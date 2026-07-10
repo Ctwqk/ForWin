@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.book_state.query import BookStateQuery
 from forwin.orchestrator_loop_core.common import *
 
 def _flush_background_llm_trace(
@@ -92,9 +93,13 @@ def _run_provisional_band_preview(
     issue_count = 0
     failure_count = 0
     aggregate_verdict = "pass"
+    book_state_query = BookStateQuery(session)
 
     for chapter_plan in chapter_plans:
-        timeline_before = repo.get_current_timeline(project_id)
+        timeline_before = book_state_query.current_timeline(
+            project_id,
+            as_of_chapter=max(int(chapter_plan.chapter_number) - 1, 0),
+        )
         current_time_label = (
             timeline_before.current_time_label
             if timeline_before is not None

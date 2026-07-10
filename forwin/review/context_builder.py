@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 
+from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.map.repository import MapRepository
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
+from forwin.review.query import ReviewQuery
 
 logger = logging.getLogger(__name__)
 
@@ -18,43 +20,51 @@ def build_review_context_pack(
 ) -> ReviewContextPack:
     band = context.band_delight_schedule
     active_entities = list(context.active_entities)
+    session = getattr(repo, "session", None) if repo is not None else None
+    book_state = BookStateQuery(session) if session is not None else None
+    review_query = ReviewQuery(session) if session is not None else None
+    as_of_chapter = max(int(context.chapter_number) - 1, 0)
     active_rules = (
-        repo.get_active_rule_entities(context.project_id)
-        if repo is not None and hasattr(repo, "get_active_rule_entities")
+        book_state.active_entities(
+            context.project_id,
+            as_of_chapter=as_of_chapter,
+            kinds={"rule"},
+        )
+        if book_state is not None
         else []
     )
     active_threads = list(context.active_threads)
     recent_canon_events = (
-        repo.get_recent_canon_events(
+        book_state.recent_events(
             context.project_id,
             before_chapter=context.chapter_number,
             entity_names=[item.name for item in active_entities],
             thread_names=[item.name for item in active_threads],
             limit=5,
         )
-        if repo is not None and hasattr(repo, "get_recent_canon_events")
+        if book_state is not None
         else []
     )
     recent_rule_events = (
-        repo.get_recent_canon_events(
+        book_state.recent_events(
             context.project_id,
             before_chapter=context.chapter_number,
             entity_names=[item.name for item in active_rules],
             thread_names=[],
             limit=5,
         )
-        if repo is not None and hasattr(repo, "get_recent_canon_events") and active_rules
+        if book_state is not None and active_rules
         else []
     )
     recent_review_notes = (
-        repo.get_recent_review_notes(
+        review_query.recent_notes(
             context.project_id,
             before_chapter=context.chapter_number,
             band_start=band.chapter_start if band is not None else None,
             band_end=band.chapter_end if band is not None else None,
             limit=5,
         )
-        if repo is not None and hasattr(repo, "get_recent_review_notes")
+        if review_query is not None
         else []
     )
     reader_feedback = context.reader_feedback

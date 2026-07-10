@@ -265,6 +265,32 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "forwin/review/decision/rules/final_residual.py"
     )
     assert "class CanonAdmissionService" in _read("forwin/canon/admission.py")
+    assert "_ensure_genesis_canon_seed_entities" not in _read(
+        "forwin/orchestrator_loop_core/world_projection.py"
+    )
+    state_updater = _read("forwin/state/updater.py")
+    for removed_writer in (
+        "apply_state_changes",
+        "apply_events",
+        "apply_thread_beats",
+        "apply_time_advance",
+    ):
+        assert f"def {removed_writer}(" not in state_updater
+    state_repository = _read("forwin/state/repo.py")
+    for removed_reader in (
+        "get_active_entities",
+        "get_allowed_entity_snapshots",
+        "get_allowed_entity_names",
+        "get_active_relations",
+        "get_active_threads",
+        "get_current_timeline",
+        "get_recent_canon_events",
+        "get_entity_by_name",
+        "get_entities_by_names",
+        "get_thread_by_name",
+        "get_chapter_summaries",
+    ):
+        assert f"def {removed_reader}(" not in state_repository
     assert "self.canon_admission.commit(" in _read(
         "forwin/orchestrator_loop_core/acceptance.py"
     )

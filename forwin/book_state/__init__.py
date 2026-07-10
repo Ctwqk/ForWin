@@ -8,10 +8,12 @@ from .cognition import CognitionView
 from .map_graph import MapGraph
 from .narrative import NarrativeControlGraph
 from .projection import BookStateProjection
+from .query import BookStateQuery
 from .repository import BookStateRepository
 from .review_gate_ext import BookStateDirectCommitResult, BookStateDirectCommitService
 from .reviewer import BookStateReviewGate, BookStateReviewIssue, BookStateReviewVerdict
 from .runtime import BookStateRuntime, ObjectiveWorldGraph, distance_between_world_nodes
+from .writer_contract import WriterContractDeltaBuilder
 
 __all__ = [
     "BookStateRuntime",
@@ -20,6 +22,7 @@ __all__ = [
     "BookStateDirectCommitResult",
     "BookStateDirectCommitService",
     "BookStateProjection",
+    "BookStateQuery",
     "BookStateRepository",
     "BookStateReviewGate",
     "BookStateReviewIssue",
@@ -28,5 +31,6 @@ __all__ = [
     "MapGraph",
     "NarrativeControlGraph",
     "ObjectiveWorldGraph",
+    "WriterContractDeltaBuilder",
     "distance_between_world_nodes",
 ]

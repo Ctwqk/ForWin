@@ -8,6 +8,7 @@ from hashlib import md5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.query import BookStateQuery
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.governance import (
     BandCheckpointDetail,
@@ -24,20 +25,16 @@ from forwin.models import (
     BandCheckpoint,
     BandExperiencePlan,
     BookGenesisRevision,
-    CanonEvent,
     ChapterDraft,
     ChapterPlan,
     ChapterRewriteAttempt,
     ChapterReview,
-    ChapterTimeline,
     DecisionEvent,
     Entity,
     EntityAlias,
     EntityState,
-    EventEntityLink,
     NarrativeConstraint,
     PlotThread,
-    PlotThreadBeat,
     Project,
     PromptTrace,
     RelationEdge,
@@ -49,11 +46,8 @@ from forwin.models import (
 from forwin.protocol import (
     BandDelightSchedule,
     ChapterExperiencePlan,
-    EventCandidate,
+    EntitySnapshot,
     ReviewVerdict,
-    StateChangeCandidate,
-    ThreadBeatCandidate,
-    TimeAdvance,
     WriterOutput,
 )
 
@@ -64,8 +58,7 @@ if TYPE_CHECKING:
 from forwin.protocol.review import normalize_repair_scope
 
 from .repo import StateRepository
-from .query_helpers import load_latest_entity_states
-from .schema import prepare_state_change, validate_state_payload
+from .schema import validate_state_payload
 
 logger = logging.getLogger(__name__)
 
@@ -463,15 +456,27 @@ class StateUpdater:
             slot_key=roster_item.slot_key,
             role_hint=roster_item.role_hint,
         )
-        entity: Entity | None = None
+        book_state = BookStateQuery(self.session)
+        as_of_chapter = max(int(chapter or 0), 0)
+        entity: EntitySnapshot | None = None
         if roster_item.entity_id and not canonical_character_id:
-            entity = self.session.get(Entity, roster_item.entity_id)
-            if entity is not None and entity.kind != "character":
-                entity = None
+            entity = next(
+                (
+                    item
+                    for item in book_state.active_entities(
+                        roster_item.project_id,
+                        as_of_chapter=as_of_chapter,
+                        kinds={"character"},
+                    )
+                    if item.entity_id == roster_item.entity_id
+                ),
+                None,
+            )
         if entity is None and not canonical_character_id:
-            entity = self._repo.get_entities_by_names(
+            entity = book_state.entities_by_names(
                 roster_item.project_id,
                 [display_name],
+                as_of_chapter=as_of_chapter,
             ).get(display_name)
             if entity is not None and entity.kind != "character":
                 entity = None
@@ -487,7 +492,7 @@ class StateUpdater:
                 character_id=canonical_character_id,
                 roster_item_id=roster_item.id,
                 name=entity.name if entity is not None else display_name,
-                aliases=_json_list(entity.aliases_json) if entity is not None else [],
+                aliases=list(entity.aliases) if entity is not None else [],
                 description=roster_item.description
                 or (entity.description if entity is not None else "")
                 or roster_item.role_hint
@@ -600,88 +605,6 @@ class StateUpdater:
         self.session.flush()
         return stp
 
-    # ------------------------------------------------------------------
-    # Applying writer output
-    # ------------------------------------------------------------------
-
-    def apply_state_changes(
-        self,
-        project_id: str,
-        chapter_number: int,
-        changes: list[StateChangeCandidate],
-    ) -> None:
-        """Apply state changes from writer output.
-
-        For each change:
-          1. Resolve entity_name to entity (via repo).
-          2. If not found, reject the change under strict subworld control.
-          3. Get the latest EntityState for this entity.
-          4. Parse state_json, update the specified field.
-          5. Create a new EntityState with as_of_chapter=chapter_number.
-        """
-        entity_lookup = self._repo.get_entities_by_names(
-            project_id,
-            [change.entity_name for change in changes],
-        )
-        existing_entities = [entity for entity in entity_lookup.values() if entity is not None]
-        latest_state_map = load_latest_entity_states(
-            self.session,
-            [entity.id for entity in existing_entities],
-        )
-
-        for change in changes:
-            entity = entity_lookup.get(change.entity_name)
-
-            if entity is None:
-                if change.entity_kind == "character":
-                    raise ValueError(
-                        "State change references unknown or unapproved entity "
-                        f"'{change.entity_name}' in chapter {chapter_number}."
-                    )
-                logger.info(
-                    "Entity '%s' not found; creating new %s entity.",
-                    change.entity_name,
-                    change.entity_kind,
-                )
-                entity = self.create_entity(
-                    project_id=project_id,
-                    kind=change.entity_kind,
-                    name=change.entity_name,
-                    description="",
-                    chapter=chapter_number,
-                )
-                entity_lookup[change.entity_name] = entity
-
-            latest_state = latest_state_map.get(entity.id)
-
-            current_state: dict = {}
-            if latest_state is not None:
-                try:
-                    current_state = json.loads(latest_state.state_json) or {}
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(
-                        "Failed to parse state_json for entity %s; starting fresh.",
-                        entity.id,
-                    )
-
-            _, next_state = prepare_state_change(
-                kind=entity.kind,
-                current_state=current_state,
-                field=change.field,
-                new_value=change.new_value,
-            )
-
-            self.create_entity_state(
-                entity_id=entity.id,
-                chapter=chapter_number,
-                state=next_state,
-            )
-            latest_state_map[entity.id] = EntityState(
-                entity_id=entity.id,
-                as_of_chapter=chapter_number,
-                state_json=json.dumps(next_state, ensure_ascii=False),
-            )
-
     @staticmethod
     def _fallback_slot_name(
         *,
@@ -695,152 +618,6 @@ class StateUpdater:
         surname = _SUBWORLD_NAME_SURNAMES[int(digest[:2], 16) % len(_SUBWORLD_NAME_SURNAMES)]
         given = _SUBWORLD_NAME_GIVEN[int(digest[2:4], 16) % len(_SUBWORLD_NAME_GIVEN)]
         return f"{surname}{given}"
-
-    def apply_events(
-        self,
-        project_id: str,
-        chapter_number: int,
-        events: list[EventCandidate],
-    ) -> None:
-        """Apply events from writer output.
-
-        For each event:
-          1. Resolve every involved entity name to an entity ID.
-          2. Abort the event if any entity cannot be resolved.
-          3. Create a CanonEvent and all corresponding EventEntityLink rows.
-        """
-        entity_lookup = self._repo.get_entities_by_names(
-            project_id,
-            [
-                entity_name
-                for event_candidate in events
-                for entity_name in event_candidate.involved_entity_names
-            ],
-        )
-        for event_candidate in events:
-            resolved_links: list[tuple[str, str]] = []
-            names = event_candidate.involved_entity_names
-            roles = event_candidate.roles
-
-            for idx, entity_name in enumerate(names):
-                role = roles[idx] if idx < len(roles) else "mentioned"
-                entity = entity_lookup.get(entity_name)
-                if entity is None:
-                    raise ValueError(
-                        "Event references unknown entity "
-                        f"'{entity_name}' in chapter {chapter_number}."
-                    )
-
-                resolved_links.append((entity.id, role))
-
-            canon_event = CanonEvent(
-                id=new_id(),
-                project_id=project_id,
-                chapter_number=chapter_number,
-                summary=event_candidate.summary,
-                significance=event_candidate.significance,
-            )
-            self.session.add(canon_event)
-            self.session.flush()
-
-            for entity_id, role in resolved_links:
-                link = EventEntityLink(
-                    id=new_id(),
-                    event_id=canon_event.id,
-                    entity_id=entity_id,
-                    role=role,
-                )
-                self.session.add(link)
-
-            self.session.flush()
-
-    def apply_thread_beats(
-        self,
-        project_id: str,
-        chapter_number: int,
-        beats: list[ThreadBeatCandidate],
-    ) -> None:
-        """Apply thread beats from writer output.
-
-        For each beat:
-          1. Resolve thread_name to a PlotThread.
-          2. If not found, create a new thread.
-          3. Create a PlotThreadBeat.
-          4. If beat_type is "resolution", update thread status to "resolved".
-        """
-        for beat in beats:
-            thread = self._repo.get_thread_by_name(project_id, beat.thread_name)
-
-            if thread is None:
-                logger.info(
-                    "Thread '%s' not found; creating new thread.", beat.thread_name
-                )
-                thread = self.create_thread(
-                    project_id=project_id,
-                    name=beat.thread_name,
-                    description="",
-                    chapter=chapter_number,
-                )
-
-            ptb = PlotThreadBeat(
-                id=new_id(),
-                thread_id=thread.id,
-                chapter_number=chapter_number,
-                beat_type=beat.beat_type,
-                description=beat.description,
-            )
-            self.session.add(ptb)
-
-            if beat.beat_type == "resolution":
-                thread.status = "resolved"
-                thread.closed_at_chapter = chapter_number
-                self.session.add(thread)
-
-        self.session.flush()
-
-    def apply_time_advance(
-        self,
-        project_id: str,
-        chapter_number: int,
-        advance: TimeAdvance,
-    ) -> None:
-        """Apply time advancement.
-
-        1. Determine the current maximum ordinal.
-        2. Create a new StoryTimePoint with ordinal+1.
-        3. Create a ChapterTimeline linking the chapter to the new time point.
-        """
-        # Find the current max ordinal.
-        stmt = (
-            select(StoryTimePoint)
-            .where(StoryTimePoint.project_id == project_id)
-            .order_by(StoryTimePoint.ordinal.desc())
-            .limit(1)
-        )
-        current_stp = self.session.execute(stmt).scalar_one_or_none()
-        current_ordinal = current_stp.ordinal if current_stp is not None else 0
-        new_ordinal = current_ordinal + 1
-
-        new_stp = self.create_time_point(
-            project_id=project_id,
-            label=advance.new_time_label,
-            ordinal=new_ordinal,
-            description=advance.duration_description,
-        )
-
-        # Determine the start_time_id: use the previous time point if available.
-        start_time_id = current_stp.id if current_stp is not None else new_stp.id
-
-        timeline = ChapterTimeline(
-            id=new_id(),
-            project_id=project_id,
-            chapter_number=chapter_number,
-            start_time_id=start_time_id,
-            end_time_id=new_stp.id,
-            duration_description=advance.duration_description,
-        )
-        self.session.add(timeline)
-        self.session.flush()
 
     # ------------------------------------------------------------------
     # Draft / Review

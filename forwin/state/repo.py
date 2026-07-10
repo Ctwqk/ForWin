@@ -22,27 +22,20 @@ from forwin.models import (
     BandCheckpoint,
     BandExperiencePlan,
     BookGenesisRevision,
-    CanonEvent,
     ChapterDraft,
     ChapterPlan,
     ChapterReview,
     ChapterRewriteAttempt,
     DecisionEvent,
-    Entity,
-    EntityAlias,
-    EventEntityLink,
     FeedbackActionRecord,
     MapRegionRow,
     NarrativeConstraint,
     NPCIntentSnapshot,
-    PlotThread,
     Project,
     PromptTrace,
     PublisherRawComment,
     ReaderScaleSnapshot,
-    RelationEdge,
     SignalWindowAggregate,
-    StoryTimePoint,
     SubWorld,
     SubWorldRosterItem,
     WorldSimulationTurn,
@@ -52,26 +45,16 @@ from forwin.protocol import (
     ArcPayoffMap,
     AudienceTrendView,
     BandDelightSchedule,
-    CanonEventEvidence,
     ChapterExperiencePlan,
-    EntitySnapshot,
     NPCIntentView,
-    PlotThreadSnapshot,
     ReaderPromise,
     ReaderCommentView,
     ReaderFeedbackView,
-    RelationSnapshot,
     ReviewNote,
     SignalSummaryView,
     SubWorldSummary,
-    TimelineSnapshot,
     WorldPressureView,
 )
-from forwin.state.query_helpers import (
-    load_latest_entity_states,
-    load_recent_thread_beats,
-)
-
 logger = logging.getLogger(__name__)
 
 _READER_FEEDBACK_LEVEL_ORDER = {
@@ -466,62 +449,6 @@ class StateRepository:
             )
         ).scalars().all()
 
-    def get_recent_canon_events(
-        self,
-        project_id: str,
-        *,
-        before_chapter: int,
-        entity_names: list[str] | None = None,
-        thread_names: list[str] | None = None,
-        limit: int = 5,
-    ) -> list[CanonEventEvidence]:
-        rows = self.session.execute(
-            select(CanonEvent)
-            .where(
-                CanonEvent.project_id == project_id,
-                CanonEvent.chapter_number < before_chapter,
-            )
-            .order_by(CanonEvent.chapter_number.desc(), CanonEvent.created_at.desc())
-            .limit(max(limit * 4, limit))
-        ).scalars().all()
-        if not rows:
-            return []
-        event_ids = [row.id for row in rows]
-        link_rows = self.session.execute(
-            select(EventEntityLink.event_id, Entity.name)
-            .join(Entity, Entity.id == EventEntityLink.entity_id)
-            .where(EventEntityLink.event_id.in_(event_ids))
-        ).all()
-        names_by_event: dict[str, list[str]] = {}
-        for event_id, entity_name in link_rows:
-            names_by_event.setdefault(event_id, []).append(entity_name)
-
-        entity_set = {str(item).strip() for item in (entity_names or []) if str(item).strip()}
-        thread_set = {str(item).strip() for item in (thread_names or []) if str(item).strip()}
-        ranked: list[tuple[float, CanonEventEvidence]] = []
-        for row in rows:
-            involved_names = names_by_event.get(row.id, [])
-            overlap_score = float(len(entity_set & set(involved_names))) * 3.0
-            thread_score = float(
-                sum(1 for thread_name in thread_set if thread_name in row.summary)
-            ) * 2.0
-            recency_score = max(0.0, 10.0 - float(before_chapter - row.chapter_number))
-            ranked.append(
-                (
-                    overlap_score + thread_score + recency_score,
-                    CanonEventEvidence(
-                        event_id=row.id,
-                        chapter_number=row.chapter_number,
-                        summary=row.summary,
-                        significance=row.significance,
-                        involved_entity_names=involved_names,
-                        evidence_id=f"canon_event:{row.id}",
-                    ),
-                )
-            )
-        ranked.sort(key=lambda item: (-item[0], -item[1].chapter_number, item[1].event_id))
-        return [event for _, event in ranked[:limit]]
-
     def get_recent_review_notes(
         self,
         project_id: str,
@@ -591,67 +518,6 @@ class StateRepository:
                 break
         return notes
 
-    # ------------------------------------------------------------------
-    # Entities
-    # ------------------------------------------------------------------
-
-    def get_active_entities(self, project_id: str) -> list[EntitySnapshot]:
-        """Get all active entities with their latest state."""
-        stmt = select(Entity).where(
-            Entity.project_id == project_id,
-            Entity.is_active == True,  # noqa: E712
-        )
-        entities = self.session.execute(stmt).scalars().all()
-        entity_ids = [entity.id for entity in entities]
-        state_map = load_latest_entity_states(self.session, entity_ids)
-        alias_rows = (
-            self.session.execute(
-                select(EntityAlias.entity_id, EntityAlias.alias)
-                .where(EntityAlias.entity_id.in_(entity_ids))
-                .order_by(EntityAlias.alias.asc())
-            ).all()
-            if entity_ids
-            else []
-        )
-        alias_map: dict[str, list[str]] = {}
-        for entity_id, alias in alias_rows:
-            alias_map.setdefault(entity_id, []).append(alias)
-
-        snapshots: list[EntitySnapshot] = []
-        for entity in entities:
-            entity_state = state_map.get(entity.id)
-            current_state: dict = {}
-            if entity_state is not None:
-                try:
-                    current_state = json.loads(entity_state.state_json) or {}
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(
-                        "Failed to parse state_json for entity %s", entity.id
-                    )
-
-            aliases = alias_map.get(entity.id, [])
-            if not aliases and entity.aliases_json:
-                try:
-                    aliases = json.loads(entity.aliases_json) or []
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(
-                        "Failed to parse aliases_json for entity %s", entity.id
-                    )
-
-            snapshots.append(
-                EntitySnapshot(
-                    entity_id=entity.id,
-                    kind=entity.kind,
-                    name=entity.name,
-                    importance=entity.importance,
-                    aliases=aliases,
-                    description=entity.description,
-                    current_state=current_state,
-                )
-            )
-
-        return snapshots
-
     def list_subworlds(self, project_id: str) -> list[SubWorld]:
         return list(
             self.session.execute(
@@ -680,107 +546,6 @@ class StateRepository:
                 )
             ).scalars().all()
         )
-
-    def get_allowed_entity_names(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> set[str]:
-        names: set[str] = set()
-        entities = self.session.execute(
-            select(Entity).where(
-                Entity.project_id == project_id,
-                Entity.kind == "character",
-                Entity.is_active == True,  # noqa: E712
-            )
-        ).scalars().all()
-        names.update(
-            str(entity.name or "").strip()
-            for entity in entities
-            if str(entity.name or "").strip()
-        )
-        alias_rows = self.session.execute(
-            select(EntityAlias.alias)
-            .join(Entity, EntityAlias.entity_id == Entity.id)
-            .where(
-                Entity.project_id == project_id,
-                Entity.kind == "character",
-                Entity.is_active == True,  # noqa: E712
-                EntityAlias.project_id == project_id,
-            )
-        ).all()
-        names.update(
-            str(alias or "").strip()
-            for alias, in alias_rows
-            if str(alias or "").strip()
-        )
-        chapter_experience = self.get_chapter_experience_plan(project_id, chapter_number)
-        if chapter_experience is not None:
-            names.update(
-                str(item.entity_name or "").strip()
-                for item in chapter_experience.chapter_entry_targets
-                if str(item.entity_name or "").strip()
-            )
-        return names
-
-    def get_allowed_entity_snapshots(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> list[EntitySnapshot]:
-        active_subworld_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
-        if not active_subworld_ids:
-            active_subworld_ids = self._fallback_global_core_ids(project_id)
-        roster_items = self.list_roster_items(project_id, active_subworld_ids)
-        allowed_character_ids = {
-            str(item.entity_id or "").strip()
-            for item in roster_items
-            if item.entity_kind == "character" and str(item.entity_id or "").strip()
-        }
-        pressure_character_names = self._world_pressure_character_names(project_id, chapter_number)
-        active_entities = self.get_active_entities(project_id)
-        snapshots: list[EntitySnapshot] = []
-        for entity in active_entities:
-            if entity.kind != "character":
-                snapshots.append(entity)
-                continue
-            entity_names = {
-                str(entity.name or "").strip(),
-                *[str(alias or "").strip() for alias in (entity.aliases or [])],
-            }
-            if entity.entity_id in allowed_character_ids or bool(entity_names & pressure_character_names):
-                snapshots.append(entity)
-        return snapshots
-
-    def _world_pressure_character_names(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> set[str]:
-        pressure = self.get_latest_world_pressure(project_id, before_chapter=chapter_number)
-        if pressure is None:
-            return set()
-        pressure_text = "\n".join(
-            [
-                str(pressure.pressure_summary or ""),
-                *[str(item or "") for item in (pressure.notable_shifts or [])],
-            ]
-        )
-        if not pressure_text.strip():
-            return set()
-
-        names: set[str] = set()
-        for entity in self.get_active_entities(project_id):
-            if entity.kind != "character":
-                continue
-            candidates = [
-                str(entity.name or "").strip(),
-                *[str(alias or "").strip() for alias in (entity.aliases or [])],
-            ]
-            matched = [name for name in candidates if name and name in pressure_text]
-            if matched:
-                names.update(name for name in candidates if name)
-        return names
 
     def get_active_subworld_summary(
         self,
@@ -881,95 +646,6 @@ class StateRepository:
                 )
                 drafts.append(draft_payload)
         return drafts
-
-    def get_active_rule_entities(self, project_id: str) -> list[EntitySnapshot]:
-        return [
-            entity
-            for entity in self.get_active_entities(project_id)
-            if entity.kind == "rule"
-        ]
-
-    # ------------------------------------------------------------------
-    # Relations
-    # ------------------------------------------------------------------
-
-    def get_active_relations(
-        self,
-        project_id: str,
-        entity_names: list[str] | None = None,
-    ) -> list[RelationSnapshot]:
-        """Get all active relation edges, resolved to entity names."""
-        stmt = select(RelationEdge).where(
-            RelationEdge.project_id == project_id,
-            RelationEdge.is_active == True,  # noqa: E712
-        )
-        edges = self.session.execute(stmt).scalars().all()
-
-        # Build a name cache to avoid N+1 queries.
-        entity_ids = set()
-        for edge in edges:
-            entity_ids.add(edge.source_entity_id)
-            entity_ids.add(edge.target_entity_id)
-
-        name_map: dict[str, str] = {}
-        if entity_ids:
-            name_stmt = select(Entity).where(Entity.id.in_(entity_ids))
-            for ent in self.session.execute(name_stmt).scalars().all():
-                name_map[ent.id] = ent.name
-
-        snapshots: list[RelationSnapshot] = []
-        for edge in edges:
-            source_name = name_map.get(edge.source_entity_id, edge.source_entity_id)
-            target_name = name_map.get(edge.target_entity_id, edge.target_entity_id)
-            if entity_names is not None:
-                allowed = {str(name or "").strip() for name in entity_names if str(name or "").strip()}
-                if allowed and source_name not in allowed and target_name not in allowed:
-                    continue
-            snapshots.append(
-                RelationSnapshot(
-                    source_name=source_name,
-                    target_name=target_name,
-                    relation_type=edge.relation_type,
-                    description=edge.description,
-                )
-            )
-
-        return snapshots
-
-    # ------------------------------------------------------------------
-    # Plot Threads
-    # ------------------------------------------------------------------
-
-    def get_active_threads(self, project_id: str) -> list[PlotThreadSnapshot]:
-        """Get active plot threads with their last 3 beats."""
-        stmt = select(PlotThread).where(
-            PlotThread.project_id == project_id,
-            PlotThread.status == "active",
-        )
-        threads = self.session.execute(stmt).scalars().all()
-        recent_beats_map = load_recent_thread_beats(
-            self.session,
-            [thread.id for thread in threads],
-            limit_per_thread=3,
-        )
-
-        snapshots: list[PlotThreadSnapshot] = []
-        for thread in threads:
-            beats = recent_beats_map.get(thread.id, [])
-            recent_beats = [b.description for b in reversed(beats)]
-
-            snapshots.append(
-                PlotThreadSnapshot(
-                    thread_id=thread.id,
-                    name=thread.name,
-                    description=thread.description,
-                    status=thread.status,
-                    priority=thread.priority,
-                    recent_beats=recent_beats,
-                )
-            )
-
-        return snapshots
 
     def list_active_narrative_constraints(
         self,
@@ -1089,53 +765,6 @@ class StateRepository:
             )
             for row in rows
         ]
-
-    # ------------------------------------------------------------------
-    # Chapter summaries
-    # ------------------------------------------------------------------
-
-    def get_chapter_summaries(
-        self,
-        project_id: str,
-        up_to_chapter: int,
-        limit: int = 3,
-    ) -> list[str]:
-        """Return recent chapter summaries from drafts, up to *limit* entries.
-
-        Ordered newest-first (highest chapter_number first), then we reverse
-        so the caller gets them in chronological order.
-        """
-        stmt = (
-            select(ChapterDraft.summary, ChapterPlan.chapter_number)
-            .join(ChapterPlan, ChapterDraft.chapter_plan_id == ChapterPlan.id)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number < up_to_chapter,
-            )
-            .order_by(ChapterPlan.chapter_number.desc())
-            .limit(limit)
-        )
-        rows = self.session.execute(stmt).all()
-        # rows are (summary, chapter_number) newest-first; reverse for chron order.
-        summaries = [row[0] for row in reversed(rows) if row[0]]
-        return summaries
-
-    # ------------------------------------------------------------------
-    # Timeline
-    # ------------------------------------------------------------------
-
-    def get_current_timeline(self, project_id: str) -> Optional[TimelineSnapshot]:
-        """Get the latest story time point (highest ordinal)."""
-        stmt = (
-            select(StoryTimePoint)
-            .where(StoryTimePoint.project_id == project_id)
-            .order_by(StoryTimePoint.ordinal.desc())
-            .limit(1)
-        )
-        stp = self.session.execute(stmt).scalar_one_or_none()
-        if stp is None:
-            return None
-        return TimelineSnapshot(current_time_label=stp.label, ordinal=stp.ordinal)
 
     def get_recent_npc_intents(
         self,
@@ -1451,75 +1080,6 @@ class StateRepository:
             risk_flags=risk[:3],
         )
 
-    # ------------------------------------------------------------------
-    # Name-based lookups
-    # ------------------------------------------------------------------
-
-    def get_entity_by_name(
-        self, project_id: str, name: str
-    ) -> Optional[Entity]:
-        """Find entity by exact name match, then by alias match."""
-        # 1. Exact name match.
-        stmt = select(Entity).where(
-            Entity.project_id == project_id,
-            Entity.name == name,
-        )
-        entity = self.session.execute(stmt).scalar_one_or_none()
-        if entity is not None:
-            return entity
-
-        alias_stmt = (
-            select(Entity)
-            .join(EntityAlias, EntityAlias.entity_id == Entity.id)
-            .where(
-                Entity.project_id == project_id,
-                EntityAlias.project_id == project_id,
-                EntityAlias.alias == name,
-            )
-        )
-        entity = self.session.execute(alias_stmt).scalar_one_or_none()
-        if entity is not None:
-            return entity
-
-        return None
-
-    def get_entities_by_names(
-        self,
-        project_id: str,
-        names: list[str],
-    ) -> dict[str, Entity]:
-        normalized = [name.strip() for name in names if str(name).strip()]
-        if not normalized:
-            return {}
-
-        mapping: dict[str, Entity] = {}
-        exact_rows = self.session.execute(
-            select(Entity).where(
-                Entity.project_id == project_id,
-                Entity.name.in_(normalized),
-            )
-        ).scalars().all()
-        for entity in exact_rows:
-            mapping[entity.name] = entity
-
-        unresolved = [name for name in normalized if name not in mapping]
-        if not unresolved:
-            return mapping
-
-        alias_rows = self.session.execute(
-            select(EntityAlias.alias, Entity)
-            .join(Entity, EntityAlias.entity_id == Entity.id)
-            .where(
-                Entity.project_id == project_id,
-                EntityAlias.project_id == project_id,
-                EntityAlias.alias.in_(unresolved),
-            )
-        ).all()
-        for alias, entity in alias_rows:
-            mapping[str(alias)] = entity
-
-        return mapping
-
     def _active_subworld_ids_for_chapter(
         self,
         project_id: str,
@@ -1552,13 +1112,3 @@ class StateRepository:
             .order_by(SubWorld.created_at.asc(), SubWorld.id.asc())
         ).all()
         return [str(subworld_id) for subworld_id, in rows if str(subworld_id or "").strip()]
-
-    def get_thread_by_name(
-        self, project_id: str, name: str
-    ) -> Optional[PlotThread]:
-        """Find a plot thread by exact name."""
-        stmt = select(PlotThread).where(
-            PlotThread.project_id == project_id,
-            PlotThread.name == name,
-        )
-        return self.session.execute(stmt).scalar_one_or_none()

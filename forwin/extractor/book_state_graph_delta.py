@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from hashlib import sha1
+from typing import TYPE_CHECKING
 
 from forwin.book_state.adapter import BookStateDeltaAdapter
 from forwin.book_state.extraction_contract import (
@@ -9,9 +10,13 @@ from forwin.book_state.extraction_contract import (
     BookStateExtractionRequest,
     BookStateExtractionResult,
 )
+from forwin.book_state.writer_contract import WriterContractDeltaBuilder
 from forwin.protocol.book_state import FactPatch, GraphDelta, GraphDeltaType, NodePatch
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.world_v4_review_gate import V4ReviewGate
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 DEFAULT_BOOK_STATE_LAYERS = {"world", "map", "cognition", "narrative"}
@@ -144,8 +149,14 @@ class BookStateGraphDeltaExtractor:
     compiler as the canon success condition.
     """
 
-    def __init__(self, *, layers: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        layers: set[str] | None = None,
+        session: Session | None = None,
+    ) -> None:
         self.layers = _normalize_book_state_layers(layers)
+        self.session = session
 
     def extract(self, request: BookStateExtractionRequest) -> BookStateExtractionResult:
         writer_output = request.writer_output.model_copy(update={"project_id": request.project_id})
@@ -190,7 +201,7 @@ class BookStateGraphDeltaExtractor:
             ),
             forced_accept_reason=request.forced_accept_reason,
         )
-        graph_deltas = [
+        compatibility_deltas = [
             delta.model_copy(
                 update={
                     "metadata": {
@@ -202,7 +213,36 @@ class BookStateGraphDeltaExtractor:
             )
             for delta in changes.graph_deltas
         ]
-        graph_deltas = _filter_graph_delta_layers(graph_deltas, self.layers)
+        graph_deltas = _filter_graph_delta_layers(compatibility_deltas, self.layers)
+        if self.session is not None:
+            contract_result = WriterContractDeltaBuilder(self.session).build(
+                project_id=request.project_id,
+                chapter_number=request.chapter_number,
+                writer_output=writer_output,
+                review_verdict_id=(
+                    request.review_verdict_id
+                    or f"book_state_direct_extract_{request.project_id}_{request.chapter_number}"
+                ),
+            )
+            if contract_result.issues:
+                return BookStateExtractionResult(
+                    project_id=request.project_id,
+                    chapter_number=request.chapter_number,
+                    accepted=False,
+                    compatibility_extracted=extracted,
+                    compatibility_gate_verdict=gate_verdict,
+                    issues=[
+                        BookStateExtractionIssue(
+                            severity="error",
+                            code=issue.code,
+                            message=issue.message,
+                            evidence_refs=list(issue.evidence_refs),
+                        )
+                        for issue in contract_result.issues
+                    ],
+                    metadata={"extraction_path": "writer_contract"},
+                )
+            graph_deltas.extend(contract_result.graph_deltas)
         if not graph_deltas and "world" in self.layers and _needs_light_structured_extraction(writer_output):
             light_delta = _light_state_extraction_delta(
                 project_id=request.project_id,

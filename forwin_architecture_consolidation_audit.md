@@ -289,6 +289,7 @@ WritingOrchestrator (变薄的编排壳)
 
 ### Phase D — BookState 单一写方（D14,D15）
 
+- **当前进度**：核心割接完成，清理继续。WriterOutput 完整结构合约与 EntityAdmissionPlan 已统一转 GraphDelta；context/review/checker/autofix/finalization/registrar 已改读 `BookStateQuery`/`ReviewQuery`；legacy accepted-state reader 名称在生产代码清零；Canon 双写、Genesis legacy entity 预灌与对应 `StateRepository`/`StateUpdater` 方法已删除。legacy 表和 deprecated world-model projection facade 尚待物理清除；30/60/100 章运行 gate 未执行。
 - **目标**：删 canon 提交双写，前置是读方清单清零。
 - **步骤**：① 盘点 legacy `StateRepository` 读方（context providers、RetrievalBroker.build_world_model_pack、ContinuityChecker、phase3/phase4、api world routes）；② 逐个改读 BookState projection，30 章对拍上下文一致；③ 读方清零后删 `_apply_canon_candidate` 内 `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance`；④ legacy 行转只读归档或重建脚本。
 - **不变量**：canon 提交幂等；old-value mismatch 拦截；BookMap pathfinding 不降级；LLM KB 刷新不变。

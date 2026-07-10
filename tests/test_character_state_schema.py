@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from forwin.orchestrator_loop_core.governance import _filter_supported_state_changes
-from forwin.protocol.state_change import StateChangeCandidate
 from forwin.state.schema import prepare_state_change, validate_state_payload
 
 
@@ -65,31 +63,3 @@ def test_prepare_state_change_normalizes_common_extraction_aliases() -> None:
     assert knowledge_state["knowledge_state"] == "确认周隐仍在通风井内"
     assert normalized_possession == "possession_state"
     assert possession_state["possession_state"] == "馆员备份光盘"
-
-
-def test_filter_supported_state_changes_normalizes_aliases_before_filtering() -> None:
-    changes = [
-        StateChangeCandidate(
-            entity_name="林陈",
-            entity_kind="character",
-            field="knowledge",
-            old_value="",
-            new_value="知道备份光盘位置",
-            reason="周隐告知",
-        ),
-        StateChangeCandidate(
-            entity_name="林陈",
-            entity_kind="character",
-            field="possession",
-            old_value="",
-            new_value="备份光盘",
-            reason="取得证物",
-        ),
-    ]
-
-    filtered = _filter_supported_state_changes(changes)
-
-    assert [change.field for change in filtered] == [
-        "knowledge_state",
-        "possession_state",
-    ]

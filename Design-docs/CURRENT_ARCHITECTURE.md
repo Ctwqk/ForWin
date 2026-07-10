@@ -24,6 +24,7 @@ Genesis / Writer / Review 主链
 - 书本根真值：`Genesis`。
 - Genesis 只在写前可变；`start-writing` 成功后 active revision 标记为 `locked`，workspace mutation 全部拒绝，运行时计划只认物化后的 `ArcPlanVersion` / `ChapterPlan`。
 - 世界状态 canon：`BookState + GraphDelta + Snapshot`。
+- 世界状态读侧：`BookStateQuery` 是实体、关系、事件、剧情线和故事时间的唯一 accepted-state 查询入口；`ReviewQuery` 只读取已接受章节摘要和已接受 review notes。
 - 地图 canon：`BookMap / Scheme C`，语义为 `SubWorld -> Region -> MapNode -> MapEdge`。
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
@@ -46,6 +47,7 @@ ForWin 只支持 `RuntimePolicy.quality_profile=standard|pulp`。
 ```text
 WriterOutput / chapter body
 -> EntityAdmissionPlan verification
+-> WriterOutput structured contract -> GraphDelta
 -> BookStateGraphDeltaExtractor
 -> BookStateReviewGate
 -> BookStateCompiler
@@ -55,14 +57,14 @@ WriterOutput / chapter body
 
 `forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都调用其强类型 `commit()`。内部 BookState 写路径名为 `_commit_book_state_canon`。`_apply_canon_candidate`、兼容 outcome coercer、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除；`FinalResidualPolicy` 的 force-accept 候选仍必须经过上述 canon admission。
 
-旧 `world_model_v4` / world-v4 compatibility projection 写入已经从 accepted chapter runtime 删除。新项目的 canon commit 只以 BookState review/compile 结果为准，后续只保留 Knowledge Projection refresh 等当前检索投影。
+旧 `world_model_v4` / world-v4 compatibility projection 与 `StateUpdater.apply_*` 写入已经从 accepted chapter runtime 删除。`state_changes`、`new_events`、`thread_beats`、`time_advance` 和 EntityAdmissionPlan 先转成同一 GraphDelta 合约，再经 BookState review/compile 一次落盘；后续只保留 Knowledge Projection refresh 等当前检索投影。
 
 ## 兼容层
 
 - `world_model`：legacy wiki/export/projection/read path；不作为新 canon 语义来源。
 - `world_model_v4`：已删除的旧 compatibility projection / debug-export bridge；不得重新作为 runtime 写入路径引入。
 - `reviewer_v4`：world_v4 extraction compatibility gate；不是 `reviewer` 的新版替代品。
-- legacy `entity_states / relation_edges / CanonEvent`：兼容投影、迁移输入或审计摘要；`entities / entity_aliases` 只允许由 Canon 实体准入提交器写入。
+- legacy `entity_states / relation_edges / CanonEvent / PlotThreadBeat / ChapterTimeline`：已退出 accepted-state 读写路径，等待 v5 baseline 物理删表；`entities / entity_aliases` 只作为 Canon 实体准入提交后的身份唯一性索引。
 - legacy provisional：历史预演、审计和 compatibility preview，不默认阻断正式写作。
 
 ## 投影层

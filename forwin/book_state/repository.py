@@ -563,16 +563,24 @@ class BookStateRepository:
             metadata_json=_dump(delta.metadata),
         )
         self.session.add(row)
+        patch_sequence = 0
         for patch in delta.node_patches:
-            self.session.add(self._patch_row(delta, "node", patch))
+            self.session.add(self._patch_row(delta, "node", patch, patch_sequence))
+            patch_sequence += 1
         for patch in delta.edge_patches:
-            self.session.add(self._patch_row(delta, "edge", patch))
+            self.session.add(self._patch_row(delta, "edge", patch, patch_sequence))
+            patch_sequence += 1
         for patch in delta.fact_patches:
-            self.session.add(self._patch_row(delta, "fact", patch))
+            self.session.add(self._patch_row(delta, "fact", patch, patch_sequence))
+            patch_sequence += 1
         for patch in delta.map_patches:
-            self.session.add(self._patch_row(delta, "map", patch))
+            self.session.add(self._patch_row(delta, "map", patch, patch_sequence))
+            patch_sequence += 1
         for patch in delta.cognition_patches:
-            self.session.add(self._patch_row(delta, "cognition", patch))
+            self.session.add(
+                self._patch_row(delta, "cognition", patch, patch_sequence)
+            )
+            patch_sequence += 1
             self.session.add(
                 CognitionOverlayPatchRow(
                     project_id=delta.project_id,
@@ -588,7 +596,10 @@ class BookStateRepository:
                 )
             )
         for patch in delta.narrative_patches:
-            self.session.add(self._patch_row(delta, "narrative", patch))
+            self.session.add(
+                self._patch_row(delta, "narrative", patch, patch_sequence)
+            )
+            patch_sequence += 1
         self.session.flush()
         return row
 
@@ -597,8 +608,10 @@ class BookStateRepository:
         delta: GraphDelta,
         patch_type: str,
         patch: NodePatch | EdgePatch | FactPatch | MapPatch | CognitionPatch | NarrativePatch,
+        sequence: int,
     ) -> GraphDeltaPatchRow:
         target_ref, metadata = _patch_target_and_metadata(patch_type, patch)
+        metadata["sequence"] = int(sequence)
         return GraphDeltaPatchRow(
             project_id=delta.project_id,
             delta_id=delta.id,
@@ -645,6 +658,14 @@ class BookStateRepository:
             )
             .scalars()
             .all()
+        )
+        patch_rows.sort(
+            key=lambda row: (
+                row.delta_id,
+                int(_loads(row.metadata_json, {}).get("sequence", 1_000_000)),
+                row.created_at,
+                row.id,
+            )
         )
         patches_by_delta: dict[str, list[GraphDeltaPatchRow]] = {}
         for patch_row in patch_rows:

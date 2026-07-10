@@ -22,11 +22,9 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThreadBeat
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.orchestrator.phase3 import ReplanGovernor, StageAssessment
 from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.orchestrator_loop_core.world_projection import _ensure_genesis_canon_seed_entities
 from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
@@ -105,50 +103,6 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦/L-7"), "灰鸦")
         self.assertEqual(ContinuityChecker._candidate_character_name("L-7/灰鸦"), "灰鸦")
-
-    def test_genesis_canon_seed_entities_includes_canon_name_anchors(self) -> None:
-        with TemporaryDirectory() as tmp:
-            engine = get_engine(postgres_test_url("canon-seed-anchor"))
-            init_db(engine)
-            session = get_session_factory(engine)()
-            try:
-                updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
-                revision = BookGenesisRevision(
-                    project_id=project.id,
-                    revision=1,
-                    status="locked",
-                    pack_json='{"world":{"story_engine":{"core_cast":[]}}}',
-                )
-                session.add(revision)
-                session.flush()
-                project.active_genesis_revision_id = revision.id
-                thread = updater.create_thread(project.id, "母亲线索", "", priority=3, chapter=1)
-                session.add(
-                    PlotThreadBeat(
-                        thread_id=thread.id,
-                        chapter_number=3,
-                        beat_type="clue",
-                        description="终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
-                    )
-                )
-                session.commit()
-
-                repo = StateRepository(session)
-                _ensure_genesis_canon_seed_entities(
-                    session=session,
-                    repo=repo,
-                    updater=updater,
-                    project_id=project.id,
-                )
-
-                entity = repo.get_entities_by_names(project.id, ["林若"]).get("林若")
-            finally:
-                session.close()
-                engine.dispose()
-
-        self.assertIsNotNone(entity)
-        self.assertEqual(entity.kind, "character")
 
     def test_ensure_registry_bootstraps_global_core_with_existing_characters(self) -> None:
         with TemporaryDirectory() as tmp:

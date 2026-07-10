@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.book_state.query import BookStateQuery
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
 from forwin.checker.reference_classifier import normalize_character_reference
 from forwin.protocol.writer import WriterOutput
@@ -199,7 +200,16 @@ def _project_character_names(repo: StateRepository, project_id: str) -> set[str]
             )
         )
     try:
-        entities = repo.get_active_entities(project_id)
+        session = getattr(repo, "session", None)
+        entities = (
+            BookStateQuery(session).active_entities(
+                project_id,
+                as_of_chapter=10**9,
+                kinds={"character"},
+            )
+            if session is not None
+            else []
+        )
     except Exception:  # noqa: BLE001
         return names
     for entity in entities or []:

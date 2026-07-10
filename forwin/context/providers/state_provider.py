@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from forwin.book_state.query import BookStateQuery
 from forwin.context.request import ContextDraft, ContextRequest
+from forwin.review import ReviewQuery
 
 
 class StateContextProvider:
@@ -11,23 +13,21 @@ class StateContextProvider:
         chapter_plan = request.chapter_plan
         project_id = request.project_id
         project = repo.get_project(project_id)
-
-        allowed_entities_getter = getattr(repo, "get_allowed_entity_snapshots", None)
-        if callable(allowed_entities_getter):
-            entities = allowed_entities_getter(project_id, chapter_plan.chapter_number)
-        else:
-            entities = repo.get_active_entities(project_id)
-
+        if request.session is None:
+            raise RuntimeError("StateContextProvider requires a database session")
+        as_of_chapter = max(int(chapter_plan.chapter_number) - 1, 0)
+        book_state = BookStateQuery(request.session)
+        review_query = ReviewQuery(request.session)
+        entities = book_state.active_entities(
+            project_id,
+            as_of_chapter=as_of_chapter,
+        )
         allowed_entities = [entity.name for entity in entities if entity.kind == "character"]
-        relations_getter = getattr(repo, "get_active_relations")
-        try:
-            relations = relations_getter(project_id, entity_names=allowed_entities)
-        except TypeError:
-            relations = [
-                relation
-                for relation in relations_getter(project_id)
-                if relation.source_name in allowed_entities or relation.target_name in allowed_entities
-            ]
+        relations = book_state.active_relations(
+            project_id,
+            as_of_chapter=as_of_chapter,
+            entity_names=allowed_entities,
+        )
 
         npc_intents_getter = getattr(repo, "get_recent_npc_intents", None)
         world_pressure_getter = getattr(repo, "get_latest_world_pressure", None)
@@ -39,9 +39,18 @@ class StateContextProvider:
                 "entities": entities,
                 "allowed_entities": allowed_entities,
                 "relations": relations,
-                "threads": repo.get_active_threads(project_id),
-                "summaries": repo.get_chapter_summaries(project_id, chapter_plan.chapter_number),
-                "timeline": repo.get_current_timeline(project_id),
+                "threads": book_state.active_threads(
+                    project_id,
+                    as_of_chapter=as_of_chapter,
+                ),
+                "summaries": review_query.chapter_summaries(
+                    project_id,
+                    before_chapter=chapter_plan.chapter_number,
+                ),
+                "timeline": book_state.current_timeline(
+                    project_id,
+                    as_of_chapter=as_of_chapter,
+                ),
                 "npc_intents": (
                     npc_intents_getter(project_id, before_chapter=chapter_plan.chapter_number)
                     if callable(npc_intents_getter)

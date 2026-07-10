@@ -118,6 +118,18 @@
 - 质量闭环已开始从 review-time 反应式扫描前移到 plan-time patch；遗留 reviewer signal 仍会保留兜底提示，但必须避免重复注入同一约束。
 - Prompt 回归测试固定 deterministic fixture 和 revision hash，不替代真实 LLM A/B 评估。
 
+## 2026-07 V5 Slice 4 Status
+
+状态：implementation-in-progress，未部署，长跑 gate 未执行。
+
+- WriterOutput 的实体准入、状态变化、事件、剧情线 beat 与时间推进统一翻译为 GraphDelta；未知角色/事件引用与 stale old-value 均 fail-closed。
+- `BookStateQuery` 已接管 context、review、checker、autofix、finalization 和 EntityRegistrar 的 accepted-state 读取；`ReviewQuery` 接管已接受摘要与 review notes。
+- Canon 已删除 legacy `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 双写；`StateRepository` 对应 accepted-state 查询族及 Genesis legacy entity 预灌已物理删除。
+- `entities/entity_aliases` 暂留作 Canon 后身份唯一性索引；legacy accepted-state 表、deprecated world-model projection facade 与剩余入口壳仍待本 Slice 后续删除。
+- GraphDelta patch 持久化现在记录并按 sequence 重放，避免 create/append 顺序在数据库 round-trip 后漂移。
+
+验证口径：`compileall` 成功，BookState writer contract/entity admission/architecture 聚焦测试 28 passed，全仓 1554 tests collect 成功且无收集错误。按用户要求不在本任务重复运行全量测试；30/60/100/200 章 gate 均未宣称完成。
+
 ## 2026-07 Integrated Roadmap Status
 
 `docs/superpowers/specs/2026-07-06-forwin-integrated-roadmap-full-design.md` and `docs/superpowers/plans/2026-07-06-forwin-integrated-roadmap-full.md` track the integrated runtime work now reflected in code:

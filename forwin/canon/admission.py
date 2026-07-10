@@ -118,51 +118,6 @@ class CanonAdmissionService:
                 project_id=project_id,
                 plan=entity_admission_plan,
             )
-            world_projection._ensure_genesis_canon_seed_entities(
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project_id,
-            )
-            filtered_state_changes = governance._filter_supported_state_changes(
-                writer_output.state_changes
-            )
-            filtered_state_changes = world_projection._filter_resolvable_state_changes(
-                repo,
-                project_id,
-                chapter_number,
-                filtered_state_changes,
-            )
-            updater.apply_state_changes(
-                project_id,
-                chapter_number,
-                filtered_state_changes,
-            )
-            world_projection._ensure_event_mentioned_non_character_entities(
-                repo,
-                updater,
-                project_id,
-                chapter_number,
-                writer_output,
-            )
-            filtered_events = world_projection._filter_resolvable_events(
-                repo,
-                project_id,
-                chapter_number,
-                writer_output.new_events,
-            )
-            updater.apply_events(project_id, chapter_number, filtered_events)
-            updater.apply_thread_beats(
-                project_id,
-                chapter_number,
-                writer_output.thread_beats,
-            )
-            if writer_output.time_advance:
-                updater.apply_time_advance(
-                    project_id,
-                    chapter_number,
-                    writer_output.time_advance,
-                )
             runtime._record_decision_event(
                 updater=updater,
                 project_id=project_id,

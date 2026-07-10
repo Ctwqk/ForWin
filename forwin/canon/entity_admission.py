@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.governance import DecisionEventType
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
@@ -49,7 +50,7 @@ class EntityAdmissionCommitter:
                     decision=decision,
                 )
             elif decision.action == "register_alias":
-                entity = self._require_character(
+                entity = self._require_or_create_registry_character(
                     project_id=project_id,
                     entity_id=decision.entity_id,
                 )
@@ -73,48 +74,24 @@ class EntityAdmissionCommitter:
         chapter_number: int,
         decision: EntityAdmissionDecision,
     ) -> Entity:
-        entity = self.session.get(Entity, decision.entity_id)
-        if entity is not None:
-            if (
-                entity.project_id != project_id
-                or entity.kind != "character"
-                or entity.name != decision.canonical_name
-            ):
-                raise ValueError(
-                    f"Entity admission id conflict: {decision.mention_name}"
-                )
-            return entity
-        name_owner = self.session.execute(
-            select(Entity).where(
-                Entity.project_id == project_id,
-                Entity.name == decision.canonical_name,
-            )
-        ).scalars().first()
-        if name_owner is not None:
+        existing = self.session.get(Entity, decision.entity_id)
+        entity = self._require_or_create_registry_character(
+            project_id=project_id,
+            entity_id=decision.entity_id,
+        )
+        if entity.name != decision.canonical_name:
             raise ValueError(
-                f'Entity name "{decision.canonical_name}" already exists'
+                f"Entity admission id conflict: {decision.mention_name}"
             )
-        entity = Entity(
-            id=decision.entity_id,
-            project_id=project_id,
-            kind="character",
-            name=decision.canonical_name,
-            aliases_json="[]",
-            description=decision.role_hint,
-            importance=decision.importance,
-            created_at_chapter=chapter_number,
-            is_active=True,
-        )
-        self.session.add(entity)
-        self.session.flush()
-        self._record_event(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_type=DecisionEventType.ENTITY_REGISTERED,
-            summary=f"实体注册器注册新角色「{entity.name}」。",
-            payload=decision.model_dump(mode="json"),
-            related_object_id=entity.id,
-        )
+        if existing is None:
+            self._record_event(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_type=DecisionEventType.ENTITY_REGISTERED,
+                summary=f"实体注册器注册新角色「{entity.name}」。",
+                payload=decision.model_dump(mode="json"),
+                related_object_id=entity.id,
+            )
         return entity
 
     def _register_alias(
@@ -163,15 +140,50 @@ class EntityAdmissionCommitter:
             related_object_id=entity.id,
         )
 
-    def _require_character(self, *, project_id: str, entity_id: str) -> Entity:
-        entity = self.session.get(Entity, entity_id)
+    def _require_or_create_registry_character(
+        self,
+        *,
+        project_id: str,
+        entity_id: str,
+    ) -> Entity:
+        node = BookStateRepository(self.session).get_world_node(entity_id)
         if (
-            entity is None
-            or entity.project_id != project_id
+            node is None
+            or node.project_id != project_id
+            or str(node.node_type) != "character"
+            or not node.is_active
+        ):
+            raise ValueError(f"Entity admission BookState target missing: {entity_id}")
+        entity = self.session.get(Entity, entity_id)
+        if entity is None:
+            name_owner = self.session.execute(
+                select(Entity).where(
+                    Entity.project_id == project_id,
+                    Entity.name == node.name,
+                )
+            ).scalars().first()
+            if name_owner is not None:
+                raise ValueError(f'Entity name "{node.name}" already exists')
+            entity = Entity(
+                id=node.id,
+                project_id=project_id,
+                kind="character",
+                name=node.name,
+                aliases_json=json.dumps(node.aliases, ensure_ascii=False),
+                description=node.description or node.summary,
+                importance=node.importance,
+                created_at_chapter=node.created_at_chapter,
+                is_active=True,
+            )
+            self.session.add(entity)
+            self.session.flush()
+        if (
+            entity.project_id != project_id
             or entity.kind != "character"
+            or entity.name != node.name
             or not entity.is_active
         ):
-            raise ValueError(f"Entity admission alias target missing: {entity_id}")
+            raise ValueError(f"Entity admission registry conflict: {entity_id}")
         return entity
 
     def _sync_alias_json(self, entity: Entity, alias: str) -> None:

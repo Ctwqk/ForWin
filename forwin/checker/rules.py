@@ -2,7 +2,9 @@
 from __future__ import annotations
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from forwin.book_state.query import BookStateQuery
 
 if TYPE_CHECKING:
     from forwin.state.repo import StateRepository
@@ -30,8 +32,23 @@ BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 class ContinuityChecker:
     """Checks chapter output for basic continuity issues."""
 
-    def __init__(self, repo: StateRepository, min_chars: int = 2500, max_chars: int = 3200):
+    def __init__(
+        self,
+        repo: StateRepository,
+        min_chars: int = 2500,
+        max_chars: int = 3200,
+        *,
+        book_state_query: BookStateQuery | Any | None = None,
+    ):
         self.repo = repo
+        session = getattr(repo, "session", None)
+        self.book_state = (
+            book_state_query
+            if book_state_query is not None
+            else BookStateQuery(session)
+            if session is not None
+            else None
+        )
         self.min_chars = min_chars
         self.max_chars = max_chars
 
@@ -94,7 +111,10 @@ class ContinuityChecker:
         return issues
 
     def _check_canon_name_anchors(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
-        anchors = self._canon_name_anchors(project_id)
+        anchors = self._canon_name_anchors(
+            project_id,
+            as_of_chapter=max(int(output.chapter_number) - 1, 0),
+        )
         if not anchors:
             return []
         violations = find_canon_name_violations(
@@ -128,12 +148,22 @@ class ContinuityChecker:
             )
         return issues
 
-    def _canon_name_anchors(self, project_id: str):
-        get_active_threads = getattr(self.repo, "get_active_threads", None)
-        if not callable(get_active_threads):
+    def _canon_name_anchors(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int = 10**9,
+    ):
+        if self.book_state is None:
             return []
         try:
-            threads = list(get_active_threads(project_id) or [])
+            threads = list(
+                self.book_state.active_threads(
+                    project_id,
+                    as_of_chapter=as_of_chapter,
+                )
+                or []
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("canon name anchor check skipped: %s", exc)
             return []
@@ -222,7 +252,12 @@ class ContinuityChecker:
         issues = []
 
         # Get entities that are dead/inactive
-        entities = self.repo.get_active_entities(project_id)
+        if self.book_state is None:
+            return issues
+        entities = self.book_state.active_entities(
+            project_id,
+            as_of_chapter=max(int(output.chapter_number) - 1, 0),
+        )
         dead_names = set()
         for e in entities:
             state = e.current_state
@@ -262,8 +297,15 @@ class ContinuityChecker:
         """Check if beat candidates reference resolved/abandoned threads."""
         issues = []
 
+        if self.book_state is None:
+            return issues
+
         for beat in output.thread_beats:
-            thread = self.repo.get_thread_by_name(project_id, beat.thread_name)
+            thread = self.book_state.thread_by_name(
+                project_id,
+                beat.thread_name,
+                as_of_chapter=max(int(output.chapter_number) - 1, 0),
+            )
             if thread and thread.status in ("resolved", "abandoned"):
                 issues.append(ContinuityIssue(
                     rule_name="thread_already_closed",

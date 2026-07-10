@@ -9,12 +9,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.query import BookStateQuery
 from forwin.checker.reference_classifier import (
     looks_like_generic_character_reference,
     looks_like_non_character_reference,
 )
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
+from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
 
@@ -44,16 +46,16 @@ class LLMEntityAdmissionClassifier:
         chapter_number: int,
         names: list[str],
         writer_output: WriterOutput,
-        existing_entities: list[Entity],
+        existing_entities: list[EntitySnapshot],
     ) -> list[dict[str, Any]]:
         if self.llm_client is None:
             raise RuntimeError("entity registrar has no LLM client")
         entity_rows = [
             {
-                "entity_id": entity.id,
+                "entity_id": entity.entity_id,
                 "name": entity.name,
                 "kind": entity.kind,
-                "aliases": _json_list(entity.aliases_json),
+                "aliases": list(entity.aliases),
                 "description": entity.description,
             }
             for entity in existing_entities
@@ -107,6 +109,7 @@ class EntityRegistrar:
     def __init__(self, *, session: Session, classifier: Any | None = None) -> None:
         self.session = session
         self.classifier = classifier
+        self.book_state = BookStateQuery(session)
 
     def plan_writer_output(
         self,
@@ -125,6 +128,7 @@ class EntityRegistrar:
             names=unknown_names,
             writer_output=writer_output,
         )
+        as_of_chapter = max(int(chapter_number) - 1, 0)
         reserved_names: dict[str, str] = {}
         decisions: list[EntityAdmissionDecision] = []
         for raw_decision in raw_decisions:
@@ -140,6 +144,7 @@ class EntityRegistrar:
                     mention_name=mention_name,
                     raw_decision=raw_decision,
                     reserved_names=reserved_names,
+                    as_of_chapter=as_of_chapter,
                 )
             elif action == "register_alias":
                 decision = self._plan_alias_registration(
@@ -147,6 +152,7 @@ class EntityRegistrar:
                     mention_name=mention_name,
                     raw_decision=raw_decision,
                     reserved_names=reserved_names,
+                    as_of_chapter=as_of_chapter,
                 )
             elif action == "background_generic":
                 decision = EntityAdmissionDecision(
@@ -248,6 +254,7 @@ class EntityRegistrar:
         mention_name: str,
         raw_decision: dict[str, Any],
         reserved_names: dict[str, str],
+        as_of_chapter: int,
     ) -> EntityAdmissionDecision:
         canonical_name = str(
             raw_decision.get("canonical_name") or mention_name
@@ -269,6 +276,7 @@ class EntityRegistrar:
             target_entity_id="",
             reserved_names=reserved_names,
             mention_name=mention_name,
+            as_of_chapter=as_of_chapter,
         )
         if not canonical_name:
             conflict = "missing canonical name"
@@ -294,11 +302,13 @@ class EntityRegistrar:
         mention_name: str,
         raw_decision: dict[str, Any],
         reserved_names: dict[str, str],
+        as_of_chapter: int,
     ) -> EntityAdmissionDecision:
         entity, error = self._resolve_character_target(
             project_id=project_id,
             entity_id=str(raw_decision.get("entity_id") or "").strip(),
             canonical_name=str(raw_decision.get("canonical_name") or "").strip(),
+            as_of_chapter=as_of_chapter,
         )
         if entity is None:
             return self._conflict_decision(mention_name, error or "alias target not found")
@@ -319,9 +329,10 @@ class EntityRegistrar:
         conflict = self._name_conflict(
             project_id=project_id,
             names=aliases,
-            target_entity_id=entity.id,
+            target_entity_id=entity.entity_id,
             reserved_names=reserved_names,
             mention_name=mention_name,
+            as_of_chapter=as_of_chapter,
         )
         if conflict:
             return self._conflict_decision(mention_name, conflict)
@@ -330,7 +341,7 @@ class EntityRegistrar:
         return EntityAdmissionDecision(
             mention_name=mention_name,
             action="register_alias",
-            entity_id=entity.id,
+            entity_id=entity.entity_id,
             canonical_name=entity.name,
             aliases=aliases,
             role_hint=str(raw_decision.get("role_hint") or ""),
@@ -356,8 +367,13 @@ class EntityRegistrar:
         target_entity_id: str,
         reserved_names: dict[str, str],
         mention_name: str,
+        as_of_chapter: int,
     ) -> str:
-        owners = self._name_owners(project_id, names)
+        owners = self._name_owners(
+            project_id,
+            names,
+            as_of_chapter=as_of_chapter,
+        )
         for name in names:
             reserved_by = reserved_names.get(name)
             if reserved_by and reserved_by != mention_name:
@@ -376,6 +392,7 @@ class EntityRegistrar:
         project_id: str,
         plan: EntityAdmissionPlan,
     ) -> None:
+        as_of_chapter = max(int(plan.chapter_number) - 1, 0)
         reserved_names: dict[str, str] = {}
         for decision in plan.decisions:
             if decision.action in {"background_generic", "plan_conflict"}:
@@ -406,6 +423,7 @@ class EntityRegistrar:
                 target_entity_id=target_entity_id,
                 reserved_names=reserved_names,
                 mention_name=decision.mention_name,
+                as_of_chapter=as_of_chapter,
             )
             if conflict:
                 raise ValueError(
@@ -417,6 +435,7 @@ class EntityRegistrar:
                 self._require_character_target(
                     project_id=project_id,
                     entity_id=decision.entity_id,
+                    as_of_chapter=as_of_chapter,
                 )
 
     def _classify(
@@ -453,13 +472,10 @@ class EntityRegistrar:
                     for name in unresolved_names
                 ],
             ]
-        existing_entities = list(
-            self.session.execute(
-                select(Entity).where(
-                    Entity.project_id == project_id,
-                    Entity.is_active == True,  # noqa: E712
-                )
-            ).scalars().all()
+        existing_entities = self.book_state.active_entities(
+            project_id,
+            as_of_chapter=max(int(chapter_number) - 1, 0),
+            kinds={"character"},
         )
         try:
             raw = self.classifier.classify(
@@ -526,61 +542,49 @@ class EntityRegistrar:
                 seen.add(name)
         if not mentioned:
             return []
-        known = self._entities_by_names(project_id, mentioned)
+        known = self._entities_by_names(
+            project_id,
+            mentioned,
+            as_of_chapter=max(int(writer_output.chapter_number) - 1, 0),
+        )
         return [name for name in mentioned if name not in known]
 
     def _entities_by_names(
         self,
         project_id: str,
         names: list[str],
-    ) -> dict[str, Entity]:
-        normalized = _dedupe(names)
-        if not normalized:
-            return {}
-        mapping: dict[str, Entity] = {}
-        exact_rows = self.session.execute(
-            select(Entity).where(
-                Entity.project_id == project_id,
-                Entity.is_active == True,  # noqa: E712
-                Entity.name.in_(normalized),
-            )
-        ).scalars().all()
-        for entity in exact_rows:
-            mapping[entity.name] = entity
-        unresolved = [name for name in normalized if name not in mapping]
-        if not unresolved:
-            return mapping
-        alias_rows = self.session.execute(
-            select(EntityAlias.alias, Entity)
-            .join(Entity, EntityAlias.entity_id == Entity.id)
-            .where(
-                Entity.project_id == project_id,
-                Entity.is_active == True,  # noqa: E712
-                EntityAlias.project_id == project_id,
-                EntityAlias.alias.in_(unresolved),
-            )
-        ).all()
-        for alias, entity in alias_rows:
-            mapping[str(alias)] = entity
+        *,
+        as_of_chapter: int,
+    ) -> dict[str, EntitySnapshot]:
+        requested = set(_dedupe(names))
+        mapping: dict[str, EntitySnapshot] = {}
+        for entity in self.book_state.active_entities(
+            project_id,
+            as_of_chapter=as_of_chapter,
+            kinds={"character"},
+        ):
+            for name in (entity.name, *entity.aliases):
+                if name in requested:
+                    mapping[name] = entity
         return mapping
 
     def _name_owners(
         self,
         project_id: str,
         names: list[str],
+        *,
+        as_of_chapter: int,
     ) -> dict[str, set[str]]:
         normalized = _dedupe(names)
         owners = {name: set() for name in normalized}
         if not normalized:
             return owners
-        exact_rows = self.session.execute(
-            select(Entity.name, Entity.id).where(
-                Entity.project_id == project_id,
-                Entity.name.in_(normalized),
-            )
-        ).all()
-        for name, entity_id in exact_rows:
-            owners[str(name)].add(str(entity_id))
+        for name, entity in self.book_state.entities_by_names(
+            project_id,
+            normalized,
+            as_of_chapter=as_of_chapter,
+        ).items():
+            owners[name].add(entity.entity_id)
         alias_rows = self.session.execute(
             select(EntityAlias.alias, EntityAlias.entity_id).where(
                 EntityAlias.project_id == project_id,
@@ -597,41 +601,28 @@ class EntityRegistrar:
         project_id: str,
         entity_id: str,
         canonical_name: str,
-    ) -> tuple[Entity | None, str]:
+        as_of_chapter: int,
+    ) -> tuple[EntitySnapshot | None, str]:
+        characters = self.book_state.active_entities(
+            project_id,
+            as_of_chapter=as_of_chapter,
+            kinds={"character"},
+        )
         if entity_id:
-            entity = self.session.get(Entity, entity_id)
-            if (
-                entity is None
-                or entity.project_id != project_id
-                or entity.kind != "character"
-                or not entity.is_active
-            ):
+            entity = next(
+                (item for item in characters if item.entity_id == entity_id),
+                None,
+            )
+            if entity is None:
                 return None, "alias target not found"
             return entity, ""
         if not canonical_name:
             return None, "alias target is missing entity_id and canonical_name"
-        rows = list(
-            self.session.execute(
-                select(Entity).where(
-                    Entity.project_id == project_id,
-                    Entity.is_active == True,  # noqa: E712
-                    Entity.name == canonical_name,
-                )
-            ).scalars().all()
-        )
-        rows.extend(
-            self.session.execute(
-                select(Entity)
-                .join(EntityAlias, EntityAlias.entity_id == Entity.id)
-                .where(
-                    Entity.project_id == project_id,
-                    Entity.is_active == True,  # noqa: E712
-                    EntityAlias.project_id == project_id,
-                    EntityAlias.alias == canonical_name,
-                )
-            ).scalars().all()
-        )
-        unique = {entity.id: entity for entity in rows if entity.kind == "character"}
+        unique = {
+            entity.entity_id: entity
+            for entity in characters
+            if canonical_name == entity.name or canonical_name in entity.aliases
+        }
         if len(unique) != 1:
             reason = "alias target not found" if not unique else "alias target is ambiguous"
             return None, reason
@@ -642,14 +633,21 @@ class EntityRegistrar:
         *,
         project_id: str,
         entity_id: str,
-    ) -> Entity:
-        entity = self.session.get(Entity, entity_id)
-        if (
-            entity is None
-            or entity.project_id != project_id
-            or entity.kind != "character"
-            or not entity.is_active
-        ):
+        as_of_chapter: int,
+    ) -> EntitySnapshot:
+        entity = next(
+            (
+                item
+                for item in self.book_state.active_entities(
+                    project_id,
+                    as_of_chapter=as_of_chapter,
+                    kinds={"character"},
+                )
+                if item.entity_id == entity_id
+            ),
+            None,
+        )
+        if entity is None:
             raise ValueError(f"Entity admission alias target missing: {entity_id}")
         return entity
 
@@ -712,16 +710,6 @@ def _importance(raw: object) -> int:
     except (TypeError, ValueError):
         value = 5
     return max(1, min(10, value))
-
-
-def _json_list(raw: str) -> list[str]:
-    try:
-        payload = json.loads(raw or "[]")
-    except (TypeError, json.JSONDecodeError):
-        return []
-    if not isinstance(payload, list):
-        return []
-    return [str(item or "").strip() for item in payload if str(item or "").strip()]
 
 
 def _dedupe(items: list[str]) -> list[str]:

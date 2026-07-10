@@ -1,28 +1,6 @@
 from __future__ import annotations
 
-from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
-
-_EVENT_STUB_ENTITY_KINDS = {"location", "faction", "item", "rule"}
-_EVENT_STUB_KIND_ALIASES = {
-    "地点": "location",
-    "位置": "location",
-    "场所": "location",
-    "组织": "faction",
-    "势力": "faction",
-    "机构": "faction",
-    "团体": "faction",
-    "org": "faction",
-    "organization": "faction",
-    "物品": "item",
-    "物件": "item",
-    "道具": "item",
-    "证物": "item",
-    "规则": "rule",
-    "机制": "rule",
-    "协议": "rule",
-}
-_EVENT_STUB_MAX_NAME_LENGTH = 40
 
 @staticmethod
 def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, object]:
@@ -101,7 +79,8 @@ def _commit_book_state_canon(
         "compiler": compiler_pack.model_dump(mode="json"),
     }
     extractor = BookStateGraphDeltaExtractor(
-        layers=set(self.policy.canon.book_state_layers)
+        layers=set(self.policy.canon.book_state_layers),
+        session=session,
     )
     extraction = extractor.extract(
         BookStateExtractionRequest(
@@ -340,227 +319,6 @@ def _commit_book_state_canon(
     )
     return None
 
-@staticmethod
-def _filter_resolvable_events(
-    repo: StateRepository,
-    project_id: str,
-    chapter_number: int,
-    events: list[EventCandidate],
-) -> list[EventCandidate]:
-    entity_lookup = repo.get_entities_by_names(
-        project_id,
-        [
-            name
-            for event in events
-            for name in event.involved_entity_names
-        ],
-    )
-    filtered: list[EventCandidate] = []
-    for event in events:
-        unknown_names = [
-            name
-            for name in event.involved_entity_names
-            if entity_lookup.get(name) is None
-        ]
-        if unknown_names:
-            logger.warning(
-                "Dropping event %r in chapter %d because entities are unknown: %s",
-                event.summary,
-                chapter_number,
-                ", ".join(unknown_names),
-            )
-            continue
-        filtered.append(event)
-    return filtered
-
-@staticmethod
-def _ensure_event_mentioned_non_character_entities(
-    repo: StateRepository,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-    writer_output: WriterOutput,
-) -> int:
-    event_names = list(
-        dict.fromkeys(
-            str(name).strip()
-            for event in getattr(writer_output, "new_events", []) or []
-            for name in getattr(event, "involved_entity_names", []) or []
-            if str(name).strip()
-        )
-    )
-    if not event_names:
-        return 0
-    existing = repo.get_entities_by_names(project_id, event_names)
-    mention_kind_by_name: dict[str, str] = {}
-    for mention in getattr(writer_output, "entity_mentions", []) or []:
-        name = str(getattr(mention, "entity_name", "") or "").strip()
-        if not name or name not in event_names or len(name) > _EVENT_STUB_MAX_NAME_LENGTH:
-            continue
-        if not bool(getattr(mention, "is_named", True)):
-            continue
-        if not bool(getattr(mention, "is_on_stage", True)):
-            continue
-        raw_kind = str(getattr(mention, "entity_kind", "") or "").strip()
-        kind = _EVENT_STUB_KIND_ALIASES.get(raw_kind, raw_kind.lower())
-        if kind in _EVENT_STUB_ENTITY_KINDS:
-            mention_kind_by_name.setdefault(name, kind)
-
-    created = 0
-    for name, kind in mention_kind_by_name.items():
-        if existing.get(name) is not None:
-            continue
-        entity = updater.create_entity(
-            project_id=project_id,
-            kind=kind,
-            name=name,
-            description=f"第{chapter_number}章事件引用的{kind}实体；由本章entity_mentions补建。",
-            aliases=[],
-            importance=4,
-            chapter=chapter_number,
-        )
-        existing[name] = entity
-        created += 1
-    if created:
-        logger.info(
-            "Seeded %d event-mentioned non-character canon entities in chapter %d.",
-            created,
-            chapter_number,
-        )
-    return created
-
-@staticmethod
-def _filter_resolvable_state_changes(
-    repo: StateRepository,
-    project_id: str,
-    chapter_number: int,
-    changes: list,
-) -> list:
-    entity_names = [
-        str(change.entity_name or "").strip()
-        for change in changes
-        if str(change.entity_name or "").strip()
-    ]
-    entity_lookup = repo.get_entities_by_names(project_id, entity_names)
-    filtered: list = []
-    for change in changes:
-        entity_name = str(change.entity_name or "").strip()
-        entity = entity_lookup.get(entity_name)
-        if str(getattr(change, "entity_kind", "") or "") == "character" and entity_name:
-            if entity is None:
-                logger.warning(
-                    "Dropping state change for unknown character %r in chapter %d.",
-                    entity_name,
-                    chapter_number,
-                )
-                continue
-        if entity is not None:
-            resolved_kind = str(getattr(entity, "kind", "") or "").strip()
-            normalized_field = normalize_state_field(resolved_kind, str(change.field or ""))
-            known_fields = KNOWN_STATE_FIELDS.get(resolved_kind, set())
-            if known_fields and normalized_field not in known_fields:
-                logger.warning(
-                    "Dropping unsupported state change field %r for resolved entity kind %r in chapter %d.",
-                    change.field,
-                    resolved_kind,
-                    chapter_number,
-                )
-                continue
-            if normalized_field and normalized_field != change.field:
-                change = change.model_copy(update={"field": normalized_field})
-        filtered.append(change)
-    return filtered
-
-@staticmethod
-def _ensure_genesis_canon_seed_entities(
-    *,
-    session: Session,
-    repo: StateRepository,
-    updater: StateUpdater,
-    project_id: str,
-) -> None:
-    project = session.get(Project, project_id)
-    if project is None:
-        return
-    revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
-    revision = session.get(BookGenesisRevision, revision_id) if revision_id else None
-    if revision is None:
-        return
-    try:
-        pack = json.loads(str(getattr(revision, "pack_json", "") or "{}"))
-    except (TypeError, json.JSONDecodeError):
-        return
-    if not isinstance(pack, dict):
-        return
-    world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
-    story_engine = world.get("story_engine") if isinstance(world.get("story_engine"), dict) else {}
-    seed_specs: list[tuple[str, str, dict]] = []
-    for collection_key, entity_kind in (
-        ("core_cast", "character"),
-        ("characters", "character"),
-        ("factions", "faction"),
-        ("opposition", "character"),
-    ):
-        for item in story_engine.get(collection_key) or []:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or item.get("id") or "").strip()
-            if not name or len(name) > 40:
-                continue
-            seed_specs.append((entity_kind, name, item))
-    for anchor in ContinuityChecker(repo)._canon_name_anchors(project_id):
-        name = str(getattr(anchor, "canonical_name", "") or "").strip()
-        role_label = str(getattr(anchor, "role_label", "") or "").strip()
-        if not name or len(name) > 40:
-            continue
-        seed_specs.append(
-            (
-                "character",
-                name,
-                {
-                    "role": f"{role_label} canon name anchor" if role_label else "canon name anchor",
-                    "aliases": [role_label] if role_label else [],
-                },
-            )
-        )
-    if not seed_specs:
-        return
-
-    changed = False
-    seen: set[tuple[str, str]] = set()
-    for entity_kind, name, payload in seed_specs:
-        key = (entity_kind, name)
-        if key in seen:
-            continue
-        seen.add(key)
-        existing = repo.get_entities_by_names(project_id, [name]).get(name)
-        if existing is not None:
-            continue
-        aliases = [
-            str(alias).strip()
-            for alias in (payload.get("aliases") or [])
-            if str(alias).strip()
-        ]
-        if "/" in name:
-            aliases.extend(part.strip() for part in name.split("/") if part.strip() and part.strip() != name)
-        description_parts = [
-            str(payload.get(key_name) or "").strip()
-            for key_name in ("role", "desire", "fear", "secret", "goal", "leverage")
-            if str(payload.get(key_name) or "").strip()
-        ]
-        updater.create_entity(
-            project_id=project_id,
-            kind=entity_kind,
-            name=name,
-            description="；".join(description_parts),
-            aliases=list(dict.fromkeys(aliases)),
-            importance=8 if entity_kind == "character" else 7,
-            chapter=0,
-        )
-        changed = True
-    if changed:
-        SubWorldManager().ensure_registry(session, project_id)
-
 def _run_phase3_pass(
     self,
     *,
@@ -650,4 +408,4 @@ def _run_phase3_pass(
 
 
 
-__all__ = ['_prompt_trace_success_summary', '_commit_book_state_canon', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_run_phase3_pass']
+__all__ = ['_prompt_trace_success_summary', '_commit_book_state_canon', '_run_phase3_pass']

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from forwin.canon_quality.signals import CanonAdmissionGateResult
+
+if TYPE_CHECKING:
+    from forwin.canon.plan import CanonCommitPlan
 
 
 @dataclass(frozen=True)
@@ -13,6 +17,21 @@ class CanonQualityGateOutcome:
     @property
     def blocked(self) -> bool:
         return bool(self.blocked_path)
+
+    def __bool__(self) -> bool:
+        return self.blocked
+
+
+@dataclass(frozen=True)
+class CanonPreparationOutcome:
+    plan: CanonCommitPlan | None = None
+    blocked_path: str = ""
+    block_kind: str = ""
+    canon_gate_result: CanonAdmissionGateResult | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return self.plan is None
 
     def __bool__(self) -> bool:
         return self.blocked

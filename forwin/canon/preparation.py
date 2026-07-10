@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.candidate_drafts import candidate_body_hash
+from forwin.book_state.extraction_contract import BookStateExtractionRequest
+from forwin.book_state.extraction_contract import BookStateExtractionResult
+from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
+from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
+from forwin.governance import DecisionEventType
+from forwin.models.book_state import GraphDeltaRow
+from forwin.models.project import ChapterPlan
+from forwin.naming import EntityAdmissionPlan, EntityRegistrar
+from forwin.planning.world_contracts import WorldContractRepository
+from forwin.protocol.book_state import ApprovedGraphDeltaSet
+from forwin.protocol.review import ReviewVerdict
+from forwin.protocol.writer import WriterOutput
+
+from .plan import CanonAuditEvent, CanonCommitPlan, CanonOutboxEvent
+from .types import CanonPreparationOutcome
+
+
+@dataclass(frozen=True)
+class BookStatePreparationOutcome:
+    approved_changes: ApprovedGraphDeltaSet | None = None
+    blocked_path: str = ""
+    extraction: BookStateExtractionResult | None = None
+    review_verdict: BookStateReviewVerdict | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return self.approved_changes is None
+
+
+class BookStateCanonPreparer:
+    def prepare(
+        self,
+        *,
+        runtime: Any,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+    ) -> BookStatePreparationOutcome:
+        del verdict
+        chapter_intent = WorldContractRepository(session).get_chapter_intent(
+            project_id,
+            chapter_number,
+        )
+        extraction = BookStateGraphDeltaExtractor(
+            layers=set(runtime.policy.canon.book_state_layers),
+            session=session,
+        ).extract(
+            BookStateExtractionRequest(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output.model_copy(
+                    update={"project_id": project_id}
+                ),
+                chapter_intent=chapter_intent,
+                review_verdict_id=(
+                    f"book_state_direct_review_{project_id}_{chapter_number}"
+                ),
+            )
+        )
+        if not extraction.accepted or extraction.changes is None:
+            return BookStatePreparationOutcome(
+                blocked_path="book-state-direct-extraction-blocked",
+                extraction=extraction,
+            )
+        review = BookStateReviewGate(session).review(extraction.changes)
+        if not review.accepted or review.approved_changes is None:
+            return BookStatePreparationOutcome(
+                blocked_path="book-state-review-gate-blocked",
+                extraction=extraction,
+                review_verdict=review,
+            )
+        return BookStatePreparationOutcome(
+            approved_changes=review.approved_changes,
+            extraction=extraction,
+            review_verdict=review,
+        )
+
+
+class CanonPreparationService:
+    def __init__(
+        self,
+        *,
+        quality_evaluator: Callable[..., Any] | None = None,
+        book_state_preparer: Any | None = None,
+    ) -> None:
+        self.quality_evaluator = quality_evaluator or _evaluate_canon_quality
+        self.book_state_preparer = book_state_preparer or BookStateCanonPreparer()
+
+    def prepare(
+        self,
+        *,
+        runtime: Any,
+        session: Session,
+        repo: Any,
+        updater: Any,
+        candidate_id: str,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+        acceptance_mode: str,
+        repair_attempt_count: int,
+        residual_review_issues: list[dict[str, Any]],
+        canon_risk_level: str,
+    ) -> CanonPreparationOutcome:
+        candidate = CandidateDraftRepository(session).get(candidate_id)
+        if candidate is None:
+            raise LookupError("candidate draft not found")
+        if candidate.project_id != project_id:
+            raise ValueError("candidate project mismatch")
+        if int(candidate.chapter_number or 0) != int(chapter_number or 0):
+            raise ValueError("candidate chapter mismatch")
+        if candidate.body_hash != candidate_body_hash(writer_output.body):
+            raise ValueError("candidate body changed after review")
+
+        quality_outcome = self.quality_evaluator(
+            runtime=runtime,
+            session=session,
+            repo=repo,
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+            verdict=verdict,
+        )
+        if quality_outcome.blocked:
+            return CanonPreparationOutcome(
+                blocked_path=quality_outcome.blocked_path,
+                block_kind="canon_quality",
+                canon_gate_result=quality_outcome.gate_result,
+            )
+        try:
+            entity_admission_plan = EntityRegistrar(
+                session=session
+            ).verify_writer_output_admission(
+                project_id=project_id,
+                writer_output=writer_output,
+            )
+        except ValueError as exc:
+            return CanonPreparationOutcome(
+                blocked_path=str(exc),
+                block_kind="entity_admission",
+            )
+        book_state_outcome = self.book_state_preparer.prepare(
+            runtime=runtime,
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+            verdict=verdict,
+        )
+        if book_state_outcome.blocked:
+            return CanonPreparationOutcome(
+                blocked_path=book_state_outcome.blocked_path,
+                block_kind="book_state",
+            )
+        return self.prepare_from_approved(
+            session=session,
+            candidate_id=candidate_id,
+            approved_book_state_changes=book_state_outcome.approved_changes,
+            entity_admission_plan=entity_admission_plan,
+            acceptance_mode=acceptance_mode,
+            repair_attempt_count=repair_attempt_count,
+            residual_review_issues=residual_review_issues,
+            canon_risk_level=canon_risk_level,
+        )
+
+    def prepare_from_approved(
+        self,
+        *,
+        session: Session,
+        candidate_id: str,
+        approved_book_state_changes: ApprovedGraphDeltaSet,
+        entity_admission_plan: EntityAdmissionPlan,
+        acceptance_mode: str,
+        repair_attempt_count: int,
+        residual_review_issues: list[dict[str, Any]],
+        canon_risk_level: str,
+    ) -> CanonPreparationOutcome:
+        repository = CandidateDraftRepository(session)
+        candidate = repository.get(candidate_id, for_update=True)
+        if candidate is None:
+            raise LookupError("candidate draft not found")
+        project_id = str(candidate.project_id or "")
+        chapter_number = int(candidate.chapter_number or 0)
+        if approved_book_state_changes.project_id != project_id:
+            raise ValueError("BookState project mismatch")
+        if int(approved_book_state_changes.chapter_number or 0) != chapter_number:
+            raise ValueError("BookState chapter mismatch")
+        if entity_admission_plan.blocked:
+            return CanonPreparationOutcome(
+                block_kind="entity_admission",
+                blocked_path="; ".join(entity_admission_plan.plan_conflicts),
+            )
+        if entity_admission_plan.project_id != project_id:
+            raise ValueError("Entity admission project mismatch")
+        if int(entity_admission_plan.chapter_number or 0) != chapter_number:
+            raise ValueError("Entity admission chapter mismatch")
+
+        expected_previous_accepted_chapter = int(
+            session.scalar(
+                select(func.max(ChapterPlan.chapter_number)).where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.status == "accepted",
+                    ChapterPlan.chapter_number < chapter_number,
+                )
+            )
+            or 0
+        )
+        expected_book_state_chapter = int(
+            session.scalar(
+                select(func.max(GraphDeltaRow.chapter_number)).where(
+                    GraphDeltaRow.project_id == project_id,
+                    GraphDeltaRow.chapter_number < chapter_number,
+                )
+            )
+            or 0
+        )
+        plan = CanonCommitPlan.build(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            candidate_id=candidate.id,
+            candidate_body_hash=candidate.body_hash,
+            plan_revision=candidate.plan_revision,
+            policy_version=candidate.policy_version,
+            expected_previous_accepted_chapter=expected_previous_accepted_chapter,
+            expected_book_state_chapter=expected_book_state_chapter,
+            approved_book_state_changes=approved_book_state_changes,
+            entity_admission_plan=entity_admission_plan,
+            acceptance_mode=acceptance_mode,
+            repair_attempt_count=repair_attempt_count,
+            residual_review_issues=residual_review_issues,
+            canon_risk_level=canon_risk_level,
+            audit_events=(
+                CanonAuditEvent(
+                    event_type=DecisionEventType.CANON_COMMIT,
+                    event_family="business_event",
+                    summary=f"第{chapter_number}章 canon 原子提交完成。",
+                    payload={"candidate_id": candidate.id},
+                    related_object_type="candidate_draft",
+                    related_object_id=candidate.id,
+                ),
+            ),
+            outbox_events=(
+                CanonOutboxEvent(
+                    event_type="canon.post_commit.requested",
+                    payload={
+                        "project_id": project_id,
+                        "chapter_number": chapter_number,
+                        "candidate_id": candidate.id,
+                    },
+                ),
+                CanonOutboxEvent(
+                    event_type="canon.publisher.requested",
+                    payload={
+                        "project_id": project_id,
+                        "chapter_number": chapter_number,
+                        "candidate_id": candidate.id,
+                    },
+                ),
+            ),
+        )
+        repository.attach_entity_admission_plan(
+            candidate.id,
+            plan_payload=entity_admission_plan.model_dump(mode="json"),
+        )
+        repository.attach_canon_plan(
+            candidate.id,
+            plan_payload=plan.model_dump(mode="json"),
+            eligibility_payload={
+                "eligible": True,
+                "candidate_id": candidate.id,
+                "body_hash": candidate.body_hash,
+                "plan_revision": candidate.plan_revision,
+            },
+            idempotency_key=plan.idempotency_key,
+        )
+        if candidate.status != "ready_for_canon":
+            repository.transition(candidate.id, "ready_for_canon")
+        return CanonPreparationOutcome(plan=plan)
+
+
+def _evaluate_canon_quality(**kwargs: Any):
+    from forwin.generation.pipeline_core import quality_gates
+
+    runtime = kwargs.pop("runtime")
+    return quality_gates._apply_canon_quality_gate(runtime, **kwargs)
+
+
+__all__ = [
+    "BookStateCanonPreparer",
+    "BookStatePreparationOutcome",
+    "CanonPreparationService",
+]

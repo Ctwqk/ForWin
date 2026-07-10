@@ -82,7 +82,7 @@ Run: `uv run pytest -q tests/test_candidate_lifecycle_v5.py tests/test_candidate
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add forwin/models/draft.py forwin/candidate_drafts.py forwin/generation/pipeline_core/review_autofix.py tests/test_candidate_lifecycle_v5.py
@@ -105,7 +105,7 @@ git commit -m "Make candidate versions durable and immutable"
 - Consumes: reviewed candidate, `WriterOutput`, `ReviewVerdict`, `EntityAdmissionPlan`, approved `GraphDelta` set, current chapter/BookState versions.
 - Produces: frozen Pydantic `CanonCommitPlan` and `CanonPreparationOutcome`.
 
-- [ ] **Step 1: Write failing plan preparation tests**
+- [x] **Step 1: Write failing plan preparation tests**
 
 ```python
 def test_prepare_plan_performs_no_authoritative_writes(session, prepared_candidate):
@@ -120,13 +120,13 @@ def test_plan_idempotency_key_changes_with_candidate_hash(prepared_candidate):
     assert first.idempotency_key != second.idempotency_key
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 Run: `uv run pytest -q tests/test_canon_commit_plan.py`
 
 Expected: `forwin.canon.plan` and preparation service do not exist.
 
-- [ ] **Step 3: Define the frozen plan DTO**
+- [x] **Step 3: Define the frozen plan DTO**
 
 ```python
 class CanonCommitPlan(BaseModel):
@@ -151,15 +151,15 @@ class CanonCommitPlan(BaseModel):
     idempotency_key: str
 ```
 
-- [ ] **Step 4: Split BookState prepare from compile**
+- [x] **Step 4: Split BookState prepare from compile**
 
 Move extraction and `BookStateReviewGate` work out of `_commit_book_state_canon`. Preparation returns approved changes or an explicit block. It must not call `BookStateCompiler`, `KnowledgeProjectionRefresher`, memory index, publisher code, or `session.commit()`.
 
-- [ ] **Step 5: Persist the plan on the candidate**
+- [x] **Step 5: Persist the plan on the candidate**
 
 On success, transition the candidate to `ready_for_canon` and save `canon_commit_plan_json` plus `idempotency_key`. On a quality, entity, or BookState preparation block, transition to `needs_review` without authoritative writes.
 
-- [ ] **Step 6: Run focused preparation tests**
+- [x] **Step 6: Run focused preparation tests**
 
 Run: `uv run pytest -q tests/test_canon_commit_plan.py tests/test_book_state_direct_commit.py tests/test_canon_admission_gate.py`
 

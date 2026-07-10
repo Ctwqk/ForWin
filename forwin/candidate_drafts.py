@@ -252,6 +252,24 @@ class CandidateDraftRepository:
         self.session.flush()
         return row
 
+    def attach_entity_admission_plan(
+        self,
+        candidate_id: str,
+        *,
+        plan_payload: dict[str, Any],
+    ) -> CandidateDraftRecord:
+        row = self.get(candidate_id, for_update=True)
+        if row is None:
+            raise LookupError("candidate draft not found")
+        encoded = _dump_json(plan_payload, fallback={})
+        existing = str(row.entity_admission_plan_json or "{}").strip() or "{}"
+        if existing not in {"{}", encoded}:
+            raise ValueError("candidate entity admission plan is immutable")
+        row.entity_admission_plan_json = encoded
+        self.session.add(row)
+        self.session.flush()
+        return row
+
     # Transitional callers are removed when Canon adopts commit_plan.
     def mark_canon_committed(
         self,

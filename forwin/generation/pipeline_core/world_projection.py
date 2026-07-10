@@ -5,11 +5,9 @@ from forwin.observability.payloads import (
     event_error_payload,
 )
 from forwin.book_state.review_gate_ext import BookStateDirectCommitService
-from forwin.book_state.extraction_contract import BookStateExtractionRequest
-from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
+from forwin.canon.preparation import BookStateCanonPreparer
 from forwin.governance import DecisionEventType
 from forwin.knowledge_system.refresher import KnowledgeProjectionRefresher
-from forwin.retrieval import RetrievalBroker
 from forwin.protocol.review import ReviewVerdict
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.simulation.world import (
@@ -20,7 +18,6 @@ from forwin.planning.stage_analysis import save_stage_analysis
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.writer import WriterOutput
 
 @staticmethod
@@ -70,84 +67,6 @@ def _commit_book_state_canon(
     writer_output: WriterOutput,
     verdict: ReviewVerdict,
 ) -> str | None:
-    chapter_intent = WorldContractRepository(session).get_chapter_intent(
-        project_id,
-        chapter_number,
-    )
-    writer_output_for_direct = writer_output.model_copy(update={"project_id": project_id})
-    broker = RetrievalBroker()
-    writer_pack = broker.build_world_model_pack(
-        repo,
-        project_id,
-        chapter_number,
-        "writing",
-    )
-    review_pack = broker.build_world_model_pack(
-        repo,
-        project_id,
-        chapter_number,
-        "review",
-    )
-    compiler_pack = broker.build_world_model_pack(
-        repo,
-        project_id,
-        chapter_number,
-        "compiler",
-    )
-    retrieval_pack_payload = {
-        "writing": writer_pack.model_dump(mode="json"),
-        "review": review_pack.model_dump(mode="json"),
-        "compiler": compiler_pack.model_dump(mode="json"),
-    }
-    extractor = BookStateGraphDeltaExtractor(
-        layers=set(self.policy.canon.book_state_layers),
-        session=session,
-    )
-    extraction = extractor.extract(
-        BookStateExtractionRequest(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writer_output=writer_output_for_direct,
-            chapter_intent=chapter_intent,
-            review_verdict_id=f"book_state_direct_review_{project_id}_{chapter_number}",
-        )
-    )
-    gate_verdict = extraction.compatibility_gate_verdict
-    if not extraction.accepted or extraction.changes is None:
-        frozen_path = ""
-        if self.policy.canon.hard_floor:
-            frozen_path = self.artifact_store.save_frozen_candidate(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                payload={
-                    "reason": "book-state-direct-extraction-blocked",
-                    "chapter_number": chapter_number,
-                    "writer_output": writer_output.model_dump(mode="json"),
-                    "review_verdict": verdict.model_dump(mode="json"),
-                    "book_state_extraction": extraction.model_dump(mode="json"),
-                    "book_state_retrieval_packs": retrieval_pack_payload,
-                },
-            )
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="runtime_observation",
-            event_type=DecisionEventType.CANON_COMMIT_FAILED,
-            scope="chapter",
-            summary=f"第{chapter_number}章 BookState direct extraction 阻止 canon 写入。",
-            payload={
-                "book_state_extraction_issues": [
-                    issue.model_dump(mode="json") for issue in extraction.issues
-                ],
-                "extraction_path": "book_state_direct",
-            },
-        )
-        return frozen_path or "book-state-direct-extraction-blocked"
-
-    book_state_changes = extraction.changes
-    if not book_state_changes.graph_deltas:
-        return None
     self._record_decision_event(
         updater=updater,
         project_id=project_id,
@@ -160,13 +79,20 @@ def _commit_book_state_canon(
             stage="book_state_review",
             status="started",
             operation_id=self._audit_operation_id(),
-            graph_delta_count=len(book_state_changes.graph_deltas),
             extraction_path="book_state_direct",
         ),
     )
-    commit_service = BookStateDirectCommitService(session)
-    book_state_verdict = commit_service.review(book_state_changes)
-    if not book_state_verdict.accepted or book_state_verdict.approved_changes is None:
+    preparation = BookStateCanonPreparer().prepare(
+        runtime=self,
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writer_output=writer_output,
+        verdict=verdict,
+    )
+    if preparation.blocked or preparation.approved_changes is None:
+        extraction = preparation.extraction
+        book_state_verdict = preparation.review_verdict
         self._record_decision_event(
             updater=updater,
             project_id=project_id,
@@ -174,13 +100,20 @@ def _commit_book_state_canon(
             event_family="runtime_observation",
             event_type=DecisionEventType.BOOK_STATE_REVIEW_FAILED,
             scope="chapter",
-            summary=f"第{chapter_number}章 BookState review gate 未通过。",
+            summary=f"第{chapter_number}章 BookState preparation 未通过。",
             payload=audit_payload(
                 stage="book_state_review",
                 status="failed",
                 operation_id=self._audit_operation_id(),
-                issue_count=len(book_state_verdict.issues),
-                issues=[issue.model_dump(mode="json") for issue in book_state_verdict.issues],
+                blocked_path=preparation.blocked_path,
+                issues=(
+                    [issue.model_dump(mode="json") for issue in book_state_verdict.issues]
+                    if book_state_verdict is not None
+                    else [
+                        issue.model_dump(mode="json")
+                        for issue in (extraction.issues if extraction is not None else [])
+                    ]
+                ),
                 extraction_path="book_state_direct",
             ),
         )
@@ -193,8 +126,16 @@ def _commit_book_state_canon(
                     "reason": "book-state-review-gate-blocked",
                     "chapter_number": chapter_number,
                     "writer_output": writer_output.model_dump(mode="json"),
-                    "book_state_review": book_state_verdict.model_dump(mode="json"),
-                    "book_state_extraction": extraction.model_dump(mode="json"),
+                    "book_state_review": (
+                        book_state_verdict.model_dump(mode="json")
+                        if book_state_verdict is not None
+                        else {}
+                    ),
+                    "book_state_extraction": (
+                        extraction.model_dump(mode="json")
+                        if extraction is not None
+                        else {}
+                    ),
                 },
             )
         self._record_decision_event(
@@ -204,14 +145,10 @@ def _commit_book_state_canon(
             event_family="runtime_observation",
             event_type=DecisionEventType.CANON_COMMIT_FAILED,
             scope="chapter",
-            summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
-            payload={
-                "book_state_review_issues": [
-                    issue.model_dump(mode="json") for issue in book_state_verdict.issues
-                ],
-            },
+            summary=f"第{chapter_number}章 BookState preparation 阻止 canon 写入。",
+            payload={"blocked_path": preparation.blocked_path},
         )
-        return frozen_path or "book-state-review-gate-blocked"
+        return frozen_path or preparation.blocked_path
 
     self._record_decision_event(
         updater=updater,
@@ -225,10 +162,16 @@ def _commit_book_state_canon(
             stage="book_state_review",
             status="succeeded",
             operation_id=self._audit_operation_id(),
-            issue_count=len(book_state_verdict.issues),
+            issue_count=len(preparation.review_verdict.issues)
+            if preparation.review_verdict is not None
+            else 0,
             extraction_path="book_state_direct",
         ),
     )
+
+    book_state_changes = preparation.approved_changes
+    if not book_state_changes.graph_deltas:
+        return None
 
     self._record_decision_event(
         updater=updater,
@@ -242,13 +185,14 @@ def _commit_book_state_canon(
             stage="book_state_compile",
             status="started",
             operation_id=self._audit_operation_id(),
-            graph_delta_count=len(book_state_verdict.approved_changes.graph_deltas),
+            graph_delta_count=len(book_state_changes.graph_deltas),
             extraction_path="book_state_direct",
         ),
     )
+    commit_service = BookStateDirectCommitService(session)
     try:
         book_state_result = commit_service.compile_approved(
-            book_state_verdict.approved_changes,
+            book_state_changes,
             compiler_run_id=f"book_state_compile_{project_id}_{chapter_number}",
         )
     except Exception as exc:
@@ -302,9 +246,17 @@ def _commit_book_state_canon(
                     "reason": "book-state-compile-blocked",
                     "chapter_number": chapter_number,
                     "writer_output": writer_output.model_dump(mode="json"),
-                    "book_state_review": book_state_verdict.model_dump(mode="json"),
+                    "book_state_review": (
+                        preparation.review_verdict.model_dump(mode="json")
+                        if preparation.review_verdict is not None
+                        else {}
+                    ),
                     "book_state_result": book_state_result.model_dump(mode="json"),
-                    "book_state_extraction": extraction.model_dump(mode="json"),
+                    "book_state_extraction": (
+                        preparation.extraction.model_dump(mode="json")
+                        if preparation.extraction is not None
+                        else {}
+                    ),
                 },
             )
         self._record_decision_event(

@@ -17,7 +17,6 @@ from forwin.governance import (
     derive_chapter_task_contract,
     governance_to_json,
     issue_group_for_issue,
-    new_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.observability.redaction import redact_payload
@@ -61,6 +60,7 @@ from forwin.protocol import (
 
 if TYPE_CHECKING:
     from forwin.characters.models import CharacterCreationResult
+    from forwin.runtime.policy import RuntimePolicy
 
 from forwin.protocol.review import normalize_repair_scope
 
@@ -127,13 +127,13 @@ class StateUpdater:
         genre: str,
         setting_summary: str = "",
         target_total_chapters: int = 3,
-        governance=None,
+        *,
+        runtime_policy: RuntimePolicy,
         creation_status: str = "creating",
         active_genesis_revision_id: str = "",
         automation_json: str = "{}",
     ) -> Project:
         """Create a new project and flush to the session."""
-        resolved_governance = governance or new_project_governance()
         project = Project(
             id=new_id(),
             title=title,
@@ -144,7 +144,8 @@ class StateUpdater:
             creation_status=str(creation_status or "creating").strip() or "creating",
             active_genesis_revision_id=str(active_genesis_revision_id or "").strip(),
             automation_json=str(automation_json or "{}"),
-            governance_json=governance_to_json(resolved_governance),
+            runtime_policy_json=runtime_policy.model_dump_json(),
+            runtime_policy_version=1,
         )
         self.session.add(project)
         self.session.flush()

@@ -22,6 +22,12 @@ class Project(Base):
     active_genesis_revision_id: Mapped[str] = mapped_column(String, default="")
     automation_json: Mapped[str] = mapped_column(Text, default="{}")
     governance_json: Mapped[str] = mapped_column(Text, default="{}")
+    runtime_policy_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    runtime_policy_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()

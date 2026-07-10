@@ -62,25 +62,45 @@ class CodexBridgeClient:
         }
         self.last_call_trace = {
             "model": request_payload["model"],
+            "requested_model": request_payload["model"],
             "request": request_payload,
         }
-        response = self.client.post(
-            f"{self.bridge_url}/v1/codex/chat",
-            headers=headers,
-            json=request_payload,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = self.client.post(
+                f"{self.bridge_url}/v1/codex/chat",
+                headers=headers,
+                json=request_payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.last_call_trace.update(
+                {
+                    "response": None,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+            raise
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001
+            payload = {"raw_response_text": str(getattr(response, "text", "") or "")}
+        evidence = payload.get("detail") if isinstance(payload, dict) else None
+        if not isinstance(evidence, dict):
+            evidence = payload if isinstance(payload, dict) else {}
         self.last_call_trace.update(
             {
                 "response": payload,
-                "raw_events": list(payload.get("raw_events") or []),
-                "returncode": int(payload.get("returncode") or 0),
+                "http_status": int(getattr(response, "status_code", 0) or 0),
+                "raw_response_text": str(getattr(response, "text", "") or ""),
+                "raw_events": list(evidence.get("raw_events") or []),
+                "returncode": int(evidence.get("returncode") or 0),
+                "actual_model": str(evidence.get("actual_model") or "").strip(),
+                "thread_id": str(evidence.get("thread_id") or "").strip(),
             }
         )
-        if not payload.get("ok", False):
-            raise RuntimeError(str(payload.get("error") or "Codex bridge call failed"))
-        return str(payload.get("content", "") or "")
+        response.raise_for_status()
+        if not evidence.get("ok", False):
+            raise RuntimeError(str(evidence.get("error") or "Codex bridge call failed"))
+        return str(evidence.get("content", "") or "")
 
     def submit_job(
         self,

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import select
 
+from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.config import Config
+from forwin.governance import DecisionEventType
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.reckless_review import RECKLESS_REVIEW_MODEL
+from forwin.state.updater import StateUpdater
 
 
 class FakeChapterGateLLM:
@@ -50,9 +56,13 @@ class FakeChapterGateLLM:
             }
         ]
         self.last_call_result = SimpleNamespace(
-            backend="ordinary",
+            backend="codex_bridge",
             fallback_used=False,
-            trace={"backend": "ordinary", "model": RECKLESS_REVIEW_MODEL},
+            trace={
+                "backend": "codex_bridge",
+                "model": RECKLESS_REVIEW_MODEL,
+                "actual_model": RECKLESS_REVIEW_MODEL,
+            },
         )
         return content
 
@@ -107,6 +117,8 @@ def _run_reckless_gate(
     review_interval_chapters: int = 0,
     review_fail_max_rewrites: int = 3,
     num_chapters: int = 1,
+    persistence_failure: str = "",
+    canon_system_block: bool = False,
 ) -> dict[str, object]:
     database_url = postgres_test_url(
         f"reckless-chapter-{operation_mode}-{review_verdict}-{decision}"
@@ -140,8 +152,55 @@ def _run_reckless_gate(
             issues=[],
             recommended_action="continue" if review_verdict == "warn" else "manual_review",
         )
+    if canon_system_block:
+        orchestrator._apply_canon_candidate = lambda **_kwargs: CanonApplyOutcome(
+            block_kind="canon_quality",
+            canon_gate_result=CanonAdmissionGateResult(
+                project_id="project-reckless",
+                chapter_number=1,
+                draft_id="draft-reckless",
+                review_id="review-reckless",
+                commit_allowed=False,
+                verdict="fail",
+                admission_mode="blocked",
+                required_repair_scope="book",
+                gate_summary="deterministic canon system block",
+                deterministic_issue_refs=["canon-signal-1"],
+            ),
+        )
     try:
-        result = orchestrator.run("p", "g", num_chapters)
+        with ExitStack() as stack:
+            if persistence_failure == "trace":
+                original_save_prompt_trace = StateUpdater.save_prompt_trace
+
+                def fail_reckless_trace(updater, *args, **kwargs):
+                    if kwargs.get("trace_scope") == "reckless_review":
+                        raise RuntimeError("prompt trace persistence failed")
+                    return original_save_prompt_trace(updater, *args, **kwargs)
+
+                stack.enter_context(
+                    patch.object(
+                        StateUpdater,
+                        "save_prompt_trace",
+                        new=fail_reckless_trace,
+                    )
+                )
+            elif persistence_failure == "override":
+                original_record = orchestrator._record_decision_event
+
+                def fail_override(**kwargs):
+                    if kwargs.get("event_type") == DecisionEventType.RECKLESS_GATE_OVERRIDDEN:
+                        raise RuntimeError("override persistence failed")
+                    return original_record(**kwargs)
+
+                stack.enter_context(
+                    patch.object(
+                        orchestrator,
+                        "_record_decision_event",
+                        side_effect=fail_override,
+                    )
+                )
+            result = orchestrator.run("p", "g", num_chapters)
         with orchestrator._SessionFactory() as session:
             plans = list(
                 session.execute(
@@ -254,3 +313,31 @@ def test_reckless_mode_does_not_duplicate_existing_force_accept() -> None:
     assert snapshot["acceptance_modes"] == ["force_accept_after_repair"]
     assert snapshot["trace_count"] == 0
     assert snapshot["llm_calls"] == 0
+
+
+def test_reckless_trace_persistence_failure_preserves_review_gate() -> None:
+    snapshot = _run_reckless_gate("approve", persistence_failure="trace")
+
+    assert snapshot["result"].status == "needs_review"
+    assert snapshot["result"].failed_chapters == []
+    assert snapshot["plan_statuses"] == ["needs_review"]
+    assert snapshot["trace_count"] == 0
+
+
+def test_reckless_override_persistence_failure_preserves_review_gate() -> None:
+    snapshot = _run_reckless_gate("approve", persistence_failure="override")
+
+    assert snapshot["result"].status == "needs_review"
+    assert snapshot["result"].failed_chapters == []
+    assert snapshot["plan_statuses"] == ["needs_review"]
+    assert snapshot["trace_count"] == 0
+
+
+def test_reckless_approval_cannot_bypass_canon_system_block() -> None:
+    snapshot = _run_reckless_gate("approve", canon_system_block=True)
+
+    assert snapshot["result"].status == "needs_review"
+    assert snapshot["result"].system_block_chapters == [1]
+    assert snapshot["plan_statuses"] == ["needs_review"]
+    assert snapshot["trace_count"] == 1
+    assert snapshot["llm_calls"] == 1

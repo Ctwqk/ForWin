@@ -23,13 +23,15 @@ class FakeReviewLLM:
         content: str,
         *,
         actual_model: str = RECKLESS_REVIEW_MODEL,
-        backend: str = "ordinary",
+        backend: str = "codex_bridge",
         error: Exception | None = None,
+        prove_actual_model: bool = True,
     ) -> None:
         self.content = content
         self.actual_model = actual_model
         self.backend = backend
         self.error = error
+        self.prove_actual_model = prove_actual_model
         self.last_call_result = None
         self.calls: list[dict[str, object]] = []
         self._attempts: list[dict[str, object]] = []
@@ -61,6 +63,8 @@ class FakeReviewLLM:
             "model": self.actual_model,
             "raw_events": [{"type": "turn.completed", "content": self.content}],
         }
+        if self.prove_actual_model:
+            trace["actual_model"] = self.actual_model
         self.last_call_result = SimpleNamespace(
             content=self.content,
             backend=self.backend,
@@ -73,6 +77,38 @@ class FakeReviewLLM:
         attempts = list(self._attempts)
         self._attempts.clear()
         return attempts
+
+
+class FailedRoutedReviewLLM:
+    def __init__(self) -> None:
+        self.last_call_result = None
+
+    def chat(self, _messages, **_kwargs):
+        self.last_call_result = SimpleNamespace(
+            backend="failed",
+            fallback_used=True,
+            trace={
+                "backend": "failed",
+                "failed_codex_trace": {
+                    "requested_model": RECKLESS_REVIEW_MODEL,
+                    "actual_model": RECKLESS_REVIEW_MODEL,
+                    "response": {
+                        "detail": {
+                            "content": "partial Spark response",
+                            "raw_events": [
+                                {"type": "turn.failed", "detail": "provider timeout"}
+                            ],
+                            "returncode": 9,
+                        }
+                    },
+                },
+                "ordinary_error": "RuntimeError: ordinary unavailable",
+            },
+        )
+        raise RuntimeError("all routed backends failed")
+
+    def drain_llm_attempt_events(self):
+        return []
 
 
 @pytest.fixture()
@@ -108,6 +144,9 @@ def _request(project_id: str) -> RecklessReviewRequest:
             "draft": "这是必须完整保留的章节正文。",
             "issues": [{"code": "continuity_warn", "severity": "warning"}],
             "api_key": "must-not-leak",
+            "token": "generic-token-must-not-leak",
+            "access_token": "access-token-must-not-leak",
+            "refresh_token": "refresh-token-must-not-leak",
             "story_secret": "故事秘密必须保留",
         },
     )
@@ -146,6 +185,9 @@ def test_spark_approval_persists_complete_trace(review_session) -> None:
     assert "这是必须完整保留的章节正文" in trace.input_snapshot_json
     assert "故事秘密必须保留" in trace.input_snapshot_json
     assert "must-not-leak" not in trace.input_snapshot_json
+    assert "generic-token-must-not-leak" not in trace.input_snapshot_json
+    assert "access-token-must-not-leak" not in trace.input_snapshot_json
+    assert "refresh-token-must-not-leak" not in trace.input_snapshot_json
     assert "must-not-leak" not in trace.attempts_json
     assert "continuity_warn" in trace.prompt_layers_json
     assert "_raw_request_payload" in trace.attempts_json
@@ -153,7 +195,7 @@ def test_spark_approval_persists_complete_trace(review_session) -> None:
     assert "警告不影响 canon 连续性" in trace.attempts_json
     assert "turn.completed" in trace.attempts_json
     assert "警告不影响 canon 连续性" in trace.output_summary_json
-    assert trace.backend == "ordinary"
+    assert trace.backend == "codex_bridge"
     assert trace.permission_profile == "prompt_only_readonly"
     event_types = {
         row.event_type
@@ -187,6 +229,79 @@ def test_non_spark_success_is_logged_but_cannot_approve(review_session) -> None:
     assert trace is not None
     assert "kimi-k2.5" in trace.model_profile_json
     assert "model_mismatch" in trace.output_summary_json
+
+
+def test_requested_model_without_observed_actual_model_cannot_approve(review_session) -> None:
+    session, project = review_session
+    agent = RecklessReviewAgent(
+        llm_client=FakeReviewLLM(
+            _approval_json(),
+            prove_actual_model=False,
+        )
+    )
+
+    outcome = agent.review_and_record(
+        updater=StateUpdater(session),
+        request=_request(project.id),
+    )
+
+    assert outcome.approved is False
+    assert outcome.failure_reason == "model_mismatch"
+    assert outcome.actual_model == ""
+
+
+def test_ordinary_backend_cannot_approve_even_with_matching_attempt_model(review_session) -> None:
+    session, project = review_session
+    agent = RecklessReviewAgent(
+        llm_client=FakeReviewLLM(
+            _approval_json(),
+            backend="ordinary",
+        )
+    )
+
+    outcome = agent.review_and_record(
+        updater=StateUpdater(session),
+        request=_request(project.id),
+    )
+
+    assert outcome.approved is False
+    assert outcome.failure_reason == "model_mismatch"
+
+
+def test_extra_decision_fields_are_rejected_and_logged(review_session) -> None:
+    session, project = review_session
+    payload = json.loads(_approval_json())
+    payload["request_human"] = True
+
+    outcome = RecklessReviewAgent(
+        llm_client=FakeReviewLLM(json.dumps(payload, ensure_ascii=False))
+    ).review_and_record(
+        updater=StateUpdater(session),
+        request=_request(project.id),
+    )
+
+    assert outcome.approved is False
+    assert outcome.failure_reason == "parse_or_schema"
+    trace = session.get(PromptTrace, outcome.trace_id)
+    assert trace is not None
+    assert "request_human" in trace.output_summary_json
+
+
+def test_failed_routed_call_persists_bridge_response_and_raw_events(review_session) -> None:
+    session, project = review_session
+
+    outcome = RecklessReviewAgent(llm_client=FailedRoutedReviewLLM()).review_and_record(
+        updater=StateUpdater(session),
+        request=_request(project.id),
+    )
+
+    assert outcome.approved is False
+    assert outcome.failure_reason == "llm_call_failed"
+    trace = session.get(PromptTrace, outcome.trace_id)
+    assert trace is not None
+    assert "partial Spark response" in trace.attempts_json
+    assert "turn.failed" in trace.attempts_json
+    assert "provider timeout" in trace.attempts_json
 
 
 @pytest.mark.parametrize(

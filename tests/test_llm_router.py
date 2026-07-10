@@ -50,7 +50,9 @@ class FakeCodexClient:
         self.calls.append({"messages": messages, "intent": intent, "kwargs": kwargs})
         if self.fail:
             raise RuntimeError("codex bridge unavailable")
+        actual_model = str(kwargs.get("model") or "codex-default")
         self.last_call_trace = {
+            "actual_model": actual_model,
             "raw_events": [{"type": "turn.completed", "usage": {"output_tokens": 12}}],
             "returncode": 0,
         }
@@ -268,8 +270,41 @@ class LLMRouterTests(unittest.TestCase):
 
         self.assertEqual(result.backend, "codex_bridge")
         self.assertEqual(result.trace["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(result.trace["actual_model"], "gpt-5.3-codex-spark")
         self.assertEqual(result.trace["raw_events"][0]["type"], "turn.completed")
         self.assertEqual(result.trace["returncode"], 0)
+
+    def test_total_failure_replaces_prior_success_trace(self) -> None:
+        ordinary = FailingOrdinaryAdapter()
+        codex = FakeCodexClient()
+        adapter = RoutedModelAdapter(
+            LLMCallRouter(
+                ordinary_adapter=ordinary,
+                codex_client=codex,
+                codex_enabled=True,
+                codex_default_model="gpt-5.3-codex-spark",
+            )
+        )
+        adapter.chat(
+            [{"role": "user", "content": "first"}],
+            task_family="review",
+            stage_key="reckless_human_gate",
+        )
+        self.assertEqual(adapter.last_call_result.backend, "codex_bridge")
+
+        codex.fail = True
+        with self.assertRaisesRegex(RuntimeError, "ordinary unavailable"):
+            adapter.chat(
+                [{"role": "user", "content": "second"}],
+                task_family="review",
+                stage_key="reckless_human_gate",
+            )
+
+        self.assertIsNotNone(adapter.last_call_result)
+        self.assertEqual(adapter.last_call_result.backend, "failed")
+        self.assertIn("ordinary unavailable", adapter.last_call_result.trace["ordinary_error"])
+        failed_codex_trace = adapter.last_call_result.trace["failed_codex_trace"]
+        self.assertNotIn("raw_events", failed_codex_trace)
 
     def test_preferred_codex_model_keeps_bridge_enabled_for_repair(self) -> None:
         ordinary = OrdinaryAdapter()

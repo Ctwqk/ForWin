@@ -16,6 +16,7 @@ from forwin.planning.future_plan_auditor import FuturePlanAuditRun
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.reckless_review import RECKLESS_REVIEW_MODEL
+from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
@@ -68,9 +69,13 @@ class FakeSparkGateLLM:
             }
         ]
         self.last_call_result = SimpleNamespace(
-            backend="ordinary",
+            backend="codex_bridge",
             fallback_used=False,
-            trace={"backend": "ordinary", "model": RECKLESS_REVIEW_MODEL},
+            trace={
+                "backend": "codex_bridge",
+                "model": RECKLESS_REVIEW_MODEL,
+                "actual_model": RECKLESS_REVIEW_MODEL,
+            },
         )
         return content
 
@@ -446,6 +451,61 @@ class GenerationAuditCheckpointTests(unittest.TestCase):
             orchestrator.engine.dispose()
             engine.dispose()
 
+    def test_reckless_mode_overrides_post_acceptance_manual_checkpoints(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "manual-post-acceptance-reckless",
+            chapter_count=1,
+            review_delegation_mode="reckless",
+        )
+        with session_factory() as session:
+            arc_id = session.query(ArcPlanVersion.id).filter_by(project_id=project_id).scalar()
+            checkpoints = [
+                BandCheckpoint(
+                    id=new_id(),
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    band_id=f"manual:{boundary_kind}:1",
+                    trigger_source="manual_boundary",
+                    boundary_kind=boundary_kind,
+                    boundary_chapter=1,
+                    status="pending",
+                    summary=f"Operator requested {boundary_kind} review.",
+                )
+                for boundary_kind in ("chapter_accepted", "band_end")
+            ]
+            session.add_all(checkpoints)
+            session.commit()
+            checkpoint_ids = [row.id for row in checkpoints]
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM()
+        orchestrator.llm_client = fake_llm
+        try:
+            result = self._run_with_fast_pipeline(
+                orchestrator,
+                session_factory=session_factory,
+                project_id=project_id,
+                chapter_numbers=[1],
+            )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(len(fake_llm.calls), 2)
+            with session_factory() as session:
+                rows = [session.get(BandCheckpoint, row_id) for row_id in checkpoint_ids]
+                self.assertEqual([row.status for row in rows], ["overridden", "overridden"])
+                self.assertTrue(all(row.resolved_at is not None for row in rows))
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
     def test_reckless_mode_overrides_pausing_band_warning(self) -> None:
         db_path, engine, session_factory, project_id = self._setup_project(
             "band-checkpoint-reckless",
@@ -511,6 +571,207 @@ class GenerationAuditCheckpointTests(unittest.TestCase):
                 checkpoint = session.get(BandCheckpoint, checkpoint_ids[0])
                 self.assertEqual(checkpoint.status, "overridden")
                 self.assertIsNotNone(checkpoint.resolved_at)
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_mode_delegates_band_warning_on_final_batch_chapter(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "band-checkpoint-reckless-final",
+            chapter_count=1,
+            review_delegation_mode="reckless",
+        )
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM()
+        orchestrator.llm_client = fake_llm
+        checkpoint_ids: list[str] = []
+
+        def fake_band_checkpoint(**kwargs):
+            session = kwargs["session"]
+            arc_id = session.query(ArcPlanVersion.id).filter_by(project_id=project_id).scalar()
+            row = BandCheckpoint(
+                id=new_id(),
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id="band:final",
+                chapter_start=1,
+                chapter_end=1,
+                trigger_source="auto_band_end",
+                boundary_kind="band_end",
+                boundary_chapter=1,
+                status="warn",
+                summary="Final chapter warning requires delegated review.",
+            )
+            session.add(row)
+            session.flush()
+            checkpoint_ids.append(row.id)
+            return row
+
+        try:
+            with patch.object(
+                orchestrator,
+                "_create_auto_band_checkpoint",
+                side_effect=fake_band_checkpoint,
+            ):
+                result = self._run_with_fast_pipeline(
+                    orchestrator,
+                    session_factory=session_factory,
+                    project_id=project_id,
+                    chapter_numbers=[1],
+                )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(len(fake_llm.calls), 1)
+            with session_factory() as session:
+                checkpoint = session.get(BandCheckpoint, checkpoint_ids[0])
+                self.assertEqual(checkpoint.status, "overridden")
+                self.assertIsNotNone(checkpoint.resolved_at)
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_mode_overrides_band_fail_and_error_checkpoints(self) -> None:
+        for checkpoint_status in ("fail", "error"):
+            with self.subTest(checkpoint_status=checkpoint_status):
+                db_path, engine, session_factory, project_id = self._setup_project(
+                    f"band-checkpoint-reckless-{checkpoint_status}",
+                    chapter_count=1,
+                    review_delegation_mode="reckless",
+                )
+                orchestrator = WritingOrchestrator(
+                    Config(
+                        database_url=db_path,
+                        minimax_api_key="",
+                        minimax_model="fake-model",
+                        review_delegation_mode="reckless",
+                    )
+                )
+                original_llm = orchestrator.llm_client
+                fake_llm = FakeSparkGateLLM()
+                orchestrator.llm_client = fake_llm
+                checkpoint_ids: list[str] = []
+
+                def fake_band_checkpoint(**kwargs):
+                    session = kwargs["session"]
+                    arc_id = session.query(ArcPlanVersion.id).filter_by(
+                        project_id=project_id
+                    ).scalar()
+                    row = BandCheckpoint(
+                        id=new_id(),
+                        project_id=project_id,
+                        arc_id=arc_id,
+                        band_id=f"band:{checkpoint_status}",
+                        chapter_start=1,
+                        chapter_end=1,
+                        trigger_source="auto_band_end",
+                        boundary_kind="band_end",
+                        boundary_chapter=1,
+                        status=checkpoint_status,
+                        summary=f"{checkpoint_status} checkpoint.",
+                    )
+                    session.add(row)
+                    session.flush()
+                    checkpoint_ids.append(row.id)
+                    return row
+
+                try:
+                    with patch.object(
+                        orchestrator,
+                        "_create_auto_band_checkpoint",
+                        side_effect=fake_band_checkpoint,
+                    ):
+                        result = self._run_with_fast_pipeline(
+                            orchestrator,
+                            session_factory=session_factory,
+                            project_id=project_id,
+                            chapter_numbers=[1],
+                        )
+
+                    self.assertEqual(result.status, "completed")
+                    self.assertEqual(len(fake_llm.calls), 1)
+                    with session_factory() as session:
+                        checkpoint = session.get(BandCheckpoint, checkpoint_ids[0])
+                        self.assertEqual(checkpoint.status, "overridden")
+                finally:
+                    original_llm.close()
+                    orchestrator.engine.dispose()
+                    engine.dispose()
+
+    def test_reckless_checkpoint_flush_failure_rolls_back_review_audit(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "checkpoint-override-flush-failure",
+            chapter_count=1,
+            review_delegation_mode="reckless",
+        )
+        with session_factory() as session:
+            arc_id = session.query(ArcPlanVersion.id).filter_by(project_id=project_id).scalar()
+            checkpoint = BandCheckpoint(
+                id=new_id(),
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id="manual:flush-failure",
+                trigger_source="manual_boundary",
+                boundary_kind="chapter_start",
+                boundary_chapter=1,
+                status="pending",
+                summary="Flush failure checkpoint.",
+            )
+            session.add(checkpoint)
+            session.commit()
+            checkpoint_id = checkpoint.id
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+            )
+        )
+        original_llm = orchestrator.llm_client
+        orchestrator.llm_client = FakeSparkGateLLM()
+        try:
+            with session_factory() as session:
+                updater = StateUpdater(session)
+                project = session.get(Project, project_id)
+                checkpoint = session.get(BandCheckpoint, checkpoint_id)
+                governance = orchestrator._project_governance(project)
+                original_flush = session.flush
+
+                def fail_override_flush(*args, **kwargs):
+                    if checkpoint.status == "overridden":
+                        raise RuntimeError("checkpoint override flush failed")
+                    return original_flush(*args, **kwargs)
+
+                with patch.object(session, "flush", side_effect=fail_override_flush):
+                    approved = orchestrator._delegate_checkpoint_if_reckless(
+                        updater=updater,
+                        governance=governance,
+                        checkpoint=checkpoint,
+                        gate_kind="manual_checkpoint_chapter_start",
+                        chapter_number=1,
+                    )
+                session.commit()
+                session.expire_all()
+
+                self.assertFalse(approved)
+                self.assertEqual(session.get(BandCheckpoint, checkpoint_id).status, "pending")
+                self.assertEqual(
+                    session.query(PromptTrace).filter_by(
+                        project_id=project_id,
+                        trace_scope="reckless_review",
+                    ).count(),
+                    0,
+                )
         finally:
             original_llm.close()
             orchestrator.engine.dispose()

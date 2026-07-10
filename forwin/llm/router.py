@@ -103,6 +103,8 @@ class LLMCallRouter:
         intent: LLMCallIntent | None = None,
         **kwargs: Any,
     ) -> LLMCallResult:
+        self.last_call_result = None
+        self._last_codex_trace = {}
         resolved_intent = intent or LLMCallIntent(codex_allowed=False)
         fallback_used = False
         failed_codex_trace: dict[str, Any] = {}
@@ -143,11 +145,24 @@ class LLMCallRouter:
             ordinary_content = self.ordinary_adapter.chat(messages, **ordinary_kwargs)
         except Exception as ordinary_exc:  # noqa: BLE001
             if codex_policy != "ordinary_primary":
+                self.last_call_result = self._failed_result(
+                    resolved_intent,
+                    fallback_used=fallback_used,
+                    failed_codex_trace=failed_codex_trace,
+                    ordinary_error=ordinary_exc,
+                )
                 raise
             ordinary_reason = str(ordinary_exc)
             try:
                 content = self._chat_with_codex(messages, intent=resolved_intent, **kwargs)
-            except Exception:
+            except Exception as codex_exc:
+                self.last_call_result = self._failed_result(
+                    resolved_intent,
+                    fallback_used=True,
+                    failed_codex_trace=dict(self._last_codex_trace),
+                    ordinary_error=ordinary_exc,
+                    codex_error=codex_exc,
+                )
                 raise ordinary_exc
             self._fallback_events.append(
                 {
@@ -187,6 +202,32 @@ class LLMCallRouter:
         self.last_call_result = result
         return result
 
+    @staticmethod
+    def _failed_result(
+        intent: LLMCallIntent,
+        *,
+        fallback_used: bool,
+        failed_codex_trace: dict[str, Any],
+        ordinary_error: Exception,
+        codex_error: Exception | None = None,
+    ) -> LLMCallResult:
+        trace = {
+            "backend": "failed",
+            "task_family": intent.task_family,
+            "stage_key": intent.stage_key,
+            "permission_profile": intent.permission_profile,
+            "failed_codex_trace": failed_codex_trace,
+            "ordinary_error": f"{ordinary_error.__class__.__name__}: {ordinary_error}",
+        }
+        if codex_error is not None:
+            trace["codex_error"] = f"{codex_error.__class__.__name__}: {codex_error}"
+        return LLMCallResult(
+            content="",
+            backend="failed",
+            fallback_used=fallback_used,
+            trace=trace,
+        )
+
     def _chat_with_codex(
         self,
         messages: list[dict],
@@ -198,7 +239,9 @@ class LLMCallRouter:
         model = str(intent.codex_model or self.codex_default_model or "").strip()
         if model:
             codex_kwargs.setdefault("model", model)
-        self._last_codex_trace = {"model": model}
+        self._last_codex_trace = {"model": model, "requested_model": model}
+        if isinstance(getattr(self.codex_client, "last_call_trace", None), dict):
+            self.codex_client.last_call_trace = {}
         try:
             content = self.codex_client.chat(messages, intent=intent, **codex_kwargs)
         finally:
@@ -206,7 +249,12 @@ class LLMCallRouter:
             if isinstance(client_trace, dict):
                 self._last_codex_trace = {
                     **client_trace,
-                    "model": str(client_trace.get("model") or model),
+                    "model": str(
+                        client_trace.get("actual_model")
+                        or client_trace.get("model")
+                        or model
+                    ),
+                    "requested_model": str(client_trace.get("requested_model") or model),
                 }
         return content
 
@@ -303,26 +351,29 @@ class RoutedModelAdapter:
             or "codex" in preferred_model_text.lower()
             or "gpt-5.3" in preferred_model_text.lower()
         )
-        content = self.router.chat(
-            messages,
-            intent=LLMCallIntent(
-                task_family=task_family,
-                stage_key=stage_key,
-                latency_class=latency_class,
-                output_schema=output_schema,
-                codex_allowed=bool(codex_allowed and (not deterministic_route_requested or preferred_codex_requested)),
-                permission_profile=permission_profile,
-                codex_model=preferred_model_text if preferred_codex_requested else "",
-            ),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            timeout_seconds=timeout_seconds,
-            retry_on_timeout=retry_on_timeout,
-            preferred_provider_kind=preferred_provider_kind,
-            preferred_model=preferred_model,
-        )
-        self.last_call_result = self.router.last_call_result
+        self.last_call_result = None
+        try:
+            content = self.router.chat(
+                messages,
+                intent=LLMCallIntent(
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    latency_class=latency_class,
+                    output_schema=output_schema,
+                    codex_allowed=bool(codex_allowed and (not deterministic_route_requested or preferred_codex_requested)),
+                    permission_profile=permission_profile,
+                    codex_model=preferred_model_text if preferred_codex_requested else "",
+                ),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                timeout_seconds=timeout_seconds,
+                retry_on_timeout=retry_on_timeout,
+                preferred_provider_kind=preferred_provider_kind,
+                preferred_model=preferred_model,
+            )
+        finally:
+            self.last_call_result = self.router.last_call_result
         return content
 
     def drain_model_fallback_events(self) -> list[dict[str, str]]:

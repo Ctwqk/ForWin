@@ -30,6 +30,8 @@ class CodexBridgeChatResponse(BaseModel):
     raw_events: list[dict[str, Any]] = Field(default_factory=list)
     returncode: int = 0
     error: str = ""
+    actual_model: str = ""
+    thread_id: str = ""
 
 
 class CodexBridgeJobSubmitResponse(BaseModel):
@@ -66,6 +68,8 @@ def _response_from_result(result: CodexExecResult) -> CodexBridgeChatResponse:
         raw_events=result.raw_events,
         returncode=result.returncode,
         error=result.error,
+        actual_model=result.actual_model,
+        thread_id=result.thread_id,
     )
 
 
@@ -81,17 +85,49 @@ def _schema_validation_error(content: str, output_schema: dict[str, Any] | None)
             parsed = json.loads(content)
         except Exception as exc:  # noqa: BLE001
             return f"schema_parse_failed: {exc}"
-    if expected_type == "object" and not isinstance(parsed, dict):
-        return "schema_type_mismatch: expected object"
-    if expected_type == "array" and not isinstance(parsed, list):
-        return "schema_type_mismatch: expected array"
-    if expected_type == "string" and not isinstance(parsed, str):
-        return "schema_type_mismatch: expected string"
-    if expected_type == "object":
-        required = [str(item) for item in (output_schema.get("required") or []) if str(item)]
-        missing = [key for key in required if key not in parsed]
+    return _validate_schema_node(parsed, output_schema, path="$")
+
+
+def _validate_schema_node(value: Any, schema: dict[str, Any], *, path: str) -> str:
+    expected_type = str(schema.get("type") or "").strip()
+    type_matches = {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }
+    if expected_type and expected_type in type_matches and not type_matches[expected_type]:
+        return f"schema_type_mismatch: {path} expected {expected_type}"
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        return f"schema_enum_mismatch: {path}"
+    if expected_type == "object" and isinstance(value, dict):
+        required = [str(item) for item in (schema.get("required") or []) if str(item)]
+        missing = [key for key in required if key not in value]
         if missing:
             return f"schema_required_missing: {', '.join(missing)}"
+        properties = schema.get("properties")
+        property_map = properties if isinstance(properties, dict) else {}
+        if schema.get("additionalProperties") is False:
+            extras = sorted(str(key) for key in value if key not in property_map)
+            if extras:
+                return f"schema_additional_properties: {', '.join(extras)}"
+        for key, child_schema in property_map.items():
+            if key not in value or not isinstance(child_schema, dict):
+                continue
+            error = _validate_schema_node(value[key], child_schema, path=f"{path}.{key}")
+            if error:
+                return error
+    if expected_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                error = _validate_schema_node(item, item_schema, path=f"{path}[{index}]")
+                if error:
+                    return error
     return ""
 
 
@@ -138,11 +174,13 @@ def build_app(
                 raw_events=result.raw_events,
                 returncode=result.returncode,
                 error=validation_error,
+                actual_model=result.actual_model,
+                thread_id=result.thread_id,
             )
         if not result.ok:
             raise HTTPException(
                 status_code=502,
-                detail={"error": result.error or result.content, "returncode": result.returncode},
+                detail=_response_from_result(result).model_dump(mode="json"),
             )
         return _response_from_result(result)
 
@@ -168,6 +206,8 @@ def build_app(
                     raw_events=result.raw_events,
                     returncode=result.returncode,
                     error=validation_error,
+                    actual_model=result.actual_model,
+                    thread_id=result.thread_id,
                 )
             with jobs_lock:
                 jobs[job_id]["status"] = "succeeded" if result.ok else "failed"

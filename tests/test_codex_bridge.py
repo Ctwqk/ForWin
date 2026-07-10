@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from forwin.codex_bridge.http import build_app
@@ -39,28 +42,43 @@ class FakeCodexRunner:
 
 
 class FakeHttpResponse:
-    def __init__(self, payload: dict[str, object]) -> None:
+    def __init__(self, payload: dict[str, object], *, status_code: int = 200) -> None:
         self.payload = payload
+        self.status_code = status_code
+        self.text = json.dumps(payload, ensure_ascii=False)
+        self.request = httpx.Request("POST", "http://bridge/v1/codex/chat")
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"bridge returned {self.status_code}",
+                request=self.request,
+                response=httpx.Response(
+                    self.status_code,
+                    request=self.request,
+                    json=self.payload,
+                ),
+            )
 
     def json(self) -> dict[str, object]:
         return self.payload
 
 
 class FakeHttpClient:
-    def __init__(self) -> None:
+    def __init__(self, response: FakeHttpResponse | None = None) -> None:
         self.posts: list[dict[str, object]] = []
+        self.response = response
 
     def post(self, url: str, *, headers=None, json=None) -> FakeHttpResponse:  # noqa: ANN001
         self.posts.append({"url": url, "headers": headers, "json": json})
-        return FakeHttpResponse(
+        return self.response or FakeHttpResponse(
             {
                 "ok": True,
                 "content": '{"ok":true}',
                 "raw_events": [{"type": "turn.completed"}],
                 "returncode": 0,
+                "actual_model": "gpt-5.3-codex-spark",
+                "thread_id": "thread-success",
             }
         )
 
@@ -169,6 +187,88 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(captured["input"], "ping")
         self.assertEqual(captured["schema"]["additionalProperties"], False)
 
+    def test_codex_runner_reads_actual_model_from_cli_session_metadata(self) -> None:
+        thread_id = "019f-model-proof"
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp)
+
+            def fake_run(cmd, **_kwargs):
+                output_index = cmd.index("--output-last-message") + 1
+                Path(cmd[output_index]).write_text('{"ok": true}', encoding="utf-8")
+                session_dir = codex_home / "sessions" / "2026" / "07" / "09"
+                session_dir.mkdir(parents=True)
+                (session_dir / f"rollout-{thread_id}.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "type": "turn_context",
+                            "payload": {"model": "gpt-5.3-codex-spark"},
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({"type": "thread.started", "thread_id": thread_id})
+                    + "\n",
+                    stderr="",
+                )
+
+            runner = CodexExecRunner(default_cwd=".", codex_home=codex_home)
+            with patch("forwin.codex_bridge.runner.subprocess.run", side_effect=fake_run):
+                result = runner.run(
+                    CodexExecRequest(
+                        prompt="prove model",
+                        model="gpt-5.3-codex-spark",
+                    )
+                )
+
+        self.assertEqual(result.thread_id, thread_id)
+        self.assertEqual(result.actual_model, "gpt-5.3-codex-spark")
+
+    def test_failed_bridge_response_retains_complete_runner_evidence(self) -> None:
+        class FailedRunner(FakeCodexRunner):
+            def run(self, request, *, timeout_seconds=None):  # noqa: ANN001
+                return CodexExecResult(
+                    ok=False,
+                    content="partial model response",
+                    raw_events=[{"type": "turn.failed", "detail": "provider timeout"}],
+                    returncode=7,
+                    error="provider timeout",
+                    actual_model="gpt-5.3-codex-spark",
+                    thread_id="thread-failed",
+                )
+
+        response = TestClient(build_app(token="", runner=FailedRunner())).post(
+            "/v1/codex/chat",
+            json={"prompt": "review", "model": "gpt-5.3-codex-spark"},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["content"], "partial model response")
+        self.assertEqual(detail["raw_events"][0]["type"], "turn.failed")
+        self.assertEqual(detail["actual_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(detail["thread_id"], "thread-failed")
+
+    def test_bridge_rejects_extra_properties_in_strict_schema(self) -> None:
+        runner = FakeCodexRunner(content='{"decision":"approve","request_human":true}')
+        response = TestClient(build_app(token="", runner=runner)).post(
+            "/v1/codex/chat",
+            json={
+                "prompt": "review",
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"decision": {"type": "string"}},
+                    "required": ["decision"],
+                    "additionalProperties": False,
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("schema_additional_properties", response.json()["detail"]["error"])
+
     def test_codex_client_does_not_send_generic_object_schema(self) -> None:
         fake_http = FakeHttpClient()
         with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
@@ -221,9 +321,40 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertIsInstance(request_json, dict)
         self.assertEqual(request_json["model"], "gpt-5.3-codex-spark")
         self.assertEqual(client.last_call_trace["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(client.last_call_trace["actual_model"], "gpt-5.3-codex-spark")
         self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.completed")
         self.assertEqual(client.last_call_trace["returncode"], 0)
         self.assertNotIn("Authorization", json.dumps(client.last_call_trace))
+
+    def test_codex_client_records_failed_bridge_response_before_raising(self) -> None:
+        response = FakeHttpResponse(
+            {
+                "detail": {
+                    "ok": False,
+                    "content": "partial output",
+                    "raw_events": [{"type": "turn.failed"}],
+                    "returncode": 9,
+                    "error": "provider failed",
+                    "actual_model": "gpt-5.3-codex-spark",
+                    "thread_id": "thread-9",
+                }
+            },
+            status_code=502,
+        )
+        fake_http = FakeHttpClient(response=response)
+        with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
+            client = CodexBridgeClient(bridge_url="http://bridge")
+            with self.assertRaises(httpx.HTTPStatusError):
+                client.chat(
+                    [{"role": "user", "content": "review"}],
+                    intent=LLMCallIntent(task_family="review", stage_key="reckless_human_gate"),
+                    model="gpt-5.3-codex-spark",
+                )
+
+        self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.failed")
+        self.assertEqual(client.last_call_trace["actual_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(client.last_call_trace["thread_id"], "thread-9")
+        self.assertEqual(client.last_call_trace["returncode"], 9)
 
     def test_chapter_writer_does_not_invent_generic_output_schema(self) -> None:
         llm = FakeWriterLLM()

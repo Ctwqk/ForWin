@@ -882,7 +882,7 @@ def _run_project_chapters(
                 checkpoint_warn_pause and chapter_num != last_requested_chapter
             )
             if (
-                should_pause_for_checkpoint
+                (checkpoint_pause or checkpoint_warn_pause)
                 and checkpoint_row is not None
                 and self._delegate_checkpoint_if_reckless(
                     updater=updater,

@@ -58,10 +58,11 @@
 | `forwin.world_model` | removed | `forwin.knowledge_system` + `forwin.book_state` | 已删除 | live page/proposal/Obsidian/retrieval helper 已迁入 owner；`/world-model/*` 只保留 HTTP 传输契约名。 |
 | `forwin.world_model_v4` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection/debug bridge 已从生产模块删除。 |
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
-| `forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate` | v5.0 删除 alias 包 | 仅作为旧导入路径 alias；新代码必须导入 `world_v4_review_gate`。 |
-| `forwin.world_v4_review_gate` | legacy-compatibility | `forwin.review` 主域 | v5.0 复核是否仍需 extraction gate | 兼容 gate，不是主 chapter reviewer。 |
-| `forwin.planning.scenario_rehearsal` | deprecated | `forwin.planning.scenario_rehearsal_service` | v5.0 删除直接业务依赖 | 旧 monolith 仅保留历史 API 兼容；新增 orchestration 必须走 service。 |
+| `forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate` | 已删除 | 旧导入 alias 包已物理删除。 |
+| `forwin.world_v4_review_gate` | active-internal | `forwin.book_state` extraction path | v5 后按 BookState extraction contract 演进 | 确定性 extraction gate，不是主 chapter reviewer。 |
+| `forwin.planning.scenario_rehearsal` | removed | `forwin.planning.scenario_rehearsal_service` | 已删除 | runner/repository 实现迁入 `scenario_rehearsal_engine`；生产编排只经 service。 |
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
+| `forwin.planning.scenario_rehearsal_engine` | active-internal | service / resolution owner | 无 | 确定性 runner 与 repository，不作为应用入口。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
 | `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
@@ -148,7 +149,7 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 - 根层 `api_project_ops`、`api_project_policy`、`api_publisher_ops`、`project_ops`、`api_schemas`、`api_project_payloads` 及 context/retrieval/writer 转发壳已物理删除。
 - 全仓生产代码不再使用星号导入、类/模块身份篡改或 `common/constants` 借道 re-export；机械删除 2,336 个未使用 import，并修复因此暴露的 8 个隐性依赖和 `llm_eval` 未定义配置。
 
-验证：`compileall` 成功；Ruff `F401/F403/F405/F821` 全绿；ASGI 导入保持 163 routes；全仓 1532 tests collect 成功；聚焦架构/API split/large-module 守卫 31 passed。按用户要求不重复运行全量测试。
+验证：`compileall` 成功；Ruff `F401/F403/F405/F821` 全绿；ASGI 导入保持 163 routes；全仓 1533 tests collect 成功；聚焦架构/API split/large-module 守卫 32 passed，alias/rehearsal/extraction-gate 相关组 54 passed。按用户要求不重复运行全量测试。
 
 ## 2026-07 Integrated Roadmap Status
 

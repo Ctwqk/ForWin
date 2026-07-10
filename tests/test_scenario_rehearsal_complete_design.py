@@ -8,7 +8,7 @@ from forwin.api_governance_ops import approve_scenario_plan_patch, rerun_scenari
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
-from forwin.planning.scenario_rehearsal import ScenarioRehearsalRunner
+from forwin.planning.scenario_rehearsal_engine import ScenarioRehearsalRunner
 from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
 from forwin.planning.scenario_triggers import ScenarioTriggerEvaluator
 from forwin.planning.world_contracts import (
@@ -18,12 +18,19 @@ from forwin.planning.world_contracts import (
     WorldContractRepository,
 )
 from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def _setup_project(session, *, chapter_start: int = 1, chapter_end: int = 4):
     updater = StateUpdater(session)
-    project = updater.create_project(title="完整预检", premise="误会与新地图", genre="玄幻")
+    project = updater.create_project(
+        title="完整预检",
+        premise="误会与新地图",
+        genre="玄幻",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
+    )
     arc = updater.create_arc_plan(
         project.id,
         "Arc：误会入局",

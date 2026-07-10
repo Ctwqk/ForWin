@@ -24,19 +24,12 @@ from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenar
 logger = logging.getLogger(__name__)
 
 def _bind_pipeline_runtime_hooks(self) -> None:
-    self.arc_envelope_manager.provisional_executor = self._run_provisional_band_preview
-    self.arc_envelope_manager.scenario_progress_callback = (
-        lambda **payload: self._emit_progress("stage_changed", **payload)
-    )
-    planning_services = getattr(self.arc_envelope_manager, "services", None)
-    provisional_preview = getattr(planning_services, "provisional_preview", None)
-    if provisional_preview is not None:
-        provisional_preview.provisional_executor = self._run_provisional_band_preview
-    scenario_rehearsal = getattr(planning_services, "scenario_rehearsal", None)
-    if scenario_rehearsal is not None:
-        scenario_rehearsal.progress_callback = (
+    self.arc_envelope_manager.bind_runtime_hooks(
+        provisional_executor=self._run_provisional_band_preview,
+        scenario_progress_callback=(
             lambda **payload: self._emit_progress("stage_changed", **payload)
-        )
+        ),
+    )
 
 # ------------------------------------------------------------------
 # Public API

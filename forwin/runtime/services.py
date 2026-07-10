@@ -51,9 +51,6 @@ class RuntimeServices:
     world_simulator: Any
 
     arc_envelope_manager: Any
-    experience_planning_service: Any
-    band_plan_service: Any
-    world_contract_service: Any
     genesis_workspace_service: Any
     genesis_handoff_service: Any
     production_scheduler: Any

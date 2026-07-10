@@ -1,4 +1,4 @@
-"""Chapter draft review domain; `reviewer_v4` is only a compatibility gate."""
+"""Chapter draft review domain, separate from BookState extraction validation."""
 
 from .draft_service import DraftReviewService
 from .query import ReviewQuery

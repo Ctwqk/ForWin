@@ -11,16 +11,14 @@ from forwin.config import InfrastructureConfig
 from forwin.context.assembler_core import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
-from forwin.experience.service import ExperiencePlanningService
 from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.service import PlanningService
 from forwin.planning.stage_analysis import PacingStrategist, ReplanGovernor, StageAnalyzer
 from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
 from forwin.observability.service import ObservabilityService
-from forwin.planning.band_plan_service import BandPlanService
-from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
@@ -280,22 +278,18 @@ class RuntimeContainer:
             llm_client=phase4_llm,
             active_thread_limit=infrastructure.phase_active_thread_limit,
         )
-        world_contract_service = WorldContractPlanningService()
-        experience_planning_service = ExperiencePlanningService()
-        band_plan_service = BandPlanService(
+        planning_service = PlanningService.build_default(
+            director=arc_director,
             subworld_manager=subworld_manager,
-            world_contract_service=world_contract_service,
-            experience_service=experience_planning_service,
+            provisional_preview_enabled=policy.planning.provisional_preview,
             trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
         )
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,
             subworld_manager=subworld_manager,
             provisional_preview_enabled=policy.planning.provisional_preview,
+            planning_service=planning_service,
         )
-        arc_envelope_manager.services.band_plan = band_plan_service
-        arc_envelope_manager.services.world_contracts = world_contract_service
-        arc_envelope_manager.services.experience = experience_planning_service
 
         hub_llm_enabled = llm_available
         draft_review = DraftReviewService(
@@ -346,9 +340,6 @@ class RuntimeContainer:
             npc_intent_generator=npc_intent_generator,
             world_simulator=world_simulator,
             arc_envelope_manager=arc_envelope_manager,
-            experience_planning_service=experience_planning_service,
-            band_plan_service=band_plan_service,
-            world_contract_service=world_contract_service,
             genesis_workspace_service=book_genesis.workspace,
             genesis_handoff_service=book_genesis.handoff,
             production_scheduler=ProductionSchedulerFactory(

@@ -19,7 +19,10 @@ from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ProjectRe
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
-from forwin.planning.scenario_rehearsal import ScenarioRehearsalRepository, ScenarioRehearsalRunner
+from forwin.planning.scenario_rehearsal_engine import (
+    ScenarioRehearsalRepository,
+    ScenarioRehearsalRunner,
+)
 from forwin.planning.world_contracts import (
     ArcWorldContract,
     ReaderCognitionTransition,

@@ -10,7 +10,7 @@ from forwin.protocol.world_v4 import (
     WorldDelta,
 )
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
-from forwin.reviewer_v4.gate import V4ReviewGate
+from forwin.world_v4_review_gate import V4ReviewGate
 
 
 def _intent() -> ChapterWorldDeltaIntent:

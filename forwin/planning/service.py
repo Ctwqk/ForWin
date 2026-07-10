@@ -50,6 +50,7 @@ class PlanningService:
         subworld_manager: SubWorldManager | None = None,
         provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
+        trope_cost_ceiling: int = 3,
     ) -> "PlanningService":
         from forwin.experience.arc_experience_planner import ArcExperiencePlanningService
         from forwin.experience.band_scheduler import BandExperienceScheduler
@@ -91,6 +92,7 @@ class PlanningService:
                 scheduler=band_scheduler,
                 chapter_planner=chapter_planner,
                 persistence=persistence,
+                trope_cost_ceiling=trope_cost_ceiling,
             ),
             world_contracts=world_contracts,
             scenario_rehearsal=ScenarioRehearsalService(

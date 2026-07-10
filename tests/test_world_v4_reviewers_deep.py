@@ -12,7 +12,7 @@ from forwin.protocol.world_v4 import (
     TruthRelation,
     WorldDelta,
 )
-from forwin.reviewer_v4.gate import V4ReviewGate
+from forwin.world_v4_review_gate import V4ReviewGate
 
 
 def _chapter_23_intent() -> ChapterWorldDeltaIntent:

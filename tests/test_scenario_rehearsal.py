@@ -11,12 +11,14 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.generation.pipeline import ChapterPipeline
-from forwin.planning.scenario_rehearsal import ScenarioRehearsalRepository, ScenarioRehearsalRunner
+from forwin.planning.scenario_rehearsal_engine import (
+    ScenarioRehearsalRepository,
+    ScenarioRehearsalRunner,
+)
 from forwin.planning.world_contracts import (
     ArcWorldContract,
     BandWorldContract,
     ChapterWorldDeltaIntent,
-    RevealLadderStep,
     WorldContractRepository,
 )
 from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation
@@ -91,6 +93,7 @@ def _seed_project_with_chapters(session, *, chapter_start: int = 1, chapter_end:
         title="Scenario Rehearsal",
         premise="殖民地防线与母星通讯危机",
         genre="科幻",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     arc = updater.create_arc_plan(
         project.id,

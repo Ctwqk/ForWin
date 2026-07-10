@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import sys
 from dataclasses import fields
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import pytest
 import forwin.book_state as book_state
 import forwin.map as book_map
 import forwin.review as review
-import forwin.reviewer_v4 as reviewer_v4
+import forwin.world_v4_review_gate as world_v4_review_gate
 from forwin.api_route_registry import (
     ApiRouteDeps,
     CoreDeps,
@@ -39,7 +38,6 @@ def test_core_packages_declare_current_architecture_roles() -> None:
         "forwin/book_state/README.md": "Status: CANON runtime.",
         "forwin/knowledge_system/README.md": "Status: disposable projection and retrieval domain.",
         "forwin/review/README.md": "Status: DRAFT REVIEW domain.",
-        "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
     }
     for rel_path, marker in expectations.items():
@@ -47,9 +45,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
     assert "Chapter draft review domain" in inspect.getdoc(review)
-    assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(
-        reviewer_v4
-    )
+    assert "Canonical import path" in inspect.getdoc(world_v4_review_gate)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
 
@@ -216,21 +212,25 @@ def test_design_status_contains_deprecation_matrix() -> None:
     assert "兼容 / 弃用矩阵" in status_doc
     assert "`forwin.world_model` | removed | `forwin.knowledge_system`" in status_doc
     assert (
-        "`forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate`"
+        "`forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate`"
         in status_doc
     )
-    assert "`forwin.planning.scenario_rehearsal` | deprecated" in status_doc
-    assert "v5.0" in status_doc
+    assert "`forwin.planning.scenario_rehearsal` | removed" in status_doc
 
 
-def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
-    for module_name in (
-        "forwin.reviewer_v4",
-        "forwin.planning.scenario_rehearsal",
-    ):
-        sys.modules.pop(module_name, None)
-        with pytest.warns(DeprecationWarning, match="DESIGN_STATUS"):
-            importlib.import_module(module_name)
+def test_v5_legacy_alias_modules_stay_removed() -> None:
+    assert not (ROOT / "forwin/reviewer_v4").exists()
+    assert not (ROOT / "forwin/planning/scenario_rehearsal.py").exists()
+
+
+def test_planning_runtime_has_one_explicit_composition_service() -> None:
+    container_source = _read("forwin/runtime/container.py")
+    run_control_source = _read("forwin/generation/pipeline_core/run_control.py")
+
+    assert "PlanningService.build_default" in container_source
+    assert "arc_envelope_manager.services" not in container_source
+    assert "arc_envelope_manager.services" not in run_control_source
+    assert "bind_runtime_hooks" in run_control_source
 
 
 def test_removed_world_v4_projection_modules_stay_removed() -> None:

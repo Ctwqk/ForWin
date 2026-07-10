@@ -12,7 +12,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.governance import DecisionEventType
-from forwin.planning.scenario_rehearsal import ScenarioRehearsalRunner
+from forwin.planning.scenario_rehearsal_engine import ScenarioRehearsalRunner
 from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator, latest_blocking_scenario_rehearsal
 from forwin.planning.world_contracts import (
     ArcWorldContract,
@@ -22,7 +22,9 @@ from forwin.planning.world_contracts import (
     WorldContractRepository,
 )
 from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def _setup_project(session, *, chapter_start: int = 21, chapter_end: int = 24):
@@ -31,6 +33,7 @@ def _setup_project(session, *, chapter_start: int = 21, chapter_end: int = 24):
         title="Scenario Resolution",
         premise="母星围城与殖民地误判",
         genre="科幻",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     arc = updater.create_arc_plan(
         project.id,

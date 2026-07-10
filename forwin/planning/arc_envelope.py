@@ -234,6 +234,17 @@ class ArcEnvelopeManager:
             scenario_progress_callback=scenario_progress_callback,
         )
 
+    def bind_runtime_hooks(
+        self,
+        *,
+        provisional_executor: Any,
+        scenario_progress_callback: Any,
+    ) -> None:
+        self.provisional_executor = provisional_executor
+        self.scenario_progress_callback = scenario_progress_callback
+        self.planning.provisional_preview.provisional_executor = provisional_executor
+        self.planning.scenario_rehearsal.progress_callback = scenario_progress_callback
+
     def _emit_scenario_progress(
         self,
         *,

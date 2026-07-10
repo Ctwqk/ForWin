@@ -165,7 +165,7 @@ Run: `uv run pytest -q tests/test_canon_commit_plan.py tests/test_book_state_dir
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add forwin/canon forwin/generation/pipeline_core/world_projection.py tests/test_canon_commit_plan.py
@@ -189,7 +189,7 @@ git commit -m "Prepare Canon commit plans before transactions"
 - Consumes: persisted `CanonCommitPlan` and a `sessionmaker` owned by `CanonAdmissionService`.
 - Produces: `CanonAdmissionOutcome` containing `commit_id`, compile result, idempotent flag, or a typed stale/block result.
 
-- [ ] **Step 1: Write failing atomicity, rollback, stale, and idempotency tests**
+- [x] **Step 1: Write failing atomicity, rollback, stale, and idempotency tests**
 
 ```python
 @pytest.mark.parametrize("failure_stage", ["book_state", "entity", "obligation", "chapter", "outbox"])
@@ -205,17 +205,17 @@ def test_same_idempotency_key_returns_prior_commit(prepared_plan):
     assert second.idempotent is True
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 Run: `uv run pytest -q tests/test_canon_atomic_transaction.py`
 
 Expected: missing `CanonCommitRecord` and `commit_plan` failures.
 
-- [ ] **Step 3: Add `CanonCommitRecord`**
+- [x] **Step 3: Add `CanonCommitRecord`**
 
 The table has unique `idempotency_key` and `candidate_id`, plus project/chapter, expected versions, graph delta ids, snapshot ids, status, result JSON, and timestamps.
 
-- [ ] **Step 4: Implement the transaction**
+- [x] **Step 4: Implement the transaction**
 
 `commit_plan` opens `with session_factory.begin() as session`, locks `Project`, `ChapterPlan`, and `CandidateDraftRecord` with `FOR UPDATE`, revalidates candidate body hash, plan revision, previous accepted chapter, and latest BookState chapter, then applies in order:
 
@@ -230,7 +230,7 @@ The table has unique `idempotency_key` and `candidate_id`, plus project/chapter,
 
 No exception is swallowed inside the transaction. A stale revalidation raises `CanonStaleVersion`; the outer handler returns the candidate to `ready_for_canon`. Other failures leave all authoritative tables unchanged and mark the candidate `failed` in a separate diagnostic transaction.
 
-- [ ] **Step 5: Run atomic tests and BookState compiler tests**
+- [x] **Step 5: Run atomic tests and BookState compiler tests**
 
 Run: `uv run pytest -q tests/test_canon_atomic_transaction.py tests/test_book_state_compiler.py tests/test_book_state_final.py tests/test_entity_admission_planner.py`
 

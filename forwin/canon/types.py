@@ -7,6 +7,7 @@ from forwin.canon_quality.signals import CanonAdmissionGateResult
 
 if TYPE_CHECKING:
     from forwin.canon.plan import CanonCommitPlan
+    from forwin.protocol.book_state import BookStateCompileResult
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,11 @@ class CanonAdmissionOutcome:
     blocked_path: str = ""
     block_kind: str = ""
     canon_gate_result: CanonAdmissionGateResult | None = None
+    commit_id: str = ""
+    idempotent: bool = False
+    stale: bool = False
+    failure_reason: str = ""
+    compile_result: BookStateCompileResult | None = None
 
     @property
     def blocked(self) -> bool:

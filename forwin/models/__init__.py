@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .base import Base, get_engine, get_session_factory, init_db, new_id
+from .canon import CanonCommitRecord
 from .draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from .canon_quality import (
     ArtifactCollectionLedgerRow,
@@ -112,6 +113,7 @@ __all__ = [
     "get_session_factory",
     "init_db",
     "OutboxEvent",
+    "CanonCommitRecord",
     "new_id",
     # project
     "Project",

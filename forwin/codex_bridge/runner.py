@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from copy import deepcopy
@@ -27,6 +28,8 @@ class CodexExecResult:
     raw_events: list[dict[str, Any]] = field(default_factory=list)
     returncode: int = 0
     error: str = ""
+    actual_model: str = ""
+    thread_id: str = ""
 
 
 class CodexExecRunner:
@@ -36,9 +39,19 @@ class CodexExecRunner:
     `codex exec` instead of requiring an API key inside ForWin.
     """
 
-    def __init__(self, *, codex_bin: str = "codex", default_cwd: str | Path = ".") -> None:
+    def __init__(
+        self,
+        *,
+        codex_bin: str = "codex",
+        default_cwd: str | Path = ".",
+        codex_home: str | Path | None = None,
+    ) -> None:
         self.codex_bin = codex_bin
         self.default_cwd = Path(default_cwd).resolve()
+        configured_home = (
+            codex_home or os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+        )
+        self.codex_home = Path(configured_home).expanduser().resolve()
 
     def health(self) -> dict[str, object]:
         try:
@@ -97,6 +110,8 @@ class CodexExecRunner:
                 check=False,
             )
             events = self._parse_jsonl(proc.stdout)
+            thread_id = self._thread_id_from_events(events)
+            actual_model = self._actual_model_from_session(thread_id)
             content = output_path.read_text(encoding="utf-8") if output_path.exists() else self._content_from_events(events)
             if not content:
                 content = (proc.stdout or "").strip()
@@ -106,7 +121,49 @@ class CodexExecRunner:
                 raw_events=events,
                 returncode=proc.returncode,
                 error=(proc.stderr or "").strip(),
+                actual_model=actual_model,
+                thread_id=thread_id,
             )
+
+    @staticmethod
+    def _thread_id_from_events(events: list[dict[str, Any]]) -> str:
+        for event in events:
+            if str(event.get("type") or "") != "thread.started":
+                continue
+            thread_id = str(event.get("thread_id") or "").strip()
+            if thread_id:
+                return thread_id
+        return ""
+
+    def _actual_model_from_session(self, thread_id: str) -> str:
+        if not thread_id:
+            return ""
+        sessions_root = self.codex_home / "sessions"
+        if not sessions_root.exists():
+            return ""
+        candidates = list(sessions_root.rglob(f"*{thread_id}.jsonl"))
+        if not candidates:
+            return ""
+        session_path = max(candidates, key=lambda path: path.stat().st_mtime_ns)
+        try:
+            lines = session_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+        actual_model = ""
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "turn_context":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            model = str(payload.get("model") or "").strip()
+            if model:
+                actual_model = model
+        return actual_model
 
     @staticmethod
     def _parse_jsonl(raw: str) -> list[dict[str, Any]]:

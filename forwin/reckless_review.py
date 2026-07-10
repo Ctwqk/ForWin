@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.state.updater import StateUpdater
@@ -38,13 +38,22 @@ _SENSITIVE_LOG_KEYS = {
     "apikey",
     "authorization",
     "browser_session",
+    "access_token",
+    "bearer_token",
+    "client_secret",
     "codex_bridge_token",
     "cookie",
     "cookies",
     "minimax_api_key",
     "password",
+    "private_key",
     "publisher_session_secret",
     "raw_browser_session",
+    "refresh_token",
+    "secret_key",
+    "session_secret",
+    "session_token",
+    "token",
 }
 
 
@@ -63,6 +72,8 @@ class RecklessReviewRequest(BaseModel):
 
 
 class RecklessReviewDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     decision: Literal["approve", "reject"]
     reason: str = Field(min_length=1)
     risk_level: Literal["low", "medium", "high"] = "medium"
@@ -92,7 +103,7 @@ def _sanitize_complete_log(value: Any) -> Any:
         for key, item in value.items():
             normalized = str(key or "").strip().lower()
             is_sensitive = normalized in _SENSITIVE_LOG_KEYS or normalized.endswith(
-                ("_api_key", "_password", "_cookie")
+                ("_api_key", "_password", "_cookie", "_token")
             )
             result[str(key)] = "[REDACTED]" if is_sensitive else _sanitize_complete_log(item)
         return result
@@ -187,7 +198,6 @@ class RecklessReviewAgent:
         router_trace = dict(getattr(call_result, "trace", {}) or {})
         fallback_used = bool(getattr(call_result, "fallback_used", False))
         actual_model = self._actual_model(
-            attempts=attempts,
             backend=backend,
             router_trace=router_trace,
         )
@@ -302,7 +312,7 @@ class RecklessReviewAgent:
                 event_family="evaluation_verdict",
                 event_type=event_type,
                 actor_type="worker",
-                actor_id=actual_model or RECKLESS_REVIEW_MODEL,
+                actor_id=actual_model or "reckless-review-router",
                 summary=(
                     f"Reckless review failed for {request.gate_kind}: {failure_reason}."
                     if failure_reason
@@ -359,28 +369,9 @@ class RecklessReviewAgent:
     @staticmethod
     def _actual_model(
         *,
-        attempts: list[dict[str, Any]],
         backend: str,
         router_trace: dict[str, Any],
     ) -> str:
-        if backend == "codex_bridge":
-            traced_model = str(router_trace.get("model") or "").strip()
-            if traced_model:
-                return traced_model
-        for attempt in reversed(attempts):
-            status = int(attempt.get("http_status") or 0)
-            failed = bool(attempt.get("final_failure")) or bool(
-                str(attempt.get("error_class") or "").strip()
-            )
-            if not failed and (status == 0 or 200 <= status < 300):
-                model = str(attempt.get("model") or "").strip()
-                if model:
-                    return model
-        traced_model = str(router_trace.get("model") or "").strip()
-        if traced_model:
-            return traced_model
-        for attempt in reversed(attempts):
-            model = str(attempt.get("model") or "").strip()
-            if model:
-                return model
-        return ""
+        if backend != "codex_bridge":
+            return ""
+        return str(router_trace.get("actual_model") or "").strip()

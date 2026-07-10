@@ -40,20 +40,15 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_home_page_uses_incremental_drawer_refresh_and_hides_raw_planned_label(self) -> None:
-        html = render_home_page(
-            has_api_key=False,
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            freeze_failed_candidates=True,
-        )
+        html = render_home_page()
 
         self.assertIn("refreshCurrentDrawerIfChanged", html)
         self.assertIn("chapterStatusLabel", html)
         self.assertIn("待生成正文", html)
-        self.assertIn("config_generation_min_chapter_chars", html)
-        self.assertIn("task_generation_min_chapter_chars", html)
-        self.assertIn("task_generation_progression_mode", html)
-        self.assertIn("task_generation_auto_band_checkpoint", html)
+        self.assertIn("runtime_policy_min_chapter_chars", html)
+        self.assertIn("runtime_policy_gate_${value}", html)
+        self.assertIn("task_generation_run_until_chapter", html)
+        self.assertNotIn("task_generation_operation_mode", html)
         self.assertIn('aria-label", "ForWin primary navigation"', html)
         self.assertIn('<forwin-topbar active="book"></forwin-topbar>', html)
         self.assertIn("FORWIN_TOPBAR_ITEMS", html)
@@ -106,10 +101,10 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("Provisional Preview", html)
         self.assertIn("Candidate Draft Review", html)
         self.assertNotIn("loadWorldModelV4Debug", html)
-        self.assertIn("saveProjectGovernanceFromDrawer", html)
-        self.assertIn("review_delegation_mode", html)
-        self.assertIn("鲁莽模式", html)
-        self.assertIn("Codex 5.3 Spark", html)
+        self.assertIn("saveProjectRuntimePolicyFromDrawer", html)
+        self.assertIn("gate_delegate", html)
+        self.assertNotIn("review_delegation_mode", html)
+        self.assertNotIn("鲁莽模式", html)
         self.assertIn("z-index:2", html)
         self.assertIn("background:rgb(255,252,247)", html)
         self.assertIn("renderDecisionTimeline", html)
@@ -128,7 +123,7 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("submitGovernanceActionModal", html)
         self.assertIn("因果回放", html)
         self.assertIn("治理洞察", html)
-        self.assertIn("future constraints 仅保存/展示", html)
+        self.assertNotIn("future constraints 仅保存/展示", html)
         self.assertIn("editNarrativeConstraintFromDrawer", html)
         self.assertIn("archiveNarrativeConstraintFromDrawer", html)
         self.assertIn("PATCH", html)
@@ -137,8 +132,8 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn('<h1 data-i18n="home.title">工作台</h1>', html)
         self.assertIn('<h2 data-i18n="home.books">书本</h2>', html)
         self.assertIn('<h2 data-i18n="home.tasks">任务</h2>', html)
-        self.assertIn('<h2 data-i18n="home.models">模型</h2>', html)
-        self.assertIn('<h2 data-i18n="home.generation">生成默认值</h2>', html)
+        self.assertIn('<h2 data-i18n="home.models">环境模型目录</h2>', html)
+        self.assertNotIn('data-i18n="home.generation"', html)
         self.assertIn('<h2 data-i18n="home.platform">平台</h2>', html)
         self.assertNotIn("配置归配置，任务归任务", html)
         self.assertNotIn("首页现在拆成", html)
@@ -149,7 +144,7 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("继续生成目标", html)
         self.assertIn("fw-logo", html)
         self.assertIn("ForWin Workspace", html)
-        self.assertIn('value="2500"', html)
+        self.assertIn("chapterLength.min_chars", html)
         self.assertIn("chapterStatusLabel(chapter.status)", html)
         self.assertIn("function parseTextareaLines(value)", html)
         self.assertIn(
@@ -159,8 +154,8 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("genesis_refine_instruction", html)
         self.assertIn("refineGenesisCurrentStage", html)
         self.assertIn("refineGenesisSelectedItem", html)
-        self.assertIn("genesis_model_profile_id", html)
-        self.assertIn("changeGenesisModelProfile", html)
+        self.assertNotIn("genesis_model_profile_id", html)
+        self.assertNotIn("changeGenesisModelProfile", html)
         self.assertIn("genesis_lock_stage_btn", html)
         self.assertIn("genesis_lock_stage_status", html)
         self.assertIn("genesis_save_stage_btn", html)
@@ -230,21 +225,12 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
 
     def test_home_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
-        html = render_home_page(
-            has_api_key=True,
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            freeze_failed_candidates=True,
-        )
+        html = render_home_page()
 
         self._assert_rendered_inline_scripts_parse(html)
 
     def test_home_page_renders_review_engine_decision_breakdown(self) -> None:
         html = render_home_page(
-            has_api_key=False,
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            freeze_failed_candidates=True,
             rule_decision_breakdown=[
                 {
                     "rule_id": "gate_delegation_failed",

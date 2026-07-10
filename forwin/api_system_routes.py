@@ -30,7 +30,6 @@ def build_handlers(
     get_session: Callable[[], Any],
     render_home_page: Callable[..., str],
     render_publishers_page: Callable[..., str],
-    build_home_page_settings: Callable[..., dict[str, object]],
     create_generation_task: Callable[..., str],
     serialize_task: Callable[..., Any],
     get_generation_task_or_404: Callable[[str], dict[str, Any]],
@@ -49,9 +48,6 @@ def build_handlers(
         }
 
     def home_page():
-        settings = build_home_page_settings(
-            base_config=get_config(),
-        )
         publisher_manager = get_publisher_manager()
         backend_ready = (
             publisher_manager.backend_ready_payload()
@@ -60,12 +56,6 @@ def build_handlers(
         )
         return HTMLResponse(
             render_home_page(
-                has_api_key=bool(settings["api_key"]),
-                base_url=str(settings["base_url"]),
-                model=str(settings["model"]),
-                freeze_failed_candidates=bool(settings["freeze_failed_candidates"]),
-                min_chapter_chars=max(500, int(settings.get("min_chapter_chars", 2500))),
-                review_interval_chapters=max(0, int(settings.get("review_interval_chapters", 0))),
                 extension_api_key_configured=bool(backend_ready.get("extension_api_key_configured")),
                 extension_install_path="browser_extension/forwin-publisher",
                 rule_decision_breakdown=_load_rule_decision_breakdown(get_session),

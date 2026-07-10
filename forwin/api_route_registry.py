@@ -110,7 +110,6 @@ class CoreDeps:
     get_orchestrator: Callable[[], Any]
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
-    build_home_page_settings: Callable[..., dict[str, object]]
     active_generation_task_error_cls: type[Exception]
     display_datetime: Callable[[Any], str]
     json_load_object: Callable[[str | None], dict[str, Any]]
@@ -216,7 +215,6 @@ def register_api_routes(
     get_session = deps.get_session
     render_home_page = deps.render_home_page
     render_publishers_page = deps.publisher.render_publishers_page
-    build_home_page_settings = deps.build_home_page_settings
     create_generation_task = deps.create_generation_task
     serialize_task = deps.serialize_task
     get_generation_task_or_404 = deps.get_generation_task_or_404
@@ -277,7 +275,6 @@ def register_api_routes(
         get_session=get_session,
         render_home_page=render_home_page,
         render_publishers_page=render_publishers_page,
-        build_home_page_settings=build_home_page_settings,
         create_generation_task=create_generation_task,
         serialize_task=serialize_task,
         get_generation_task_or_404=get_generation_task_or_404,

@@ -36,6 +36,7 @@ from forwin.mcp.models import (
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 
 
@@ -259,6 +260,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 title="Chapter MCP Book",
                 premise="用来测试 chapter_list / chapter_get。",
                 genre="玄幻",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
             arc = updater.create_arc_plan(project_id=project.id, arc_synopsis="测试 arc")
@@ -301,7 +303,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "genesis_stage_lock",
                     "project_start_writing",
                     "project_continue_generation",
-                    "project_set_reckless_mode",
+                    "project_set_gate_delegate",
                     "project_decision_events",
                     "project_extend_generation",
                     "task_list",
@@ -323,7 +325,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         self.assertTrue(all("Use this when" in (tool.description or "") for tool in tools))
 
-    def test_project_set_reckless_mode_via_mcp_updates_project_governance(self) -> None:
+    def test_project_set_gate_delegate_via_mcp_updates_runtime_policy(self) -> None:
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = updater.create_project(
@@ -331,37 +333,38 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 premise="测试 MCP 鲁莽模式开关。",
                 genre="悬疑",
                 target_total_chapters=12,
+                runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
             session.commit()
             project_id = project.id
 
-        enabled = self._load_model(
+        delegated = self._load_model(
             MutationResult,
             self._call_tool(
-                "project_set_reckless_mode",
+                "project_set_gate_delegate",
                 {
                     "project_id": project_id,
-                    "enabled": True,
+                    "delegate": "spark",
                     "reason": "delegate review gates to Spark",
                 },
             ),
         )
 
-        self.assertIsNotNone(enabled.project)
-        self.assertEqual(enabled.project.review_delegation_mode, "reckless")
-        disabled = self._load_model(
+        self.assertIsNotNone(delegated.project)
+        self.assertEqual(delegated.project.gate_delegate, "spark")
+        restored = self._load_model(
             MutationResult,
             self._call_tool(
-                "project_set_reckless_mode",
+                "project_set_gate_delegate",
                 {
                     "project_id": project_id,
-                    "enabled": False,
+                    "delegate": "human",
                     "reason": "return review gates to human",
                 },
             ),
         )
-        self.assertEqual(disabled.project.review_delegation_mode, "human")
+        self.assertEqual(restored.project.gate_delegate, "human")
 
     def test_list_tools_return_object_wrappers_for_remote_mcp_clients(self) -> None:
         project_id, _chapter_number = self._create_project_with_draft()
@@ -383,6 +386,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 premise="测试追加续写计划。",
                 genre="悬疑",
                 target_total_chapters=2,
+                runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
             arc = updater.create_arc_plan(
@@ -701,6 +705,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 premise="测试 MCP 续跑参数透传。",
                 genre="玄幻",
                 target_total_chapters=60,
+                runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
             arc = updater.create_arc_plan(
@@ -853,6 +858,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 title="Checkpoint MCP Book",
                 premise="用来测试 band checkpoint MCP 工具。",
                 genre="玄幻",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
             arc = updater.create_arc_plan(project_id=project.id, arc_synopsis="checkpoint arc")

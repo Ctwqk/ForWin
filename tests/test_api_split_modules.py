@@ -18,18 +18,12 @@ class ApiSplitModuleTests(unittest.TestCase):
         home = self._import_required_module("forwin.api_pages_home")
         publishers = self._import_required_module("forwin.api_pages_publishers")
 
-        self.assertTrue(getattr(shared, "LLM_PROVIDER_PRESETS", None))
+        self.assertFalse(hasattr(shared, "LLM_PROVIDER_PRESETS"))
         self.assertIn("function clearNode(node)", getattr(shared, "PAGE_DOM_HELPERS_JS", ""))
 
-        home_html = home.render_home_page(
-            has_api_key=False,
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            operation_mode="blackbox",
-            freeze_failed_candidates=True,
-        )
+        home_html = home.render_home_page()
         self.assertIn("ForWin 工作台", home_html)
-        self.assertIn("config_generation_min_chapter_chars", home_html)
+        self.assertIn("runtime_policy_min_chapter_chars", home_html)
 
         publishers_html = publishers.render_publishers_page(
             backend_ready={"extension_api_key_configured": True},

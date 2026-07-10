@@ -1,11 +1,4 @@
     async function bootstrap() {
-      document.getElementById('task_generation_operation_mode').value = @@OPERATION_MODE_JSON@@;
-      document.getElementById('task_generation_freeze_failed_candidates').checked = @@FREEZE_FAILED_JSON@@;
-      document.getElementById('task_generation_min_chapter_chars').value = @@MIN_CHAPTER_CHARS_JSON@@;
-      document.getElementById('config_generation_operation_mode').value = @@OPERATION_MODE_JSON@@;
-      document.getElementById('config_generation_freeze_failed_candidates').checked = @@FREEZE_FAILED_JSON@@;
-      document.getElementById('config_generation_min_chapter_chars').value = @@MIN_CHAPTER_CHARS_JSON@@;
-      document.getElementById('config_generation_review_interval_chapters').value = @@REVIEW_INTERVAL_CHAPTERS_JSON@@;
       switchTab(initialHomeTabFromLocation());
       await loadSettings();
       await ensureFreshPlatforms({ force: true, reason: 'bootstrap' });

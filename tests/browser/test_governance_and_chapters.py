@@ -16,21 +16,24 @@ def test_governance_actions_review_and_chapter_operations(page, browser_test_bas
 
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#drawer_body")).to_contain_text("治理设置")
-    reckless_mode = page.get_by_label("鲁莽模式 · Codex 5.3 Spark 审核")
-    expect(reckless_mode).not_to_be_checked()
-    reckless_mode.check()
+    expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v1")
+    page.locator("#runtime_policy_quality_profile").select_option("pulp")
+    page.locator("#runtime_policy_target_chapter_chars").fill("2900")
+    page.locator("#runtime_policy_gate_spark").click()
 
-    page.get_by_role("button", name="保存治理设置").click()
+    page.get_by_role("button", name="保存运行策略").click()
     page.locator("#governance_action_modal_submit").click()
     expect(page.locator("#global_status")).to_contain_text("治理动作必须填写 reason")
     _submit_governance_reason(page)
-    expect(page.locator("#global_status")).to_contain_text("项目治理设置已保存")
-    governance_payload = backend.captured_payloads(
-        "/api/projects/project-1/governance", method="PUT"
+    expect(page.locator("#global_status")).to_contain_text("项目运行策略已保存")
+    policy_payload = backend.captured_payloads(
+        "/api/projects/project-1/policy", method="PUT"
     )[-1]
-    assert governance_payload["reason"]
-    assert governance_payload["review_delegation_mode"] == "reckless"
+    assert policy_payload["reason"]
+    assert policy_payload["expected_version"] == 1
+    assert policy_payload["quality_profile"] == "pulp"
+    assert policy_payload["target_chapter_chars"] == 2900
+    assert policy_payload["gate_delegate"] == "spark"
 
     page.get_by_role("button", name="插入 Manual Checkpoint").click()
     _submit_governance_reason(page)

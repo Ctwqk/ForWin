@@ -17,7 +17,7 @@
           <div id="global_status" class="meta">等待加载首页数据。</div>
         </div>
         <div class="badge-row">
-          <span id="saved_key_badge" class="badge">API Key：@@HAS_API_KEY_TEXT@@</span>
+          <span id="model_catalog_badge" class="badge">模型：环境目录</span>
           <span id="codex_bridge_badge" class="badge">Codex：未检查</span>
           <span id="extension_ready_badge" class="badge @@EXTENSION_BADGE_CLASS@@">扩展回写：@@EXTENSION_READY_TEXT@@</span>
         </div>
@@ -55,7 +55,7 @@
             <button class="secondary" type="button" onclick="loadTaskCenter(true)" data-i18n="action.refresh">刷新</button>
             <button id="task_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllTasks()" data-i18n="action.select_deletable">全选可删</button>
             <button id="task_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteTasks()" disabled data-i18n="action.bulk_delete">批量删除</button>
-            <button class="primary" type="button" onclick="openTaskModal('generation')" data-i18n="action.create_task">新建任务</button>
+            <button class="primary" type="button" onclick="openTaskModal('upload')">新建上传任务</button>
           </div>
         </div>
         <div id="task_list" class="task-list"></div>
@@ -80,44 +80,13 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2 data-i18n="home.models">模型</h2>
+                  <h2 data-i18n="home.models">环境模型目录</h2>
                 </div>
                 <div class="action-row">
                   <button class="secondary" type="button" onclick="loadSettings()" data-i18n="action.refresh">刷新</button>
-                  <button class="primary" type="button" onclick="openModelModal('')" data-i18n="action.add_model">添加模型</button>
                 </div>
               </div>
               <div id="profile_list" class="list"></div>
-            </section>
-            <section class="card">
-              <div class="section-head">
-                <div>
-                  <h2 data-i18n="home.generation">生成默认值</h2>
-                </div>
-                <button class="primary" type="button" onclick="saveGenerationPreferences()" data-i18n="action.save">保存</button>
-              </div>
-              <div class="field-grid">
-                <div>
-                  <label for="config_generation_min_chapter_chars">每章最少字数</label>
-                  <input id="config_generation_min_chapter_chars" type="number" min="500" max="50000" step="100" value="@@MIN_CHAPTER_CHARS@@">
-                </div>
-                <div>
-                  <label for="config_generation_review_interval_chapters">每 N 章人工检查</label>
-                  <input id="config_generation_review_interval_chapters" type="number" min="0" max="200" step="1" value="@@REVIEW_INTERVAL_CHAPTERS@@">
-                </div>
-                <div>
-                  <label for="config_generation_operation_mode">Operation Mode</label>
-                  <select id="config_generation_operation_mode">
-                    <option value="blackbox">blackbox</option>
-                    <option value="copilot">copilot</option>
-                    <option value="checkpoint">checkpoint</option>
-                  </select>
-                </div>
-              </div>
-              <label class="checkbox" style="margin-top:12px;">
-                <input id="config_generation_freeze_failed_candidates" type="checkbox">
-                <span>freeze_failed_candidates。黑箱写作出错时，保留冻结产物，方便后续人工接管。</span>
-              </label>
             </section>
           </div>
           <div class="stack">
@@ -154,73 +123,27 @@
     <div class="modal" onclick="event.stopPropagation()">
       <div class="section-head" style="margin-bottom:0;">
         <div>
-          <h3 id="task_modal_title">新建任务</h3>
-          <p id="task_modal_description">统一入口。先选任务类型，再填写最少必要字段。</p>
+          <h3 id="task_modal_title">新建上传任务</h3>
+          <p id="task_modal_description">上传章节</p>
         </div>
         <button class="ghost" type="button" onclick="closeTaskModal()">关闭</button>
-      </div>
-      <div class="pill-switch">
-        <button id="new_task_kind_generation" type="button" class="active" onclick="setTaskModalKind('generation')">生成任务</button>
-        <button id="new_task_kind_upload" type="button" onclick="setTaskModalKind('upload')">上传任务</button>
       </div>
       <section id="task_form_generation" class="drawer-grid">
         <div id="task_generation_project_hint" class="meta-line" style="display:none;"></div>
         <div class="field-grid">
-          <div style="grid-column:1 / -1;">
-            <label for="task_generation_premise">Premise / Prompt</label>
-            <textarea id="task_generation_premise" placeholder="写清世界观、主角处境、关键冲突和你想要的开篇质感。"></textarea>
-          </div>
           <div>
-            <label for="task_generation_genre">Genre</label>
-            <input id="task_generation_genre" value="@@DEFAULT_GENRE@@" spellcheck="false">
-          </div>
-          <div>
-            <label for="task_generation_num_chapters">Num Chapters</label>
+            <label for="task_generation_num_chapters">本批最多章节</label>
             <input id="task_generation_num_chapters" type="number" min="1" max="200" value="@@DEFAULT_CHAPTERS@@">
           </div>
           <div>
-            <label for="task_generation_min_chapter_chars">每章最少字数</label>
-            <input id="task_generation_min_chapter_chars" type="number" min="500" max="50000" step="100" value="@@MIN_CHAPTER_CHARS@@">
-          </div>
-          <div>
-            <label for="task_generation_model_profile_id">Model Profile</label>
-            <select id="task_generation_model_profile_id"></select>
-          </div>
-          <div>
-            <label for="task_generation_operation_mode">Operation Mode</label>
-            <select id="task_generation_operation_mode">
-              <option value="blackbox">blackbox</option>
-              <option value="copilot">copilot</option>
-              <option value="checkpoint">checkpoint</option>
-            </select>
-          </div>
-          <div>
-            <label for="task_generation_progression_mode">推进策略覆盖</label>
-            <select id="task_generation_progression_mode">
-              <option value="">沿用项目默认</option>
-              <option value="serial_canon">serial_canon</option>
-              <option value="serial_canon_band_guard">serial_canon_band_guard</option>
-            </select>
+            <label for="task_generation_run_until_chapter">运行至章节</label>
+            <input id="task_generation_run_until_chapter" type="number" min="1" max="5000" placeholder="项目目标">
           </div>
         </div>
         <label class="checkbox">
-          <input id="task_generation_freeze_failed_candidates" type="checkbox">
-          <span>freeze_failed_candidates。黑箱写作出错时，保留冻结产物，方便后续人工接管。</span>
+          <input id="task_generation_auto_continue" type="checkbox" checked>
+          <span>自动继续</span>
         </label>
-        <div class="inline-fields">
-          <label class="checkbox" style="flex:1 1 220px;">
-            <input id="task_generation_auto_band_checkpoint" type="checkbox">
-            <span>本次运行启用 auto band checkpoint。</span>
-          </label>
-          <label class="checkbox" style="flex:1 1 220px;">
-            <input id="task_generation_manual_checkpoints_enabled" type="checkbox">
-            <span>本次运行允许 manual checkpoint。</span>
-          </label>
-          <label class="checkbox" style="flex:1 1 220px;">
-            <input id="task_generation_future_constraints_enabled" type="checkbox">
-            <span>本次运行启用 future constraints。</span>
-          </label>
-        </div>
       </section>
       <section id="task_form_upload" class="drawer-grid" style="display:none;">
         <div class="field-grid">
@@ -298,66 +221,8 @@
       </section>
       <div class="action-row" style="justify-content:flex-end;">
         <button class="ghost" type="button" onclick="closeTaskModal()">取消</button>
-        <button class="primary" type="button" onclick="submitTaskModal()">创建任务</button>
+        <button id="task_modal_submit" class="primary" type="button" onclick="submitTaskModal()">创建任务</button>
       </div>
-    </div>
-  </div>
-
-  <div id="model_modal_shell" class="modal-shell" onclick="dismissModal(event, 'model_modal_shell')">
-    <div class="modal" onclick="event.stopPropagation()">
-      <div class="section-head" style="margin-bottom:0;">
-        <div>
-          <h3 id="model_modal_title">模型设置</h3>
-          <p>新增和编辑共用这个弹窗。API Key 留空时会保留已保存值。</p>
-        </div>
-        <button class="ghost" type="button" onclick="closeModelModal()">关闭</button>
-      </div>
-      <form id="model_profile_form" onsubmit="event.preventDefault();">
-        <div class="field-grid">
-          <div>
-            <label for="model_form_name">名称</label>
-            <input id="model_form_name" placeholder="例如：MiniMax 主账号">
-          </div>
-          <div>
-            <label for="model_form_provider_preset">供应商预设</label>
-            <select id="model_form_provider_preset"></select>
-          </div>
-          <div>
-            <label for="model_form_model">当前 Model / 自定义</label>
-            <input id="model_form_model" spellcheck="false">
-          </div>
-          <div>
-            <label for="model_form_recommended_model">模型下拉</label>
-            <select id="model_form_recommended_model"></select>
-          </div>
-          <div style="grid-column:1 / -1;">
-            <div class="action-row">
-              <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
-              <span id="model_form_provider_hint" class="meta-line"></span>
-            </div>
-          </div>
-          <div style="grid-column:1 / -1;">
-            <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
-            <select id="model_form_base_url_select"></select>
-          </div>
-          <div style="grid-column:1 / -1;">
-            <label for="model_form_base_url">当前 Base URL / 自定义</label>
-            <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
-          </div>
-          <div style="grid-column:1 / -1;">
-            <label for="model_form_api_key">API Key</label>
-            <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
-          </div>
-        </div>
-        <label class="checkbox">
-          <input id="model_form_set_default" type="checkbox">
-          <span>保存后同时设为默认模型。</span>
-        </label>
-        <div class="action-row" style="justify-content:flex-end;">
-          <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
-          <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
-        </div>
-      </form>
     </div>
   </div>
 
@@ -539,10 +404,6 @@
           </div>
           <div class="genesis-chat-box">
             <label for="genesis_refine_instruction">AI 对话改写</label>
-            <div>
-              <label for="genesis_model_profile_id">Model Profile</label>
-              <select id="genesis_model_profile_id" onchange="changeGenesisModelProfile(this.value)"></select>
-            </div>
             <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="告诉 AI 想怎么改。选中子项时只改那一条规则。"></textarea>
             <div id="genesis_refine_meta" class="meta-line">默认会改写整个阶段；如果选中了子项，也可以只改写那个对象。</div>
             <div class="action-row">

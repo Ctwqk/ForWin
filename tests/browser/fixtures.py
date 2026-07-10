@@ -170,42 +170,6 @@ class MockForWinBackend:
         if path == "/api/settings/codex/health":
             json_reply(route, {"enabled": False, "healthy": False, "status": "disabled", "bridge_url": "", "message": "disabled"})
             return
-        if path == "/api/settings/llm/preferences" and method == "POST":
-            payload = read_json(route)
-            self.capture(route, payload)
-            self.settings.update(payload)
-            self.settings["message"] = "运行偏好已保存"
-            json_reply(route, self.settings)
-            return
-        if path == "/api/settings/llm/profiles" and method == "POST":
-            payload = read_json(route)
-            self.capture(route, payload)
-            profile_id = payload.get("profile_id") or f"profile-{len(self.settings['profiles']) + 1}"
-            profile = {
-                "id": profile_id,
-                "name": payload.get("name") or "测试模型",
-                "model": payload.get("model") or "test-model",
-                "base_url": payload.get("base_url") or "https://example.invalid/v1",
-                "has_api_key": bool(payload.get("api_key")),
-            }
-            self.settings["profiles"] = [item for item in self.settings["profiles"] if item["id"] != profile_id] + [profile]
-            if payload.get("set_as_default"):
-                self.settings["default_profile_id"] = profile_id
-            json_reply(route, {**self.settings, "message": "模型配置已保存"})
-            return
-        if path == "/api/settings/llm/default-profile" and method == "POST":
-            payload = read_json(route)
-            self.capture(route, payload)
-            self.settings["default_profile_id"] = payload.get("profile_id")
-            json_reply(route, {**self.settings, "message": "默认模型已切换"})
-            return
-        profile_delete = re.fullmatch(r"/api/settings/llm/profiles/([^/]+)", path)
-        if profile_delete and method == "DELETE":
-            self.capture(route, {})
-            profile_id = profile_delete.group(1)
-            self.settings["profiles"] = [item for item in self.settings["profiles"] if item["id"] != profile_id]
-            json_reply(route, {**self.settings, "message": "模型配置已删除"})
-            return
 
         if path == "/api/personality-skills" and method == "GET":
             json_reply(route, {"skills": self.personality_skills})
@@ -408,6 +372,48 @@ class MockForWinBackend:
                 json_reply(route, {"project_id": project_id, "message": "书本已删除"})
                 return
 
+        policy_match = re.fullmatch(r"/api/projects/([^/]+)/policy", path)
+        if policy_match:
+            project_id = policy_match.group(1)
+            project = self.project_ref(project_id)
+            if method == "GET":
+                json_reply(route, {
+                    "project_id": project_id,
+                    "version": project["runtime_policy_version"],
+                    "policy": project["runtime_policy"],
+                })
+                return
+            if method == "PUT":
+                payload = read_json(route)
+                self.capture(route, payload)
+                if payload.get("expected_version") != project["runtime_policy_version"]:
+                    api_error(route, "runtime policy version conflict", 409)
+                    return
+                project["runtime_policy_version"] += 1
+                policy = project["runtime_policy"]
+                policy["quality_profile"] = payload["quality_profile"]
+                policy["model_profile_id"] = payload["model_profile_id"]
+                policy["chapter_length"] = {
+                    "min_chars": payload["min_chapter_chars"],
+                    "target_chars": payload["target_chapter_chars"],
+                    "max_chars": payload["max_chapter_chars"],
+                }
+                policy["pause"] = {
+                    "review_interval_chapters": payload["review_interval_chapters"],
+                    "manual_checkpoints": payload["manual_checkpoints"],
+                    "band_checkpoint_action": payload["band_checkpoint_action"],
+                    "generation_audit_interval": payload["generation_audit_interval"],
+                    "generation_audit_pauses": payload["generation_audit_pauses"],
+                    "gate_delegate": payload["gate_delegate"],
+                }
+                json_reply(route, {
+                    "project_id": project_id,
+                    "version": project["runtime_policy_version"],
+                    "policy": policy,
+                    "message": "项目运行策略已保存。",
+                })
+                return
+
         if method == "GET" and re.fullmatch(r"/api/projects/[^/]+/genesis", path):
             project_id = path.split("/")[3]
             json_reply(route, self.genesis.setdefault(project_id, sample_genesis_detail(project_id)))
@@ -537,11 +543,6 @@ class MockForWinBackend:
                 json_reply(route, {"message": "review retried", "task_id": payload.get("continue_generation") and "task-retry" or ""})
                 return
             json_reply(route, sample_review(project_id, int(chapter_number)))
-            return
-        if method == "PUT" and re.fullmatch(r"/api/projects/[^/]+/governance", path):
-            payload = read_json(route)
-            self.capture(route, payload)
-            json_reply(route, {"message": "项目治理设置已保存"})
             return
         if method == "POST" and re.fullmatch(r"/api/projects/[^/]+/manual-checkpoints", path):
             payload = read_json(route)
@@ -683,7 +684,6 @@ class MockForWinBackend:
         project = deepcopy(self.project_ref(project_id))
         project["id"] = project_id
         project.setdefault("chapters", [sample_chapter(1), sample_chapter(2, status="needs_review", has_review=True)])
-        project.setdefault("governance", sample_governance())
         project.setdefault("latest_band_checkpoint", sample_band_checkpoint())
         project.setdefault("narrative_constraints", [sample_constraint()])
         project.setdefault("decision_timeline", sample_decision_events())
@@ -696,28 +696,17 @@ class MockForWinBackend:
 
 def sample_settings() -> dict[str, Any]:
     return {
-        "has_api_key": True,
-        "api_key": "",
-        "base_url": "https://api.minimaxi.com/v1",
-        "model": "MiniMax-M2.7",
-        "operation_mode": "blackbox",
-        "freeze_failed_candidates": True,
-        "min_chapter_chars": 2500,
-        "review_interval_chapters": 2,
-        "progression_mode": "serial_canon_band_guard",
-        "auto_band_checkpoint": True,
-        "manual_checkpoints_enabled": True,
-        "future_constraints_enabled": True,
-        "default_profile_id": "profile-1",
-        "profiles": [
+        "default_model_profile_id": "env-minimax",
+        "model_profiles": [
             {
-                "id": "profile-1",
+                "id": "env-minimax",
                 "name": "测试 MiniMax",
                 "model": "MiniMax-M2.7",
                 "base_url": "https://api.minimaxi.com/v1",
                 "has_api_key": True,
             }
         ],
+        "bootstrap_policy": sample_runtime_policy(),
     }
 
 
@@ -750,14 +739,39 @@ def sample_platforms() -> list[dict[str, Any]]:
     ]
 
 
-def sample_governance() -> dict[str, Any]:
+def sample_runtime_policy() -> dict[str, Any]:
     return {
-        "default_operation_mode": "checkpoint",
-        "progression_mode": "serial_canon_band_guard",
-        "review_interval_chapters": 2,
-        "auto_band_checkpoint": True,
-        "manual_checkpoints_enabled": True,
-        "future_constraints_enabled": False,
+        "schema_version": 1,
+        "quality_profile": "standard",
+        "model_profile_id": "env-minimax",
+        "chapter_length": {"min_chars": 2500, "target_chars": 2800, "max_chars": 3200},
+        "pause": {
+            "review_interval_chapters": 2,
+            "manual_checkpoints": True,
+            "band_checkpoint_action": "pause_on_warn",
+            "generation_audit_interval": 6,
+            "generation_audit_pauses": False,
+            "gate_delegate": "human",
+        },
+        "review": {
+            "signals": ["experience", "lint"],
+            "repair_scopes": ["local", "chapter"],
+            "max_rewrites": 3,
+            "repair_models": ["deepseek-reasoner"],
+        },
+        "planning": {
+            "future_constraints": True,
+            "plan_health": True,
+            "provisional_preview": False,
+            "use_llm_simulation": True,
+            "context_recency_window": 0,
+        },
+        "canon": {
+            "hard_floor": True,
+            "quality_gate": "strict",
+            "book_state_layers": ["world", "map", "cognition", "narrative"],
+        },
+        "writer_attention_retries": 3,
     }
 
 
@@ -788,7 +802,8 @@ def sample_project(project_id: str = "project-1", *, title: str = "雾港潮生�
         "latest_stage": "paused_for_review",
         "pacing_summary": "稳定推进",
         "chapters": [sample_chapter(1), sample_chapter(2, status="needs_review", has_review=True), sample_chapter(3, status="planned")],
-        "governance": sample_governance(),
+        "runtime_policy": sample_runtime_policy(),
+        "runtime_policy_version": 1,
         "automation": sample_automation(),
         "generation_control": sample_generation_control(can_resume=True),
     }

@@ -59,8 +59,8 @@ def test_home_surfaces_api_failures_and_clears_modal_state(page, browser_test_ba
     expect(page.locator("#global_status")).to_contain_text("book list exploded")
 
     switch_home_tab(page, "task")
-    page.get_by_role("button", name="新建任务").click()
-    page.locator("#task_generation_premise").fill("临时输入")
+    page.get_by_role("button", name="新建上传任务").click()
+    page.locator("#task_upload_body").fill("临时输入")
     page.get_by_role("button", name="取消").first.click()
-    page.get_by_role("button", name="新建任务").click()
-    expect(page.locator("#task_generation_premise")).to_have_value("")
+    page.get_by_role("button", name="新建上传任务").click()
+    expect(page.locator("#task_upload_body")).to_have_value("")

@@ -168,7 +168,6 @@ def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
         {
             "render_home_page": noop_str,
             "render_publishers_page": noop_str,
-            "build_home_page_settings": lambda *args, **kwargs: {},
             "active_generation_task_error_cls": RuntimeError,
             "display_datetime": lambda value: "",
             "json_load_object": lambda value: {},

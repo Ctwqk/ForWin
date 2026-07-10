@@ -46,9 +46,6 @@ from forwin.api_project_payloads import (
     latest_provisional_band_execution,
     normalize_project_automation,
 )
-from forwin.api_runtime import (
-    build_home_page_settings,
-)
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_schemas import (

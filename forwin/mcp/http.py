@@ -196,7 +196,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "project_set_gate_delegate",
-        "Choose whether project pause gates wait for a human or delegate to Codex 5.3 Spark with complete traces.",
+        "Choose whether project pause gates wait for a human or delegate to Codex 5.3 Spark with complete traces. Use this when the user wants to change who resolves optional project pause gates.",
     )
     async def project_set_gate_delegate(
         project_id: str,

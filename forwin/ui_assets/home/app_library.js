@@ -1,13 +1,6 @@
     function updateTaskModalSelects() {
-      const modelSelect = document.getElementById('task_generation_model_profile_id');
-      const genesisModelSelect = document.getElementById('genesis_model_profile_id');
       const platformSelect = document.getElementById('task_upload_platform');
       clearNode(platformSelect);
-      populateModelProfileSelect(modelSelect, currentTaskPrefill?.model_profile_id || modelSelect?.value || '');
-      currentGenesisModelProfileId = populateModelProfileSelect(
-        genesisModelSelect,
-        currentGenesisModelProfileId || genesisModelSelect?.value || '',
-      );
       platformsState.forEach((platform) => {
         const option = document.createElement('option');
         option.value = platform.platform_id;
@@ -16,16 +9,14 @@
       });
     }
 
-    function changeGenesisModelProfile(value) {
-      currentGenesisModelProfileId = String(value || '').trim();
-    }
-
     function renderProfiles() {
       const list = document.getElementById('profile_list');
       clearNode(list);
-      const profiles = Array.isArray(settingsState?.profiles) ? settingsState.profiles : [];
+      const profiles = Array.isArray(runtimeCatalogState?.model_profiles)
+        ? runtimeCatalogState.model_profiles
+        : [];
       if (!profiles.length) {
-        list.appendChild(createNode('div', '还没有模型配置。先添加一条，让生成任务只需要下拉选择。', 'empty'));
+        list.appendChild(createNode('div', '环境中没有可用模型。', 'empty'));
         return;
       }
       profiles.forEach((profile) => {
@@ -36,192 +27,38 @@
         titleWrap.appendChild(createNode('div', `${profile.model} | ${profile.base_url}`, 'meta-line'));
         top.appendChild(titleWrap);
         const badges = createNode('div', '', 'badge-row');
-        if (profile.id === settingsState.default_profile_id) badges.appendChild(createNode('span', '默认', 'badge ok'));
-        badges.appendChild(createNode('span', profile.has_api_key ? 'Key 已保存' : 'Key 未保存', `badge ${profile.has_api_key ? 'ok' : 'warn'}`));
+        if (profile.id === runtimeCatalogState.default_model_profile_id) {
+          badges.appendChild(createNode('span', '默认', 'badge ok'));
+        }
+        badges.appendChild(createNode(
+          'span',
+          profile.has_api_key ? '凭据可用' : '凭据缺失',
+          `badge ${profile.has_api_key ? 'ok' : 'warn'}`,
+        ));
         top.appendChild(badges);
         item.appendChild(top);
-        const actions = createNode('div', '', 'action-row');
-        actions.appendChild(createButton('设置', () => openModelModal(profile.id), 'secondary'));
-        actions.appendChild(createButton('设为默认', () => setDefaultProfile(profile.id), 'ghost'));
-        actions.appendChild(createButton('删除', () => deleteProfile(profile.id), 'danger'));
-        item.appendChild(actions);
         list.appendChild(item);
       });
-    }
-
-    function modelPresetById(presetId) {
-      return MODEL_PROVIDER_PRESETS.find((preset) => preset.id === presetId) || null;
-    }
-
-    function modelPresetSites(preset) {
-      const sites = Array.isArray(preset?.sites) ? preset.sites : [];
-      if (sites.length) return sites;
-      if (preset?.base_url) {
-        return [{ label: '默认站点', base_url: preset.base_url }];
-      }
-      return [];
-    }
-
-    function normalizedBaseUrl(value) {
-      return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
-    }
-
-    function detectModelPresetId(baseUrl, model) {
-      const normalizedCurrentBaseUrl = normalizedBaseUrl(baseUrl);
-      const normalizedModel = (model || '').trim();
-      const matched = MODEL_PROVIDER_PRESETS.find((preset) => {
-        const siteMatched = modelPresetSites(preset).some((site) => (
-          normalizedCurrentBaseUrl && normalizedCurrentBaseUrl === normalizedBaseUrl(site.base_url)
-        ));
-        const recommended = Array.isArray(preset.recommended_models) ? preset.recommended_models.map((item) => String(item || '').trim()) : [];
-        return (
-          siteMatched
-          || (normalizedModel && recommended.includes(normalizedModel))
-        );
-      });
-      return matched ? matched.id : '';
-    }
-
-    function syncModelPresetControls(preferredPresetId = null) {
-      const providerSelect = document.getElementById('model_form_provider_preset');
-      const baseUrlSelect = document.getElementById('model_form_base_url_select');
-      const modelSelect = document.getElementById('model_form_recommended_model');
-      const hint = document.getElementById('model_form_provider_hint');
-      const currentModel = document.getElementById('model_form_model').value.trim();
-      const currentBaseUrl = document.getElementById('model_form_base_url').value.trim();
-      const selectedPresetId = preferredPresetId !== null
-        ? preferredPresetId
-        : detectModelPresetId(currentBaseUrl, currentModel);
-
-      clearNode(providerSelect);
-      const customOption = document.createElement('option');
-      customOption.value = '';
-      customOption.textContent = '自定义';
-      providerSelect.appendChild(customOption);
-      MODEL_PROVIDER_PRESETS.forEach((preset) => {
-        const option = document.createElement('option');
-        option.value = preset.id;
-        option.textContent = `${preset.label} · ${preset.default_model}`;
-        providerSelect.appendChild(option);
-      });
-      providerSelect.value = selectedPresetId;
-
-      const selectedPreset = modelPresetById(providerSelect.value);
-      const sites = modelPresetSites(selectedPreset);
-      clearNode(baseUrlSelect);
-      if (!sites.length) {
-        const option = document.createElement('option');
-        option.value = currentBaseUrl;
-        option.textContent = currentBaseUrl || '自定义当前值';
-        baseUrlSelect.appendChild(option);
-      } else {
-        sites.forEach((site) => {
-          const option = document.createElement('option');
-          option.value = site.base_url;
-          option.textContent = `${site.label} · ${site.base_url}`;
-          baseUrlSelect.appendChild(option);
-        });
-        if (currentBaseUrl && !sites.some((site) => normalizedBaseUrl(site.base_url) === normalizedBaseUrl(currentBaseUrl))) {
-          const option = document.createElement('option');
-          option.value = currentBaseUrl;
-          option.textContent = `${currentBaseUrl} · 当前自定义`;
-          baseUrlSelect.appendChild(option);
-        }
-      }
-      baseUrlSelect.value = currentBaseUrl || (sites[0]?.base_url || '');
-
-      clearNode(modelSelect);
-      const recommendedModels = selectedPreset && Array.isArray(selectedPreset.recommended_models)
-        ? selectedPreset.recommended_models.map((item) => String(item || '').trim()).filter(Boolean)
-        : [];
-      if (!recommendedModels.length) {
-        const option = document.createElement('option');
-        option.value = currentModel;
-        option.textContent = currentModel || '自定义当前值';
-        modelSelect.appendChild(option);
-      } else {
-        recommendedModels.forEach((modelName) => {
-          const option = document.createElement('option');
-          option.value = modelName;
-          option.textContent = modelName === selectedPreset.default_model ? `${modelName} · 推荐` : modelName;
-          modelSelect.appendChild(option);
-        });
-        if (currentModel && !recommendedModels.includes(currentModel)) {
-          const option = document.createElement('option');
-          option.value = currentModel;
-          option.textContent = `${currentModel} · 当前值`;
-          modelSelect.appendChild(option);
-        }
-      }
-      modelSelect.value = currentModel || (selectedPreset?.default_model || '');
-      hint.textContent = selectedPreset
-        ? `${selectedPreset.hint} 默认站点：${sites[0]?.base_url || selectedPreset.base_url || ''}`
-        : '保留手填 base URL / model，用于任意 OpenAI 兼容服务。';
-    }
-
-    function applyModelPresetById(presetId) {
-      const preset = modelPresetById(presetId);
-      if (!preset) {
-        syncModelPresetControls();
-        return;
-      }
-      const nameInput = document.getElementById('model_form_name');
-      const sites = modelPresetSites(preset);
-      document.getElementById('model_form_base_url').value = sites[0]?.base_url || preset.base_url || '';
-      document.getElementById('model_form_model').value = preset.default_model || '';
-      if (!nameInput.value.trim()) {
-        nameInput.value = preset.default_name || preset.label || '';
-      }
-      syncModelPresetControls(preset.id);
-    }
-
-    function applySelectedModelPreset() {
-      applyModelPresetById(document.getElementById('model_form_provider_preset').value);
-    }
-
-    function normalizeMinChapterChars(value) {
-      const normalized = Number(value || @@MIN_CHAPTER_CHARS_JSON@@);
-      if (!Number.isFinite(normalized)) return @@MIN_CHAPTER_CHARS_JSON@@;
-      return Math.max(500, Math.min(50000, Math.round(normalized)));
     }
 
     function normalizeReviewInterval(value) {
       const normalized = Number(value || 0);
       if (!Number.isFinite(normalized)) return 0;
-      return Math.max(0, Math.min(200, Math.round(normalized)));
-    }
-
-    function normalizeProgressionMode(value) {
-      const normalized = String(value || '').trim();
-      if (['serial_canon', 'serial_canon_band_guard'].includes(normalized)) {
-        return normalized;
-      }
-      return '';
-    }
-
-    function strictGovernanceDefaults() {
-      return {
-        progression_mode: 'serial_canon_band_guard',
-        auto_band_checkpoint: true,
-        band_warn_action: 'pause',
-        manual_checkpoints_enabled: true,
-        future_constraints_enabled: true,
-      };
-    }
-
-    function applyGenerationPreferenceFields() {
-      const minChars = normalizeMinChapterChars(settingsState?.min_chapter_chars || @@MIN_CHAPTER_CHARS_JSON@@);
-      document.getElementById('config_generation_min_chapter_chars').value = minChars;
-      document.getElementById('config_generation_review_interval_chapters').value = normalizeReviewInterval(settingsState?.review_interval_chapters ?? @@REVIEW_INTERVAL_CHAPTERS_JSON@@);
-      document.getElementById('config_generation_operation_mode').value = settingsState?.operation_mode || @@OPERATION_MODE_JSON@@;
-      document.getElementById('config_generation_freeze_failed_candidates').checked = settingsState?.freeze_failed_candidates ?? @@FREEZE_FAILED_JSON@@;
+      return Math.max(0, Math.min(500, Math.round(normalized)));
     }
 
     async function loadSettings() {
       try {
-        settingsState = await requestJson('/api/settings/llm');
-        document.getElementById('saved_key_badge').textContent = `API Key：${settingsState.has_api_key ? '已保存' : '未保存'}`;
-        applyGenerationPreferenceFields();
+        runtimeCatalogState = await requestJson('/api/settings/llm');
+        const profiles = Array.isArray(runtimeCatalogState?.model_profiles)
+          ? runtimeCatalogState.model_profiles
+          : [];
+        const readyCount = profiles.filter((profile) => profile.has_api_key).length;
+        const badge = document.getElementById('model_catalog_badge');
+        if (badge) {
+          badge.textContent = `模型：${readyCount}/${profiles.length} 可用`;
+          badge.className = `badge ${readyCount ? 'ok' : 'warn'}`;
+        }
         updateTaskModalSelects();
         renderProfiles();
         await loadCodexBridgeStatus();
@@ -265,122 +102,6 @@
         }
       }
     }
-
-    function openModelModal(profileId) {
-      currentProfileId = profileId || '';
-      const profile = (settingsState?.profiles || []).find((item) => item.id === currentProfileId);
-      document.getElementById('model_modal_title').textContent = profile ? '模型设置' : '添加模型';
-      document.getElementById('model_form_name').value = profile?.name || '';
-      document.getElementById('model_form_model').value = profile?.model || @@MODEL_JSON@@;
-      document.getElementById('model_form_base_url').value = profile?.base_url || @@BASE_URL_JSON@@;
-      document.getElementById('model_form_api_key').value = '';
-      document.getElementById('model_form_set_default').checked = Boolean(profile && settingsState?.default_profile_id === profile.id);
-      syncModelPresetControls();
-      document.getElementById('model_modal_shell').classList.add('open');
-    }
-
-    function closeModelModal() {
-      document.getElementById('model_modal_shell').classList.remove('open');
-    }
-
-    async function saveModelProfile() {
-      const payload = {
-        profile_id: currentProfileId || null,
-        name: document.getElementById('model_form_name').value.trim(),
-        api_key: document.getElementById('model_form_api_key').value.trim(),
-        base_url: document.getElementById('model_form_base_url').value.trim(),
-        model: document.getElementById('model_form_model').value.trim(),
-        set_as_default: document.getElementById('model_form_set_default').checked,
-      };
-      if (!payload.name) {
-        setGlobalStatus('请先填写模型配置名称。', '模型配置');
-        return;
-      }
-      try {
-        settingsState = await requestJson('/api/settings/llm/profiles', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        closeModelModal();
-        renderProfiles();
-        updateTaskModalSelects();
-        setGlobalStatus(settingsState.message || '模型配置已保存。', '模型配置');
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), '模型配置保存失败');
-      }
-    }
-
-    async function saveGenerationPreferences() {
-      const payload = {
-        operation_mode: document.getElementById('config_generation_operation_mode').value,
-        freeze_failed_candidates: document.getElementById('config_generation_freeze_failed_candidates').checked,
-        min_chapter_chars: normalizeMinChapterChars(document.getElementById('config_generation_min_chapter_chars').value),
-        review_interval_chapters: normalizeReviewInterval(document.getElementById('config_generation_review_interval_chapters').value),
-      };
-      try {
-        settingsState = await requestJson('/api/settings/llm/preferences', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        applyGenerationPreferenceFields();
-        setGlobalStatus(settingsState.message || '生成设置已保存。', '生成设置');
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), '生成设置保存失败');
-      }
-    }
-
-    async function setDefaultProfile(profileId) {
-      try {
-        settingsState = await requestJson('/api/settings/llm/default-profile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ profile_id: profileId }),
-        });
-        renderProfiles();
-        updateTaskModalSelects();
-        setGlobalStatus(settingsState.message || '默认模型已切换。', '模型配置');
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), '默认模型切换失败');
-      }
-    }
-
-    async function deleteProfile(profileId) {
-      if (!window.confirm('确定删除这条模型配置吗？')) return;
-      try {
-        settingsState = await requestJson(`/api/settings/llm/profiles/${profileId}`, { method: 'DELETE' });
-        renderProfiles();
-        updateTaskModalSelects();
-        setGlobalStatus(settingsState.message || '模型配置已删除。', '模型配置');
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), '模型配置删除失败');
-      }
-    }
-
-    document.getElementById('model_form_provider_preset').addEventListener('change', () => {
-      const presetId = document.getElementById('model_form_provider_preset').value;
-      if (presetId) {
-        applyModelPresetById(presetId);
-      } else {
-        syncModelPresetControls('');
-      }
-    });
-
-    document.getElementById('model_form_base_url_select').addEventListener('change', (event) => {
-      const value = event.target?.value || '';
-      if (value) {
-        document.getElementById('model_form_base_url').value = value;
-      }
-      syncModelPresetControls(document.getElementById('model_form_provider_preset').value);
-    });
-
-    document.getElementById('model_form_recommended_model').addEventListener('change', (event) => {
-      const value = event.target?.value || '';
-      if (value) {
-        document.getElementById('model_form_model').value = value;
-      }
-    });
 
     function renderPlatforms() {
       const list = document.getElementById('platform_list');
@@ -775,18 +496,7 @@
         const hasReviewBlocker = Boolean(book.needs_review_chapter_count || (Array.isArray(control.pending_review_chapters) && control.pending_review_chapters.length));
         let generateLabel = '生成首批章节';
         let generateClass = 'primary';
-        let generateAction = () => openTaskModal('generation', {
-          project_id: book.id,
-          book_title: book.title,
-          premise: book.premise || '',
-          genre: book.genre || @@DEFAULT_GENRE_JSON@@,
-          num_chapters: book.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@,
-          operation_mode: book.governance?.default_operation_mode || '',
-          progression_mode: book.governance?.progression_mode || '',
-          auto_band_checkpoint: Boolean(book.governance?.auto_band_checkpoint),
-          manual_checkpoints_enabled: Boolean(book.governance?.manual_checkpoints_enabled),
-          future_constraints_enabled: Boolean(book.governance?.future_constraints_enabled),
-        });
+        let generateAction = () => continueProjectGeneration(book.id);
         if (book.creation_status === 'creating') {
           generateLabel = '继续创世';
           generateClass = 'primary';
@@ -1074,10 +784,10 @@
 
     function setTaskModalKind(kind) {
       currentTaskModalKind = kind;
-      document.getElementById('new_task_kind_generation').classList.toggle('active', kind === 'generation');
-      document.getElementById('new_task_kind_upload').classList.toggle('active', kind === 'upload');
       document.getElementById('task_form_generation').style.display = kind === 'generation' ? 'grid' : 'none';
       document.getElementById('task_form_upload').style.display = kind === 'upload' ? 'grid' : 'none';
+      const submit = document.getElementById('task_modal_submit');
+      if (submit) submit.textContent = kind === 'generation' ? '继续生成' : '创建上传任务';
     }
 
     function updateTaskModalHeader() {
@@ -1086,16 +796,11 @@
       if (!title || !description) return;
       if (currentTaskModalKind === 'upload') {
         title.textContent = '新建上传任务';
-        description.textContent = '统一入口。先选任务类型，再填写最少必要字段。';
+        description.textContent = '上传章节';
         return;
       }
-      if (currentTaskPrefill?.continue_generation) {
-        title.textContent = '继续生成';
-        description.textContent = '沿用现有生成 modal，但本次提交会走 continue-generation，并允许覆盖本次治理策略。';
-        return;
-      }
-      title.textContent = '新建任务';
-      description.textContent = '统一入口。先选任务类型，再填写最少必要字段。';
+      title.textContent = '继续生成';
+      description.textContent = currentTaskPrefill?.book_title || currentTaskPrefill?.project_id || '项目';
     }
 
     function applyTaskPrefill() {
@@ -1109,23 +814,9 @@
         projectHint.style.display = 'none';
         projectHint.textContent = '';
       }
-      document.getElementById('task_generation_genre').value = currentTaskPrefill.genre || @@DEFAULT_GENRE_JSON@@;
-      document.getElementById('task_generation_num_chapters').value = currentTaskPrefill.num_chapters || @@DEFAULT_CHAPTERS_JSON@@;
-      document.getElementById('task_generation_min_chapter_chars').value = normalizeMinChapterChars(
-        currentTaskPrefill.min_chapter_chars || settingsState?.min_chapter_chars || @@MIN_CHAPTER_CHARS_JSON@@
-      );
-      document.getElementById('task_generation_premise').value = currentTaskPrefill.premise || '';
-      document.getElementById('task_generation_operation_mode').value = currentTaskPrefill.operation_mode || settingsState?.operation_mode || @@OPERATION_MODE_JSON@@;
-      document.getElementById('task_generation_freeze_failed_candidates').checked = currentTaskPrefill.freeze_failed_candidates ?? settingsState?.freeze_failed_candidates ?? @@FREEZE_FAILED_JSON@@;
-      const strictDefaults = strictGovernanceDefaults();
-      const defaultProgressionMode = currentTaskPrefill.progression_mode ?? settingsState?.progression_mode ?? strictDefaults.progression_mode;
-      document.getElementById('task_generation_progression_mode').value = normalizeProgressionMode(defaultProgressionMode) || strictDefaults.progression_mode;
-      document.getElementById('task_generation_auto_band_checkpoint').checked = currentTaskPrefill.auto_band_checkpoint ?? settingsState?.auto_band_checkpoint ?? strictDefaults.auto_band_checkpoint;
-      document.getElementById('task_generation_manual_checkpoints_enabled').checked = currentTaskPrefill.manual_checkpoints_enabled ?? settingsState?.manual_checkpoints_enabled ?? strictDefaults.manual_checkpoints_enabled;
-      document.getElementById('task_generation_future_constraints_enabled').checked = currentTaskPrefill.future_constraints_enabled ?? settingsState?.future_constraints_enabled ?? strictDefaults.future_constraints_enabled;
-      if (currentTaskPrefill.model_profile_id) {
-        document.getElementById('task_generation_model_profile_id').value = currentTaskPrefill.model_profile_id;
-      }
+      document.getElementById('task_generation_num_chapters').value = currentTaskPrefill.max_chapters || '';
+      document.getElementById('task_generation_run_until_chapter').value = currentTaskPrefill.run_until_chapter || '';
+      document.getElementById('task_generation_auto_continue').checked = currentTaskPrefill.auto_continue ?? true;
 
       document.getElementById('task_upload_platform').value = currentTaskPrefill.platform || (platformsState[0]?.platform_id || '');
       document.getElementById('task_upload_book_name').value = currentTaskPrefill.book_name || '';
@@ -1145,7 +836,7 @@
       document.getElementById('task_upload_auto_cover_upload_enabled').checked = currentTaskPrefill.auto_cover_upload_enabled ?? true;
     }
 
-    async function openTaskModal(kind = 'generation', prefill = {}) {
+    async function openTaskModal(kind = 'upload', prefill = {}) {
       currentTaskPrefill = prefill || {};
       if (kind === 'upload') {
         try {
@@ -1214,40 +905,17 @@
     async function submitTaskModal() {
       try {
         if (currentTaskModalKind === 'generation') {
-          const payload = {
-            project_id: currentTaskPrefill.project_id || null,
-            premise: document.getElementById('task_generation_premise').value.trim(),
-            genre: document.getElementById('task_generation_genre').value.trim() || @@DEFAULT_GENRE_JSON@@,
-            num_chapters: Number(document.getElementById('task_generation_num_chapters').value || @@DEFAULT_CHAPTERS_JSON@@),
-            min_chapter_chars: normalizeMinChapterChars(document.getElementById('task_generation_min_chapter_chars').value),
-            review_interval_chapters: normalizeReviewInterval(settingsState?.review_interval_chapters ?? @@REVIEW_INTERVAL_CHAPTERS_JSON@@),
-            model_profile_id: document.getElementById('task_generation_model_profile_id').value || null,
-            operation_mode: document.getElementById('task_generation_operation_mode').value,
-            freeze_failed_candidates: document.getElementById('task_generation_freeze_failed_candidates').checked,
-            progression_mode: normalizeProgressionMode(document.getElementById('task_generation_progression_mode').value),
-            auto_band_checkpoint: document.getElementById('task_generation_auto_band_checkpoint').checked,
-            manual_checkpoints_enabled: document.getElementById('task_generation_manual_checkpoints_enabled').checked,
-            future_constraints_enabled: document.getElementById('task_generation_future_constraints_enabled').checked,
-          };
-          if (!currentTaskPrefill.continue_generation && !payload.premise) {
-            setGlobalStatus('生成任务必须填写 premise / prompt。', '新建任务');
+          const projectId = String(currentTaskPrefill.project_id || '').trim();
+          if (!projectId) {
+            setGlobalStatus('继续生成必须从书本进入。', '继续生成');
             return;
           }
-          const requestUrl = currentTaskPrefill.continue_generation && currentTaskPrefill.project_id
-            ? `/api/projects/${currentTaskPrefill.project_id}/continue-generation`
-            : '/api/generate';
-          const requestPayload = currentTaskPrefill.continue_generation
-            ? {
-                max_chapters: Number(document.getElementById('task_generation_num_chapters').value || 0) || null,
-                operation_mode: payload.operation_mode,
-                review_interval_chapters: payload.review_interval_chapters,
-                progression_mode: payload.progression_mode || null,
-                auto_band_checkpoint: payload.auto_band_checkpoint,
-                manual_checkpoints_enabled: payload.manual_checkpoints_enabled,
-                future_constraints_enabled: payload.future_constraints_enabled,
-              }
-            : payload;
-          const created = await requestJson(requestUrl, {
+          const requestPayload = {
+            max_chapters: Number(document.getElementById('task_generation_num_chapters').value || 0) || null,
+            run_until_chapter: Number(document.getElementById('task_generation_run_until_chapter').value || 0) || null,
+            auto_continue: document.getElementById('task_generation_auto_continue').checked,
+          };
+          const created = await requestJson(`/api/projects/${projectId}/continue-generation`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestPayload),
@@ -1256,12 +924,7 @@
           switchTab('task');
           await loadTaskCenter();
           await loadBooks();
-          setGlobalStatus(
-            currentTaskPrefill.continue_generation
-              ? `已创建继续生成任务 ${created.task_id}。`
-              : `已创建生成任务 ${created.task_id}。`,
-            currentTaskPrefill.continue_generation ? '继续生成' : '新建任务'
-          );
+          setGlobalStatus(`已创建继续生成任务 ${created.task_id}。`, '继续生成');
           await openTaskDrawer('generation', created.task_id);
           return;
         }
@@ -1350,17 +1013,10 @@
     async function continueProjectGeneration(projectId) {
       const project = booksState.find((book) => book.id === projectId);
       openTaskModal('generation', {
-        continue_generation: true,
         project_id: projectId,
         book_title: project?.title || '',
-        premise: project?.premise || '',
-        genre: project?.genre || @@DEFAULT_GENRE_JSON@@,
-        num_chapters: project?.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@,
-        operation_mode: project?.governance?.default_operation_mode || '',
-        progression_mode: project?.governance?.progression_mode || '',
-        auto_band_checkpoint: Boolean(project?.governance?.auto_band_checkpoint),
-        manual_checkpoints_enabled: Boolean(project?.governance?.manual_checkpoints_enabled),
-        future_constraints_enabled: Boolean(project?.governance?.future_constraints_enabled),
+        run_until_chapter: project?.target_total_chapters || '',
+        auto_continue: true,
       });
     }
 

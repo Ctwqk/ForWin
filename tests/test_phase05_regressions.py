@@ -258,13 +258,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIn("browser extension", str(ctx.exception).lower())
 
     def test_home_page_exposes_publish_action_label(self) -> None:
-        html = render_home_page(
-            has_api_key=False,
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            operation_mode="copilot",
-            freeze_failed_candidates=False,
-        )
+        html = render_home_page()
 
         self.assertIn("发布到平台", html)
 

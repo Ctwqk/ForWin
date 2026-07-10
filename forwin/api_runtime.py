@@ -4,14 +4,12 @@ import logging
 import time
 from typing import Any, Callable
 
-from forwin.config import InfrastructureConfig, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.generation.task_payload import GenerationExecutionContext
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.runtime.container import RuntimeContainer
-from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 
 
@@ -78,33 +76,6 @@ def _paused_chapters_message(result, *, prefix: str = "") -> str:
     if prefix:
         return f"{prefix}遇到质量门阻断，需自动修复或重试章节: {paused_str}"
     return f"质量门阻断，需自动修复或重试章节: {paused_str}"
-
-
-def build_home_page_settings(
-    *,
-    base_config: InfrastructureConfig | None,
-) -> dict[str, object]:
-    policy = RuntimePolicy.for_profile("standard")
-    return {
-        "api_key": "",
-        "base_url": base_config.minimax_base_url if base_config else DEFAULT_MINIMAX_BASE_URL,
-        "model": base_config.minimax_model if base_config else DEFAULT_MINIMAX_MODEL,
-        "freeze_failed_candidates": policy.canon.hard_floor,
-        "min_chapter_chars": policy.chapter_length.min_chars,
-        "review_interval_chapters": policy.pause.review_interval_chapters,
-        "progression_mode": "serial_canon_band_guard",
-        "auto_band_checkpoint": policy.pause.band_checkpoint_action != "continue",
-        "band_warn_action": "pause",
-        "manual_checkpoints_enabled": policy.pause.manual_checkpoints,
-        "future_constraints_enabled": policy.planning.future_constraints,
-        "generation_audit_interval_chapters": policy.pause.generation_audit_interval,
-        "generation_audit_pause_enabled": policy.pause.generation_audit_pauses,
-        "skill_runtime_enabled": base_config.skill_runtime_enabled if base_config else True,
-        "skill_registry_path": base_config.skill_registry_path if base_config else "forwin_skills",
-        "skill_strictness": base_config.skill_strictness if base_config else "normal",
-        "enabled_skill_groups": list(base_config.enabled_skill_groups) if base_config else [],
-        "disabled_skill_ids": list(base_config.disabled_skill_ids) if base_config else [],
-    }
 
 
 def _record_task_observability_event(

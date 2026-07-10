@@ -1,12 +1,12 @@
     const PROJECT_CHAPTER_RENDER_BATCH_SIZE = 60;
 
-    function governanceLabel(governance = {}) {
-      const parts = [
-        governance.progression_mode || 'serial_canon_band_guard',
-        governance.auto_band_checkpoint ? 'auto-band-checkpoint' : 'manual-band-checkpoint',
-        governance.future_constraints_enabled ? 'future-constraints:on' : 'future-constraints:off',
-      ];
-      return parts.join(' | ');
+    function runtimePolicyLabel(policy = {}) {
+      const length = policy.chapter_length || {};
+      return [
+        policy.quality_profile || 'standard',
+        policy.model_profile_id || runtimeCatalogState?.default_model_profile_id || '环境默认模型',
+        `${length.min_chars || 0}/${length.target_chars || 0}/${length.max_chars || 0} 字`,
+      ].join(' | ');
     }
 
     function renderDecisionTimeline(project = {}) {
@@ -274,31 +274,31 @@
       return card;
     }
 
-    async function executeSaveProjectGovernance(projectId, fields, reason) {
+    async function executeSaveProjectRuntimePolicy(projectId, expectedVersion, fields, reason) {
       try {
-        const payload = { ...fields, reason };
-        const result = await requestJson(`/api/projects/${projectId}/governance`, {
+        const payload = { expected_version: expectedVersion, ...fields, reason };
+        const result = await requestJson(`/api/projects/${projectId}/policy`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        setGlobalStatus(result.message || '项目治理设置已保存。', '治理设置');
+        setGlobalStatus(result.message || '项目运行策略已保存。', '运行策略');
         await loadBooks();
         if (currentDrawerTask?.project_id === projectId) {
           await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
         }
       } catch (error) {
-        setGlobalStatus(error.message || String(error), '治理设置保存失败');
+        setGlobalStatus(error.message || String(error), '运行策略保存失败');
       }
     }
 
-    function saveProjectGovernanceFromDrawer(projectId, fields) {
+    function saveProjectRuntimePolicyFromDrawer(projectId, expectedVersion, fields) {
       openGovernanceActionModal({
-        title: '保存治理设置',
-        description: '项目级治理会影响后续默认行为；本次修改原因会进入决策时间线。',
-        confirmLabel: '保存治理设置',
-        errorTitle: '治理设置保存失败',
-        onSubmit: ({ reason }) => executeSaveProjectGovernance(projectId, fields, reason),
+        title: '保存运行策略',
+        description: `将项目 RuntimePolicy 从 v${expectedVersion} 更新到下一版本。`,
+        confirmLabel: '保存运行策略',
+        errorTitle: '运行策略保存失败',
+        onSubmit: ({ reason }) => executeSaveProjectRuntimePolicy(projectId, expectedVersion, fields, reason),
       });
     }
 
@@ -554,21 +554,20 @@
     }
 
     function renderGovernanceCard(item, project = {}) {
-      const governance = project.governance || {};
+      const policy = project.runtime_policy || runtimeCatalogState?.bootstrap_policy || {};
+      const chapterLength = policy.chapter_length || {};
+      const pausePolicy = policy.pause || {};
+      const policyVersion = Number(project.runtime_policy_version || 0);
       const blockingReason = project.blocking_reason || item.generation_control?.blocking_reason || {};
       const latestCheckpoint = project.latest_band_checkpoint || item.generation_control?.latest_band_checkpoint || null;
       const card = createNode('section', '', 'detail-card');
-      card.appendChild(createNode('div', '治理设置', 'task-id'));
+      card.appendChild(createNode('div', `RuntimePolicy v${policyVersion}`, 'task-id'));
       const badges = createNode('div', '', 'badge-row');
-      badges.appendChild(createNode('span', governance.default_operation_mode || 'blackbox', 'badge'));
-      badges.appendChild(createNode('span', governance.progression_mode || 'serial_canon_band_guard', 'badge'));
-      if (governance.review_delegation_mode === 'reckless') {
-        badges.appendChild(createNode('span', '鲁莽模式 · Codex 5.3 Spark 审核', 'badge warn'));
-      }
-      if (governance.auto_band_checkpoint) badges.appendChild(createNode('span', 'auto band checkpoint', 'badge ok'));
-      badges.appendChild(createNode('span', governance.future_constraints_enabled ? 'future constraints 参与判定' : 'future constraints 仅保存/展示', governance.future_constraints_enabled ? 'badge ok' : 'badge warn'));
+      badges.appendChild(createNode('span', policy.quality_profile || 'standard', 'badge ok'));
+      badges.appendChild(createNode('span', policy.model_profile_id || runtimeCatalogState?.default_model_profile_id || '环境默认模型', 'badge'));
+      badges.appendChild(createNode('span', `Gate · ${pausePolicy.gate_delegate || 'human'}`, 'badge'));
       card.appendChild(badges);
-      card.appendChild(createNode('div', `当前策略：${governanceLabel(governance)}\n下一 gate：${project.next_gate || item.generation_control?.next_gate || '-'}\n人工检查间隔：${governance.review_interval_chapters || 0}`, 'meta-line'));
+      card.appendChild(createNode('div', `当前策略：${runtimePolicyLabel(policy)}\n下一 gate：${project.next_gate || item.generation_control?.next_gate || '-'}\n人工检查间隔：${pausePolicy.review_interval_chapters || 0}`, 'meta-line'));
       if (blockingReason?.code) {
         card.appendChild(createNode('div', `阻断原因：${blockingReason.message || blockingReason.code}${blockingReason.detail ? `\n${blockingReason.detail}` : ''}`, 'meta-line'));
         if (blockingReason.decision_event_id) {
@@ -598,83 +597,140 @@
         }
       }
 
-      const form = createNode('div', '', 'drawer-grid');
-      const operationMode = document.createElement('select');
-      ['blackbox', 'copilot', 'checkpoint'].forEach((value) => {
+      const form = createNode('div', '', 'field-grid');
+      const qualityProfile = document.createElement('select');
+      qualityProfile.id = 'runtime_policy_quality_profile';
+      [
+        ['standard', 'Standard'],
+        ['pulp', 'Pulp'],
+      ].forEach(([value, label]) => {
         const option = document.createElement('option');
         option.value = value;
-        option.textContent = value;
-        operationMode.appendChild(option);
+        option.textContent = label;
+        qualityProfile.appendChild(option);
       });
-      operationMode.value = governance.default_operation_mode || 'blackbox';
-      form.appendChild(createLabeledField('默认运行模式', operationMode));
+      qualityProfile.value = policy.quality_profile || 'standard';
+      form.appendChild(createLabeledField('质量档位', qualityProfile));
 
-      const progressionMode = document.createElement('select');
-      ['serial_canon', 'serial_canon_band_guard'].forEach((value) => {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = value;
-        progressionMode.appendChild(option);
-      });
-      progressionMode.value = governance.progression_mode || 'serial_canon_band_guard';
-      form.appendChild(createLabeledField('推进策略', progressionMode));
+      const modelProfile = document.createElement('select');
+      modelProfile.id = 'runtime_policy_model_profile_id';
+      populateModelProfileSelect(modelProfile, policy.model_profile_id || '');
+      form.appendChild(createLabeledField('模型 Profile', modelProfile));
 
-      const reviewInterval = document.createElement('input');
-      reviewInterval.type = 'number';
-      reviewInterval.min = '0';
-      reviewInterval.max = '200';
-      reviewInterval.step = '1';
-      reviewInterval.value = String(governance.review_interval_chapters || 0);
+      function policyNumberInput(id, value, min, max) {
+        const input = document.createElement('input');
+        input.id = id;
+        input.type = 'number';
+        input.min = String(min);
+        input.max = String(max);
+        input.step = '1';
+        input.value = String(value ?? min);
+        return input;
+      }
+
+      const minChars = policyNumberInput('runtime_policy_min_chapter_chars', chapterLength.min_chars, 500, 20000);
+      const targetChars = policyNumberInput('runtime_policy_target_chapter_chars', chapterLength.target_chars, 500, 20000);
+      const maxChars = policyNumberInput('runtime_policy_max_chapter_chars', chapterLength.max_chars, 500, 20000);
+      form.appendChild(createLabeledField('章节最少字数', minChars));
+      form.appendChild(createLabeledField('章节目标字数', targetChars));
+      form.appendChild(createLabeledField('章节最多字数', maxChars));
+
+      const reviewInterval = policyNumberInput('runtime_policy_review_interval_chapters', pausePolicy.review_interval_chapters, 0, 500);
       form.appendChild(createLabeledField('每 N 章人工检查', reviewInterval));
 
-      const recklessMode = document.createElement('input');
-      recklessMode.type = 'checkbox';
-      recklessMode.checked = governance.review_delegation_mode === 'reckless';
-      const recklessModeWrap = document.createElement('label');
-      recklessModeWrap.className = 'checkbox';
-      recklessModeWrap.appendChild(recklessMode);
-      recklessModeWrap.appendChild(document.createTextNode('鲁莽模式 · Codex 5.3 Spark 审核'));
-      form.appendChild(recklessModeWrap);
+      const bandCheckpointAction = document.createElement('select');
+      bandCheckpointAction.id = 'runtime_policy_band_checkpoint_action';
+      [
+        ['continue', '继续'],
+        ['pause_on_warn', '告警时暂停'],
+        ['pause_always', '始终暂停'],
+      ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        bandCheckpointAction.appendChild(option);
+      });
+      bandCheckpointAction.value = pausePolicy.band_checkpoint_action || 'pause_on_warn';
+      form.appendChild(createLabeledField('Band Checkpoint', bandCheckpointAction));
 
-      const autoBandCheckpoint = document.createElement('input');
-      autoBandCheckpoint.type = 'checkbox';
-      autoBandCheckpoint.checked = Boolean(governance.auto_band_checkpoint);
-      const autoBandCheckpointWrap = document.createElement('label');
-      autoBandCheckpointWrap.className = 'checkbox';
-      autoBandCheckpointWrap.appendChild(autoBandCheckpoint);
-      autoBandCheckpointWrap.appendChild(document.createTextNode('自动 band checkpoint'));
-      form.appendChild(autoBandCheckpointWrap);
+      const auditInterval = policyNumberInput('runtime_policy_generation_audit_interval', pausePolicy.generation_audit_interval, 0, 500);
+      form.appendChild(createLabeledField('生成审计间隔', auditInterval));
 
       const manualCheckpoint = document.createElement('input');
+      manualCheckpoint.id = 'runtime_policy_manual_checkpoints';
       manualCheckpoint.type = 'checkbox';
-      manualCheckpoint.checked = Boolean(governance.manual_checkpoints_enabled);
+      manualCheckpoint.checked = Boolean(pausePolicy.manual_checkpoints);
       const manualCheckpointWrap = document.createElement('label');
       manualCheckpointWrap.className = 'checkbox';
       manualCheckpointWrap.appendChild(manualCheckpoint);
-      manualCheckpointWrap.appendChild(document.createTextNode('允许 manual checkpoint'));
+      manualCheckpointWrap.appendChild(document.createTextNode('允许 Manual Checkpoint'));
       form.appendChild(manualCheckpointWrap);
 
-      const futureConstraints = document.createElement('input');
-      futureConstraints.type = 'checkbox';
-      futureConstraints.checked = Boolean(governance.future_constraints_enabled);
-      const futureConstraintsWrap = document.createElement('label');
-      futureConstraintsWrap.className = 'checkbox';
-      futureConstraintsWrap.appendChild(futureConstraints);
-      futureConstraintsWrap.appendChild(document.createTextNode('启用 future constraints'));
-      form.appendChild(futureConstraintsWrap);
+      const auditPauses = document.createElement('input');
+      auditPauses.id = 'runtime_policy_generation_audit_pauses';
+      auditPauses.type = 'checkbox';
+      auditPauses.checked = Boolean(pausePolicy.generation_audit_pauses);
+      const auditPausesWrap = document.createElement('label');
+      auditPausesWrap.className = 'checkbox';
+      auditPausesWrap.appendChild(auditPauses);
+      auditPausesWrap.appendChild(document.createTextNode('生成审计后暂停'));
+      form.appendChild(auditPausesWrap);
+
+      let gateDelegate = pausePolicy.gate_delegate === 'spark' ? 'spark' : 'human';
+      const gateControl = createNode('div', '', 'pill-switch');
+      const gateButtons = {};
+      const syncGateDelegate = () => {
+        Object.entries(gateButtons).forEach(([value, button]) => {
+          const active = value === gateDelegate;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+      };
+      [
+        ['human', '人工'],
+        ['spark', 'Spark'],
+      ].forEach(([value, label]) => {
+        const button = createButton(label, () => {
+          gateDelegate = value;
+          syncGateDelegate();
+        }, 'ghost');
+        button.type = 'button';
+        button.id = `runtime_policy_gate_${value}`;
+        gateButtons[value] = button;
+        gateControl.appendChild(button);
+      });
+      syncGateDelegate();
+      form.appendChild(createLabeledField('Gate 委托', gateControl));
 
       card.appendChild(form);
 
       const actions = createNode('div', '', 'action-row');
-      actions.appendChild(createButton('保存治理设置', () => saveProjectGovernanceFromDrawer(item.project_id, {
-        default_operation_mode: operationMode.value,
-        progression_mode: progressionMode.value,
-        review_delegation_mode: recklessMode.checked ? 'reckless' : 'human',
-        review_interval_chapters: normalizeReviewInterval(reviewInterval.value),
-        auto_band_checkpoint: autoBandCheckpoint.checked,
-        manual_checkpoints_enabled: manualCheckpoint.checked,
-        future_constraints_enabled: futureConstraints.checked,
-      }), 'primary'));
+      actions.appendChild(createButton('保存运行策略', () => {
+        const minValue = Number(minChars.value);
+        const targetValue = Number(targetChars.value);
+        const maxValue = Number(maxChars.value);
+        if (!(minValue <= targetValue && targetValue <= maxValue)) {
+          setGlobalStatus('章节字数必须满足：最少 <= 目标 <= 最多。', '运行策略');
+          return;
+        }
+        if (policyVersion < 1) {
+          setGlobalStatus('项目缺少有效的 RuntimePolicy 版本。', '运行策略');
+          return;
+        }
+        saveProjectRuntimePolicyFromDrawer(item.project_id, policyVersion, {
+          quality_profile: qualityProfile.value,
+          model_profile_id: modelProfile.value,
+          min_chapter_chars: minValue,
+          target_chapter_chars: targetValue,
+          max_chapter_chars: maxValue,
+          review_interval_chapters: normalizeReviewInterval(reviewInterval.value),
+          manual_checkpoints: manualCheckpoint.checked,
+          band_checkpoint_action: bandCheckpointAction.value,
+          generation_audit_interval: Number(auditInterval.value),
+          generation_audit_pauses: auditPauses.checked,
+          gate_delegate: gateDelegate,
+        });
+      }, 'primary'));
       actions.appendChild(createButton('插入 Manual Checkpoint', () => createManualCheckpointFromDrawer(item.project_id, {
         boundary_kind: latestCheckpoint?.boundary_kind || 'band_end',
         boundary_chapter: latestCheckpoint?.boundary_chapter || item.current_chapter || 0,

@@ -46,9 +46,6 @@ from forwin.api_project_payloads import (
     latest_provisional_band_execution,
     normalize_project_automation,
 )
-from forwin.api_runtime import (
-    build_home_page_settings,
-)
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_schemas import (
@@ -348,7 +345,6 @@ globals().update(
                 get_orchestrator=lambda: api_state._orchestrator,
                 get_session=_get_session,
                 render_home_page=render_home_page,
-                build_home_page_settings=build_home_page_settings,
                 active_generation_task_error_cls=ActiveGenerationTaskError,
                 display_datetime=_display_datetime,
                 json_load_object=lambda raw: _json_load_object(raw),

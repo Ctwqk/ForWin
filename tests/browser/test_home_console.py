@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from itertools import product
 import re
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
+from tests.browser.fixtures import MockForWinBackend, goto_home, sample_project, switch_home_tab
 
 
 def test_home_console_navigation_books_and_config(page, browser_test_base_url: str) -> None:
@@ -30,22 +29,10 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
     expect(page.get_by_role("link", name="下载 Firefox 扩展包")).to_have_attribute(
         "href", "/api/publishers/extension-package/firefox"
     )
-    page.get_by_role("button", name="添加模型").click()
-    expect(page.locator("#model_modal_shell")).to_have_class(re.compile(r".*\bopen\b.*"))
-    page.locator("#model_form_name").fill("Kimi 测试")
-    page.locator("#model_form_api_key").fill("secret-key-for-test")
-    page.locator("#model_form_set_default").check()
-    page.locator("#model_modal_shell").get_by_role("button", name="保存").click()
-    expect(page.locator("#global_status")).to_contain_text("模型配置已保存")
-    assert backend.captured_payloads("/api/settings/llm/profiles")[-1]["set_as_default"] is True
-
-    page.locator("#config_generation_min_chapter_chars").fill("3100")
-    page.locator("#config_generation_operation_mode").select_option("copilot")
-    page.get_by_role("button", name="保存").click()
-    expect(page.locator("#global_status")).to_contain_text("运行偏好已保存")
-    prefs = backend.captured_payloads("/api/settings/llm/preferences")[-1]
-    assert prefs["min_chapter_chars"] == 3100
-    assert prefs["operation_mode"] == "copilot"
+    expect(page.locator("#profile_list")).to_contain_text("凭据可用")
+    expect(page.get_by_role("button", name="添加模型")).to_have_count(0)
+    expect(page.locator("#model_form_api_key")).to_have_count(0)
+    expect(page.locator("#config_generation_operation_mode")).to_have_count(0)
 
     expect(page.get_by_role("link", name="发布")).to_have_attribute("href", "/publishers")
     expect(page.get_by_role("link", name="世界档案")).to_have_attribute("href", "/world-studio")
@@ -80,76 +67,21 @@ def test_book_modal_validates_bindings_and_opens_genesis(page, browser_test_base
     assert payload["publish_bindings"][0]["create_if_missing"] is True
 
 
-def test_generation_modal_serializes_all_operation_combinations(page, browser_test_base_url: str) -> None:
-    backend = MockForWinBackend()
+def test_generation_modal_only_submits_project_run_boundary(page, browser_test_base_url: str) -> None:
+    project = sample_project()
+    project["needs_review_chapter_count"] = 0
+    project["generation_control"]["pending_review_chapters"] = []
+    backend = MockForWinBackend(projects=[project])
     goto_home(page, browser_test_base_url, backend)
 
-    combos = [
-        {
-            "operation_mode": operation_mode,
-            "progression_mode": progression_mode,
-            "freeze_failed_candidates": freeze_failed_candidates,
-            "auto_band_checkpoint": auto_band_checkpoint,
-            "manual_checkpoints_enabled": manual_checkpoints_enabled,
-            "future_constraints_enabled": future_constraints_enabled,
-        }
-        for operation_mode, progression_mode, freeze_failed_candidates, auto_band_checkpoint, manual_checkpoints_enabled, future_constraints_enabled in product(
-            ["blackbox", "copilot", "checkpoint"],
-            ["", "serial_canon", "serial_canon_band_guard"],
-            [False, True],
-            [False, True],
-            [False, True],
-            [False, True],
-        )
-    ]
+    page.get_by_role("button", name="继续生成剩余章节").click()
+    expect(page.locator("#task_modal_shell")).to_have_class(re.compile(r".*\bopen\b.*"))
+    page.locator("#task_generation_num_chapters").fill("4")
+    page.locator("#task_generation_run_until_chapter").fill("6")
+    page.locator("#task_generation_auto_continue").uncheck()
+    page.locator("#task_modal_submit").click()
 
-    page.evaluate(
-        """
-        async (combos) => {
-          window.openTaskDrawer = async () => {};
-          window.loadTaskCenter = async () => {};
-          window.loadBooks = async () => {};
-          for (const combo of combos) {
-            await window.openTaskModal('generation');
-            document.getElementById('task_generation_premise').value = `组合 ${combo.operation_mode} ${combo.progression_mode}`;
-            document.getElementById('task_generation_genre').value = '玄幻';
-            document.getElementById('task_generation_num_chapters').value = '4';
-            document.getElementById('task_generation_min_chapter_chars').value = '2800';
-            document.getElementById('task_generation_operation_mode').value = combo.operation_mode;
-            document.getElementById('task_generation_progression_mode').value = combo.progression_mode;
-            document.getElementById('task_generation_freeze_failed_candidates').checked = combo.freeze_failed_candidates;
-            document.getElementById('task_generation_auto_band_checkpoint').checked = combo.auto_band_checkpoint;
-            document.getElementById('task_generation_manual_checkpoints_enabled').checked = combo.manual_checkpoints_enabled;
-            document.getElementById('task_generation_future_constraints_enabled').checked = combo.future_constraints_enabled;
-            await window.submitTaskModal();
-          }
-        }
-        """,
-        combos,
-    )
-
-    payloads = backend.captured_payloads("/api/generate")
-    assert len(payloads) == len(combos)
-    observed = {
-        (
-            payload["operation_mode"],
-            payload["progression_mode"],
-            payload["freeze_failed_candidates"],
-            payload["auto_band_checkpoint"],
-            payload["manual_checkpoints_enabled"],
-            payload["future_constraints_enabled"],
-        )
-        for payload in payloads
-    }
-    expected = {
-        (
-            combo["operation_mode"],
-            combo["progression_mode"],
-            combo["freeze_failed_candidates"],
-            combo["auto_band_checkpoint"],
-            combo["manual_checkpoints_enabled"],
-            combo["future_constraints_enabled"],
-        )
-        for combo in combos
-    }
-    assert observed == expected
+    payload = backend.captured_payloads("/api/projects/project-1/continue-generation")[-1]
+    assert payload == {"max_chapters": 4, "run_until_chapter": 6, "auto_continue": False}
+    expect(page.locator("#task_generation_operation_mode")).to_have_count(0)
+    expect(page.locator("#task_generation_model_profile_id")).to_have_count(0)

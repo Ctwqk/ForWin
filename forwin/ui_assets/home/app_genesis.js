@@ -117,7 +117,6 @@
       currentGenesisItemCollection = '';
       currentGenesisItemIndex = -1;
       clearAllGenesisDrafts();
-      currentGenesisModelProfileId = currentGenesisModelProfileId || settingsState?.default_profile_id || '';
     }
 
     async function openGenesisWorkspace(projectId, stageKey = '') {
@@ -902,10 +901,6 @@
       document.getElementById('genesis_stage_summary').textContent = currentGenesisStageSummary(detail);
       document.getElementById('genesis_stage_preview').textContent = JSON.stringify(payload || {}, null, 2);
       renderGenesisStageForm(detail);
-      currentGenesisModelProfileId = populateModelProfileSelect(
-        document.getElementById('genesis_model_profile_id'),
-        currentGenesisModelProfileId || settingsState?.default_profile_id || '',
-      );
 
       const blueprint = currentGenesisPayload(detail, 'book_blueprint') || {};
       const blueprintLines = [
@@ -951,10 +946,6 @@
         const generated = await runGenesisAction(async () => {
           currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/stages/${currentGenesisStage}/${normalized}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model_profile_id: currentGenesisModelProfileId || null,
-            }),
           });
           clearAllGenesisDrafts();
           renderGenesisWorkspace();
@@ -1163,7 +1154,6 @@
               instruction,
               target_path: targetPath,
               reason: targetPath ? `ui_refine_item_${currentGenesisStage}` : `ui_refine_stage_${currentGenesisStage}`,
-              model_profile_id: currentGenesisModelProfileId || null,
             }),
           });
           clearAllGenesisDrafts();

@@ -1,7 +1,6 @@
     const EXTENSION_BRIDGE_CHANNEL = 'forwin-publisher-extension';
     const BACKEND_EXTENSION_KEY_READY = @@EXTENSION_READY@@;
     const EXTENSION_INSTALL_PATH = @@EXTENSION_INSTALL_PATH@@;
-    const MODEL_PROVIDER_PRESETS = @@MODEL_PROVIDER_PRESETS_JSON@@;
     const STAGE_ORDER = [
       'queued',
       'planning_arc',
@@ -65,12 +64,6 @@
         { path: 'summary', label: '蓝图总览', kind: 'textarea' },
       ],
       bootstrap: [
-        {
-          path: 'operation_mode',
-          label: '运行模式',
-          kind: 'select',
-          options: [{ value: 'blackbox', label: 'blackbox' }],
-        },
         {
           path: 'start_policy',
           label: '启动策略',
@@ -785,13 +778,12 @@
     const TERMINAL_TASK_STATUSES = new Set(['completed', 'partial_failed', 'failed', 'needs_review', 'cancelled', 'paused', 'succeeded']);
     const ACTIVE_TASK_STATUSES = new Set(['starting', 'running', 'pending', 'terminating']);
     const pendingBridgeRequests = new Map();
-    let settingsState = null;
+    let runtimeCatalogState = null;
     let platformsState = [];
     let booksState = [];
     let taskCenterState = [];
     let selectedBookIds = new Set();
     let selectedTaskKeys = new Set();
-    let currentProfileId = '';
     let currentTaskModalKind = 'generation';
     let currentTaskPrefill = {};
     let currentGovernanceAction = null;
@@ -810,7 +802,6 @@
     let currentGenesisStage = 'brief';
     let currentGenesisItemCollection = '';
     let currentGenesisItemIndex = -1;
-    let currentGenesisModelProfileId = '';
     let currentGenesisDrafts = {};
     let genesisActionBusy = false;
 
@@ -949,7 +940,7 @@
     function populateModelProfileSelect(selectEl, preferredId = '') {
       if (!selectEl) return '';
       clearNode(selectEl);
-      const profiles = Array.isArray(settingsState?.profiles) ? settingsState.profiles : [];
+      const profiles = Array.isArray(runtimeCatalogState?.model_profiles) ? runtimeCatalogState.model_profiles : [];
       if (!profiles.length) {
         const option = document.createElement('option');
         option.value = '';
@@ -958,11 +949,11 @@
         selectEl.disabled = true;
         return '';
       }
-      const selectedId = preferredId || settingsState?.default_profile_id || profiles[0]?.id || '';
+      const selectedId = preferredId || runtimeCatalogState?.default_model_profile_id || profiles[0]?.id || '';
       profiles.forEach((profile, index) => {
         const option = document.createElement('option');
         option.value = profile.id;
-        option.textContent = `${profile.name}${profile.id === settingsState.default_profile_id ? ' · 默认' : ''}`;
+        option.textContent = `${profile.name}${profile.id === runtimeCatalogState.default_model_profile_id ? ' · 默认' : ''}`;
         option.selected = profile.id === selectedId || (!selectedId && index === 0);
         selectEl.appendChild(option);
       });

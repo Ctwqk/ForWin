@@ -318,7 +318,7 @@ entries:
       - forwin/orchestrator_loop_core/governance.py
       - forwin/orchestrator_loop_core/common.py
       - forwin/orchestrator_loop_core/quality_gates.py
-      - forwin/orchestrator_loop_core/repair_loop.py
+      - forwin/review/repair/service.py
       - forwin/review/decision/audit.py
       - forwin/review/decision/rules/final_residual.py
       - forwin/review/decision/rules/review_outcome.py

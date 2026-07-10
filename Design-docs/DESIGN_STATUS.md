@@ -74,6 +74,8 @@
 | `_compile_world_model_after_acceptance` | removed | 无 | 已删除 | 恒返回 `True` 的空壳及两处调用均删除。 |
 | `WritingOrchestrator._apply_canon_candidate` | removed | `forwin.canon.CanonAdmissionService.commit` | 已删除 | generation 与人工接受共享同一强类型 canon admission；不接受字符串/None compatibility outcome。 |
 | `orchestrator_loop_core.quality_gate_types` | removed | `forwin.canon.types` | 已删除 | canon outcome 类型归 canon owner；`CanonApplyOutcome` 改名 `CanonAdmissionOutcome`。 |
+| `orchestrator_loop_core.repair_loop` | removed | `forwin.review.repair.RepairService` | 已删除 | 1056 行 live repair 算法迁入 owner；pipeline 只调用 `review_candidate` / `repair_canon_block`。 |
+| `orchestrator_loop_core.__init__` re-export | removed | explicit submodule imports | 已删除 | 包初始化不再反向加载 `common.*` 和完整 `WritingOrchestrator`。 |
 
 ## 2026-07 V5 Slice 1 Status
 
@@ -100,6 +102,7 @@
 - `HistoricalReviewHub` 已破坏性改名为 `DraftReviewService`；runtime 字段为 `draft_review`。
 - `FinalAcceptanceGate` 已合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
 - `CanonAdmissionService` 已拥有唯一 candidate -> canon 决策体；`WritingOrchestrator._apply_canon_candidate` 和 outcome coercer 已删除。
+- live repair loop 已迁入 `forwin.review.repair.service`；`WritingOrchestrator` 不再暴露 `_review_and_maybe_rewrite` / `_run_canon_repair_for_block`。
 - 下一步是把 canon/repair 函数族从 `WritingOrchestrator` 属性拼装迁入显式协作对象；Phase C-F 尚未开始。
 
 ## 已知限制

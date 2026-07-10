@@ -16,7 +16,7 @@
 
 Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
 
-Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`，旧 orchestrator 方法、字符串/None outcome coercer 和 `CanonApplyOutcome` 名称均删除。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
+Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`；1056 行 live repair loop 已迁入 `forwin.review.repair.RepairService`，pipeline 只调用两个显式入口；旧 orchestrator 方法和包级反向 re-export 均删除。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
 
 ---
 
@@ -267,7 +267,7 @@ WritingOrchestrator (变薄的编排壳)
 
 ### Phase B — review/repair/final/canon 分层 + orchestrator 立缝（D07-D13,D19,D20 首批）
 
-- **当前进度**：D07、D11、D13、D14、D19 与 D12 入口迁移已完成；FinalResidual 聚焦 7 tests 通过，CanonAdmission 异常路径与 BookState block 聚焦通过。尚未完成 D08 缓存、RepairService，以及 CanonAdmission 内部 quality/BookState helper 的 monkey-patch 迁移。
+- **当前进度**：D07、D11、D13、D14、D19、D12 入口迁移和 RepairService 入口迁移已完成；FinalResidual 聚焦 7 tests 通过，CanonAdmission 异常路径与 BookState block 聚焦通过。尚未完成 D08 缓存，以及 CanonAdmission/RepairService 内部 helpers 的 monkey-patch 迁移。
 - **目标**：四层判决语义落地为四个显式 service；`service.py` 猴子补丁开始收敛。
 - **涉及**：`review/{draft_service,decision,repair}`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
 - **不变量**：hard blocker 必拦；force-accept/reckless 不越 canon 门（新增显式不变量测试）；`ChapterReview` 持久化与 UI 队列可读。

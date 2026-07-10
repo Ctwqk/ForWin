@@ -4,13 +4,12 @@ from types import SimpleNamespace
 
 from forwin.governance import DecisionEventType, ensure_decision_event_type
 from forwin.orchestrator_loop_core.repair_budget import evaluate_repair_body_budget
-from forwin.orchestrator_loop_core.repair_loop import _default_repair_instruction
+from forwin.review.repair.service import _default_repair_instruction
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 
 
 def test_default_repair_instruction_includes_word_budget_guardrails() -> None:
     instruction = _default_repair_instruction(
-        SimpleNamespace(config=SimpleNamespace()),
         repair_scope="draft",
         context=SimpleNamespace(
             chapter_plan_title="第八十九章",

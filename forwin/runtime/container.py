@@ -25,7 +25,7 @@ from forwin.publisher_runtime.codex_intervention import build_codex_intervention
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.review import DraftReviewService
-from forwin.review.repair import RepairVerifier
+from forwin.review.repair import RepairService, RepairVerifier
 from forwin.runtime.factories import ProductionSchedulerFactory, build_provisional_writer, build_writer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.services import RuntimeServices, SkillRuntimeBundle
@@ -342,6 +342,7 @@ class RuntimeContainer:
             draft_review=draft_review,
             writer=writer,
             provisional_writer=provisional_writer,
+            repair=RepairService(),
             repair_verifier=RepairVerifier(
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,

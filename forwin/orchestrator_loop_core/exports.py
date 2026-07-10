@@ -10,7 +10,7 @@ acceptance = importlib.import_module("forwin.orchestrator_loop_core.acceptance")
 governance = importlib.import_module("forwin.orchestrator_loop_core.governance")
 runtime_helpers = importlib.import_module("forwin.orchestrator_loop_core.runtime_helpers")
 review_autofix = importlib.import_module("forwin.orchestrator_loop_core.review_autofix")
-repair_loop = importlib.import_module("forwin.orchestrator_loop_core.repair_loop")
+repair_service = importlib.import_module("forwin.review.repair.service")
 project_chapters = importlib.import_module("forwin.orchestrator_loop_core.project_chapters")
 writer_attention = importlib.import_module("forwin.orchestrator_loop_core.writer_attention")
 quality_gates = importlib.import_module("forwin.orchestrator_loop_core.quality_gates")
@@ -25,7 +25,7 @@ _MODULES: tuple[ModuleType, ...] = (
     quality_gates,
     writer_attention,
     project_chapters,
-    repair_loop,
+    repair_service,
     review_autofix,
     runtime_helpers,
     governance,

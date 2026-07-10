@@ -23,8 +23,8 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator_loop_core import project_chapters as project_chapters_module
 from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
-from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
-from forwin.orchestrator_loop_core.repair_loop import (
+from forwin.review.repair import service as repair_service_module
+from forwin.review.repair.service import (
     _attempts_for_repair_phase,
     _review_from_canon_gate_block,
 )
@@ -383,7 +383,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
             )
 
     monkeypatch.setattr(
-        repair_loop_module,
+        repair_service_module,
         "decide_repair_v2",
         lambda _input: Decision(
             outcome="manual_review",
@@ -415,9 +415,9 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
                 },
             )
 
-    monkeypatch.setattr(repair_loop_module, "AutoDecisionEngine", _FinalGateEngine)
+    monkeypatch.setattr(repair_service_module, "AutoDecisionEngine", _FinalGateEngine)
 
-    _output, _review, forced_accept = repair_loop_module._run_repair_loop_for_phase(
+    _output, _review, forced_accept = repair_service_module._run_repair_loop_for_phase(
         _Orchestrator(),
         session=_Session(),
         repo=_Repo(),
@@ -1030,7 +1030,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
         )
         orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
         orchestrator.draft_review = WarnReviewHub()
-        orchestrator._run_canon_repair_for_block = lambda **_kwargs: (_ for _ in ()).throw(
+        orchestrator.repair.repair_canon_block = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
         orchestrator.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
@@ -1171,9 +1171,9 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
                 canon_repair_force_accept,
             )
 
-        orchestrator._review_and_maybe_rewrite = force_accepted_review
+        orchestrator.repair.review_candidate = force_accepted_review
         orchestrator.canon_admission.commit = apply_canon_candidate
-        orchestrator._run_canon_repair_for_block = failed_canon_repair
+        orchestrator.repair.repair_canon_block = failed_canon_repair
 
         result = orchestrator.run("p", "g", 1)
     finally:

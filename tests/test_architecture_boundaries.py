@@ -246,6 +246,8 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "_apply_canon_candidate",
         "_coerce_canon_apply_outcome",
         "CanonApplyOutcome",
+        "_review_and_maybe_rewrite",
+        "_run_canon_repair_for_block",
         "HistoricalReviewHub",
         "FinalAcceptanceGate",
         "final_gate_decision",
@@ -269,6 +271,15 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "forwin/orchestrator_loop_core/project_chapters.py"
     )
     assert not (ROOT / "forwin/orchestrator_loop_core/quality_gate_types.py").exists()
+    assert not (ROOT / "forwin/orchestrator_loop_core/repair_loop.py").exists()
+    assert "class RepairService" in _read("forwin/review/repair/service.py")
+    assert "self.repair.review_candidate(" in _read(
+        "forwin/orchestrator_loop_core/project_chapters.py"
+    )
+    assert "self.repair.repair_canon_block(" in _read(
+        "forwin/orchestrator_loop_core/project_chapters.py"
+    )
+    assert "WritingOrchestrator" not in _read("forwin/orchestrator_loop_core/__init__.py")
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:
@@ -302,7 +313,7 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
             "forwin/runtime/container.py",
             "forwin/runtime/services.py",
             "forwin/orchestrator_loop_core/service.py",
-            "forwin/orchestrator_loop_core/repair_loop.py",
+            "forwin/review/repair/service.py",
             "forwin/review/decision/rules/repair.py",
         ],
         "Obligation" "ScopeRouter": [
@@ -313,7 +324,7 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
             "forwin/orchestrator_loop_core/quality_gates.py",
         ],
         "engine_" "live_enabled": [
-            "forwin/orchestrator_loop_core/repair_loop.py",
+            "forwin/review/repair/service.py",
         ],
     }
     offenders: list[tuple[str, str]] = []

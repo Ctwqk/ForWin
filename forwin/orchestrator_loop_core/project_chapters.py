@@ -13,7 +13,7 @@ from forwin.orchestrator_loop_core.obligation_resolution import (
 )
 from forwin.orchestrator_loop_core.result import RunResult
 from forwin.orchestrator_loop_core.common import *
-from forwin.orchestrator_loop_core.repair_loop import _canon_repair_scope, _canon_repair_scope_can_run
+from forwin.review.repair.service import _canon_repair_scope, _canon_repair_scope_can_run
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +339,8 @@ def _run_project_chapters(
                 failed_chapters=failed_chapters,
                 paused_chapters=paused_chapters,
             )
-            writer_output, verdict, force_accept_applied = self._review_and_maybe_rewrite(
+            writer_output, verdict, force_accept_applied = self.repair.review_candidate(
+                runtime=self,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -505,7 +506,8 @@ def _run_project_chapters(
                         writer_output,
                         verdict,
                         canon_force_accept_applied,
-                    ) = self._run_canon_repair_for_block(
+                    ) = self.repair.repair_canon_block(
+                        runtime=self,
                         session=session,
                         repo=repo,
                         updater=updater,

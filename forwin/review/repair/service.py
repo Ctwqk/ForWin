@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from forwin.orchestrator_loop_core.common import *
 from forwin.protocol.review import FinalResidualDecision
 from forwin.review.decision.engine import AutoDecisionEngine
@@ -10,6 +12,9 @@ from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
 from forwin.orchestrator_loop_core.repair_budget_events import record_repair_body_budget_event
 from forwin.orchestrator_loop_core.subworld_admission_repair import _apply_subworld_admission_repair_patch
+
+if TYPE_CHECKING:
+    from forwin.orchestrator_loop_core.service import WritingOrchestrator
 
 REVIEW_REPAIR_PHASE = "review_repair"
 CANON_REPAIR_PHASE = "canon_repair"
@@ -115,7 +120,7 @@ def _final_residual_from_engine_decision(decision: Decision) -> FinalResidualDec
     )
 
 
-def _review_and_maybe_rewrite(
+def _review_candidate(
     self,
     *,
     session: Session,
@@ -211,7 +216,8 @@ def _review_and_maybe_rewrite(
     if current_review.verdict != "fail":
         return current_output, current_review, False
 
-    return self._run_repair_loop_for_phase(
+    return _run_repair_loop_for_phase(
+        self,
         session=session,
         repo=repo,
         updater=updater,
@@ -230,7 +236,7 @@ def _review_and_maybe_rewrite(
     )
 
 
-def _run_canon_repair_for_block(
+def _repair_canon_block(
     self,
     *,
     session: Session,
@@ -278,7 +284,8 @@ def _run_canon_repair_for_block(
         related_object_id=current_review_row.id,
         payload=self._review_event_payload(synthetic_review),
     )
-    return self._run_repair_loop_for_phase(
+    return _run_repair_loop_for_phase(
+        self,
         session=session,
         repo=repo,
         updater=updater,
@@ -365,7 +372,7 @@ def _run_repair_loop_for_phase(
                     "forced_accept_applied": force_accept,
                 }
             )
-            current_review_row.review_meta_json = self._review_meta_json(current_review)
+            current_review_row.review_meta_json = _review_meta_json(current_review)
             session.add(current_review_row)
             if force_accept:
                 if phase_attempts:
@@ -393,7 +400,7 @@ def _run_repair_loop_for_phase(
             "preferred_provider_kind": "",
             "preferred_model": "",
         }
-        repair_instruction = current_review.repair_instruction or self._default_repair_instruction(
+        repair_instruction = current_review.repair_instruction or _default_repair_instruction(
             repair_scope=repair_scope,
             context=current_context,
             review=current_review,
@@ -819,7 +826,6 @@ def _review_meta_json(review: ReviewVerdict) -> str:
     return json.dumps(review_meta, ensure_ascii=False)
 
 def _default_repair_instruction(
-    self,
     *,
     repair_scope: str,
     context,
@@ -1038,19 +1044,58 @@ def _apply_repair_patch(
         "",
     )
 
-__all__ = [
-    "REVIEW_REPAIR_PHASE",
-    "CANON_REPAIR_PHASE",
-    "_attempt_repair_phase",
-    "_attempts_for_repair_phase",
-    "_canon_repair_scope",
-    "_canon_repair_scope_can_run",
-    "_canon_issue_type_for_scope",
-    "_review_from_canon_gate_block",
-    "_review_and_maybe_rewrite",
-    "_run_canon_repair_for_block",
-    "_run_repair_loop_for_phase",
-    "_review_meta_json",
-    "_default_repair_instruction",
-    "_apply_repair_patch",
-]
+class RepairService:
+    def review_candidate(
+        self,
+        *,
+        runtime: WritingOrchestrator,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        checker: ContinuityChecker,
+        project_id: str,
+        chapter_plan: ChapterPlan,
+        context,
+        writer_output: WriterOutput,
+    ) -> tuple[WriterOutput, ReviewVerdict, bool]:
+        return _review_candidate(
+            runtime,
+            session=session,
+            repo=repo,
+            updater=updater,
+            checker=checker,
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            context=context,
+            writer_output=writer_output,
+        )
+
+    def repair_canon_block(
+        self,
+        *,
+        runtime: WritingOrchestrator,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        checker: ContinuityChecker,
+        project_id: str,
+        chapter_plan: ChapterPlan,
+        context,
+        writer_output: WriterOutput,
+        gate_result,
+    ) -> tuple[WriterOutput, ReviewVerdict, bool]:
+        return _repair_canon_block(
+            runtime,
+            session=session,
+            repo=repo,
+            updater=updater,
+            checker=checker,
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            context=context,
+            writer_output=writer_output,
+            gate_result=gate_result,
+        )
+
+
+__all__ = ["RepairService"]

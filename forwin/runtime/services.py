@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from forwin.application.generation import GenerationApplicationService
-from forwin.canon import CanonAdmissionService
 from forwin.config import InfrastructureConfig
-from forwin.generation.gate_delegation import GateDelegationService
 from forwin.model_adapter import ModelAdapter
 from forwin.observability.ports import ObservabilityPort
-from forwin.review import DraftReviewService
-from forwin.review.repair import RepairVerifier
 from forwin.runtime.policy import RuntimePolicy
 from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
+
+if TYPE_CHECKING:
+    from forwin.application.generation import GenerationApplicationService
+    from forwin.canon import CanonAdmissionService
+    from forwin.generation.gate_delegation import GateDelegationService
+    from forwin.review import DraftReviewService
+    from forwin.review.repair import RepairService, RepairVerifier
 
 
 @dataclass(slots=True)
@@ -61,6 +63,7 @@ class RuntimeServices:
     draft_review: DraftReviewService
     writer: Any
     provisional_writer: Any
+    repair: RepairService
     repair_verifier: RepairVerifier
     canon_admission: CanonAdmissionService
     gate_delegation: GateDelegationService

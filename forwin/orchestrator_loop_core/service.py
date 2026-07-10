@@ -6,7 +6,6 @@ from forwin.orchestrator_loop_core import finalization as _finalization_module
 from forwin.orchestrator_loop_core import governance as _governance_module
 from forwin.orchestrator_loop_core import project_chapters as _project_chapters_module
 from forwin.orchestrator_loop_core import quality_gates as _quality_gates_module
-from forwin.orchestrator_loop_core import repair_loop as _repair_loop_module
 from forwin.orchestrator_loop_core import repair_patches as _repair_patches_module
 from forwin.orchestrator_loop_core import gate_delegation as _gate_delegation_module
 from forwin.orchestrator_loop_core import review_autofix as _review_autofix_module
@@ -19,15 +18,9 @@ from forwin.orchestrator_loop_core.acceptance import accept_review
 from forwin.orchestrator_loop_core.governance import _project_policy, _record_decision_event, _record_rule_decision_event, _audit_current_plan_before_write, _audit_future_plans_after_acceptance, _future_plan_audit_plans, _future_plan_audit_band_rows, _record_future_plan_audit_events, _record_generation_audit_checkpoint_if_due, _generation_audit_checkpoint_payload, _previous_band_row, _manual_boundary_checkpoint, _strict_progression_block, _create_auto_band_checkpoint, _filter_supported_state_changes
 from forwin.orchestrator_loop_core.runtime_helpers import _make_state_helpers, _select_skill_layers, _filter_supported_kwargs, _call_with_compatible_kwargs, _save_prompt_trace_payload, _record_prompt_trace_performance_spans
 from forwin.orchestrator_loop_core.review_autofix import _persist_draft_and_review, _review_current_output, _register_writer_output_entities, _apply_canon_name_drift_autofix, _apply_placeholder_leakage_autofix, _project_character_names, _replace_canon_name_strings, _review_event_payload, _review_issue_payloads, _record_map_movement_review_issues, _review_canon_risk, _load_json_list, _chapter_plan_snapshot, _band_plan_snapshot, _repair_verification_issue, _review_with_repair_verification, _repair_policy_requested_scope, _review_has_structural_repair_issue
-from forwin.orchestrator_loop_core.repair_loop import (
+from forwin.review.repair.service import (
     CANON_REPAIR_PHASE as CANON_REPAIR_PHASE,
     _apply_repair_patch,
-    _default_repair_instruction,
-    _review_and_maybe_rewrite,
-    _review_from_canon_gate_block,
-    _review_meta_json,
-    _run_canon_repair_for_block,
-    _run_repair_loop_for_phase,
 )
 from forwin.orchestrator_loop_core.repair_patches import (
     _arc_payoff_patch_payload,
@@ -97,6 +90,7 @@ class WritingOrchestrator:
         self.world_simulator = services.world_simulator
         self.arc_envelope_manager = services.arc_envelope_manager
         self.draft_review = services.draft_review
+        self.repair = services.repair
         self.repair_verifier = services.repair_verifier
         self.canon_admission = services.canon_admission
         self.gate_delegation = services.gate_delegation
@@ -162,12 +156,6 @@ WritingOrchestrator._repair_verification_issue = _repair_verification_issue
 WritingOrchestrator._review_with_repair_verification = _review_with_repair_verification
 WritingOrchestrator._repair_policy_requested_scope = _repair_policy_requested_scope
 WritingOrchestrator._review_has_structural_repair_issue = _review_has_structural_repair_issue
-WritingOrchestrator._review_and_maybe_rewrite = _review_and_maybe_rewrite
-WritingOrchestrator._run_canon_repair_for_block = _run_canon_repair_for_block
-WritingOrchestrator._run_repair_loop_for_phase = _run_repair_loop_for_phase
-WritingOrchestrator._review_from_canon_gate_block = _review_from_canon_gate_block
-WritingOrchestrator._review_meta_json = _review_meta_json
-WritingOrchestrator._default_repair_instruction = _default_repair_instruction
 WritingOrchestrator._apply_repair_patch = _apply_repair_patch
 WritingOrchestrator._replace_band_schedule = _replace_band_schedule
 WritingOrchestrator._structure_data_from_row = _structure_data_from_row
@@ -223,7 +211,6 @@ for _module in (
     _governance_module,
     _project_chapters_module,
     _quality_gates_module,
-    _repair_loop_module,
     _repair_patches_module,
     _gate_delegation_module,
     _review_autofix_module,

@@ -2,19 +2,41 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from forwin.orchestrator_loop_core.common import *
+from typing import Any
+from forwin.models.project import ChapterPlan
+import json
+from forwin.generation.pipeline_core.common import logger
+from forwin.protocol.review import ReviewVerdict
+from forwin.protocol.experience import (
+    BandDelightSchedule,
+    ChapterExperiencePlan,
+)
+from forwin.models.draft import (
+    ChapterDraft,
+    ChapterReview,
+)
+from forwin.checker.rules import ContinuityChecker
+from forwin.protocol.review import (
+    ContinuityIssue,
+    RepairInstruction,
+)
+from forwin.governance import DecisionEventType
+from sqlalchemy.orm import Session
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import FinalResidualDecision
 from forwin.review.decision.engine import AutoDecisionEngine
 from forwin.review.decision.rules.final_residual import build_final_residual_rules
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
-from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
-from forwin.orchestrator_loop_core.repair_budget_events import record_repair_body_budget_event
-from forwin.orchestrator_loop_core.quality_gates import _latest_draft_and_review_for_chapter
+from forwin.generation.pipeline_core.repair_budget import repair_word_budget_patch
+from forwin.generation.pipeline_core.repair_budget_events import record_repair_body_budget_event
+from forwin.generation.pipeline_core.quality_gates import _latest_draft_and_review_for_chapter
 
 if TYPE_CHECKING:
-    from forwin.orchestrator_loop_core.service import WritingOrchestrator
+    from forwin.generation.pipeline import ChapterPipeline
 
 REVIEW_REPAIR_PHASE = "review_repair"
 CANON_REPAIR_PHASE = "canon_repair"
@@ -1050,7 +1072,7 @@ class RepairService:
     def review_candidate(
         self,
         *,
-        runtime: WritingOrchestrator,
+        runtime: ChapterPipeline,
         session: Session,
         repo: StateRepository,
         updater: StateUpdater,
@@ -1075,7 +1097,7 @@ class RepairService:
     def repair_canon_block(
         self,
         *,
-        runtime: WritingOrchestrator,
+        runtime: ChapterPipeline,
         session: Session,
         repo: StateRepository,
         updater: StateUpdater,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 
-from forwin.book_genesis_core import materialize
+from forwin.genesis import materialize
 
 
 def test_materialize_wrappers_do_not_keep_unreachable_legacy_bodies() -> None:

@@ -13,7 +13,7 @@ from forwin.config import InfrastructureConfig
 from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
-from forwin.writer.llm_client import OpenAICompatibleAdapter
+from forwin.writer.llm import OpenAICompatibleAdapter
 
 from .reporting import render_markdown_summary, summarize_attempts
 from .schemas import EvalAttemptResult, EvalCase, EvalProfile, EvalRunConfig
@@ -508,13 +508,13 @@ class LLMReliabilityRunner:
                 },
             }
         )
-        orchestrator = RuntimeContainer.from_config(
+        pipeline = RuntimeContainer.from_config(
             infrastructure,
             policy=policy,
             role="generation_worker",
-        ).build_writing_orchestrator()
+        ).build_chapter_pipeline()
         try:
-            result = orchestrator.run(
+            result = pipeline.run(
                 premise="主角在潮雾旧城得到一枚会记录未来声音的罗盘。",
                 genre="玄幻",
                 num_chapters=2,
@@ -539,11 +539,11 @@ class LLMReliabilityRunner:
             )
         finally:
             try:
-                orchestrator.llm_client.close()
+                pipeline.llm_client.close()
             except Exception:  # noqa: BLE001
                 pass
             try:
-                orchestrator.engine.dispose()
+                pipeline.engine.dispose()
             except Exception:  # noqa: BLE001
                 pass
         _json_dump_line(self.full_runs_path, payload)

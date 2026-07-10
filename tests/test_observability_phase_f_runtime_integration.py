@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.api_runtime import run_orchestrator_task
+from forwin.api_runtime import run_pipeline_task
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
@@ -28,7 +28,7 @@ class _FakeRuntimeEngine:
         self.disposed = True
 
 
-def test_run_orchestrator_task_records_operation_and_cleanup_spans() -> None:
+def test_run_pipeline_task_records_operation_and_cleanup_spans() -> None:
     engine = get_engine(postgres_test_url("phase-f-runtime"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -52,7 +52,7 @@ def test_run_orchestrator_task_records_operation_and_cleanup_spans() -> None:
         )
         fake_llm = _FakeCloser()
         fake_engine = _FakeRuntimeEngine()
-        orchestrator = SimpleNamespace(
+        pipeline = SimpleNamespace(
             _SessionFactory=Session,
             services=SimpleNamespace(observability=obs),
             llm_client=fake_llm,
@@ -66,9 +66,9 @@ def test_run_orchestrator_task_records_operation_and_cleanup_spans() -> None:
             frozen_artifacts=[],
         )
 
-        run_orchestrator_task(
+        run_pipeline_task(
             "task-phase-f-runtime",
-            orchestrator,
+            pipeline,
             lambda: result,
             update_task=lambda *_args, **_kwargs: None,
             logger=SimpleNamespace(
@@ -95,7 +95,7 @@ def test_run_orchestrator_task_records_operation_and_cleanup_spans() -> None:
         engine.dispose()
 
 
-def test_run_orchestrator_task_records_worker_component_when_requested() -> None:
+def test_run_pipeline_task_records_worker_component_when_requested() -> None:
     engine = get_engine(postgres_test_url("phase-f-runtime-worker-component"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -119,7 +119,7 @@ def test_run_orchestrator_task_records_worker_component_when_requested() -> None
         )
         fake_llm = _FakeCloser()
         fake_engine = _FakeRuntimeEngine()
-        orchestrator = SimpleNamespace(
+        pipeline = SimpleNamespace(
             _SessionFactory=Session,
             services=SimpleNamespace(observability=obs),
             llm_client=fake_llm,
@@ -133,9 +133,9 @@ def test_run_orchestrator_task_records_worker_component_when_requested() -> None
             frozen_artifacts=[],
         )
 
-        run_orchestrator_task(
+        run_pipeline_task(
             "task-phase-f-runtime-worker-component",
-            orchestrator,
+            pipeline,
             lambda: result,
             update_task=lambda *_args, **_kwargs: None,
             logger=SimpleNamespace(exception=lambda *_args, **_kwargs: None),

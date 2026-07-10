@@ -53,9 +53,9 @@ def test_core_packages_declare_current_architecture_roles() -> None:
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
 
-def test_orchestrator_book_state_runtime_has_no_legacy_projection_markers() -> None:
-    source = _read("forwin/orchestrator/loop.py")
-    projection_source = _read("forwin/orchestrator_loop_core/world_projection.py")
+def test_pipeline_book_state_runtime_has_no_legacy_projection_markers() -> None:
+    source = _read("forwin/generation/pipeline.py")
+    projection_source = _read("forwin/generation/pipeline_core/world_projection.py")
 
     forbidden = [
         "WorldModelCompilerV4",
@@ -297,18 +297,25 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         assert f'op.create_table(\n        "{current_table}"' in baseline
 
 
-def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
-    assert not (ROOT / "forwin/orchestration/__init__.py").exists()
-    assert not (ROOT / "forwin/orchestration/chapter_pipeline.py").exists()
-    assert not (ROOT / "forwin/orchestration/events.py").exists()
+def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
+    for removed_path in (
+        "forwin/orchestration",
+        "forwin/orchestrator",
+        "forwin/orchestrator_loop_core",
+        "forwin/pipeline_loop_core",
+    ):
+        assert not (ROOT / removed_path).exists()
 
+    production_files = sorted((ROOT / "forwin").rglob("*.py"))
     production_source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        path.read_text(encoding="utf-8") for path in production_files
     )
     for removed in (
         "ChapterPipelinePorts",
         "OrchestrationEvent",
+        "WritingOrchestrator",
+        "forwin.orchestrator",
+        "orchestrator_loop_core",
         "_compile_world_model_after_acceptance",
         "_apply_world_v4_gate",
         "_apply_canon_candidate",
@@ -320,20 +327,29 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "HistoricalReviewHub",
         "FinalAcceptanceGate",
         "final_gate_decision",
+        "globals().update",
+        "__class__ =",
+        "__module__ =",
+        "from types import ModuleType",
     ):
         assert removed not in production_source
+    assert all("import *" not in path.read_text(encoding="utf-8") for path in production_files)
 
-    assert "_commit_book_state_canon" in _read(
-        "forwin/orchestrator_loop_core/world_projection.py"
-    )
+    pipeline_source = _read("forwin/generation/pipeline.py")
+    assert "class ChapterPipeline:" in pipeline_source
+    assert "RuntimeServices" not in pipeline_source
+    assert "ChapterPipeline." not in pipeline_source
+    assert "ChapterPipeline" not in _read("forwin/generation/pipeline_core/__init__.py")
+
+    projection_source = _read("forwin/generation/pipeline_core/world_projection.py")
+    assert "_commit_book_state_canon" in projection_source
+    assert "_ensure_genesis_canon_seed_entities" not in projection_source
     assert "class DraftReviewService" in _read("forwin/review/draft_service.py")
     assert "class FinalResidualPolicy" in _read(
         "forwin/review/decision/rules/final_residual.py"
     )
     assert "class CanonAdmissionService" in _read("forwin/canon/admission.py")
-    assert "_ensure_genesis_canon_seed_entities" not in _read(
-        "forwin/orchestrator_loop_core/world_projection.py"
-    )
+
     state_updater = _read("forwin/state/updater.py")
     for removed_writer in (
         "apply_state_changes",
@@ -357,58 +373,19 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "get_chapter_summaries",
     ):
         assert f"def {removed_reader}(" not in state_repository
+
+    project_chapters = _read("forwin/generation/pipeline_core/project_chapters.py")
     assert "self.canon_admission.commit(" in _read(
-        "forwin/orchestrator_loop_core/acceptance.py"
+        "forwin/generation/pipeline_core/acceptance.py"
     )
-    assert "self.canon_admission.commit(" in _read(
-        "forwin/orchestrator_loop_core/project_chapters.py"
-    )
-    assert not (ROOT / "forwin/orchestrator_loop_core/quality_gate_types.py").exists()
-    assert not (ROOT / "forwin/orchestrator_loop_core/repair_loop.py").exists()
+    assert "self.canon_admission.commit(" in project_chapters
+    assert "self.repair.review_candidate(" in project_chapters
+    assert "self.repair.repair_canon_block(" in project_chapters
     assert "class RepairService" in _read("forwin/review/repair/service.py")
-    assert "self.repair.review_candidate(" in _read(
-        "forwin/orchestrator_loop_core/project_chapters.py"
-    )
-    assert "self.repair.repair_canon_block(" in _read(
-        "forwin/orchestrator_loop_core/project_chapters.py"
-    )
-    assert "WritingOrchestrator._apply_repair_patch" not in _read(
-        "forwin/orchestrator_loop_core/service.py"
-    )
-    orchestrator_service = _read("forwin/orchestrator_loop_core/service.py")
-    for removed_assignment in (
-        "WritingOrchestrator._apply_canon_quality_gate",
-        "WritingOrchestrator._commit_book_state_canon",
-        "WritingOrchestrator._validate_subworld_admission",
-        "WritingOrchestrator._ensure_genesis_canon_seed_entities",
-        "WritingOrchestrator._filter_supported_state_changes",
-        "WritingOrchestrator._filter_resolvable_state_changes",
-        "WritingOrchestrator._ensure_event_mentioned_non_character_entities",
-        "WritingOrchestrator._filter_resolvable_events",
-        "WritingOrchestrator._latest_draft_and_review_for_chapter",
-        "WritingOrchestrator._prepare_deferred_acceptance_if_needed",
-        "WritingOrchestrator._band_scope_candidates",
-        "WritingOrchestrator._band_row_by_id",
-        "WritingOrchestrator._collect_subworld_candidate_names",
-        "WritingOrchestrator._future_plan_audit_plans",
-        "WritingOrchestrator._future_plan_audit_band_rows",
-        "WritingOrchestrator._register_writer_output_entities",
-    ):
-        assert removed_assignment not in orchestrator_service
-    assert (
-        sum(
-            line.startswith("WritingOrchestrator._")
-            for line in orchestrator_service.splitlines()
-        )
-        <= 87
-    )
-    assert "WritingOrchestrator" not in _read(
-        "forwin/orchestrator_loop_core/__init__.py"
-    )
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:
-    assert not (ROOT / "forwin/orchestrator/repair_coordinator.py").exists()
+    assert not (ROOT / "forwin/pipeline/repair_coordinator.py").exists()
 
     loop_detector = importlib.import_module("forwin.review.repair_loop_detector")
     assert hasattr(loop_detector, "RepairAttemptRecord")
@@ -442,7 +419,7 @@ def test_quality_analysis_cache_is_shared_and_versioned() -> None:
     assert "save_quality_analysis_run" in service_source
     assert "analyze_writer_output_quality(" in _read("forwin/review/draft_service.py")
     assert "analyze_writer_output_quality(" in _read(
-        "forwin/orchestrator_loop_core/quality_gates.py"
+        "forwin/generation/pipeline_core/quality_gates.py"
     )
     baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
     assert '"quality_analysis_runs"' in baseline
@@ -457,12 +434,19 @@ def test_quality_analysis_cache_is_shared_and_versioned() -> None:
 
 
 def test_genesis_workflow_contains_delegation_only() -> None:
-    assert not (ROOT / "forwin/book_genesis_core/workflow.py").exists()
-    service = _read("forwin/book_genesis_core/service.py")
-    assert "from forwin.book_genesis_core.workflow" not in service
+    for removed_path in (
+        "forwin/book_genesis.py",
+        "forwin/book_genesis_core",
+        "forwin/genesis_workspace",
+        "forwin/genesis_handoff",
+    ):
+        assert not (ROOT / removed_path).exists()
+    service = _read("forwin/genesis/service.py")
+    assert "from forwin.genesis.workflow" not in service
     assert "def patch_pack(" in service
     assert "return self.workspace.patch_pack(" in service
-    workspace = _read("forwin/genesis_workspace/service.py")
+    assert "BookGenesisService." not in service
+    workspace = _read("forwin/genesis/workspace/service.py")
     for method in ("patch_pack", "generate_stage", "refine_stage", "lock_stage"):
         method_source = workspace.split(f"    def {method}(", 1)[1]
         assert "_ensure_genesis_mutable(" in method_source.split("    def ", 1)[0]
@@ -471,22 +455,22 @@ def test_genesis_workflow_contains_delegation_only() -> None:
 def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     forbidden_runtime_tokens = {
         "ReviewOutcomeRouter": [
-            "forwin/orchestrator_loop_core/common.py",
-            "forwin/orchestrator_loop_core/quality_gates.py",
+            "forwin/generation/pipeline_core/common.py",
+            "forwin/generation/pipeline_core/quality_gates.py",
         ],
         "RepairPolicy": [
             "forwin/runtime/container.py",
             "forwin/runtime/services.py",
-            "forwin/orchestrator_loop_core/service.py",
+            "forwin/generation/pipeline.py",
             "forwin/review/repair/service.py",
             "forwin/review/decision/rules/repair.py",
         ],
         "ObligationScopeRouter": [
-            "forwin/orchestrator_loop_core/quality_gates.py",
+            "forwin/generation/pipeline_core/quality_gates.py",
             "forwin/review/decision/rules/obligation_scope.py",
         ],
         "select_cutover_pair": [
-            "forwin/orchestrator_loop_core/quality_gates.py",
+            "forwin/generation/pipeline_core/quality_gates.py",
         ],
         "engine_live_enabled": [
             "forwin/review/repair/service.py",
@@ -554,22 +538,57 @@ def test_v5_runtime_policy_is_the_only_generation_policy_surface() -> None:
     assert offenders == []
 
 
+def test_entry_adapters_use_explicit_application_services() -> None:
+    for removed_path in (
+        "forwin/api_core/exports.py",
+        "forwin/api_project_ops.py",
+        "forwin/api_project_policy.py",
+        "forwin/api_publisher_ops.py",
+        "forwin/project_ops",
+    ):
+        assert not (ROOT / removed_path).exists()
+
+    api_entry = _read("forwin/api.py")
+    assert '__all__ = ["app", "lifespan"]' in api_entry
+    assert "ModuleType" not in api_entry
+    assert "__class__" not in api_entry
+
+    api_app = _read("forwin/api_core/app.py")
+    assert "globals().update" not in api_app
+    assert '__all__ = ["app", "lifespan"]' in api_app
+
+    project_routes = _read("forwin/api_project_routes.py")
+    publisher_routes = _read("forwin/api_publisher_routes.py")
+    assert "ProjectApplicationService" in project_routes
+    assert "PublisherApplicationService" in publisher_routes
+    assert "project_ops" not in project_routes
+    assert "api_publisher_ops" not in publisher_routes
+    assert "class ProjectApplicationService" in _read(
+        "forwin/application/projects/service.py"
+    )
+    assert "class PublisherApplicationService" in _read(
+        "forwin/application/publisher/service.py"
+    )
+
+
 def test_generation_task_producers_use_application_service() -> None:
     for rel_path in (
+        "forwin/api_core/automation.py",
         "forwin/api_core/generation.py",
         "forwin/generation/worker.py",
         "forwin/production/executor.py",
+        "forwin/production/scheduler.py",
     ):
         assert "GenerationApplicationService" in _read(rel_path)
 
 
-def test_runtime_container_is_the_only_orchestrator_constructor() -> None:
+def test_runtime_container_is_the_only_pipeline_constructor() -> None:
     offenders = [
         path.relative_to(ROOT).as_posix()
         for root in (ROOT / "forwin", ROOT / "scripts")
         for path in root.rglob("*.py")
         if path != ROOT / "forwin/runtime/container.py"
-        and "WritingOrchestrator(" in path.read_text(encoding="utf-8")
+        and "ChapterPipeline(" in path.read_text(encoding="utf-8")
     ]
 
     assert offenders == []

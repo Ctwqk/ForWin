@@ -37,7 +37,7 @@ class ApiRuntimeProgressTests(unittest.TestCase):
         self.assertEqual(changes["current_stage"], "failed")
 
 
-def test_task_orchestrator_builder_consumes_execution_context(monkeypatch) -> None:
+def test_task_pipeline_builder_consumes_execution_context(monkeypatch) -> None:
     infrastructure = InfrastructureConfig()
     payload = GenerationTaskExecutionPayload(
         mode="continue",
@@ -51,7 +51,7 @@ def test_task_orchestrator_builder_consumes_execution_context(monkeypatch) -> No
         task_id="task-1",
     )
     calls: dict[str, object] = {}
-    orchestrator = SimpleNamespace()
+    pipeline = SimpleNamespace()
 
     class FakeContainer:
         @classmethod
@@ -61,15 +61,15 @@ def test_task_orchestrator_builder_consumes_execution_context(monkeypatch) -> No
             calls["role"] = role
             return cls()
 
-        def build_writing_orchestrator(self, **kwargs):
+        def build_chapter_pipeline(self, **kwargs):
             calls.update(kwargs)
-            return orchestrator
+            return pipeline
 
     monkeypatch.setattr(api_runtime, "RuntimeContainer", FakeContainer)
 
-    result = api_runtime._build_writing_orchestrator_for_task(context)
+    result = api_runtime._build_chapter_pipeline_for_task(context)
 
-    assert result is orchestrator
+    assert result is pipeline
     assert calls == {
         "infrastructure": infrastructure,
         "policy": context.policy,

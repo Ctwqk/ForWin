@@ -6,7 +6,6 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Str
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from forwin.map.models import MapEdgeRow, MapNodeRow
 
 from .base import Base, new_id
 

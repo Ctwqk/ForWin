@@ -28,11 +28,20 @@ Genesis / Writer / Review 主链
 - 地图 canon：`BookMap / Scheme C`，语义为 `SubWorld -> Region -> MapNode -> MapEdge`。
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
-- 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 orchestrator 装配点。
+- 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 `ChapterPipeline` 构造点。
 - 运行时计划：`forwin.planning.PlanningService` 是写侧门面，`PlanningQuery` 读取 active arc/chapter/band 计划，future audit、patch validation 与 scenario rehearsal 统一投影为 `PlanHealth`。
 - 实体准入：`EntityRegistrar` 只构建并验证候选稿上的 `EntityAdmissionPlan`，不会写 `Entity` / `EntityAlias`；分类器异常、遗漏、别名歧义和唯一性冲突均 fail-closed。只有 `CanonAdmissionService` 通过 `EntityAdmissionCommitter` 在 Canon 事务中落实无冲突计划。
-- review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享 primary quality 分析，cache key 包含正文内容、chapter plan、prior-canon 分析上下文、模式/版本与模型指纹；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`CanonAdmissionService` 直接编排 quality、BookState 与 projection helper，不经 `WritingOrchestrator` canon 方法注入；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
+- review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享 primary quality 分析，cache key 包含正文内容、chapter plan、prior-canon 分析上下文、模式/版本与模型指纹；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`CanonAdmissionService` 直接编排 quality、BookState 与 projection helper，`ChapterPipeline` 不再通过类属性注入接管这些职责；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
+
+## 模块与入口边界
+
+- 章节生产入口是 `forwin.generation.pipeline.ChapterPipeline`。构造器显式接收协作者，方法在类定义内绑定；不存在 `WritingOrchestrator`、类属性后注入、模块回注或伪造 `__module__`。
+- `forwin.generation.pipeline_core` 只保存 pipeline-owned 函数，不通过 `common.py` 转发外域类型；每个模块直接从真实 owner 导入。
+- Genesis 只有 `forwin.genesis` 一个包，workspace 与 handoff 是其子域；`book_genesis.py`、`book_genesis_core`、`genesis_workspace`、`genesis_handoff` 旧入口均已删除。
+- 项目/Genesis/章节/review 的传输适配统一落到 `ProjectApplicationService`；publisher HTTP/extension 动作统一落到 `PublisherApplicationService`；生成任务统一落到 `GenerationApplicationService`。
+- `forwin.api` 只公开 `app` 与 `lifespan`。旧 `ModuleType` 代理、`api_core.exports`、`globals().update()`、`api_project_ops`、`api_publisher_ops`、`api_project_policy` 和 `project_ops` 根包已删除。
+- 生产代码禁止星号导入和隐式依赖仓库。拆分遗留的 2,336 个未使用导入已清除，runtime 模块必须直接声明依赖。
 
 ## Quality Profile
 

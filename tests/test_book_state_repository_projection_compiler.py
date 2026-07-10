@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
-from forwin.context.assembler import assemble_context
+from forwin.context.assembler_core import assemble_context
 from forwin.api_book_state_routes import build_handlers
 from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
-from forwin.writer.prompts import _canon_quality_context_section
+from forwin.writer.prompt_core import _canon_quality_context_section
 
 
 def test_prompt_constraints_shrink_when_plan_patches_cover_form_signals() -> None:

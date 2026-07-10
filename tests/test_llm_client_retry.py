@@ -8,8 +8,8 @@ from unittest.mock import patch
 import httpx
 
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise, RevelationLayer
-from forwin.orchestrator.phase24 import _coerce_unit_float
-from forwin.writer.llm_client import LLMClient
+from forwin.planning.arc_envelope import _coerce_unit_float
+from forwin.writer.llm import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
@@ -143,7 +143,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ) as sleep:
                 result = client.chat([{"role": "user", "content": "hello"}])
@@ -180,7 +180,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat([{"role": "user", "content": "hello"}])
@@ -230,7 +230,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat([{"role": "user", "content": "hello"}])
@@ -434,7 +434,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat([{"role": "user", "content": "hello"}])
@@ -478,7 +478,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat([{"role": "user", "content": "hello"}])
@@ -749,7 +749,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat(
@@ -854,7 +854,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         try:
             with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm_client.time.sleep",
+                "forwin.writer.llm.adapter.time.sleep",
                 return_value=None,
             ):
                 result = client.chat(

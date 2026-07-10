@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 from sqlalchemy import select
 
-from forwin.book_genesis import BookGenesisService
-from forwin.genesis_handoff.commands import StartWritingCommand
+from forwin.genesis import BookGenesisService
+from forwin.genesis.handoff.commands import StartWritingCommand
 from forwin.governance import DecisionEventType
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
@@ -172,7 +172,7 @@ class GenesisHandoffServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             project = self._create_ready_project(session, service, project_id="proj-handoff-success")
             updater = StateUpdater(session)
-            with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
+            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
                 result = service.handoff.start_writing(
                     session=session,
                     updater=updater,
@@ -220,8 +220,8 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 validation_report=MapValidationReport(valid=False, errors=["bad map"]),
             )
             with (
-                patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call),
-                patch("forwin.genesis_handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
+                patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call),
+                patch("forwin.genesis.handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
                 self.assertRaises(ValueError),
             ):
                 service.handoff.start_writing(
@@ -265,7 +265,7 @@ class GenesisHandoffServiceTests(unittest.TestCase):
             session.flush()
             updater = StateUpdater(session)
 
-            with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
+            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
                 result = service.handoff.start_writing(
                     session=session,
                     updater=updater,

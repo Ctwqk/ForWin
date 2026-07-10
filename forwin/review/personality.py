@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
 
 from forwin.protocol.context import ChapterContextPack, LintSignal
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict

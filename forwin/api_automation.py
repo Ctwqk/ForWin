@@ -6,7 +6,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import case, func, select
 
-from forwin.api_schemas import ProjectAutomationSettings
+from forwin.api_schema import ProjectAutomationSettings
 from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
 from forwin.production.scheduler import ProductionScheduler, daily_start_minutes

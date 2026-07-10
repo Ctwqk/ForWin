@@ -5,21 +5,20 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from forwin.api_project_payloads import (
+from forwin.project_payloads import (
     build_provisional_band_detail,
     build_scenario_rehearsal_detail,
     latest_provisional_band_execution,
     latest_scenario_rehearsal_run,
 )
-from forwin.api_schemas import (
+from forwin.api_schema import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
     BandExperienceOverrideRequest,
     BandExperienceOverrideResponse,
     CausalReplayResponse,
-    ChapterInfo,
     DecisionEventsResponse,
     GovernanceInsightsResponse,
     ManualCheckpointRequest,
@@ -27,7 +26,6 @@ from forwin.api_schemas import (
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
     ProvisionalBandDetail,
-    ScenarioPlanPatchApproveRequest,
     ScenarioRehearsalDetail,
     TaskContractResponse,
     TaskContractUpdateRequest,
@@ -842,7 +840,7 @@ def override_band_experience(
     req: BandExperienceOverrideRequest,
     *,
     get_session,
-    orchestrator,
+    pipeline,
 ) -> BandExperienceOverrideResponse:
     session = get_session()
     try:
@@ -882,14 +880,14 @@ def override_band_experience(
         band_row.stall_guard_max_gap = schedule.stall_guard_max_gap
         session.add(band_row)
 
-        if orchestrator is not None:
+        if pipeline is not None:
             arc_structure = repo.get_latest_arc_structure_draft(project_id)
-            structure_data = orchestrator._structure_data_from_row(arc_structure)
+            structure_data = pipeline._structure_data_from_row(arc_structure)
             for chapter_number in range(schedule.chapter_start, schedule.chapter_end + 1):
                 chapter_plan = repo.get_chapter_plan(project_id, chapter_number)
                 if chapter_plan is None:
                     continue
-                experience_plan = orchestrator.arc_envelope_manager._derive_chapter_experience_plan(
+                experience_plan = pipeline.arc_envelope_manager._derive_chapter_experience_plan(
                     chapter_number=chapter_number,
                     structure=structure_data,
                     schedule=schedule,

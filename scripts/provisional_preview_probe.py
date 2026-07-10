@@ -18,12 +18,12 @@ from forwin.config import InfrastructureConfig
 from forwin.generation.task_payload import payload_from_json
 from forwin.models import ChapterPlan, GenerationTask, ProvisionalChapterLedger
 from forwin.models.project import Project
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
-from forwin.writer.prompts import build_preview_chapter_prompt
+from forwin.writer.prompt_core import build_preview_chapter_prompt
 
 
 def repo_root() -> Path:
@@ -175,8 +175,8 @@ def make_out_dir(raw: str) -> Path:
     return path
 
 
-def prompt_params(orchestrator: WritingOrchestrator) -> dict[str, float | int]:
-    writer = orchestrator.provisional_writer
+def prompt_params(pipeline: ChapterPipeline) -> dict[str, float | int]:
+    writer = pipeline.provisional_writer
     target_chars = max(
         writer.min_chapter_chars,
         min(writer.target_chapter_chars, writer.max_chapter_chars),
@@ -241,13 +241,13 @@ def main() -> int:
     finally:
         bootstrap_engine.dispose()
 
-    orchestrator = RuntimeContainer.from_config(
+    pipeline = RuntimeContainer.from_config(
         config,
         policy=policy,
         role="generation_worker",
-    ).build_writing_orchestrator()
+    ).build_chapter_pipeline()
     try:
-        session = orchestrator._SessionFactory()
+        session = pipeline._SessionFactory()
         try:
             plan = session.execute(
                 select(ChapterPlan).where(
@@ -261,10 +261,10 @@ def main() -> int:
                 )
 
             repo = StateRepository(session)
-            context = orchestrator.retrieval_broker.build_chapter_context(
+            context = pipeline.retrieval_broker.build_chapter_context(
                 repo, project_id, plan
             )
-            params = prompt_params(orchestrator)
+            params = prompt_params(pipeline)
             messages = build_preview_chapter_prompt(
                 context,
                 target_chars=int(params["target_chars"]),
@@ -272,7 +272,7 @@ def main() -> int:
                 max_chars=int(params["max_chars"]),
             )
             payload = {
-                "model": orchestrator.llm_client.model,
+                "model": pipeline.llm_client.model,
                 "messages": messages,
                 "temperature": params["temperature"],
                 "max_tokens": params["max_tokens"],
@@ -283,11 +283,11 @@ def main() -> int:
                 "chapter_number": chapter_number,
                 "chapter_title": plan.title,
                 "task_id": args.task_id or None,
-                "base_url": orchestrator.llm_client.base_url,
+                "base_url": pipeline.llm_client.base_url,
                 "call_enabled": bool(args.call),
                 "source_error": source_error,
                 "request_summary": {
-                    "model": orchestrator.llm_client.model,
+                    "model": pipeline.llm_client.model,
                     "message_count": len(messages),
                     "temperature": params["temperature"],
                     "max_tokens": params["max_tokens"],
@@ -299,8 +299,8 @@ def main() -> int:
             print(f"output_dir={out_dir}")
             print(f"project_id={project_id}")
             print(f"chapter_number={chapter_number}")
-            print(f"model={orchestrator.llm_client.model}")
-            print(f"base_url={orchestrator.llm_client.base_url}")
+            print(f"model={pipeline.llm_client.model}")
+            print(f"base_url={pipeline.llm_client.base_url}")
             print(f"messages={len(messages)}")
             print(f"max_tokens={params['max_tokens']}")
             if source_error:
@@ -316,7 +316,7 @@ def main() -> int:
                 raise SystemExit("MINIMAX_API_KEY is empty; cannot send request.")
 
             try:
-                raw = orchestrator.llm_client.chat(
+                raw = pipeline.llm_client.chat(
                     messages,
                     temperature=float(params["temperature"]),
                     max_tokens=int(params["max_tokens"]),
@@ -337,8 +337,8 @@ def main() -> int:
         finally:
             session.close()
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
 
 if __name__ == "__main__":

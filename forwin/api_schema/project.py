@@ -4,13 +4,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.governance import (
     BandCheckpointDetail,
     BlockingReasonInfo,
     DecisionEventInfo,
     NarrativeConstraintInfo,
-    PlanTaskItem,
 )
 from forwin.long_run_policy import LongRunPolicy
 from forwin.protocol.subworld import SubWorldSummary

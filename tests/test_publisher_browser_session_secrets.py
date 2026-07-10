@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from forwin.api_publisher_ops import (
+from forwin.application.publisher.operations import (
     get_publisher_browser_session_summary,
     publisher_extension_get_browser_session,
 )

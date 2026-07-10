@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from forwin.application.generation import GenerationApplicationService
-from forwin.api_project_payloads import normalize_project_automation
-from forwin.api_schemas import ProjectAutomationSettings
+from forwin.project_payloads import normalize_project_automation
+from forwin.api_schema import ProjectAutomationSettings
 from forwin.models.project import Project
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability

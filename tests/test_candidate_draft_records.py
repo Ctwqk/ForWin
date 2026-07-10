@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from forwin.api_project_ops import get_candidate_draft
+from forwin.application.projects.reviews import get_candidate_draft
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview

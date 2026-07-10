@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.api_schemas import ProjectAutomationPublishSettings, ProjectAutomationSettings
+from forwin.api_schema import ProjectAutomationPublishSettings, ProjectAutomationSettings
 from forwin.long_run_policy import LongRunPolicy, normalize_long_run_policy
 
 

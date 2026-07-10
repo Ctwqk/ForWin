@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from forwin.api_book_state_routes import build_handlers
-from forwin.api_schemas import (
+from forwin.api_schema import (
     CharacterPersonalityActiveContextPreviewRequest,
     CharacterCreateRequest,
     CharacterPersonalityPreviewRequest,

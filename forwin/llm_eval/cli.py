@@ -5,12 +5,15 @@ import os
 import uuid
 from pathlib import Path
 
+from forwin.config import InfrastructureConfig
+
 from .cases import default_eval_cases
 from .profiles import load_eval_profiles, profile_requires_api_key
 from .runner import EvalRunConfig, LLMReliabilityRunner
 
 
 def run_eval_from_args(args) -> int:  # noqa: ANN001
+    config = InfrastructureConfig.from_env()
     live = os.environ.get("FORWIN_LLM_EVAL_LIVE", "").strip().lower() in {"1", "true", "yes"}
     if not live and not getattr(args, "dry_run", False):
         print("Refusing to run live LLM eval. Set FORWIN_LLM_EVAL_LIVE=1 or pass --dry-run.")

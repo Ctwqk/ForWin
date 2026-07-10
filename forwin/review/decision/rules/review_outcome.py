@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from forwin.canon_quality.signals import CanonQualitySignal
-from forwin.narrative_obligations.types import NarrativeObligation, ReviewOutcome
+from forwin.narrative_obligations.types import ReviewOutcome
 from forwin.protocol.review import ReviewVerdict
 
 from ..types import Decision, DecisionInput, DecisionRule

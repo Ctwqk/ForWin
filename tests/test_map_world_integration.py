@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from forwin.book_state.runtime import ObjectiveWorldGraph, distance_between_world_nodes
-from forwin.context.assembler import _build_map_context, assemble_context
+from forwin.context.assembler_core import _build_map_context, assemble_context
 from forwin.map.generator import generate_subworld_map
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.map.pathfinding import MapGraph
@@ -37,7 +37,7 @@ from forwin.protocol.book_state import MapEdge, MapNode, WorldNode
 from forwin.protocol.writer import WriterOutput
 from forwin.review.webnovel import WebNovelExperienceReviewer
 from forwin.state.repo import StateRepository
-from forwin.writer.prompts import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 
 
 def _spec() -> SubWorldMapSpec:

@@ -3,190 +3,39 @@
 from __future__ import annotations
 
 import logging
-import os
-import json
-import io
-import inspect
-import time
-import zipfile
-from collections import Counter, defaultdict
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import case, delete, func, or_, select
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy import select
 
-from forwin.api_pages import render_home_page, render_publishers_page
-from forwin import (
-    api_automation,
-    api_governance_ops,
-    api_governance_routes,
-    api_governance_support,
-    api_observability_routes,
-    api_project_ops,
-    api_project_routes,
-    api_publisher_ops,
-    api_publisher_routes,
-    api_route_registry,
-    api_system_routes,
-    api_task_routes,
-)
-from forwin.api_task_center_service import TaskCenterService
-from forwin.api_project_payloads import (
-    build_project_detail,
-    build_project_summaries,
-    build_provisional_band_detail,
-    latest_provisional_band_execution,
+from forwin.project_payloads import (
     normalize_project_automation,
-)
-from forwin.api_task_history import augment_task_with_rehearsal_history
-from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
-from forwin.api_schemas import (
-    BandCheckpointApproveRequest,
-    BandCheckpointDetail,
-    BandExperienceOverrideRequest,
-    BandExperienceOverrideResponse,
-    ActiveGenerationTaskCheckResponse,
-    BookGenesisDetail,
-    BookGenesisPatchRequest,
-    BookGenesisRefineRequest,
-    BookGenesisStageRunRequest,
-    CausalReplayResponse,
-    CandidateDraftDetail,
-    DecisionEventsResponse,
-    BulkDeleteResponse,
-    ChapterDetail,
-    ChapterInfo,
-    ChapterReviewApproveRequest,
-    ChapterReviewApproveResponse,
-    ChapterReviewDetail,
-    ChapterReviewIssueInfo,
-    CommentSyncJobResultRequest,
-    EntityInfo,
-    ExtensionClaimCommentSyncJobRequest,
-    ExtensionClaimCommentSyncJobResponse,
-    ExtensionClaimUploadJobRequest,
-    ExtensionClaimUploadJobResponse,
-    ExtensionCommentsBatchRequest,
-    ExtensionCommentsBatchResponse,
-    ExtensionHeartbeatRequest,
-    ExtensionHeartbeatResponse,
-    ExtensionPlatformHeartbeat,
-    ExtensionBrowserSessionResponse,
-    ExtensionSessionSyncRequest,
-    ExtensionSessionSyncResponse,
-    GenerateRequest,
-    GenerationControlInfo,
-    NarrativeConstraintCreateRequest,
-    NarrativeConstraintUpdateRequest,
-    NarrativeConstraintsResponse,
-    GovernanceInsightsResponse,
-    ManualCheckpointRequest,
-    ProjectArcSnapshotFields,
-    ProjectChapterPublishRequest,
-    ProjectCreateRequest,
-    ProjectCreateResponse,
-    ProjectContinueGenerationRequest,
-    ProjectAutomationSettings,
-    ProjectAutomationUpdateRequest,
-    ProjectAutomationUpdateResponse,
-    ProjectBulkDeleteRequest,
-    ProjectDeleteResponse,
-    ProjectDetail,
-    ProjectSummary,
-    ProvisionalBandDetail,
-    ProvisionalChapterLedgerInfo,
-    PublisherCommentSyncJobRequest,
-    PublisherCommentSyncJobResponse,
-    PublisherPlatformInfo,
-    PublisherRawCommentInput,
-    PublisherUploadJobCreateRequest,
-    PublisherUploadJobResponse,
-    TaskResponse,
-    TaskCenterItemResponse,
-    TaskBulkDeleteRequest,
-    TaskMutationResponse,
-    TaskContractResponse,
-    TaskContractUpdateRequest,
-    TaskSummaryResponse,
-    ThreadInfo,
-    TropeTemplateInfo,
-    TropeRegistrySummaryResponse,
-    TropeTemplateValidationRequest,
-    TropeTemplateValidationResponse,
-    UploadJobResultRequest,
-    LintSignalInfo,
-    StartWritingResponse,
-)
-from forwin.book_genesis import (
-    BookGenesisService,
-    GENESIS_STAGE_ORDER,
-    StaleGenesisRevisionError,
 )
 from forwin.application.errors import ProjectNotFound
 from forwin.application.generation import (
     EnqueueGenerationCommand,
     GenerationApplicationService,
 )
-from forwin.config import InfrastructureConfig
 from forwin.governance import (
-    BandCheckpointIssueInfo,
-    CONSTRAINT_LEVELS,
-    CONSTRAINT_STATUSES,
-    CONSTRAINT_TYPES,
     DecisionEventType,
-    NarrativeConstraintInfo,
-    issue_group_for_issue,
-    load_plan_task_contract,
-    plan_task_contract_to_json,
 )
-from forwin.models.base import Base, get_session_factory
-from forwin.models.genesis import BookGenesisRevision
-from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
-from forwin.models.entity import Entity
-from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
+from forwin.models.project import Project, ChapterPlan
 from forwin.models.publisher import (
-    PublisherCommentSyncJob,
-    PublisherConnectionState,
-    PublisherExtensionClient,
-    PublisherRawComment,
     PublisherUploadJob,
 )
 from forwin.models.task import GenerationTask
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
-from forwin.models.phase import (
-    BandExperiencePlan,
-    ChapterRewriteAttempt,
-)
-from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
-from forwin.protocol.experience import BandDelightSchedule
-from forwin.protocol.trope_library import (
-    TROPE_TEMPLATE_LIBRARY,
-    trope_registry_summary,
-    validate_trope_template_payload,
-)
-from forwin.state.repo import StateRepository
-from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
-from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
-from forwin.publishers import PublisherManager
-from forwin.runtime.container import RuntimeContainer
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
-from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
 
 from forwin.api_core import state as api_state
-from forwin.api_core.runtime import *
-from forwin.api_core.tasks import *
-from forwin.api_core.project_helpers import *
+from forwin.api_core.runtime import (
+    _get_session,
+)
+from forwin.api_core.tasks import (
+    _cached_generation_task,
+    _task_is_terminal,
+)
 
 
 def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[str]:
@@ -330,10 +179,6 @@ def _project_has_active_upload_job(project_id: str, *, session=None) -> bool:
             normalized_project_id,
             session=managed_session,
         )
-
-
-def _generation_task_conflict_message(project_id: str) -> str:
-    return f"项目 {project_id} 已有运行中的生成任务，请先终止或等待当前任务完成。"
 
 
 def _project_delete_conflict_message(blockers: list[str]) -> str:

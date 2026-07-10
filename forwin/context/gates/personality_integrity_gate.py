@@ -8,7 +8,7 @@ class PersonalityIntegrityGate:
     name = "personality_integrity"
 
     def validate(self, request: ContextRequest, draft: ContextDraft) -> list[ContextIssue]:
-        from forwin.context.assembler import (
+        from forwin.context.assembler_core import (
             _personality_integrity_issues,
             _project_personality_integrity_strict,
             _save_personality_integrity_failure,

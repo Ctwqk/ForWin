@@ -6,11 +6,12 @@ import pytest
 from fastapi import HTTPException
 
 from forwin.api_publisher_routes import build_handlers
-from forwin.api_schemas import (
+from forwin.api_schema import (
     ExtensionHeartbeatRequest,
     ExtensionLoginQrNotifyRequest,
     PublisherLoginQrOneShotRequest,
 )
+from forwin.application.publisher import PublisherApplicationService
 
 
 class _FakePublisherManager:
@@ -23,7 +24,7 @@ class _FakePublisherManager:
     def verify_extension_api_key(self, value: str | None) -> None:
         self.checked_keys.append(value)
         if value != "secret":
-            from forwin.publishers.manager import PublisherExtensionAuthError
+            from forwin.publisher_runtime.auth import PublisherExtensionAuthError
 
             raise PublisherExtensionAuthError("bad key")
 
@@ -71,12 +72,18 @@ class _FakePublisherManager:
         }
 
 
+def _build_handlers(manager: _FakePublisherManager):
+    return build_handlers(
+        service=PublisherApplicationService(
+            get_publisher_manager=lambda: manager,
+            extension_root=Path("browser_extension/forwin-publisher"),
+        )
+    )
+
+
 def test_extension_heartbeat_status_requires_extension_key() -> None:
     manager = _FakePublisherManager()
-    handlers = build_handlers(
-        get_publisher_manager=lambda: manager,
-        extension_root=Path("browser_extension/forwin-publisher"),
-    )
+    handlers = _build_handlers(manager)
 
     with pytest.raises(HTTPException) as exc:
         handlers["publisher_extension_heartbeat_status"](x_forwin_extension_key=None)
@@ -90,10 +97,7 @@ def test_extension_heartbeat_status_requires_extension_key() -> None:
 
 def test_extension_browser_session_does_not_request_plaintext_upgrade() -> None:
     manager = _FakePublisherManager()
-    handlers = build_handlers(
-        get_publisher_manager=lambda: manager,
-        extension_root=Path("browser_extension/forwin-publisher"),
-    )
+    handlers = _build_handlers(manager)
 
     response = handlers["publisher_extension_get_browser_session"](
         "qidian",
@@ -107,10 +111,7 @@ def test_extension_browser_session_does_not_request_plaintext_upgrade() -> None:
 
 def test_extension_heartbeat_preserves_flat_platform_evidence_fields() -> None:
     manager = _FakePublisherManager()
-    handlers = build_handlers(
-        get_publisher_manager=lambda: manager,
-        extension_root=Path("browser_extension/forwin-publisher"),
-    )
+    handlers = _build_handlers(manager)
     req = ExtensionHeartbeatRequest(
         client_id="client-1",
         extension_version="0.1.0",
@@ -145,10 +146,7 @@ def test_extension_heartbeat_preserves_flat_platform_evidence_fields() -> None:
 
 def test_extension_login_qr_notify_requires_extension_key_and_forwards_payload() -> None:
     manager = _FakePublisherManager()
-    handlers = build_handlers(
-        get_publisher_manager=lambda: manager,
-        extension_root=Path("browser_extension/forwin-publisher"),
-    )
+    handlers = _build_handlers(manager)
     req = ExtensionLoginQrNotifyRequest(
         client_id="client-1",
         platform="fanqie",
@@ -187,10 +185,7 @@ def test_extension_login_qr_notify_requires_extension_key_and_forwards_payload()
 
 def test_publisher_login_qr_one_shot_start_forwards_operator_request() -> None:
     manager = _FakePublisherManager()
-    handlers = build_handlers(
-        get_publisher_manager=lambda: manager,
-        extension_root=Path("browser_extension/forwin-publisher"),
-    )
+    handlers = _build_handlers(manager)
     req = PublisherLoginQrOneShotRequest(
         platform="qidian",
         webhook_url="https://discord.invalid/api/webhooks/one-shot",

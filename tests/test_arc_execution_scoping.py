@@ -9,9 +9,9 @@ from sqlalchemy import select
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.orchestrator.loop import RunResult
-from forwin.orchestrator_loop_core.quality_gates import evaluate_structural_patch_completion_debt
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.generation.pipeline_core.result import RunResult
+from forwin.generation.pipeline_core.quality_gates import evaluate_structural_patch_completion_debt
+from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
@@ -19,7 +19,7 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-def _build_orchestrator(database_url: str, *, progress_callback=None):  # noqa: ANN001
+def _build_pipeline(database_url: str, *, progress_callback=None):  # noqa: ANN001
     return RuntimeContainer.from_config(
         InfrastructureConfig(
             database_url=database_url,
@@ -30,7 +30,7 @@ def _build_orchestrator(database_url: str, *, progress_callback=None):  # noqa: 
         ),
         policy=RuntimePolicy.for_profile("standard"),
         role="generation_worker",
-    ).build_writing_orchestrator(progress_callback=progress_callback)
+    ).build_chapter_pipeline(progress_callback=progress_callback)
 
 
 def _chapter_payloads(total: int) -> list[dict]:
@@ -73,9 +73,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("seed-state")
-            orchestrator = _build_orchestrator(db_path)
+            pipeline = _build_pipeline(db_path)
             try:
-                session = orchestrator._SessionFactory()
+                session = pipeline._SessionFactory()
                 try:
                     updater = StateUpdater(session)
                     project = updater.create_project(
@@ -84,7 +84,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
                         genre="玄幻",
                         target_total_chapters=20,
                     )
-                    orchestrator._seed_state(
+                    pipeline._seed_state(
                         updater,
                         project.id,
                         {
@@ -129,8 +129,8 @@ class ArcExecutionScopingTests(unittest.TestCase):
                 finally:
                     session.close()
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
 
         self.assertEqual(len(arcs), 2)
         active_arc = next(arc for arc in arcs if arc.status == "active")
@@ -142,7 +142,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
     def test_new_project_run_executes_only_first_active_arc(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("run-scope")
-            orchestrator = _build_orchestrator(db_path)
+            pipeline = _build_pipeline(db_path)
             captured: dict[str, object] = {}
 
             def fake_run_project_chapters(**kwargs):
@@ -156,7 +156,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
             try:
                 with (
                     patch.object(
-                        orchestrator.arc_director,
+                        pipeline.arc_director,
                         "plan_arc",
                         return_value={
                             "arc_synopsis": "总弧线",
@@ -187,14 +187,14 @@ class ArcExecutionScopingTests(unittest.TestCase):
                         },
                     ),
                     patch.object(
-                        orchestrator,
+                        pipeline,
                         "_run_project_chapters",
                         side_effect=fake_run_project_chapters,
                     ),
                 ):
-                    result = orchestrator.run("故事前提", "玄幻", 4)
+                    result = pipeline.run("故事前提", "玄幻", 4)
 
-                session = orchestrator._SessionFactory()
+                session = pipeline._SessionFactory()
                 try:
                     plans = session.execute(
                         select(ChapterPlan)
@@ -204,8 +204,8 @@ class ArcExecutionScopingTests(unittest.TestCase):
                 finally:
                     session.close()
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
 
         self.assertEqual(captured["chapter_numbers"], [1, 2])
         self.assertEqual(captured["requested_chapters"], 2)
@@ -250,7 +250,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
             captured: dict[str, object] = {}
             progress_events: list[tuple[str, dict[str, object]]] = []
-            orchestrator = _build_orchestrator(
+            pipeline = _build_pipeline(
                 db_path,
                 progress_callback=lambda event, payload: progress_events.append((event, dict(payload))),
             )
@@ -265,14 +265,14 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
             try:
                 with patch.object(
-                    orchestrator,
+                    pipeline,
                     "_run_project_chapters",
                     side_effect=fake_run_project_chapters,
                 ):
-                    orchestrator.continue_project(project.id)
+                    pipeline.continue_project(project.id)
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
                 engine.dispose()
 
         self.assertEqual(captured["chapter_numbers"], [1, 2])

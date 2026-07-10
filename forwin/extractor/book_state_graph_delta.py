@@ -145,7 +145,7 @@ class BookStateGraphDeltaExtractor:
 
     The first direct-path slice reuses the existing deterministic world_v4
     extraction rules, then converts the approved result into BookState
-    GraphDelta candidates. The orchestrator no longer treats the world_v4
+    GraphDelta candidates. The pipeline no longer treats the world_v4
     compiler as the canon success condition.
     """
 

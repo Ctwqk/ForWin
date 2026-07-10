@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.api_project_payloads import normalize_project_automation
-from forwin.api_schemas import (
+from forwin.project_payloads import normalize_project_automation
+from forwin.api_schema import (
     BandCheckpointDetail,
     CausalReplayResponse,
     DecisionEventInfo,
@@ -31,7 +31,7 @@ from forwin.governance import (
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
-from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+from forwin.audience.feedback import derive_action_effectiveness
 
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 

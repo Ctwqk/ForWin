@@ -8,7 +8,7 @@ import pytest
 from forwin.api_book_state_routes import build_handlers as build_book_state_handlers
 from forwin.api_llm_kb_routes import build_handlers as build_llm_kb_handlers
 from forwin.api_obsidian_routes import build_handlers as build_obsidian_handlers
-from forwin.api_schemas import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
+from forwin.api_schema import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
 from forwin.api_world_model_routes import build_handlers as build_world_model_handlers
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
@@ -32,7 +32,7 @@ from forwin.protocol.book_state import (
     WorldNode,
 )
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ReaderExperienceDelta
-from forwin.retrieval.broker import RetrievalBroker
+from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
@@ -903,7 +903,7 @@ def test_reader_promise_old_value_mismatch_requires_forced_accept(tmp_path: Path
 
 def test_unified_proposal_api_creates_reviews_and_updates_loadout(tmp_path: Path) -> None:
     from forwin.api_proposal_routes import build_handlers as build_proposal_handlers
-    from forwin.api_schemas import WorldEditProposalCreateRequest
+    from forwin.api_schema import WorldEditProposalCreateRequest
 
     Session, engine = _session_factory()
     try:

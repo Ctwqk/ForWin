@@ -15,7 +15,7 @@ from forwin.knowledge_system.projection_jobs import (
 from forwin.knowledge_system.store import load_json
 from forwin.models.project import Project
 from forwin.models.knowledge import KnowledgeProjectionPageRow
-from forwin.api_schemas import WorldModelPageInfo
+from forwin.api_schema import WorldModelPageInfo
 
 
 def build_handlers(

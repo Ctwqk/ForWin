@@ -4,7 +4,6 @@ import importlib
 import importlib.util
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 class ApiSplitModuleTests(unittest.TestCase):
@@ -33,14 +32,14 @@ class ApiSplitModuleTests(unittest.TestCase):
         self.assertIn("下载扩展包", publishers_html)
         self.assertIn("function clearNode(node)", publishers_html)
 
-    def test_api_operation_split_modules_are_available(self) -> None:
-        publisher_ops = self._import_required_module("forwin.api_publisher_ops")
-        project_ops = self._import_required_module("forwin.api_project_ops")
+    def test_application_services_are_available(self) -> None:
+        publisher = self._import_required_module("forwin.application.publisher")
+        projects = self._import_required_module("forwin.application.projects")
         governance_ops = self._import_required_module("forwin.api_governance_ops")
 
-        for module, names in (
+        for owner, names in (
             (
-                publisher_ops,
+                publisher.PublisherApplicationService,
                 (
                     "download_publisher_extension_package",
                     "download_publisher_firefox_extension_package",
@@ -49,7 +48,7 @@ class ApiSplitModuleTests(unittest.TestCase):
                 ),
             ),
             (
-                project_ops,
+                projects.ProjectApplicationService,
                 (
                     "create_project",
                     "continue_project_generation",
@@ -61,48 +60,32 @@ class ApiSplitModuleTests(unittest.TestCase):
             (
                 governance_ops,
                 (
-                    "get_project_governance",
                     "create_manual_checkpoint",
                     "get_project_causal_replay",
+                    "get_project_governance_insights",
                     "override_band_experience",
                 ),
             ),
         ):
             for name in names:
-                self.assertTrue(callable(getattr(module, name, None)), f"expected {module.__name__}.{name}")
+                self.assertTrue(callable(getattr(owner, name, None)), f"expected {owner.__name__}.{name}")
 
-    def test_api_proxy_preserves_private_patch_points(self) -> None:
+    def test_api_entrypoint_exports_only_asgi_contract(self) -> None:
         api_module = self._import_required_module("forwin.api")
         api_app = self._import_required_module("forwin.api_core.app")
-        api_state = self._import_required_module("forwin.api_core.state")
-        api_tasks = self._import_required_module("forwin.api_core.tasks")
 
-        old_session_factory = api_module._SessionFactory
-        marker = object()
-        try:
-            api_module._SessionFactory = marker
-            self.assertIs(api_state._SessionFactory, marker)
-            self.assertIs(api_module._SessionFactory, marker)
-        finally:
-            api_module._SessionFactory = old_session_factory
-
-        original_db_write = api_tasks._run_generation_task_db_write
-        with patch.object(api_module, "_run_generation_task_db_write", return_value=True):
-            self.assertIs(api_tasks._run_generation_task_db_write, api_module._run_generation_task_db_write)
-        self.assertIs(api_tasks._run_generation_task_db_write, original_db_write)
-
-        original_continue = api_app._create_continue_generation_task
-        with patch("forwin.api._create_continue_generation_task", return_value="task-api-split"):
-            self.assertIs(api_app._create_continue_generation_task, api_module._create_continue_generation_task)
-        self.assertIs(api_app._create_continue_generation_task, original_continue)
+        self.assertEqual(api_module.__all__, ["app", "lifespan"])
+        self.assertIs(api_module.app, api_app.app)
+        self.assertIs(api_module.lifespan, api_app.lifespan)
+        self.assertFalse(hasattr(api_module, "_SessionFactory"))
+        self.assertFalse(hasattr(api_module, "_create_continue_generation_task"))
 
     def test_api_files_stay_split_instead_of_regressing_into_giants(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         line_limits = {
-            "forwin/api.py": 700,
+            "forwin/api.py": 20,
             "forwin/api_core/app.py": 700,
             "forwin/api_core/automation.py": 450,
-            "forwin/api_core/exports.py": 120,
             "forwin/api_core/generation.py": 700,
             "forwin/api_core/project_helpers.py": 700,
             "forwin/api_core/runtime.py": 500,
@@ -113,8 +96,10 @@ class ApiSplitModuleTests(unittest.TestCase):
             "forwin/api_pages_publishers.py": 250,
             "forwin/api_system_routes.py": 500,
             "forwin/api_task_routes.py": 500,
-            "forwin/api_publisher_routes.py": 400,
-            "forwin/api_project_routes.py": 500,
+            "forwin/api_publisher_routes.py": 200,
+            "forwin/api_project_routes.py": 80,
+            "forwin/application/publisher/service.py": 400,
+            "forwin/application/projects/service.py": 500,
             "forwin/api_governance_routes.py": 500,
             "forwin/api_governance_support.py": 900,
             "forwin/api_automation.py": 450,

@@ -9,8 +9,8 @@ from forwin.config import InfrastructureConfig
 from forwin.models import ProvisionalBandExecution
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.planning.scenario_rehearsal import ScenarioRehearsalRepository, ScenarioRehearsalRunner
 from forwin.planning.world_contracts import (
     ArcWorldContract,
@@ -26,7 +26,7 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-def _build_orchestrator(*, provisional_preview: bool = False) -> WritingOrchestrator:
+def _build_pipeline(*, provisional_preview: bool = False) -> ChapterPipeline:
     policy = RuntimePolicy.for_profile("standard")
     if provisional_preview:
         policy = policy.model_copy(
@@ -46,11 +46,11 @@ def _build_orchestrator(*, provisional_preview: bool = False) -> WritingOrchestr
         ),
         policy=policy,
         role="generation_worker",
-    ).build_writing_orchestrator()
+    ).build_chapter_pipeline()
 
 
 def test_project_arc_snapshot_payload_exposes_scenario_rehearsal_fields() -> None:
-    from forwin.api_project_payloads import project_arc_snapshot_payload
+    from forwin.project_payloads import project_arc_snapshot_payload
 
     payload = project_arc_snapshot_payload(
         None,
@@ -243,20 +243,20 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
         project_id = project.id
 
     with Session() as session:
-        default_orchestrator = _build_orchestrator()
+        default_pipeline = _build_pipeline()
         try:
-            assert default_orchestrator._new_failed_provisional_gate(
+            assert default_pipeline._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
                 previous_snapshot=None,
             ) is None
         finally:
-            default_orchestrator.llm_client.close()
-            default_orchestrator.engine.dispose()
+            default_pipeline.llm_client.close()
+            default_pipeline.engine.dispose()
 
-        provisional_orchestrator = _build_orchestrator(provisional_preview=True)
+        provisional_pipeline = _build_pipeline(provisional_preview=True)
         try:
-            gate = provisional_orchestrator._new_failed_provisional_gate(
+            gate = provisional_pipeline._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
                 previous_snapshot=None,
@@ -264,5 +264,5 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
             assert gate is not None
             assert gate.aggregate_verdict == "fail"
         finally:
-            provisional_orchestrator.llm_client.close()
-            provisional_orchestrator.engine.dispose()
+            provisional_pipeline.llm_client.close()
+            provisional_pipeline.engine.dispose()

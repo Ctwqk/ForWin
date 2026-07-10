@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import inspect
 import logging
 import re
@@ -23,7 +22,7 @@ from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.writer.prompt_budget import prompt_revision_hash
 from forwin.writer.profile import WriterProfile
-from .prompts import (
+from .prompt_core import (
     build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
     build_state_event_extraction_prompt,

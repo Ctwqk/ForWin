@@ -7,7 +7,7 @@ class BookStateContextProvider:
     name = "book_state"
 
     def contribute(self, request: ContextRequest, draft: ContextDraft) -> None:
-        from forwin.context.assembler import _book_state_context_overlay, _merge_book_state_map_overlay
+        from forwin.context.assembler_core import _book_state_context_overlay, _merge_book_state_map_overlay
 
         overlay = _book_state_context_overlay(
             request.session,

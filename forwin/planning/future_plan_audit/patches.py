@@ -1,28 +1,23 @@
 from __future__ import annotations
 
-import json
-import re
-from datetime import UTC, datetime
-from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from forwin.models.base import new_id
-from forwin.models.narrative_obligation import FuturePlanAuditRunRow
-from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
-from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
-from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
-from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.signal_pre_audit import select_stale_signal_targets
-from forwin.protocol.experience import BandDelightSchedule
+from forwin.narrative_obligations.types import NarrativePlanPatch
 
-from .helpers import *
-from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
+from .helpers import (
+    _hard_countdown_instruction,
+    _hard_custody_instruction,
+    _is_custody_state_patch,
+    _json,
+    _loads,
+    _rewrite_custody_json_strings,
+    _rewrite_json_strings,
+    _rewrite_stale_countdown_text,
+    _rewrite_stale_custody_text,
+    _strip_countdown_instruction_noise,
+    _strip_countdown_instruction_text,
+)
 
 
 class FuturePlanPatchMixin:

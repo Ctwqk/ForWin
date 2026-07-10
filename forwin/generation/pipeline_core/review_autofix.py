@@ -1,0 +1,524 @@
+from __future__ import annotations
+
+from forwin.book_state.query import BookStateQuery
+from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
+from forwin.checker.reference_classifier import normalize_character_reference
+from forwin.protocol.writer import WriterOutput
+from typing import Any
+from forwin.models.project import ChapterPlan
+from forwin.governance import issue_group_for_issue
+import json
+from forwin.protocol.review import ReviewVerdict
+from forwin.observability.payloads import audit_payload
+from forwin.protocol.experience import (
+    BandDelightSchedule,
+    ChapterExperiencePlan,
+)
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.models.draft import (
+    ChapterDraft,
+    ChapterReview,
+)
+from forwin.models.phase import ChapterRewriteAttempt
+from forwin.checker.rules import ContinuityChecker
+from forwin.protocol.review import (
+    ContinuityIssue,
+    RepairInstruction,
+)
+from forwin.governance import DecisionEventType
+from forwin.canon_quality.placeholder import extract_expected_protagonist_names
+from forwin.canon_names import is_plausible_person_name
+from sqlalchemy.orm import Session
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+
+def _persist_draft_and_review(
+    self,
+    *,
+    session: Session,
+    updater: StateUpdater,
+    chapter_plan: ChapterPlan,
+    project_id: str,
+    chapter_number: int,
+    writer_output: WriterOutput,
+    review: ReviewVerdict,
+) -> tuple[WriterOutput, ChapterDraft, ChapterReview]:
+    artifact_paths = self.artifact_store.save_writer_output(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writer_output=writer_output,
+    )
+    self._record_decision_event(
+        updater=updater,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        event_family="runtime_observation",
+        event_type=DecisionEventType.WRITER_OUTPUT_ARTIFACT_SAVED,
+        scope="chapter",
+        summary=f"第{chapter_number}章 writer output artifact 已保存。",
+        payload={
+            "draft_blob_path": artifact_paths.get("draft_blob_path", ""),
+            "artifact_meta_path": artifact_paths.get("meta_path", ""),
+            "char_count": int(getattr(writer_output, "char_count", 0) or 0),
+        },
+    )
+    persisted_output = artifact_paths["writer_output"].model_copy(
+        update={
+            "generation_meta": {
+                **writer_output.generation_meta,
+                "artifact_meta_path": artifact_paths["meta_path"],
+            },
+        }
+    )
+    draft = updater.save_draft(
+        chapter_plan_id=chapter_plan.id,
+        writer_output=persisted_output,
+        raw_response=artifact_paths["meta_path"],
+        model_name=str(getattr(self.llm_client, "model", "") or ""),
+    )
+    review_row = updater.save_review(draft.id, review)
+    repair_attempt_count = session.query(ChapterRewriteAttempt).filter(
+        ChapterRewriteAttempt.project_id == project_id,
+        ChapterRewriteAttempt.chapter_number == chapter_number,
+    ).count()
+    CandidateDraftRepository(session).upsert_from_review(
+        project_id=project_id,
+        chapter_plan=chapter_plan,
+        draft=draft,
+        review=review_row,
+        writer_output=persisted_output,
+        repair_attempt_count=repair_attempt_count,
+    )
+    updater.mark_chapter_status(project_id, chapter_number, "drafted")
+    session.flush()
+    return persisted_output, draft, review_row
+
+def _review_current_output(
+    self,
+    *,
+    repo: StateRepository,
+    checker: ContinuityChecker,
+    project_id: str,
+    context,
+    writer_output: WriterOutput,
+) -> ReviewVerdict:
+    reviewer_skill_layers = self._select_skill_layers(
+        scope="reviewer",
+        stage_key="chapter_review",
+        task_family="review_chapter",
+    )
+    review = self._call_with_compatible_kwargs(
+        self.draft_review.review,
+        project_id=project_id,
+        repo=repo,
+        context=context,
+        writer_output=writer_output,
+        continuity_checker=checker,
+        reviewer_skill_layers=reviewer_skill_layers,
+    )
+    return review
+
+def _plan_writer_output_entities(
+    self,
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+    writer_output: WriterOutput,
+) -> WriterOutput:
+    llm_client = getattr(self, "llm_client", None)
+    classifier = LLMEntityAdmissionClassifier(llm_client) if llm_client is not None else None
+    result = EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writer_output=writer_output,
+    )
+    return result.writer_output
+
+@staticmethod
+def _apply_canon_name_drift_autofix(
+    writer_output: WriterOutput,
+    review: ReviewVerdict,
+) -> WriterOutput | None:
+    replacements: dict[str, str] = {}
+    for issue in review.issues:
+        if str(issue.rule_name or "") != "canon_name_drift":
+            continue
+        if str(issue.severity or "") != "error":
+            continue
+        entity_names = list(issue.entity_names or [])
+        if len(entity_names) < 2:
+            continue
+        observed = str(entity_names[0] or "").strip()
+        canonical = str(entity_names[1] or "").strip()
+        if not observed or not canonical or observed == canonical:
+            continue
+        if observed.startswith(canonical):
+            continue
+        if not is_plausible_person_name(observed) or not is_plausible_person_name(canonical):
+            continue
+        replacements[observed] = canonical
+
+    if not replacements:
+        return None
+
+    payload = _replace_canon_name_strings(
+        writer_output.model_dump(mode="python"),
+        replacements,
+    )
+    payload["char_count"] = len(str(payload.get("body") or ""))
+    generation_meta = dict(payload.get("generation_meta") or {})
+    previous_autofix = generation_meta.get("canon_name_autofix")
+    if isinstance(previous_autofix, dict):
+        autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
+        autofix_meta.update(replacements)
+    else:
+        autofix_meta = replacements
+    generation_meta["canon_name_autofix"] = autofix_meta
+    payload["generation_meta"] = generation_meta
+    return WriterOutput.model_validate(payload)
+
+@staticmethod
+def _apply_placeholder_leakage_autofix(
+    writer_output: WriterOutput,
+    review: ReviewVerdict,
+) -> WriterOutput | None:
+    body = str(writer_output.body or "")
+    if "工作人员" not in body and "工作人员" not in str(writer_output.end_of_chapter_summary or ""):
+        return None
+    should_replace = any(
+        str(issue.rule_name or "") == "bare_role_placeholder_leakage"
+        and str(issue.severity or "") == "error"
+        for issue in review.issues
+    )
+    if not should_replace:
+        return None
+    replacement = "具体见证人"
+    replacements = {"工作人员": replacement}
+    payload = _replace_canon_name_strings(
+        writer_output.model_dump(mode="python"),
+        replacements,
+    )
+    payload["char_count"] = len(str(payload.get("body") or ""))
+    generation_meta = dict(payload.get("generation_meta") or {})
+    previous_autofix = generation_meta.get("placeholder_leakage_autofix")
+    if isinstance(previous_autofix, dict):
+        autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
+        autofix_meta.update(replacements)
+    else:
+        autofix_meta = replacements
+    generation_meta["placeholder_leakage_autofix"] = autofix_meta
+    payload["generation_meta"] = generation_meta
+    return WriterOutput.model_validate(payload)
+
+@staticmethod
+def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
+    names: set[str] = set()
+    try:
+        project = repo.get_project(project_id)
+    except Exception:  # noqa: BLE001
+        project = None
+    if project is not None:
+        names.update(
+            extract_expected_protagonist_names(
+                str(getattr(project, "premise", "") or ""),
+                str(getattr(project, "setting_summary", "") or ""),
+            )
+        )
+    try:
+        session = getattr(repo, "session", None)
+        entities = (
+            BookStateQuery(session).active_entities(
+                project_id,
+                as_of_chapter=10**9,
+                kinds={"character"},
+            )
+            if session is not None
+            else []
+        )
+    except Exception:  # noqa: BLE001
+        return names
+    for entity in entities or []:
+        if str(getattr(entity, "kind", "") or "") != "character":
+            continue
+        raw_names = [getattr(entity, "name", "") or "", *(getattr(entity, "aliases", []) or [])]
+        for raw_name in raw_names:
+            name = normalize_character_reference(str(raw_name or ""))
+            if name:
+                names.add(name)
+    return names
+
+@staticmethod
+def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        result = value
+        for observed, canonical in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+            result = result.replace(observed, canonical)
+        return result
+    if isinstance(value, list):
+        return [
+            _replace_canon_name_strings(item, replacements)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _replace_canon_name_strings(item, replacements)
+            for item in value
+        )
+    if isinstance(value, dict):
+        return {
+            (
+                _replace_canon_name_strings(key, replacements)
+                if isinstance(key, str)
+                else key
+            ): _replace_canon_name_strings(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+@staticmethod
+def _review_event_payload(review: ReviewVerdict) -> dict[str, object]:
+    return {
+        "verdict": review.verdict,
+        "issue_types": [
+            str(getattr(issue, "issue_type", getattr(issue, "rule_name", "")) or "")
+            for issue in review.issues
+        ],
+        "issue_groups": [
+            str(getattr(issue, "issue_group", "") or issue_group_for_issue(
+                issue_type=str(getattr(issue, "issue_type", "") or ""),
+                rule_name=str(getattr(issue, "rule_name", "") or ""),
+            ))
+            for issue in review.issues
+        ],
+        "forced_accept_applied": bool(review.forced_accept_applied),
+    }
+
+@staticmethod
+def _review_issue_payloads(review: ReviewVerdict) -> list[dict[str, object]]:
+    issues = review.residual_review_issues or review.issues
+    return [issue.model_dump(mode="json") for issue in issues]
+
+def _record_map_movement_review_issues(
+    self,
+    *,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    review: ReviewVerdict,
+    parent_event_id: str = "",
+) -> None:
+    issues = [
+        issue
+        for issue in review.issues
+        if str(getattr(issue, "rule_name", "") or "").startswith("map_")
+    ]
+    if not issues:
+        return
+    self._record_decision_event(
+        updater=updater,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        event_family="runtime_observation",
+        event_type=DecisionEventType.MAP_MOVEMENT_REVIEW_ISSUE,
+        scope="chapter",
+        summary=f"第{chapter_number}章 map movement reviewer 发现 {len(issues)} 个问题。",
+        payload=audit_payload(
+            stage="map_movement_review",
+            status="issue",
+            operation_id=self._audit_operation_id(),
+            issue_count=len(issues),
+            issues=[
+                {
+                    "rule_name": str(issue.rule_name or ""),
+                    "issue_type": str(issue.issue_type or ""),
+                    "severity": str(issue.severity or ""),
+                    "issue_group": str(issue.issue_group or ""),
+                    "target_scope": str(issue.target_scope or ""),
+                    "entity_names": list(issue.entity_names or []),
+                    "evidence_refs": list(issue.evidence_refs or []),
+                }
+                for issue in issues
+            ],
+        ),
+        parent_event_id=parent_event_id,
+    )
+
+@staticmethod
+def _review_canon_risk(review: ReviewVerdict) -> str:
+    if review.final_residual_decision is not None:
+        return str(review.final_residual_decision.canon_risk or "")
+    if review.forced_accept_applied:
+        return "low"
+    if review.verdict == "fail":
+        return "high"
+    return ""
+
+@staticmethod
+def _load_json_list(raw: str) -> list[object]:
+    try:
+        payload = json.loads(raw or "[]") or []
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return payload if isinstance(payload, list) else []
+
+def _chapter_plan_snapshot(
+    self,
+    *,
+    repo: StateRepository,
+    project_id: str,
+    chapter_plan: ChapterPlan,
+    experience_plan: ChapterExperiencePlan | None = None,
+    transient_overlay: bool = False,
+) -> dict[str, object]:
+    live_experience_plan = experience_plan or repo.get_chapter_experience_plan(
+        project_id,
+        chapter_plan.chapter_number,
+    )
+    return {
+        "chapter_number": int(chapter_plan.chapter_number or 0),
+        "title": str(chapter_plan.title or ""),
+        "one_line": str(chapter_plan.one_line or ""),
+        "goals": self._load_json_list(getattr(chapter_plan, "goals_json", "[]")),
+        "task_contract": self._load_json_list(getattr(chapter_plan, "task_contract_json", "[]")),
+        "experience_plan": (
+            live_experience_plan.model_dump(mode="json")
+            if live_experience_plan is not None
+            else {}
+        ),
+        "transient_overlay": bool(transient_overlay),
+    }
+
+def _band_plan_snapshot(
+    self,
+    *,
+    repo: StateRepository,
+    project_id: str,
+    chapter_number: int,
+    schedule: BandDelightSchedule | None = None,
+    transient_overlay: bool = False,
+) -> dict[str, object]:
+    row = repo.get_band_row_for_chapter(project_id, chapter_number)
+    live_schedule = schedule or repo.get_band_experience_plan_for_chapter(project_id, chapter_number)
+    if row is None and live_schedule is None:
+        return {}
+    return {
+        "band_id": str(getattr(row, "band_id", getattr(live_schedule, "band_id", "")) or ""),
+        "chapter_start": int(getattr(row, "chapter_start", getattr(live_schedule, "chapter_start", 0)) or 0),
+        "chapter_end": int(getattr(row, "chapter_end", getattr(live_schedule, "chapter_end", 0)) or 0),
+        "task_contract": self._load_json_list(getattr(row, "task_contract_json", "[]")),
+        "schedule": live_schedule.model_dump(mode="json") if live_schedule is not None else {},
+        "transient_overlay": bool(transient_overlay),
+    }
+
+@staticmethod
+def _repair_verification_issue(
+    *,
+    rule_name: str,
+    description: str,
+    suggested_fix: str,
+) -> ContinuityIssue:
+    return ContinuityIssue(
+        rule_name=rule_name,
+        severity="error",
+        description=description,
+        reviewer="repair_verifier",
+        issue_type="repair_verification",
+        target_scope="chapter",
+        evidence_refs=[],
+        suggested_fix=suggested_fix,
+    )
+
+def _review_with_repair_verification(
+    self,
+    *,
+    original_output: WriterOutput,
+    repaired_output: WriterOutput,
+    before_review: ReviewVerdict,
+    review: ReviewVerdict,
+    repair_instruction: RepairInstruction,
+) -> ReviewVerdict:
+    verification = self.repair_verifier.verify(
+        original_output=original_output,
+        repaired_output=repaired_output,
+        before_review=before_review,
+        after_review=review,
+        repair_instruction=repair_instruction,
+    )
+    merged_review = review.model_copy(update={"repair_verification": verification})
+    if verification.fixed_all_must_fix and verification.preserved_all_must_preserve:
+        return merged_review
+
+    issues = list(merged_review.issues)
+    for item in verification.unfixed:
+        issues.append(
+            self._repair_verification_issue(
+                rule_name="repair_unfixed",
+                description=f"repair 未真正修复：{item}",
+                suggested_fix="升级 repair scope，并继续针对 must_fix 重写。",
+            )
+        )
+    for item in verification.broken_preserve_constraints:
+        issues.append(
+            self._repair_verification_issue(
+                rule_name="repair_preserve_breach",
+                description=f"repair 破坏了 must_preserve：{item}",
+                suggested_fix="保留既有约束后重新修复，不允许以修 A 伤 B。",
+            )
+        )
+    summary_parts = [str(merged_review.review_summary or "").strip()]
+    if verification.unfixed:
+        summary_parts.append("repair verification: must_fix 仍未完全修复")
+    if verification.broken_preserve_constraints:
+        summary_parts.append("repair verification: must_preserve 被破坏")
+    return merged_review.model_copy(
+        update={
+            "verdict": "fail",
+            "recommended_action": "rewrite",
+            "issues": issues,
+            "review_summary": " | ".join(part for part in summary_parts if part),
+            "repair_instruction": merged_review.repair_instruction or repair_instruction,
+        }
+    )
+
+@staticmethod
+def _repair_policy_requested_scope(review: ReviewVerdict) -> str:
+    instruction = getattr(review, "repair_instruction", None)
+    if instruction is None:
+        return ""
+    requested_scope = str(getattr(instruction, "repair_scope", "") or "").strip()
+    if _review_has_structural_repair_issue(review):
+        return ""
+    return requested_scope
+
+@staticmethod
+def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
+    structural_issue_types = {
+        "countdown_non_monotonic",
+        "artifact_count_explanation",
+        "artifact_ledger_conflict",
+        "identity_conflict",
+        "identity_ambiguity",
+        "payoff_miss",
+        "unpaid_promise_debt",
+        "world_model_conflict",
+        "cognition_conflict",
+    }
+    structural_target_scopes = {
+        "ledger",
+        "character",
+        "band",
+        "arc",
+        "book",
+        "world_model",
+    }
+    for issue in getattr(review, "issues", []) or []:
+        issue_type = str(getattr(issue, "issue_type", "") or "").strip()
+        target_scope = str(getattr(issue, "target_scope", "") or "").strip()
+        if issue_type in structural_issue_types or target_scope in structural_target_scopes:
+            return True
+    return False
+
+
+
+__all__ = ['_persist_draft_and_review', '_review_current_output', '_plan_writer_output_entities', '_apply_canon_name_drift_autofix', '_apply_placeholder_leakage_autofix', '_project_character_names', '_replace_canon_name_strings', '_review_event_payload', '_review_issue_payloads', '_record_map_movement_review_issues', '_review_canon_risk', '_load_json_list', '_chapter_plan_snapshot', '_band_plan_snapshot', '_repair_verification_issue', '_review_with_repair_verification', '_repair_policy_requested_scope', '_review_has_structural_repair_issue']

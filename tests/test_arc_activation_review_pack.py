@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from forwin.book_genesis_core.arc_activation_review import build_arc_activation_review_pack
-from forwin.book_genesis_core.planning import _plan_arc_chapters
+from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
+from forwin.genesis.planning import _plan_arc_chapters
 from forwin.book_state.repository import BookStateRepository
 from forwin.models import (
     ArcPlanVersion,

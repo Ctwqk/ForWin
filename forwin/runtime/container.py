@@ -5,19 +5,19 @@ import logging
 from typing import Callable, Literal
 
 from forwin.application.generation import GenerationApplicationService
-from forwin.book_genesis import BookGenesisService
+from forwin.genesis import BookGenesisService
 from forwin.canon import CanonAdmissionService
 from forwin.config import InfrastructureConfig
-from forwin.context.assembler import ChapterContextAssembler
+from forwin.context.assembler_core import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
 from forwin.experience.service import ExperiencePlanningService
 from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
-from forwin.orchestrator.phase3 import PacingStrategist, ReplanGovernor, StageAnalyzer
-from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
+from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.stage_analysis import PacingStrategist, ReplanGovernor, StageAnalyzer
+from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
 from forwin.observability.service import ObservabilityService
 from forwin.planning.band_plan_service import BandPlanService
 from forwin.planning.world_contract_service import WorldContractPlanningService
@@ -36,7 +36,7 @@ from forwin.runtime.services import RuntimeServices, SkillRuntimeBundle
 from forwin.skills import build_skill_runtime_components
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
-from forwin.writer.llm_client import LLMClient
+from forwin.writer.llm import LLMClient
 
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ class RuntimeContainer:
             self._services = self._build_services()
         return self._services
 
-    def build_writing_orchestrator(
+    def build_chapter_pipeline(
         self,
         *,
         progress_callback: Callable[[str, dict], None] | None = None,
@@ -121,10 +121,37 @@ class RuntimeContainer:
         task_id: str = "",
         root_event_id: str = "",
     ):
-        from forwin.orchestrator.loop import WritingOrchestrator
+        from forwin.generation.pipeline import ChapterPipeline
 
-        return WritingOrchestrator(
-            services=self.services(),
+        services = self.services()
+        return ChapterPipeline(
+            infrastructure=services.infrastructure,
+            policy=services.policy,
+            engine=services.engine,
+            session_factory=services.session_factory,
+            llm_client=services.llm_client,
+            skill_registry=services.skill_runtime.registry,
+            skill_router=services.skill_runtime.router,
+            skill_prompt_layer_builder=services.skill_runtime.prompt_layer_builder,
+            arc_director=services.arc_director,
+            book_genesis=services.book_genesis,
+            subworld_manager=services.subworld_manager,
+            retrieval_broker=services.retrieval_broker,
+            artifact_store=services.artifact_store,
+            observability=services.observability,
+            writer=services.writer,
+            provisional_writer=services.provisional_writer,
+            stage_analyzer=services.stage_analyzer,
+            pacing_strategist=services.pacing_strategist,
+            replan_governor=services.replan_governor,
+            npc_intent_generator=services.npc_intent_generator,
+            world_simulator=services.world_simulator,
+            arc_envelope_manager=services.arc_envelope_manager,
+            draft_review=services.draft_review,
+            repair=services.repair,
+            repair_verifier=services.repair_verifier,
+            canon_admission=services.canon_admission,
+            gate_delegation=services.gate_delegation,
             progress_callback=progress_callback,
             should_abort=should_abort,
             should_pause=should_pause,

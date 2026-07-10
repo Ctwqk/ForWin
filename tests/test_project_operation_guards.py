@@ -10,8 +10,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 import forwin.api as api_module
-from forwin import api_project_ops
-from forwin.api_schemas import (
+from forwin.application.projects import generation as project_generation
+from forwin.application.projects import genesis as project_genesis
+from forwin.api_schema import (
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
     GenerateRequest,
@@ -38,7 +39,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
-        self.old_orchestrator = api_module._orchestrator
+        self.old_pipeline = api_module._pipeline
 
         api_module._SessionFactory = self.session_factory
         api_module._config = InfrastructureConfig(
@@ -47,12 +48,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
         )
-        api_module._orchestrator = None
+        api_module._pipeline = None
 
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory
         api_module._config = self.old_config
-        api_module._orchestrator = self.old_orchestrator
+        api_module._pipeline = self.old_pipeline
         self.engine.dispose()
         self.tmpdir.cleanup()
 
@@ -173,7 +174,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 )
             session.commit()
 
-        detail = api_project_ops.extend_project_generation(
+        detail = project_generation.extend_project_generation(
             project.id,
             ProjectExtendGenerationRequest(
                 additional_chapters=12,
@@ -256,7 +257,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 )
             session.commit()
 
-        detail = api_project_ops.extend_project_generation(
+        detail = project_generation.extend_project_generation(
             project.id,
             ProjectExtendGenerationRequest(
                 additional_chapters=45,
@@ -284,7 +285,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         project = self._create_project(project_id="proj-extend-active", creation_status="writing")
 
         with self.assertRaises(HTTPException) as ctx:
-            api_project_ops.extend_project_generation(
+            project_generation.extend_project_generation(
                 project.id,
                 ProjectExtendGenerationRequest(additional_chapters=12),
                 get_session=self.session_factory,
@@ -337,7 +338,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 "frozen_artifact": "",
             }
 
-        api_module._orchestrator = SimpleNamespace(
+        api_module._pipeline = SimpleNamespace(
             accept_review=accept_review
         )
 
@@ -401,7 +402,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-review-gate-auto-retry"
 
-        api_module._orchestrator = SimpleNamespace(accept_review=accept_review)
+        api_module._pipeline = SimpleNamespace(accept_review=accept_review)
 
         with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
             payload = api_module.approve_chapter_review(
@@ -471,7 +472,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-approve-workset"
 
-        api_module._orchestrator = SimpleNamespace(accept_review=accept_review)
+        api_module._pipeline = SimpleNamespace(accept_review=accept_review)
 
         with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
             payload = api_module.approve_chapter_review(
@@ -703,7 +704,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         with (
             self.assertRaises(RuntimeError),
         ):
-            api_project_ops.start_project_writing(
+            project_genesis.start_project_writing(
                 project.id,
                 get_session=self.session_factory,
                 config=api_module._config,
@@ -770,7 +771,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-start-writing-target"
 
-        response = api_project_ops.start_project_writing(
+        response = project_genesis.start_project_writing(
             project.id,
             StartWritingRequest(auto_continue=False, max_chapters=2, run_until_chapter=2),
             get_session=self.session_factory,
@@ -853,7 +854,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-start-auto-continue"
 
-        response = api_project_ops.start_project_writing(
+        response = project_genesis.start_project_writing(
             project.id,
             get_session=self.session_factory,
             config=api_module._config,

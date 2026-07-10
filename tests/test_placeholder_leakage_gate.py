@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage
 from forwin.checker.rules import ContinuityChecker
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 
@@ -155,7 +155,7 @@ def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias(
         ],
     )
 
-    fixed = WritingOrchestrator._apply_placeholder_leakage_autofix(output, review)
+    fixed = ChapterPipeline._apply_placeholder_leakage_autofix(output, review)
 
     assert fixed is not None
     assert "工作人员" not in fixed.body
@@ -163,7 +163,7 @@ def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias(
     assert fixed.generation_meta["placeholder_leakage_autofix"] == {"工作人员": "具体见证人"}
 
 
-def test_subworld_generic_autofix_helper_is_removed_from_orchestrator_boundary() -> None:
-    assert not hasattr(WritingOrchestrator, "_generic_subworld_reference")
+def test_subworld_generic_autofix_helper_is_removed_from_pipeline_boundary() -> None:
+    assert not hasattr(ChapterPipeline, "_generic_subworld_reference")
     assert ContinuityChecker._looks_like_generic_character_reference("馆员") is True
     assert ContinuityChecker._looks_like_generic_character_reference("档案区旧书摊主") is True

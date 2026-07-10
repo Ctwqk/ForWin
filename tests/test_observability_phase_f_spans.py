@@ -14,7 +14,7 @@ from forwin.observability.ports import NullObservability
 from forwin.observability.query_service import ObservabilityQueryService
 from forwin.observability.service import ObservabilityService
 from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 
 
 def _seed_project(session, project_id: str) -> None:
@@ -157,10 +157,10 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
             artifact_store=None,
             config=InfrastructureConfig(database_url=postgres_test_url("phase-f-prompt-parent"), minimax_api_key=""),
         )
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-        orchestrator.observability = obs
-        orchestrator._governance_task_id = "task-prompt-parent"
-        orchestrator._governance_root_event_id = ""
+        pipeline = ChapterPipeline.__new__(ChapterPipeline)
+        pipeline.observability = obs
+        pipeline._governance_task_id = "task-prompt-parent"
+        pipeline._governance_root_event_id = ""
 
         ctx = OperationContext(
             project_id=project_id,
@@ -169,8 +169,8 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
             stage="writing_chapter",
             operation_id="task-prompt-parent",
         )
-        with obs.span(ctx, "stage.writing_chapter", span_kind="stage", component="orchestrator") as stage_span:
-            orchestrator._record_prompt_trace_performance_spans(
+        with obs.span(ctx, "stage.writing_chapter", span_kind="stage", component="pipeline") as stage_span:
+            pipeline._record_prompt_trace_performance_spans(
                 project_id=project_id,
                 chapter_number=3,
                 prompt_trace_id="prompt-trace-parent",
@@ -216,30 +216,30 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
             artifact_store=None,
             config=InfrastructureConfig(database_url=postgres_test_url("phase-f-stage-chapter"), minimax_api_key=""),
         )
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-        orchestrator.observability = obs
-        orchestrator._governance_task_id = "task-stage-chapter"
-        orchestrator._governance_root_event_id = ""
-        orchestrator._governance_runtime_project_id = project_id
-        orchestrator._governance_runtime_updater = object()
-        orchestrator._governance_stage_name = ""
-        orchestrator._governance_stage_started_at = 0.0
-        orchestrator._governance_stage_span = None
+        pipeline = ChapterPipeline.__new__(ChapterPipeline)
+        pipeline.observability = obs
+        pipeline._governance_task_id = "task-stage-chapter"
+        pipeline._governance_root_event_id = ""
+        pipeline._governance_runtime_project_id = project_id
+        pipeline._governance_runtime_updater = object()
+        pipeline._governance_stage_name = ""
+        pipeline._governance_stage_started_at = 0.0
+        pipeline._governance_stage_span = None
         recorded_events = []
 
         def record_event(**kwargs):
             recorded_events.append(kwargs)
             return SimpleNamespace(id=f"event-{len(recorded_events)}")
 
-        orchestrator._record_decision_event = record_event
-        orchestrator._record_stage_transition(
+        pipeline._record_decision_event = record_event
+        pipeline._record_stage_transition(
             {
                 "project_id": project_id,
                 "stage": "running_post_acceptance",
                 "current_chapter": 28,
             }
         )
-        orchestrator._record_stage_transition(
+        pipeline._record_stage_transition(
             {
                 "project_id": project_id,
                 "stage": "running_scenario_rehearsal",

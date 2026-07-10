@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from forwin.api_project_ops import _overlay_active_generation_task
-from forwin.api_project_payloads import build_generation_control
-from forwin.api_schemas import GenerationControlInfo, ProjectDetail
+from forwin.application.projects.common import _overlay_active_generation_task
+from forwin.project_payloads import build_generation_control
+from forwin.api_schema import GenerationControlInfo, ProjectDetail
 from forwin.governance import DecisionEventInfo
 from forwin.models.governance import BandCheckpoint
 from forwin.models.project import ChapterPlan

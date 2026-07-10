@@ -125,7 +125,7 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
 
     services = container.services()
     generation_application = container.build_generation_application_service()
-    orchestrator = container.build_writing_orchestrator(
+    pipeline = container.build_chapter_pipeline(
         progress_callback=lambda *_args: None,
         task_id="task-1",
         root_event_id="root-1",
@@ -142,12 +142,12 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     assert generation_application.session_factory is fake_session_factory
     assert generation_application.infrastructure is infrastructure
     assert init_calls == [fake_engine]
-    assert orchestrator.services is services
-    assert orchestrator.infrastructure is infrastructure
-    assert orchestrator.policy is policy
-    assert orchestrator._governance_task_id == "task-1"
-    assert orchestrator._governance_root_event_id == "root-1"
-    assert not hasattr(orchestrator, "config")
+    assert pipeline.services is services
+    assert pipeline.infrastructure is infrastructure
+    assert pipeline.policy is policy
+    assert pipeline._governance_task_id == "task-1"
+    assert pipeline._governance_root_event_id == "root-1"
+    assert not hasattr(pipeline, "config")
 
 
 def test_runtime_container_builds_callback_bound_production_scheduler(

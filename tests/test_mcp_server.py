@@ -12,7 +12,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import forwin.api as api_module
-from forwin.api_schemas import BookGenesisPatchRequest, ProjectCreateRequest
+from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
 from forwin.governance import BandCheckpointDetail, BandCheckpointIssueInfo
 from forwin.mcp.client import ForWinAPIClient
@@ -576,7 +576,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
             generated = self._load_model(
                 MutationResult,
                 self._call_tool(
@@ -586,7 +586,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             )
         self.assertEqual(generated.genesis.pack["world"]["world_bible"]["overview"], "被 MCP 生成的世界观。")
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
             refined = self._load_model(
                 MutationResult,
                 self._call_tool(
@@ -659,7 +659,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             }
 
         with patch(
-            "forwin.book_genesis.BookGenesisService._call_json_with_trace",
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
             new=fake_launch_arc_call,
         ):
             started = self._load_model(
@@ -803,8 +803,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 "frozen_artifact": "artifact.json",
             }
 
-        old_orchestrator = api_module._orchestrator
-        api_module._orchestrator = type("FakeOrchestrator", (), {"accept_review": staticmethod(accept_review)})()
+        old_pipeline = api_module._pipeline
+        api_module._pipeline = type("FakePipeline", (), {"accept_review": staticmethod(accept_review)})()
         try:
             result = self._call_tool(
                 "chapter_review_approve",
@@ -815,7 +815,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 },
             )
         finally:
-            api_module._orchestrator = old_orchestrator
+            api_module._pipeline = old_pipeline
 
         payload = self._result_payload(result)
         self.assertTrue(payload["ok"])

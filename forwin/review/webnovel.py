@@ -7,7 +7,7 @@ from typing import Any
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.writer.llm_client import LLMClient
+from forwin.writer.llm import LLMClient
 from .llm_webnovel import LLMWebNovelReviewer
 from .map_movement import MapMovementReviewer
 

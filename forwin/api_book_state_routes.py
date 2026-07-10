@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import select
 
-from forwin.api_schemas import (
+from forwin.api_schema import (
     CharacterPersonalityActiveContextPreviewRequest,
     CharacterCreateRequest,
     CharacterPersonalityPreviewRequest,

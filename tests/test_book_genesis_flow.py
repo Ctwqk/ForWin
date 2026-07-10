@@ -9,19 +9,21 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 import forwin.api as api_module
-from forwin.api_schemas import (
+from forwin.api_schema import (
     BookGenesisPatchRequest,
     BookGenesisRefineRequest,
     BookGenesisNameGenerateRequest,
     BookGenesisStageRunRequest,
     ProjectCreateRequest,
 )
-from forwin.book_genesis import BookGenesisService
-from forwin.book_genesis import StaleGenesisRevisionError
-from forwin.book_genesis import _fallback_brief
-from forwin.book_genesis import _fallback_blueprint
-from forwin.book_genesis import _fallback_map
-from forwin.book_genesis import _fallback_named_entity_seed
+from forwin.genesis import BookGenesisService
+from forwin.genesis import StaleGenesisRevisionError
+from forwin.genesis.fallbacks import (
+    _fallback_blueprint,
+    _fallback_map,
+    _fallback_named_entity_seed,
+)
+from forwin.genesis.helpers import _fallback_brief
 from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
@@ -30,7 +32,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
@@ -369,7 +371,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             }
 
         with (
-            patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
+            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
             patch("forwin.api._create_continue_generation_task", return_value="task-genesis-001"),
         ):
             response = api_module.start_project_writing(created.project_id)
@@ -508,8 +510,8 @@ class BookGenesisFlowTests(unittest.TestCase):
             validation_report=MapValidationReport(valid=False, errors=["bad map"]),
         )
         with (
-            patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
-            patch("forwin.genesis_handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
+            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
+            patch("forwin.genesis.handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
             patch("forwin.api._create_continue_generation_task") as task_mock,
         ):
             with self.assertRaises(HTTPException) as raised:
@@ -610,7 +612,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             }
 
         with (
-            patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
+            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
             patch("forwin.api._create_continue_generation_task", return_value="task-genesis-size-001"),
         ):
             api_module.start_project_writing(created.project_id)
@@ -702,7 +704,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "story_engine",
@@ -789,7 +791,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
             detail = api_module.generate_project_genesis_stage(
                 created.project_id,
                 "world",
@@ -861,7 +863,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
             detail = api_module.generate_project_genesis_stage(
                 created.project_id,
                 "map",
@@ -895,7 +897,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
             api_module.generate_project_genesis_stage(
                 created.project_id,
                 "brief",
@@ -998,7 +1000,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
             api_module.generate_project_genesis_stage(
                 created.project_id,
                 "brief",
@@ -1110,7 +1112,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_refine_item_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_item_call):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "map",
@@ -1175,7 +1177,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_refine_scalar_call):
+        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_scalar_call):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "world",

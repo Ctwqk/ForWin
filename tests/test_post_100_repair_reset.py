@@ -9,7 +9,7 @@ from forwin.models import DecisionEvent, Entity, EntityAlias, Project
 from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import EntityMention, WriterOutput
 from forwin.state.repo import StateRepository
 
@@ -237,7 +237,7 @@ def test_entity_registrar_classifier_failure_is_recorded_as_plan_conflict() -> N
         session.close()
 
 
-def test_subworld_string_genericization_autofix_is_removed_from_orchestrator_boundary() -> None:
+def test_subworld_string_genericization_autofix_is_removed_from_pipeline_boundary() -> None:
     forbidden = {
         "_apply_subworld_admission_autofix",
         "_generic_subworld_reference",
@@ -246,7 +246,7 @@ def test_subworld_string_genericization_autofix_is_removed_from_orchestrator_bou
         "_placeholder_role_replacement",
     }
 
-    assert not any(hasattr(WritingOrchestrator, name) for name in forbidden)
+    assert not any(hasattr(ChapterPipeline, name) for name in forbidden)
 
 
 def test_legacy_subworld_admission_modules_and_tokens_are_removed() -> None:
@@ -254,7 +254,7 @@ def test_legacy_subworld_admission_modules_and_tokens_are_removed() -> None:
     deleted_files = [
         root / "forwin" / "subworld" / "admission_policy.py",
         root / "forwin" / "subworld" / "admission_patch.py",
-        root / "forwin" / "orchestrator_loop_core" / "subworld_admission_repair.py",
+        root / "forwin" / "pipeline_loop_core" / "subworld_admission_repair.py",
         root / "forwin" / "planning" / "subworld_admission.py",
         root / "forwin" / "review" / "repair_handlers" / "subworld.py",
     ]

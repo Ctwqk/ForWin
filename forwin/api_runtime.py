@@ -8,7 +8,7 @@ from forwin.generation.task_payload import GenerationExecutionContext
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.runtime.container import RuntimeContainer
 from forwin.state.updater import StateUpdater
 
@@ -79,7 +79,7 @@ def _paused_chapters_message(result, *, prefix: str = "") -> str:
 
 
 def _record_task_observability_event(
-    orchestrator: WritingOrchestrator,
+    pipeline: ChapterPipeline,
     *,
     task_id: str,
     project_id: str | None,
@@ -91,7 +91,7 @@ def _record_task_observability_event(
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
         return
-    session_factory = getattr(orchestrator, "_SessionFactory", None)
+    session_factory = getattr(pipeline, "_SessionFactory", None)
     if session_factory is None:
         return
     session = session_factory()
@@ -133,24 +133,23 @@ def _record_task_observability_event(
         session.close()
 
 
-def _task_observability(orchestrator: WritingOrchestrator):
-    services = getattr(orchestrator, "services", None)
-    observability = getattr(services, "observability", None)
+def _task_observability(pipeline: ChapterPipeline):
+    observability = getattr(pipeline, "observability", None)
     return observability if observability is not None else NullObservability()
 
 
-def _build_writing_orchestrator_for_task(
+def _build_chapter_pipeline_for_task(
     context: GenerationExecutionContext,
     *,
     progress_callback=None,
     should_abort=None,
     should_pause=None,
-) -> WritingOrchestrator:
+) -> ChapterPipeline:
     return RuntimeContainer.from_config(
         context.infrastructure,
         policy=context.policy,
         role="generation_worker",
-    ).build_writing_orchestrator(
+    ).build_chapter_pipeline(
         progress_callback=progress_callback,
         should_abort=should_abort,
         should_pause=should_pause,
@@ -159,9 +158,9 @@ def _build_writing_orchestrator_for_task(
     )
 
 
-def run_orchestrator_task(
+def run_pipeline_task(
     task_id: str,
-    orchestrator: WritingOrchestrator,
+    pipeline: ChapterPipeline,
     operation,
     *,
     update_task: TaskUpdater,
@@ -176,7 +175,7 @@ def run_orchestrator_task(
 ) -> None:
     started_at = time.perf_counter()
     observed_project_id = default_project_id
-    observability = _task_observability(orchestrator)
+    observability = _task_observability(pipeline)
     span_component = str(component or "api").strip() or "api"
     try:
         operation_ctx = OperationContext(
@@ -194,7 +193,7 @@ def run_orchestrator_task(
             if not (should_abort and should_abort()):
                 update_task(task_id, status="running")
             _record_task_observability_event(
-                orchestrator,
+                pipeline,
                 task_id=task_id,
                 project_id=observed_project_id,
                 event_type=DecisionEventType.TASK_OPERATION_STARTED,
@@ -222,7 +221,7 @@ def run_orchestrator_task(
                 frozen_artifacts=result.frozen_artifacts,
             )
             _record_task_observability_event(
-                orchestrator,
+                pipeline,
                 task_id=task_id,
                 project_id=observed_project_id,
                 event_type=DecisionEventType.TASK_OPERATION_SUCCEEDED,
@@ -245,7 +244,7 @@ def run_orchestrator_task(
         logger.exception("%s for task %s", error_message, task_id)
         observed_project_id = str(getattr(exc, "project_id", observed_project_id) or observed_project_id or "").strip()
         _record_task_observability_event(
-            orchestrator,
+            pipeline,
             task_id=task_id,
             project_id=observed_project_id,
             event_type=DecisionEventType.TASK_OPERATION_FAILED,
@@ -271,7 +270,7 @@ def run_orchestrator_task(
             operation_id=task_id,
         )
         _record_task_observability_event(
-            orchestrator,
+            pipeline,
             task_id=task_id,
             project_id=observed_project_id,
             event_type=DecisionEventType.TASK_CLEANUP_STARTED,
@@ -284,11 +283,11 @@ def run_orchestrator_task(
                 span_kind="task",
                 component=span_component,
             ):
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
         finally:
             _record_task_observability_event(
-                orchestrator,
+                pipeline,
                 task_id=task_id,
                 project_id=observed_project_id,
                 event_type=DecisionEventType.TASK_CLEANUP_FINISHED,
@@ -322,7 +321,7 @@ def run_generation_with_context(
         if changes:
             update_task(task_id, **changes)
 
-    orchestrator = _build_writing_orchestrator_for_task(
+    pipeline = _build_chapter_pipeline_for_task(
         context,
         progress_callback=_handle_progress,
         should_abort=should_abort,
@@ -367,20 +366,20 @@ def run_generation_with_context(
             )
 
     if normalized_project_id:
-        operation = lambda: orchestrator.run_existing_project(  # noqa: E731
+        operation = lambda: pipeline.run_existing_project(  # noqa: E731
             normalized_project_id,
             num_chapters=num_chapters,
         )
     else:
-        operation = lambda: orchestrator.run(  # noqa: E731
+        operation = lambda: pipeline.run(  # noqa: E731
             premise=premise,
             genre=genre,
             num_chapters=num_chapters,
         )
 
-    run_orchestrator_task(
+    run_pipeline_task(
         task_id,
-        orchestrator,
+        pipeline,
         operation,
         update_task=update_task,
         logger=logger,
@@ -413,7 +412,7 @@ def run_continue_project_with_context(
         if changes:
             update_task(task_id, **changes)
 
-    orchestrator = _build_writing_orchestrator_for_task(
+    pipeline = _build_chapter_pipeline_for_task(
         context,
         progress_callback=_handle_progress,
         should_abort=should_abort,
@@ -456,10 +455,10 @@ def run_continue_project_with_context(
         else:
             update_task(task_id, message="没有剩余章节需要继续执行。")
 
-    run_orchestrator_task(
+    run_pipeline_task(
         task_id,
-        orchestrator,
-        lambda: orchestrator.continue_project(
+        pipeline,
+        lambda: pipeline.continue_project(
             project_id,
             max_chapters=max_chapters,
             resume_from_chapter=resume_from_chapter,

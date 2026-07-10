@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.orchestrator_loop_core.chapter_review_gate import (
+from forwin.generation.pipeline_core.chapter_review_gate import (
     evaluate_candidate_gate,
 )
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict

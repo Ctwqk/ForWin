@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import inspect
 
-from forwin.context.assembler import _build_canon_quality_context
+from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.models import (
     CandidateDraftRecord,
     ChapterDraft,

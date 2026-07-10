@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 
-from forwin.api_schemas import (
+from forwin.api_schema import (
     CodexBridgeStatusResponse,
     GenerateRequest,
     RuntimeCatalogResponse,

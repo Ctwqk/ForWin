@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from forwin.governance import DecisionEventType, ensure_decision_event_type
-from forwin.orchestrator_loop_core.repair_budget import evaluate_repair_body_budget
+from forwin.generation.pipeline_core.repair_budget import evaluate_repair_body_budget
 from forwin.review.repair.service import _default_repair_instruction
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 

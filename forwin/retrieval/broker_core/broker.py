@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
 from forwin.config import DEFAULT_QDRANT_URL
-from forwin.context.assembler import assemble_context
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
 from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
@@ -38,10 +37,6 @@ from forwin.protocol.context import (
 )
 from forwin.protocol.world_model import WorldContextPack
 from forwin.obsidian.frontmatter import parse_sections
-from forwin.personality import (
-    CharacterPersonalityLibrary,
-    build_active_personality_contexts,
-)
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (

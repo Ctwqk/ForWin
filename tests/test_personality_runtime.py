@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from forwin.api_book_state_routes import build_handlers
-from forwin.api_schemas import PersonalityLoadoutUpdateRequest
+from forwin.api_schema import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateRepository
 from forwin.book_state.schema import validate_world_node
 from forwin.models import Project
@@ -17,7 +17,7 @@ from forwin.personality.models import PersonalityLoadout
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.review.webnovel import WebNovelExperienceReviewer
-from forwin.writer.prompts import build_scene_generation_prompt
+from forwin.writer.prompt_core import build_scene_generation_prompt
 from tests.postgres import postgres_test_url
 
 

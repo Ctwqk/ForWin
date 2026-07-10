@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from forwin import api_governance_ops
-from forwin.api_schemas import (
+from forwin.api_schema import (
     BandCheckpointApproveRequest,
     BandExperienceOverrideRequest,
     ManualCheckpointRequest,
@@ -18,7 +18,7 @@ from forwin.api_schemas import (
 def build_handlers(
     *,
     get_session: Callable[[], Any],
-    get_orchestrator: Callable[[], Any],
+    get_pipeline: Callable[[], Any],
     display_datetime: Callable[[Any], str],
     require_reason: Callable[[str], str],
     validate_constraint_payload: Callable[..., tuple[str, str, str]],
@@ -248,7 +248,7 @@ def build_handlers(
             band_id,
             req,
             get_session=get_session,
-            orchestrator=get_orchestrator(),
+            pipeline=get_pipeline(),
         )
 
     return {

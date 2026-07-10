@@ -4,10 +4,10 @@ import unittest
 
 import forwin.api as api_module
 from forwin.config import InfrastructureConfig
-from forwin.book_genesis import BookGenesisService
+from forwin.genesis import BookGenesisService
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 
@@ -355,7 +355,7 @@ class LLMRouterTests(unittest.TestCase):
         finally:
             api_module._config = old_config
 
-    def test_orchestrator_uses_routed_adapter_when_codex_enabled(self) -> None:
+    def test_pipeline_uses_routed_adapter_when_codex_enabled(self) -> None:
         config = InfrastructureConfig(
             database_url=postgres_test_url("forwin"),
             minimax_api_key="ordinary-key",
@@ -370,9 +370,9 @@ class LLMRouterTests(unittest.TestCase):
             role="api",
         )
         services = container.services()
-        orchestrator = container.build_writing_orchestrator()
+        pipeline = container.build_chapter_pipeline()
         try:
-            self.assertIsInstance(orchestrator.llm_client, RoutedModelAdapter)
+            self.assertIsInstance(pipeline.llm_client, RoutedModelAdapter)
         finally:
             services.llm_client.close()
             services.engine.dispose()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.orchestrator.phase4 import _read_optional_phase4_llm_timeout_seconds
+from forwin.simulation.world import _read_optional_phase4_llm_timeout_seconds
 
 
 def test_phase4_optional_llm_timeout_defaults_to_runtime_safe_budget() -> None:

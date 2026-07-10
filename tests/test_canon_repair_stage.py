@@ -22,15 +22,15 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.governance import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.orchestrator_loop_core import project_chapters as project_chapters_module
-from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
+from forwin.generation.pipeline import ChapterPipeline
+from forwin.generation.pipeline_core import project_chapters as project_chapters_module
+from forwin.generation.pipeline_core import quality_gates as quality_gates_module
 from forwin.review.repair import service as repair_service_module
 from forwin.review.repair.service import (
     _attempts_for_repair_phase,
     _review_from_canon_gate_block,
 )
-from forwin.project_ops.reviews import get_chapter_review
+from forwin.application.projects.reviews import get_chapter_review
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
@@ -58,11 +58,11 @@ def _isolate_canon_repair_from_hard_floor(monkeypatch):
     )
 
 
-def _build_orchestrator(
+def _build_pipeline(
     database_url: str,
     *,
     max_rewrites: int = 3,
-) -> WritingOrchestrator:
+) -> ChapterPipeline:
     policy_payload = RuntimePolicy.for_profile("standard").model_dump(mode="python")
     policy_payload["review"]["max_rewrites"] = max_rewrites
     policy = RuntimePolicy.model_validate(policy_payload).with_user_settings(
@@ -82,7 +82,7 @@ def _build_orchestrator(
         infrastructure,
         policy=policy,
         role="generation_worker",
-    ).build_writing_orchestrator()
+    ).build_chapter_pipeline()
 
 
 def test_rewrite_attempt_phase_fields_are_serialized_in_review_detail():
@@ -264,7 +264,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
         def add(self, _row) -> None:
             return None
 
-    class _Orchestrator:
+    class _Pipeline:
         policy = RuntimePolicy.for_profile("standard")
 
         def _pause_requested(self) -> bool:
@@ -318,7 +318,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
     monkeypatch.setattr(repair_service_module, "AutoDecisionEngine", _FinalGateEngine)
 
     _output, _review, forced_accept = repair_service_module._run_repair_loop_for_phase(
-        _Orchestrator(),
+        _Pipeline(),
         session=_Session(),
         repo=_Repo(),
         updater=object(),
@@ -426,7 +426,7 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
         def get(self, _model, _id):
             return SimpleNamespace(target_total_chapters=0)
 
-    class _Orchestrator:
+    class _Pipeline:
         policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
@@ -458,7 +458,7 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     )
 
     outcome = quality_gates_module._apply_canon_quality_gate(
-        _Orchestrator(),
+        _Pipeline(),
         session=_Session(),
         repo=object(),
         updater=object(),
@@ -545,7 +545,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         def get(self, _model, _id):
             return SimpleNamespace(target_total_chapters=100)
 
-    class _Orchestrator:
+    class _Pipeline:
         policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
@@ -570,7 +570,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     )
 
     outcome = quality_gates_module._apply_canon_quality_gate(
-        _Orchestrator(),
+        _Pipeline(),
         session=_Session(),
         repo=object(),
         updater=object(),
@@ -612,7 +612,7 @@ def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
             frozen_rows.append(kwargs)
             return "frozen/canon-update-failed.json"
 
-    class _Orchestrator:
+    class _Pipeline:
         policy = RuntimePolicy.for_profile("standard")
         artifact_store = _ArtifactStore()
 
@@ -635,7 +635,7 @@ def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
     session = _Session()
 
     outcome = CanonAdmissionService().commit(
-        runtime=_Orchestrator(),
+        runtime=_Pipeline(),
         session=session,
         repo=object(),
         updater=object(),
@@ -671,15 +671,15 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
             )
 
     db_path = postgres_test_url("canon-apply-exception-no-freeze")
-    orchestrator = _build_orchestrator(db_path)
+    pipeline = _build_pipeline(db_path)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
             _one_chapter_arc("canon apply exception")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(
+        pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        orchestrator.draft_review = PassReviewHub()
+        pipeline.draft_review = PassReviewHub()
 
         def fail_canon_quality_gate(*_args, **_kwargs):
             raise RuntimeError("canon apply failed")
@@ -690,7 +690,7 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
             fail_canon_quality_gate,
         )
 
-        result = orchestrator.run("p", "g", 1)
+        result = pipeline.run("p", "g", 1)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -700,8 +700,8 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
             session.close()
             engine.dispose()
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
     assert result.status == "needs_review"
     assert result.completed_chapters == []
@@ -762,10 +762,10 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             return ReviewVerdict(verdict="pass", issues=[])
 
     db_path = postgres_test_url("canon-repair-admission")
-    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
+    pipeline = _build_pipeline(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
+        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
             "arc_synopsis": "canon repair admission",
             "setting_summary": "无",
             "chapters": [
@@ -783,7 +783,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             "plot_threads": [],
             "initial_time": {"label": "开始", "description": "开始"},
         }
-        orchestrator.writer.write_chapter = lambda context: WriterOutput(
+        pipeline.writer.write_chapter = lambda context: WriterOutput(
             chapter_number=context.chapter_number,
             title=f"第{context.chapter_number}章",
             body="正文" * 900,
@@ -794,7 +794,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             thread_beats=[],
             time_advance=None,
         )
-        orchestrator.draft_review = WarnThenPassReviewHub()
+        pipeline.draft_review = WarnThenPassReviewHub()
 
         def apply_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
@@ -817,9 +817,9 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
                 )
             return CanonAdmissionOutcome()
 
-        orchestrator.canon_admission.commit = apply_canon_candidate
+        pipeline.canon_admission.commit = apply_canon_candidate
 
-        result = orchestrator.run("p", "g", 1)
+        result = pipeline.run("p", "g", 1)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -838,8 +838,8 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             session.close()
             engine.dispose()
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
     assert result.status == "completed"
     assert result.frozen_artifacts == []
@@ -873,19 +873,19 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
             )
 
     db_path = postgres_test_url("canon-repair-exhaustion-task6")
-    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
+    pipeline = _build_pipeline(db_path, max_rewrites=1)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
             _one_chapter_arc("canon repair exhaustion")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(
+        pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        orchestrator.draft_review = WarnThenFailReviewHub()
-        orchestrator._write_chapter_with_attention_fallback = lambda **kwargs: (
+        pipeline.draft_review = WarnThenFailReviewHub()
+        pipeline._write_chapter_with_attention_fallback = lambda **kwargs: (
             _writer_output(
                 int(kwargs["chapter_number"]),
-                marker=f"repair-{orchestrator.draft_review.calls}",
+                marker=f"repair-{pipeline.draft_review.calls}",
             )
         )
         monkeypatch.setattr(
@@ -917,9 +917,9 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
                 ),
             )
 
-        orchestrator.canon_admission.commit = apply_canon_candidate
+        pipeline.canon_admission.commit = apply_canon_candidate
 
-        result = orchestrator.run("p", "g", 1)
+        result = pipeline.run("p", "g", 1)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -943,8 +943,8 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
             session.close()
             engine.dispose()
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
     latest_review_meta = json.loads(latest_attempt_review.review_meta_json or "{}")
     assert result.status == "needs_review"
@@ -979,21 +979,21 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             )
 
     db_path = postgres_test_url("canon-system-block-task6")
-    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
+    pipeline = _build_pipeline(db_path, max_rewrites=1)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
             _one_chapter_arc("canon system block")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(
+        pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        orchestrator.draft_review = WarnReviewHub()
-        orchestrator.repair.repair_canon_block = lambda **_kwargs: (
+        pipeline.draft_review = WarnReviewHub()
+        pipeline.repair.repair_canon_block = lambda **_kwargs: (
             _ for _ in ()
         ).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
-        orchestrator.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
+        pipeline.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
             block_kind="canon_quality",
             canon_gate_result=CanonAdmissionGateResult(
                 project_id="p",
@@ -1009,7 +1009,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             ),
         )
 
-        result = orchestrator.run("p", "g", 1)
+        result = pipeline.run("p", "g", 1)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -1021,8 +1021,8 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             session.close()
             engine.dispose()
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
     system_block_events = [
         event
@@ -1058,11 +1058,11 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
     canon_repair_force_accept,
 ):
     db_path = postgres_test_url("canon-repair-force-accept-fail")
-    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
+    pipeline = _build_pipeline(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
     repair_calls = {"count": 0}
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
+        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
             "arc_synopsis": "canon repair force accept fail",
             "setting_summary": "无",
             "chapters": [
@@ -1080,7 +1080,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             "plot_threads": [],
             "initial_time": {"label": "开始", "description": "开始"},
         }
-        orchestrator.writer.write_chapter = lambda context: WriterOutput(
+        pipeline.writer.write_chapter = lambda context: WriterOutput(
             chapter_number=context.chapter_number,
             title=f"第{context.chapter_number}章",
             body="正文" * 900,
@@ -1136,14 +1136,14 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
                 canon_repair_force_accept,
             )
 
-        orchestrator.repair.review_candidate = force_accepted_review
-        orchestrator.canon_admission.commit = apply_canon_candidate
-        orchestrator.repair.repair_canon_block = failed_canon_repair
+        pipeline.repair.review_candidate = force_accepted_review
+        pipeline.canon_admission.commit = apply_canon_candidate
+        pipeline.repair.repair_canon_block = failed_canon_repair
 
-        result = orchestrator.run("p", "g", 1)
+        result = pipeline.run("p", "g", 1)
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        pipeline.llm_client.close()
+        pipeline.engine.dispose()
 
     assert result.status == "needs_review"
     assert apply_calls["count"] == 1

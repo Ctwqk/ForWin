@@ -59,7 +59,13 @@ from .publisher import (
 from .project import ArcPlanVersion, ChapterPlan, Project
 from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
-from forwin.map.models import MapGenerationRunRow, MapRegionEdgeRow, MapRegionRow
+from forwin.map.models import (
+    MapEdgeRow,
+    MapGenerationRunRow,
+    MapNodeRow,
+    MapRegionEdgeRow,
+    MapRegionRow,
+)
 from .knowledge import (
     KnowledgeEditProposalRow,
     KnowledgeProjectionPageRow,
@@ -91,8 +97,6 @@ from .book_state import (
     FactNodeRow,
     GraphDeltaPatchRow,
     GraphDeltaRow,
-    MapEdgeRow,
-    MapNodeRow,
     MapSnapshotRow,
     NarrativeEdgeRow,
     NarrativeNodeRow,

@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import queue
-import threading
-import time
-import uuid
-from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import httpx
 
-from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
-from forwin.model_adapter import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}

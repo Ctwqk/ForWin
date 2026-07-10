@@ -7,7 +7,7 @@ from typing import Any
 from forwin.arc_sizing import allocate_arc_chapter_sizes
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.llm.compat import call_chat_compat
-from forwin.writer.llm_client import LLMClient
+from forwin.writer.llm import LLMClient
 from forwin.utils import LLMJSONParseError, parse_llm_json
 
 logger = logging.getLogger(__name__)

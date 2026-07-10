@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from forwin.book_state import BookStateRepository
-from forwin.context.assembler import assemble_context
+from forwin.context.assembler_core import assemble_context
 from forwin.models import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.personality.context import build_active_personality_context

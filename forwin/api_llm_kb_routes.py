@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever, LLMKnowledgeBaseStore
 from forwin.models.project import Project
-from forwin.retrieval.broker import RetrievalBroker
+from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
 
 

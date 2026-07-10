@@ -12,17 +12,17 @@ from sqlalchemy import select
 from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ChapterPlan
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 
 
-def _build_orchestrator(
+def _build_pipeline(
     database_url: str,
     *,
     writer_attention_retries: int | None = None,
-) -> WritingOrchestrator:
+) -> ChapterPipeline:
     policy_payload = RuntimePolicy.for_profile("standard").model_dump(mode="python")
     if writer_attention_retries is not None:
         policy_payload["writer_attention_retries"] = writer_attention_retries
@@ -40,7 +40,7 @@ def _build_orchestrator(
         infrastructure,
         policy=policy,
         role="generation_worker",
-    ).build_writing_orchestrator()
+    ).build_chapter_pipeline()
 
 
 class WriterAttentionFallbackTests(unittest.TestCase):
@@ -51,8 +51,8 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             "'https://api.minimaxi.com/v1/chat/completions'"
         )
 
-        self.assertTrue(WritingOrchestrator._is_transient_llm_like(exc))
-        self.assertTrue(WritingOrchestrator._should_degrade_provisional_preview(exc))
+        self.assertTrue(ChapterPipeline._is_transient_llm_like(exc))
+        self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
 
     def test_provisional_preview_generation_failure_degrades_to_shadow_plan(self) -> None:
         exc = ValueError(
@@ -60,7 +60,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             "preview response body is empty"
         )
 
-        self.assertTrue(WritingOrchestrator._should_degrade_provisional_preview(exc))
+        self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
 
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -68,7 +68,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             engine = get_engine(db_path)
             init_db(engine)
 
-            orchestrator = _build_orchestrator(db_path)
+            pipeline = _build_pipeline(db_path)
             try:
                 preview_output = WriterOutput(
                     project_id="project-1",
@@ -85,17 +85,17 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
                 with (
                     patch.object(
-                        orchestrator.writer,
+                        pipeline.writer,
                         "write_chapter",
                         side_effect=TimeoutError("The read operation timed out"),
                     ),
                     patch.object(
-                        orchestrator.writer,
+                        pipeline.writer,
                         "write_preview_chapter",
                         return_value=preview_output,
                     ) as mocked_preview,
                 ):
-                    result = orchestrator._write_chapter_with_attention_fallback(
+                    result = pipeline._write_chapter_with_attention_fallback(
                         context=SimpleNamespace(chapter_number=1),
                         project_id="project-1",
                         chapter_number=1,
@@ -114,15 +114,15 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 preview_kwargs = mocked_preview.call_args.kwargs
                 self.assertEqual(
                     preview_kwargs["timeout_seconds"],
-                    orchestrator.writer.single_call_timeout_seconds,
+                    pipeline.writer.single_call_timeout_seconds,
                 )
                 self.assertFalse(preview_kwargs["retry_on_timeout"])
                 updater.mark_chapter_status.assert_not_called()
                 self.assertEqual(paused_chapters, [])
                 self.assertEqual(frozen_artifacts, [])
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
                 engine.dispose()
 
     def test_preview_fallback_records_auditable_span_with_effective_model(self) -> None:
@@ -131,7 +131,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             engine = get_engine(db_path)
             init_db(engine)
 
-            orchestrator = _build_orchestrator(db_path)
+            pipeline = _build_pipeline(db_path)
             try:
                 preview_output = WriterOutput(
                     project_id="project-1",
@@ -167,17 +167,17 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
                 with (
                     patch.object(
-                        orchestrator.writer,
+                        pipeline.writer,
                         "write_chapter",
                         side_effect=TimeoutError("The read operation timed out"),
                     ),
                     patch.object(
-                        orchestrator.writer,
+                        pipeline.writer,
                         "write_preview_chapter",
                         return_value=preview_output,
                     ),
                 ):
-                    result = orchestrator._write_chapter_with_attention_fallback(
+                    result = pipeline._write_chapter_with_attention_fallback(
                         context=SimpleNamespace(chapter_number=1),
                         project_id="project-1",
                         chapter_number=1,
@@ -202,13 +202,13 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 self.assertEqual(succeeded.payload["successful_attempt_no"], 1)
                 self.assertEqual(succeeded.payload["output_chars"], 4)
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
                 engine.dispose()
 
     def test_writer_call_receives_repair_model_preference(self) -> None:
         db_path = postgres_test_url("writer-repair-model-preference")
-        orchestrator = _build_orchestrator(db_path)
+        pipeline = _build_pipeline(db_path)
         try:
             captured: dict[str, str] = {}
 
@@ -239,8 +239,8 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 parent_event_id=info.parent_event_id,
             )
 
-            with patch.object(orchestrator.writer, "write_chapter", side_effect=fake_write_chapter):
-                result = orchestrator._write_chapter_with_attention_fallback(
+            with patch.object(pipeline.writer, "write_chapter", side_effect=fake_write_chapter):
+                result = pipeline._write_chapter_with_attention_fallback(
                     context=SimpleNamespace(chapter_number=1),
                     project_id="project-1",
                     chapter_number=1,
@@ -262,18 +262,18 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             self.assertEqual(started.payload["preferred_provider_kind"], "deepseek")
             self.assertEqual(started.payload["preferred_model"], "deepseek-reasoner")
         finally:
-            orchestrator.llm_client.close()
-            orchestrator.engine.dispose()
+            pipeline.llm_client.close()
+            pipeline.engine.dispose()
 
     def test_transient_llm_failure_stops_before_advancing_to_next_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("transient-llm")
-            orchestrator = _build_orchestrator(
+            pipeline = _build_pipeline(
                 db_path,
                 writer_attention_retries=2,
             )
             try:
-                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                pipeline.arc_director.plan_arc = lambda premise, genre, num_chapters: {
                     "arc_synopsis": "瞬时故障",
                     "setting_summary": "无",
                     "chapters": [
@@ -296,15 +296,15 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     raise RuntimeError("HTTP 529 Unknown Status Code")
 
                 with (
-                    patch.object(orchestrator.writer, "write_chapter", side_effect=transient_fail),
+                    patch.object(pipeline.writer, "write_chapter", side_effect=transient_fail),
                     patch.object(
-                        orchestrator.writer,
+                        pipeline.writer,
                         "write_preview_chapter",
                         side_effect=RuntimeError("HTTP 529 Unknown Status Code"),
                     ),
-                    patch("forwin.orchestrator.loop.time.sleep", return_value=None),
+                    patch("forwin.generation.pipeline.time.sleep", return_value=None),
                 ):
-                    result = orchestrator.run("p", "玄幻", 3)
+                    result = pipeline.run("p", "玄幻", 3)
 
                 engine = get_engine(db_path)
                 session = get_session_factory(engine)()
@@ -319,8 +319,8 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     session.close()
                     engine.dispose()
             finally:
-                orchestrator.llm_client.close()
-                orchestrator.engine.dispose()
+                pipeline.llm_client.close()
+                pipeline.engine.dispose()
 
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.failed_chapters, [1])

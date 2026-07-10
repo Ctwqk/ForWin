@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import queue
 import threading
 import time
 import uuid
-from email.utils import parsedate_to_datetime
-from urllib.parse import urlparse
 
 import httpx
 

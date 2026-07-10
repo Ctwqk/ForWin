@@ -4,7 +4,7 @@ import json
 
 from fastapi import HTTPException
 
-from forwin.api_project_ops import get_candidate_draft
+from forwin.application.projects.reviews import get_candidate_draft
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.state.updater import StateUpdater

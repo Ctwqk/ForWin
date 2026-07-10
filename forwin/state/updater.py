@@ -118,7 +118,7 @@ class StateUpdater:
     """Writes state changes to the database.
 
     Uses ``session.add()`` + ``session.flush()`` rather than ``session.commit()``
-    so that the calling orchestrator controls transaction boundaries.
+    so that the calling pipeline controls transaction boundaries.
     """
 
     def __init__(self, session: Session) -> None:

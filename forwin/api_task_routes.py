@@ -7,7 +7,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 
-from forwin.api_schemas import (
+from forwin.api_schema import (
     ActiveGenerationTaskCheckResponse,
     BulkDeleteResponse,
     TaskBulkDeleteRequest,

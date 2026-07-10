@@ -8,8 +8,8 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
 
-from forwin.api_project_payloads import build_generation_control, _recent_rows_by_project
-from forwin.api_schemas import TaskCenterItemResponse
+from forwin.project_payloads import build_generation_control, _recent_rows_by_project
+from forwin.api_schema import TaskCenterItemResponse
 from forwin.models.governance import BandCheckpoint, DecisionEvent
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ChapterPlan, Project

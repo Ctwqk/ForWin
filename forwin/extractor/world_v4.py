@@ -9,7 +9,6 @@ from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import (
     DeltaKind,
     DeltaSource,
-    DeltaSourceType,
     ExtractedWorldChangeSet,
     KnowledgeUpdateEvent,
     KnowledgeUpdateType,

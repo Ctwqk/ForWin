@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from forwin.context.assembler import _build_canon_quality_context
+from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.llm_eval.cases import sample_context
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.review.context_builder import build_review_context_pack
-from forwin.writer.prompts import _canon_quality_context_section
+from forwin.writer.prompt_core import _canon_quality_context_section
 
 
 def test_canon_quality_context_injects_active_narrative_obligations() -> None:

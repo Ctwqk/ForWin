@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
 
 from forwin.protocol.context import ChapterContextPack, EntitySnapshot, PlotThreadSnapshot, TimelineSnapshot
-from forwin.writer.prompts import (
+from forwin.writer.prompt_core import (
     build_lore_timeline_notes_extraction_prompt,
     build_preview_chapter_prompt,
     build_scene_breakdown_prompt,

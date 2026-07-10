@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.api_schemas import PerformanceBreakdownItem, PerformanceReportResponse
+from forwin.api_schema import PerformanceBreakdownItem, PerformanceReportResponse
 
 
 def build_performance_recommendations(report: PerformanceReportResponse) -> list[str]:

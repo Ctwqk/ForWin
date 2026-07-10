@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.protocol.book_state import FactNode, GraphDelta, WorldNode
-from forwin.retrieval.broker import RetrievalBroker
+from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
 
 from .store import DEFAULT_LLM_KB_ROOT

@@ -3,12 +3,12 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from forwin.api_publisher_ops import _require_extension_auth
-from forwin.publishers.manager import (
+from forwin.application.publisher.operations import _require_extension_auth
+from forwin.publisher_runtime.auth import (
     PublisherExtensionAuthError,
     PublisherExtensionAuthNotConfigured,
-    PublisherManager,
 )
+from forwin.publishers.manager import PublisherManager
 
 
 def _manager(api_key: str = "") -> PublisherManager:

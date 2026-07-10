@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import forwin.api as api_module
-from forwin.api_runtime import run_orchestrator_task
+from forwin.api_runtime import run_pipeline_task
 from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.genesis import PromptTrace
@@ -22,8 +22,8 @@ from forwin.observability import (
     redact_payload,
     stack_hash,
 )
-from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.retrieval.broker import RetrievalBroker
+from forwin.generation.pipeline import ChapterPipeline
+from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.storage import ArtifactStore
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
@@ -317,7 +317,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
             api_module.read_artifact_preview(uri="/etc/passwd")
 
 class ApiRuntimeObservabilityTests(unittest.TestCase):
-    def test_run_orchestrator_task_records_success_and_cleanup_events(self) -> None:
+    def test_run_pipeline_task_records_success_and_cleanup_events(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("runtime-success"))
             init_db(engine)
@@ -347,8 +347,8 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
 
                 fake_llm = FakeCloser()
                 fake_engine = FakeEngine()
-                orchestrator = type(
-                    "FakeOrchestrator",
+                pipeline = type(
+                    "FakePipeline",
                     (),
                     {"_SessionFactory": session_factory, "llm_client": fake_llm, "engine": fake_engine},
                 )()
@@ -366,9 +366,9 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     },
                 )()
 
-                run_orchestrator_task(
+                run_pipeline_task(
                     "task-runtime-success",
-                    orchestrator,
+                    pipeline,
                     lambda: result,
                     update_task=lambda task_id, **changes: updates.append({"task_id": task_id, **changes}),
                     logger=api_module.logger,
@@ -391,7 +391,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
             finally:
                 engine.dispose()
 
-    def test_run_orchestrator_task_records_failure_event_with_stack_hash(self) -> None:
+    def test_run_pipeline_task_records_failure_event_with_stack_hash(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("runtime-failure"))
             init_db(engine)
@@ -411,15 +411,15 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     def dispose(self) -> None:
                         return None
 
-                orchestrator = type(
-                    "FakeOrchestrator",
+                pipeline = type(
+                    "FakePipeline",
                     (),
                     {"_SessionFactory": session_factory, "llm_client": FakeCloser(), "engine": FakeEngine()},
                 )()
 
-                run_orchestrator_task(
+                run_pipeline_task(
                     "task-runtime-failure",
-                    orchestrator,
+                    pipeline,
                     lambda: (_ for _ in ()).throw(RuntimeError("boom")),
                     update_task=lambda *_args, **_kwargs: None,
                     logger=api_module.logger,

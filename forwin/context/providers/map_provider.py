@@ -7,7 +7,7 @@ class MapContextProvider:
     name = "map"
 
     def contribute(self, request: ContextRequest, draft: ContextDraft) -> None:
-        from forwin.context.assembler import _build_genesis_map_overview, _build_map_context
+        from forwin.context.assembler_core import _build_genesis_map_overview, _build_map_context
 
         map_context = _build_map_context(
             request.session,

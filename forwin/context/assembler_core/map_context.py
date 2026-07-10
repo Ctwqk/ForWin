@@ -1,30 +1,9 @@
 """Context assembler - builds ChapterContextPack from current state."""
 from __future__ import annotations
-import json
 import logging
-import re
-from typing import Any
 
-from sqlalchemy import func, select
+from forwin.book_state.map_graph import MapGraph
 
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.project import ChapterPlan
-from forwin.protocol.context import (
-    ArcEnvelopeView,
-    AudienceHintView,
-    ChapterContextPack,
-    NPCIntentView,
-    TimelineSnapshot,
-    WorldPressureView,
-)
-from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
-from forwin.canon_names import extract_candidate_character_names
-from forwin.canon_quality.rule_profile import CanonGlossary
-from forwin.governance import DecisionEventInfo
-from forwin.observability.context import OperationContext
-from forwin.observability.ports import NullObservability
-from forwin.planning.world_contracts import WorldContractRepository
-from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
 

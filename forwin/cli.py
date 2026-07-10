@@ -9,12 +9,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import sys
 import time
-from pathlib import Path
 
 from forwin.config import InfrastructureConfig
 
@@ -54,12 +51,12 @@ def cmd_generate(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    orchestrator = RuntimeContainer.from_config(
+    pipeline = RuntimeContainer.from_config(
         config,
         policy=RuntimePolicy.for_profile("standard"),
         role="generation_worker",
-    ).build_writing_orchestrator()
-    result = orchestrator.run(
+    ).build_chapter_pipeline()
+    result = pipeline.run(
         premise=args.premise,
         genre=args.genre,
         num_chapters=args.chapters,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable, Iterable
 
-from forwin.api_schemas import PerformanceBreakdownItem, PerformanceSpanInfo
+from forwin.api_schema import PerformanceBreakdownItem, PerformanceSpanInfo
 
 
 def percentile(values: list[int], ratio: float) -> int:

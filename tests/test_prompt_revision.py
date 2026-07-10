@@ -8,7 +8,7 @@ from typing import Any
 from forwin.protocol.context import ChapterContextPack
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompt_budget import prompt_message_chars, prompt_revision_hash
-from forwin.writer.prompts import (
+from forwin.writer.prompt_core import (
     build_preview_chapter_prompt,
     build_scene_breakdown_prompt,
     build_single_chapter_draft_prompt,

@@ -11,7 +11,7 @@ from forwin.extractor.book_state_graph_delta import (
     BookStateGraphDeltaExtractor,
     _filter_graph_delta_layers,
 )
-from forwin.orchestrator_loop_core import quality_gates
+from forwin.generation.pipeline_core import quality_gates
 from forwin.protocol.book_state import (
     CognitionPatch,
     FactPatch,
@@ -383,7 +383,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
     sentinel_llm_client = object()
 
-    class Orchestrator:
+    class Pipeline:
         policy = Policy()
         llm_client = sentinel_llm_client
 
@@ -407,7 +407,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
     with pytest.raises(StopAfterAnalysis):
         quality_gates._apply_canon_quality_gate(
-            Orchestrator(),
+            Pipeline(),
             session=None,
             repo=None,
             updater=None,

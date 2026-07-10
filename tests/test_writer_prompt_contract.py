@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
-from forwin.writer.prompts import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 
 
 def test_writer_prompt_includes_protagonist_naming_contract() -> None:

@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from forwin.api_schemas import PerformanceReportResponse, PerformanceSpanInfo
+from forwin.api_schema import PerformanceReportResponse, PerformanceSpanInfo
 from forwin.models.observability import PerformanceSpan
 
 from .performance import CriticalPathAnalyzer, PerformanceAnalyzer

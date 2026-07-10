@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from forwin.book_genesis_core.fallbacks import _fallback_map, _fallback_world
+from forwin.genesis.fallbacks import _fallback_map, _fallback_world
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,12 +70,12 @@ LOCAL_REWRITE_STORY_TERMS = (
 ALLOWED_PRODUCTION_FILES: set[str] = set()
 
 ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
-    "forwin/api_project_ops.py",
-    "forwin/project_ops/common.py",
+    "forwin/application/projects/lifecycle.py",
+    "forwin/application/projects/common.py",
     "forwin/canon_quality/rule_profile.py",
-    "forwin/orchestrator/loop.py",
-    "forwin/orchestrator_loop_core/repair_loop.py",
-    "forwin/orchestrator_loop_core/repair_patches.py",
+    "forwin/pipeline/loop.py",
+    "forwin/review/repair/service.py",
+    "forwin/generation/pipeline_core/repair_patches.py",
     "forwin/planning/future_plan_audit/helpers.py",
     "forwin/writer/prompts.py",
 }

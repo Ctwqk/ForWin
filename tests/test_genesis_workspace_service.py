@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from sqlalchemy import select
 
-from forwin.book_genesis import BookGenesisService
-from forwin.genesis_workspace.service import GenesisWorkspaceService
+from forwin.genesis import BookGenesisService
+from forwin.genesis.workspace.service import GenesisWorkspaceService
 from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
@@ -131,7 +131,7 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
             updater = StateUpdater(session)
             project = self._project(session, project_id="proj-genesis-workspace-trace")
             revision = service.create_initial_revision(session=session, updater=updater, project=project)
-            with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_call):
+            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_call):
                 generated, _trace = service.generate_stage(
                     session=session,
                     updater=updater,

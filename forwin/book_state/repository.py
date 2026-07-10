@@ -10,6 +10,7 @@ from forwin.book_state.cognition import CognitionView
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import NarrativeControlGraph
 from forwin.book_state.runtime import ObjectiveWorldGraph
+from forwin.map.models import MapEdgeRow, MapNodeRow
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
     BookReaderExperienceDeltaRow,
@@ -19,8 +20,6 @@ from forwin.models.book_state import (
     FactNodeRow,
     GraphDeltaPatchRow,
     GraphDeltaRow,
-    MapEdgeRow,
-    MapNodeRow,
     MapSnapshotRow,
     NarrativeEdgeRow,
     NarrativeNodeRow,

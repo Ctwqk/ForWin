@@ -5,17 +5,10 @@ produces fluent Chinese web-novel prose and metadata without code-switching.
 """
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass
 
 from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
-from forwin.canon_quality.rule_profile import (
-    countdown_profiles_from_quality_context,
-    display_countdown_label,
-)
 from forwin.protocol.context import ChapterContextPack
-from forwin.protocol.scene import SceneOutput, ScenePlan
 
 
 def _apply_skill_layers(

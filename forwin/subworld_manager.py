@@ -19,7 +19,7 @@ from forwin.models import (
     SubWorldRosterItem,
     new_id,
 )
-from forwin.orchestrator.goals import load_goals_json
+from forwin.planning.goals import load_goals_json
 from forwin.map.protocol import RegionNode
 from forwin.map.repository import MapRepository
 from forwin.protocol import (

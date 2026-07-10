@@ -4,207 +4,101 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
-import uuid
-import json
-import io
-import inspect
-import time
-import zipfile
-from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any
-from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import case, delete, func, or_, select
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from forwin.api_pages import render_home_page, render_publishers_page
 from forwin import (
-    api_automation,
-    api_governance_ops,
-    api_governance_routes,
-    api_governance_support,
     api_observability_routes,
-    api_project_ops,
-    api_project_routes,
-    api_publisher_ops,
-    api_publisher_routes,
     api_route_registry,
-    api_system_routes,
-    api_task_routes,
 )
-from forwin.api_task_center_service import TaskCenterService
-from forwin.api_project_payloads import (
-    build_project_detail,
-    build_project_summaries,
-    build_provisional_band_detail,
-    latest_provisional_band_execution,
-    normalize_project_automation,
-)
-from forwin.api_task_history import augment_task_with_rehearsal_history
+from forwin.application.errors import ActiveGenerationTaskError
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
-from forwin.api_schemas import (
-    BandCheckpointApproveRequest,
-    BandCheckpointDetail,
-    BandExperienceOverrideRequest,
-    BandExperienceOverrideResponse,
-    ActiveGenerationTaskCheckResponse,
-    BookGenesisDetail,
-    BookGenesisPatchRequest,
-    BookGenesisRefineRequest,
-    BookGenesisStageRunRequest,
-    CausalReplayResponse,
-    CandidateDraftDetail,
-    DecisionEventsResponse,
-    BulkDeleteResponse,
-    ChapterDetail,
-    ChapterInfo,
-    ChapterReviewApproveRequest,
-    ChapterReviewApproveResponse,
-    ChapterReviewDetail,
-    ChapterReviewIssueInfo,
-    CommentSyncJobResultRequest,
-    EntityInfo,
-    ExtensionClaimCommentSyncJobRequest,
-    ExtensionClaimCommentSyncJobResponse,
-    ExtensionClaimUploadJobRequest,
-    ExtensionClaimUploadJobResponse,
-    ExtensionCommentsBatchRequest,
-    ExtensionCommentsBatchResponse,
-    ExtensionHeartbeatRequest,
-    ExtensionHeartbeatResponse,
-    ExtensionPlatformHeartbeat,
-    ExtensionBrowserSessionResponse,
-    ExtensionSessionSyncRequest,
-    ExtensionSessionSyncResponse,
-    GenerateRequest,
-    GenerationControlInfo,
-    NarrativeConstraintCreateRequest,
-    NarrativeConstraintUpdateRequest,
-    NarrativeConstraintsResponse,
-    GovernanceInsightsResponse,
-    ManualCheckpointRequest,
-    ProjectArcSnapshotFields,
-    ProjectChapterPublishRequest,
-    ProjectCreateRequest,
-    ProjectCreateResponse,
-    ProjectContinueGenerationRequest,
-    ProjectAutomationSettings,
-    ProjectAutomationUpdateRequest,
-    ProjectAutomationUpdateResponse,
-    ProjectBulkDeleteRequest,
-    ProjectDeleteResponse,
-    ProjectDetail,
-    ProjectSummary,
-    ProvisionalBandDetail,
-    ProvisionalChapterLedgerInfo,
-    PublisherCommentSyncJobRequest,
-    PublisherCommentSyncJobResponse,
-    PublisherPlatformInfo,
-    PublisherRawCommentInput,
-    PublisherUploadJobCreateRequest,
-    PublisherUploadJobResponse,
-    TaskResponse,
-    TaskCenterItemResponse,
-    TaskBulkDeleteRequest,
-    TaskMutationResponse,
-    TaskContractResponse,
-    TaskContractUpdateRequest,
-    TaskSummaryResponse,
-    ThreadInfo,
-    TropeTemplateInfo,
-    TropeRegistrySummaryResponse,
-    TropeTemplateValidationRequest,
-    TropeTemplateValidationResponse,
-    UploadJobResultRequest,
-    LintSignalInfo,
-    StartWritingResponse,
-)
-from forwin.book_genesis import (
-    BookGenesisService,
-    GENESIS_STAGE_ORDER,
-    StaleGenesisRevisionError,
-)
 from forwin.config import InfrastructureConfig
-from forwin.governance import (
-    BandCheckpointIssueInfo,
-    CONSTRAINT_LEVELS,
-    CONSTRAINT_STATUSES,
-    CONSTRAINT_TYPES,
-    DecisionEventType,
-    DecisionEventInfo,
-    NarrativeConstraintInfo,
-    ensure_decision_event_type,
-    issue_group_for_issue,
-    load_plan_task_contract,
-    plan_task_contract_to_json,
-)
-from forwin.models.base import Base, get_session_factory
-from forwin.models.genesis import BookGenesisRevision
-from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
-from forwin.models.entity import Entity
-from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import (
-    PublisherCommentSyncJob,
-    PublisherConnectionState,
-    PublisherExtensionClient,
-    PublisherRawComment,
-    PublisherUploadJob,
-)
-from forwin.models.task import GenerationTask
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
-from forwin.models.phase import (
-    BandExperiencePlan,
-    ChapterRewriteAttempt,
-)
-from forwin.models.phase4 import NPCIntentSnapshot
+from forwin.models.base import get_session_factory
 import forwin.models.phase  # noqa: F401
-from forwin.protocol.experience import BandDelightSchedule
-from forwin.protocol.trope_library import (
-    TROPE_TEMPLATE_LIBRARY,
-    trope_registry_summary,
-    validate_trope_template_payload,
-)
-from forwin.state.repo import StateRepository
-from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
-from forwin.state.query_helpers import load_latest_drafts_by_plan_id
-from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
 
 from forwin.api_core import state as api_state
-from forwin.api_core.runtime import *
-from forwin.api_core.tasks import *
-from forwin.api_core.project_helpers import *
-from forwin.api_core.generation import *
-from forwin.api_core.automation import *
+from forwin.api_core.runtime import (
+    _active_genesis_revision,
+    _build_genesis_service,
+    _close_genesis_service,
+    _display_datetime,
+    _genesis_patch_payload,
+    _get_session,
+    _json_load_list,
+    _json_load_object,
+    _require_genesis_project,
+)
+from forwin.api_core.tasks import (
+    _generation_task_conflict_message,
+    _get_project_backed_task_item_or_404,
+    _list_project_backed_task_items,
+    _parse_project_task_id,
+    _recover_interrupted_generation_tasks,
+    _serialize_generation_task_center_item,
+    _serialize_task,
+    _serialize_upload_task_center_item,
+    _task_is_deletable,
+    _task_is_pausable,
+    _task_is_terminable,
+    _task_is_terminal,
+)
+from forwin.api_core.project_helpers import (
+    _build_causal_replay,
+    _build_governance_insights,
+    _decision_refs_for_chapter_review,
+    _delete_project,
+    _get_generation_task_or_404,
+    _latest_band_checkpoint_row,
+    _latest_related_decision_event,
+    _list_decision_event_rows,
+    _log_decision_event,
+    _persist_project_automation,
+    _require_reason,
+    _serialize_band_checkpoint,
+    _serialize_constraint,
+    _serialize_decision_event,
+    _update_task,
+    _validate_constraint_payload,
+)
+from forwin.api_core.generation import (
+    _active_generation_task_ids,
+    _create_continue_generation_task,
+    _create_generation_task,
+    _project_delete_blockers,
+    _project_delete_conflict_message,
+    _project_has_active_generation_task,
+)
+from forwin.api_core.automation import (
+    _list_generation_tasks,
+    _start_automation_scheduler,
+    _stop_automation_scheduler,
+)
 
 
 def _shutdown_runtime_state() -> None:
 
     _stop_automation_scheduler()
-    if api_state._orchestrator is not None:
+    if api_state._pipeline is not None:
         try:
-            api_state._orchestrator.llm_client.close()
+            api_state._pipeline.llm_client.close()
         except Exception:  # noqa: BLE001
             logger.debug(
-                "Ignoring orchestrator LLM client shutdown error.", exc_info=True
+                "Ignoring pipeline LLM client shutdown error.", exc_info=True
             )
         try:
-            api_state._orchestrator.engine.dispose()
+            api_state._pipeline.engine.dispose()
         except Exception:  # noqa: BLE001
-            logger.debug("Ignoring orchestrator engine shutdown error.", exc_info=True)
+            logger.debug("Ignoring pipeline engine shutdown error.", exc_info=True)
 
     if api_state._engine is not None:
         try:
@@ -212,7 +106,7 @@ def _shutdown_runtime_state() -> None:
         except Exception:  # noqa: BLE001
             logger.debug("Ignoring API engine shutdown error.", exc_info=True)
 
-    api_state._orchestrator = None
+    api_state._pipeline = None
     api_state._runtime_container = None
     api_state._publisher_manager = None
     api_state._task_center_service = None
@@ -255,14 +149,14 @@ async def lifespan(app: FastAPI):
         api_state._SessionFactory = runtime_services.session_factory
     if api_state._SessionFactory is None:
         api_state._SessionFactory = get_session_factory(api_state._engine)
-    if api_state._orchestrator is None:
+    if api_state._pipeline is None:
         if api_state._runtime_container is None:
             raise RuntimeError("API runtime container is not initialized")
-        api_state._orchestrator = (
-            api_state._runtime_container.build_writing_orchestrator()
+        api_state._pipeline = (
+            api_state._runtime_container.build_chapter_pipeline()
         )
         with api_state._SessionFactory() as bootstrap_session:
-            created_envelopes = api_state._orchestrator.arc_envelope_manager.backfill_missing_resolutions(
+            created_envelopes = api_state._pipeline.arc_envelope_manager.backfill_missing_resolutions(
                 session=bootstrap_session
             )
             if created_envelopes:
@@ -363,19 +257,17 @@ get_db_performance_report = _observability_handlers["get_db_performance_report"]
 
 
 def _current_memory_index():
-    orchestrator = api_state._orchestrator
-    services = getattr(orchestrator, "services", None)
-    broker = getattr(services, "retrieval_broker", None)
+    pipeline = api_state._pipeline
+    broker = getattr(pipeline, "retrieval_broker", None)
     return getattr(broker, "memory_index", None)
 
 
-globals().update(
-    api_route_registry.register_api_routes(
+_registered_route_handlers = api_route_registry.register_api_routes(
         app,
         deps=api_route_registry.ApiRouteDeps(
             core=api_route_registry.CoreDeps(
                 get_config=lambda: api_state._config,
-                get_orchestrator=lambda: api_state._orchestrator,
+                get_pipeline=lambda: api_state._pipeline,
                 get_session=_get_session,
                 render_home_page=render_home_page,
                 active_generation_task_error_cls=ActiveGenerationTaskError,
@@ -508,8 +400,7 @@ globals().update(
                 render_publishers_page=render_publishers_page,
             ),
         ),
-    )
 )
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = ["app", "lifespan"]

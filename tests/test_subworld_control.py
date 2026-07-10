@@ -8,11 +8,11 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.api_project_payloads import build_project_detail
+from forwin.project_payloads import build_project_detail
 from forwin.book_state import BookStateRepository
 from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
 from forwin.checker.rules import ContinuityChecker
-from forwin.context.assembler import assemble_context
+from forwin.context.assembler_core import assemble_context
 from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
@@ -22,9 +22,9 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.orchestrator.phase24 import ArcEnvelopeManager, ArcStructureDraftData
-from forwin.orchestrator.phase3 import ReplanGovernor, StageAssessment
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
+from forwin.planning.stage_analysis import ReplanGovernor, StageAssessment
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
@@ -44,7 +44,7 @@ from forwin.state.updater import StateUpdater
 from forwin.review.draft_service import DraftReviewService
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
-from forwin.writer.prompts import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 
 
 class SubWorldControlTests(unittest.TestCase):
@@ -992,7 +992,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNotNone(fixed)
         assert fixed is not None
@@ -1034,7 +1034,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
 
@@ -1057,7 +1057,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
 
@@ -1072,7 +1072,7 @@ class SubWorldControlTests(unittest.TestCase):
             def get_active_entities(self, _project_id: str) -> list[object]:
                 return []
 
-        names = WritingOrchestrator._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
+        names = ChapterPipeline._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
 
         self.assertIn("陆明", names)
 
@@ -1087,7 +1087,7 @@ class SubWorldControlTests(unittest.TestCase):
             def get_active_entities(self, _project_id: str) -> list[object]:
                 return []
 
-        names = WritingOrchestrator._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
+        names = ChapterPipeline._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
 
         self.assertIn("顾青", names)
 

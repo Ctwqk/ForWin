@@ -7,6 +7,11 @@ from typing import Any, Callable
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from forwin.application.projects import (
+    ProjectApplicationDeps,
+    ProjectApplicationService,
+)
+from forwin.application.publisher import PublisherApplicationService
 from forwin import (
     api_book_state_routes,
     api_governance_routes,
@@ -21,7 +26,7 @@ from forwin import (
     api_task_routes,
     api_world_model_routes,
 )
-from forwin.api_schemas import (
+from forwin.api_schema import (
     ActiveGenerationTaskCheckResponse,
     ArtifactReadResponse,
     BandCheckpointDetail,
@@ -49,12 +54,8 @@ from forwin.api_schemas import (
     ExtensionLoginQrNotifyResponse,
     ExtensionSessionSyncResponse,
     PublisherBrowserSessionSummaryResponse,
-    PublisherAuditSyncRequest,
     PublisherChapterBindingResponse,
     PublisherCoverAssetResponse,
-    PublisherCoverGenerateRequest,
-    PublisherCoverSelectRequest,
-    PublisherCoverUploadRequest,
     GovernanceInsightsResponse,
     MapEnsureResponse,
     MapPathResponse,
@@ -72,12 +73,10 @@ from forwin.api_schemas import (
     ProjectSummary,
     PromptTraceDetailResponse,
     ProvisionalBandDetail,
-    ScenarioPlanPatchApproveRequest,
     ScenarioRehearsalDetail,
     PublisherCommentSyncJobResponse,
     PublisherLoginQrOneShotResponse,
     PublisherPlatformInfo,
-    PublisherPreflightRequest,
     PublisherPreflightResponse,
     PublisherUploadJobResponse,
     PublisherWorkBindingResponse,
@@ -92,12 +91,8 @@ from forwin.api_schemas import (
     TropeTemplateInfo,
     TropeTemplateValidationResponse,
     WorldEditProposalInfo,
-    WorldEditProposalCreateRequest,
-    WorldEditProposalReviewRequest,
     WorldModelConflictInfo,
-    WorldModelExportRequest,
     WorldModelExportResponse,
-    WorldModelImportRequest,
     WorldModelImportResponse,
     WorldModelPageInfo,
     WorldModelSnapshotInfo,
@@ -107,7 +102,7 @@ from forwin.api_schemas import (
 @dataclass(frozen=True)
 class CoreDeps:
     get_config: Callable[[], Any]
-    get_orchestrator: Callable[[], Any]
+    get_pipeline: Callable[[], Any]
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
     active_generation_task_error_cls: type[Exception]
@@ -211,7 +206,7 @@ def register_api_routes(
 ) -> dict[str, Callable[..., Any]]:
     get_config = deps.get_config
     get_publisher_manager = deps.publisher.get_publisher_manager
-    get_orchestrator = deps.get_orchestrator
+    get_pipeline = deps.get_pipeline
     get_session = deps.get_session
     render_home_page = deps.render_home_page
     render_publishers_page = deps.publisher.render_publishers_page
@@ -306,38 +301,44 @@ def register_api_routes(
         ),
     )
     publisher_handlers = api_publisher_routes.build_handlers(
-        get_publisher_manager=get_publisher_manager,
-        extension_root=Path.cwd() / "browser_extension" / "forwin-publisher",
+        service=PublisherApplicationService(
+            get_publisher_manager=get_publisher_manager,
+            extension_root=Path.cwd() / "browser_extension" / "forwin-publisher",
+        )
     )
     project_handlers = api_project_routes.build_handlers(
-        get_session=get_session,
-        get_config=get_config,
-        get_orchestrator=get_orchestrator,
-        get_publisher_manager=get_publisher_manager,
-        display_datetime=display_datetime,
-        build_genesis_service=build_genesis_service,
-        close_genesis_service=close_genesis_service,
-        require_genesis_project=require_genesis_project,
-        active_genesis_revision=active_genesis_revision,
-        genesis_patch_payload=genesis_patch_payload,
-        delete_project_impl=delete_project_impl,
-        project_delete_blockers=project_delete_blockers,
-        project_delete_conflict_message=project_delete_conflict_message,
-        project_has_active_generation_task=project_has_active_generation_task,
-        generation_task_conflict_message=generation_task_conflict_message,
-        create_continue_generation_task=create_continue_generation_task,
-        persist_project_automation=persist_project_automation,
-        log_decision_event=log_decision_event,
-        serialize_task=serialize_task,
-        get_generation_task_or_404=get_generation_task_or_404,
-        active_generation_task_error_cls=active_generation_task_error_cls,
-        require_reason=require_reason,
-        decision_refs_for_chapter_review=decision_refs_for_chapter_review,
-        update_task=update_task,
+        service=ProjectApplicationService(
+            ProjectApplicationDeps(
+                get_session=get_session,
+                get_config=get_config,
+                get_pipeline=get_pipeline,
+                get_publisher_manager=get_publisher_manager,
+                display_datetime=display_datetime,
+                build_genesis_service=build_genesis_service,
+                close_genesis_service=close_genesis_service,
+                require_genesis_project=require_genesis_project,
+                active_genesis_revision=active_genesis_revision,
+                genesis_patch_payload=genesis_patch_payload,
+                delete_project_impl=delete_project_impl,
+                project_delete_blockers=project_delete_blockers,
+                project_delete_conflict_message=project_delete_conflict_message,
+                project_has_active_generation_task=project_has_active_generation_task,
+                generation_task_conflict_message=generation_task_conflict_message,
+                create_continue_generation_task=create_continue_generation_task,
+                persist_project_automation=persist_project_automation,
+                log_decision_event=log_decision_event,
+                serialize_task=serialize_task,
+                get_generation_task_or_404=get_generation_task_or_404,
+                active_generation_task_error_cls=active_generation_task_error_cls,
+                require_reason=require_reason,
+                decision_refs_for_chapter_review=decision_refs_for_chapter_review,
+                update_task=update_task,
+            )
+        )
     )
     governance_handlers = api_governance_routes.build_handlers(
         get_session=get_session,
-        get_orchestrator=get_orchestrator,
+        get_pipeline=get_pipeline,
         display_datetime=display_datetime,
         require_reason=require_reason,
         validate_constraint_payload=validate_constraint_payload,

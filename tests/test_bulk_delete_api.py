@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import forwin.api as api_module
-from forwin.api_schemas import ProjectBulkDeleteRequest, TaskBulkDeleteRequest
+from forwin.api_schema import ProjectBulkDeleteRequest, TaskBulkDeleteRequest
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.governance import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt

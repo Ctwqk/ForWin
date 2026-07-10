@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
-from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,12 +14,11 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.signal_pre_audit import select_stale_signal_targets
-from forwin.protocol.experience import BandDelightSchedule
 
-from .helpers import *
+from .helpers import (
+    _minimum_scope_for_obligation,
+)
 from .macro_progression import audit_arc_macro_boundary
 from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
 

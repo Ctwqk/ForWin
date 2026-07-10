@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.orchestrator.goals import load_goals_json, normalize_goals_payload
+from forwin.planning.goals import load_goals_json, normalize_goals_payload
 
 
 def test_load_goals_json_wraps_legacy_string_goal() -> None:

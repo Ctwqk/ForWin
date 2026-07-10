@@ -19,13 +19,14 @@ from forwin.models import (
     new_id,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.orchestrator.feedback_aggregator import (
+from forwin.audience.feedback import (
     run_feedback_aggregation_pass,
     score_signal_aggregate_v1,
 )
-from forwin.orchestrator.phase24 import ArcEnvelopeManager, policy_for_total_chapters
-from forwin.orchestrator.phase3 import PacingStrategist
-from forwin.orchestrator.phase4 import CommentAnalyzer, classify_signal_level
+from forwin.arc_sizing import policy_for_total_chapters
+from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.stage_analysis import PacingStrategist
+from forwin.simulation.world import CommentAnalyzer, classify_signal_level
 from forwin.publishers import PublisherManager
 from forwin.state.repo import StateRepository
 
@@ -714,7 +715,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(second.actionable, [])
 
     def test_estimate_reader_scale_uses_raw_comment_volume_not_signal_count(self) -> None:
-        from forwin.orchestrator.feedback_aggregator import estimate_reader_scale
+        from forwin.audience.feedback import estimate_reader_scale
 
         project = self._create_project()
         for index in range(4):
@@ -752,7 +753,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(snapshot.tier, 1)
 
     def test_estimate_reader_scale_prefers_platform_metric(self) -> None:
-        from forwin.orchestrator.feedback_aggregator import estimate_reader_scale
+        from forwin.audience.feedback import estimate_reader_scale
 
         project = self._create_project()
         self._add_comment(
@@ -783,7 +784,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(snapshot.tier, 2)
 
     def test_action_effectiveness_marks_score_drop_improved(self) -> None:
-        from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+        from forwin.audience.feedback import derive_action_effectiveness
 
         project = self._create_project()
         self.session.add(
@@ -848,7 +849,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(outcomes[0]["action_type"], "boost_reward_density")
 
     def test_action_effectiveness_batches_signal_aggregate_reads(self) -> None:
-        from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+        from forwin.audience.feedback import derive_action_effectiveness
 
         project = self._create_project()
         self.session.add_all(
@@ -965,7 +966,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(len(aggregate_queries), 1)
 
     def test_feedback_cooldown_batches_latest_action_lookup(self) -> None:
-        from forwin.orchestrator.feedback_aggregator import FeedbackCooldown
+        from forwin.audience.feedback import FeedbackCooldown
 
         project = self._create_project()
         self.session.add_all(
@@ -1206,7 +1207,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertGreater(trends[0].current_score, trends[0].previous_score)
 
     def test_arc_envelope_manager_calibrates_overlay_from_audience_signals(self) -> None:
-        from forwin.orchestrator.phase24 import ArcStructureDraftData
+        from forwin.planning.arc_envelope import ArcStructureDraftData
         from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 
         project = self._create_project()

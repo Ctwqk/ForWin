@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from forwin.genesis_workspace.service import GenesisWorkspaceService
+from forwin.genesis.workspace.service import GenesisWorkspaceService
 
 
 def test_genesis_workspace_rejects_mutation_after_writing_handoff() -> None:

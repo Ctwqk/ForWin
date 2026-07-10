@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from forwin.governance_keywords import constraint_keywords, keyword_is_prefix_negated
 
 if TYPE_CHECKING:
     from forwin.protocol.experience import BandDelightSchedule

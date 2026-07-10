@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from forwin.context.assembler import assemble_context
+from forwin.context.assembler_core import assemble_context
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.experience import (
     ArcPayoffMap,
@@ -122,7 +122,7 @@ class _FakeRepo:
 
 
 def test_assemble_context_uses_default_provider_chain() -> None:
-    from forwin.context.assembler import ChapterContextAssembler
+    from forwin.context.assembler_core import ChapterContextAssembler
 
     repo = _FakeRepo()
     chapter_plan = SimpleNamespace(
@@ -175,7 +175,7 @@ def test_context_gates_are_explicit_runner_not_provider_side_effects() -> None:
 def test_context_assembler_has_no_top_level_provider_domain_imports() -> None:
     import inspect
 
-    import forwin.context.assembler as assembler_module
+    import forwin.context.assembler_core as assembler_module
 
     source = inspect.getsource(assembler_module)
     import_lines = [
@@ -214,7 +214,7 @@ class _MaxChapterSession:
 
 
 def test_canon_quality_context_infers_final_when_target_total_is_stale() -> None:
-    from forwin.context.assembler import _build_canon_quality_context
+    from forwin.context.assembler_core import _build_canon_quality_context
 
     context = _build_canon_quality_context(
         session=_MaxChapterSession(12),
@@ -229,7 +229,7 @@ def test_canon_quality_context_infers_final_when_target_total_is_stale() -> None
 
 
 def test_canon_quality_context_does_not_infer_final_before_known_target_total() -> None:
-    from forwin.context.assembler import _build_canon_quality_context
+    from forwin.context.assembler_core import _build_canon_quality_context
 
     context = _build_canon_quality_context(
         session=_MaxChapterSession(12),
@@ -244,7 +244,7 @@ def test_canon_quality_context_does_not_infer_final_before_known_target_total() 
 
 
 def test_canon_quality_context_does_not_infer_ordinary_last_arc_chapter_as_final() -> None:
-    from forwin.context.assembler import _build_canon_quality_context
+    from forwin.context.assembler_core import _build_canon_quality_context
 
     context = _build_canon_quality_context(
         session=_MaxChapterSession(8),

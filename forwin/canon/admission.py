@@ -10,7 +10,7 @@ from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.naming import EntityRegistrar
-from forwin.orchestrator_loop_core import governance, quality_gates, world_projection
+from forwin.generation.pipeline_core import quality_gates, world_projection
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy

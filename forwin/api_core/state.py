@@ -6,14 +6,14 @@ from zoneinfo import ZoneInfo
 
 from forwin.api_task_center_service import TaskCenterService
 from forwin.config import InfrastructureConfig
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 
 _config: InfrastructureConfig | None = None
 _engine = None
 _SessionFactory = None
-_orchestrator: WritingOrchestrator | None = None
+_pipeline: ChapterPipeline | None = None
 _runtime_container: RuntimeContainer | None = None
 _publisher_manager: PublisherManager | None = None
 _task_center_service: TaskCenterService | None = None

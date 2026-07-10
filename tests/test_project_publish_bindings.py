@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 from sqlalchemy import select
 
 import forwin.api as api_module
-from forwin.api_project_payloads import normalize_project_automation
-from forwin.api_schemas import ProjectCreateRequest
+from forwin.project_payloads import normalize_project_automation
+from forwin.api_schema import ProjectCreateRequest
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 

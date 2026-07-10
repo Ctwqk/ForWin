@@ -20,7 +20,7 @@ class RuntimeContainerPort(Protocol):
     def services(self):
         ...
 
-    def build_writing_orchestrator(
+    def build_chapter_pipeline(
         self,
         *,
         progress_callback=None,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from forwin.context.assembler import ChapterContextAssembler
+from forwin.context.assembler_core import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
 from forwin.context.request import ContextDraft, ContextRequest
 

@@ -1,28 +1,21 @@
 from __future__ import annotations
 
-import json
-import re
-from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from forwin.models.base import new_id
-from forwin.models.narrative_obligation import FuturePlanAuditRunRow
-from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
-from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
-from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
-from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.signal_pre_audit import select_stale_signal_targets
-from forwin.protocol.experience import BandDelightSchedule
+from forwin.narrative_obligations.types import NarrativePlanPatch
 
-from .helpers import *
-from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
+from .helpers import (
+    _chapter_plan_contract,
+    _CUSTODY_FREE_STATES,
+    _hard_custody_instruction,
+    _plan_declares_recapture_bridge,
+    _plan_mentions_stale_custody,
+    _plan_text,
+)
+from .models import FuturePlanAuditIssue
 
 
 class FuturePlanCustodyMixin:

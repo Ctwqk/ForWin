@@ -118,7 +118,7 @@ def test_repair_loop_passes_current_context_to_local_executor() -> None:
     source = (
         Path(__file__).resolve().parents[2]
         / "forwin"
-        / "orchestrator_loop_core"
+        / "pipeline_loop_core"
         / "repair_loop.py"
     ).read_text(encoding="utf-8")
     call_start = source.index("LocalRewriteExecutor().execute(")

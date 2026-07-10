@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.state.updater import StateUpdater
 from forwin.planning.world_contracts import (
     ArcWorldContract,

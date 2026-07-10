@@ -25,7 +25,7 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-def _build_orchestrator(database_url: str, artifact_root: str):
+def _build_pipeline(database_url: str, artifact_root: str):
     policy = RuntimePolicy.for_profile("standard")
     policy = policy.model_copy(
         update={"canon": policy.canon.model_copy(update={"quality_gate": "pulp_fatal"})}
@@ -41,7 +41,7 @@ def _build_orchestrator(database_url: str, artifact_root: str):
         ),
         policy=policy,
         role="generation_worker",
-    ).build_writing_orchestrator()
+    ).build_chapter_pipeline()
 
 
 def _setup_project(session):
@@ -85,16 +85,16 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
     None
 ):
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-bookstate-no-projection-compat")
+        db_path = postgres_test_url("pipeline-bookstate-no-projection-compat")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
+        pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
-            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            result = orchestrator.canon_admission.commit(
-                runtime=orchestrator,
+            result = pipeline.canon_admission.commit(
+                runtime=pipeline,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -127,16 +127,16 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
 
 def test_canon_admission_blocks_review_failure_before_book_state_commit() -> None:
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-bookstate-review-block")
+        db_path = postgres_test_url("pipeline-bookstate-review-block")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
+        pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
-            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            outcome = orchestrator.canon_admission.commit(
-                runtime=orchestrator,
+            outcome = pipeline.canon_admission.commit(
+                runtime=pipeline,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -178,16 +178,16 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         "forwin.book_state.review_gate_ext.BookStateCompiler.compile", fail_compile
     )
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-bookstate-rollback")
+        db_path = postgres_test_url("pipeline-bookstate-rollback")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
+        pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
-            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            result = orchestrator.canon_admission.commit(
-                runtime=orchestrator,
+            result = pipeline.canon_admission.commit(
+                runtime=pipeline,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -221,7 +221,7 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
+        pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             updater = StateUpdater(session)
             project = updater.create_project(
@@ -254,7 +254,7 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             )
 
         monkeypatch.setattr(
-            orchestrator,
+            pipeline,
             "_load_writer_output_from_meta",
             lambda _meta: WriterOutput(
                 project_id=project.id,
@@ -265,12 +265,12 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             ),
         )
         monkeypatch.setattr(
-            orchestrator,
+            pipeline,
             "_load_review_verdict",
             lambda _review: ReviewVerdict(verdict="pass", issues=[]),
         )
         monkeypatch.setattr(
-            orchestrator.canon_admission,
+            pipeline.canon_admission,
             "commit",
             lambda **_kwargs: CanonAdmissionOutcome(
                 blocked_path="book-state-review-gate-blocked",
@@ -278,13 +278,13 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             ),
         )
         monkeypatch.setattr(
-            orchestrator,
+            pipeline,
             "_run_phase3_pass",
             lambda **_kwargs: (_ for _ in ()).throw(
                 AssertionError("phase3 should not run")
             ),
         )
-        result = orchestrator.accept_review(project.id, 1)
+        result = pipeline.accept_review(project.id, 1)
 
         with Session() as session:
             status = session.scalar(

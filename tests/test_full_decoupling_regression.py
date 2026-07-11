@@ -9,7 +9,9 @@ from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVer
 def test_api_genesis_service_uses_runtime_container_when_available(monkeypatch) -> None:
     from forwin import api as api_module
 
-    service = SimpleNamespace(llm_client=SimpleNamespace(client=SimpleNamespace(close=lambda: None)))
+    service = SimpleNamespace(
+        llm_client=SimpleNamespace(client=SimpleNamespace(close=lambda: None))
+    )
 
     class FakeContainer:
         def services(self):
@@ -41,7 +43,9 @@ def test_api_automation_can_use_runtime_production_scheduler_factory() -> None:
             assert kwargs["generation_terminal_statuses"] == {"completed"}
             assert "create_generation_task" not in kwargs
             assert "create_continue_generation_task" not in kwargs
-            return SimpleNamespace(run_due_projects=lambda *, now: calls.append(now.isoformat()))
+            return SimpleNamespace(
+                run_due_projects=lambda *, now: calls.append(now.isoformat())
+            )
 
     api_automation.run_automation_scheduler_pass(
         session_factory=object(),
@@ -64,7 +68,9 @@ def test_reviewer_does_not_mutate_chapter_experience_plan() -> None:
     from forwin.protocol.writer import WriterOutput
     from forwin.review.experience import ExperienceReviewer
 
-    plan = ChapterExperiencePlan(planned_reward_tags=["mystery"], progress_markers=["找到线索"])
+    plan = ChapterExperiencePlan(
+        planned_reward_tags=["mystery"], progress_markers=["找到线索"]
+    )
     before = plan.model_dump(mode="json")
     context = ReviewContextPack(
         project_id="project-1",
@@ -109,7 +115,7 @@ def test_draft_review_repair_merge_preserves_existing_scope_order() -> None:
 
     merged = DraftReviewService._merge_repair_instructions(
         continuity_instruction=base,
-        governance_instruction=None,
+        plan_instruction=None,
         webnovel_instruction=webnovel,
     )
 

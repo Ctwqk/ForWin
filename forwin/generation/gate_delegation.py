@@ -5,7 +5,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.runtime.policy import GateDelegate, RuntimePolicy
 from forwin.state.updater import StateUpdater
 
@@ -153,9 +156,7 @@ class SparkGateDelegate:
                 causal_root_id=request.causal_root_id,
             )
         )
-        causal_root_id = str(
-            requested_event.causal_root_id or requested_event.id or ""
-        )
+        causal_root_id = str(requested_event.causal_root_id or requested_event.id or "")
         sanitized_snapshot = _sanitize_complete_log(request.input_snapshot)
         user_payload = {
             "gate_kind": request.gate_kind,
@@ -275,9 +276,7 @@ class SparkGateDelegate:
             output_summary_json=_json_dump(output_summary),
             backend=backend,
             codex_job_id=str(
-                router_trace.get("job_id")
-                or router_trace.get("codex_job_id")
-                or ""
+                router_trace.get("job_id") or router_trace.get("codex_job_id") or ""
             ),
             permission_profile=SPARK_GATE_PERMISSION_PROFILE,
             fallback_used=fallback_used,
@@ -326,8 +325,7 @@ class SparkGateDelegate:
                 actor_type="worker",
                 actor_id=actual_model or "spark-gate-router",
                 summary=(
-                    f"Gate delegation failed for {request.gate_kind}: "
-                    f"{failure_reason}."
+                    f"Gate delegation failed for {request.gate_kind}: {failure_reason}."
                     if failure_reason
                     else f"Gate delegation decided {decision_text} for "
                     f"{request.gate_kind}."

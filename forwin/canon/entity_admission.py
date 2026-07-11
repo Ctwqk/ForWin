@@ -7,10 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.repository import BookStateRepository
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
 
 
@@ -80,9 +80,7 @@ class EntityAdmissionCommitter:
             entity_id=decision.entity_id,
         )
         if entity.name != decision.canonical_name:
-            raise ValueError(
-                f"Entity admission id conflict: {decision.mention_name}"
-            )
+            raise ValueError(f"Entity admission id conflict: {decision.mention_name}")
         if existing is None:
             self._record_event(
                 project_id=project_id,
@@ -102,12 +100,16 @@ class EntityAdmissionCommitter:
         alias: str,
         chapter_number: int,
     ) -> None:
-        exact_owner = self.session.execute(
-            select(Entity).where(
-                Entity.project_id == project_id,
-                Entity.name == alias,
+        exact_owner = (
+            self.session.execute(
+                select(Entity).where(
+                    Entity.project_id == project_id,
+                    Entity.name == alias,
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if exact_owner is not None and exact_owner.id != entity.id:
             raise ValueError(f'Entity alias "{alias}" conflicts with an entity name')
         existing = self.session.execute(
@@ -136,7 +138,11 @@ class EntityAdmissionCommitter:
             chapter_number=chapter_number,
             event_type=DecisionEventType.ENTITY_ALIAS_REGISTERED,
             summary=f"实体注册器注册「{entity.name}」的别名「{alias}」。",
-            payload={"entity_id": entity.id, "entity_name": entity.name, "alias": alias},
+            payload={
+                "entity_id": entity.id,
+                "entity_name": entity.name,
+                "alias": alias,
+            },
             related_object_id=entity.id,
         )
 
@@ -156,12 +162,16 @@ class EntityAdmissionCommitter:
             raise ValueError(f"Entity admission BookState target missing: {entity_id}")
         entity = self.session.get(Entity, entity_id)
         if entity is None:
-            name_owner = self.session.execute(
-                select(Entity).where(
-                    Entity.project_id == project_id,
-                    Entity.name == node.name,
+            name_owner = (
+                self.session.execute(
+                    select(Entity).where(
+                        Entity.project_id == project_id,
+                        Entity.name == node.name,
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if name_owner is not None:
                 raise ValueError(f'Entity name "{node.name}" already exists')
             entity = Entity(

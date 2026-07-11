@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
 from forwin.protocol.context import ChapterContextPack
@@ -77,12 +77,16 @@ def _upload_failure_is_login_failure(
     message: str,
     result_payload: dict[str, Any],
 ) -> bool:
-    error_code = str(
-        result_payload.get("error_code")
-        or result_payload.get("code")
-        or result_payload.get("reason")
-        or ""
-    ).strip().lower()
+    error_code = (
+        str(
+            result_payload.get("error_code")
+            or result_payload.get("code")
+            or result_payload.get("reason")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if error_code in LOGIN_FAILURE_ERROR_CODES:
         return True
     haystack = "\n".join(
@@ -306,7 +310,9 @@ class UploadJobService:
         normalized_platform = str(platform or "").strip()
         normalized_limit = max(1, min(int(limit or 30), 100))
         with self.session_factory() as session:
-            stmt = select(PublisherUploadJob).order_by(PublisherUploadJob.updated_at.desc())
+            stmt = select(PublisherUploadJob).order_by(
+                PublisherUploadJob.updated_at.desc()
+            )
             if not include_deleted:
                 stmt = stmt.where(PublisherUploadJob.deleted_at.is_(None))
             if normalized_status:
@@ -338,7 +344,9 @@ class UploadJobService:
         spec = self.platform_catalog.get(platform)
         normalized_book_meta = self.normalize_book_meta(book_meta)
         platform_meta = (
-            self.platform_metadata_catalog.resolve_for_platform(platform, normalized_book_meta)
+            self.platform_metadata_catalog.resolve_for_platform(
+                platform, normalized_book_meta
+            )
             if self.platform_metadata_catalog is not None
             else {}
         )
@@ -366,7 +374,12 @@ class UploadJobService:
                 latest_publisher_compliance=latest_publisher_compliance,
             )
             if self.preflight is not None
-            else {"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta}
+            else {
+                "ok": True,
+                "blocking": [],
+                "warnings": [],
+                "platform_meta": platform_meta,
+            }
         )
         if not preflight.get("ok", False):
             details = "；".join(
@@ -403,20 +416,31 @@ class UploadJobService:
                     create_if_missing=create_if_missing,
                     normalized_book_meta=normalized_book_meta,
                     platform_meta=platform_meta,
-                    preflight={"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta},
+                    preflight={
+                        "ok": True,
+                        "blocking": [],
+                        "warnings": [],
+                        "platform_meta": platform_meta,
+                    },
                     task_kind="cover_generate",
                 )
                 cover_payload = _load_json_object(cover_job.result_payload_json)
                 cover_payload.update(
                     {
                         "project_id": resolved_project_id,
-                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_candidate_count": max(
+                            1, min(int(cover_candidate_count or 4), 8)
+                        ),
                         "cover_style_hint": str(cover_style_hint or "").strip(),
-                        "cover_confirmation_required": bool(cover_confirmation_required),
+                        "cover_confirmation_required": bool(
+                            cover_confirmation_required
+                        ),
                         "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
                     }
                 )
-                cover_job.result_payload_json = json.dumps(cover_payload, ensure_ascii=False)
+                cover_job.result_payload_json = json.dumps(
+                    cover_payload, ensure_ascii=False
+                )
                 cover_job.result_message = "封面生成任务已创建，等待后端执行。"
                 session.add(cover_job)
                 session.flush()
@@ -446,10 +470,14 @@ class UploadJobService:
                 {
                     "cover_generation_enabled": bool(cover_generation_enabled),
                     "cover_confirmation_required": bool(cover_confirmation_required),
-                    "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                    "cover_candidate_count": max(
+                        1, min(int(cover_candidate_count or 4), 8)
+                    ),
                     "cover_style_hint": str(cover_style_hint or "").strip(),
                     "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
-                    "publisher_compliance_required": bool(publisher_compliance_required),
+                    "publisher_compliance_required": bool(
+                        publisher_compliance_required
+                    ),
                 }
             )
             job.result_payload_json = json.dumps(chapter_payload, ensure_ascii=False)
@@ -487,7 +515,9 @@ class UploadJobService:
         spec = self.platform_catalog.get(platform)
         normalized_book_meta = self.normalize_book_meta(book_meta)
         platform_meta = (
-            self.platform_metadata_catalog.resolve_for_platform(platform, normalized_book_meta)
+            self.platform_metadata_catalog.resolve_for_platform(
+                platform, normalized_book_meta
+            )
             if self.platform_metadata_catalog is not None
             else {}
         )
@@ -530,20 +560,31 @@ class UploadJobService:
                     create_if_missing=create_if_missing,
                     normalized_book_meta=normalized_book_meta,
                     platform_meta=platform_meta,
-                    preflight={"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta},
+                    preflight={
+                        "ok": True,
+                        "blocking": [],
+                        "warnings": [],
+                        "platform_meta": platform_meta,
+                    },
                     task_kind="cover_generate",
                 )
                 cover_payload = _load_json_object(cover_job.result_payload_json)
                 cover_payload.update(
                     {
                         "project_id": resolved_project_id,
-                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_candidate_count": max(
+                            1, min(int(cover_candidate_count or 4), 8)
+                        ),
                         "cover_style_hint": str(cover_style_hint or "").strip(),
-                        "cover_confirmation_required": bool(cover_confirmation_required),
+                        "cover_confirmation_required": bool(
+                            cover_confirmation_required
+                        ),
                         "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
                     }
                 )
-                cover_job.result_payload_json = json.dumps(cover_payload, ensure_ascii=False)
+                cover_job.result_payload_json = json.dumps(
+                    cover_payload, ensure_ascii=False
+                )
                 cover_job.result_message = "封面生成任务已创建，等待后端执行。"
                 session.add(cover_job)
                 session.flush()
@@ -565,7 +606,9 @@ class UploadJobService:
                             PublisherUploadJob.chapter_title.in_(chapter_titles),
                             PublisherUploadJob.deleted_at.is_(None),
                         )
-                    ).scalars().all()
+                    )
+                    .scalars()
+                    .all()
                     if str(title or "").strip()
                 }
 
@@ -623,11 +666,17 @@ class UploadJobService:
                 payload.update(
                     {
                         "cover_generation_enabled": bool(cover_generation_enabled),
-                        "cover_confirmation_required": bool(cover_confirmation_required),
-                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_confirmation_required": bool(
+                            cover_confirmation_required
+                        ),
+                        "cover_candidate_count": max(
+                            1, min(int(cover_candidate_count or 4), 8)
+                        ),
                         "cover_style_hint": str(cover_style_hint or "").strip(),
                         "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
-                        "publisher_compliance_required": bool(publisher_compliance_required),
+                        "publisher_compliance_required": bool(
+                            publisher_compliance_required
+                        ),
                     }
                 )
                 row.result_payload_json = json.dumps(payload, ensure_ascii=False)
@@ -718,9 +767,14 @@ class UploadJobService:
                     PublisherUploadJob.deleted_at.is_(None),
                     PublisherUploadJob.extension_client_id == client_id,
                     PublisherUploadJob.platform_id.in_(platforms),
-                    PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
+                    PublisherUploadJob.task_kind.in_(
+                        EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
+                    ),
                 )
-                .order_by(PublisherUploadJob.started_at.asc(), PublisherUploadJob.created_at.asc())
+                .order_by(
+                    PublisherUploadJob.started_at.asc(),
+                    PublisherUploadJob.created_at.asc(),
+                )
                 .limit(1)
             ).scalar_one_or_none()
             if job is not None:
@@ -742,7 +796,9 @@ class UploadJobService:
                         PublisherUploadJob.abort_requested.is_(False),
                         PublisherUploadJob.deleted_at.is_(None),
                         PublisherUploadJob.platform_id.in_(claimable_platforms),
-                        PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
+                        PublisherUploadJob.task_kind.in_(
+                            EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
+                        ),
                     )
                     .order_by(PublisherUploadJob.created_at.asc())
                     .limit(1)
@@ -759,7 +815,9 @@ class UploadJobService:
                         PublisherUploadJob.status == "pending",
                         PublisherUploadJob.abort_requested.is_(False),
                         PublisherUploadJob.deleted_at.is_(None),
-                        PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
+                        PublisherUploadJob.task_kind.in_(
+                            EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
+                        ),
                     )
                     .values(
                         status="running",
@@ -799,13 +857,17 @@ class UploadJobService:
         now = utc_now()
         recovered_platforms: set[str] = set()
         with self.session_factory() as session:
-            jobs = session.execute(
-                select(PublisherUploadJob).where(
-                    PublisherUploadJob.status.in_(["running", "terminating"]),
-                    PublisherUploadJob.finished_at.is_(None),
-                    PublisherUploadJob.deleted_at.is_(None),
+            jobs = (
+                session.execute(
+                    select(PublisherUploadJob).where(
+                        PublisherUploadJob.status.in_(["running", "terminating"]),
+                        PublisherUploadJob.finished_at.is_(None),
+                        PublisherUploadJob.deleted_at.is_(None),
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for job in jobs:
                 if job.abort_requested:
                     job.status = "cancelled"
@@ -964,17 +1026,15 @@ class UploadJobService:
             job.status = effective_status
             job.current_url = current_url
             job.result_message = (
-                "上传任务已取消。"
-                if effective_status == "cancelled"
-                else message
+                "上传任务已取消。" if effective_status == "cancelled" else message
             )
             job.error_message = (
-                ""
-                if effective_status in {"cancelled", "pending"}
-                else error
+                "" if effective_status in {"cancelled", "pending"} else error
             )
 
-            task_kind = str(job.task_kind or "chapter_upload").strip() or "chapter_upload"
+            task_kind = (
+                str(job.task_kind or "chapter_upload").strip() or "chapter_upload"
+            )
             if (
                 self.bindings is not None
                 and effective_status == "succeeded"
@@ -1027,8 +1087,8 @@ class UploadJobService:
                     current_url=current_url,
                 )
                 if work_binding is not None:
-                    merged_payload["work_binding"] = self.bindings.serialize_work_binding(
-                        work_binding
+                    merged_payload["work_binding"] = (
+                        self.bindings.serialize_work_binding(work_binding)
                     )
             elif (
                 self.bindings is not None
@@ -1042,8 +1102,8 @@ class UploadJobService:
                     current_url=current_url,
                 )
                 if work_binding is not None:
-                    merged_payload["work_binding"] = self.bindings.serialize_work_binding(
-                        work_binding
+                    merged_payload["work_binding"] = (
+                        self.bindings.serialize_work_binding(work_binding)
                     )
 
             job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
@@ -1059,14 +1119,11 @@ class UploadJobService:
                 if effective_status == "succeeded":
                     state.connected = True
                     state.last_error = ""
-                elif (
-                    effective_status == "failed"
-                    and _upload_failure_is_login_failure(
-                        current_url=current_url,
-                        error=error,
-                        message=message,
-                        result_payload=merged_payload,
-                    )
+                elif effective_status == "failed" and _upload_failure_is_login_failure(
+                    current_url=current_url,
+                    error=error,
+                    message=message,
+                    result_payload=merged_payload,
                 ):
                     state.connected = False
                     state.last_error = error or message
@@ -1096,7 +1153,9 @@ class UploadJobService:
                 extra_payload={
                     "requested_status": status,
                     "effective_status": effective_status,
-                    "error_class": "publisher_upload_error" if job.error_message else "",
+                    "error_class": "publisher_upload_error"
+                    if job.error_message
+                    else "",
                     "error_message": job.error_message,
                     "requeued_after_failure": requeued_after_failure,
                     "remote_chapter_id": (
@@ -1137,7 +1196,9 @@ class UploadJobService:
             "claimed_at": isoformat(job.claimed_at),
             "started_at": isoformat(job.started_at),
             "finished_at": isoformat(job.finished_at),
-            "terminable": bool(job.deleted_at is None and not terminal and not job.abort_requested),
+            "terminable": bool(
+                job.deleted_at is None and not terminal and not job.abort_requested
+            ),
             "deletable": bool(job.deleted_at is None and terminal),
         }
 
@@ -1235,9 +1296,13 @@ class UploadJobService:
         normalized_work_name = str(work_name or "").strip()
         if not normalized_work_name:
             return ""
-        matches = session.execute(
-            select(Project.id).where(Project.title == normalized_work_name).limit(2)
-        ).scalars().all()
+        matches = (
+            session.execute(
+                select(Project.id).where(Project.title == normalized_work_name).limit(2)
+            )
+            .scalars()
+            .all()
+        )
         if len(matches) == 1:
             return str(matches[0] or "").strip()
         return ""

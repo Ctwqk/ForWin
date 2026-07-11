@@ -8,10 +8,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.audience_metrics import derive_audience_trends
-from forwin.governance import (
-    DecisionEventInfo,
-    NarrativeConstraintInfo,
-    NextBandSummary,
+from forwin.audit.events import DecisionEventInfo
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.checkpoints import NextBandSummary
+from forwin.planning.contracts import (
     PlanTaskItem,
     load_plan_task_contract,
 )
@@ -55,6 +55,7 @@ from forwin.protocol import (
     SubWorldSummary,
     WorldPressureView,
 )
+
 logger = logging.getLogger(__name__)
 
 _READER_FEEDBACK_LEVEL_ORDER = {
@@ -92,7 +93,9 @@ def _reader_feedback_target_label(target_name: str) -> str:
     return str(target_name or "").strip() or "整体"
 
 
-def _reader_feedback_sort_key(row: SignalWindowAggregate) -> tuple[int, int, int, int, str]:
+def _reader_feedback_sort_key(
+    row: SignalWindowAggregate,
+) -> tuple[int, int, int, int, str]:
     level = str(row.signal_level or "noise")
     signal_type = str(row.signal_type or "")
     boost = 2 if signal_type == "risk" and level in {"watchlist", "confirmed"} else 0
@@ -140,7 +143,12 @@ def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> st
 
 
 class _AudienceHintData:
-    __slots__ = ("pacing_hints", "clarity_hints", "character_heat_changes", "risk_flags")
+    __slots__ = (
+        "pacing_hints",
+        "clarity_hints",
+        "character_heat_changes",
+        "risk_flags",
+    )
 
     def __init__(
         self,
@@ -170,11 +178,15 @@ class StateRepository:
         stmt = select(Project).where(Project.id == project_id)
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def get_active_genesis_revision(self, project_id: str) -> BookGenesisRevision | None:
+    def get_active_genesis_revision(
+        self, project_id: str
+    ) -> BookGenesisRevision | None:
         project = self.get_project(project_id)
         if project is None:
             return None
-        revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
+        revision_id = str(
+            getattr(project, "active_genesis_revision_id", "") or ""
+        ).strip()
         if revision_id:
             row = self.session.get(BookGenesisRevision, revision_id)
             if row is not None:
@@ -182,7 +194,10 @@ class StateRepository:
         stmt = (
             select(BookGenesisRevision)
             .where(BookGenesisRevision.project_id == project_id)
-            .order_by(BookGenesisRevision.revision.desc(), BookGenesisRevision.created_at.desc())
+            .order_by(
+                BookGenesisRevision.revision.desc(),
+                BookGenesisRevision.created_at.desc(),
+            )
             .limit(1)
         )
         return self.session.execute(stmt).scalar_one_or_none()
@@ -232,7 +247,9 @@ class StateRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def get_latest_arc_structure_draft(self, project_id: str) -> ArcStructureDraft | None:
+    def get_latest_arc_structure_draft(
+        self, project_id: str
+    ) -> ArcStructureDraft | None:
         active_arc = self.get_active_arc_plan(project_id)
         if active_arc is None:
             return None
@@ -360,26 +377,37 @@ class StateRepository:
                 BandExperiencePlan.arc_id == active_arc.id,
                 BandExperiencePlan.chapter_start > chapter_number,
             )
-            .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.created_at.desc())
+            .order_by(
+                BandExperiencePlan.chapter_start.asc(),
+                BandExperiencePlan.created_at.desc(),
+            )
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
             return None
-        plans = self.session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number >= row.chapter_start,
-                ChapterPlan.chapter_number <= row.chapter_end,
+        plans = (
+            self.session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number >= row.chapter_start,
+                    ChapterPlan.chapter_number <= row.chapter_end,
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
             )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return NextBandSummary(
             band_id=row.band_id,
             chapter_start=row.chapter_start,
             chapter_end=row.chapter_end,
-            chapter_titles=[str(plan.title or "") for plan in plans if str(plan.title or "").strip()],
-            band_task_contract=load_plan_task_contract(getattr(row, "task_contract_json", "[]")),
+            chapter_titles=[
+                str(plan.title or "") for plan in plans if str(plan.title or "").strip()
+            ],
+            band_task_contract=load_plan_task_contract(
+                getattr(row, "task_contract_json", "[]")
+            ),
         )
 
     def get_latest_band_checkpoint(
@@ -412,8 +440,12 @@ class StateRepository:
             stmt = stmt.where(BandCheckpoint.status == status)
         return list(
             self.session.execute(
-                stmt.order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
-            ).scalars().all()
+                stmt.order_by(
+                    BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc()
+                )
+            )
+            .scalars()
+            .all()
         )
 
     def list_chapter_rewrite_attempts(
@@ -421,14 +453,21 @@ class StateRepository:
         project_id: str,
         chapter_number: int,
     ) -> list[ChapterRewriteAttempt]:
-        return self.session.execute(
-            select(ChapterRewriteAttempt)
-            .where(
-                ChapterRewriteAttempt.project_id == project_id,
-                ChapterRewriteAttempt.chapter_number == chapter_number,
+        return (
+            self.session.execute(
+                select(ChapterRewriteAttempt)
+                .where(
+                    ChapterRewriteAttempt.project_id == project_id,
+                    ChapterRewriteAttempt.chapter_number == chapter_number,
+                )
+                .order_by(
+                    ChapterRewriteAttempt.attempt_no.asc(),
+                    ChapterRewriteAttempt.created_at.asc(),
+                )
             )
-            .order_by(ChapterRewriteAttempt.attempt_no.asc(), ChapterRewriteAttempt.created_at.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     def list_chapter_rewrite_attempts_for_phase(
         self,
@@ -436,18 +475,23 @@ class StateRepository:
         chapter_number: int,
         repair_phase: str,
     ) -> list[ChapterRewriteAttempt]:
-        return self.session.execute(
-            select(ChapterRewriteAttempt)
-            .where(
-                ChapterRewriteAttempt.project_id == project_id,
-                ChapterRewriteAttempt.chapter_number == chapter_number,
-                ChapterRewriteAttempt.repair_phase == str(repair_phase or "review_repair"),
+        return (
+            self.session.execute(
+                select(ChapterRewriteAttempt)
+                .where(
+                    ChapterRewriteAttempt.project_id == project_id,
+                    ChapterRewriteAttempt.chapter_number == chapter_number,
+                    ChapterRewriteAttempt.repair_phase
+                    == str(repair_phase or "review_repair"),
+                )
+                .order_by(
+                    ChapterRewriteAttempt.phase_attempt_no.asc(),
+                    ChapterRewriteAttempt.created_at.asc(),
+                )
             )
-            .order_by(
-                ChapterRewriteAttempt.phase_attempt_no.asc(),
-                ChapterRewriteAttempt.created_at.asc(),
-            )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     def get_recent_review_notes(
         self,
@@ -466,7 +510,9 @@ class StateRepository:
                 ChapterPlan.project_id == project_id,
                 ChapterPlan.chapter_number < before_chapter,
             )
-            .order_by(ChapterPlan.chapter_number.desc(), ChapterReview.created_at.desc())
+            .order_by(
+                ChapterPlan.chapter_number.desc(), ChapterReview.created_at.desc()
+            )
         ).all()
         notes: list[ReviewNote] = []
         seen_chapters: set[int] = set()
@@ -523,8 +569,12 @@ class StateRepository:
             self.session.execute(
                 select(SubWorld)
                 .where(SubWorld.project_id == project_id)
-                .order_by(SubWorld.scope.asc(), SubWorld.created_at.asc(), SubWorld.id.asc())
-            ).scalars().all()
+                .order_by(
+                    SubWorld.scope.asc(), SubWorld.created_at.asc(), SubWorld.id.asc()
+                )
+            )
+            .scalars()
+            .all()
         )
 
     def list_roster_items(
@@ -532,8 +582,14 @@ class StateRepository:
         project_id: str,
         subworld_ids: list[str] | None = None,
     ) -> list[SubWorldRosterItem]:
-        stmt = select(SubWorldRosterItem).where(SubWorldRosterItem.project_id == project_id)
-        normalized_ids = [str(item or "").strip() for item in (subworld_ids or []) if str(item or "").strip()]
+        stmt = select(SubWorldRosterItem).where(
+            SubWorldRosterItem.project_id == project_id
+        )
+        normalized_ids = [
+            str(item or "").strip()
+            for item in (subworld_ids or [])
+            if str(item or "").strip()
+        ]
         if normalized_ids:
             stmt = stmt.where(SubWorldRosterItem.subworld_id.in_(normalized_ids))
         return list(
@@ -544,7 +600,9 @@ class StateRepository:
                     SubWorldRosterItem.created_at.asc(),
                     SubWorldRosterItem.id.asc(),
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
     def get_active_subworld_summary(
@@ -578,7 +636,9 @@ class StateRepository:
                         for item in roster
                         if item.is_core and str(item.display_name or "").strip()
                     ],
-                    planned_slot_count=sum(1 for item in roster if item.status == "planned_slot"),
+                    planned_slot_count=sum(
+                        1 for item in roster if item.status == "planned_slot"
+                    ),
                 )
             )
         return summaries
@@ -593,16 +653,24 @@ class StateRepository:
             active_ids = self._fallback_global_core_ids(project_id)
         active_set = set(active_ids)
         drafts: list[dict] = []
-        map_region_rows = self.session.execute(
-            select(MapRegionRow)
-            .where(
-                MapRegionRow.project_id == project_id,
-                MapRegionRow.subworld_id.in_(active_set),
+        map_region_rows = (
+            self.session.execute(
+                select(MapRegionRow)
+                .where(
+                    MapRegionRow.project_id == project_id,
+                    MapRegionRow.subworld_id.in_(active_set),
+                )
+                .order_by(MapRegionRow.created_at.asc(), MapRegionRow.id.asc())
             )
-            .order_by(MapRegionRow.created_at.asc(), MapRegionRow.id.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         seen_names: set[tuple[str, str]] = set()
-        subworld_names = {row.id: row.name for row in self.list_subworlds(project_id) if row.id in active_set}
+        subworld_names = {
+            row.id: row.name
+            for row in self.list_subworlds(project_id)
+            if row.id in active_set
+        }
         for region in map_region_rows:
             metadata = _load_json_object(region.metadata_json or "{}", {})
             payload = {
@@ -624,7 +692,9 @@ class StateRepository:
             if row.id not in active_set:
                 continue
             metadata = _load_json_object(getattr(row, "metadata_json", "") or "{}", {})
-            region_drafts = metadata.get("region_drafts") if isinstance(metadata, dict) else []
+            region_drafts = (
+                metadata.get("region_drafts") if isinstance(metadata, dict) else []
+            )
             if not isinstance(region_drafts, list):
                 continue
             for draft in region_drafts:
@@ -653,23 +723,27 @@ class StateRepository:
         *,
         chapter_number: int,
     ) -> list[NarrativeConstraintInfo]:
-        rows = self.session.execute(
-            select(NarrativeConstraint)
-            .where(
-                NarrativeConstraint.project_id == project_id,
-                NarrativeConstraint.status == "active",
-                NarrativeConstraint.effective_from_chapter <= chapter_number,
-                or_(
-                    NarrativeConstraint.protect_until_chapter == 0,
-                    NarrativeConstraint.protect_until_chapter >= chapter_number,
-                ),
+        rows = (
+            self.session.execute(
+                select(NarrativeConstraint)
+                .where(
+                    NarrativeConstraint.project_id == project_id,
+                    NarrativeConstraint.status == "active",
+                    NarrativeConstraint.effective_from_chapter <= chapter_number,
+                    or_(
+                        NarrativeConstraint.protect_until_chapter == 0,
+                        NarrativeConstraint.protect_until_chapter >= chapter_number,
+                    ),
+                )
+                .order_by(
+                    NarrativeConstraint.level.asc(),
+                    NarrativeConstraint.protect_until_chapter.desc(),
+                    NarrativeConstraint.created_at.desc(),
+                )
             )
-            .order_by(
-                NarrativeConstraint.level.asc(),
-                NarrativeConstraint.protect_until_chapter.desc(),
-                NarrativeConstraint.created_at.desc(),
-            )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return [
             NarrativeConstraintInfo(
                 id=row.id,
@@ -692,9 +766,11 @@ class StateRepository:
         project = self.session.get(Project, project_id)
         if project is None:
             return False
-        return ProjectPolicyStore(self.session).load(
-            project
-        ).policy.planning.future_constraints
+        return (
+            ProjectPolicyStore(self.session)
+            .load(project)
+            .policy.planning.future_constraints
+        )
 
     def list_narrative_constraints(
         self,
@@ -704,8 +780,12 @@ class StateRepository:
             self.session.execute(
                 select(NarrativeConstraint)
                 .where(NarrativeConstraint.project_id == project_id)
-                .order_by(NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc())
-            ).scalars().all()
+                .order_by(
+                    NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc()
+                )
+            )
+            .scalars()
+            .all()
         )
 
     def list_decision_events(
@@ -739,9 +819,15 @@ class StateRepository:
             stmt = stmt.where(DecisionEvent.related_object_id == related_object_id)
         if causal_root_id:
             stmt = stmt.where(DecisionEvent.causal_root_id == causal_root_id)
-        rows = self.session.execute(
-            stmt.order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc()).limit(max(1, limit))
-        ).scalars().all()
+        rows = (
+            self.session.execute(
+                stmt.order_by(
+                    DecisionEvent.created_at.desc(), DecisionEvent.id.desc()
+                ).limit(max(1, limit))
+            )
+            .scalars()
+            .all()
+        )
         return [
             DecisionEventInfo(
                 id=row.id,
@@ -772,19 +858,23 @@ class StateRepository:
         before_chapter: int,
         limit: int = 5,
     ) -> list[NPCIntentView]:
-        rows = self.session.execute(
-            select(NPCIntentSnapshot)
-            .where(
-                NPCIntentSnapshot.project_id == project_id,
-                NPCIntentSnapshot.chapter_number < before_chapter,
+        rows = (
+            self.session.execute(
+                select(NPCIntentSnapshot)
+                .where(
+                    NPCIntentSnapshot.project_id == project_id,
+                    NPCIntentSnapshot.chapter_number < before_chapter,
+                )
+                .order_by(
+                    NPCIntentSnapshot.chapter_number.desc(),
+                    NPCIntentSnapshot.urgency.desc(),
+                    NPCIntentSnapshot.created_at.desc(),
+                )
+                .limit(limit)
             )
-            .order_by(
-                NPCIntentSnapshot.chapter_number.desc(),
-                NPCIntentSnapshot.urgency.desc(),
-                NPCIntentSnapshot.created_at.desc(),
-            )
-            .limit(limit)
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return [
             NPCIntentView(
                 entity_name=row.entity_name,
@@ -840,18 +930,20 @@ class StateRepository:
         if not work_name:
             return None
 
-        allowed_chapter_titles = self.session.execute(
-            select(ChapterPlan.title)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number < before_chapter,
+        allowed_chapter_titles = (
+            self.session.execute(
+                select(ChapterPlan.title)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number < before_chapter,
+                )
+                .order_by(ChapterPlan.chapter_number.desc())
             )
-            .order_by(ChapterPlan.chapter_number.desc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         normalized_allowed_titles = {
-            str(item).strip()
-            for item in allowed_chapter_titles
-            if str(item).strip()
+            str(item).strip() for item in allowed_chapter_titles if str(item).strip()
         }
         has_project_scoped_comments = bool(
             self.session.execute(
@@ -863,7 +955,9 @@ class StateRepository:
 
         comments_stmt = select(PublisherRawComment)
         if has_project_scoped_comments:
-            comments_stmt = comments_stmt.where(PublisherRawComment.project_id == project_id)
+            comments_stmt = comments_stmt.where(
+                PublisherRawComment.project_id == project_id
+            )
         else:
             comments_stmt = comments_stmt.where(
                 or_(
@@ -875,31 +969,44 @@ class StateRepository:
         if normalized_allowed_titles:
             comments_stmt = comments_stmt.where(
                 or_(
-                    PublisherRawComment.chapter_title.in_(sorted(normalized_allowed_titles)),
+                    PublisherRawComment.chapter_title.in_(
+                        sorted(normalized_allowed_titles)
+                    ),
                     PublisherRawComment.chapter_title == "",
                 )
             )
-        recent_comments = self.session.execute(
-            comments_stmt
-            .order_by(PublisherRawComment.synced_at.desc(), PublisherRawComment.updated_at.desc())
-            .limit(limit)
-        ).scalars().all()
-
-        aggregate_rows = self.session.execute(
-            select(SignalWindowAggregate)
-            .where(
-                SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.window_chapter_end < before_chapter,
+        recent_comments = (
+            self.session.execute(
+                comments_stmt.order_by(
+                    PublisherRawComment.synced_at.desc(),
+                    PublisherRawComment.updated_at.desc(),
+                ).limit(limit)
             )
-            .order_by(SignalWindowAggregate.window_chapter_end.desc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
+
+        aggregate_rows = (
+            self.session.execute(
+                select(SignalWindowAggregate)
+                .where(
+                    SignalWindowAggregate.project_id == project_id,
+                    SignalWindowAggregate.window_chapter_end < before_chapter,
+                )
+                .order_by(SignalWindowAggregate.window_chapter_end.desc())
+            )
+            .scalars()
+            .all()
+        )
         structured_snapshot: list[SignalWindowAggregate] = []
         if aggregate_rows:
             anchor_row = sorted(
                 aggregate_rows,
                 key=lambda row: (
                     int(row.window_chapter_end or 0),
-                    -_READER_FEEDBACK_WINDOW_PRIORITY.get(str(row.window_type or ""), 99),
+                    -_READER_FEEDBACK_WINDOW_PRIORITY.get(
+                        str(row.window_type or ""), 99
+                    ),
                 ),
                 reverse=True,
             )[0]
@@ -923,7 +1030,10 @@ class StateRepository:
         comment_count = (
             max(
                 len(recent_comments),
-                max((int(row.total_comment_count or 0) for row in structured_snapshot), default=0),
+                max(
+                    (int(row.total_comment_count or 0) for row in structured_snapshot),
+                    default=0,
+                ),
             )
             if structured_snapshot
             else len(recent_comments)
@@ -979,7 +1089,9 @@ class StateRepository:
             dominant_sentiment = _keyword_dominant_sentiment(recent_comments)
             highlighted_topics = []
             confirmed_signals = []
-            feedback_summary = _keyword_feedback_summary(comment_count, dominant_sentiment)
+            feedback_summary = _keyword_feedback_summary(
+                comment_count, dominant_sentiment
+            )
 
         # ── Load reader tier from latest snapshot ──
         reader_tier = 0
@@ -1010,17 +1122,21 @@ class StateRepository:
         window_type: str = "long",
         limit: int = 6,
     ) -> list[AudienceTrendView]:
-        rows = self.session.execute(
-            select(SignalWindowAggregate)
-            .where(
-                SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.window_chapter_end < before_chapter,
+        rows = (
+            self.session.execute(
+                select(SignalWindowAggregate)
+                .where(
+                    SignalWindowAggregate.project_id == project_id,
+                    SignalWindowAggregate.window_chapter_end < before_chapter,
+                )
+                .order_by(
+                    SignalWindowAggregate.window_chapter_end.desc(),
+                    SignalWindowAggregate.created_at.desc(),
+                )
             )
-            .order_by(
-                SignalWindowAggregate.window_chapter_end.desc(),
-                SignalWindowAggregate.created_at.desc(),
-            )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not rows:
             return []
         return derive_audience_trends(
@@ -1042,16 +1158,20 @@ class StateRepository:
 
         Returns a lightweight data object with hint lists, or None if no actions exist.
         """
-        records = self.session.execute(
-            select(FeedbackActionRecord)
-            .where(
-                FeedbackActionRecord.project_id == project_id,
-                FeedbackActionRecord.triggered_at_chapter < before_chapter,
-                FeedbackActionRecord.cooldown_until_chapter >= before_chapter,
+        records = (
+            self.session.execute(
+                select(FeedbackActionRecord)
+                .where(
+                    FeedbackActionRecord.project_id == project_id,
+                    FeedbackActionRecord.triggered_at_chapter < before_chapter,
+                    FeedbackActionRecord.cooldown_until_chapter >= before_chapter,
+                )
+                .order_by(FeedbackActionRecord.created_at.desc())
+                .limit(12)
             )
-            .order_by(FeedbackActionRecord.created_at.desc())
-            .limit(12)
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not records:
             return None
 
@@ -1085,14 +1205,18 @@ class StateRepository:
         project_id: str,
         chapter_number: int,
     ) -> list[str]:
-        chapter_experience = self.get_chapter_experience_plan(project_id, chapter_number)
+        chapter_experience = self.get_chapter_experience_plan(
+            project_id, chapter_number
+        )
         if chapter_experience is not None and chapter_experience.active_subworld_ids:
             return [
                 str(item).strip()
                 for item in chapter_experience.active_subworld_ids
                 if str(item).strip()
             ]
-        band_schedule = self.get_band_experience_plan_for_chapter(project_id, chapter_number)
+        band_schedule = self.get_band_experience_plan_for_chapter(
+            project_id, chapter_number
+        )
         if band_schedule is not None and band_schedule.active_subworld_ids:
             return [
                 str(item).strip()
@@ -1111,4 +1235,8 @@ class StateRepository:
             )
             .order_by(SubWorld.created_at.asc(), SubWorld.id.asc())
         ).all()
-        return [str(subworld_id) for subworld_id, in rows if str(subworld_id or "").strip()]
+        return [
+            str(subworld_id)
+            for (subworld_id,) in rows
+            if str(subworld_id or "").strip()
+        ]

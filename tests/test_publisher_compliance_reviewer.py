@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -8,13 +9,23 @@ from forwin.review.publisher_compliance import PublisherComplianceReviewer
 
 
 def _writer(body: str, title: str = "第一章") -> WriterOutput:
-    return WriterOutput(
+    output = WriterOutput(
         project_id="project-1",
         chapter_number=1,
         title=title,
         body=body,
         char_count=len(body),
         end_of_chapter_summary="测试章节。",
+    )
+    plan = EntityAdmissionPlan(
+        project_id=output.project_id,
+        chapter_number=output.chapter_number,
+        candidate_fingerprint=writer_output_admission_fingerprint(output),
+    )
+    return output.model_copy(
+        update={
+            "generation_meta": {"entity_admission_plan": plan.model_dump(mode="json")}
+        }
     )
 
 
@@ -57,7 +68,9 @@ def test_publisher_compliance_reviewer_emits_error_for_contact_text() -> None:
     assert issue.evidence_refs
 
 
-def test_publisher_compliance_reviewer_allows_contact_label_in_fictional_record() -> None:
+def test_publisher_compliance_reviewer_allows_contact_label_in_fictional_record() -> (
+    None
+):
     verdict = PublisherComplianceReviewer().review(
         _context(),
         _writer("档案表格的标题栏写着名字、地址、联系方式，林陈扫过几行。"),
@@ -67,7 +80,9 @@ def test_publisher_compliance_reviewer_allows_contact_label_in_fictional_record(
     assert verdict.issues == []
 
 
-def test_publisher_compliance_reviewer_emits_warning_for_soft_promotional_text() -> None:
+def test_publisher_compliance_reviewer_emits_warning_for_soft_promotional_text() -> (
+    None
+):
     verdict = PublisherComplianceReviewer().review(
         _context(),
         _writer("作者有话说：求收藏求推荐票，喜欢可以继续追读。"),
@@ -84,7 +99,7 @@ def test_historical_draft_review_merges_publisher_compliance_when_enabled() -> N
         map_movement_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
-        governance_reviewer=_PassReviewer(),
+        plan_reviewer=_PassReviewer(),
         publisher_compliance_review_enabled=True,
     )
 
@@ -106,7 +121,7 @@ def test_historical_draft_review_unchanged_when_publisher_compliance_disabled() 
         map_movement_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
-        governance_reviewer=_PassReviewer(),
+        plan_reviewer=_PassReviewer(),
         publisher_compliance_review_enabled=False,
     )
 

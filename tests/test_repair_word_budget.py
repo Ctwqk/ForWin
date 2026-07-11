@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from forwin.governance import DecisionEventType, ensure_decision_event_type
+from forwin.audit.events import (
+    DecisionEventType,
+    ensure_decision_event_type,
+)
 from forwin.generation.pipeline_core.repair_budget import evaluate_repair_body_budget
 from forwin.review.repair.service import _default_repair_instruction
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
@@ -59,7 +62,10 @@ def test_repair_body_budget_overrun_returns_registered_decision_event() -> None:
 
     assert decision is not None
     assert decision.event_type == DecisionEventType.REPAIR_BODY_OVER_BUDGET
-    assert ensure_decision_event_type(decision.event_type) == DecisionEventType.REPAIR_BODY_OVER_BUDGET
+    assert (
+        ensure_decision_event_type(decision.event_type)
+        == DecisionEventType.REPAIR_BODY_OVER_BUDGET
+    )
     assert decision.reason == "repair-body-over-budget"
     assert decision.payload["source_char_count"] == 4000
     assert decision.payload["result_char_count"] == 5200

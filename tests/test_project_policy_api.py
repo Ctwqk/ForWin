@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from forwin.application.runtime_policy import get_project_policy, update_project_policy
 from forwin.api_schema.policy import RuntimePolicyUpdateRequest
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater

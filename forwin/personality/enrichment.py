@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models import DecisionEvent
 from forwin.models.base import new_id
 from forwin.personality.library import CharacterPersonalityLibrary

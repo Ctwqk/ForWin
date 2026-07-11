@@ -14,7 +14,10 @@ from fastmcp.exceptions import ToolError
 import forwin.api as api_module
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
-from forwin.governance import BandCheckpointDetail, BandCheckpointIssueInfo
+from forwin.planning.checkpoints import (
+    BandCheckpointDetail,
+    BandCheckpointIssueInfo,
+)
 from forwin.mcp.client import ForWinAPIClient
 from forwin.mcp.http import build_asgi_app, build_mcp_server
 from forwin.mcp.models import (
@@ -44,15 +47,23 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
     def test_invalid_stage_key_is_rejected_before_http_request(self) -> None:
         client = ForWinAPIClient(
             base_url="http://forwin.invalid",
-            transport=httpx.MockTransport(lambda request: self.fail(f"unexpected request: {request.url}")),
+            transport=httpx.MockTransport(
+                lambda request: self.fail(f"unexpected request: {request.url}")
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "Unsupported stage_key"):
-            asyncio.run(client.genesis_stage_generate(project_id="project-1", stage_key="bad-stage"))  # type: ignore[arg-type]
+            asyncio.run(
+                client.genesis_stage_generate(
+                    project_id="project-1", stage_key="bad-stage"
+                )
+            )  # type: ignore[arg-type]
 
     def test_http_4xx_becomes_value_error_with_api_message(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(409, json={"detail": "active generation task"}, request=request)
+            return httpx.Response(
+                409, json={"detail": "active generation task"}, request=request
+            )
 
         client = ForWinAPIClient(
             base_url="http://forwin.invalid",
@@ -64,7 +75,9 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
 
     def test_http_5xx_becomes_runtime_error(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(503, json={"detail": "backend unavailable"}, request=request)
+            return httpx.Response(
+                503, json={"detail": "backend unavailable"}, request=request
+            )
 
         client = ForWinAPIClient(
             base_url="http://forwin.invalid",
@@ -134,7 +147,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
 
         self.api_transport = httpx.ASGITransport(app=api_module.app)
-        self.api_client = ForWinAPIClient(base_url="http://testserver", transport=self.api_transport)
+        self.api_client = ForWinAPIClient(
+            base_url="http://testserver", transport=self.api_transport
+        )
         self.mcp = build_mcp_server(api_client=self.api_client)
         self.mcp_app = build_asgi_app(api_client=self.api_client, mcp_server=self.mcp)
 
@@ -147,10 +162,14 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.engine.dispose()
         self.tmpdir.cleanup()
 
-    def _call_tool(self, name: str, arguments: dict | None = None, *, raise_on_error: bool = True):
+    def _call_tool(
+        self, name: str, arguments: dict | None = None, *, raise_on_error: bool = True
+    ):
         async def run():
             async with Client(self.mcp) as client:
-                return await client.call_tool(name, arguments or {}, raise_on_error=raise_on_error)
+                return await client.call_tool(
+                    name, arguments or {}, raise_on_error=raise_on_error
+                )
 
         return asyncio.run(run())
 
@@ -245,11 +264,21 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
+                    "execution_bootstrap": {
+                        "pipeline": "strict_blackbox",
+                        "root_ready": True,
+                    },
                 }
             ),
         )
-        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+        for stage_key in (
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+        ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
         return created.project_id
 
@@ -263,7 +292,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
-            arc = updater.create_arc_plan(project_id=project.id, arc_synopsis="测试 arc")
+            arc = updater.create_arc_plan(
+                project_id=project.id, arc_synopsis="测试 arc"
+            )
             plan = updater.create_chapter_plan(
                 project_id=project.id,
                 arc_plan_id=arc.id,
@@ -283,7 +314,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             )
             session.add(draft)
             session.flush()
-            session.add(ChapterReview(draft_id=draft.id, verdict="warn", issues_json="[]"))
+            session.add(
+                ChapterReview(draft_id=draft.id, verdict="warn", issues_json="[]")
+            )
             session.commit()
             return project.id, 1
 
@@ -323,7 +356,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 ]
             ),
         )
-        self.assertTrue(all("Use this when" in (tool.description or "") for tool in tools))
+        self.assertTrue(
+            all("Use this when" in (tool.description or "") for tool in tools)
+        )
 
     def test_project_set_gate_delegate_via_mcp_updates_runtime_policy(self) -> None:
         with self.session_factory() as session:
@@ -372,10 +407,14 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         projects = self._load_model(ProjectListView, self._call_tool("project_list"))
         self.assertTrue(any(project.id == project_id for project in projects.projects))
 
-        tasks = self._load_model(TaskListView, self._call_tool("task_list", {"limit": 5}))
+        tasks = self._load_model(
+            TaskListView, self._call_tool("task_list", {"limit": 5})
+        )
         self.assertIsInstance(tasks.tasks, list)
 
-        chapters = self._load_model(ChapterListView, self._call_tool("chapter_list", {"project_id": project_id}))
+        chapters = self._load_model(
+            ChapterListView, self._call_tool("chapter_list", {"project_id": project_id})
+        )
         self.assertEqual([item.chapter_number for item in chapters.chapters], [1])
 
     def test_extend_generation_via_mcp_appends_future_plans(self) -> None:
@@ -429,14 +468,23 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertEqual(result.project.chapter_count, 4)
         self.assertEqual(result.project.generation_control.planned_chapters, [3, 4])
         with self.session_factory() as session:
-            plans = session.query(ChapterPlan).filter(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number >= 3,
-            ).order_by(ChapterPlan.chapter_number).all()
-            arc = session.query(ArcPlanVersion).filter(
-                ArcPlanVersion.project_id == project_id,
-                ArcPlanVersion.arc_number == 2,
-            ).one()
+            plans = (
+                session.query(ChapterPlan)
+                .filter(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number >= 3,
+                )
+                .order_by(ChapterPlan.chapter_number)
+                .all()
+            )
+            arc = (
+                session.query(ArcPlanVersion)
+                .filter(
+                    ArcPlanVersion.project_id == project_id,
+                    ArcPlanVersion.arc_number == 2,
+                )
+                .one()
+            )
 
         self.assertEqual(arc.status, "planned")
         self.assertEqual([plan.status for plan in plans], ["planned", "planned"])
@@ -452,7 +500,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         api_module._persist_generation_task(task_id, task)
 
-        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+        result = self._load_model(
+            TaskView, self._call_tool("task_get", {"task_id": task_id})
+        )
 
         self.assertTrue(result.created_at)
         self.assertTrue(result.updated_at)
@@ -468,7 +518,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         task["run_until_chapter"] = 60
         api_module._persist_generation_task(task_id, task)
 
-        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+        result = self._load_model(
+            TaskView, self._call_tool("task_get", {"task_id": task_id})
+        )
 
         self.assertEqual(result.requested_chapters, 11)
         self.assertEqual(result.run_until_chapter, 60)
@@ -486,7 +538,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         task["heartbeat_at"] = api_module._utcnow()
         api_module._persist_generation_task(task_id, task)
 
-        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+        result = self._load_model(
+            TaskView, self._call_tool("task_get", {"task_id": task_id})
+        )
 
         self.assertEqual(result.lease_owner, "worker-1")
         self.assertTrue(result.lease_expires_at)
@@ -544,7 +598,15 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         assert created.project is not None
 
-        def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_generate_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
             return (
                 {
                     "overview": "被 MCP 生成的世界观。",
@@ -563,12 +625,22 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 },
             )
 
-        def fake_refine_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_refine_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
             return (
                 {"value": "旧王朝崩塌后的百年乱局进入第二次重组前夜。"},
                 {
                     "effective_system_prompt": "genesis refine world",
-                    "prompt_layers": [{"role": "system", "content": "genesis refine world"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": "genesis refine world"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fake-model"},
                     "attempts": [{"attempt": 1, "status": "success"}],
@@ -576,7 +648,10 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_generate_call,
+        ):
             generated = self._load_model(
                 MutationResult,
                 self._call_tool(
@@ -584,9 +659,15 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     {"project_id": created.project.id, "stage_key": "world"},
                 ),
             )
-        self.assertEqual(generated.genesis.pack["world"]["world_bible"]["overview"], "被 MCP 生成的世界观。")
+        self.assertEqual(
+            generated.genesis.pack["world"]["world_bible"]["overview"],
+            "被 MCP 生成的世界观。",
+        )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_refine_call,
+        ):
             refined = self._load_model(
                 MutationResult,
                 self._call_tool(
@@ -611,14 +692,24 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 {"project_id": created.project.id, "stage_key": "world"},
             ),
         )
-        world_state = {item.stage_key: item for item in locked.genesis.stage_states}["world"]
+        world_state = {item.stage_key: item for item in locked.genesis.stage_states}[
+            "world"
+        ]
         self.assertTrue(world_state.locked)
         self.assertEqual(world_state.status, "locked")
 
     def test_start_writing_continue_conflict_and_pause_via_mcp(self) -> None:
         project_id = self._create_ready_project()
 
-        def fake_launch_arc_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_launch_arc_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
             if str(stage_key).startswith("launch_arc_"):
                 return (
                     {
@@ -642,7 +733,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     },
                     {
                         "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [{"role": "system", "content": "launch arc planner"}],
+                        "prompt_layers": [
+                            {"role": "system", "content": "launch arc planner"}
+                        ],
                         "input_snapshot": {"stage_key": stage_key},
                         "model_profile": {"model": "fake-model"},
                         "attempts": [{"attempt": 1, "status": "success"}],
@@ -744,7 +837,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api._create_continue_generation_task", new=capture_task_creation
+        ):
             result = self._load_model(
                 MutationResult,
                 self._call_tool(
@@ -767,7 +862,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
     def test_chapter_list_and_get_via_mcp(self) -> None:
         project_id, chapter_number = self._create_project_with_draft()
 
-        chapter_list_result = self._call_tool("chapter_list", {"project_id": project_id})
+        chapter_list_result = self._call_tool(
+            "chapter_list", {"project_id": project_id}
+        )
         chapters = self._load_model(ChapterListView, chapter_list_result).chapters
         self.assertEqual([item.chapter_number for item in chapters], [1])
         self.assertTrue(chapters[0].has_draft)
@@ -787,7 +884,11 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
     def test_chapter_review_approve_via_mcp(self) -> None:
         project_id, chapter_number = self._create_project_with_draft()
         with self.session_factory() as session:
-            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            plan = (
+                session.query(ChapterPlan)
+                .filter_by(project_id=project_id, chapter_number=chapter_number)
+                .one()
+            )
             plan.status = "drafted"
             session.commit()
 
@@ -804,7 +905,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             }
 
         old_pipeline = api_module._pipeline
-        api_module._pipeline = type("FakePipeline", (), {"accept_review": staticmethod(accept_review)})()
+        api_module._pipeline = type(
+            "FakePipeline", (), {"accept_review": staticmethod(accept_review)}
+        )()
         try:
             result = self._call_tool(
                 "chapter_review_approve",
@@ -822,12 +925,18 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["status"], "accepted")
         self.assertEqual(payload["frozen_artifact"], "artifact.json")
         self.assertEqual(accepted_calls[0][0], (project_id, chapter_number))
-        self.assertEqual(accepted_calls[0][1]["reason"], "MCP operator accepted clean review")
+        self.assertEqual(
+            accepted_calls[0][1]["reason"], "MCP operator accepted clean review"
+        )
 
     def test_chapter_review_retry_via_mcp(self) -> None:
         project_id, chapter_number = self._create_project_with_draft()
         with self.session_factory() as session:
-            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            plan = (
+                session.query(ChapterPlan)
+                .filter_by(project_id=project_id, chapter_number=chapter_number)
+                .one()
+            )
             plan.status = "needs_review"
             plan.residual_review_issues_json = '[{"rule_name":"stale_error"}]'
             plan.canon_risk_level = "high"
@@ -846,7 +955,11 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "planned")
         with self.session_factory() as session:
-            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            plan = (
+                session.query(ChapterPlan)
+                .filter_by(project_id=project_id, chapter_number=chapter_number)
+                .one()
+            )
             self.assertEqual(plan.status, "planned")
             self.assertEqual(plan.residual_review_issues_json, "[]")
             self.assertEqual(plan.canon_risk_level, "")
@@ -861,7 +974,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 runtime_policy=RuntimePolicy.for_profile("standard"),
                 creation_status="writing",
             )
-            arc = updater.create_arc_plan(project_id=project.id, arc_synopsis="checkpoint arc")
+            arc = updater.create_arc_plan(
+                project_id=project.id, arc_synopsis="checkpoint arc"
+            )
             checkpoint = updater.save_band_checkpoint(
                 BandCheckpointDetail(
                     project_id=project.id,
@@ -889,7 +1004,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         fetched = self._load_model(
             BandCheckpointView,
-            self._call_tool("band_checkpoint_get", {"project_id": project_id, "band_id": "band-1"}),
+            self._call_tool(
+                "band_checkpoint_get", {"project_id": project_id, "band_id": "band-1"}
+            ),
         )
         self.assertEqual(fetched.id, checkpoint_id)
         self.assertEqual(fetched.status, "warn")
@@ -917,14 +1034,18 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         snapshot = self._load_model(
             WorldModelSnapshotView,
-            self._call_tool("world_model_get", {"project_id": project_id, "as_of_chapter": 0}),
+            self._call_tool(
+                "world_model_get", {"project_id": project_id, "as_of_chapter": 0}
+            ),
         )
         self.assertEqual(snapshot.as_of_chapter, 0)
         self.assertIn("旧城", json.dumps(snapshot.snapshot, ensure_ascii=False))
 
         page = self._load_model(
             WorldModelPageView,
-            self._call_tool("world_page_get", {"project_id": project_id, "page_key": "world:index"}),
+            self._call_tool(
+                "world_page_get", {"project_id": project_id, "page_key": "world:index"}
+            ),
         )
         self.assertEqual(page.title, "00_Index")
         self.assertIn("Canon Summary", page.markdown)
@@ -937,7 +1058,10 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         exported = self._load_model(
             WorldModelExportView,
-            self._call_tool("world_export_obsidian", {"project_id": project_id, "vault_root": vault_root}),
+            self._call_tool(
+                "world_export_obsidian",
+                {"project_id": project_id, "vault_root": vault_root},
+            ),
         )
         self.assertTrue(exported.ok)
         self.assertTrue((Path(vault_root) / "00_Index.md").exists())

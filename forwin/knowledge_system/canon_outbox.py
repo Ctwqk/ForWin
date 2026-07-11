@@ -7,12 +7,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.knowledge_system.projection_jobs import refresh_projection_now
 from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
 from forwin.retrieval import create_memory_index

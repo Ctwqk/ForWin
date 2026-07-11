@@ -1,4 +1,5 @@
 """Context assembler - builds ChapterContextPack from current state."""
+
 from __future__ import annotations
 import json
 import logging
@@ -6,7 +7,7 @@ from typing import Any
 
 
 from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
-from forwin.governance import DecisionEventInfo
+from forwin.audit.events import DecisionEventInfo
 from forwin.personality import CharacterPersonalityLibrary
 from forwin.state.updater import StateUpdater
 
@@ -22,8 +23,13 @@ def _project_personality_integrity_strict(project) -> bool:
         automation = json.loads(getattr(project, "automation_json", "{}") or "{}") or {}
     except (TypeError, ValueError, json.JSONDecodeError):
         automation = {}
-    personality_policy = automation.get("character_personality") if isinstance(automation, dict) else {}
-    if isinstance(personality_policy, dict) and "strict_integrity" in personality_policy:
+    personality_policy = (
+        automation.get("character_personality") if isinstance(automation, dict) else {}
+    )
+    if (
+        isinstance(personality_policy, dict)
+        and "strict_integrity" in personality_policy
+    ):
         return bool(personality_policy.get("strict_integrity"))
     return True
 
@@ -37,11 +43,14 @@ def _personality_integrity_issues(
 ) -> list[dict[str, Any]]:
     from forwin.personality import PersonalityLoadoutAssigner
 
-    allowed_names = {str(item or "").strip() for item in allowed_entities if str(item or "").strip()}
+    allowed_names = {
+        str(item or "").strip() for item in allowed_entities if str(item or "").strip()
+    }
     allowed_ids = {
         str(getattr(item, "entity_id", "") or "").strip()
         for item in active_entities
-        if str(getattr(item, "kind", "") or "") == "character" and str(getattr(item, "entity_id", "") or "").strip()
+        if str(getattr(item, "kind", "") or "") == "character"
+        and str(getattr(item, "entity_id", "") or "").strip()
     }
     assigner = PersonalityLoadoutAssigner(library)
     issues: list[dict[str, Any]] = []
@@ -56,7 +65,11 @@ def _personality_integrity_issues(
             or character_id in allowed_names
         ):
             continue
-        loadout = character.get("personality_loadout") if isinstance(character.get("personality_loadout"), dict) else {}
+        loadout = (
+            character.get("personality_loadout")
+            if isinstance(character.get("personality_loadout"), dict)
+            else {}
+        )
         if not loadout:
             issues.append(
                 {
@@ -92,7 +105,9 @@ def _personality_integrity_issues(
     return issues
 
 
-def _save_personality_integrity_failure(repo_session, project_id: str, chapter_number: int, issues: list[dict[str, Any]]) -> None:
+def _save_personality_integrity_failure(
+    repo_session, project_id: str, chapter_number: int, issues: list[dict[str, Any]]
+) -> None:
     if repo_session is None:
         return
     StateUpdater(repo_session).save_decision_event(
@@ -113,7 +128,7 @@ def _save_personality_integrity_failure(repo_session, project_id: str, chapter_n
 
 
 __all__ = [
-    '_project_personality_integrity_strict',
-    '_personality_integrity_issues',
-    '_save_personality_integrity_failure',
+    "_project_personality_integrity_strict",
+    "_personality_integrity_issues",
+    "_save_personality_integrity_failure",
 ]

@@ -786,7 +786,7 @@
     let selectedTaskKeys = new Set();
     let currentTaskModalKind = 'generation';
     let currentTaskPrefill = {};
-    let currentGovernanceAction = null;
+    let currentProjectControlAction = null;
     let currentDrawerTask = null;
     let currentDrawerSignature = '';
     let drawerRequestToken = 0;

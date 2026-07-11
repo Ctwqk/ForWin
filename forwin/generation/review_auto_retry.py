@@ -5,8 +5,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventInfo, DecisionEventType
-from forwin.models.governance import DecisionEvent
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.state.updater import StateUpdater
 
@@ -111,7 +114,10 @@ def prior_auto_review_retry_count(
             payload = json.loads(str(event.payload_json or "{}"))
         except (TypeError, json.JSONDecodeError):
             payload = {}
-        if isinstance(payload, dict) and payload.get("source") in AUTO_REVIEW_RETRY_SOURCES:
+        if (
+            isinstance(payload, dict)
+            and payload.get("source") in AUTO_REVIEW_RETRY_SOURCES
+        ):
             count += 1
     return count
 

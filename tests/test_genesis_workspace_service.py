@@ -8,10 +8,10 @@ from sqlalchemy import select
 
 from forwin.genesis import BookGenesisService
 from forwin.genesis.workspace.service import GenesisWorkspaceService
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.state.updater import StateUpdater
 
@@ -25,7 +25,9 @@ class _NoApiKeyClient:
     base_url = ""
     last_call_result = None
 
-    def chat(self, *_args, **_kwargs):  # pragma: no cover - fallback path should avoid this
+    def chat(
+        self, *_args, **_kwargs
+    ):  # pragma: no cover - fallback path should avoid this
         raise AssertionError("workspace tests should not call the real LLM")
 
 
@@ -41,7 +43,9 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
     def _service(self) -> BookGenesisService:
         return BookGenesisService(llm_client=_NoApiKeyClient())
 
-    def _project(self, session, *, project_id: str = "proj-genesis-workspace") -> Project:
+    def _project(
+        self, session, *, project_id: str = "proj-genesis-workspace"
+    ) -> Project:
         project = Project(
             id=project_id,
             title="Workspace 测试书",
@@ -53,14 +57,18 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
         session.flush()
         return project
 
-    def test_facade_exposes_workspace_service_without_writing_side_effects(self) -> None:
+    def test_facade_exposes_workspace_service_without_writing_side_effects(
+        self,
+    ) -> None:
         service = self._service()
         self.assertIsInstance(service.workspace, GenesisWorkspaceService)
 
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = self._project(session)
-            revision = service.create_initial_revision(session=session, updater=updater, project=project)
+            revision = service.create_initial_revision(
+                session=session, updater=updater, project=project
+            )
             service.patch_pack(
                 session=session,
                 updater=updater,
@@ -68,7 +76,9 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
                 revision=revision,
                 patch={
                     "world": {
-                        "world_bible": {"overview": "只属于 Genesis Workspace 的世界观。"},
+                        "world_bible": {
+                            "overview": "只属于 Genesis Workspace 的世界观。"
+                        },
                         "map_atlas": {"overview": "旧城与城外荒原。"},
                         "story_engine": {"long_arcs": ["旧术复苏"]},
                     }
@@ -77,12 +87,32 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
             )
             current = service.active_revision(session, project)
             assert current is not None
-            service.lock_stage(session=session, updater=updater, project=project, revision=current, stage_key="world")
+            service.lock_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=current,
+                stage_key="world",
+            )
             session.commit()
 
             project_row = session.get(Project, project.id)
-            arc_count = session.execute(select(ArcPlanVersion).where(ArcPlanVersion.project_id == project.id)).scalars().all()
-            chapter_count = session.execute(select(ChapterPlan).where(ChapterPlan.project_id == project.id)).scalars().all()
+            arc_count = (
+                session.execute(
+                    select(ArcPlanVersion).where(
+                        ArcPlanVersion.project_id == project.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            chapter_count = (
+                session.execute(
+                    select(ChapterPlan).where(ChapterPlan.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
 
         assert project_row is not None
         self.assertEqual(project_row.creation_status, "creating")
@@ -93,7 +123,9 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
         service = self._service()
         observed_stage_keys: list[str] = []
 
-        def fake_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_call(
+            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+        ):
             observed_stage_keys.append(str(stage_key))
             if stage_key == "brief":
                 return (
@@ -108,7 +140,9 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
                     },
                     {
                         "effective_system_prompt": "genesis brief",
-                        "prompt_layers": [{"role": "system", "content": "genesis brief"}],
+                        "prompt_layers": [
+                            {"role": "system", "content": "genesis brief"}
+                        ],
                         "input_snapshot": {"stage_key": stage_key},
                         "model_profile": {"model": "fake-model"},
                         "attempts": [{"attempt": 1, "status": "success"}],
@@ -130,8 +164,12 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = self._project(session, project_id="proj-genesis-workspace-trace")
-            revision = service.create_initial_revision(session=session, updater=updater, project=project)
-            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_call):
+            revision = service.create_initial_revision(
+                session=session, updater=updater, project=project
+            )
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_call
+            ):
                 generated, _trace = service.generate_stage(
                     session=session,
                     updater=updater,
@@ -150,9 +188,23 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
                 )
             session.commit()
 
-            latest = session.get(BookGenesisRevision, project.active_genesis_revision_id)
-            traces = session.execute(select(PromptTrace).where(PromptTrace.project_id == project.id)).scalars().all()
-            events = session.execute(select(DecisionEvent).where(DecisionEvent.project_id == project.id)).scalars().all()
+            latest = session.get(
+                BookGenesisRevision, project.active_genesis_revision_id
+            )
+            traces = (
+                session.execute(
+                    select(PromptTrace).where(PromptTrace.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
+            events = (
+                session.execute(
+                    select(DecisionEvent).where(DecisionEvent.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
 
         assert latest is not None
         pack = json.loads(latest.pack_json)
@@ -160,8 +212,18 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
         self.assertEqual(observed_stage_keys, ["brief", "brief:refine_item"])
         self.assertTrue(any(trace.trace_scope == "genesis" for trace in traces))
         self.assertTrue(any(trace.trace_scope == "genesis_refine" for trace in traces))
-        self.assertTrue(any(event.event_type == DecisionEventType.GENESIS_STAGE_GENERATED for event in events))
-        self.assertTrue(any(event.event_type == DecisionEventType.GENESIS_STAGE_REFINED for event in events))
+        self.assertTrue(
+            any(
+                event.event_type == DecisionEventType.GENESIS_STAGE_GENERATED
+                for event in events
+            )
+        )
+        self.assertTrue(
+            any(
+                event.event_type == DecisionEventType.GENESIS_STAGE_REFINED
+                for event in events
+            )
+        )
 
     def test_top_level_old_world_sections_are_not_promoted_to_world_root(self) -> None:
         service = self._service()
@@ -188,7 +250,11 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
 
             loaded = service.load_pack(revision)
 
-        self.assertNotEqual(loaded["world"]["world_bible"].get("overview"), "旧顶层 world bible")
+        self.assertNotEqual(
+            loaded["world"]["world_bible"].get("overview"), "旧顶层 world bible"
+        )
         self.assertNotEqual(loaded["world"]["map_atlas"].get("overview"), "旧顶层 map")
-        self.assertNotEqual(loaded["world"]["story_engine"].get("long_arcs"), ["旧顶层 engine"])
+        self.assertNotEqual(
+            loaded["world"]["story_engine"].get("long_arcs"), ["旧顶层 engine"]
+        )
         self.assertNotIn("world_bible", loaded)

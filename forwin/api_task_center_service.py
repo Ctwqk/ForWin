@@ -10,7 +10,8 @@ from sqlalchemy import and_, or_, select
 
 from forwin.project_payloads import build_generation_control, _recent_rows_by_project
 from forwin.api_schema import TaskCenterItemResponse
-from forwin.models.governance import BandCheckpoint, DecisionEvent
+from forwin.models.planning_control import BandCheckpoint
+from forwin.models.audit import DecisionEvent
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
@@ -27,7 +28,9 @@ class TaskCenterService:
     new_stage_history_entry: Callable[..., dict[str, Any]]
     cached_generation_task: Callable[[str], dict[str, Any] | None]
     iter_cached_generation_tasks: Callable[[], list[tuple[str, dict[str, Any]]]]
-    prefer_cached_generation_task: Callable[[dict[str, Any] | None, dict[str, Any] | None], dict[str, Any] | None]
+    prefer_cached_generation_task: Callable[
+        [dict[str, Any] | None, dict[str, Any] | None], dict[str, Any] | None
+    ]
     generation_task_from_row: Callable[[Any], dict[str, Any]]
     config_provider: Callable[[], Any]
     terminal_statuses: set[str]
@@ -42,7 +45,7 @@ class TaskCenterService:
         normalized = str(task_id or "").strip()
         if not normalized.startswith("project-"):
             return None
-        project_id = normalized[len("project-"):].strip()
+        project_id = normalized[len("project-") :].strip()
         return project_id or None
 
     def task_has_stage(self, task: dict[str, Any], stage: str) -> bool:
@@ -70,7 +73,9 @@ class TaskCenterService:
             history.append(
                 self.new_stage_history_entry(
                     expected_stage,
-                    now=normalized.get("updated_at") if isinstance(normalized.get("updated_at"), datetime) else None,
+                    now=normalized.get("updated_at")
+                    if isinstance(normalized.get("updated_at"), datetime)
+                    else None,
                     current_chapter=int(normalized.get("current_chapter", 0) or 0),
                     message=str(normalized.get("message", "")).strip(),
                 )
@@ -114,7 +119,9 @@ class TaskCenterService:
                     task_id,
                     task,
                 )
-            return self.apply_task_visibility_rules(task, include_deleted=include_deleted)
+            return self.apply_task_visibility_rules(
+                task, include_deleted=include_deleted
+            )
 
     def list_generation_tasks(self, limit: int) -> list[tuple[str, dict[str, Any]]]:
         self.prune_tasks()
@@ -131,12 +138,16 @@ class TaskCenterService:
             ][:normalized_limit]
 
         with self.get_session() as session:
-            rows = session.execute(
-                select(GenerationTask)
-                .where(GenerationTask.deleted_at.is_(None))
-                .order_by(GenerationTask.updated_at.desc())
-                .limit(normalized_limit)
-            ).scalars().all()
+            rows = (
+                session.execute(
+                    select(GenerationTask)
+                    .where(GenerationTask.deleted_at.is_(None))
+                    .order_by(GenerationTask.updated_at.desc())
+                    .limit(normalized_limit)
+                )
+                .scalars()
+                .all()
+            )
             merged: dict[str, dict[str, Any]] = {}
             persisted_tasks: list[tuple[str, dict[str, Any]]] = []
             for row in rows:
@@ -148,24 +159,32 @@ class TaskCenterService:
             provisional_map = self._provisional_execution_map(session, persisted_tasks)
             for task_id, task in persisted_tasks:
                 visible = self.apply_task_visibility_rules(
-                    self._apply_provisional_execution(task, provisional_map.get(task_id)),
+                    self._apply_provisional_execution(
+                        task, provisional_map.get(task_id)
+                    ),
                     include_deleted=False,
                 )
                 if visible is not None:
                     merged[task_id] = visible
             for task_id, cached in self.iter_cached_generation_tasks():
-                visible = self.apply_task_visibility_rules(cached, include_deleted=False)
+                visible = self.apply_task_visibility_rules(
+                    cached, include_deleted=False
+                )
                 if visible is None:
                     continue
                 current = merged.get(task_id)
-                merged[task_id] = self.prefer_cached_generation_task(current, visible) or visible
+                merged[task_id] = (
+                    self.prefer_cached_generation_task(current, visible) or visible
+                )
             return sorted(
                 merged.items(),
                 key=lambda item: self.coerce_task_datetime(item[1].get("updated_at")),
                 reverse=True,
             )[:normalized_limit]
 
-    def list_project_backed_task_items(self, limit: int) -> list[TaskCenterItemResponse]:
+    def list_project_backed_task_items(
+        self, limit: int
+    ) -> list[TaskCenterItemResponse]:
         live_project_ids: set[str] = set()
         if self.has_db_session():
             with self.get_session() as session:
@@ -177,16 +196,22 @@ class TaskCenterService:
                             GenerationTask.project_id != "",
                             GenerationTask.status.notin_(tuple(self.terminal_statuses)),
                         )
-                    ).scalars().all()
+                    )
+                    .scalars()
+                    .all()
                     if str(project_id).strip()
                 }
         session = self.get_session()
         try:
-            projects = session.execute(
-                select(Project)
-                .order_by(Project.updated_at.desc())
-                .limit(max(1, min(int(limit or 50), 200)))
-            ).scalars().all()
+            projects = (
+                session.execute(
+                    select(Project)
+                    .order_by(Project.updated_at.desc())
+                    .limit(max(1, min(int(limit or 50), 200)))
+                )
+                .scalars()
+                .all()
+            )
             plans_by_project = self._load_project_task_center_plans(
                 session,
                 [project.id for project in projects],
@@ -215,7 +240,9 @@ class TaskCenterService:
         finally:
             session.close()
 
-    def get_project_backed_task_item_or_404(self, task_id: str) -> TaskCenterItemResponse:
+    def get_project_backed_task_item_or_404(
+        self, task_id: str
+    ) -> TaskCenterItemResponse:
         project_id = self.parse_project_task_id(task_id)
         if not project_id:
             raise HTTPException(404, "任务不存在")
@@ -224,9 +251,15 @@ class TaskCenterService:
             project = session.get(Project, project_id)
             if project is None:
                 raise HTTPException(404, "项目不存在")
-            plans_by_project = self._load_project_task_center_plans(session, [project.id])
-            latest_checkpoint_map = self._latest_band_checkpoint_by_project(session, [project.id])
-            decision_timeline_map = self._decision_timeline_by_project(session, [project.id])
+            plans_by_project = self._load_project_task_center_plans(
+                session, [project.id]
+            )
+            latest_checkpoint_map = self._latest_band_checkpoint_by_project(
+                session, [project.id]
+            )
+            decision_timeline_map = self._decision_timeline_by_project(
+                session, [project.id]
+            )
             return self._build_project_task_center_item(
                 project,
                 plans_by_project.get(project.id, []),
@@ -257,7 +290,9 @@ class TaskCenterService:
 
         for task_id, task in task_entries:
             project_id = str(task.get("project_id", "") or "").strip()
-            if not project_id or self.task_has_stage(task, "running_provisional_preview"):
+            if not project_id or self.task_has_stage(
+                task, "running_provisional_preview"
+            ):
                 continue
             created_at = self.coerce_task_datetime(task.get("created_at"))
             if created_at == minimum:
@@ -274,7 +309,10 @@ class TaskCenterService:
             if current_range is None:
                 project_ranges[project_id] = (start, end)
             else:
-                project_ranges[project_id] = (min(current_range[0], start), max(current_range[1], end))
+                project_ranges[project_id] = (
+                    min(current_range[0], start),
+                    max(current_range[1], end),
+                )
 
         if not windows:
             return {}
@@ -288,20 +326,28 @@ class TaskCenterService:
                 )
             )
 
-        executions = session.execute(
-            select(ProvisionalBandExecution)
-            .where(or_(*project_filters))
-            .order_by(ProvisionalBandExecution.created_at.asc())
-        ).scalars().all()
+        executions = (
+            session.execute(
+                select(ProvisionalBandExecution)
+                .where(or_(*project_filters))
+                .order_by(ProvisionalBandExecution.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
 
         executions_by_project: dict[str, list[ProvisionalBandExecution]] = {}
         for execution in executions:
-            executions_by_project.setdefault(str(execution.project_id or ""), []).append(execution)
+            executions_by_project.setdefault(
+                str(execution.project_id or ""), []
+            ).append(execution)
 
         matched: dict[str, ProvisionalBandExecution] = {}
         for task_id, project_id, start, end in windows:
             for execution in executions_by_project.get(project_id, []):
-                created_at = self.coerce_task_datetime(getattr(execution, "created_at", None))
+                created_at = self.coerce_task_datetime(
+                    getattr(execution, "created_at", None)
+                )
                 if created_at == minimum:
                     continue
                 if start <= created_at <= end:
@@ -351,14 +397,24 @@ class TaskCenterService:
         session,
         project_ids: list[str],
     ) -> dict[str, list[ChapterPlan]]:
-        ids = [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
+        ids = [
+            str(project_id or "").strip()
+            for project_id in project_ids
+            if str(project_id or "").strip()
+        ]
         if not ids:
             return {}
-        rows = session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id.in_(ids))
-            .order_by(ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+        rows = (
+            session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id.in_(ids))
+                .order_by(
+                    ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc()
+                )
+            )
+            .scalars()
+            .all()
+        )
         grouped: dict[str, list[ChapterPlan]] = {project_id: [] for project_id in ids}
         for row in rows:
             grouped.setdefault(str(row.project_id), []).append(row)
@@ -374,7 +430,9 @@ class TaskCenterService:
     ) -> TaskCenterItemResponse:
         requested = len(plans)
         config = self.config_provider()
-        review_interval = max(0, int(getattr(config, "review_interval_chapters", 0) if config else 0))
+        review_interval = max(
+            0, int(getattr(config, "review_interval_chapters", 0) if config else 0)
+        )
         generation_control = build_generation_control(
             plans=plans,
             latest_replan=None,
@@ -403,7 +461,11 @@ class TaskCenterService:
             status = "completed"
             current_stage = "completed"
         current_chapter = max(generated + failed, default=0)
-        message = "书本已创建，当前没有活跃生成任务。" if requested == 0 else "项目入口（当前没有活跃生成任务）"
+        message = (
+            "书本已创建，当前没有活跃生成任务。"
+            if requested == 0
+            else "项目入口（当前没有活跃生成任务）"
+        )
         can_resume = bool((planned or failed) and not paused)
         stage_history = [
             self.new_stage_history_entry(
@@ -415,7 +477,9 @@ class TaskCenterService:
         ]
         generation_control = generation_control.model_copy(
             update={
-                "plan_state": "none" if requested == 0 else generation_control.plan_state,
+                "plan_state": "none"
+                if requested == 0
+                else generation_control.plan_state,
                 "current_stage": current_stage,
                 "current_chapter": current_chapter,
                 "next_chapter": min(planned + failed, default=0),
@@ -450,18 +514,26 @@ class TaskCenterService:
         session,
         project_ids: list[str],
     ) -> dict[str, BandCheckpoint]:
-        ids = [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
+        ids = [
+            str(project_id or "").strip()
+            for project_id in project_ids
+            if str(project_id or "").strip()
+        ]
         if not ids:
             return {}
-        rows = session.execute(
-            select(BandCheckpoint)
-            .where(BandCheckpoint.project_id.in_(ids))
-            .order_by(
-                BandCheckpoint.project_id.asc(),
-                BandCheckpoint.created_at.desc(),
-                BandCheckpoint.id.desc(),
+        rows = (
+            session.execute(
+                select(BandCheckpoint)
+                .where(BandCheckpoint.project_id.in_(ids))
+                .order_by(
+                    BandCheckpoint.project_id.asc(),
+                    BandCheckpoint.created_at.desc(),
+                    BandCheckpoint.id.desc(),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         latest: dict[str, BandCheckpoint] = {}
         for row in rows:
             project_id = str(row.project_id or "")
@@ -476,7 +548,11 @@ class TaskCenterService:
         *,
         limit: int = 12,
     ) -> dict[str, list[DecisionEvent]]:
-        ids = [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
+        ids = [
+            str(project_id or "").strip()
+            for project_id in project_ids
+            if str(project_id or "").strip()
+        ]
         if not ids:
             return {}
         rows_by_project = _recent_rows_by_project(

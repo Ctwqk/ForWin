@@ -18,7 +18,7 @@ _HOME_SCRIPT_PATHS = (
     "home/app_genesis.js",
     "home/app_library.js",
     "home/app_task_progress.js",
-    "home/app_task_governance.js",
+    "home/app_task_control.js",
     "home/app_task_drawer.js",
     "home/app_bootstrap.js",
 )
@@ -39,14 +39,20 @@ def render_home_page(
         body_paths=_HOME_BODY_PATHS,
         script_paths=_HOME_SCRIPT_PATHS,
         replacements={
-            "@@EXTENSION_BADGE_CLASS@@": "ok" if extension_api_key_configured else "warn",
-            "@@EXTENSION_READY_TEXT@@": "已配置" if extension_api_key_configured else "未配置",
+            "@@EXTENSION_BADGE_CLASS@@": "ok"
+            if extension_api_key_configured
+            else "warn",
+            "@@EXTENSION_READY_TEXT@@": "已配置"
+            if extension_api_key_configured
+            else "未配置",
             "@@DEFAULT_GENRE@@": default_genre,
             "@@DEFAULT_GENRE_JSON@@": json.dumps(default_genre, ensure_ascii=False),
             "@@DEFAULT_CHAPTERS@@": str(normalized_default_chapters),
             "@@DEFAULT_CHAPTERS_JSON@@": json.dumps(normalized_default_chapters),
             "@@EXTENSION_READY@@": json.dumps(bool(extension_api_key_configured)),
-            "@@EXTENSION_INSTALL_PATH@@": json.dumps(extension_install_path, ensure_ascii=False),
+            "@@EXTENSION_INSTALL_PATH@@": json.dumps(
+                extension_install_path, ensure_ascii=False
+            ),
             "@@EXTENSION_INSTALL_PATH_TEXT@@": html.escape(extension_install_path),
             "@@REVIEW_ENGINE_BREAKDOWN_HTML@@": _render_rule_decision_breakdown(
                 rule_decision_breakdown or []

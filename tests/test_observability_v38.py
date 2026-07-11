@@ -9,7 +9,10 @@ from unittest.mock import patch
 
 import forwin.api as api_module
 from forwin.api_runtime import run_pipeline_task
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.genesis import PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -45,7 +48,9 @@ class ObservabilityCoreTests(unittest.TestCase):
         self.assertEqual(redacted["nested"][0]["cookies"], "[REDACTED]")
         self.assertEqual(redacted["raw_prompt"], "[REDACTED]")
         self.assertEqual(
-            redact_payload({"response_artifact_uri": "artifact://x"})["response_artifact_uri"],
+            redact_payload({"response_artifact_uri": "artifact://x"})[
+                "response_artifact_uri"
+            ],
             "artifact://x",
         )
         self.assertEqual(payload["api_key"], "sk-secret")
@@ -194,7 +199,9 @@ class ObservabilityReadApiTests(unittest.TestCase):
                 )
             )
             session.flush()
-            plan = updater.create_chapter_plan(project_id, arc_id, 1, "第一章", "开场", ["推进"])
+            plan = updater.create_chapter_plan(
+                project_id, arc_id, 1, "第一章", "开场", ["推进"]
+            )
             plan.status = "accepted"
             session.add(
                 GenerationTask(
@@ -254,7 +261,9 @@ class ObservabilityReadApiTests(unittest.TestCase):
                 trace_scope="writer",
                 stage_key="chapter_draft",
                 template_id="writer:single",
-                input_snapshot_json=json.dumps({"chapter_number": 1, "operation_id": "op-v38"}),
+                input_snapshot_json=json.dumps(
+                    {"chapter_number": 1, "operation_id": "op-v38"}
+                ),
                 attempts_json=json.dumps([{"attempt_no": 1, "model": "fake"}]),
                 output_summary_json=json.dumps(
                     {
@@ -286,7 +295,10 @@ class ObservabilityReadApiTests(unittest.TestCase):
 
         self.assertEqual(timeline.task_id, task_id)
         self.assertEqual(timeline.project_id, project_id)
-        self.assertEqual([item.event_type for item in timeline.events], ["generation_requested", "canon_commit"])
+        self.assertEqual(
+            [item.event_type for item in timeline.events],
+            ["generation_requested", "canon_commit"],
+        )
         self.assertIn("op-v38", timeline.operation_ids)
         self.assertEqual(timeline.stage_durations[0].stage, "canon_commit")
         self.assertEqual(timeline.stage_durations[0].total_duration_ms, 7)
@@ -297,7 +309,9 @@ class ObservabilityReadApiTests(unittest.TestCase):
         self.assertEqual(trace.permission_profile, "prompt_only_readonly")
         self.assertTrue(trace.fallback_used)
 
-    def test_chapter_ledger_and_artifact_read_are_queryable_and_restricted(self) -> None:
+    def test_chapter_ledger_and_artifact_read_are_queryable_and_restricted(
+        self,
+    ) -> None:
         project_id, _task_id, trace_id = self._seed_project()
         artifact_uri = str(self.artifact_root / "projects" / project_id / "raw.txt")
 
@@ -310,11 +324,14 @@ class ObservabilityReadApiTests(unittest.TestCase):
         self.assertIn(trace_id, ledger.prompt_trace_ids)
         self.assertIn("op-v38", ledger.operation_ids)
         self.assertEqual(ledger.stage_durations[0].stage, "canon_commit")
-        self.assertTrue(any(item.kind == "test_artifact" for item in ledger.artifact_manifest))
+        self.assertTrue(
+            any(item.kind == "test_artifact" for item in ledger.artifact_manifest)
+        )
         self.assertEqual(artifact.preview, "artifact")
         self.assertTrue(artifact.truncated)
         with self.assertRaises(api_module.HTTPException):
             api_module.read_artifact_preview(uri="/etc/passwd")
+
 
 class ApiRuntimeObservabilityTests(unittest.TestCase):
     def test_run_pipeline_task_records_success_and_cleanup_events(self) -> None:
@@ -326,7 +343,9 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
             try:
                 with session_factory() as session:
                     updater = StateUpdater(session)
-                    updater.create_project("Runtime", "premise", "玄幻", target_total_chapters=1)
+                    updater.create_project(
+                        "Runtime", "premise", "玄幻", target_total_chapters=1
+                    )
                     project = session.query(Project).first()
                     project_id = project.id
                     session.commit()
@@ -350,7 +369,11 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 pipeline = type(
                     "FakePipeline",
                     (),
-                    {"_SessionFactory": session_factory, "llm_client": fake_llm, "engine": fake_engine},
+                    {
+                        "_SessionFactory": session_factory,
+                        "llm_client": fake_llm,
+                        "engine": fake_engine,
+                    },
                 )()
                 updates: list[dict[str, object]] = []
 
@@ -370,17 +393,24 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     "task-runtime-success",
                     pipeline,
                     lambda: result,
-                    update_task=lambda task_id, **changes: updates.append({"task_id": task_id, **changes}),
+                    update_task=lambda task_id, **changes: updates.append(
+                        {"task_id": task_id, **changes}
+                    ),
                     logger=api_module.logger,
                     error_message="runtime failed",
                     default_project_id=project_id,
                 )
 
                 with session_factory() as session:
-                    rows = session.query(api_module.DecisionEvent).filter(
-                        api_module.DecisionEvent.project_id == project_id,
-                        api_module.DecisionEvent.task_id == "task-runtime-success",
-                    ).order_by(api_module.DecisionEvent.created_at.asc()).all()
+                    rows = (
+                        session.query(api_module.DecisionEvent)
+                        .filter(
+                            api_module.DecisionEvent.project_id == project_id,
+                            api_module.DecisionEvent.task_id == "task-runtime-success",
+                        )
+                        .order_by(api_module.DecisionEvent.created_at.asc())
+                        .all()
+                    )
                 event_types = [row.event_type for row in rows]
                 self.assertIn(DecisionEventType.TASK_OPERATION_STARTED, event_types)
                 self.assertIn(DecisionEventType.TASK_OPERATION_SUCCEEDED, event_types)
@@ -399,7 +429,9 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
             try:
                 with session_factory() as session:
                     updater = StateUpdater(session)
-                    project = updater.create_project("Runtime", "premise", "玄幻", target_total_chapters=1)
+                    project = updater.create_project(
+                        "Runtime", "premise", "玄幻", target_total_chapters=1
+                    )
                     project_id = project.id
                     session.commit()
 
@@ -414,7 +446,11 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 pipeline = type(
                     "FakePipeline",
                     (),
-                    {"_SessionFactory": session_factory, "llm_client": FakeCloser(), "engine": FakeEngine()},
+                    {
+                        "_SessionFactory": session_factory,
+                        "llm_client": FakeCloser(),
+                        "engine": FakeEngine(),
+                    },
                 )()
 
                 run_pipeline_task(
@@ -428,11 +464,16 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 )
 
                 with session_factory() as session:
-                    row = session.query(api_module.DecisionEvent).filter(
-                        api_module.DecisionEvent.project_id == project_id,
-                        api_module.DecisionEvent.task_id == "task-runtime-failure",
-                        api_module.DecisionEvent.event_type == DecisionEventType.TASK_OPERATION_FAILED,
-                    ).one()
+                    row = (
+                        session.query(api_module.DecisionEvent)
+                        .filter(
+                            api_module.DecisionEvent.project_id == project_id,
+                            api_module.DecisionEvent.task_id == "task-runtime-failure",
+                            api_module.DecisionEvent.event_type
+                            == DecisionEventType.TASK_OPERATION_FAILED,
+                        )
+                        .one()
+                    )
                     payload = json.loads(row.payload_json)
                 self.assertEqual(payload["error_class"], "RuntimeError")
                 self.assertEqual(payload["error_message"], "boom")
@@ -473,9 +514,14 @@ class WriterPromptTraceObservabilityTests(unittest.TestCase):
             output_summary={"char_count": 10},
         )
 
-        self.assertEqual(trace["attempts"], [{"attempt_no": 1, "model": "fake-model", "http_status": 200}])
+        self.assertEqual(
+            trace["attempts"],
+            [{"attempt_no": 1, "model": "fake-model", "http_status": 200}],
+        )
 
-    def test_prompt_trace_attempt_artifacts_are_saved_without_inline_raw_payloads(self) -> None:
+    def test_prompt_trace_attempt_artifacts_are_saved_without_inline_raw_payloads(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp:
             store = ArtifactStore(str(Path(tmp) / "artifacts"))
             payload = {
@@ -494,7 +540,7 @@ class WriterPromptTraceObservabilityTests(unittest.TestCase):
                             "model": "fake-model",
                             "messages": [{"role": "user", "content": "完整 prompt"}],
                         },
-                        "_raw_response_text": "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}",
+                        "_raw_response_text": '{"choices":[{"message":{"content":"ok"}}]}',
                     }
                 ],
                 "output_summary": {"status": "succeeded"},
@@ -528,7 +574,9 @@ class WriterPromptTraceObservabilityTests(unittest.TestCase):
                         "llm_task_route": "review_json",
                         "http_status": 200,
                         "output_chars": 7,
-                        "_raw_request_payload": {"messages": [{"role": "user", "content": "review"}]},
+                        "_raw_request_payload": {
+                            "messages": [{"role": "user", "content": "review"}]
+                        },
                         "_raw_response_text": "not json",
                     }
                 ]
@@ -544,7 +592,11 @@ class WriterPromptTraceObservabilityTests(unittest.TestCase):
                 error=ValueError("bad json"),
             )
             prepared = prepare_prompt_trace_payload(
-                {"trace_scope": "reviewer", "stage_key": "chapter_review", "attempts": client.llm_attempt_events},
+                {
+                    "trace_scope": "reviewer",
+                    "stage_key": "chapter_review",
+                    "attempts": client.llm_attempt_events,
+                },
                 artifact_store=ArtifactStore(str(Path(tmp) / "artifacts")),
                 project_id="project-1",
                 chapter_number=3,
@@ -594,7 +646,12 @@ class RetrievalObservabilityTests(unittest.TestCase):
                 "model_copy": lambda self, update: type(
                     "Pack",
                     (),
-                    {**self.__dict__, **update, "model_dump": self.model_dump, "model_copy": self.model_copy},
+                    {
+                        **self.__dict__,
+                        **update,
+                        "model_dump": self.model_dump,
+                        "model_copy": self.model_copy,
+                    },
                 )(),
                 "model_dump": lambda self, mode="json": {
                     "previous_chapter_summaries": self.previous_chapter_summaries,
@@ -606,7 +663,9 @@ class RetrievalObservabilityTests(unittest.TestCase):
             },
         )()
 
-        broker._finalize_context_summary(base_pack=pack, pack=broker._trim_pack(pack), memories=[])
+        broker._finalize_context_summary(
+            base_pack=pack, pack=broker._trim_pack(pack), memories=[]
+        )
 
         summary = broker.last_observability_summary
         self.assertEqual(summary["summaries_count_before"], 2)

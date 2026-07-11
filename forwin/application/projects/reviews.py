@@ -29,8 +29,8 @@ from forwin.generation.review_auto_retry import (
     prior_auto_review_retry_count,
     reset_chapter_for_auto_review_retry,
 )
-from forwin.governance import (
-    DecisionEventType,
+from forwin.audit.events import DecisionEventType
+from forwin.planning.contracts import (
     derive_chapter_task_contract,
     plan_task_contract_to_json,
 )
@@ -64,6 +64,7 @@ def latest_rewrite_attempts_by_chapter(
     chapter_numbers: list[int] | None = None,
 ) -> dict[int, ChapterRewriteAttempt]:
     return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
+
 
 def get_chapter_review(
     project_id: str,
@@ -103,14 +104,21 @@ def get_chapter_review(
 
         issues = _load_json_object(review.issues_json, [])
         review_meta = _load_json_object(review.review_meta_json, {})
-        rewrite_attempts = session.execute(
-            select(ChapterRewriteAttempt)
-            .where(
-                ChapterRewriteAttempt.project_id == project_id,
-                ChapterRewriteAttempt.chapter_number == chapter_number,
+        rewrite_attempts = (
+            session.execute(
+                select(ChapterRewriteAttempt)
+                .where(
+                    ChapterRewriteAttempt.project_id == project_id,
+                    ChapterRewriteAttempt.chapter_number == chapter_number,
+                )
+                .order_by(
+                    ChapterRewriteAttempt.attempt_no.desc(),
+                    ChapterRewriteAttempt.created_at.desc(),
+                )
             )
-            .order_by(ChapterRewriteAttempt.attempt_no.desc(), ChapterRewriteAttempt.created_at.desc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         decision_refs = decision_refs_for_chapter_review(
             session,
             project_id=project_id,
@@ -121,7 +129,9 @@ def get_chapter_review(
         residual_review_issues = (
             review_meta.get("residual_review_issues")
             if isinstance(review_meta.get("residual_review_issues"), list)
-            else _load_json_object(getattr(plan, "residual_review_issues_json", "[]"), [])
+            else _load_json_object(
+                getattr(plan, "residual_review_issues_json", "[]"), []
+            )
         )
         return ChapterReviewDetail(
             project_id=project_id,
@@ -177,7 +187,10 @@ def get_chapter_review(
             ],
             reviewer_mode=str(review_meta.get("reviewer_mode") or ""),
             proposed_design_patch=(
-                dict((review_meta.get("repair_instruction") or {}).get("design_patch") or {})
+                dict(
+                    (review_meta.get("repair_instruction") or {}).get("design_patch")
+                    or {}
+                )
                 if isinstance(review_meta.get("repair_instruction"), dict)
                 else {}
             ),
@@ -198,12 +211,16 @@ def get_chapter_review(
                 if isinstance(item, dict)
             ],
             repair_verification=(
-                RepairVerificationInfo.model_validate(review_meta.get("repair_verification"))
+                RepairVerificationInfo.model_validate(
+                    review_meta.get("repair_verification")
+                )
                 if isinstance(review_meta.get("repair_verification"), dict)
                 else None
             ),
             final_residual_decision=(
-                FinalResidualDecisionInfo.model_validate(review_meta.get("final_residual_decision"))
+                FinalResidualDecisionInfo.model_validate(
+                    review_meta.get("final_residual_decision")
+                )
                 if isinstance(review_meta.get("final_residual_decision"), dict)
                 else None
             ),
@@ -211,23 +228,41 @@ def get_chapter_review(
             rewrite_attempts=[
                 ChapterRewriteAttemptInfo(
                     attempt_no=int(item.attempt_no or 0),
-                    repair_phase=str(getattr(item, "repair_phase", "") or "review_repair"),
+                    repair_phase=str(
+                        getattr(item, "repair_phase", "") or "review_repair"
+                    ),
                     phase_attempt_no=int(getattr(item, "phase_attempt_no", 0) or 0),
-                    repair_scope=normalize_repair_scope(item.repair_scope or "", default=""),
+                    repair_scope=normalize_repair_scope(
+                        item.repair_scope or "", default=""
+                    ),
                     result_verdict=str(item.result_verdict or ""),
                     result_review_id=str(getattr(item, "result_review_id", "") or ""),
                     failure_reason=str(getattr(item, "failure_reason", "") or ""),
                     forced_accept_applied=bool(item.forced_accept_applied),
                     design_patch=_load_json_object(item.design_patch_json, {}),
                     verification=(
-                        RepairVerificationInfo.model_validate(_load_json_object(getattr(item, "verification_json", "{}"), {}))
-                        if _load_json_object(getattr(item, "verification_json", "{}"), {})
+                        RepairVerificationInfo.model_validate(
+                            _load_json_object(
+                                getattr(item, "verification_json", "{}"), {}
+                            )
+                        )
+                        if _load_json_object(
+                            getattr(item, "verification_json", "{}"), {}
+                        )
                         else None
                     ),
-                    source_chapter_plan=_load_json_object(getattr(item, "source_chapter_plan_json", "{}"), {}),
-                    result_chapter_plan=_load_json_object(getattr(item, "result_chapter_plan_json", "{}"), {}),
-                    source_band_plan=_load_json_object(getattr(item, "source_band_plan_json", "{}"), {}),
-                    result_band_plan=_load_json_object(getattr(item, "result_band_plan_json", "{}"), {}),
+                    source_chapter_plan=_load_json_object(
+                        getattr(item, "source_chapter_plan_json", "{}"), {}
+                    ),
+                    result_chapter_plan=_load_json_object(
+                        getattr(item, "result_chapter_plan_json", "{}"), {}
+                    ),
+                    source_band_plan=_load_json_object(
+                        getattr(item, "source_band_plan_json", "{}"), {}
+                    ),
+                    result_band_plan=_load_json_object(
+                        getattr(item, "result_band_plan_json", "{}"), {}
+                    ),
                 )
                 for item in reversed(rewrite_attempts)
             ],
@@ -259,6 +294,7 @@ def _latest_rule_decision(decision_refs: list[Any]) -> dict[str, Any]:
         }
     return {}
 
+
 def get_candidate_draft(
     project_id: str,
     chapter_number: int,
@@ -275,7 +311,9 @@ def get_candidate_draft(
         )
     except HTTPException as exc:
         if exc.status_code == 404 and "draft" in str(exc.detail).lower():
-            raise HTTPException(404, f"第{chapter_number}章尚未生成 candidate draft") from exc
+            raise HTTPException(
+                404, f"第{chapter_number}章尚未生成 candidate draft"
+            ) from exc
         raise
     session = get_session()
     try:
@@ -299,9 +337,13 @@ def get_candidate_draft(
             summary=review.summary,
             char_count=len(review.body or ""),
             scene_outputs=_load_json_object(record.scene_outputs_json, []),
-            state_change_candidates=_load_json_object(record.state_change_candidates_json, []),
+            state_change_candidates=_load_json_object(
+                record.state_change_candidates_json, []
+            ),
             event_candidates=_load_json_object(record.event_candidates_json, []),
-            thread_beat_candidates=_load_json_object(record.thread_beat_candidates_json, []),
+            thread_beat_candidates=_load_json_object(
+                record.thread_beat_candidates_json, []
+            ),
             review_verdict=review.verdict,
             review_summary=review.review_summary,
             repair_attempts=review.rewrite_attempts,
@@ -313,6 +355,7 @@ def get_candidate_draft(
         )
     finally:
         session.close()
+
 
 def approve_chapter_review(
     project_id: str,
@@ -358,10 +401,13 @@ def approve_chapter_review(
                     event_type=DecisionEventType.HARD_GATE_HIT,
                     actor_type="api",
                     scope="project",
-                    summary=project_detail.blocking_reason.message or project_detail.blocking_reason.code,
+                    summary=project_detail.blocking_reason.message
+                    or project_detail.blocking_reason.code,
                     payload={"blocking_reason": project_detail.blocking_reason.code},
                     band_id=project_detail.blocking_reason.band_id,
-                    chapter_number=int(project_detail.blocking_reason.chapter_number or 0),
+                    chapter_number=int(
+                        project_detail.blocking_reason.chapter_number or 0
+                    ),
                     related_object_type="project",
                     related_object_id=project_id,
                 )
@@ -414,7 +460,9 @@ def approve_chapter_review(
             raise HTTPException(409, str(exc)) from exc
         update_task(
             task_id,
-            frozen_artifacts=[result["frozen_artifact"]] if result["frozen_artifact"] else [],
+            frozen_artifacts=[result["frozen_artifact"]]
+            if result["frozen_artifact"]
+            else [],
         )
         message = f"{message} 已启动后续章节继续执行。"
     elif req.continue_generation and accepted_status == "needs_review":
@@ -524,6 +572,7 @@ def _auto_retry_review_approve_blocker(
         frozen_artifact=frozen_artifact,
     )
 
+
 def retry_chapter_review(
     project_id: str,
     chapter_number: int,
@@ -596,7 +645,10 @@ def retry_chapter_review(
             scope="chapter",
             summary=f"第{chapter_number}章 review 候选已重置为 planned，等待重写。",
             reason=reason,
-            payload={"chapter_number": chapter_number, "previous_status": previous_status},
+            payload={
+                "chapter_number": chapter_number,
+                "previous_status": previous_status,
+            },
             chapter_number=chapter_number,
             related_object_type="chapter",
             related_object_id=str(plan.id),
@@ -637,4 +689,10 @@ def retry_chapter_review(
     )
 
 
-__all__ = ['latest_rewrite_attempts_by_chapter', 'get_chapter_review', 'get_candidate_draft', 'approve_chapter_review', 'retry_chapter_review']
+__all__ = [
+    "latest_rewrite_attempts_by_chapter",
+    "get_chapter_review",
+    "get_candidate_draft",
+    "approve_chapter_review",
+    "retry_chapter_review",
+]

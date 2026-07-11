@@ -6,7 +6,8 @@ from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.generation.pipeline_core.obligation_resolution import (
     _verify_obligations_after_acceptance,
 )
-from forwin.governance import DecisionEventType, issue_group_for_issue
+from forwin.audit.events import DecisionEventType
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
     record_deferred_maintenance,

@@ -10,15 +10,15 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
-from forwin.governance import (
-    BandCheckpointDetail,
-    DecisionEventInfo,
-    NarrativeConstraintInfo,
+from forwin.planning.checkpoints import BandCheckpointDetail
+from forwin.audit.events import DecisionEventInfo
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.contracts import (
     derive_band_task_contract,
     derive_chapter_task_contract,
-    issue_group_for_issue,
     plan_task_contract_to_json,
 )
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.observability.redaction import redact_payload
 from forwin.models import (
     ArcPlanVersion,

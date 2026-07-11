@@ -4,10 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import (
-    NarrativeConstraintInfo,
-    PlanTaskItem,
-)
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.contracts import PlanTaskItem
 from .project import ProjectAutomationPublishSettings, ProjectAutomationSettings
 
 
@@ -91,13 +89,13 @@ class ProjectAutomationUpdateResponse(BaseModel):
 
 
 __all__ = [
-    'ManualCheckpointRequest',
-    'BandCheckpointApproveRequest',
-    'NarrativeConstraintCreateRequest',
-    'NarrativeConstraintUpdateRequest',
-    'NarrativeConstraintsResponse',
-    'TaskContractUpdateRequest',
-    'TaskContractResponse',
-    'ProjectAutomationUpdateRequest',
-    'ProjectAutomationUpdateResponse',
+    "ManualCheckpointRequest",
+    "BandCheckpointApproveRequest",
+    "NarrativeConstraintCreateRequest",
+    "NarrativeConstraintUpdateRequest",
+    "NarrativeConstraintsResponse",
+    "TaskContractUpdateRequest",
+    "TaskContractResponse",
+    "ProjectAutomationUpdateRequest",
+    "ProjectAutomationUpdateResponse",
 ]

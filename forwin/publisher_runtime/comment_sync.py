@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherCommentSyncJob,
@@ -98,7 +98,9 @@ class CommentSyncService:
             if normalized_status:
                 stmt = stmt.where(PublisherCommentSyncJob.status == normalized_status)
             if normalized_platform:
-                stmt = stmt.where(PublisherCommentSyncJob.platform_id == normalized_platform)
+                stmt = stmt.where(
+                    PublisherCommentSyncJob.platform_id == normalized_platform
+                )
             jobs = session.execute(stmt.limit(normalized_limit)).scalars().all()
             return [self.serialize_comment_sync_job(job) for job in jobs]
 
@@ -176,7 +178,10 @@ class CommentSyncService:
                         started_at=started_at,
                         error_message="",
                         result_summary_json=json.dumps(
-                            {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                            {
+                                "phase": "claimed",
+                                "message": "评论同步任务已被浏览器扩展自动领取。",
+                            },
                             ensure_ascii=False,
                         ),
                     )
@@ -191,7 +196,10 @@ class CommentSyncService:
                 job.started_at = started_at
                 job.error_message = ""
                 job.result_summary_json = json.dumps(
-                    {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                    {
+                        "phase": "claimed",
+                        "message": "评论同步任务已被浏览器扩展自动领取。",
+                    },
                     ensure_ascii=False,
                 )
                 self.audit.record_comment_sync_event(
@@ -241,10 +249,12 @@ class CommentSyncService:
                 merged_payload = {}
             if not isinstance(merged_payload, dict):
                 merged_payload = {}
-            merged_payload.update({
-                "message": str(message or "").strip(),
-                "status": status,
-            })
+            merged_payload.update(
+                {
+                    "message": str(message or "").strip(),
+                    "status": status,
+                }
+            )
             if result_payload:
                 merged_payload.update(result_payload)
 
@@ -308,7 +318,9 @@ class CommentSyncService:
                         PublisherRawComment.platform_id == platform,
                         PublisherRawComment.remote_comment_id.in_(remote_ids),
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
                 if remote_ids
                 else []
             )
@@ -324,8 +336,12 @@ class CommentSyncService:
                 if explicit_project_ids:
                     valid_project_ids = set(
                         session.execute(
-                            select(Project.id).where(Project.id.in_(explicit_project_ids))
-                        ).scalars().all()
+                            select(Project.id).where(
+                                Project.id.in_(explicit_project_ids)
+                            )
+                        )
+                        .scalars()
+                        .all()
                     )
                 work_names = {
                     str(item.get("work_name", "")).strip()
@@ -494,7 +510,9 @@ class CommentSyncService:
             job_id=job_id,
         )
 
-    def serialize_comment_sync_job(self, job: PublisherCommentSyncJob) -> dict[str, Any]:
+    def serialize_comment_sync_job(
+        self, job: PublisherCommentSyncJob
+    ) -> dict[str, Any]:
         payload = json.loads(job.result_summary_json or "{}")
         return {
             "job_id": job.id,

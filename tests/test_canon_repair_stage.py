@@ -17,7 +17,7 @@ from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.config import InfrastructureConfig
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.generation.pipeline import ChapterPipeline
@@ -910,25 +910,23 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             context.chapter_number
         )
         pipeline.draft_review = WarnReviewHub()
-        pipeline.repair.repair_canon_block = lambda **_kwargs: (
-            _ for _ in ()
-        ).throw(
+        pipeline.repair.repair_canon_block = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
-        pipeline.canon_preparation.quality_evaluator = (
-            lambda **_kwargs: CanonQualityGateOutcome(
+        pipeline.canon_preparation.quality_evaluator = lambda **_kwargs: (
+            CanonQualityGateOutcome(
                 blocked_path="frozen/canon-quality.json",
                 gate_result=CanonAdmissionGateResult(
-                project_id="p",
-                chapter_number=1,
-                draft_id="d1",
-                review_id="r1",
-                commit_allowed=False,
-                verdict="fail",
-                admission_mode="blocked",
-                required_repair_scope=raw_scope,
-                gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
-                deterministic_issue_refs=["signal-1"],
+                    project_id="p",
+                    chapter_number=1,
+                    draft_id="d1",
+                    review_id="r1",
+                    commit_allowed=False,
+                    verdict="fail",
+                    admission_mode="blocked",
+                    required_repair_scope=raw_scope,
+                    gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
+                    deterministic_issue_refs=["signal-1"],
                 ),
             )
         )

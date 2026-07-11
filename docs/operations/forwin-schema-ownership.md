@@ -11,7 +11,7 @@ PostgreSQL schema namespace, or separate service.
 | --- | --- | --- |
 | generation task state | Generation task port, web API enqueue/control, generation worker lease/progress | API creates and controls tasks; generation worker claims, heartbeats, and completes tasks |
 | BookState/canon state | CanonPort and BookState repository/compiler | Accepted graph deltas, canon snapshots, and admission results stay synchronous in the correctness path |
-| review/governance state | ReviewPort, governance APIs, generation runtime | Review verdicts and governance decisions remain part of the controlled writing workflow |
+| review/project-control/audit state | ReviewPort, project-control APIs, audit event store, generation runtime | Review verdicts, operator controls, and audit decisions remain distinct parts of the controlled writing workflow |
 | publisher runtime state | Publisher runtime and publisher worker | Upload, comment sync, cover, connection, and browser-session state is mutated through publisher runtime APIs |
 | knowledge/projection state | KnowledgeIndexPort, projection jobs, and future knowledge worker | Rebuild/index/projection refresh work may use outbox when eventual consistency is acceptable |
 | observability/artifact state | Observability and artifact ports, plus maintenance/outbox workers | Retention, indexing, and artifact maintenance are side effects, not generation correctness gates |

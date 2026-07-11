@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.observability import PerformanceSpan
 from forwin.models.phase import TropeUsageRecord
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -240,7 +240,14 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
 
         assert (
             pulp_pressure_test.main(
-                ["--project-id", "project-pressure", "--chapters", "2", "--output", str(output)]
+                [
+                    "--project-id",
+                    "project-pressure",
+                    "--chapters",
+                    "2",
+                    "--output",
+                    str(output),
+                ]
             )
             == 0
         )
@@ -265,8 +272,9 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
         assert summary["generation_worker_heartbeat_failed_count"] == 1
         assert summary["failed_chapter_stop_count"] == 1
         assert summary["context_memory_pruned_count"] == 2
-        assert "future versions can replace" not in (
-            output / "README.md"
-        ).read_text(encoding="utf-8").lower()
+        assert (
+            "future versions can replace"
+            not in (output / "README.md").read_text(encoding="utf-8").lower()
+        )
     finally:
         engine.dispose()

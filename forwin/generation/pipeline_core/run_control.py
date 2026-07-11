@@ -12,7 +12,7 @@ from forwin.models.project import (
 )
 from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.draft import ChapterDraft
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.observability.context import OperationContext
 from forwin.models import ProvisionalBandExecution
 from sqlalchemy import select
@@ -163,7 +163,7 @@ class RunControlStage:
                 runtime_policy=self.policy,
             )
             project_id = project.id
-            self._bind_governance_runtime(project_id=project_id, updater=updater)
+            self._bind_audit_context(project_id=project_id, updater=updater)
 
             self._seed_state(updater, project_id, arc_plan, num_chapters)
             session.commit()
@@ -322,7 +322,7 @@ class RunControlStage:
             self._emit_progress("stage_changed", stage="failed")
             raise
         finally:
-            self._clear_governance_runtime()
+            self._clear_audit_context()
             session.close()
 
     def run_existing_project(
@@ -349,7 +349,7 @@ class RunControlStage:
 
             premise = project.premise
             genre = project.genre or "玄幻"
-            self._bind_governance_runtime(project_id=project_id, updater=updater)
+            self._bind_audit_context(project_id=project_id, updater=updater)
 
             self._emit_progress(
                 "stage_changed",
@@ -488,7 +488,7 @@ class RunControlStage:
             self._emit_progress("stage_changed", stage="failed", project_id=project_id)
             raise
         finally:
-            self._clear_governance_runtime()
+            self._clear_audit_context()
             session.close()
 
     def _emit_progress(self, event: str, **payload: Any) -> None:
@@ -504,36 +504,36 @@ class RunControlStage:
         except Exception:  # noqa: BLE001
             logger.debug("Ignoring progress callback error.", exc_info=True)
 
-    def _bind_governance_runtime(
+    def _bind_audit_context(
         self,
         *,
         project_id: str,
         updater: StateUpdater,
     ) -> None:
-        self._governance_runtime_project_id = str(project_id or "").strip()
-        self._governance_runtime_updater = updater
-        self._governance_stage_name = ""
-        self._governance_stage_started_at = 0.0
-        self._governance_stage_chapter_number = 0
-        self._governance_stage_span = None
+        self._audit_project_id = str(project_id or "").strip()
+        self._audit_updater = updater
+        self._audit_stage_name = ""
+        self._audit_stage_started_at = 0.0
+        self._audit_stage_chapter_number = 0
+        self._audit_stage_span = None
 
-    def _clear_governance_runtime(self) -> None:
-        self._finish_governance_stage_span(next_stage="", chapter_number=0)
-        self._governance_runtime_project_id = ""
-        self._governance_runtime_updater = None
-        self._governance_stage_name = ""
-        self._governance_stage_started_at = 0.0
-        self._governance_stage_chapter_number = 0
-        self._governance_stage_span = None
+    def _clear_audit_context(self) -> None:
+        self._finish_audit_stage_span(next_stage="", chapter_number=0)
+        self._audit_project_id = ""
+        self._audit_updater = None
+        self._audit_stage_name = ""
+        self._audit_stage_started_at = 0.0
+        self._audit_stage_chapter_number = 0
+        self._audit_stage_span = None
 
-    def _start_governance_stage_span(
+    def _start_audit_stage_span(
         self, *, project_id: str, stage: str, chapter_number: int
     ) -> None:
-        if self._governance_stage_span is not None:
+        if self._audit_stage_span is not None:
             return
         context = OperationContext(
             project_id=project_id,
-            task_id=self._governance_task_id,
+            task_id=self._audit_task_id,
             chapter_number=int(chapter_number or 0),
             stage=stage,
             operation_id=self._audit_operation_id(),
@@ -546,48 +546,44 @@ class RunControlStage:
             tags={"stage": stage},
         )
         span.__enter__()
-        self._governance_stage_span = span
+        self._audit_stage_span = span
 
-    def _finish_governance_stage_span(
-        self, *, next_stage: str, chapter_number: int
-    ) -> None:
-        span = self._governance_stage_span
+    def _finish_audit_stage_span(self, *, next_stage: str, chapter_number: int) -> None:
+        span = self._audit_stage_span
         if span is None:
             return
         try:
             span.tag("next_stage", str(next_stage or ""))
             stage_chapter_number = int(
-                getattr(self, "_governance_stage_chapter_number", 0)
-                or chapter_number
-                or 0
+                getattr(self, "_audit_stage_chapter_number", 0) or chapter_number or 0
             )
             if stage_chapter_number:
                 span.metric("chapter_number", stage_chapter_number)
             span.__exit__(None, None, None)
         except Exception:  # noqa: BLE001
-            logger.debug("Ignoring governance stage span close failure.", exc_info=True)
+            logger.debug(
+                "Ignoring audit control stage span close failure.", exc_info=True
+            )
         finally:
-            self._governance_stage_span = None
+            self._audit_stage_span = None
 
     def _record_stage_transition(self, payload: dict[str, Any]) -> None:
-        updater = self._governance_runtime_updater
+        updater = self._audit_updater
         project_id = str(
-            payload.get("project_id") or self._governance_runtime_project_id or ""
+            payload.get("project_id") or self._audit_project_id or ""
         ).strip()
         stage = str(payload.get("stage") or "").strip()
         if updater is None or not project_id or not stage:
             return
         now = time.perf_counter()
         chapter_number = int(payload.get("current_chapter") or 0)
-        if self._governance_stage_name and self._governance_stage_name != stage:
+        if self._audit_stage_name and self._audit_stage_name != stage:
             stage_chapter_number = int(
-                getattr(self, "_governance_stage_chapter_number", 0)
-                or chapter_number
-                or 0
+                getattr(self, "_audit_stage_chapter_number", 0) or chapter_number or 0
             )
-            duration_ms = max(0, int((now - self._governance_stage_started_at) * 1000))
+            duration_ms = max(0, int((now - self._audit_stage_started_at) * 1000))
             stage_payload = {
-                "stage": self._governance_stage_name,
+                "stage": self._audit_stage_name,
                 "next_stage": stage,
                 "duration_ms": duration_ms,
             }
@@ -598,7 +594,7 @@ class RunControlStage:
                 event_family="runtime_observation",
                 event_type=DecisionEventType.STAGE_EXITED,
                 scope="task",
-                summary=f"阶段 {self._governance_stage_name} 已结束。",
+                summary=f"阶段 {self._audit_stage_name} 已结束。",
                 payload=stage_payload,
             )
             self._record_decision_event(
@@ -608,13 +604,13 @@ class RunControlStage:
                 event_family="runtime_observation",
                 event_type=DecisionEventType.STAGE_DURATION_SUMMARY,
                 scope="task",
-                summary=f"阶段 {self._governance_stage_name} 用时 {duration_ms}ms。",
+                summary=f"阶段 {self._audit_stage_name} 用时 {duration_ms}ms。",
                 payload=stage_payload,
             )
-            self._finish_governance_stage_span(
+            self._finish_audit_stage_span(
                 next_stage=stage, chapter_number=stage_chapter_number
             )
-        if self._governance_stage_name != stage:
+        if self._audit_stage_name != stage:
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -625,10 +621,10 @@ class RunControlStage:
                 summary=f"阶段 {stage} 已开始。",
                 payload={"stage": stage},
             )
-            self._governance_stage_name = stage
-            self._governance_stage_started_at = now
-            self._governance_stage_chapter_number = chapter_number
-            self._start_governance_stage_span(
+            self._audit_stage_name = stage
+            self._audit_stage_started_at = now
+            self._audit_stage_chapter_number = chapter_number
+            self._start_audit_stage_span(
                 project_id=project_id,
                 stage=stage,
                 chapter_number=chapter_number,
@@ -773,7 +769,7 @@ class RunControlStage:
         session: Session = self._SessionFactory()
         try:
             repo, updater, checker = self._make_state_helpers(session)
-            self._bind_governance_runtime(project_id=project_id, updater=updater)
+            self._bind_audit_context(project_id=project_id, updater=updater)
             project = session.get(Project, project_id)
             if project is None:
                 raise ValueError(f"项目不存在: {project_id}")
@@ -937,7 +933,7 @@ class RunControlStage:
                 requested_chapters=len(chapter_numbers),
             )
         finally:
-            self._clear_governance_runtime()
+            self._clear_audit_context()
             session.close()
 
     @staticmethod

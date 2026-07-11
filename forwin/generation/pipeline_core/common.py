@@ -19,10 +19,8 @@ import logging
 from typing import Any
 
 
-from forwin.governance import (
-    BandCheckpointIssueInfo,
-    issue_group_for_issue,
-)
+from forwin.planning.checkpoints import BandCheckpointIssueInfo
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.project import ChapterPlan
 from forwin.protocol.review import ReviewVerdict
 from forwin.planning.future_plan_audit import FuturePlanAuditRun

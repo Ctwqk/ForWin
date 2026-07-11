@@ -541,7 +541,7 @@
     }
 
     function approveReview(projectId, chapterNumber, continueGeneration = false) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: continueGeneration ? `接受并继续 · 第${chapterNumber}章` : `接受 Review · 第${chapterNumber}章`,
         description: continueGeneration
           ? '本次会先接受当前 review，再尝试继续生成；如果仍命中治理 gate，会保留阻断。'
@@ -577,7 +577,7 @@
     }
 
     function retryReview(projectId, chapterNumber, continueGeneration = false, allowAccepted = false) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: continueGeneration ? `Retry 并继续 · 第${chapterNumber}章` : `Retry Review · 第${chapterNumber}章`,
         description: '把当前章节重置为 planned 并记录 retry reason。后续生成只会选择 planned / failed 章节。',
         confirmLabel: continueGeneration ? 'Retry 并继续' : 'Retry Review',
@@ -601,7 +601,7 @@
     }
 
     function registerSubworldEntityFromReview(projectId, chapterNumber) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: `Register Subworld Entity · 第${chapterNumber}章`,
         description: '创建一个可审计 proposal，用于把 review 中的未准入实体登记到 subworld/canon 入口。',
         confirmLabel: 'Register Entity Proposal',
@@ -629,7 +629,7 @@
     }
 
     function recordBackgroundEntityDecisionFromReview(projectId, chapterNumber) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: `Record Background Entity · 第${chapterNumber}章`,
         description: '创建一个可审计 proposal，用于记录未计划实体不进入 canon 的背景决策。',
         confirmLabel: 'Record Decision',
@@ -653,7 +653,7 @@
     }
 
     function createObligationFromReview(projectId, chapterNumber) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: `Create Obligation · 第${chapterNumber}章`,
         description: '创建一个叙事义务 proposal，供后续计划/BookState 处理。',
         confirmLabel: 'Create Obligation Proposal',

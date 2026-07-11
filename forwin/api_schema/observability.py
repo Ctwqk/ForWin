@@ -4,9 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import (
-    DecisionEventInfo,
-)
+from forwin.audit.events import DecisionEventInfo
 from .genesis import PromptTraceInfo
 
 
@@ -122,14 +120,18 @@ class CausalReplayResponse(BaseModel):
     linked_checkpoint_refs: list[DecisionEventInfo] = Field(default_factory=list)
 
 
-class GovernanceInsightsResponse(BaseModel):
+class AuditInsightsResponse(BaseModel):
     top_override_rule_types: list[dict[str, Any]] = Field(default_factory=list)
     top_override_reasons: list[dict[str, Any]] = Field(default_factory=list)
     top_warn_but_allowed_issue_types: list[dict[str, Any]] = Field(default_factory=list)
-    top_constraint_false_positive_types: list[dict[str, Any]] = Field(default_factory=list)
+    top_constraint_false_positive_types: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
     forced_accept_frequency: int = 0
     most_common_blocking_reasons: list[dict[str, Any]] = Field(default_factory=list)
-    recent_band_checkpoint_distribution: list[dict[str, Any]] = Field(default_factory=list)
+    recent_band_checkpoint_distribution: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
     issue_group_distribution: list[dict[str, Any]] = Field(default_factory=list)
     recent_action_effectiveness: list[dict[str, Any]] = Field(default_factory=list)
     recommended_adjustments: list[dict[str, Any]] = Field(default_factory=list)
@@ -137,16 +139,16 @@ class GovernanceInsightsResponse(BaseModel):
 
 
 __all__ = [
-    'DecisionEventsResponse',
-    'StageDurationAggregate',
-    'ArtifactManifestItem',
-    'TaskTimelineResponse',
-    'ChapterLedgerResponse',
-    'PromptTraceDetailResponse',
-    'ArtifactReadResponse',
-    'PerformanceSpanInfo',
-    'PerformanceBreakdownItem',
-    'PerformanceReportResponse',
-    'CausalReplayResponse',
-    'GovernanceInsightsResponse',
+    "DecisionEventsResponse",
+    "StageDurationAggregate",
+    "ArtifactManifestItem",
+    "TaskTimelineResponse",
+    "ChapterLedgerResponse",
+    "PromptTraceDetailResponse",
+    "ArtifactReadResponse",
+    "PerformanceSpanInfo",
+    "PerformanceBreakdownItem",
+    "PerformanceReportResponse",
+    "CausalReplayResponse",
+    "AuditInsightsResponse",
 ]

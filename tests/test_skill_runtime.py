@@ -8,7 +8,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.review import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 from forwin.skills import build_skill_runtime_components
 from forwin.writer.chapter_writer import ChapterWriter
 
@@ -120,7 +120,9 @@ class SkillRuntimeTests(unittest.TestCase):
             stage_key="world",
             task_family="generate_stage_payload",
         )
-        self.assertEqual([item.manifest.name for item in selections], ["genesis.world-bible"])
+        self.assertEqual(
+            [item.manifest.name for item in selections], ["genesis.world-bible"]
+        )
 
         layers = builder.build(selections)
         self.assertEqual(layers[0].skill_id, "genesis.world-bible")
@@ -147,7 +149,9 @@ class SkillRuntimeTests(unittest.TestCase):
         )
 
         self.assertTrue(writer_selections)
-        self.assertTrue(all(item.manifest.group == "writer" for item in writer_selections))
+        self.assertTrue(
+            all(item.manifest.group == "writer" for item in writer_selections)
+        )
         self.assertEqual(genesis_selections, [])
 
     def test_chapter_writer_records_skill_prompt_trace(self) -> None:
@@ -220,7 +224,9 @@ class SkillRuntimeTests(unittest.TestCase):
         self.assertEqual(verdict.verdict, "pass")
         self.assertTrue(any("reviewer skills" in note for note in verdict.review_notes))
         self.assertEqual(verdict.prompt_trace.get("trace_scope"), "reviewer")
-        self.assertTrue(verdict.prompt_trace.get("input_snapshot", {}).get("selected_skills"))
+        self.assertTrue(
+            verdict.prompt_trace.get("input_snapshot", {}).get("selected_skills")
+        )
 
     def test_reviewer_skill_layers_are_injected_into_reviewer_llm_prompt(self) -> None:
         _registry, router, builder = build_skill_runtime_components(
@@ -260,9 +266,17 @@ class SkillRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(verdict.reviewer_mode, "llm")
-        system_messages = [item["content"] for item in llm.messages if item.get("role") == "system"]
-        self.assertTrue(any("Skill: reviewer.chapter-continuity" in item for item in system_messages))
-        self.assertTrue(any("Skill: reviewer.repair-plan" in item for item in system_messages))
+        system_messages = [
+            item["content"] for item in llm.messages if item.get("role") == "system"
+        ]
+        self.assertTrue(
+            any(
+                "Skill: reviewer.chapter-continuity" in item for item in system_messages
+            )
+        )
+        self.assertTrue(
+            any("Skill: reviewer.repair-plan" in item for item in system_messages)
+        )
 
 
 if __name__ == "__main__":

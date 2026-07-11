@@ -20,8 +20,8 @@ from forwin.protocol.review import (
     ContinuityIssue,
     RepairInstruction,
 )
-from forwin.governance import DecisionEventType
-from forwin.models.governance import DecisionEvent
+from forwin.audit.events import DecisionEventType
+from forwin.models.audit import DecisionEvent
 from forwin.planning.arc_envelope import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
 from forwin.runtime.policy import RuntimePolicy

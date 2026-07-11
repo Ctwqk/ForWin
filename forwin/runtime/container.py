@@ -26,7 +26,7 @@ from forwin.observability.service import ObservabilityService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
-from forwin.review import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairService, RepairVerifier
 from forwin.runtime.factories import (
     ProductionSchedulerFactory,

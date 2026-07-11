@@ -6,7 +6,7 @@ from forwin.checker.reference_classifier import normalize_character_reference
 from forwin.protocol.writer import WriterOutput
 from typing import Any
 from forwin.models.project import ChapterPlan, Project
-from forwin.governance import issue_group_for_issue
+from forwin.review.issue_groups import issue_group_for_issue
 import json
 from forwin.protocol.review import ReviewVerdict
 from forwin.observability.payloads import audit_payload
@@ -28,7 +28,7 @@ from forwin.protocol.review import (
     ContinuityIssue,
     RepairInstruction,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_names import is_plausible_person_name
 from sqlalchemy.orm import Session

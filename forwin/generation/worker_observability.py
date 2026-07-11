@@ -8,8 +8,12 @@ from typing import Any
 
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import GenerationTaskClaimResult
-from forwin.governance import DecisionEventType
-from forwin.observability import NullObservability, ObservabilityService, OperationContext
+from forwin.audit.events import DecisionEventType
+from forwin.observability import (
+    NullObservability,
+    ObservabilityService,
+    OperationContext,
+)
 from forwin.observability.ports import ObservabilityPort, SpanHandle
 
 
@@ -119,7 +123,9 @@ def record_worker_execution_failed(
             related_object_id=str(task_id or ""),
         )
     except Exception:
-        logger.debug("Ignoring generation worker execution failure observation.", exc_info=True)
+        logger.debug(
+            "Ignoring generation worker execution failure observation.", exc_info=True
+        )
 
 
 @contextmanager
@@ -140,7 +146,9 @@ def generation_worker_span(
         config=config,
         observability_factory=observability_factory,
     )
-    ctx = _context(task_id=task_id, project_id=project_id, worker_id=worker_id, stage=span_name)
+    ctx = _context(
+        task_id=task_id, project_id=project_id, worker_id=worker_id, stage=span_name
+    )
     span_tags = {"worker_id": str(worker_id or ""), **(tags or {})}
     try:
         span_cm = obs.span(
@@ -184,7 +192,9 @@ def _record_worker_event(
         config=config,
         observability_factory=observability_factory,
     )
-    ctx = _context(task_id=task_id, project_id=normalized_project_id, worker_id=worker_id)
+    ctx = _context(
+        task_id=task_id, project_id=normalized_project_id, worker_id=worker_id
+    )
     try:
         obs.event(
             ctx,
@@ -214,11 +224,15 @@ def _claim_payload(
         "resume_from_chapter": max(0, int(resume_from_chapter or 0)),
         "claim_kind": str(claim.claim_kind or ""),
         "lease_seconds": max(30, int(lease_seconds or 300)),
-        "execution_mode": "continue" if str(task.project_id or "").strip() else "initial",
+        "execution_mode": "continue"
+        if str(task.project_id or "").strip()
+        else "initial",
     }
     if claim.claim_kind == "expired_running":
         payload["previous_lease_owner"] = str(claim.previous_lease_owner or "")
-        payload["previous_lease_expires_at"] = _isoformat(claim.previous_lease_expires_at)
+        payload["previous_lease_expires_at"] = _isoformat(
+            claim.previous_lease_expires_at
+        )
     return {key: value for key, value in payload.items() if value not in ("", None)}
 
 
@@ -250,7 +264,9 @@ def _build_observability(
             return observability_factory(session_factory=session_factory, config=config)
         return ObservabilityService(session_factory=session_factory, config=config)
     except Exception:
-        logger.debug("Falling back to NullObservability for generation worker.", exc_info=True)
+        logger.debug(
+            "Falling back to NullObservability for generation worker.", exc_info=True
+        )
         return NullObservability()
 
 

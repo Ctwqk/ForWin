@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import forwin.api as api_module
 from forwin.api_schema import ProjectBulkDeleteRequest, TaskBulkDeleteRequest
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -80,7 +80,12 @@ class BulkDeleteApiTests(unittest.TestCase):
         response = api_module.delete_project(project_id)
 
         self.assertTrue(response.operation_id)
-        audit_root = Path(api_module._config.artifact_root) / "audit_bundles" / "projects" / project_id
+        audit_root = (
+            Path(api_module._config.artifact_root)
+            / "audit_bundles"
+            / "projects"
+            / project_id
+        )
         bundles = sorted(audit_root.glob("*.json"))
         self.assertEqual(len(bundles), 1)
         bundle = json.loads(bundles[0].read_text(encoding="utf-8"))
@@ -88,11 +93,17 @@ class BulkDeleteApiTests(unittest.TestCase):
         self.assertEqual(bundle["operation_id"], response.operation_id)
         self.assertIn("decision_events", bundle)
         with self.session_factory() as session:
-            rows = session.query(DecisionEvent).filter(DecisionEvent.project_id == project_id).all()
+            rows = (
+                session.query(DecisionEvent)
+                .filter(DecisionEvent.project_id == project_id)
+                .all()
+            )
         # The DB rows may be deleted with the project, so the exported bundle is the durable audit evidence.
         self.assertEqual(rows, [])
 
-    def test_delete_project_removes_candidate_draft_records_before_reviews(self) -> None:
+    def test_delete_project_removes_candidate_draft_records_before_reviews(
+        self,
+    ) -> None:
         project_id = new_id()
         with self.session_factory() as session:
             project = Project(

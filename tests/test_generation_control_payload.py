@@ -6,10 +6,11 @@ from types import SimpleNamespace
 from forwin.application.projects.common import _overlay_active_generation_task
 from forwin.project_payloads import build_generation_control
 from forwin.api_schema import GenerationControlInfo, ProjectDetail
-from forwin.governance import DecisionEventInfo
-from forwin.models.governance import BandCheckpoint
+from forwin.audit.events import DecisionEventInfo
+from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
+from forwin.runtime.policy import RuntimePolicy
 
 
 def _plan(chapter_number: int, status: str) -> ChapterPlan:
@@ -142,7 +143,9 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.next_gate, "completed")
         self.assertEqual(control.blocking_reason.code, "")
 
-    def test_future_constraint_failure_exposes_blocking_reason_and_event_id(self) -> None:
+    def test_future_constraint_failure_exposes_blocking_reason_and_event_id(
+        self,
+    ) -> None:
         control = build_generation_control(
             plans=[
                 _plan(1, "failed"),
@@ -168,10 +171,14 @@ class GenerationControlPayloadTests(unittest.TestCase):
 
         self.assertEqual(control.blocking_reason.code, "future_constraint_block")
         self.assertEqual(control.blocking_reason.chapter_number, 1)
-        self.assertEqual(control.blocking_reason.decision_event_id, "evt-future-constraint-1")
+        self.assertEqual(
+            control.blocking_reason.decision_event_id, "evt-future-constraint-1"
+        )
         self.assertEqual(control.next_gate, "future_constraint_block")
 
-    def test_future_constraint_blocking_reason_accepts_raw_decision_event_rows(self) -> None:
+    def test_future_constraint_blocking_reason_accepts_raw_decision_event_rows(
+        self,
+    ) -> None:
         control = build_generation_control(
             plans=[
                 _plan(1, "failed"),
@@ -191,7 +198,9 @@ class GenerationControlPayloadTests(unittest.TestCase):
         )
 
         self.assertEqual(control.blocking_reason.code, "future_constraint_block")
-        self.assertEqual(control.blocking_reason.decision_event_id, "evt-row-future-constraint-1")
+        self.assertEqual(
+            control.blocking_reason.decision_event_id, "evt-row-future-constraint-1"
+        )
 
     def test_active_task_overlay_does_not_replace_project_chapter_sets(self) -> None:
         detail = ProjectDetail(
@@ -200,6 +209,8 @@ class GenerationControlPayloadTests(unittest.TestCase):
             premise="premise",
             genre="genre",
             setting_summary="",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+            runtime_policy_version=1,
             generation_control=GenerationControlInfo(
                 accepted_chapters=[1, 2, 3],
                 generated_chapters=[1, 2, 3],

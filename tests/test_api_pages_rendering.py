@@ -23,7 +23,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
         scripts = re.findall(r"<script(?:[^>]*)>(.*?)</script>", html, flags=re.DOTALL)
         self.assertTrue(scripts, "expected rendered page to include inline scripts")
 
-        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".js", encoding="utf-8", delete=False
+        ) as handle:
             handle.write("\n\n".join(scripts))
             script_path = handle.name
 
@@ -39,7 +41,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_home_page_uses_incremental_drawer_refresh_and_hides_raw_planned_label(self) -> None:
+    def test_home_page_uses_incremental_drawer_refresh_and_hides_raw_planned_label(
+        self,
+    ) -> None:
         html = render_home_page()
 
         self.assertIn("refreshCurrentDrawerIfChanged", html)
@@ -57,7 +61,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("scrollbar-gutter: stable", html)
         self.assertIn("window.addEventListener('forwin-tab-change'", html)
         self.assertIn('group.className = "lang-toggle"', html)
-        self.assertIn('group.setAttribute("aria-label", translate("lang.toggle"))', html)
+        self.assertIn(
+            'group.setAttribute("aria-label", translate("lang.toggle"))', html
+        )
         self.assertIn('button.setAttribute("data-lang", entry[0])', html)
         self.assertIn('["cn", "中"]', html)
         self.assertIn('["en", "EN"]', html)
@@ -80,8 +86,10 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertNotIn('id="tab_book"', html)
         self.assertNotIn('id="tab_task"', html)
         self.assertNotIn('id="tab_config"', html)
-        self.assertNotIn('onclick="switchTab(\'book\')"', html)
-        home_body = (REPO_ROOT / "forwin/ui_assets/home/body.html").read_text(encoding="utf-8")
+        self.assertNotIn("onclick=\"switchTab('book')\"", html)
+        home_body = (REPO_ROOT / "forwin/ui_assets/home/body.html").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('<forwin-topbar active="book"></forwin-topbar>', home_body)
         self.assertNotIn('<nav class="nav-tabs nav-tabs--primary"', home_body)
         self.assertNotIn('class="lang-toggle"', home_body)
@@ -109,7 +117,7 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("background:rgb(255,252,247)", html)
         self.assertIn("renderDecisionTimeline", html)
         self.assertIn("renderCausalReplayCard", html)
-        self.assertIn("renderGovernanceInsightsCard", html)
+        self.assertIn("renderAuditInsightsCard", html)
         self.assertIn("scope === 'arc'", html)
         self.assertIn("issue_group_distribution", html)
         self.assertIn("jumpToReviewDecisionChain", html)
@@ -119,8 +127,8 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("跳到阻断决策", html)
         self.assertIn("查看 Checkpoint 决策链", html)
         self.assertIn("Review 决策链", html)
-        self.assertIn("governance_action_modal_shell", html)
-        self.assertIn("submitGovernanceActionModal", html)
+        self.assertIn("project_control_action_modal_shell", html)
+        self.assertIn("submitProjectControlActionModal", html)
         self.assertIn("因果回放", html)
         self.assertIn("治理洞察", html)
         self.assertNotIn("future constraints 仅保存/展示", html)
@@ -220,7 +228,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("path: 'id', label: '地点 ID'", html)
         self.assertIn("path: 'id', label: '势力 ID'", html)
         self.assertIn("Arc 蓝图默认仍沿用自动生成", html)
-        self.assertIn("const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';", html)
+        self.assertIn(
+            "const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';", html
+        )
         self.assertIn("JSON.stringify(detail, null, 2)", html)
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
 
@@ -245,7 +255,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("gate_delegation_failed", html)
         self.assertIn("system_block", html)
 
-    def test_publishers_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
+    def test_publishers_page_renders_javascript_that_passes_node_syntax_check(
+        self,
+    ) -> None:
         html = render_publishers_page(
             backend_ready={"extension_api_key_configured": True},
             extension_install_path="browser_extension/forwin-publisher",
@@ -258,7 +270,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn('customElements.define("forwin-topbar"', html)
         self.assertIn("scrollbar-gutter: stable", html)
         self.assertIn('group.className = "lang-toggle"', html)
-        self.assertIn('group.setAttribute("aria-label", translate("lang.toggle"))', html)
+        self.assertIn(
+            'group.setAttribute("aria-label", translate("lang.toggle"))', html
+        )
         self.assertIn('button.setAttribute("data-lang", entry[0])', html)
         self.assertIn('["cn", "中"]', html)
         self.assertIn('["en", "EN"]', html)
@@ -275,16 +289,25 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn('node.className = "nav-tab" +', html)
         self.assertIn('href: "/world-studio"', html)
         self.assertIn('href: "/publishers"', html)
-        publishers_body = (REPO_ROOT / "forwin/ui_assets/publishers/body.html").read_text(encoding="utf-8")
-        self.assertIn('<forwin-topbar active="publish"></forwin-topbar>', publishers_body)
+        publishers_body = (
+            REPO_ROOT / "forwin/ui_assets/publishers/body.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '<forwin-topbar active="publish"></forwin-topbar>', publishers_body
+        )
         self.assertNotIn('<nav class="nav-tabs nav-tabs--primary"', publishers_body)
         self.assertNotIn('class="lang-toggle"', publishers_body)
         self.assertIn("fw-logo", html)
         self.assertIn("ForWin Publisher", html)
         self.assertIn('<h1 data-i18n="publish.title">发布</h1>', html)
         self.assertIn('<h2 data-i18n="publish.extension">扩展</h2>', html)
-        self.assertIn('<h2 style="margin-top:0;" data-i18n="publish.upload">上传</h2>', html)
-        self.assertIn('<h2 style="margin-top:0;" data-i18n="publish.recent_jobs">最近任务</h2>', html)
+        self.assertIn(
+            '<h2 style="margin-top:0;" data-i18n="publish.upload">上传</h2>', html
+        )
+        self.assertIn(
+            '<h2 style="margin-top:0;" data-i18n="publish.recent_jobs">最近任务</h2>',
+            html,
+        )
         self.assertNotIn("平台发布管理", html)
         self.assertNotIn("让浏览器扩展接管真实平台操作", html)
         self.assertNotIn("这里仍然保留手动上传入口", html)

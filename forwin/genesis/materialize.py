@@ -9,7 +9,7 @@ from forwin.observability.payloads import (
     audit_payload,
     event_error_payload,
 )
-from forwin.governance import (
+from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
@@ -17,6 +17,7 @@ from forwin.map.service import ensure_book_map_from_genesis_atlas
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
+
 
 def materialize_book_arcs(
     self,
@@ -32,6 +33,7 @@ def materialize_book_arcs(
         project=project,
         revision=revision,
     )
+
 
 def materialize_arc_chapter_plans(
     self,
@@ -54,6 +56,7 @@ def materialize_arc_chapter_plans(
         ensure_arc_map=ensure_arc_map,
     )
 
+
 def _ensure_arc_map_expansion(
     self,
     *,
@@ -66,7 +69,9 @@ def _ensure_arc_map_expansion(
     parent_event_id: str = "",
 ) -> None:
     world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
-    map_atlas = world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
+    map_atlas = (
+        world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
+    )
     if not map_atlas and isinstance(pack.get("map_atlas"), dict):
         map_atlas = pack["map_atlas"]
     updater.save_decision_event(
@@ -117,7 +122,10 @@ def _ensure_arc_map_expansion(
         )
         raise
     if not result.validation_report.valid:
-        message = "；".join(result.validation_report.errors) or "BookMap expansion validation failed."
+        message = (
+            "；".join(result.validation_report.errors)
+            or "BookMap expansion validation failed."
+        )
         updater.save_decision_event(
             DecisionEventInfo(
                 project_id=project.id,
@@ -160,6 +168,7 @@ def _ensure_arc_map_expansion(
         )
     )
 
+
 def promote_next_arc_if_needed(
     self,
     *,
@@ -179,13 +188,16 @@ def promote_next_arc_if_needed(
     ).scalar_one_or_none()
     if next_arc is None:
         return False
-    active_rows = session.execute(
-        select(ArcPlanVersion)
-        .where(
-            ArcPlanVersion.project_id == project.id,
-            ArcPlanVersion.status == "active",
+    active_rows = (
+        session.execute(
+            select(ArcPlanVersion).where(
+                ArcPlanVersion.project_id == project.id,
+                ArcPlanVersion.status == "active",
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for row in active_rows:
         row.status = "completed"
         session.add(row)
@@ -202,5 +214,9 @@ def promote_next_arc_if_needed(
     return True
 
 
-
-__all__ = ['materialize_book_arcs', 'materialize_arc_chapter_plans', '_ensure_arc_map_expansion', 'promote_next_arc_if_needed']
+__all__ = [
+    "materialize_book_arcs",
+    "materialize_arc_chapter_plans",
+    "_ensure_arc_map_expansion",
+    "promote_next_arc_if_needed",
+]

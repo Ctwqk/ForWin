@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.governance_checks import (
+from forwin.review.plan_checks import (
     chapter_combined_text,
     evaluate_constraint_issues,
     evaluate_task_contract,
@@ -9,13 +9,19 @@ from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 
 
-class GovernanceReviewer:
-    name = "governance"
+class PlanContractReviewer:
+    name = "plan_contract"
 
     def review(self, context, writer_output: WriterOutput, **_kwargs) -> ReviewVerdict:
         issues = self.issues(context=context, writer_output=writer_output)
-        verdict = "fail" if any(issue.severity == "error" for issue in issues) else (
-            "warn" if any(issue.severity == "warning" for issue in issues) else "pass"
+        verdict = (
+            "fail"
+            if any(issue.severity == "error" for issue in issues)
+            else (
+                "warn"
+                if any(issue.severity == "warning" for issue in issues)
+                else "pass"
+            )
         )
         return ReviewVerdict(verdict=verdict, issues=issues)
 
@@ -25,7 +31,7 @@ class GovernanceReviewer:
         task_issues = evaluate_task_contract(
             context.chapter_task_contract,
             combined_text=combined_text,
-            reviewer="governance",
+            reviewer="plan_contract",
             issue_type="plan_task_fulfillment",
             target_scope="chapter",
         )
@@ -39,8 +45,11 @@ class GovernanceReviewer:
             state_changes=writer_output.state_changes,
             events=writer_output.new_events,
             thread_beats=writer_output.thread_beats,
-            reviewer="governance",
+            reviewer="plan_contract",
             issue_type="future_constraint",
             target_scope="chapter",
         )
         return [*task_issues, *constraint_issues]
+
+
+__all__ = ["PlanContractReviewer"]

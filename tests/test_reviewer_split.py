@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.writer import SceneOutput, TimeAdvance, WriterOutput
@@ -37,17 +38,39 @@ def _movement_context() -> ReviewContextPack:
 
 
 def _movement_output() -> WriterOutput:
-    return WriterOutput(
+    output = WriterOutput(
         project_id="project-1",
         chapter_number=1,
         title="赶路",
         body="主角从城中抵达内殿。",
         end_of_chapter_summary="主角抵达内殿。",
         scene_outputs=[
-            SceneOutput(scene_no=1, scene_objective="出发", scene_location_id="city", text="出发。"),
-            SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id="inner", text="抵达。"),
+            SceneOutput(
+                scene_no=1,
+                scene_objective="出发",
+                scene_location_id="city",
+                text="出发。",
+            ),
+            SceneOutput(
+                scene_no=2,
+                scene_objective="抵达",
+                scene_location_id="inner",
+                text="抵达。",
+            ),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        time_advance=TimeAdvance(
+            new_time_label="片刻后", duration_description="片刻后"
+        ),
+    )
+    plan = EntityAdmissionPlan(
+        project_id=output.project_id,
+        chapter_number=output.chapter_number,
+        candidate_fingerprint=writer_output_admission_fingerprint(output),
+    )
+    return output.model_copy(
+        update={
+            "generation_meta": {"entity_admission_plan": plan.model_dump(mode="json")}
+        }
     )
 
 
@@ -57,18 +80,25 @@ def test_map_movement_reviewer_owns_deterministic_movement_issue() -> None:
     verdict = MapMovementReviewer().review(_movement_context(), _movement_output())
 
     assert verdict.verdict == "fail"
-    assert [issue.rule_name for issue in verdict.issues] == ["map_travel_time_exceeds_chapter_time"]
+    assert [issue.rule_name for issue in verdict.issues] == [
+        "map_travel_time_exceeds_chapter_time"
+    ]
     assert verdict.issues[0].reviewer == "map_movement"
 
 
-def test_webnovel_reviewer_facade_keeps_legacy_movement_behavior_without_owning_method() -> None:
+def test_webnovel_reviewer_facade_keeps_legacy_movement_behavior_without_owning_method() -> (
+    None
+):
     from forwin.review.webnovel import WebNovelExperienceReviewer
 
     reviewer = WebNovelExperienceReviewer(llm_enabled=False)
     verdict = reviewer.review(_movement_context(), _movement_output())
 
     assert not hasattr(WebNovelExperienceReviewer, "_map_movement_issue")
-    assert any(issue.rule_name == "map_travel_time_exceeds_chapter_time" for issue in verdict.issues)
+    assert any(
+        issue.rule_name == "map_travel_time_exceeds_chapter_time"
+        for issue in verdict.issues
+    )
 
 
 def test_llm_webnovel_reviewer_owns_llm_prompt_and_json_repair() -> None:
@@ -119,12 +149,12 @@ def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
 
     experience = StubReviewer()
     map_movement = StubReviewer("pass")
-    governance = StubReviewer("pass")
+    plan_review = StubReviewer("pass")
     personality = StubReviewer("pass")
     hub = DraftReviewService(
         experience_reviewer=experience,
         map_movement_reviewer=map_movement,
-        governance_reviewer=governance,
+        plan_reviewer=plan_review,
         personality_reviewer=personality,
         lint_collector=StubLintCollector(),
     )
@@ -139,7 +169,7 @@ def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
     assert verdict.verdict == "pass"
     assert experience.calls == 1
     assert map_movement.calls == 1
-    assert governance.calls == 1
+    assert plan_review.calls == 1
     assert personality.calls == 1
 
 
@@ -162,7 +192,7 @@ def test_historical_draft_review_merge_preserves_arc_repair_scope() -> None:
 
     merged = DraftReviewService._merge_repair_instructions(
         continuity_instruction=base,
-        governance_instruction=None,
+        plan_instruction=None,
         webnovel_instruction=arc,
     )
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from forwin.api_schema.policy import RuntimePolicyResponse, RuntimePolicyUpdateRequest
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.project import Project
 from forwin.runtime.policy_store import (
     ProjectPolicyMissing,

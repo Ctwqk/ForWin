@@ -19,8 +19,11 @@ from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
-from .governance import GovernanceReviewer
-from .infrastructure_errors import filter_writer_fixable_issues, infrastructure_issue_types
+from .plan_reviewer import PlanContractReviewer
+from .infrastructure_errors import (
+    filter_writer_fixable_issues,
+    infrastructure_issue_types,
+)
 from .lint import LintSignalCollector
 from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
@@ -40,7 +43,7 @@ class DraftReviewService:
         llm_client=None,
         llm_enabled: bool | None = None,
         continuity_reviewer=None,
-        governance_reviewer=None,
+        plan_reviewer=None,
         experience_reviewer=None,
         map_movement_reviewer=None,
         personality_reviewer=None,
@@ -52,24 +55,34 @@ class DraftReviewService:
         self.experience_review_enabled = bool(experience_review_enabled)
         self.map_movement_review_enabled = bool(map_movement_review_enabled)
         self.personality_review_enabled = bool(personality_review_enabled)
-        self.canon_quality_review_in_hub_enabled = bool(canon_quality_review_in_hub_enabled)
-        self.publisher_compliance_review_enabled = bool(publisher_compliance_review_enabled)
+        self.canon_quality_review_in_hub_enabled = bool(
+            canon_quality_review_in_hub_enabled
+        )
+        self.publisher_compliance_review_enabled = bool(
+            publisher_compliance_review_enabled
+        )
         self.continuity_reviewer = continuity_reviewer
-        self.governance_reviewer = governance_reviewer or GovernanceReviewer()
+        self.plan_reviewer = plan_reviewer or PlanContractReviewer()
         self.experience_reviewer = experience_reviewer or ExperienceReviewer(
             enabled=experience_review_enabled,
             llm_client=llm_client,
             llm_enabled=llm_enabled,
         )
         self.map_movement_reviewer = map_movement_reviewer or MapMovementReviewer()
-        self.personality_reviewer = personality_reviewer or PersonalityConsistencyReviewer()
+        self.personality_reviewer = (
+            personality_reviewer or PersonalityConsistencyReviewer()
+        )
         self.publisher_compliance_reviewer = (
             publisher_compliance_reviewer or PublisherComplianceReviewer()
         )
-        self.lint_collector = lint_collector or LintSignalCollector(enabled=lint_review_enabled)
+        self.lint_collector = lint_collector or LintSignalCollector(
+            enabled=lint_review_enabled
+        )
         self.llm_webnovel_reviewer = llm_webnovel_reviewer
         self.llm_client = llm_client
-        self.llm_enabled = bool(llm_client) if llm_enabled is None else bool(llm_enabled)
+        self.llm_enabled = (
+            bool(llm_client) if llm_enabled is None else bool(llm_enabled)
+        )
         self.observability = observability or NullObservability()
 
     def review(
@@ -146,12 +159,20 @@ class DraftReviewService:
                 continuity_quality_signals,
             )
         canon_quality_issues = self._canon_quality_issues(deterministic_quality_report)
-        quality_verdict = self._merge_verdicts(
-            *[
-                "fail" if issue.severity == "error" else "warn" if issue.severity == "warning" else "pass"
-                for issue in canon_quality_issues
-            ]
-        ) if canon_quality_issues else "pass"
+        quality_verdict = (
+            self._merge_verdicts(
+                *[
+                    "fail"
+                    if issue.severity == "error"
+                    else "warn"
+                    if issue.severity == "warning"
+                    else "pass"
+                    for issue in canon_quality_issues
+                ]
+            )
+            if canon_quality_issues
+            else "pass"
+        )
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
@@ -175,16 +196,16 @@ class DraftReviewService:
             span.metric("issue_count", len(getattr(webnovel, "issues", []) or []))
         with self.observability.span(
             obs_context,
-            "review.governance",
+            "review.plan_contract",
             span_kind="reviewer",
             component="reviewer",
         ) as span:
-            governance = self._call_with_compatible_kwargs(
-                self.governance_reviewer.review,
+            plan_review = self._call_with_compatible_kwargs(
+                self.plan_reviewer.review,
                 review_context,
                 writer_output,
             )
-            span.metric("issue_count", len(getattr(governance, "issues", []) or []))
+            span.metric("issue_count", len(getattr(plan_review, "issues", []) or []))
         map_movement = ReviewVerdict(verdict="pass", issues=[])
         if self.map_movement_review_enabled:
             with self.observability.span(
@@ -198,7 +219,9 @@ class DraftReviewService:
                     review_context,
                     writer_output,
                 )
-                span.metric("issue_count", len(getattr(map_movement, "issues", []) or []))
+                span.metric(
+                    "issue_count", len(getattr(map_movement, "issues", []) or [])
+                )
         personality_review = ReviewVerdict(verdict="pass", issues=[])
         personality_review_call = getattr(self.personality_reviewer, "review", None)
         if (
@@ -217,7 +240,9 @@ class DraftReviewService:
                     review_context,
                     writer_output,
                 )
-                span.metric("issue_count", len(getattr(personality_review, "issues", []) or []))
+                span.metric(
+                    "issue_count", len(getattr(personality_review, "issues", []) or [])
+                )
         publisher_compliance = ReviewVerdict(verdict="pass", issues=[])
         if self.publisher_compliance_review_enabled:
             with self.observability.span(
@@ -231,22 +256,27 @@ class DraftReviewService:
                     review_context,
                     writer_output,
                 )
-                span.metric("issue_count", len(getattr(publisher_compliance, "issues", []) or []))
+                span.metric(
+                    "issue_count",
+                    len(getattr(publisher_compliance, "issues", []) or []),
+                )
         entity_admission_issues = self._entity_admission_issues(writer_output)
         entity_admission_verdict = "fail" if entity_admission_issues else "pass"
         issues = [
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
-            *self._normalize_issues(governance.issues, reviewer="governance"),
+            *self._normalize_issues(plan_review.issues, reviewer="plan_contract"),
             *self._normalize_issues(webnovel.issues, reviewer="webnovel_experience"),
             *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
             *self._normalize_issues(personality_review.issues, reviewer="personality"),
-            *self._normalize_issues(publisher_compliance.issues, reviewer="publisher_compliance"),
+            *self._normalize_issues(
+                publisher_compliance.issues, reviewer="publisher_compliance"
+            ),
             *entity_admission_issues,
             *canon_quality_issues,
         ]
         verdict = self._merge_verdicts(
             continuity.verdict,
-            governance.verdict,
+            plan_review.verdict,
             webnovel.verdict,
             map_movement.verdict,
             personality_review.verdict,
@@ -262,19 +292,25 @@ class DraftReviewService:
                         continuity_issues=[
                             issue
                             for issue in issues
-                            if issue.reviewer in {"continuity", "canon_quality"} and issue.severity == "error"
+                            if issue.reviewer in {"continuity", "canon_quality"}
+                            and issue.severity == "error"
                         ],
                         context=context,
                     )
                     if continuity.verdict == "fail" or quality_verdict == "fail"
                     else None
                 ),
-                governance_instruction=(
-                    self._governance_repair_instruction(
-                        governance_issues=[issue for issue in issues if issue.reviewer == "governance" and issue.severity == "error"],
+                plan_instruction=(
+                    self._plan_repair_instruction(
+                        plan_issues=[
+                            issue
+                            for issue in issues
+                            if issue.reviewer == "plan_contract"
+                            and issue.severity == "error"
+                        ],
                         context=context,
                     )
-                    if governance.verdict == "fail"
+                    if plan_review.verdict == "fail"
                     else None
                 ),
                 webnovel_instruction=webnovel.repair_instruction
@@ -286,10 +322,14 @@ class DraftReviewService:
             recommended_action=(
                 "rewrite"
                 if verdict == "fail"
-                else "pause_for_review" if verdict == "warn" else "continue"
+                else "pause_for_review"
+                if verdict == "warn"
+                else "continue"
             ),
             review_summary=" | ".join(
-                item for item in [continuity.review_summary, webnovel.review_summary] if item
+                item
+                for item in [continuity.review_summary, webnovel.review_summary]
+                if item
             ),
             planned_reward_tags=list(webnovel.planned_reward_tags),
             delivered_reward_tags=list(webnovel.delivered_reward_tags),
@@ -383,26 +423,35 @@ class DraftReviewService:
         except (TypeError, ValueError):
             return callable_obj(*args, **kwargs)
         parameters = signature.parameters
-        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+        ):
             return callable_obj(*args, **kwargs)
         filtered_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key in parameters
+            key: value for key, value in kwargs.items() if key in parameters
         }
         return callable_obj(*args, **filtered_kwargs)
 
     @staticmethod
-    def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
+    def _selected_skills_from_layers(
+        skill_layers: list[object] | None,
+    ) -> list[dict[str, str]]:
         payload: list[dict[str, str]] = []
         for item in skill_layers or []:
             payload.append(
                 {
-                    "id": str(getattr(item, "skill_id", getattr(item, "name", "")) or ""),
-                    "version": str(getattr(item, "skill_version", getattr(item, "version", "")) or ""),
+                    "id": str(
+                        getattr(item, "skill_id", getattr(item, "name", "")) or ""
+                    ),
+                    "version": str(
+                        getattr(item, "skill_version", getattr(item, "version", ""))
+                        or ""
+                    ),
                     "hash": str(getattr(item, "skill_hash", "") or ""),
                     "path": str(getattr(item, "path", "") or ""),
-                    "activation_reason": str(getattr(item, "activation_reason", "") or ""),
+                    "activation_reason": str(
+                        getattr(item, "activation_reason", "") or ""
+                    ),
                     "mode": str(getattr(item, "mode", "") or ""),
                 }
             )
@@ -429,7 +478,11 @@ class DraftReviewService:
                 must_fix=(
                     list(base_instruction.must_fix)
                     if base_instruction is not None
-                    else [item.description for item in review.issues if item.severity == "error"]
+                    else [
+                        item.description
+                        for item in review.issues
+                        if item.severity == "error"
+                    ]
                 ),
                 must_preserve=(
                     list(base_instruction.must_preserve)
@@ -481,7 +534,8 @@ class DraftReviewService:
                 issue.model_copy(
                     update={
                         "reviewer": issue.reviewer or reviewer,
-                        "issue_type": issue.issue_type or ("continuity" if reviewer == "continuity" else reviewer),
+                        "issue_type": issue.issue_type
+                        or ("continuity" if reviewer == "continuity" else reviewer),
                         "target_scope": issue.target_scope or "chapter",
                     }
                 )
@@ -489,7 +543,9 @@ class DraftReviewService:
         return normalized
 
     @staticmethod
-    def _canon_quality_issues(deterministic_quality_report: dict | None) -> list[ContinuityIssue]:
+    def _canon_quality_issues(
+        deterministic_quality_report: dict | None,
+    ) -> list[ContinuityIssue]:
         if not isinstance(deterministic_quality_report, dict):
             return []
         form_issues: list[ContinuityIssue] = []
@@ -501,22 +557,39 @@ class DraftReviewService:
                 severity = "warning"
             form_issues.append(
                 ContinuityIssue(
-                    rule_name=str(item.get("source_analyzer") or item.get("reviewer_issue_type") or "canon_quality"),
+                    rule_name=str(
+                        item.get("source_analyzer")
+                        or item.get("reviewer_issue_type")
+                        or "canon_quality"
+                    ),
                     severity=severity,  # type: ignore[arg-type]
-                    description=str(item.get("description") or item.get("claim") or item.get("reviewer_issue_type") or "canon quality issue"),
+                    description=str(
+                        item.get("description")
+                        or item.get("claim")
+                        or item.get("reviewer_issue_type")
+                        or "canon quality issue"
+                    ),
                     reviewer="canon_quality",
                     issue_type=str(item.get("reviewer_issue_type") or "canon_quality"),
                     target_scope="chapter",
-                    evidence_refs=[str(ref) for ref in item.get("evidence_refs", []) if str(ref).strip()],
+                    evidence_refs=[
+                        str(ref)
+                        for ref in item.get("evidence_refs", [])
+                        if str(ref).strip()
+                    ],
                     suggested_fix=str(item.get("suggested_fix") or ""),
                     source_layer=str(item.get("source_layer") or "canon_quality"),
                     source_analyzer=str(item.get("source_analyzer") or ""),
                     source_mode=str(item.get("source_mode") or "chapter_review_form"),
                     original_verdict=str(item.get("original_verdict") or ""),
-                    original_confidence=float(item.get("original_confidence") or item.get("confidence") or 0.0),
+                    original_confidence=float(
+                        item.get("original_confidence") or item.get("confidence") or 0.0
+                    ),
                     blocking_origin=str(item.get("blocking_origin") or ""),
                     blocking=bool(item.get("blocking", False)),
-                    original_result=item.get("original_result") if isinstance(item.get("original_result"), dict) else {},
+                    original_result=item.get("original_result")
+                    if isinstance(item.get("original_result"), dict)
+                    else {},
                 )
             )
         raw_signals = [
@@ -527,15 +600,24 @@ class DraftReviewService:
         for signal in raw_signals:
             if not isinstance(signal, dict):
                 continue
-            payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
-            if form_issues and str(payload.get("source_mode") or "") == "chapter_review_form":
+            payload = (
+                signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
+            )
+            if (
+                form_issues
+                and str(payload.get("source_mode") or "") == "chapter_review_form"
+            ):
                 continue
             signal_id = str(signal.get("signal_id") or "").strip()
-            signal_type = str(signal.get("signal_type") or "canon_quality_signal").strip()
+            signal_type = str(
+                signal.get("signal_type") or "canon_quality_signal"
+            ).strip()
             severity = str(signal.get("severity") or "warning").strip()
             if severity not in {"error", "warning", "info"}:
                 severity = "warning"
-            suggested_fix = str(payload.get("repair_hint") or signal.get("description") or "").strip()
+            suggested_fix = str(
+                payload.get("repair_hint") or signal.get("description") or ""
+            ).strip()
             issues.append(
                 ContinuityIssue(
                     rule_name=signal_type,
@@ -549,9 +631,15 @@ class DraftReviewService:
                     source_layer="canon_quality",
                     source_analyzer=signal_type,
                     source_mode=str(payload.get("source_mode") or "deterministic"),
-                    original_verdict="fail" if severity == "error" else "warn" if severity == "warning" else "pass",
+                    original_verdict="fail"
+                    if severity == "error"
+                    else "warn"
+                    if severity == "warning"
+                    else "pass",
                     original_confidence=float(payload.get("confidence") or 1.0),
-                    blocking_origin=str(payload.get("blocking_origin") or "deterministic"),
+                    blocking_origin=str(
+                        payload.get("blocking_origin") or "deterministic"
+                    ),
                     blocking=severity == "error",
                     original_result=signal,
                 )
@@ -572,7 +660,9 @@ class DraftReviewService:
             if isinstance(item, dict)
         }
         for signal in signals:
-            payload = signal.model_dump(mode="json") if hasattr(signal, "model_dump") else {}
+            payload = (
+                signal.model_dump(mode="json") if hasattr(signal, "model_dump") else {}
+            )
             if not isinstance(payload, dict):
                 continue
             signal_id = str(payload.get("signal_id") or "")
@@ -604,7 +694,9 @@ class DraftReviewService:
             plan = EntityAdmissionPlan.model_validate(payload)
         except ValidationError:
             return [DraftReviewService._invalid_entity_admission_issue("invalid plan")]
-        if plan.candidate_fingerprint != writer_output_admission_fingerprint(writer_output):
+        if plan.candidate_fingerprint != writer_output_admission_fingerprint(
+            writer_output
+        ):
             return [DraftReviewService._invalid_entity_admission_issue("stale plan")]
         decisions = {decision.mention_name: decision for decision in plan.decisions}
         return [
@@ -627,9 +719,7 @@ class DraftReviewService:
                 blocking_origin="entity_admission",
                 blocking=True,
                 original_result=(
-                    decisions[name].model_dump(mode="json")
-                    if name in decisions
-                    else {}
+                    decisions[name].model_dump(mode="json") if name in decisions else {}
                 ),
             )
             for name in plan.plan_conflicts
@@ -692,55 +782,65 @@ class DraftReviewService:
             ],
             scope_reason="continuity rule break needs local repair first",
             design_patch={
-                "continuity_focus": [issue.rule_name for issue in writer_fixable if issue.severity == "error"],
+                "continuity_focus": [
+                    issue.rule_name
+                    for issue in writer_fixable
+                    if issue.severity == "error"
+                ],
                 **(
                     {"infrastructure_filtered_issue_types": filtered_types}
                     if filtered_types
                     else {}
                 ),
             },
-            evidence_refs=[ref for issue in continuity_issues for ref in issue.evidence_refs],
+            evidence_refs=[
+                ref for issue in continuity_issues for ref in issue.evidence_refs
+            ],
         )
 
     @staticmethod
-    def _governance_repair_instruction(
+    def _plan_repair_instruction(
         *,
-        governance_issues: list[ContinuityIssue],
+        plan_issues: list[ContinuityIssue],
         context: ChapterContextPack,
     ) -> RepairInstruction:
-        writer_fixable = filter_writer_fixable_issues(governance_issues)
-        filtered_types = infrastructure_issue_types(governance_issues)
+        writer_fixable = filter_writer_fixable_issues(plan_issues)
+        filtered_types = infrastructure_issue_types(plan_issues)
         return RepairInstruction(
             repair_scope="draft",
             failure_type="mixed",
-            must_fix=[issue.description for issue in writer_fixable if issue.severity == "error"],
+            must_fix=[
+                issue.description
+                for issue in writer_fixable
+                if issue.severity == "error"
+            ],
             must_preserve=[
                 context.chapter_plan_title,
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
-            scope_reason="governance issues should start with local repair",
+            scope_reason="plan-contract issues should start with local repair",
             design_patch={
-                "governance_focus": [issue.rule_name for issue in writer_fixable],
+                "plan_focus": [issue.rule_name for issue in writer_fixable],
                 **(
                     {"infrastructure_filtered_issue_types": filtered_types}
                     if filtered_types
                     else {}
                 ),
             },
-            evidence_refs=[ref for issue in governance_issues for ref in issue.evidence_refs],
+            evidence_refs=[ref for issue in plan_issues for ref in issue.evidence_refs],
         )
 
     @staticmethod
     def _merge_repair_instructions(
         *,
         continuity_instruction: RepairInstruction | None,
-        governance_instruction: RepairInstruction | None,
+        plan_instruction: RepairInstruction | None,
         webnovel_instruction: RepairInstruction | None,
     ) -> RepairInstruction | None:
-        if continuity_instruction is None and governance_instruction is None:
+        if continuity_instruction is None and plan_instruction is None:
             return webnovel_instruction
-        base_instruction = continuity_instruction or governance_instruction
+        base_instruction = continuity_instruction or plan_instruction
         if webnovel_instruction is None:
             return base_instruction
         if base_instruction is None:
@@ -768,21 +868,48 @@ class DraftReviewService:
         )
         merged_design_patch = dict(base_instruction.design_patch)
         for key, value in webnovel_instruction.design_patch.items():
-            if key in merged_design_patch and isinstance(merged_design_patch[key], list) and isinstance(value, list):
-                merged_design_patch[key] = list(dict.fromkeys([*merged_design_patch[key], *value]))
-            elif key in merged_design_patch and isinstance(merged_design_patch[key], dict) and isinstance(value, dict):
+            if (
+                key in merged_design_patch
+                and isinstance(merged_design_patch[key], list)
+                and isinstance(value, list)
+            ):
+                merged_design_patch[key] = list(
+                    dict.fromkeys([*merged_design_patch[key], *value])
+                )
+            elif (
+                key in merged_design_patch
+                and isinstance(merged_design_patch[key], dict)
+                and isinstance(value, dict)
+            ):
                 merged_design_patch[key] = {**merged_design_patch[key], **value}
             else:
                 merged_design_patch[key] = value
         return RepairInstruction(
             repair_scope=merged_scope,
             failure_type=merged_failure_type,
-            must_fix=list(dict.fromkeys([*base_instruction.must_fix, *webnovel_instruction.must_fix])),
-            must_preserve=list(dict.fromkeys([*base_instruction.must_preserve, *webnovel_instruction.must_preserve])),
+            must_fix=list(
+                dict.fromkeys(
+                    [*base_instruction.must_fix, *webnovel_instruction.must_fix]
+                )
+            ),
+            must_preserve=list(
+                dict.fromkeys(
+                    [
+                        *base_instruction.must_preserve,
+                        *webnovel_instruction.must_preserve,
+                    ]
+                )
+            ),
             scope_reason=(
-                webnovel_instruction.scope_reason
-                or base_instruction.scope_reason
+                webnovel_instruction.scope_reason or base_instruction.scope_reason
             ),
             design_patch=merged_design_patch,
-            evidence_refs=list(dict.fromkeys([*base_instruction.evidence_refs, *webnovel_instruction.evidence_refs])),
+            evidence_refs=list(
+                dict.fromkeys(
+                    [
+                        *base_instruction.evidence_refs,
+                        *webnovel_instruction.evidence_refs,
+                    ]
+                )
+            ),
         )

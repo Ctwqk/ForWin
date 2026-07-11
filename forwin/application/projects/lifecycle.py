@@ -5,7 +5,11 @@ import json
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import build_project_detail, build_project_summaries, normalize_project_automation
+from forwin.project_payloads import (
+    build_project_detail,
+    build_project_summaries,
+    normalize_project_automation,
+)
 from forwin.api_schema import (
     BulkDeleteResponse,
     ProjectBulkDeleteRequest,
@@ -15,9 +19,7 @@ from forwin.api_schema import (
     ProjectDetail,
     ProjectSummary,
 )
-from forwin.governance import (
-    DecisionEventType,
-)
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -50,9 +52,11 @@ def list_projects(
 ) -> list[ProjectSummary]:
     session = get_session()
     try:
-        projects = session.execute(
-            select(Project).order_by(Project.created_at.desc())
-        ).scalars().all()
+        projects = (
+            session.execute(select(Project).order_by(Project.created_at.desc()))
+            .scalars()
+            .all()
+        )
         return build_project_summaries(
             session=session,
             projects=projects,
@@ -60,6 +64,7 @@ def list_projects(
         )
     finally:
         session.close()
+
 
 def create_project(
     req: ProjectCreateRequest,
@@ -102,7 +107,8 @@ def create_project(
                 "platform": publish_platform,
                 "book_name": publish_book_name,
                 "upload_url": publish_upload_url,
-                "create_if_missing": bool(publish_platform) and not platform_has_existing_book,
+                "create_if_missing": bool(publish_platform)
+                and not platform_has_existing_book,
             }
             if publish_platform:
                 publish_bindings = [default_publish]
@@ -168,6 +174,7 @@ def create_project(
         close_genesis_service(genesis_service)
         session.close()
 
+
 def delete_project(
     project_id: str,
     *,
@@ -205,6 +212,7 @@ def delete_project(
         )
     finally:
         session.close()
+
 
 def bulk_delete_projects(
     req: ProjectBulkDeleteRequest,
@@ -259,6 +267,7 @@ def bulk_delete_projects(
     finally:
         session.close()
 
+
 def get_project(
     project_id: str,
     *,
@@ -284,4 +293,10 @@ def get_project(
         session.close()
 
 
-__all__ = ['list_projects', 'create_project', 'delete_project', 'bulk_delete_projects', 'get_project']
+__all__ = [
+    "list_projects",
+    "create_project",
+    "delete_project",
+    "bulk_delete_projects",
+    "get_project",
+]

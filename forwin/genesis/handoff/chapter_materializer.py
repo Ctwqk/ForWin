@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session
 
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
 from forwin.genesis.helpers import _json_dump
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.observability.payloads import audit_payload
@@ -30,12 +33,17 @@ class GenesisChapterMaterializer:
         ensure_arc_map: bool = True,
     ) -> ArcPlanVersion:
         pack = self.owner.load_pack(revision)
-        blueprint = pack.get("book_arc_blueprint") if isinstance(pack.get("book_arc_blueprint"), dict) else {}
+        blueprint = (
+            pack.get("book_arc_blueprint")
+            if isinstance(pack.get("book_arc_blueprint"), dict)
+            else {}
+        )
         arc_payload = next(
             (
                 item
                 for item in (blueprint.get("arcs") or [])
-                if isinstance(item, dict) and int(item.get("arc_number", 0) or 0) == int(arc_number or 0)
+                if isinstance(item, dict)
+                and int(item.get("arc_number", 0) or 0) == int(arc_number or 0)
             ),
             None,
         )
@@ -52,7 +60,9 @@ class GenesisChapterMaterializer:
         if arc_row is None:
             raise ValueError(f"Arc {arc_number} skeleton 不存在")
         existing = session.execute(
-            select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == arc_row.id)
+            select(func.count(ChapterPlan.id)).where(
+                ChapterPlan.arc_plan_id == arc_row.id
+            )
         ).scalar_one()
         if int(existing or 0) > 0:
             if ensure_arc_map:
@@ -67,8 +77,13 @@ class GenesisChapterMaterializer:
                 )
             return arc_row
         chapter_start = int(arc_payload.get("chapter_start", 1) or 1)
-        chapter_end = int(arc_payload.get("chapter_end", chapter_start) or chapter_start)
-        chapter_count = max(1, int(arc_payload.get("chapter_count", chapter_end - chapter_start + 1) or 1))
+        chapter_end = int(
+            arc_payload.get("chapter_end", chapter_start) or chapter_start
+        )
+        chapter_count = max(
+            1,
+            int(arc_payload.get("chapter_count", chapter_end - chapter_start + 1) or 1),
+        )
         arc_activation_review_pack = build_arc_activation_review_pack(
             session,
             project_id=project.id,
@@ -89,9 +104,15 @@ class GenesisChapterMaterializer:
                     status="succeeded",
                     arc_number=arc_number,
                     chapter_start=chapter_start,
-                    accepted_summary_count=len(review_pack_payload.get("accepted_chapter_summaries", [])),
-                    open_obligation_count=len(review_pack_payload.get("open_obligations", [])),
-                    book_state_fact_count=len(review_pack_payload.get("book_state_facts", [])),
+                    accepted_summary_count=len(
+                        review_pack_payload.get("accepted_chapter_summaries", [])
+                    ),
+                    open_obligation_count=len(
+                        review_pack_payload.get("open_obligations", [])
+                    ),
+                    book_state_fact_count=len(
+                        review_pack_payload.get("book_state_facts", [])
+                    ),
                     review_pack=review_pack_payload,
                 ),
                 related_object_type="arc_plan_version",
@@ -107,7 +128,9 @@ class GenesisChapterMaterializer:
             arc_activation_review_pack=review_pack_payload,
         )
         if str(decision_event_id or "").strip():
-            trace_payload = self.owner._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
+            trace_payload = self.owner._prepare_trace_payload_for_save(
+                trace_payload, project_id=project.id
+            )
             trace = updater.save_prompt_trace(
                 project_id=project.id,
                 genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -116,7 +139,9 @@ class GenesisChapterMaterializer:
                 stage_key=f"launch_arc_{arc_row.arc_number}",
                 template_id=f"launch_arc_plan:{arc_row.arc_number}",
                 template_version="v1",
-                effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
+                effective_system_prompt=str(
+                    trace_payload.get("effective_system_prompt", "")
+                ),
                 prompt_layers_json=_json_dump(trace_payload.get("prompt_layers", [])),
                 input_snapshot_json=_json_dump(trace_payload.get("input_snapshot", {})),
                 model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
@@ -124,7 +149,9 @@ class GenesisChapterMaterializer:
                 output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
                 backend=str(trace_payload.get("backend", "") or ""),
                 codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
-                permission_profile=str(trace_payload.get("permission_profile", "") or ""),
+                permission_profile=str(
+                    trace_payload.get("permission_profile", "") or ""
+                ),
                 fallback_used=bool(trace_payload.get("fallback_used", False)),
             )
             self.owner._record_llm_events_for_trace(
@@ -142,7 +169,8 @@ class GenesisChapterMaterializer:
                 arc_plan_id=arc_row.id,
                 chapter_number=number,
                 title=str(item.get("title", "")).strip() or f"第{number}章",
-                one_line=str(item.get("one_line", "")).strip() or f"推进 arc {arc_number} 冲突。",
+                one_line=str(item.get("one_line", "")).strip()
+                or f"推进 arc {arc_number} 冲突。",
                 goals=[
                     str(goal).strip()
                     for goal in (item.get("goals") or [])

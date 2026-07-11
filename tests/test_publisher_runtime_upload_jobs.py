@@ -4,9 +4,9 @@ import json
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
 from forwin.publisher_runtime.service import PublisherRuntimeService
@@ -76,17 +76,31 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
         assert claimed["job_id"] == created["job_id"]
         assert updated["status"] == "succeeded"
         assert updated["result_payload"]["create_if_missing"] is True
-        assert updated["result_payload"]["book_meta"]["protagonist_names"] == ["韩砚", "林雾"]
-        assert updated["result_payload"]["platform_meta"]["resolved_primary_category"]["label"] == "都市"
+        assert updated["result_payload"]["book_meta"]["protagonist_names"] == [
+            "韩砚",
+            "林雾",
+        ]
+        assert (
+            updated["result_payload"]["platform_meta"]["resolved_primary_category"][
+                "label"
+            ]
+            == "都市"
+        )
         assert updated["result_payload"]["preflight"]["ok"] is True
-        assert runtime.upload_jobs.get_upload_job(created["job_id"])["deletable"] is True
+        assert (
+            runtime.upload_jobs.get_upload_job(created["job_id"])["deletable"] is True
+        )
 
         with runtime.session_factory() as session:
-            events = session.execute(
-                select(DecisionEvent)
-                .where(DecisionEvent.project_id == project_id)
-                .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-            ).scalars().all()
+            events = (
+                session.execute(
+                    select(DecisionEvent)
+                    .where(DecisionEvent.project_id == project_id)
+                    .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
+                )
+                .scalars()
+                .all()
+            )
 
         event_types = [event.event_type for event in events]
         assert DecisionEventType.UPLOAD_JOB_CREATED in event_types
@@ -213,7 +227,12 @@ def test_batch_upload_job_blocks_failed_publisher_compliance_review() -> None:
             runtime.upload_jobs.create_upload_jobs_batch(
                 platform="qidian",
                 book_name="测试书",
-                jobs=[{"chapter_title": "第一章", "body": "主角说：加微信 vx123456 领取番外。"}],
+                jobs=[
+                    {
+                        "chapter_title": "第一章",
+                        "body": "主角说：加微信 vx123456 领取番外。",
+                    }
+                ],
                 upload_url=None,
                 publish=True,
                 publisher_compliance_required=True,
@@ -353,7 +372,10 @@ def test_claim_next_upload_job_returns_cover_upload_and_audit_sync() -> None:
         )
 
         assert second is not None
-        assert {first["task_kind"], second["task_kind"]} == {"cover_upload", "audit_sync"}
+        assert {first["task_kind"], second["task_kind"]} == {
+            "cover_upload",
+            "audit_sync",
+        }
     finally:
         engine.dispose()
 
@@ -468,6 +490,7 @@ def test_non_login_upload_failure_requeues_until_codex_intervention() -> None:
     finally:
         engine.dispose()
 
+
 def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
     engine, runtime = _runtime("publisher-runtime-upload-retry-cleared")
     try:
@@ -487,7 +510,10 @@ def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
             message="上传失败。",
             current_url="https://fanqienovel.com/main/writer/",
             error="番茄章节管理页未找到新草稿。",
-            result_payload={"error_code": "publish-not-confirmed", "failure_phase": "confirm"},
+            result_payload={
+                "error_code": "publish-not-confirmed",
+                "failure_phase": "confirm",
+            },
         )
         assert first["status"] == "pending"
 
@@ -542,8 +568,14 @@ def test_qidian_draft_timeout_with_real_ccid_is_recorded_as_success() -> None:
         assert updated["status"] == "succeeded"
         assert updated["message"] == "章节草稿已保存到起点。"
         assert updated["error"] == ""
-        assert updated["result_payload"]["verified_via"] == "qidian-real-ccid-timeout-recovery"
-        assert updated["result_payload"]["recovered_error_code"] == "extension-upload-timeout"
+        assert (
+            updated["result_payload"]["verified_via"]
+            == "qidian-real-ccid-timeout-recovery"
+        )
+        assert (
+            updated["result_payload"]["recovered_error_code"]
+            == "extension-upload-timeout"
+        )
         assert "auto_retry" not in updated["result_payload"]
     finally:
         engine.dispose()

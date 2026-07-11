@@ -10,7 +10,7 @@ from forwin.application.generation import (
     EnqueueGenerationCommand,
     GenerationApplicationService,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 
 from .events import (
@@ -127,7 +127,9 @@ class ProductionExecutor:
             action=action,
             message=message_for_action(
                 action,
-                chapter_count=review_job_count if action == ACTION_RAN_REVIEW_JOBS else message_chapter_count,
+                chapter_count=review_job_count
+                if action == ACTION_RAN_REVIEW_JOBS
+                else message_chapter_count,
                 publish_job_count=publish_job_count,
             ),
             task_id=task_id,
@@ -146,7 +148,9 @@ class ProductionExecutor:
             normalized_chapter = int(chapter_number or 0)
             if normalized_chapter <= 0:
                 continue
-            status = str(plan.review_chapter_statuses.get(normalized_chapter, "") or "").strip()
+            status = str(
+                plan.review_chapter_statuses.get(normalized_chapter, "") or ""
+            ).strip()
             if status == "needs_review":
                 callback = self.approve_chapter_review
             else:
@@ -164,7 +168,11 @@ class ProductionExecutor:
         project: Project,
         policy: ProductionPolicy,
     ) -> int:
-        if not plan.publish_jobs or not policy.auto_publish or not policy.publish_bindings:
+        if (
+            not plan.publish_jobs
+            or not policy.auto_publish
+            or not policy.publish_bindings
+        ):
             return 0
         manager = self._publisher_manager()
         if manager is None:
@@ -185,11 +193,15 @@ class ProductionExecutor:
                     publish=True,
                     create_if_missing=bool(binding.create_if_missing),
                     cover_generation_enabled=bool(binding.cover_generation_enabled),
-                    cover_confirmation_required=bool(binding.cover_confirmation_required),
+                    cover_confirmation_required=bool(
+                        binding.cover_confirmation_required
+                    ),
                     cover_candidate_count=int(binding.cover_candidate_count or 4),
                     cover_style_hint=binding.cover_style_hint,
                     auto_cover_upload_enabled=bool(binding.auto_cover_upload_enabled),
-                    publisher_compliance_required=bool(binding.publisher_compliance_required),
+                    publisher_compliance_required=bool(
+                        binding.publisher_compliance_required
+                    ),
                     book_meta=binding.book_meta.model_dump(mode="json"),
                 )
                 or 0
@@ -208,12 +220,18 @@ class ProductionExecutor:
 
         return PublisherManager(
             self.session_factory,
-            extension_api_key=str(getattr(self.config, "publisher_extension_api_key", "") or ""),
-            preferred_client_id=str(getattr(self.config, "publisher_preferred_client_id", "") or ""),
+            extension_api_key=str(
+                getattr(self.config, "publisher_extension_api_key", "") or ""
+            ),
+            preferred_client_id=str(
+                getattr(self.config, "publisher_preferred_client_id", "") or ""
+            ),
             strict_preferred_client=bool(
                 getattr(self.config, "publisher_strict_preferred_client", False)
             ),
-            publisher_session_secret=str(getattr(self.config, "publisher_session_secret", "") or ""),
+            publisher_session_secret=str(
+                getattr(self.config, "publisher_session_secret", "") or ""
+            ),
             publisher_session_encryption_required=bool(
                 getattr(self.config, "publisher_session_encryption_required", False)
             ),

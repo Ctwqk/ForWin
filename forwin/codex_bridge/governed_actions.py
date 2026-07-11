@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from forwin.governance import DecisionEventInfo
+from forwin.audit.events import DecisionEventInfo
 from forwin.state.updater import StateUpdater
 from forwin.knowledge_system.store import KnowledgeProjectionStore
 

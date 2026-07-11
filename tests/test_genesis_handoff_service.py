@@ -7,10 +7,10 @@ from sqlalchemy import select
 
 from forwin.genesis import BookGenesisService
 from forwin.genesis.handoff.commands import StartWritingCommand
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.state.updater import StateUpdater
@@ -25,7 +25,9 @@ class _NoApiKeyClient:
     base_url = ""
     last_call_result = None
 
-    def chat(self, *_args, **_kwargs):  # pragma: no cover - tests patch the facade call point
+    def chat(
+        self, *_args, **_kwargs
+    ):  # pragma: no cover - tests patch the facade call point
         raise AssertionError("handoff tests should not call the real LLM")
 
 
@@ -41,7 +43,9 @@ class GenesisHandoffServiceTests(unittest.TestCase):
     def _service(self) -> BookGenesisService:
         return BookGenesisService(llm_client=_NoApiKeyClient())
 
-    def _create_ready_project(self, session, service: BookGenesisService, *, project_id: str) -> Project:
+    def _create_ready_project(
+        self, session, service: BookGenesisService, *, project_id: str
+    ) -> Project:
         updater = StateUpdater(session)
         project = Project(
             id=project_id,
@@ -52,7 +56,9 @@ class GenesisHandoffServiceTests(unittest.TestCase):
         )
         session.add(project)
         session.flush()
-        revision = service.create_initial_revision(session=session, updater=updater, project=project)
+        revision = service.create_initial_revision(
+            session=session, updater=updater, project=project
+        )
         revision = service.patch_pack(
             session=session,
             updater=updater,
@@ -97,10 +103,20 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                         },
                     ],
                 },
-                "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
+                "execution_bootstrap": {
+                    "pipeline": "strict_blackbox",
+                    "root_ready": True,
+                },
             },
         )
-        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+        for stage_key in (
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+        ):
             revision = service.lock_stage(
                 session=session,
                 updater=updater,
@@ -111,19 +127,35 @@ class GenesisHandoffServiceTests(unittest.TestCase):
         session.commit()
         return project
 
-    def _fake_launch_arc_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+    def _fake_launch_arc_call(
+        self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+    ):
         if str(stage_key).startswith("launch_arc_"):
             return (
                 {
                     "chapters": [
-                        {"title": "雨夜", "one_line": "主角撞上禁术代价。", "goals": ["建立危机"]},
-                        {"title": "债务", "one_line": "旧城势力围拢。", "goals": ["扩大冲突"]},
-                        {"title": "遗迹", "one_line": "得到下一阶段坐标。", "goals": ["转入下一 arc"]},
+                        {
+                            "title": "雨夜",
+                            "one_line": "主角撞上禁术代价。",
+                            "goals": ["建立危机"],
+                        },
+                        {
+                            "title": "债务",
+                            "one_line": "旧城势力围拢。",
+                            "goals": ["扩大冲突"],
+                        },
+                        {
+                            "title": "遗迹",
+                            "one_line": "得到下一阶段坐标。",
+                            "goals": ["转入下一 arc"],
+                        },
                     ]
                 },
                 {
                     "effective_system_prompt": "launch arc planner",
-                    "prompt_layers": [{"role": "system", "content": "launch arc planner"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": "launch arc planner"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fake-model"},
                     "attempts": [{"attempt": 1, "status": "success"}],
@@ -157,42 +189,77 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 service.handoff.start_writing(
                     session=session,
                     updater=updater,
-                    command=StartWritingCommand(project_id=project.id, actor_type="system"),
+                    command=StartWritingCommand(
+                        project_id=project.id, actor_type="system"
+                    ),
                 )
 
             with self.assertRaises(ValueError):
                 service.handoff.start_writing(
                     session=session,
                     updater=updater,
-                    command=StartWritingCommand(project_id=project.id, actor_type="manual_ui"),
+                    command=StartWritingCommand(
+                        project_id=project.id, actor_type="manual_ui"
+                    ),
                 )
 
-    def test_start_writing_materializes_current_arc_without_creating_generation_task(self) -> None:
+    def test_start_writing_materializes_current_arc_without_creating_generation_task(
+        self,
+    ) -> None:
         service = self._service()
         with self.session_factory() as session:
-            project = self._create_ready_project(session, service, project_id="proj-handoff-success")
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-success"
+            )
             updater = StateUpdater(session)
-            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=self._fake_launch_arc_call,
+            ):
                 result = service.handoff.start_writing(
                     session=session,
                     updater=updater,
-                    command=StartWritingCommand(project_id=project.id, actor_type="manual_ui"),
+                    command=StartWritingCommand(
+                        project_id=project.id, actor_type="manual_ui"
+                    ),
                 )
             session.commit()
 
             project_row = session.get(Project, project.id)
-            arcs = session.execute(
-                select(ArcPlanVersion)
-                .where(ArcPlanVersion.project_id == project.id)
-                .order_by(ArcPlanVersion.arc_number.asc())
-            ).scalars().all()
-            chapters = session.execute(
-                select(ChapterPlan)
-                .where(ChapterPlan.project_id == project.id)
-                .order_by(ChapterPlan.chapter_number.asc())
-            ).scalars().all()
-            tasks = session.execute(select(GenerationTask).where(GenerationTask.project_id == project.id)).scalars().all()
-            events = session.execute(select(DecisionEvent).where(DecisionEvent.project_id == project.id)).scalars().all()
+            arcs = (
+                session.execute(
+                    select(ArcPlanVersion)
+                    .where(ArcPlanVersion.project_id == project.id)
+                    .order_by(ArcPlanVersion.arc_number.asc())
+                )
+                .scalars()
+                .all()
+            )
+            chapters = (
+                session.execute(
+                    select(ChapterPlan)
+                    .where(ChapterPlan.project_id == project.id)
+                    .order_by(ChapterPlan.chapter_number.asc())
+                )
+                .scalars()
+                .all()
+            )
+            tasks = (
+                session.execute(
+                    select(GenerationTask).where(
+                        GenerationTask.project_id == project.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            events = (
+                session.execute(
+                    select(DecisionEvent).where(DecisionEvent.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
 
         assert project_row is not None
         self.assertEqual(project_row.creation_status, "writing")
@@ -206,44 +273,84 @@ class GenesisHandoffServiceTests(unittest.TestCase):
         self.assertEqual([chapter.chapter_number for chapter in chapters], [1, 2, 3])
         self.assertEqual(tasks, [])
         self.assertTrue(
-            any(event.event_type == DecisionEventType.START_WRITING_REQUESTED and event.actor_type == "manual_ui" for event in events)
+            any(
+                event.event_type == DecisionEventType.START_WRITING_REQUESTED
+                and event.actor_type == "manual_ui"
+                for event in events
+            )
         )
-        self.assertTrue(any(event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED for event in events))
+        self.assertTrue(
+            any(
+                event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED
+                for event in events
+            )
+        )
 
-    def test_map_bootstrap_failure_rolls_back_handoff_and_records_failure_event(self) -> None:
+    def test_map_bootstrap_failure_rolls_back_handoff_and_records_failure_event(
+        self,
+    ) -> None:
         service = self._service()
         with self.session_factory() as session:
-            project = self._create_ready_project(session, service, project_id="proj-handoff-map-failure")
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-map-failure"
+            )
             updater = StateUpdater(session)
             invalid_map = BookMapGenerationResult(
                 project_id=project.id,
                 validation_report=MapValidationReport(valid=False, errors=["bad map"]),
             )
             with (
-                patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call),
-                patch("forwin.genesis.handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
+                patch(
+                    "forwin.genesis.BookGenesisService._call_json_with_trace",
+                    new=self._fake_launch_arc_call,
+                ),
+                patch(
+                    "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
+                    return_value=invalid_map,
+                ),
                 self.assertRaises(ValueError),
             ):
                 service.handoff.start_writing(
                     session=session,
                     updater=updater,
-                    command=StartWritingCommand(project_id=project.id, actor_type="manual_ui"),
+                    command=StartWritingCommand(
+                        project_id=project.id, actor_type="manual_ui"
+                    ),
                 )
             session.commit()
 
             project_row = session.get(Project, project.id)
-            chapters = session.execute(select(ChapterPlan).where(ChapterPlan.project_id == project.id)).scalars().all()
-            events = session.execute(select(DecisionEvent).where(DecisionEvent.project_id == project.id)).scalars().all()
+            chapters = (
+                session.execute(
+                    select(ChapterPlan).where(ChapterPlan.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
+            events = (
+                session.execute(
+                    select(DecisionEvent).where(DecisionEvent.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
 
         assert project_row is not None
         self.assertEqual(project_row.creation_status, "genesis_ready")
         self.assertEqual(chapters, [])
-        self.assertTrue(any(event.event_type == DecisionEventType.MAP_GENERATION_FAILED for event in events))
+        self.assertTrue(
+            any(
+                event.event_type == DecisionEventType.MAP_GENERATION_FAILED
+                for event in events
+            )
+        )
 
     def test_handoff_reuses_existing_arc_and_chapter_rows(self) -> None:
         service = self._service()
         with self.session_factory() as session:
-            project = self._create_ready_project(session, service, project_id="proj-handoff-idempotent")
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-idempotent"
+            )
             arc = ArcPlanVersion(
                 id=new_id(),
                 project_id=project.id,
@@ -265,16 +372,35 @@ class GenesisHandoffServiceTests(unittest.TestCase):
             session.flush()
             updater = StateUpdater(session)
 
-            with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=self._fake_launch_arc_call):
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=self._fake_launch_arc_call,
+            ):
                 result = service.handoff.start_writing(
                     session=session,
                     updater=updater,
-                    command=StartWritingCommand(project_id=project.id, actor_type="manual_ui"),
+                    command=StartWritingCommand(
+                        project_id=project.id, actor_type="manual_ui"
+                    ),
                 )
             session.commit()
 
-            arcs = session.execute(select(ArcPlanVersion).where(ArcPlanVersion.project_id == project.id)).scalars().all()
-            chapters = session.execute(select(ChapterPlan).where(ChapterPlan.project_id == project.id)).scalars().all()
+            arcs = (
+                session.execute(
+                    select(ArcPlanVersion).where(
+                        ArcPlanVersion.project_id == project.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            chapters = (
+                session.execute(
+                    select(ChapterPlan).where(ChapterPlan.project_id == project.id)
+                )
+                .scalars()
+                .all()
+            )
 
         self.assertEqual(result.active_chapter_plan_count, 1)
         self.assertEqual(len(arcs), 1)

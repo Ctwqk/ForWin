@@ -5,8 +5,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventInfo, DecisionEventType
-from forwin.models.governance import DecisionEvent
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
+from forwin.models.audit import DecisionEvent
 from forwin.models.publisher import PublisherCommentSyncJob, PublisherUploadJob
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability

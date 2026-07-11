@@ -15,7 +15,7 @@ import forwin.world_v4_review_gate as world_v4_review_gate
 from forwin.api_route_registry import (
     ApiRouteDeps,
     CoreDeps,
-    GovernanceDeps,
+    ProjectControlDeps,
     ObservabilityDeps,
     ProjectDeps,
     PublisherDeps,
@@ -139,7 +139,7 @@ def test_api_route_deps_are_grouped_by_domain() -> None:
         "core",
         "task",
         "project",
-        "governance",
+        "project_control",
         "observability",
         "publisher",
     ]
@@ -162,7 +162,7 @@ def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
             CoreDeps,
             TaskDeps,
             ProjectDeps,
-            GovernanceDeps,
+            ProjectControlDeps,
             ObservabilityDeps,
             PublisherDeps,
         )
@@ -417,7 +417,7 @@ def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> No
     bases = {ast.unparse(base) for base in pipeline.bases}
     assert {
         "RunControlStage",
-        "GovernanceStage",
+        "AuditControlStage",
         "ReviewWorkflowStage",
         "ChapterExecutionStage",
         "WriterExecutionStage",
@@ -433,6 +433,48 @@ def test_repair_service_does_not_receive_the_complete_pipeline() -> None:
     assert "runtime: ChapterPipeline" not in repair_source
     assert "runtime=self" not in chapter_source
     assert "RepairExecution" in repair_source
+
+
+def test_legacy_governance_namespace_is_replaced_by_real_domain_owners() -> None:
+    removed_paths = (
+        "forwin/governance.py",
+        "forwin/governance_checks.py",
+        "forwin/governance_keywords.py",
+        "forwin/codex_governance.py",
+        "forwin/models/governance.py",
+        "forwin/review/governance.py",
+        "forwin/generation/pipeline_core/governance.py",
+        "forwin/api_governance_ops.py",
+        "forwin/api_governance_routes.py",
+        "forwin/api_governance_support.py",
+        "forwin/api_schema/governance.py",
+        "forwin/ui_assets/home/app_task_governance.js",
+    )
+    assert [path for path in removed_paths if (ROOT / path).exists()] == []
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    for removed in (
+        "from forwin.governance",
+        "forwin.governance_checks",
+        "forwin.governance_keywords",
+        "forwin.codex_governance",
+        "GovernanceReviewer",
+        "GovernanceStage",
+        "GovernanceDeps",
+        "GovernanceInsightsResponse",
+    ):
+        assert removed not in production_source
+
+    assert (ROOT / "forwin/audit/events.py").exists()
+    assert (ROOT / "forwin/planning/contracts.py").exists()
+    assert (ROOT / "forwin/planning/constraints.py").exists()
+    assert (ROOT / "forwin/planning/checkpoints.py").exists()
+    assert (ROOT / "forwin/review/plan_checks.py").exists()
+    assert (ROOT / "forwin/review/constraint_keywords.py").exists()
+    assert (ROOT / "forwin/review/plan_reviewer.py").exists()
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:

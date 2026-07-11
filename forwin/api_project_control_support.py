@@ -14,21 +14,29 @@ from forwin.api_schema import (
     BandCheckpointDetail,
     CausalReplayResponse,
     DecisionEventInfo,
-    GovernanceInsightsResponse,
+    AuditInsightsResponse,
     NarrativeConstraintInfo,
     ProjectAutomationSettings,
 )
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     BandCheckpointIssueInfo,
+    normalize_checkpoint_status,
+)
+from forwin.planning.constraints import (
     CONSTRAINT_LEVELS,
     CONSTRAINT_STATUSES,
     CONSTRAINT_TYPES,
+)
+from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
-    issue_group_for_issue,
-    normalize_checkpoint_status,
 )
-from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
+from forwin.review.issue_groups import issue_group_for_issue
+from forwin.models.planning_control import (
+    BandCheckpoint,
+    NarrativeConstraint,
+)
+from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.audience.feedback import derive_action_effectiveness
@@ -60,16 +68,24 @@ def _json_load_object(raw: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def validate_constraint_payload(*, constraint_type: str, level: str, status: str) -> tuple[str, str, str]:
+def validate_constraint_payload(
+    *, constraint_type: str, level: str, status: str
+) -> tuple[str, str, str]:
     normalized_type = str(constraint_type or "").strip()
     normalized_level = str(level or "hard").strip()
     normalized_status = str(status or "active").strip() or "active"
     if normalized_type not in CONSTRAINT_TYPES:
-        raise HTTPException(400, f"未知 constraint_type: {normalized_type or '<empty>'}")
+        raise HTTPException(
+            400, f"未知 constraint_type: {normalized_type or '<empty>'}"
+        )
     if normalized_level not in CONSTRAINT_LEVELS:
-        raise HTTPException(400, f"未知 constraint level: {normalized_level or '<empty>'}")
+        raise HTTPException(
+            400, f"未知 constraint level: {normalized_level or '<empty>'}"
+        )
     if normalized_status not in CONSTRAINT_STATUSES:
-        raise HTTPException(400, f"未知 constraint status: {normalized_status or '<empty>'}")
+        raise HTTPException(
+            400, f"未知 constraint status: {normalized_status or '<empty>'}"
+        )
     return normalized_type, normalized_level, normalized_status
 
 
@@ -145,11 +161,15 @@ def latest_band_checkpoint_row(
     if band_id:
         stmt = stmt.where(BandCheckpoint.band_id == band_id)
     return session.execute(
-        stmt.order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc()).limit(1)
+        stmt.order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc()).limit(
+            1
+        )
     ).scalar_one_or_none()
 
 
-def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheckpointDetail:
+def serialize_band_checkpoint(
+    row: BandCheckpoint, *, session=None
+) -> BandCheckpointDetail:
     issues_payload = _json_load_list(row.issues_json)
     normalized_status = normalize_checkpoint_status(row.status)
     return BandCheckpointDetail(
@@ -170,15 +190,24 @@ def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheck
             for item in issues_payload
             if isinstance(item, dict)
         ],
-        decision_refs=decision_refs_for_checkpoint(session, row) if session is not None else [],
+        decision_refs=decision_refs_for_checkpoint(session, row)
+        if session is not None
+        else [],
         created_at=_display_datetime(row.created_at),
         updated_at=_display_datetime(row.updated_at),
-        resolved_at=_display_datetime(row.resolved_at or (row.updated_at if normalized_status in {"pass", "overridden"} else None)),
+        resolved_at=_display_datetime(
+            row.resolved_at
+            or (row.updated_at if normalized_status in {"pass", "overridden"} else None)
+        ),
     )
 
 
 def serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
-    payload = json.loads(row.payload_json or "{}") if str(row.payload_json or "").strip() else {}
+    payload = (
+        json.loads(row.payload_json or "{}")
+        if str(row.payload_json or "").strip()
+        else {}
+    )
     if not isinstance(payload, dict):
         payload = {}
     return NarrativeConstraintInfo(
@@ -200,7 +229,11 @@ def serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
 
 
 def serialize_decision_event(row: DecisionEvent) -> DecisionEventInfo:
-    payload = json.loads(row.payload_json or "{}") if str(row.payload_json or "").strip() else {}
+    payload = (
+        json.loads(row.payload_json or "{}")
+        if str(row.payload_json or "").strip()
+        else {}
+    )
     if not isinstance(payload, dict):
         payload = {}
     return DecisionEventInfo(
@@ -277,21 +310,25 @@ def list_decision_event_rows(
         if ascending
         else (DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
     )
-    return session.execute(
-        decision_event_stmt(
-            project_id=project_id,
-            scope=scope,
-            band_id=band_id,
-            chapter_number=chapter_number,
-            task_id=task_id,
-            event_family=event_family,
-            related_object_type=related_object_type,
-            related_object_id=related_object_id,
-            causal_root_id=causal_root_id,
+    return (
+        session.execute(
+            decision_event_stmt(
+                project_id=project_id,
+                scope=scope,
+                band_id=band_id,
+                chapter_number=chapter_number,
+                task_id=task_id,
+                event_family=event_family,
+                related_object_type=related_object_type,
+                related_object_id=related_object_id,
+                causal_root_id=causal_root_id,
+            )
+            .order_by(*order_clause)
+            .limit(max(1, limit))
         )
-        .order_by(*order_clause)
-        .limit(max(1, limit))
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def latest_related_decision_event(
@@ -328,7 +365,9 @@ def latest_related_decision_event(
     return rows[0] if rows else None
 
 
-def decision_refs_for_checkpoint(session, row: BandCheckpoint) -> list[DecisionEventInfo]:
+def decision_refs_for_checkpoint(
+    session, row: BandCheckpoint
+) -> list[DecisionEventInfo]:
     rows = list_decision_event_rows(
         session,
         project_id=row.project_id,
@@ -409,19 +448,36 @@ def build_causal_replay(
         if not target_arc_id:
             active_arc = session.execute(
                 select(ArcPlanVersion)
-                .where(ArcPlanVersion.project_id == project_id, ArcPlanVersion.status == "active")
-                .order_by(ArcPlanVersion.version.desc(), ArcPlanVersion.created_at.desc())
+                .where(
+                    ArcPlanVersion.project_id == project_id,
+                    ArcPlanVersion.status == "active",
+                )
+                .order_by(
+                    ArcPlanVersion.version.desc(), ArcPlanVersion.created_at.desc()
+                )
                 .limit(1)
             ).scalar_one_or_none()
             target_arc_id = str(active_arc.id if active_arc is not None else "")
         if not target_arc_id:
             return CausalReplayResponse(current_outcome="no_active_arc")
-        bands = session.execute(
-            select(BandExperiencePlan)
-            .where(BandExperiencePlan.project_id == project_id, BandExperiencePlan.arc_id == target_arc_id)
-            .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.created_at.asc())
-        ).scalars().all()
-        band_ids = {str(row.band_id or "") for row in bands if str(row.band_id or "").strip()}
+        bands = (
+            session.execute(
+                select(BandExperiencePlan)
+                .where(
+                    BandExperiencePlan.project_id == project_id,
+                    BandExperiencePlan.arc_id == target_arc_id,
+                )
+                .order_by(
+                    BandExperiencePlan.chapter_start.asc(),
+                    BandExperiencePlan.created_at.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        band_ids = {
+            str(row.band_id or "") for row in bands if str(row.band_id or "").strip()
+        }
         chapter_numbers: set[int] = set()
         for band in bands:
             start = int(band.chapter_start or 0)
@@ -441,7 +497,9 @@ def build_causal_replay(
                     BandCheckpoint.project_id == project_id,
                     BandCheckpoint.arc_id == target_arc_id,
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         for row in rows:
             payload = _json_load_object(getattr(row, "payload_json", "") or "")
@@ -474,15 +532,24 @@ def build_causal_replay(
         for item in items:
             if item.parent_event_id:
                 by_parent[str(item.parent_event_id)].append(item)
-        linked_review_refs = [item for item in items if item.related_object_type == "chapter_review"]
-        linked_checkpoint_refs = [item for item in items if item.related_object_type == "band_checkpoint"]
+        linked_review_refs = [
+            item for item in items if item.related_object_type == "chapter_review"
+        ]
+        linked_checkpoint_refs = [
+            item for item in items if item.related_object_type == "band_checkpoint"
+        ]
         current_outcome = "arc_empty"
         if items:
             current_outcome = items[-1].summary or items[-1].event_type
         elif bands:
-            current_outcome = f"arc {target_arc_id} has {len(bands)} band(s), no decision events"
+            current_outcome = (
+                f"arc {target_arc_id} has {len(bands)} band(s), no decision events"
+            )
         return CausalReplayResponse(
-            root_event=next((item for item in items if not item.parent_event_id), items[0] if items else None),
+            root_event=next(
+                (item for item in items if not item.parent_event_id),
+                items[0] if items else None,
+            ),
             timeline=items,
             branches=dict(by_parent),
             current_outcome=current_outcome,
@@ -518,9 +585,15 @@ def build_causal_replay(
         parent_id = str(item.parent_event_id or "")
         if parent_id:
             by_parent[parent_id].append(item)
-    root_event = next((item for item in items if item.id == root_id), items[0] if items else None)
-    linked_review_refs = [item for item in items if item.related_object_type == "chapter_review"]
-    linked_checkpoint_refs = [item for item in items if item.related_object_type == "band_checkpoint"]
+    root_event = next(
+        (item for item in items if item.id == root_id), items[0] if items else None
+    )
+    linked_review_refs = [
+        item for item in items if item.related_object_type == "chapter_review"
+    ]
+    linked_checkpoint_refs = [
+        item for item in items if item.related_object_type == "band_checkpoint"
+    ]
     current_outcome = items[-1].event_type if items else ""
     if items and items[-1].summary:
         current_outcome = items[-1].summary
@@ -534,7 +607,7 @@ def build_causal_replay(
     )
 
 
-def build_governance_insights(session, *, project_id: str) -> GovernanceInsightsResponse:
+def build_audit_insights(session, *, project_id: str) -> AuditInsightsResponse:
     event_rows = list_decision_event_rows(
         session,
         project_id=project_id,
@@ -555,10 +628,14 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
             .where(BandCheckpoint.project_id == project_id)
             .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
             .limit(20)
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     checkpoint_status_counter: Counter[str] = Counter(
-        str(row.status or "") for row in checkpoint_rows if str(row.status or "").strip()
+        str(row.status or "")
+        for row in checkpoint_rows
+        if str(row.status or "").strip()
     )
     checkpoint_map = {row.id: row for row in checkpoint_rows}
     for checkpoint in checkpoint_rows:
@@ -566,11 +643,17 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
             if not isinstance(issue, dict):
                 continue
             code = str(issue.get("code") or "").strip()
-            group = str(issue.get("issue_group") or issue_group_for_issue(code=code)).strip()
+            group = str(
+                issue.get("issue_group") or issue_group_for_issue(code=code)
+            ).strip()
             if group:
                 issue_group_counter[group] += 1
     for row in event_rows:
-        payload = json.loads(row.payload_json or "{}") if str(row.payload_json or "").strip() else {}
+        payload = (
+            json.loads(row.payload_json or "{}")
+            if str(row.payload_json or "").strip()
+            else {}
+        )
         if not isinstance(payload, dict):
             payload = {}
         if row.event_type == DecisionEventType.FORCED_ACCEPT_APPLIED:
@@ -589,7 +672,9 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
                 }
             )
         if row.event_type == DecisionEventType.HARD_GATE_HIT:
-            blocking_counter[str(payload.get("blocking_reason") or "hard_gate_hit")] += 1
+            blocking_counter[
+                str(payload.get("blocking_reason") or "hard_gate_hit")
+            ] += 1
             recent_examples.append(
                 {
                     "event_id": row.id,
@@ -600,7 +685,10 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
                     "blocking_reason": str(payload.get("blocking_reason") or ""),
                 }
             )
-        if row.event_type in {DecisionEventType.BAND_CHECKPOINT_HIT, DecisionEventType.BAND_CHECKPOINT_CREATED}:
+        if row.event_type in {
+            DecisionEventType.BAND_CHECKPOINT_HIT,
+            DecisionEventType.BAND_CHECKPOINT_CREATED,
+        }:
             status = str(payload.get("status") or "")
             if status in {"warn", "fail", "error"}:
                 blocking_counter[f"band_checkpoint_{status}"] += 1
@@ -610,14 +698,26 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
             if reason:
                 override_reason_counter[reason] += 1
             checkpoint = checkpoint_map.get(str(row.related_object_id or ""))
-            issues = _json_load_list(checkpoint.issues_json) if checkpoint is not None else []
+            issues = (
+                _json_load_list(checkpoint.issues_json)
+                if checkpoint is not None
+                else []
+            )
             for issue in issues:
-                code = str(issue.get("code") or issue.get("severity") or "checkpoint_issue")
-                issue_group = str(issue.get("issue_group") or issue_group_for_issue(code=code)).strip()
+                code = str(
+                    issue.get("code") or issue.get("severity") or "checkpoint_issue"
+                )
+                issue_group = str(
+                    issue.get("issue_group") or issue_group_for_issue(code=code)
+                ).strip()
                 if issue_group:
                     issue_group_counter[issue_group] += 1
                 warn_allowed_counter[code] += 1
-                if code in {"future_constraint", "future_resource_preservation", "next_band_compatibility"}:
+                if code in {
+                    "future_constraint",
+                    "future_resource_preservation",
+                    "next_band_compatibility",
+                }:
                     constraint_counter[code] += 1
                 category = str(issue.get("category") or "").strip()
                 if category:
@@ -723,7 +823,7 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
                 "count": issue_group_counter["fact_conflict"],
             }
         )
-    return GovernanceInsightsResponse(
+    return AuditInsightsResponse(
         top_override_rule_types=counter_rows(override_counter),
         top_override_reasons=counter_rows(override_reason_counter),
         top_warn_but_allowed_issue_types=counter_rows(warn_allowed_counter),
@@ -732,7 +832,9 @@ def build_governance_insights(session, *, project_id: str) -> GovernanceInsights
         most_common_blocking_reasons=counter_rows(blocking_counter),
         recent_band_checkpoint_distribution=counter_rows(checkpoint_status_counter),
         issue_group_distribution=counter_rows(issue_group_counter),
-        recent_action_effectiveness=derive_action_effectiveness(session, project_id=project_id, limit=8),
+        recent_action_effectiveness=derive_action_effectiveness(
+            session, project_id=project_id, limit=8
+        ),
         recommended_adjustments=recommended_adjustments[:5],
         recent_examples=recent_examples[:8],
     )

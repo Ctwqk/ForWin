@@ -147,8 +147,8 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     assert pipeline.policy is policy
     assert pipeline.writer is services.writer
     assert pipeline.canon_admission is services.canon_admission
-    assert pipeline._governance_task_id == "task-1"
-    assert pipeline._governance_root_event_id == "root-1"
+    assert pipeline._audit_task_id == "task-1"
+    assert pipeline._audit_root_event_id == "root-1"
     assert not hasattr(pipeline, "config")
 
 

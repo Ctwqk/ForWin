@@ -31,7 +31,7 @@ from forwin.models.draft import (
     ChapterReview,
 )
 from forwin.writer.chapter_writer import ChapterWriter
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -779,9 +779,7 @@ class QualityDiagnosticsStage:
         )
 
     def _audit_operation_id(self) -> str:
-        return str(
-            self._governance_task_id or self._governance_root_event_id or ""
-        ).strip()
+        return str(self._audit_task_id or self._audit_root_event_id or "").strip()
 
     def _drain_llm_attempt_events(self) -> list[dict[str, object]]:
         drain = getattr(

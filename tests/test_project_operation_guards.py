@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,9 +8,11 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-import forwin.api as api_module
+import forwin.api_core.app as api_app
 from forwin.application.projects import generation as project_generation
 from forwin.application.projects import genesis as project_genesis
+from forwin.api_core import state as api_state
+from forwin.api_core.tasks import _create_task_record, _persist_generation_task
 from forwin.api_schema import (
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
@@ -24,10 +25,19 @@ from forwin.api_schema import (
 )
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import BandCheckpoint
+from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
+
+
+api_module = SimpleNamespace(
+    **api_app._registered_route_handlers,
+    _create_task_record=_create_task_record,
+    _persist_generation_task=_persist_generation_task,
+)
 
 
 class ProjectOperationGuardTests(unittest.TestCase):
@@ -37,27 +47,29 @@ class ProjectOperationGuardTests(unittest.TestCase):
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
 
-        self.old_session_factory = api_module._SessionFactory
-        self.old_config = api_module._config
-        self.old_pipeline = api_module._pipeline
+        self.old_session_factory = api_state._SessionFactory
+        self.old_config = api_state._config
+        self.old_pipeline = api_state._pipeline
 
-        api_module._SessionFactory = self.session_factory
-        api_module._config = InfrastructureConfig(
+        api_state._SessionFactory = self.session_factory
+        api_state._config = InfrastructureConfig(
             database_url=postgres_test_url("operation-guards"),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
         )
-        api_module._pipeline = None
+        api_state._pipeline = None
 
     def tearDown(self) -> None:
-        api_module._SessionFactory = self.old_session_factory
-        api_module._config = self.old_config
-        api_module._pipeline = self.old_pipeline
+        api_state._SessionFactory = self.old_session_factory
+        api_state._config = self.old_config
+        api_state._pipeline = self.old_pipeline
         self.engine.dispose()
         self.tmpdir.cleanup()
 
-    def _create_project(self, *, project_id: str | None = None, creation_status: str | None = None) -> Project:
+    def _create_project(
+        self, *, project_id: str | None = None, creation_status: str | None = None
+    ) -> Project:
         with self.session_factory() as session:
             project = Project(
                 id=project_id or new_id(),
@@ -68,12 +80,19 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
             if creation_status is not None:
                 project.creation_status = creation_status
-            session.add(project)
+            ProjectPolicyStore(session).initialize(
+                project,
+                RuntimePolicy.for_profile("standard"),
+            )
             session.commit()
             return project
 
-    def test_generate_rejects_existing_project_with_active_generation_task(self) -> None:
-        project = self._create_project(project_id="proj-active-generate", creation_status="writing")
+    def test_generate_rejects_existing_project_with_active_generation_task(
+        self,
+    ) -> None:
+        project = self._create_project(
+            project_id="proj-active-generate", creation_status="writing"
+        )
         with self.session_factory() as session:
             session.add(
                 GenerationTask(
@@ -94,7 +113,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
                     premise="测试 premise",
                     genre="玄幻",
                     num_chapters=1,
-                    api_key="sk-inline",
                 )
             )
 
@@ -144,7 +162,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertTrue(detail.generation_control.pause_requested)
         self.assertFalse(detail.generation_control.can_resume)
 
-    def test_extend_generation_appends_future_plans_after_completed_workset(self) -> None:
+    def test_extend_generation_appends_future_plans_after_completed_workset(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-extend-after-24")
         with self.session_factory() as session:
             project = session.get(Project, project.id)
@@ -189,17 +209,28 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.assertEqual(detail.target_total_chapters, 36)
         self.assertEqual(detail.generation_control.next_chapter, 25)
-        self.assertEqual(detail.generation_control.planned_chapters, list(range(25, 37)))
+        self.assertEqual(
+            detail.generation_control.planned_chapters, list(range(25, 37))
+        )
 
         with self.session_factory() as session:
-            plans = session.query(ChapterPlan).filter(
-                ChapterPlan.project_id == project.id,
-                ChapterPlan.chapter_number >= 25,
-            ).order_by(ChapterPlan.chapter_number).all()
-            arcs = session.query(ArcPlanVersion).filter(
-                ArcPlanVersion.project_id == project.id,
-                ArcPlanVersion.arc_number == 2,
-            ).all()
+            plans = (
+                session.query(ChapterPlan)
+                .filter(
+                    ChapterPlan.project_id == project.id,
+                    ChapterPlan.chapter_number >= 25,
+                )
+                .order_by(ChapterPlan.chapter_number)
+                .all()
+            )
+            arcs = (
+                session.query(ArcPlanVersion)
+                .filter(
+                    ArcPlanVersion.project_id == project.id,
+                    ArcPlanVersion.arc_number == 2,
+                )
+                .all()
+            )
 
         self.assertEqual([plan.chapter_number for plan in plans], list(range(25, 37)))
         self.assertEqual([plan.status for plan in plans], ["planned"] * 12)
@@ -273,16 +304,25 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(detail.generation_control.planned_chapters, list(range(6, 61)))
 
         with self.session_factory() as session:
-            appended = session.query(ChapterPlan).filter(
-                ChapterPlan.project_id == project.id,
-                ChapterPlan.chapter_number >= 16,
-            ).order_by(ChapterPlan.chapter_number).all()
+            appended = (
+                session.query(ChapterPlan)
+                .filter(
+                    ChapterPlan.project_id == project.id,
+                    ChapterPlan.chapter_number >= 16,
+                )
+                .order_by(ChapterPlan.chapter_number)
+                .all()
+            )
 
-        self.assertEqual([plan.chapter_number for plan in appended], list(range(16, 61)))
+        self.assertEqual(
+            [plan.chapter_number for plan in appended], list(range(16, 61))
+        )
         self.assertEqual([plan.status for plan in appended], ["planned"] * 45)
 
     def test_extend_generation_rejects_active_generation_task(self) -> None:
-        project = self._create_project(project_id="proj-extend-active", creation_status="writing")
+        project = self._create_project(
+            project_id="proj-extend-active", creation_status="writing"
+        )
 
         with self.assertRaises(HTTPException) as ctx:
             project_generation.extend_project_generation(
@@ -291,13 +331,17 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 get_session=self.session_factory,
                 display_datetime=lambda value: str(value),
                 project_has_active_generation_task=lambda *_args, **_kwargs: True,
-                generation_task_conflict_message=lambda project_id: f"active {project_id}",
+                generation_task_conflict_message=lambda project_id: (
+                    f"active {project_id}"
+                ),
             )
 
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("active proj-extend-active", str(ctx.exception.detail))
 
-    def test_approve_review_rejects_continue_when_active_generation_task_exists(self) -> None:
+    def test_approve_review_rejects_continue_when_active_generation_task_exists(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-active-continue")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
@@ -338,15 +382,15 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 "frozen_artifact": "",
             }
 
-        api_module._pipeline = SimpleNamespace(
-            accept_review=accept_review
-        )
+        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
 
         with self.assertRaises(HTTPException) as ctx:
             api_module.approve_chapter_review(
                 project.id,
                 1,
-                ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
+                ChapterReviewApproveRequest(
+                    continue_generation=True, reason="guard regression"
+                ),
             )
 
         self.assertEqual(ctx.exception.status_code, 409)
@@ -368,7 +412,11 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 chapter_end=3,
             )
             session.add(arc)
-            for chapter_number, status in [(1, "needs_review"), (2, "planned"), (3, "planned")]:
+            for chapter_number, status in [
+                (1, "needs_review"),
+                (2, "planned"),
+                (3, "planned"),
+            ]:
                 session.add(
                     ChapterPlan(
                         id=f"plan-review-gate-block-{chapter_number}",
@@ -387,7 +435,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 plan.status = "needs_review"
                 plan.canon_risk_level = "high"
                 plan.repair_attempt_count = 0
-                plan.residual_review_issues_json = '[{"rule_name":"canon_admission_error"}]'
+                plan.residual_review_issues_json = (
+                    '[{"rule_name":"canon_admission_error"}]'
+                )
                 session.add(plan)
                 session.commit()
             return {
@@ -402,13 +452,18 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-review-gate-auto-retry"
 
-        api_module._pipeline = SimpleNamespace(accept_review=accept_review)
+        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             payload = api_module.approve_chapter_review(
                 project.id,
                 1,
-                ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
+                ChapterReviewApproveRequest(
+                    continue_generation=True, reason="guard regression"
+                ),
             )
 
         self.assertEqual(payload.status, "planned")
@@ -460,10 +515,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         def accept_review(_project_id, chapter_number, **_kwargs):
             with self.session_factory() as session:
-                plan = session.query(ChapterPlan).filter(
-                    ChapterPlan.project_id == _project_id,
-                    ChapterPlan.chapter_number == chapter_number,
-                ).one()
+                plan = (
+                    session.query(ChapterPlan)
+                    .filter(
+                        ChapterPlan.project_id == _project_id,
+                        ChapterPlan.chapter_number == chapter_number,
+                    )
+                    .one()
+                )
                 plan.status = "accepted"
                 session.commit()
             return {"status": "accepted", "message": "accepted", "frozen_artifact": ""}
@@ -472,13 +531,18 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-approve-workset"
 
-        api_module._pipeline = SimpleNamespace(accept_review=accept_review)
+        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             payload = api_module.approve_chapter_review(
                 project.id,
                 2,
-                ChapterReviewApproveRequest(continue_generation=True, reason="accept and continue"),
+                ChapterReviewApproveRequest(
+                    continue_generation=True, reason="accept and continue"
+                ),
             )
 
         self.assertEqual(payload.task_id, "task-approve-workset")
@@ -565,17 +629,24 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-retry-workset"
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             payload = api_module.retry_chapter_review(
                 project.id,
                 3,
-                ChapterReviewRetryRequest(continue_generation=True, reason="retry and continue"),
+                ChapterReviewRetryRequest(
+                    continue_generation=True, reason="retry and continue"
+                ),
             )
 
         self.assertEqual(payload.task_id, "task-retry-workset")
         self.assertEqual(captured["requested_chapters"], 3)
 
-    def test_retry_chapter_review_can_reset_accepted_when_explicitly_allowed(self) -> None:
+    def test_retry_chapter_review_can_reset_accepted_when_explicitly_allowed(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-review-retry-accepted")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
@@ -645,7 +716,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         payload = api_module.retry_chapter_review(
             project.id,
             4,
-            ChapterReviewRetryRequest(reason="regenerate drafted chapter after prior chapter rewrite"),
+            ChapterReviewRetryRequest(
+                reason="regenerate drafted chapter after prior chapter rewrite"
+            ),
         )
 
         self.assertTrue(payload.ok)
@@ -707,12 +780,18 @@ class ProjectOperationGuardTests(unittest.TestCase):
             project_genesis.start_project_writing(
                 project.id,
                 get_session=self.session_factory,
-                config=api_module._config,
-                build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+                config=api_state._config,
+                build_genesis_service=lambda _runtime_config, **_kwargs: (
+                    FakeGenesisService()
+                ),
                 close_genesis_service=lambda _service: None,
                 require_genesis_project=lambda _project: None,
-                active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-writing"),
-                project_has_active_generation_task=lambda _project_id, *, session=None: False,
+                active_genesis_revision=lambda _session, _project: SimpleNamespace(
+                    id="revision-start-writing"
+                ),
+                project_has_active_generation_task=lambda _project_id, *, session=None: (
+                    False
+                ),
                 generation_task_conflict_message=lambda _project_id: "conflict",
                 create_continue_generation_task=fail_task_creation,
             )
@@ -773,14 +852,22 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         response = project_genesis.start_project_writing(
             project.id,
-            StartWritingRequest(auto_continue=False, max_chapters=2, run_until_chapter=2),
+            StartWritingRequest(
+                auto_continue=False, max_chapters=2, run_until_chapter=2
+            ),
             get_session=self.session_factory,
-            config=api_module._config,
-            build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+            config=api_state._config,
+            build_genesis_service=lambda _runtime_config, **_kwargs: (
+                FakeGenesisService()
+            ),
             close_genesis_service=lambda _service: None,
             require_genesis_project=lambda _project: None,
-            active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-writing-target"),
-            project_has_active_generation_task=lambda _project_id, *, session=None: False,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(
+                id="revision-start-writing-target"
+            ),
+            project_has_active_generation_task=lambda _project_id, *, session=None: (
+                False
+            ),
             generation_task_conflict_message=lambda _project_id: "conflict",
             create_continue_generation_task=capture_task_creation,
         )
@@ -857,12 +944,18 @@ class ProjectOperationGuardTests(unittest.TestCase):
         response = project_genesis.start_project_writing(
             project.id,
             get_session=self.session_factory,
-            config=api_module._config,
-            build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+            config=api_state._config,
+            build_genesis_service=lambda _runtime_config, **_kwargs: (
+                FakeGenesisService()
+            ),
             close_genesis_service=lambda _service: None,
             require_genesis_project=lambda _project: None,
-            active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-auto-continue"),
-            project_has_active_generation_task=lambda _project_id, *, session=None: False,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(
+                id="revision-start-auto-continue"
+            ),
+            project_has_active_generation_task=lambda _project_id, *, session=None: (
+                False
+            ),
             generation_task_conflict_message=lambda _project_id: "conflict",
             create_continue_generation_task=capture_task_creation,
         )
@@ -965,7 +1058,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertTrue(policy.policy.pause.manual_checkpoints)
 
     def test_continue_generation_rejects_failed_band_checkpoint(self) -> None:
-        project = self._create_project(project_id="proj-band-checkpoint", creation_status="writing")
+        project = self._create_project(
+            project_id="proj-band-checkpoint", creation_status="writing"
+        )
         with self.session_factory() as session:
             arc = ArcPlanVersion(
                 id="arc-band-checkpoint",
@@ -1016,8 +1111,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("checkpoint", str(ctx.exception.detail))
 
-    def test_continue_generation_rejects_drafted_chapter_waiting_for_acceptance(self) -> None:
-        project = self._create_project(project_id="proj-drafted-waits", creation_status="writing")
+    def test_continue_generation_rejects_drafted_chapter_waiting_for_acceptance(
+        self,
+    ) -> None:
+        project = self._create_project(
+            project_id="proj-drafted-waits", creation_status="writing"
+        )
         with self.session_factory() as session:
             arc = ArcPlanVersion(
                 id="arc-drafted-waits",
@@ -1067,7 +1166,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("2", str(ctx.exception.detail))
 
     def test_continue_generation_resets_orphan_needs_review_placeholders(self) -> None:
-        project = self._create_project(project_id="proj-orphan-review-placeholders", creation_status="writing")
+        project = self._create_project(
+            project_id="proj-orphan-review-placeholders", creation_status="writing"
+        )
         with self.session_factory() as session:
             arc = ArcPlanVersion(
                 id="arc-orphan-review-placeholders",
@@ -1119,7 +1220,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
                 ProjectContinueGenerationRequest(run_until_chapter=33),
@@ -1140,7 +1244,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
             }
         self.assertEqual(statuses, {31: "planned", 32: "planned", 33: "planned"})
 
-    def test_continue_generation_task_requested_chapters_honors_max_chapters(self) -> None:
+    def test_continue_generation_task_requested_chapters_honors_max_chapters(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-continue-sized-task")
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
@@ -1181,7 +1287,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
                 ProjectContinueGenerationRequest(max_chapters=2),
@@ -1192,7 +1301,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["max_chapters"], 2)
         self.assertEqual(captured["run_until_chapter"], 32)
 
-    def test_continue_generation_passes_auto_continue_target_to_task_creation(self) -> None:
+    def test_continue_generation_passes_auto_continue_target_to_task_creation(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-continue-auto-target")
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
@@ -1237,7 +1348,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
                 ProjectContinueGenerationRequest(run_until_chapter=36),
@@ -1249,7 +1363,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["requested_chapters"], 12)
         self.assertEqual(captured["max_chapters"], 12)
 
-    def test_continue_generation_auto_continue_false_preserves_short_batch(self) -> None:
+    def test_continue_generation_auto_continue_false_preserves_short_batch(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-continue-auto-false")
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
@@ -1292,7 +1408,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
                 ProjectContinueGenerationRequest(auto_continue=False, max_chapters=3),
@@ -1357,10 +1476,15 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=strict_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=strict_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
-                ProjectContinueGenerationRequest(auto_continue=True, run_until_chapter=4),
+                ProjectContinueGenerationRequest(
+                    auto_continue=True, run_until_chapter=4
+                ),
             )
 
         self.assertEqual(response.task_id, "task-continue-strict-factory")
@@ -1422,7 +1546,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             api_module._persist_generation_task(task_id, task)
             return task_id
 
-        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+        with patch(
+            "forwin.api_core.app._create_continue_generation_task",
+            new=capture_task_creation,
+        ):
             response = api_module.continue_project_generation(
                 project.id,
                 ProjectContinueGenerationRequest(max_chapters=10),
@@ -1432,7 +1559,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["requested_chapters"], 1)
         self.assertEqual(captured["max_chapters"], 10)
 
-    def test_project_continue_generation_request_rejects_non_positive_run_limits(self) -> None:
+    def test_project_continue_generation_request_rejects_non_positive_run_limits(
+        self,
+    ) -> None:
         with self.assertRaises(ValidationError):
             ProjectContinueGenerationRequest(max_chapters=0)
         with self.assertRaises(ValidationError):
@@ -1441,8 +1570,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
             ProjectContinueGenerationRequest(run_until_chapter=0)
         with self.assertRaises(ValidationError):
             ProjectContinueGenerationRequest(run_until_chapter=-1)
-        self.assertEqual(ProjectContinueGenerationRequest(max_chapters=1).max_chapters, 1)
-        self.assertEqual(ProjectContinueGenerationRequest(run_until_chapter=1).run_until_chapter, 1)
+        self.assertEqual(
+            ProjectContinueGenerationRequest(max_chapters=1).max_chapters, 1
+        )
+        self.assertEqual(
+            ProjectContinueGenerationRequest(run_until_chapter=1).run_until_chapter, 1
+        )
 
     def test_generation_control_drafted_chapter_blocks_future_arc_resume(self) -> None:
         project = self._create_project(project_id="proj-drafted-future-arc")
@@ -1500,13 +1633,16 @@ class ProjectOperationGuardTests(unittest.TestCase):
             session.commit()
 
         detail = api_module.get_project(project.id)
-        summary = next(item for item in api_module.list_projects() if item.id == project.id)
+        summary = next(
+            item for item in api_module.list_projects() if item.id == project.id
+        )
 
         self.assertEqual(detail.generation_control.plan_state, "pending_acceptance")
         self.assertEqual(detail.generation_control.review_state, "pending_acceptance")
         self.assertEqual(detail.generation_control.next_gate, "chapter_2_accept")
         self.assertFalse(detail.generation_control.can_resume)
         self.assertFalse(summary.generation_control.can_resume)
+
 
 if __name__ == "__main__":
     unittest.main()

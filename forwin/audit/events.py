@@ -1,73 +1,19 @@
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
-if TYPE_CHECKING:
-    from forwin.protocol.experience import BandDelightSchedule
-
-
-PlanTaskType = Literal[
-    "plot_advance",
-    "relationship_shift",
-    "setup",
-    "withhold",
-    "experience_delivery",
-]
-ConstraintType = Literal[
-    "character_availability",
-    "secret_withhold",
-    "relationship_preserve",
-    "thread_keep_open",
-    "location_availability",
-    "rule_preserve",
-]
-ConstraintLevel = Literal["hard", "soft", "hint"]
-ConstraintStatus = Literal["active", "inactive", "archived"]
-CheckpointStatus = Literal["pending", "pass", "warn", "fail", "error", "overridden"]
-CHECKPOINT_STATUS_VALUES = {"pending", "pass", "warn", "fail", "error", "overridden"}
-
-
-def normalize_checkpoint_status(value: object) -> str:
-    raw = str(value or "").strip()
-    if raw in CHECKPOINT_STATUS_VALUES:
-        return raw
-    return "error"
-
-
-BlockingReasonCode = Literal[
-    "",
-    "chapter_not_canon",
-    "band_checkpoint_pending",
-    "band_checkpoint_warn",
-    "band_checkpoint_fail",
-    "future_constraint_block",
-]
 DecisionEventFamily = Literal[
     "business_event",
     "audit_action",
     "runtime_observation",
     "evaluation_verdict",
 ]
+
+
 DecisionActorType = Literal["system", "scheduler", "manual_ui", "api", "extension", "worker"]
-OverClosureRiskCategory = Literal[
-    "",
-    "character_locked_out",
-    "thread_closed_too_early",
-    "relationship_closed_too_early",
-    "secret_over_explained",
-    "growth_arc_completed_too_early",
-]
-IssueGroup = Literal[
-    "",
-    "fact_conflict",
-    "director_imbalance",
-    "runtime_observation",
-    "governance_action",
-]
 
 
 class DecisionEventType:
@@ -369,59 +315,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.RAW_COMMENTS_INGESTED,
 }
 
-PLAN_TASK_TYPES = {
-    "plot_advance",
-    "relationship_shift",
-    "setup",
-    "withhold",
-    "experience_delivery",
-}
-CONSTRAINT_TYPES = {
-    "character_availability",
-    "secret_withhold",
-    "relationship_preserve",
-    "thread_keep_open",
-    "location_availability",
-    "rule_preserve",
-}
-CONSTRAINT_LEVELS = {"hard", "soft", "hint"}
-CONSTRAINT_STATUSES = {"active", "inactive", "archived"}
-
-
-class PlanTaskItem(BaseModel):
-    task_type: PlanTaskType
-    description: str = ""
-    target_name: str = ""
-    required_keywords: list[str] = Field(default_factory=list)
-    forbidden_keywords: list[str] = Field(default_factory=list)
-    source: str = "derived"
-
-
-class BlockingReasonInfo(BaseModel):
-    code: BlockingReasonCode = ""
-    message: str = ""
-    chapter_number: int = 0
-    band_id: str = ""
-    decision_event_id: str = ""
-    detail: str = ""
-
-
-class NarrativeConstraintInfo(BaseModel):
-    id: str = ""
-    project_id: str = ""
-    arc_id: str = ""
-    band_id: str = ""
-    constraint_type: ConstraintType = "character_availability"
-    level: ConstraintLevel = "hard"
-    subject_name: str = ""
-    description: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
-    effective_from_chapter: int = 1
-    protect_until_chapter: int = 0
-    status: str = "active"
-    created_at: str = ""
-    updated_at: str = ""
-
 
 class DecisionEventInfo(BaseModel):
     id: str = ""
@@ -444,141 +337,6 @@ class DecisionEventInfo(BaseModel):
     created_at: str = ""
 
 
-class BandCheckpointIssueInfo(BaseModel):
-    code: str = ""
-    severity: str = "info"
-    category: OverClosureRiskCategory = ""
-    issue_group: IssueGroup = ""
-    description: str = ""
-    detail: str = ""
-
-
-class BandCheckpointDetail(BaseModel):
-    id: str = ""
-    project_id: str = ""
-    arc_id: str = ""
-    band_id: str = ""
-    chapter_start: int = 0
-    chapter_end: int = 0
-    trigger_source: str = ""
-    boundary_kind: str = ""
-    boundary_chapter: int = 0
-    status: CheckpointStatus = "pending"
-    summary: str = ""
-    reason: str = ""
-    issues: list[BandCheckpointIssueInfo] = Field(default_factory=list)
-    decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
-    created_at: str = ""
-    updated_at: str = ""
-    resolved_at: str = ""
-
-
-class NextBandSummary(BaseModel):
-    band_id: str = ""
-    chapter_start: int = 0
-    chapter_end: int = 0
-    chapter_titles: list[str] = Field(default_factory=list)
-    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
-
-
-def load_plan_task_contract(raw: str | list[dict[str, Any]] | None) -> list[PlanTaskItem]:
-    if isinstance(raw, list):
-        payload = raw
-    else:
-        try:
-            payload = json.loads(raw or "[]") or []
-        except (json.JSONDecodeError, TypeError):
-            payload = []
-    tasks: list[PlanTaskItem] = []
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        try:
-            tasks.append(PlanTaskItem.model_validate(item))
-        except Exception:
-            continue
-    return tasks
-
-
-def derive_chapter_task_contract(goals: list[str]) -> list[PlanTaskItem]:
-    tasks: list[PlanTaskItem] = []
-    for goal in goals[:4]:
-        text = str(goal or "").strip()
-        if len(text) < 2:
-            continue
-        if is_derived_goal_control_instruction(text):
-            continue
-        tasks.append(
-            PlanTaskItem(
-                task_type="plot_advance",
-                description=text,
-                source="derived_from_goals",
-            )
-        )
-    return tasks
-
-
-def is_derived_goal_control_instruction(text: str) -> bool:
-    value = str(text or "").strip()
-    if not value:
-        return False
-    return any(
-        marker in value
-        for marker in (
-            "accepted canon",
-            "canon 优先",
-            "不改写已发生事实",
-            "必须紧接最新 accepted canon",
-            "必须紧接此状态",
-            "承接上一章 accepted",
-            "连续性护栏",
-            "最新 canon ledger",
-            "旧计划/旧摘要",
-            "不得回退成几天",
-            "不要回退成几天",
-            "不要写成几天",
-            "分钟级倒计时不得回退",
-        )
-    )
-
-
-def derive_band_task_contract(schedule: "BandDelightSchedule") -> list[PlanTaskItem]:
-    tasks: list[PlanTaskItem] = []
-    seen_reward_targets: set[str] = set()
-    for reward in schedule.scheduled_rewards:
-        target = str(reward.category or "").strip()
-        if not target or target in seen_reward_targets:
-            continue
-        seen_reward_targets.add(target)
-        tasks.append(
-            PlanTaskItem(
-                task_type="experience_delivery",
-                description=f"本 band 至少交付一次 {target} 回报。",
-                target_name=target,
-                source="derived_from_schedule",
-            )
-        )
-    for beat in schedule.curiosity_beats[:2]:
-        if not str(beat.question_open or "").strip():
-            continue
-        tasks.append(
-            PlanTaskItem(
-                task_type="setup",
-                description=str(beat.question_open or "").strip(),
-                source="derived_from_schedule",
-            )
-        )
-        if str(beat.question_resolve or "").strip():
-            tasks.append(
-                PlanTaskItem(
-                    task_type="plot_advance",
-                    description=str(beat.question_resolve or "").strip(),
-                    source="derived_from_schedule",
-                )
-            )
-    return tasks
-
-
 def ensure_decision_event_type(value: str) -> str:
     event_type = str(value or "").strip()
     if event_type not in KNOWN_DECISION_EVENT_TYPES:
@@ -586,82 +344,11 @@ def ensure_decision_event_type(value: str) -> str:
     return event_type
 
 
-_FACT_CONFLICT_HINTS = {
-    "continuity",
-    "future_constraint",
-    "next_band_compatibility",
-    "timeline",
-    "state",
-    "state_conflict",
-    "character",
-    "relationship",
-    "relation",
-    "intra_band_consistency",
-}
-_DIRECTOR_IMBALANCE_HINTS = {
-    "director_imbalance",
-    "plan_task_fulfillment",
-    "chapter_task_contract",
-    "band_task_completion",
-    "future_resource_preservation",
-    "payoff",
-    "pacing",
-    "experience",
-    "experience_delivery",
-    "stall",
-    "immersion",
-}
-_RUNTIME_HINTS = {
-    "runtime",
-    "llm",
-    "stage",
-    "memory",
-    "fallback",
-    "timeout",
-    "retry",
-}
-_GOVERNANCE_ACTION_HINTS = {
-    "governance",
-    "manual",
-    "override",
-    "approve",
-    "checkpoint_action",
-    "constraint_update",
-}
-
-
-def issue_group_for_issue(*, issue_type: str = "", rule_name: str = "", code: str = "") -> IssueGroup:
-    text = " ".join(str(part or "") for part in (issue_type, rule_name, code)).lower()
-    if not text.strip():
-        return ""
-    if any(hint in text for hint in _RUNTIME_HINTS):
-        return "runtime_observation"
-    if any(hint in text for hint in _GOVERNANCE_ACTION_HINTS):
-        return "governance_action"
-    if any(hint in text for hint in _DIRECTOR_IMBALANCE_HINTS):
-        return "director_imbalance"
-    if any(hint in text for hint in _FACT_CONFLICT_HINTS):
-        return "fact_conflict"
-    return "fact_conflict"
-
-
-def plan_task_contract_to_json(tasks: list[PlanTaskItem]) -> str:
-    return json.dumps([item.model_dump(mode="json") for item in tasks], ensure_ascii=False)
-
-
-def band_is_first_chapter(band_start: int, chapter_number: int) -> bool:
-    return int(chapter_number or 0) == int(band_start or 0)
-
-
-def chapter_blocking_message(reason: BlockingReasonCode, *, chapter_number: int = 0, band_id: str = "") -> str:
-    if reason == "chapter_not_canon":
-        return f"前序章节尚未进入 canon，暂不能开启第{chapter_number}章。"
-    if reason == "band_checkpoint_pending":
-        return f"{band_id or '上一 band'} 尚未完成 checkpoint 放行。"
-    if reason == "band_checkpoint_warn":
-        return f"{band_id or '上一 band'} checkpoint 出现警告，需人工确认后继续。"
-    if reason == "band_checkpoint_fail":
-        return f"{band_id or '上一 band'} checkpoint 未通过，需修复或 override 后继续。"
-    if reason == "future_constraint_block":
-        return "存在未来叙事约束冲突，需先处理后才能继续。"
-    return ""
+__all__ = [
+    "DecisionActorType",
+    "DecisionEventFamily",
+    "DecisionEventInfo",
+    "DecisionEventType",
+    "KNOWN_DECISION_EVENT_TYPES",
+    "ensure_decision_event_type",
+]

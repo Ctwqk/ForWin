@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 
 
 def repair_word_budget_patch(context) -> dict[str, object]:
@@ -41,7 +41,9 @@ def evaluate_repair_body_budget(
     target_chars = _positive_int(design_patch.get("target_chapter_chars"))
     growth_ratio = _positive_float(design_patch.get("repair_max_growth_ratio"))
     must_replace = bool(design_patch.get("must_replace_not_append"))
-    growth_limit = int(source_chars * growth_ratio) if source_chars and growth_ratio else 0
+    growth_limit = (
+        int(source_chars * growth_ratio) if source_chars and growth_ratio else 0
+    )
     over_max = bool(max_chars and result_chars > max_chars)
     over_growth = bool(growth_limit and result_chars > growth_limit)
     if not over_max and not over_growth:
@@ -54,9 +56,7 @@ def evaluate_repair_body_budget(
         else DecisionEventType.REPAIR_BODY_OVER_BUDGET
     )
     reason = (
-        "repair-needs-human-compression"
-        if needs_human
-        else "repair-body-over-budget"
+        "repair-needs-human-compression" if needs_human else "repair-body-over-budget"
     )
     return RepairBodyBudgetDecision(
         event_type=event_type,

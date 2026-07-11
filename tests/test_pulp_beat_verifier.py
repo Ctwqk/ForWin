@@ -5,9 +5,9 @@ import json
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.checker.pulp_beat import verify_pulp_beats
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url

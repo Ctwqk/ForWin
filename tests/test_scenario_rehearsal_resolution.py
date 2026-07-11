@@ -6,14 +6,17 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.planning.scenario_rehearsal_engine import ScenarioRehearsalRunner
-from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator, latest_blocking_scenario_rehearsal
+from forwin.planning.scenario_rehearsal_resolution import (
+    ScenarioRehearsalCoordinator,
+    latest_blocking_scenario_rehearsal,
+)
 from forwin.planning.world_contracts import (
     ArcWorldContract,
     BandWorldContract,
@@ -106,11 +109,18 @@ def test_patch_resolution_adds_reveal_ladder_and_rehearses_again() -> None:
         )
 
         updated_contract = contracts.get_arc_contract(project.id, arc.id)
-        rows = session.execute(
-            select(ScenarioRehearsalRunRow)
-            .where(ScenarioRehearsalRunRow.project_id == project.id)
-            .order_by(ScenarioRehearsalRunRow.created_at.asc(), ScenarioRehearsalRunRow.id.asc())
-        ).scalars().all()
+        rows = (
+            session.execute(
+                select(ScenarioRehearsalRunRow)
+                .where(ScenarioRehearsalRunRow.project_id == project.id)
+                .order_by(
+                    ScenarioRehearsalRunRow.created_at.asc(),
+                    ScenarioRehearsalRunRow.id.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         assert outcome.status == "patched_passed"
         assert outcome.report.recommendation == ScenarioRehearsalRecommendation.PASS
@@ -165,8 +175,14 @@ def test_subworld_without_roster_is_a_patchable_rehearsal_risk() -> None:
         )
 
         assert report.recommendation == ScenarioRehearsalRecommendation.PATCH
-        assert any(finding.risk_type == "subworld_roster_empty" for finding in report.risk_findings)
-        assert any(patch.patch_type == "add_subworld_roster_slot" for patch in report.required_plan_patches)
+        assert any(
+            finding.risk_type == "subworld_roster_empty"
+            for finding in report.risk_findings
+        )
+        assert any(
+            patch.patch_type == "add_subworld_roster_slot"
+            for patch in report.required_plan_patches
+        )
 
 
 def test_subworld_with_roster_but_no_entry_target_auto_patches_band_plan() -> None:
@@ -236,15 +252,27 @@ def test_subworld_with_roster_but_no_entry_target_auto_patches_band_plan() -> No
             chapter_numbers=[chapter.chapter_number for chapter in chapters],
         )
 
-        row = session.execute(
-            select(BandExperiencePlan)
-            .where(BandExperiencePlan.project_id == project.id, BandExperiencePlan.band_id == "band:1:4")
-            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
-        ).scalars().first()
+        row = (
+            session.execute(
+                select(BandExperiencePlan)
+                .where(
+                    BandExperiencePlan.project_id == project.id,
+                    BandExperiencePlan.band_id == "band:1:4",
+                )
+                .order_by(
+                    BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
+                )
+            )
+            .scalars()
+            .first()
+        )
         payload = json.loads(row.schedule_json or "{}")
 
         assert outcome.status == "patched_passed"
-        assert any(item.get("subworld_id") == subworld.id for item in payload["chapter_entry_targets"])
+        assert any(
+            item.get("subworld_id") == subworld.id
+            for item in payload["chapter_entry_targets"]
+        )
 
 
 def test_empty_rehearsal_band_is_skipped_without_blocking_checkpoint() -> None:
@@ -253,7 +281,9 @@ def test_empty_rehearsal_band_is_skipped_without_blocking_checkpoint() -> None:
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project, arc, _chapters = _setup_project(session, chapter_start=1, chapter_end=4)
+        project, arc, _chapters = _setup_project(
+            session, chapter_start=1, chapter_end=4
+        )
         subworld = SubWorld(
             project_id=project.id,
             origin_arc_id=arc.id,
@@ -303,7 +333,9 @@ def test_early_reveal_before_visibility_guard_blocks_rehearsal() -> None:
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project, arc, chapters = _setup_project(session, chapter_start=10, chapter_end=12)
+        project, arc, chapters = _setup_project(
+            session, chapter_start=10, chapter_end=12
+        )
         contracts = WorldContractRepository(session)
         contracts.save_arc_contract(
             ArcWorldContract(
@@ -342,16 +374,21 @@ def test_early_reveal_before_visibility_guard_blocks_rehearsal() -> None:
         )
 
         assert report.recommendation == ScenarioRehearsalRecommendation.BLOCK
-        assert any(finding.risk_type == "early_reveal_blocker" for finding in report.risk_findings)
+        assert any(
+            finding.risk_type == "early_reveal_blocker"
+            for finding in report.risk_findings
+        )
 
 
-def test_replan_resolution_creates_new_plan_version_and_governance_events() -> None:
+def test_replan_resolution_creates_new_plan_version_and_audit_events() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project, arc, chapters = _setup_project(session, chapter_start=31, chapter_end=34)
+        project, arc, chapters = _setup_project(
+            session, chapter_start=31, chapter_end=34
+        )
         contracts = WorldContractRepository(session)
         contracts.save_arc_contract(
             ArcWorldContract(
@@ -395,15 +432,22 @@ def test_replan_resolution_creates_new_plan_version_and_governance_events() -> N
         old_arc = session.get(ArcPlanVersion, arc.id)
         active_arc = session.execute(
             select(ArcPlanVersion)
-            .where(ArcPlanVersion.project_id == project.id, ArcPlanVersion.status == "active")
+            .where(
+                ArcPlanVersion.project_id == project.id,
+                ArcPlanVersion.status == "active",
+            )
             .order_by(ArcPlanVersion.version.desc())
             .limit(1)
         ).scalar_one()
-        updated_chapter_plans = session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id == project.id)
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+        updated_chapter_plans = (
+            session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id == project.id)
+                .order_by(ChapterPlan.chapter_number.asc())
+            )
+            .scalars()
+            .all()
+        )
         updated_contract = contracts.get_arc_contract(project.id, active_arc.id)
         event_types = [
             row.event_type
@@ -411,7 +455,9 @@ def test_replan_resolution_creates_new_plan_version_and_governance_events() -> N
                 select(DecisionEvent)
                 .where(DecisionEvent.project_id == project.id)
                 .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         ]
 
         assert outcome.status == "replanned_passed"
@@ -423,7 +469,9 @@ def test_replan_resolution_creates_new_plan_version_and_governance_events() -> N
         assert all(plan.arc_plan_id == active_arc.id for plan in updated_chapter_plans)
         assert updated_contract is not None
         assert updated_contract.reader_cognition_trajectory
-        assert json.loads(outcome.report.metadata["replan"])["new_arc_id"] == active_arc.id
+        assert (
+            json.loads(outcome.report.metadata["replan"])["new_arc_id"] == active_arc.id
+        )
         assert DecisionEventType.SCENARIO_REHEARSAL_EVALUATED in event_types
         assert DecisionEventType.SCENARIO_REHEARSAL_REPLAN_REQUIRED in event_types
 
@@ -434,7 +482,9 @@ def test_latest_nonblocking_scenario_rehearsal_clears_older_blocker() -> None:
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project, arc, _chapters = _setup_project(session, chapter_start=32, chapter_end=36)
+        project, arc, _chapters = _setup_project(
+            session, chapter_start=32, chapter_end=36
+        )
         base_time = datetime.now(timezone.utc)
         session.add(
             ScenarioRehearsalRunRow(

@@ -13,15 +13,26 @@ from forwin.api_schema import (
     TaskBulkDeleteRequest,
     TaskMutationResponse,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 
 logger = logging.getLogger(__name__)
 
 
 def _is_retryable_db_error(exc: OperationalError) -> bool:
     orig = getattr(exc, "orig", None)
-    sqlstate = str(getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or "").strip()
-    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
+    sqlstate = str(
+        getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or ""
+    ).strip()
+    if sqlstate in {
+        "40001",
+        "40P01",
+        "55P03",
+        "57014",
+        "08000",
+        "08003",
+        "08006",
+        "08001",
+    }:
         return True
     message = str(exc).lower()
     return (
@@ -60,7 +71,9 @@ class TaskRouteDeps:
 
 
 def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
-    def active_generation_task_check(project_id: str = "") -> ActiveGenerationTaskCheckResponse:
+    def active_generation_task_check(
+        project_id: str = "",
+    ) -> ActiveGenerationTaskCheckResponse:
         normalized_project_id = str(project_id or "").strip()
         if deps.active_generation_task_ids is not None:
             active_ids = deps.active_generation_task_ids(normalized_project_id)
@@ -71,7 +84,11 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
                     continue
                 if task.get("deleted"):
                     continue
-                if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
+                if (
+                    normalized_project_id
+                    and str(task.get("project_id", "") or "").strip()
+                    != normalized_project_id
+                ):
                     continue
                 if deps.task_is_terminal(str(task.get("status", "")).strip()):
                     continue
@@ -93,7 +110,10 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
         return deps.serialize_task(task_id, task)
 
     def list_tasks(limit: int = 30):
-        return [deps.serialize_task(task_id, task) for task_id, task in deps.list_generation_tasks(limit)]
+        return [
+            deps.serialize_task(task_id, task)
+            for task_id, task in deps.list_generation_tasks(limit)
+        ]
 
     def list_task_center_items(limit: int = 50):
         normalized_limit = max(1, min(int(limit or 50), 100))
@@ -164,13 +184,17 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
                         related_object_type="generation_task",
                         related_object_id=task_id,
                         parent_event_id=str(parent.id if parent is not None else ""),
-                        causal_root_id=str(parent.causal_root_id if parent is not None else ""),
+                        causal_root_id=str(
+                            parent.causal_root_id if parent is not None else ""
+                        ),
                     )
                     session.commit()
             except OperationalError as exc:
                 if not _is_retryable_db_error(exc):
                     raise
-                logger.warning("Terminate audit event skipped because database is busy: %s", exc)
+                logger.warning(
+                    "Terminate audit event skipped because database is busy: %s", exc
+                )
         updated = deps.get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,
@@ -211,13 +235,17 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
                         related_object_type="generation_task",
                         related_object_id=task_id,
                         parent_event_id=str(parent.id if parent is not None else ""),
-                        causal_root_id=str(parent.causal_root_id if parent is not None else ""),
+                        causal_root_id=str(
+                            parent.causal_root_id if parent is not None else ""
+                        ),
                     )
                     session.commit()
             except OperationalError as exc:
                 if not _is_retryable_db_error(exc):
                     raise
-                logger.warning("Pause audit event skipped because database is busy: %s", exc)
+                logger.warning(
+                    "Pause audit event skipped because database is busy: %s", exc
+                )
         updated = deps.get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,

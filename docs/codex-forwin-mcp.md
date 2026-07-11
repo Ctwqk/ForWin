@@ -63,7 +63,7 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
 1. Call `project_get` to confirm the project is already in writing state.
 2. Call `task_active_generation_check` for the project.
 3. If an active task exists, inspect it with `task_get`; do not start another generation task.
-4. If there is no active task and the project is not blocked by review or governance gates, call `project_continue_generation`.
+4. If there is no active task and the project is not blocked by review or project-control gates, call `project_continue_generation`.
 
 ### Inspect Output
 
@@ -84,7 +84,7 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
 - `project_start_writing` is the only supported handoff from Genesis into chapter production.
 - `project_continue_generation` must not be called while `task_active_generation_check` reports active generation.
 - `chapter_list` and `chapter_get` are the supported chapter inspection path.
-- `world_export_obsidian` is a read-oriented export workflow; canon changes still go through ForWin governance.
+- `world_export_obsidian` is a read-oriented export workflow; canon changes still go through candidate review and Canon admission.
 
 ## Verification
 
@@ -95,7 +95,7 @@ Run the focused operator and Codex integration tests from the repository virtual
   tests/test_mcp_server.py \
   tests/test_codex_bridge.py \
   tests/test_llm_router.py \
-  tests/test_codex_governance.py \
+  tests/test_codex_governed_actions.py \
   tests/test_codex_operator_ready.py \
   -q
 ```

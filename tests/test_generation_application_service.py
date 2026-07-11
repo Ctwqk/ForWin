@@ -16,7 +16,7 @@ from forwin.application.generation import (
 )
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_payload import payload_from_json
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
@@ -94,9 +94,7 @@ def _service(
 def test_enqueue_snapshots_project_policy_and_creates_one_task(
     session_factory: sessionmaker,
 ) -> None:
-    policy = RuntimePolicy.for_profile("pulp").with_user_settings(
-        gate_delegate="spark"
-    )
+    policy = RuntimePolicy.for_profile("pulp").with_user_settings(gate_delegate="spark")
     project = _create_project(session_factory, policy=policy)
 
     handle = _service(session_factory).enqueue(_command(project.id))

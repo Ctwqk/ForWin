@@ -3,7 +3,10 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.observability.payloads import event_error_payload
 from forwin.state.updater import StateUpdater

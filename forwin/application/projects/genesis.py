@@ -15,9 +15,7 @@ from forwin.api_schema import (
 )
 from forwin.genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.genesis.handoff import StartWritingCommand
-from forwin.governance import (
-    DecisionEventType,
-)
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
@@ -71,6 +69,7 @@ def get_project_genesis(
         close_genesis_service(genesis_service)
         session.close()
 
+
 def patch_project_genesis(
     project_id: str,
     req: BookGenesisPatchRequest,
@@ -120,6 +119,7 @@ def patch_project_genesis(
     finally:
         close_genesis_service(genesis_service)
         session.close()
+
 
 def generate_project_genesis_stage(
     project_id: str,
@@ -171,6 +171,7 @@ def generate_project_genesis_stage(
         close_genesis_service(genesis_service)
         session.close()
 
+
 def lock_project_genesis_stage(
     project_id: str,
     stage_key: str,
@@ -218,6 +219,7 @@ def lock_project_genesis_stage(
     finally:
         close_genesis_service(genesis_service)
         session.close()
+
 
 def rerun_project_genesis_stage(
     project_id: str,
@@ -269,6 +271,7 @@ def rerun_project_genesis_stage(
     finally:
         close_genesis_service(genesis_service)
         session.close()
+
 
 def refine_project_genesis_stage(
     project_id: str,
@@ -324,6 +327,7 @@ def refine_project_genesis_stage(
         close_genesis_service(genesis_service)
         session.close()
 
+
 def generate_project_genesis_name(
     project_id: str,
     req: BookGenesisNameGenerateRequest,
@@ -371,6 +375,7 @@ def generate_project_genesis_name(
         close_genesis_service(genesis_service)
         session.close()
 
+
 def start_project_writing(
     project_id: str,
     req: StartWritingRequest | None = None,
@@ -387,7 +392,9 @@ def start_project_writing(
 ) -> StartWritingResponse:
     if not config:
         raise HTTPException(503, "服务尚未初始化")
-    auto_continue = True if req is None or req.auto_continue is None else bool(req.auto_continue)
+    auto_continue = (
+        True if req is None or req.auto_continue is None else bool(req.auto_continue)
+    )
     run_until_chapter = req.run_until_chapter if req is not None else None
     max_chapters = req.max_chapters if req is not None else None
     infrastructure = config
@@ -428,9 +435,15 @@ def start_project_writing(
             )
         except ValueError as exc:
             failure_summary = str(exc) or "Genesis map_atlas 无法生成 BookMap。"
-            if "map" in failure_summary.lower() or "地图" in failure_summary or "BookMap" in failure_summary:
+            if (
+                "map" in failure_summary.lower()
+                or "地图" in failure_summary
+                or "BookMap" in failure_summary
+            ):
                 session.commit()
-                raise HTTPException(409, f"地图生成失败，不能启动写作：{failure_summary}") from exc
+                raise HTTPException(
+                    409, f"地图生成失败，不能启动写作：{failure_summary}"
+                ) from exc
             session.rollback()
             raise HTTPException(409, failure_summary) from exc
         try:
@@ -447,7 +460,9 @@ def start_project_writing(
                     )
                 except ValueError as exc:
                     raise HTTPException(400, str(exc)) from exc
-                requested_chapters = min(requested_chapters, target.effective_max_chapters)
+                requested_chapters = min(
+                    requested_chapters, target.effective_max_chapters
+                )
                 task_max_chapters = target.effective_max_chapters
                 task_run_until_chapter = target.run_until_chapter
             task_id = create_continue_generation_task(
@@ -476,4 +491,13 @@ def start_project_writing(
         session.close()
 
 
-__all__ = ['get_project_genesis', 'patch_project_genesis', 'generate_project_genesis_stage', 'lock_project_genesis_stage', 'rerun_project_genesis_stage', 'refine_project_genesis_stage', 'generate_project_genesis_name', 'start_project_writing']
+__all__ = [
+    "get_project_genesis",
+    "patch_project_genesis",
+    "generate_project_genesis_stage",
+    "lock_project_genesis_stage",
+    "rerun_project_genesis_stage",
+    "refine_project_genesis_stage",
+    "generate_project_genesis_name",
+    "start_project_writing",
+]

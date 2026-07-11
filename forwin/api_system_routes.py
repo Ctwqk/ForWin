@@ -14,7 +14,7 @@ from forwin.api_schema import (
     runtime_catalog,
 )
 from forwin.llm.codex_client import CodexBridgeClient
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.review.decision.dashboard import build_waiting_review_breakdown
@@ -43,7 +43,9 @@ def build_handlers(
             "status": "ok",
             "embedding": _embedding_health_payload(
                 config=get_config(),
-                memory_index=(get_memory_index() if get_memory_index is not None else None),
+                memory_index=(
+                    get_memory_index() if get_memory_index is not None else None
+                ),
             ),
         }
 
@@ -56,7 +58,9 @@ def build_handlers(
         )
         return HTMLResponse(
             render_home_page(
-                extension_api_key_configured=bool(backend_ready.get("extension_api_key_configured")),
+                extension_api_key_configured=bool(
+                    backend_ready.get("extension_api_key_configured")
+                ),
                 extension_install_path="browser_extension/forwin-publisher",
                 rule_decision_breakdown=_load_rule_decision_breakdown(get_session),
             )
@@ -98,9 +102,15 @@ def build_handlers(
             if project is None:
                 raise HTTPException(404, "项目不存在")
             if str(project.creation_status or "") in {"creating", "genesis_ready"}:
-                raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
-            if project_has_active_generation_task(normalized_project_id, session=session):
-                raise HTTPException(409, generation_task_conflict_message(normalized_project_id))
+                raise HTTPException(
+                    409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。"
+                )
+            if project_has_active_generation_task(
+                normalized_project_id, session=session
+            ):
+                raise HTTPException(
+                    409, generation_task_conflict_message(normalized_project_id)
+                )
             policy_record = ProjectPolicyStore(session).load(project)
             task_policy = policy_record.policy
             task_title = project.title or task_title
@@ -127,8 +137,16 @@ def build_handlers(
 
     def get_codex_bridge_status() -> CodexBridgeStatusResponse:
         config = get_config()
-        enabled = bool(getattr(config, "codex_enabled", False)) if config is not None else False
-        bridge_url = str(getattr(config, "codex_bridge_url", "") or "").strip() if config is not None else ""
+        enabled = (
+            bool(getattr(config, "codex_enabled", False))
+            if config is not None
+            else False
+        )
+        bridge_url = (
+            str(getattr(config, "codex_bridge_url", "") or "").strip()
+            if config is not None
+            else ""
+        )
         if not enabled:
             return CodexBridgeStatusResponse(
                 enabled=False,
@@ -148,7 +166,9 @@ def build_handlers(
         client = CodexBridgeClient(
             bridge_url=bridge_url,
             token=str(getattr(config, "codex_bridge_token", "") or ""),
-            timeout_seconds=min(15.0, float(getattr(config, "codex_sync_timeout_seconds", 90) or 90)),
+            timeout_seconds=min(
+                15.0, float(getattr(config, "codex_sync_timeout_seconds", 90) or 90)
+            ),
         )
         try:
             health = client.health()
@@ -162,13 +182,17 @@ def build_handlers(
                     message="FORWIN_CODEX_BRIDGE_URL 未返回 Codex Bridge health payload。",
                     health=health,
                 )
-            healthy = bool(health.get("available", False) or health.get("status") == "ok")
+            healthy = bool(
+                health.get("available", False) or health.get("status") == "ok"
+            )
             return CodexBridgeStatusResponse(
                 enabled=True,
                 bridge_url=bridge_url,
                 healthy=healthy,
                 status=str(health.get("status", "ok" if healthy else "degraded") or ""),
-                message="Codex Bridge 可用。" if healthy else "Codex Bridge 返回 degraded。",
+                message="Codex Bridge 可用。"
+                if healthy
+                else "Codex Bridge 返回 degraded。",
                 health=health,
             )
         except Exception as exc:  # noqa: BLE001
@@ -192,14 +216,20 @@ def build_handlers(
     }
 
 
-def _load_rule_decision_breakdown(get_session: Callable[[], Any]) -> list[dict[str, object]]:
+def _load_rule_decision_breakdown(
+    get_session: Callable[[], Any],
+) -> list[dict[str, object]]:
     session = get_session()
     try:
-        rows = session.execute(
-            select(DecisionEvent)
-            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
-            .limit(500)
-        ).scalars().all()
+        rows = (
+            session.execute(
+                select(DecisionEvent)
+                .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+                .limit(500)
+            )
+            .scalars()
+            .all()
+        )
         return build_waiting_review_breakdown(rows)
     except Exception as exc:
         logger.warning("failed to load rule decision breakdown: %s", exc)
@@ -210,7 +240,9 @@ def _load_rule_decision_breakdown(get_session: Callable[[], Any]) -> list[dict[s
             close()
 
 
-def _embedding_health_payload(*, config: Any, memory_index: Any | None) -> dict[str, object]:
+def _embedding_health_payload(
+    *, config: Any, memory_index: Any | None
+) -> dict[str, object]:
     if memory_index is not None:
         status = getattr(memory_index, "embedding_status", None)
         if callable(status):

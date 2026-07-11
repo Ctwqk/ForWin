@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
-from forwin.governance import DecisionEventInfo
+from forwin.audit.events import DecisionEventInfo
 from forwin.models.base import new_id
 from forwin.personality import (
     CharacterPersonalityLibrary,
@@ -22,7 +22,11 @@ from .events import (
     CHARACTER_ROSTER_MATERIALIZED,
     PERSONALITY_LOADOUT_AUTO_ASSIGNED,
 )
-from .integrity import CharacterIntegrityIssue, CharacterIntegrityReport, failed_integrity
+from .integrity import (
+    CharacterIntegrityIssue,
+    CharacterIntegrityReport,
+    failed_integrity,
+)
 from .identity import CharacterIdentityMap
 from .models import CharacterCreationRequest, CharacterCreationResult
 from .normalization import is_generic_character_name
@@ -43,8 +47,13 @@ class CharacterCreationHelper:
         self.assigner = PersonalityLoadoutAssigner(self.library)
         self.policy_resolver = CharacterPersonalityPolicyResolver(session)
 
-    def create_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
-        if is_generic_character_name(request.name) and request.generic_character_policy == "reject_or_group":
+    def create_character(
+        self, request: CharacterCreationRequest
+    ) -> CharacterCreationResult:
+        if (
+            is_generic_character_name(request.name)
+            and request.generic_character_policy == "reject_or_group"
+        ):
             report = failed_integrity(
                 "generic_character_rejected",
                 message=f"{request.name} is a generic character token and should not become a named character.",
@@ -53,7 +62,12 @@ class CharacterCreationHelper:
                 project_id=request.project_id,
                 character_name=request.name,
                 integrity_report=report,
-                warnings=[{"code": "generic_character_rejected", "message": report.errors[0].message}],
+                warnings=[
+                    {
+                        "code": "generic_character_rejected",
+                        "message": report.errors[0].message,
+                    }
+                ],
             )
 
         resolution = self.registry.resolve(
@@ -62,28 +76,41 @@ class CharacterCreationHelper:
             roster_item_id=request.roster_item_id,
             name=request.name,
         )
-        if resolution.node is not None and request.existing_resolution == "get_or_create":
+        if (
+            resolution.node is not None
+            and request.existing_resolution == "get_or_create"
+        ):
             return self._existing_result(request, resolution.node)
 
         assignment = self.assigner.assign(self._assignment_request(request))
         loadout_payload = assignment.loadout.model_dump(mode="json", exclude_none=True)
         assignment_payload = assignment.report.model_dump(mode="json")
         if not assignment.validation.ok:
-            raise ValueError(f"invalid personality_loadout: {', '.join(assignment.validation.errors)}")
+            raise ValueError(
+                f"invalid personality_loadout: {', '.join(assignment.validation.errors)}"
+            )
 
-        character_id = request.character_id.strip() if request.character_id.strip() else f"char_{new_id()}"
+        character_id = (
+            request.character_id.strip()
+            if request.character_id.strip()
+            else f"char_{new_id()}"
+        )
         genesis_ref_id = self._genesis_ref_id(request)
         profile = dict(request.profile)
         if request.personality_tags and not profile.get("personality_tags"):
             profile["personality_tags"] = list(request.personality_tags)
         profile["personality_loadout"] = loadout_payload
         metadata = {
-            "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
+            "roster_item_ids": [request.roster_item_id]
+            if request.roster_item_id
+            else [],
             "character_identity": {
                 "canonical_character_id": character_id,
                 "book_state_node_id": character_id,
                 "genesis_ref_id": genesis_ref_id,
-                "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
+                "roster_item_ids": [request.roster_item_id]
+                if request.roster_item_id
+                else [],
             },
             "personality_assignment": assignment_payload,
             "character_creation": {
@@ -134,7 +161,11 @@ class CharacterCreationHelper:
                 self._creation_event_type(request),
                 node.id,
                 f"创建角色 {node.name or node.id}。",
-                {"character_id": node.id, "character_name": node.name, "source": request.source},
+                {
+                    "character_id": node.id,
+                    "character_name": node.name,
+                    "source": request.source,
+                },
             ),
             self._save_event(
                 request,
@@ -148,7 +179,9 @@ class CharacterCreationHelper:
                         "assignment_mode": assignment.report.assignment_mode,
                         "confidence": assignment.report.confidence,
                         "status": assignment.report.status,
-                        "selected_skill_ids": [item.skill for item in assignment.report.selected_skills],
+                        "selected_skill_ids": [
+                            item.skill for item in assignment.report.selected_skills
+                        ],
                         "reason_tags": list(assignment.report.reason_tags),
                     },
                 },
@@ -166,7 +199,10 @@ class CharacterCreationHelper:
             personality_assignment=assignment.report,
             integrity_report=CharacterIntegrityReport(ok=assignment.validation.ok),
             decision_event_ids=decision_ids,
-            warnings=[{"code": warning, "message": warning} for warning in assignment.validation.warnings],
+            warnings=[
+                {"code": warning, "message": warning}
+                for warning in assignment.validation.warnings
+            ],
         )
 
     def _creation_event_type(self, request: CharacterCreationRequest) -> str:
@@ -179,7 +215,10 @@ class CharacterCreationHelper:
         request: CharacterCreationRequest,
         resolution,
     ) -> str:
-        if request.existing_resolution == "create_new" and getattr(resolution, "node", None) is not None:
+        if (
+            request.existing_resolution == "create_new"
+            and getattr(resolution, "node", None) is not None
+        ):
             return "created_new_disambiguated"
         return "created_new"
 
@@ -188,29 +227,56 @@ class CharacterCreationHelper:
         request: CharacterCreationRequest,
         resolution,
     ) -> str:
-        if request.existing_resolution != "create_new" or getattr(resolution, "node", None) is None:
+        if (
+            request.existing_resolution != "create_new"
+            or getattr(resolution, "node", None) is None
+        ):
             return ""
-        context = dict(request.creation_context) if isinstance(request.creation_context, dict) else {}
+        context = (
+            dict(request.creation_context)
+            if isinstance(request.creation_context, dict)
+            else {}
+        )
         for key in ("disambiguation", "scope", "faction_id", "source_scope"):
             value = str(context.get(key) or "").strip()
             if value:
                 return value
         return str(request.source_ref or request.roster_item_id or "").strip()
 
-    def get_or_create_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
+    def get_or_create_character(
+        self, request: CharacterCreationRequest
+    ) -> CharacterCreationResult:
         request = request.model_copy(update={"existing_resolution": "get_or_create"})
         return self.create_character(request)
 
-    def materialize_roster_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
-        return self.create_character(request.model_copy(update={"source": request.source or "subworld_planned_slot_materialization"}))
+    def materialize_roster_character(
+        self, request: CharacterCreationRequest
+    ) -> CharacterCreationResult:
+        return self.create_character(
+            request.model_copy(
+                update={
+                    "source": request.source or "subworld_planned_slot_materialization"
+                }
+            )
+        )
 
-    def apply_book_state_character_patch(self, request: CharacterCreationRequest) -> CharacterCreationResult:
-        return self.create_character(request.model_copy(update={"source": request.source or "book_state_graph_delta"}))
+    def apply_book_state_character_patch(
+        self, request: CharacterCreationRequest
+    ) -> CharacterCreationResult:
+        return self.create_character(
+            request.model_copy(
+                update={"source": request.source or "book_state_graph_delta"}
+            )
+        )
 
-    def ensure_character_integrity(self, character_id: str, *, reason: str) -> CharacterIntegrityReport:
+    def ensure_character_integrity(
+        self, character_id: str, *, reason: str
+    ) -> CharacterIntegrityReport:
         node = self.repo.get_world_node(character_id)
         if node is None:
-            return failed_integrity("character_not_found", message=reason, character_id=character_id)
+            return failed_integrity(
+                "character_not_found", message=reason, character_id=character_id
+            )
         if str(node.node_type) != "character":
             return failed_integrity(
                 "not_character",
@@ -250,21 +316,28 @@ class CharacterCreationHelper:
             affected_character_ids=[character_id] if errors or warnings else [],
         )
 
-    def _existing_result(self, request: CharacterCreationRequest, node: WorldNode) -> CharacterCreationResult:
+    def _existing_result(
+        self, request: CharacterCreationRequest, node: WorldNode
+    ) -> CharacterCreationResult:
         metadata = dict(node.metadata)
         self._sync_identity_map(
             request,
             character_id=node.id,
             display_name=node.name,
             aliases=list(node.aliases),
-            genesis_ref_id=self._genesis_ref_id(request) or str(metadata.get("genesis_ref_id") or ""),
+            genesis_ref_id=self._genesis_ref_id(request)
+            or str(metadata.get("genesis_ref_id") or ""),
         )
         self._save_event(
             request,
             CHARACTER_MERGED_EXISTING,
             node.id,
             f"复用已有角色 {node.name or node.id}。",
-            {"character_id": node.id, "character_name": node.name, "resolution": "get_or_create"},
+            {
+                "character_id": node.id,
+                "character_name": node.name,
+                "resolution": "get_or_create",
+            },
         )
         profile = dict(node.profile)
         return CharacterCreationResult(
@@ -276,7 +349,9 @@ class CharacterCreationHelper:
             world_node=node.model_dump(mode="json"),
             personality_loadout=dict(profile.get("personality_loadout") or {}),
             personality_assignment=metadata.get("personality_assignment") or {},
-            integrity_report=CharacterIntegrityReport(ok=bool(profile.get("personality_loadout"))),
+            integrity_report=CharacterIntegrityReport(
+                ok=bool(profile.get("personality_loadout"))
+            ),
         )
 
     def _sync_identity_map(
@@ -304,8 +379,14 @@ class CharacterCreationHelper:
         )
 
     def _genesis_ref_id(self, request: CharacterCreationRequest) -> str:
-        context = dict(request.creation_context) if isinstance(request.creation_context, dict) else {}
-        value = str(context.get("genesis_ref_id") or context.get("genesis_ref") or "").strip()
+        context = (
+            dict(request.creation_context)
+            if isinstance(request.creation_context, dict)
+            else {}
+        )
+        value = str(
+            context.get("genesis_ref_id") or context.get("genesis_ref") or ""
+        ).strip()
         if value:
             return value
         if str(request.source_ref or "").startswith("genesis:"):
@@ -314,7 +395,9 @@ class CharacterCreationHelper:
             return str(request.source_ref or "").strip()
         return ""
 
-    def _assignment_request(self, request: CharacterCreationRequest) -> PersonalityAssignmentRequest:
+    def _assignment_request(
+        self, request: CharacterCreationRequest
+    ) -> PersonalityAssignmentRequest:
         profile = dict(request.profile)
         state = dict(request.state)
         existing_assignment: dict[str, Any] | None = None
@@ -328,7 +411,9 @@ class CharacterCreationHelper:
             source_ref=request.source_ref,
             description=request.description,
             summary=request.summary,
-            role_hint=str(profile.get("role_hint") or profile.get("role_archetype") or ""),
+            role_hint=str(
+                profile.get("role_hint") or profile.get("role_archetype") or ""
+            ),
             narrative_role=str(profile.get("narrative_role") or ""),
             public_identity=str(profile.get("public_identity") or ""),
             role_archetype=str(profile.get("role_archetype") or ""),
@@ -338,7 +423,9 @@ class CharacterCreationHelper:
             goal=str(state.get("goal") or ""),
             long_term_goal=str(state.get("long_term_goal") or ""),
             relationship_summary=str(state.get("relationship_summary") or ""),
-            personality_tags=list(request.personality_tags or profile.get("personality_tags") or []),
+            personality_tags=list(
+                request.personality_tags or profile.get("personality_tags") or []
+            ),
             aliases=list(request.aliases),
             importance=int(request.importance or 5),
             explicit_loadout=request.personality_loadout,
@@ -352,7 +439,11 @@ class CharacterCreationHelper:
         for node in self.repo.list_world_nodes(project_id):
             if str(node.node_type) != "character":
                 continue
-            raw = node.profile.get("personality_loadout") if isinstance(node.profile, dict) else None
+            raw = (
+                node.profile.get("personality_loadout")
+                if isinstance(node.profile, dict)
+                else None
+            )
             if isinstance(raw, dict) and raw:
                 loadouts.append(dict(raw))
         return loadouts

@@ -6,14 +6,12 @@ from forwin.generation.pipeline_core.common import (
     logger,
 )
 from typing import Any
-from forwin.governance import (
-    BandCheckpointIssueInfo,
-    issue_group_for_issue,
-)
+from forwin.planning.checkpoints import BandCheckpointIssueInfo
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.project import ChapterPlan
 from forwin.planning.future_plan_audit import FuturePlanAuditRun
 import json
-from forwin.governance_checks import (
+from forwin.review.plan_checks import (
     band_combined_text,
     evaluate_band_obligation_contract,
     evaluate_constraint_issues,
@@ -23,15 +21,17 @@ from forwin.governance_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     band_is_first_chapter,
     BandCheckpointDetail,
     chapter_blocking_message,
+)
+from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
     ensure_decision_event_type,
 )
-from forwin.models.governance import BandCheckpoint
+from forwin.models.planning_control import BandCheckpoint
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.draft import (
@@ -61,8 +61,8 @@ def _positive_int(value: object) -> int:
         return 0
 
 
-class GovernanceStage:
-    """Owns the governance stage behavior."""
+class AuditControlStage:
+    """Owns the audit control stage behavior."""
 
     def _project_policy(self, session: Session, project: Project):
         _ = session, project
@@ -92,7 +92,7 @@ class GovernanceStage:
         row = updater.save_decision_event(
             DecisionEventInfo(
                 project_id=project_id,
-                task_id=task_id or self._governance_task_id,
+                task_id=task_id or self._audit_task_id,
                 band_id=band_id,
                 chapter_number=chapter_number,
                 scope=scope,
@@ -106,11 +106,11 @@ class GovernanceStage:
                 related_object_type=related_object_type,
                 related_object_id=related_object_id,
                 parent_event_id=parent_event_id,
-                causal_root_id=causal_root_id or self._governance_root_event_id,
+                causal_root_id=causal_root_id or self._audit_root_event_id,
             )
         )
-        if not self._governance_root_event_id:
-            self._governance_root_event_id = str(row.causal_root_id or row.id or "")
+        if not self._audit_root_event_id:
+            self._audit_root_event_id = str(row.causal_root_id or row.id or "")
         return row
 
     def _record_rule_decision_event(
@@ -755,7 +755,7 @@ class GovernanceStage:
             review_fail_chapters=review_fail_chapters,
             provisional_failed=provisional_failed,
             pending_checkpoint_count=len(unresolved),
-            reviewer="governance",
+            reviewer="plan_control",
             target_scope="band",
         )
         for issue in intra_band_issues:
@@ -775,7 +775,7 @@ class GovernanceStage:
         band_task_issues = evaluate_task_contract(
             repo.get_band_task_contract_for_chapter(project_id, chapter_number),
             combined_text=combined_text,
-            reviewer="governance",
+            reviewer="plan_control",
             issue_type="band_task_completion",
             target_scope="band",
         )
@@ -811,7 +811,7 @@ class GovernanceStage:
             band_schedule,
             obligations=band_obligations,
             band_end_chapter=chapter_number,
-            reviewer="governance",
+            reviewer="plan_control",
             target_scope="band",
         )
         for issue in band_obligation_issues:
@@ -827,7 +827,7 @@ class GovernanceStage:
         director_issues = evaluate_director_imbalance(
             review_metas=review_metas,
             band_stall_guard=int(getattr(band_row, "stall_guard_max_gap", 0) or 0),
-            reviewer="governance",
+            reviewer="plan_control",
             target_scope="band",
         )
         for issue in director_issues:
@@ -861,7 +861,7 @@ class GovernanceStage:
                 state_changes=[],
                 events=[],
                 thread_beats=[],
-                reviewer="governance",
+                reviewer="plan_control",
                 issue_type="next_band_compatibility",
                 target_scope="band",
             )
@@ -869,7 +869,7 @@ class GovernanceStage:
                 evaluate_next_band_task_compatibility(
                     next_band_summary=next_band_summary,
                     combined_text=combined_text,
-                    reviewer="governance",
+                    reviewer="plan_control",
                     target_scope="band",
                 )
             )
@@ -904,7 +904,7 @@ class GovernanceStage:
             future_risk_issues = evaluate_resource_closure_risk(
                 combined_text=combined_text,
                 next_band_targets=list(dict.fromkeys(next_band_targets)),
-                reviewer="governance",
+                reviewer="plan_control",
                 target_scope="band",
             )
             for issue in future_risk_issues:
@@ -968,4 +968,4 @@ class GovernanceStage:
         return row
 
 
-__all__ = ["GovernanceStage"]
+__all__ = ["AuditControlStage"]

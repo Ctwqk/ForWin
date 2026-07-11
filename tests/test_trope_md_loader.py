@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from forwin import api_governance_ops
+from forwin import api_project_control_ops
 from forwin.protocol import trope_library
 from forwin.protocol.trope_md_loader import load_trope_templates_from_md
 
@@ -31,7 +31,9 @@ def test_loads_pulp_markdown_library_templates() -> None:
     assert "fanqie" in power_level_up.platform_fit
     assert power_level_up.audience_fit
     assert all(template.genre_fit for template in templates)
-    assert all(template.payoff_shape or template.visible_payoff for template in templates)
+    assert all(
+        template.payoff_shape or template.visible_payoff for template in templates
+    )
     assert PULP_LIBRARY_PATH.read_text(encoding="utf-8").count("\n## ") >= 50
 
 
@@ -42,7 +44,9 @@ def test_trope_library_no_longer_generates_padding_templates() -> None:
     assert "_generated_template_payload" not in source
 
 
-def test_configured_bad_override_path_fails_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configured_bad_override_path_fails_visibly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trope_library.load_trope_template_library.cache_clear()
     monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", "Design-docs/does-not-exist.md")
 
@@ -54,13 +58,18 @@ def test_configured_bad_override_path_fails_visibly(monkeypatch: pytest.MonkeyPa
 
 def test_markdown_loader_rejects_file_with_no_templates(tmp_path: Path) -> None:
     bad_library = tmp_path / "empty_trope_library.md"
-    bad_library.write_text("# Notes\n\n## Not A Template\n\nNo parseable template sections.\n", encoding="utf-8")
+    bad_library.write_text(
+        "# Notes\n\n## Not A Template\n\nNo parseable template sections.\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(ValueError, match="no trope templates"):
         load_trope_templates_from_md(bad_library)
 
 
-def test_markdown_override_summary_has_no_json_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_markdown_override_summary_has_no_json_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trope_library.load_trope_template_library.cache_clear()
     monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(PULP_LIBRARY_PATH))
     templates = trope_library.load_trope_template_library()
@@ -75,18 +84,22 @@ def test_markdown_override_summary_has_no_json_validation_error(monkeypatch: pyt
     trope_library.load_trope_template_library.cache_clear()
 
 
-def test_markdown_override_drives_helpers_and_api_without_global_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_markdown_override_drives_helpers_and_api_without_global_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trope_library.load_trope_template_library.cache_clear()
     monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(PULP_LIBRARY_PATH))
 
     templates = trope_library.load_trope_template_library()
     summary = trope_library.trope_registry_summary()
     power_templates = trope_library.trope_templates_by_category("power")
-    api_power_templates = api_governance_ops.get_trope_templates(category="power")
+    api_power_templates = api_project_control_ops.get_trope_templates(category="power")
 
     assert len(templates) == summary.total_count
     assert any(template.template_id == "power-level-up" for template in power_templates)
-    assert any(template.template_id == "power-level-up" for template in api_power_templates)
+    assert any(
+        template.template_id == "power-level-up" for template in api_power_templates
+    )
 
     trope_library.load_trope_template_library.cache_clear()
 
@@ -123,7 +136,9 @@ def test_markdown_override_summary_reports_effective_cached_library(
     trope_library.load_trope_template_library.cache_clear()
     monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(library_path))
     templates = trope_library.load_trope_template_library()
-    library_path.write_text("# Corrupted after effective library load\n", encoding="utf-8")
+    library_path.write_text(
+        "# Corrupted after effective library load\n", encoding="utf-8"
+    )
 
     summary = trope_library.trope_registry_summary()
 

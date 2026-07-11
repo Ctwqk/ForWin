@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.governance import (
+from forwin.audit.events import (
     KNOWN_DECISION_EVENT_TYPES,
     DecisionEventType,
     ensure_decision_event_type,

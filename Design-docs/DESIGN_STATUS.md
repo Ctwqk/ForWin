@@ -64,7 +64,11 @@
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
 | `forwin.planning.scenario_rehearsal_engine` | active-internal | service / resolution owner | 无 | 确定性 runner 与 repository，不作为应用入口。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
-| `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
+| `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | 项目运行设置只由版本化 RuntimePolicy 持有。 |
+| `forwin.governance*` / `models.governance` / `review.governance` | removed | `forwin.audit` + `forwin.planning` + `forwin.review` | 已删除 | 决策事件、计划控制和草稿规则分别归真实 owner，不保留兼容 facade。 |
+| `api_governance_*` / `api_schema.governance` | removed | `api_project_control_*` + `api_schema.project_control` | 已删除 | HTTP transport 使用 project-control 与 audit 术语。 |
+| `codex_governance` | removed | `forwin.codex_bridge.governed_actions` | 已删除 | Codex 白名单动作留在 Codex bridge 边界。 |
+| `app_task_governance.js` | removed | `app_task_control.js` | 已删除 | 项目抽屉只呈现项目控制与审计状态。 |
 | `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
 | `WritingOrchestrator` + `forwin.orchestrator*` | removed | `forwin.generation.pipeline.ChapterPipeline` | 已删除 | pipeline 静态组合 typed stage owner；模块回注、身份伪装和类体函数赋值均不存在。 |
 | `book_genesis.py` / `book_genesis_core` / `genesis_workspace` / `genesis_handoff` | removed | `forwin.genesis` | 已删除 | Genesis service、workspace 与 handoff 归入一个包；不再经延迟 facade 查询 helper。 |
@@ -150,9 +154,10 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 - `forwin.api` 只公开 `app/lifespan`；动态 module proxy、`api_core.exports` 和 route handler `globals()` 注入已删除。
 - `ProjectApplicationService` 接管项目、Genesis、章节和 review 入口；`PublisherApplicationService` 接管 publisher/extension 入口；`GenerationApplicationService` 仍是唯一生成任务入口。
 - 根层 `api_project_ops`、`api_project_policy`、`api_publisher_ops`、`project_ops`、`api_schemas`、`api_project_payloads` 及 context/retrieval/writer 转发壳已物理删除。
+- D25 命名与所有权切换完成：audit event、planning control、review rule、Codex action、HTTP project-control 和 UI project-control 各有唯一 owner；生产 Python/JS/HTML 对 `governance` 零命中。
 - 全仓生产代码不再使用星号导入、类/模块身份篡改或 `common/constants` 借道 re-export；机械删除 2,336 个未使用 import，并修复因此暴露的 8 个隐性依赖和 `llm_eval` 未定义配置。
 
-此前记录的编译、Ruff、路由导入和 collect 证据只适用于当时提交。当前 v5 总验收仍需在 pipeline ownership、HTTP app factory、application adapters 与 audit/governance 命名完成后重跑；不得据此前证据宣称 Phase E/F 完成。
+此前记录的编译、Ruff、路由导入和 collect 证据只适用于当时提交。当前 v5 总验收仍需在 HTTP app factory、application adapters 与 layered review UI 完成后重跑；不得据此前证据宣称 Phase E/F 完成。
 
 ## 2026-07 Integrated Roadmap Status
 

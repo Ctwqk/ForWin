@@ -23,7 +23,7 @@ from forwin.models.book_state import (
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.entity import Entity, EntityAlias
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan
@@ -216,9 +216,7 @@ def test_canon_failure_rolls_back_every_authoritative_write(
 ) -> None:
     before = _authoritative_snapshot(prepared_canon)
 
-    outcome = CanonAdmissionService(
-        session_factory=prepared_canon.Session
-    ).commit_plan(
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
         prepared_canon.plan,
         failure_injector=_fail_at(failure_stage),
     )
@@ -236,9 +234,9 @@ def test_canon_failure_rolls_back_every_authoritative_write(
 def test_atomic_commit_writes_all_authoritative_state_once(
     prepared_canon: PreparedCanon,
 ) -> None:
-    outcome = CanonAdmissionService(
-        session_factory=prepared_canon.Session
-    ).commit_plan(prepared_canon.plan)
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
 
     assert outcome.blocked is False
     assert outcome.commit_id
@@ -289,9 +287,9 @@ def test_stale_plan_rolls_back_and_returns_candidate_to_ready(
         session.add(chapter)
     before = _authoritative_snapshot(prepared_canon)
 
-    outcome = CanonAdmissionService(
-        session_factory=prepared_canon.Session
-    ).commit_plan(prepared_canon.plan)
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
 
     assert outcome.blocked is True
     assert outcome.block_kind == "stale_canon_plan"

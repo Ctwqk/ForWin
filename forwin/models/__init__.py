@@ -16,7 +16,8 @@ from .canon_quality import (
 )
 from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
-from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
+from .planning_control import BandCheckpoint, NarrativeConstraint
+from .audit import DecisionEvent
 from .observability import PerformanceSpan
 from .outbox import OutboxEvent
 from .narrative_obligation import (

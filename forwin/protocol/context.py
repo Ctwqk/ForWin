@@ -10,24 +10,28 @@ from .experience import (
     ReaderPromise,
 )
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
-from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.checkpoints import NextBandSummary
+from forwin.planning.contracts import PlanTaskItem
 from .subworld import ChapterEntryTarget, SubWorldSummary
 from .world_model import WorldContextPack
 
 
 class EntitySnapshot(BaseModel):
     """Snapshot of an entity's current state for context."""
+
     entity_id: str
     kind: str
     name: str
     importance: int = 0
     aliases: list[str] = Field(default_factory=list)
     description: str
-    current_state: dict       # Deserialized state_json
+    current_state: dict  # Deserialized state_json
 
 
 class RelationSnapshot(BaseModel):
     """Snapshot of a relationship for context."""
+
     source_name: str
     target_name: str
     relation_type: str
@@ -36,6 +40,7 @@ class RelationSnapshot(BaseModel):
 
 class PlotThreadSnapshot(BaseModel):
     """Snapshot of a plot thread for context."""
+
     thread_id: str
     name: str
     description: str
@@ -46,12 +51,14 @@ class PlotThreadSnapshot(BaseModel):
 
 class TimelineSnapshot(BaseModel):
     """Current story time."""
+
     current_time_label: str
     ordinal: int
 
 
 class MemorySnippet(BaseModel):
     """Retrieved memory snippet selected for the current chapter."""
+
     chapter_number: int
     title: str
     summary: str = ""
@@ -168,6 +175,7 @@ class LintSignal(BaseModel):
 
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
+
     project_id: str = ""
     project_title: str
     premise: str
@@ -186,7 +194,9 @@ class ChapterContextPack(BaseModel):
     chapter_goals: list[str]
 
     # History
-    previous_chapter_summaries: list[str] = Field(default_factory=list)  # Last 1-3 chapters
+    previous_chapter_summaries: list[str] = Field(
+        default_factory=list
+    )  # Last 1-3 chapters
 
     # World state
     active_entities: list[EntitySnapshot] = Field(default_factory=list)
@@ -209,7 +219,9 @@ class ChapterContextPack(BaseModel):
     chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
     entity_admission_rule: str = ""
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
-    active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
+    active_future_constraints: list[NarrativeConstraintInfo] = Field(
+        default_factory=list
+    )
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
     knowledge_system_context: dict[str, Any] = Field(default_factory=dict)
@@ -329,7 +341,9 @@ class ReviewContextPack(BaseModel):
     band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     chapter_experience_plan: ChapterExperiencePlan | None = None
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
-    active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
+    active_future_constraints: list[NarrativeConstraintInfo] = Field(
+        default_factory=list
+    )
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
     map_context: dict[str, Any] = Field(default_factory=dict)

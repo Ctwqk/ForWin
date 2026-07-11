@@ -11,21 +11,23 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from forwin import (
-    api_governance_support,
+    api_project_control_support,
 )
 from forwin.api_schema import (
     BandCheckpointDetail,
     CausalReplayResponse,
-    GovernanceInsightsResponse,
+    AuditInsightsResponse,
     ProjectAutomationSettings,
 )
-from forwin.governance import (
-    DecisionEventInfo,
-    NarrativeConstraintInfo,
-)
+from forwin.audit.events import DecisionEventInfo
+from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.models.base import Base
 from forwin.models.project import Project, ChapterPlan
-from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
+from forwin.models.planning_control import (
+    BandCheckpoint,
+    NarrativeConstraint,
+)
+from forwin.models.audit import DecisionEvent
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
@@ -242,7 +244,7 @@ def _require_reason(reason: str, *, action: str) -> str:
 def _validate_constraint_payload(
     *, constraint_type: str, level: str, status: str
 ) -> tuple[str, str, str]:
-    return api_governance_support.validate_constraint_payload(
+    return api_project_control_support.validate_constraint_payload(
         constraint_type=constraint_type,
         level=level,
         status=status,
@@ -254,17 +256,17 @@ def _persist_project_automation(
     project: Project,
     automation: ProjectAutomationSettings,
 ) -> ProjectAutomationSettings:
-    return api_governance_support.persist_project_automation(
+    return api_project_control_support.persist_project_automation(
         session, project, automation
     )
 
 
 def _log_decision_event(session, **kwargs):
-    return api_governance_support.log_decision_event(session, **kwargs)
+    return api_project_control_support.log_decision_event(session, **kwargs)
 
 
 def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
-    return api_governance_support.latest_band_checkpoint_row(
+    return api_project_control_support.latest_band_checkpoint_row(
         session,
         project_id=project_id,
         band_id=band_id,
@@ -274,33 +276,33 @@ def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
 def _serialize_band_checkpoint(
     row: BandCheckpoint, *, session=None
 ) -> BandCheckpointDetail:
-    return api_governance_support.serialize_band_checkpoint(row, session=session)
+    return api_project_control_support.serialize_band_checkpoint(row, session=session)
 
 
 def _serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
-    return api_governance_support.serialize_constraint(row)
+    return api_project_control_support.serialize_constraint(row)
 
 
 def _serialize_decision_event(row: DecisionEvent) -> DecisionEventInfo:
-    return api_governance_support.serialize_decision_event(row)
+    return api_project_control_support.serialize_decision_event(row)
 
 
 def _decision_event_stmt(**kwargs):
-    return api_governance_support.decision_event_stmt(**kwargs)
+    return api_project_control_support.decision_event_stmt(**kwargs)
 
 
 def _list_decision_event_rows(session, **kwargs) -> list[DecisionEvent]:
-    return api_governance_support.list_decision_event_rows(session, **kwargs)
+    return api_project_control_support.list_decision_event_rows(session, **kwargs)
 
 
 def _latest_related_decision_event(session, **kwargs) -> DecisionEvent | None:
-    return api_governance_support.latest_related_decision_event(session, **kwargs)
+    return api_project_control_support.latest_related_decision_event(session, **kwargs)
 
 
 def _decision_refs_for_checkpoint(
     session, row: BandCheckpoint
 ) -> list[DecisionEventInfo]:
-    return api_governance_support.decision_refs_for_checkpoint(session, row)
+    return api_project_control_support.decision_refs_for_checkpoint(session, row)
 
 
 def _decision_refs_for_chapter_review(
@@ -310,7 +312,7 @@ def _decision_refs_for_chapter_review(
     chapter_number: int,
     review_id: str,
 ) -> list[DecisionEventInfo]:
-    return api_governance_support.decision_refs_for_chapter_review(
+    return api_project_control_support.decision_refs_for_chapter_review(
         session,
         project_id=project_id,
         chapter_number=chapter_number,
@@ -319,7 +321,7 @@ def _decision_refs_for_chapter_review(
 
 
 def _counter_rows(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any]]:
-    return api_governance_support.counter_rows(counter, limit=limit)
+    return api_project_control_support.counter_rows(counter, limit=limit)
 
 
 def _build_causal_replay(
@@ -332,7 +334,7 @@ def _build_causal_replay(
     chapter_number: int = 0,
     task_id: str = "",
 ) -> CausalReplayResponse:
-    return api_governance_support.build_causal_replay(
+    return api_project_control_support.build_causal_replay(
         session,
         project_id=project_id,
         scope=scope,
@@ -343,10 +345,8 @@ def _build_causal_replay(
     )
 
 
-def _build_governance_insights(
-    session, *, project_id: str
-) -> GovernanceInsightsResponse:
-    return api_governance_support.build_governance_insights(
+def _build_audit_insights(session, *, project_id: str) -> AuditInsightsResponse:
+    return api_project_control_support.build_audit_insights(
         session, project_id=project_id
     )
 

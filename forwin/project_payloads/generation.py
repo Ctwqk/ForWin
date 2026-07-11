@@ -8,13 +8,15 @@ from typing import Any, Callable
 from forwin.api_schema import (
     GenerationControlInfo,
 )
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     BlockingReasonInfo,
-    DecisionEventInfo,
-    DecisionEventType,
     chapter_blocking_message,
 )
-from forwin.models.governance import BandCheckpoint
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
+from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ChapterPlan, Project
 
 

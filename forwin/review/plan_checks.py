@@ -2,18 +2,26 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from forwin.governance import (
-    NarrativeConstraintInfo,
-    NextBandSummary,
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.checkpoints import NextBandSummary
+from forwin.planning.contracts import (
     PlanTaskItem,
     is_derived_goal_control_instruction,
-    issue_group_for_issue,
 )
-from forwin.governance_keywords import constraint_keywords, first_unnegated_keyword, text_has_unnegated_keyword
+from forwin.review.issue_groups import issue_group_for_issue
+from forwin.review.constraint_keywords import (
+    constraint_keywords,
+    first_unnegated_keyword,
+    text_has_unnegated_keyword,
+)
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.review import ContinuityIssue
-from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, ThreadBeatCandidate
+from forwin.protocol.state_change import (
+    EventCandidate,
+    StateChangeCandidate,
+    ThreadBeatCandidate,
+)
 from forwin.protocol.writer import WriterOutput
 
 _KEYWORDS = constraint_keywords()
@@ -78,7 +86,9 @@ def evaluate_task_contract(
                     reviewer=reviewer,
                     issue_type=issue_type,
                     target_scope=target_scope,
-                    issue_group=issue_group_for_issue(issue_type=issue_type, rule_name="plan_task_unfulfilled"),
+                    issue_group=issue_group_for_issue(
+                        issue_type=issue_type, rule_name="plan_task_unfulfilled"
+                    ),
                     evidence_refs=[
                         f"task_type={task.task_type}",
                         f"task_source={task.source}",
@@ -145,7 +155,10 @@ def evaluate_band_obligation_contract(
                         issue_type="band_obligation_completion",
                         rule_name="band_obligation_invalid_carry_forward",
                     ),
-                    evidence_refs=[f"obligation={obligation_id}", f"priority={obligation.priority}"],
+                    evidence_refs=[
+                        f"obligation={obligation_id}",
+                        f"priority={obligation.priority}",
+                    ],
                     suggested_fix="将该义务改为本 band 清偿，或升级 arc/manual replan。",
                 )
             )
@@ -196,7 +209,10 @@ def evaluate_constraint_issues(
     for constraint in constraints:
         severity = _constraint_severity(constraint.level)
         entity_names = [constraint.subject_name] if constraint.subject_name else []
-        evidence_refs = [f"constraint={constraint.id}", f"constraint_type={constraint.constraint_type}"]
+        evidence_refs = [
+            f"constraint={constraint.id}",
+            f"constraint_type={constraint.constraint_type}",
+        ]
         matched, detail = _constraint_triggered(
             constraint,
             combined_text=combined_text,
@@ -216,7 +232,9 @@ def evaluate_constraint_issues(
                 reviewer=reviewer,
                 issue_type=issue_type,
                 target_scope=target_scope,
-                issue_group=issue_group_for_issue(issue_type=issue_type, rule_name="future_constraint_violation"),
+                issue_group=issue_group_for_issue(
+                    issue_type=issue_type, rule_name="future_constraint_violation"
+                ),
                 evidence_refs=[*evidence_refs, detail],
                 suggested_fix="撤回会锁死未来空间的写法，或下调/修改该约束。",
             )
@@ -256,7 +274,10 @@ def evaluate_resource_closure_risk(
                 reviewer=reviewer,
                 issue_type="future_resource_preservation",
                 target_scope=target_scope,
-                issue_group=issue_group_for_issue(issue_type="future_resource_preservation", rule_name="future_resource_preservation_risk"),
+                issue_group=issue_group_for_issue(
+                    issue_type="future_resource_preservation",
+                    rule_name="future_resource_preservation_risk",
+                ),
                 evidence_refs=[f"target={name}", f"category={category}"],
                 suggested_fix="避免把后续 band 仍可能要使用的角色、线索或关系写成彻底关闭。",
             )
@@ -284,7 +305,9 @@ def evaluate_intra_band_consistency(
                 issue_type="intra_band_consistency",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="intra_band_consistency"),
-                evidence_refs=[f"chapters={','.join(str(ch) for ch in unresolved_review_chapters)}"],
+                evidence_refs=[
+                    f"chapters={','.join(str(ch) for ch in unresolved_review_chapters)}"
+                ],
                 suggested_fix="先处理这些章节的 review，再放行 band checkpoint。",
             )
         )
@@ -298,7 +321,9 @@ def evaluate_intra_band_consistency(
                 issue_type="intra_band_consistency",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="intra_band_consistency"),
-                evidence_refs=[f"chapters={','.join(str(ch) for ch in review_fail_chapters)}"],
+                evidence_refs=[
+                    f"chapters={','.join(str(ch) for ch in review_fail_chapters)}"
+                ],
                 suggested_fix="先修复失败章节，或通过明确人工决策处理。",
             )
         )
@@ -357,9 +382,14 @@ def evaluate_next_band_task_compatibility(
             evidence.append(f"forbidden_keywords={','.join(forbidden_hits)}")
         target = str(task.target_name or "").strip()
         if target and target in text:
-            if task.task_type == "withhold" and any(keyword in text for keyword in _REVEAL_KEYWORDS):
+            if task.task_type == "withhold" and any(
+                keyword in text for keyword in _REVEAL_KEYWORDS
+            ):
                 evidence.append(f"withhold_target_revealed={target}")
-            if any(keyword in text for keyword in (*_RESOURCE_CLOSURE_KEYWORDS, *_THREAD_CLOSURE_KEYWORDS)):
+            if any(
+                keyword in text
+                for keyword in (*_RESOURCE_CLOSURE_KEYWORDS, *_THREAD_CLOSURE_KEYWORDS)
+            ):
                 evidence.append(f"target_prematurely_closed={target}")
         if not evidence:
             continue
@@ -408,7 +438,10 @@ def evaluate_director_imbalance(
     }
     has_experience_evidence = any(
         bool(meta.get("delivered_reward_tags"))
-        or bool(experience_issue_types & {str(item) for item in (meta.get("issue_types") or [])})
+        or bool(
+            experience_issue_types
+            & {str(item) for item in (meta.get("issue_types") or [])}
+        )
         or any(
             str(ref).startswith(("scene:", "draft_event:", "thread:", "state:"))
             for ref in (meta.get("evidence_refs") or [])
@@ -427,9 +460,19 @@ def evaluate_director_imbalance(
     delivery_count = 0
     for meta in ordered:
         chapter_number = int(meta.get("chapter_number", 0) or 0)
-        planned = {str(item) for item in (meta.get("planned_reward_tags") or []) if str(item).strip()}
-        delivered = {str(item) for item in (meta.get("delivered_reward_tags") or []) if str(item).strip()}
-        issue_types = {str(item) for item in (meta.get("issue_types") or []) if str(item).strip()}
+        planned = {
+            str(item)
+            for item in (meta.get("planned_reward_tags") or [])
+            if str(item).strip()
+        }
+        delivered = {
+            str(item)
+            for item in (meta.get("delivered_reward_tags") or [])
+            if str(item).strip()
+        }
+        issue_types = {
+            str(item) for item in (meta.get("issue_types") or []) if str(item).strip()
+        }
         notes = " ".join(str(item) for item in (meta.get("review_notes") or []))
         if delivered:
             reward_chapters.append(chapter_number)
@@ -447,7 +490,9 @@ def evaluate_director_imbalance(
                     issue_type="director_imbalance",
                     target_scope=target_scope,
                     issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                    evidence_refs=[f"chapters={','.join(str(ch) for ch in empty_delivery_streak[-2:])}"],
+                    evidence_refs=[
+                        f"chapters={','.join(str(ch) for ch in empty_delivery_streak[-2:])}"
+                    ],
                     suggested_fix="下一章或 checkpoint 前补足可感知 payoff，或重排 band reward。",
                 )
             )
@@ -478,11 +523,16 @@ def evaluate_director_imbalance(
                     issue_type="director_imbalance",
                     target_scope=target_scope,
                     issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                    evidence_refs=[f"reward_chapters={','.join(str(ch) for ch in reward_chapters)}", f"stall_guard={band_stall_guard}"],
+                    evidence_refs=[
+                        f"reward_chapters={','.join(str(ch) for ch in reward_chapters)}",
+                        f"stall_guard={band_stall_guard}",
+                    ],
                     suggested_fix="缩短 reward gap，或把计划回报提前到当前 band。",
                 )
             )
-    elif band_stall_guard > 0 and len(ordered) > band_stall_guard and not reward_chapters:
+    elif (
+        band_stall_guard > 0 and len(ordered) > band_stall_guard and not reward_chapters
+    ):
         issues.append(
             ContinuityIssue(
                 rule_name="director_reward_gap_exceeded",
@@ -492,7 +542,10 @@ def evaluate_director_imbalance(
                 issue_type="director_imbalance",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                evidence_refs=[f"chapters={len(ordered)}", f"stall_guard={band_stall_guard}"],
+                evidence_refs=[
+                    f"chapters={len(ordered)}",
+                    f"stall_guard={band_stall_guard}",
+                ],
                 suggested_fix="补一个明确的 power/social/mystery/emotion/justice 回报。",
             )
         )
@@ -506,7 +559,10 @@ def evaluate_director_imbalance(
                 issue_type="director_imbalance",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                evidence_refs=[f"setup_like_count={setup_like_count}", "delivery_count=0"],
+                evidence_refs=[
+                    f"setup_like_count={setup_like_count}",
+                    "delivery_count=0",
+                ],
                 suggested_fix="减少继续铺垫，补一个可验证交付点。",
             )
         )
@@ -525,7 +581,9 @@ def evaluate_director_imbalance(
                 issue_type="director_imbalance",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                evidence_refs=[f"chapters={','.join(str(ch) for ch in unresolved_relation[:4])}"],
+                evidence_refs=[
+                    f"chapters={','.join(str(ch) for ch in unresolved_relation[:4])}"
+                ],
                 suggested_fix="把关系、情绪或地位变化写成可见场面，而不是继续延后。",
             )
         )
@@ -539,7 +597,10 @@ def evaluate_director_imbalance(
                 issue_type="director_imbalance",
                 target_scope=target_scope,
                 issue_group=issue_group_for_issue(issue_type="director_imbalance"),
-                evidence_refs=[f"planned_mystery={planned_mystery}", "delivered_mystery=0"],
+                evidence_refs=[
+                    f"planned_mystery={planned_mystery}",
+                    "delivered_mystery=0",
+                ],
                 suggested_fix="安排一个可理解的线索兑现或规则澄清，避免只堆悬念。",
             )
         )
@@ -550,8 +611,16 @@ def _task_is_satisfied(task: PlanTaskItem, combined_text: str) -> bool:
     text = combined_text.strip()
     if not text:
         return False
-    required_hits = [keyword for keyword in task.required_keywords if str(keyword or "").strip() and str(keyword) in text]
-    forbidden_hits = [keyword for keyword in task.forbidden_keywords if str(keyword or "").strip() and str(keyword) in text]
+    required_hits = [
+        keyword
+        for keyword in task.required_keywords
+        if str(keyword or "").strip() and str(keyword) in text
+    ]
+    forbidden_hits = [
+        keyword
+        for keyword in task.forbidden_keywords
+        if str(keyword or "").strip() and str(keyword) in text
+    ]
     target_hit = bool(task.target_name and task.target_name in text)
     description_hit = bool(task.description and task.description in text)
     if task.task_type == "withhold":
@@ -595,18 +664,33 @@ def _constraint_triggered(
                 continue
             new_value = str(change.new_value or "")
             if any(keyword in new_value for keyword in _DEATH_KEYWORDS):
-                return True, f"state_change={change.entity_name}:{change.field}->{new_value}"
-        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _DEATH_KEYWORDS):
+                return (
+                    True,
+                    f"state_change={change.entity_name}:{change.field}->{new_value}",
+                )
+        if (
+            subject
+            and subject in combined_text
+            and text_has_unnegated_keyword(combined_text, _DEATH_KEYWORDS)
+        ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "secret_withhold":
         if payload_keywords:
             keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
             if keyword:
                 return True, f"keyword={keyword}"
-        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _REVEAL_KEYWORDS):
+        if (
+            subject
+            and subject in combined_text
+            and text_has_unnegated_keyword(combined_text, _REVEAL_KEYWORDS)
+        ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "relationship_preserve":
-        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _RELATION_BREAK_KEYWORDS):
+        if (
+            subject
+            and subject in combined_text
+            and text_has_unnegated_keyword(combined_text, _RELATION_BREAK_KEYWORDS)
+        ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "thread_keep_open":
         for beat in thread_beats:
@@ -618,22 +702,37 @@ def _constraint_triggered(
         for change in state_changes:
             if subject and change.entity_name != subject:
                 continue
-            if any(keyword in str(change.new_value or "") for keyword in _LOCATION_DESTROY_KEYWORDS):
+            if any(
+                keyword in str(change.new_value or "")
+                for keyword in _LOCATION_DESTROY_KEYWORDS
+            ):
                 return True, f"state_change={change.entity_name}:{change.field}"
-        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _LOCATION_DESTROY_KEYWORDS):
+        if (
+            subject
+            and subject in combined_text
+            and text_has_unnegated_keyword(combined_text, _LOCATION_DESTROY_KEYWORDS)
+        ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "rule_preserve":
         for change in state_changes:
             if subject and change.entity_name != subject:
                 continue
-            if any(keyword in str(change.new_value or "") for keyword in _RULE_BREAK_KEYWORDS):
+            if any(
+                keyword in str(change.new_value or "")
+                for keyword in _RULE_BREAK_KEYWORDS
+            ):
                 return True, f"state_change={change.entity_name}:{change.field}"
     if payload_keywords:
         keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
         if keyword:
             return True, f"keyword={keyword}"
-    if subject and any(subject == name for event in events for name in event.involved_entity_names):
-        if constraint.constraint_type in {"character_availability", "secret_withhold"} and text_has_unnegated_keyword(
+    if subject and any(
+        subject == name for event in events for name in event.involved_entity_names
+    ):
+        if constraint.constraint_type in {
+            "character_availability",
+            "secret_withhold",
+        } and text_has_unnegated_keyword(
             combined_text,
             (*_DEATH_KEYWORDS, *_REVEAL_KEYWORDS),
         ):

@@ -18,7 +18,7 @@ def test_schema_ownership_doc_defines_owner_domains_and_split_rules() -> None:
         "shared production Postgres/Qdrant/MinIO layer on 150",
         "generation task state",
         "BookState/canon state",
-        "review/governance state",
+        "review/project-control/audit state",
         "publisher runtime state",
         "knowledge/projection state",
         "observability/artifact state",
@@ -49,6 +49,7 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
     allowed_exact = {
         "forwin/models/__init__.py",
         "forwin/models/outbox.py",
+        "forwin/knowledge_system/canon_outbox.py",
         "forwin/knowledge_system/projection_jobs.py",
     }
     allowed_prefixes = ("forwin/outbox/",)
@@ -58,7 +59,10 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
         if "__pycache__" in path.parts:
             continue
         source = path.read_text(encoding="utf-8")
-        if "OutboxEvent" not in source and "forwin.models.outbox" not in source:
+        if (
+            "from forwin.models.outbox import" not in source
+            and "from .outbox import OutboxEvent" not in source
+        ):
             continue
         relative = path.relative_to(ROOT).as_posix()
         if relative in allowed_exact:

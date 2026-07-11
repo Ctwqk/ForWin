@@ -6,7 +6,7 @@ from forwin.observability.llm_trace import (
     mark_latest_attempt_parse_failure,
     prepare_prompt_trace_payload,
 )
-from forwin.governance import (
+from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
@@ -46,6 +46,7 @@ from forwin.genesis.names_paths import (
     _set_value_at_path,
 )
 
+
 def _generate_stage_payload(
     self,
     *,
@@ -54,7 +55,10 @@ def _generate_stage_payload(
     stage_key: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if stage_key == "brief":
-        fallback = _fallback_brief(project, pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {})
+        fallback = _fallback_brief(
+            project,
+            pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {},
+        )
     elif stage_key == "world":
         fallback = _fallback_world(project, pack)
     elif stage_key == "map":
@@ -73,25 +77,38 @@ def _generate_stage_payload(
         stage_key=stage_key,
         fallback=fallback,
     )
-    payload, trace = self._call_json_with_trace(messages=messages, fallback=fallback, stage_key=stage_key)
+    payload, trace = self._call_json_with_trace(
+        messages=messages, fallback=fallback, stage_key=stage_key
+    )
     if stage_key == "book_blueprint":
-        payload = self._normalize_blueprint_payload(project=project, payload=payload, fallback=fallback)
+        payload = self._normalize_blueprint_payload(
+            project=project, payload=payload, fallback=fallback
+        )
     elif stage_key == "world":
-        payload = self._normalize_world_root_payload(project=project, payload=payload, fallback=fallback)
+        payload = self._normalize_world_root_payload(
+            project=project, payload=payload, fallback=fallback
+        )
     elif stage_key == "map":
         payload = self._normalize_map_payload(
             payload=payload,
             fallback=fallback,
-            world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
+            world_bible=_pack_stage_payload(pack, "world").get("world_bible")
+            if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict)
+            else {},
         )
     elif stage_key == "story_engine":
         payload = self._normalize_story_engine_payload(
             payload=payload,
             fallback=fallback,
-            world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
-            map_atlas=_pack_stage_payload(pack, "world").get("map_atlas") if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict) else {},
+            world_bible=_pack_stage_payload(pack, "world").get("world_bible")
+            if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict)
+            else {},
+            map_atlas=_pack_stage_payload(pack, "world").get("map_atlas")
+            if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict)
+            else {},
         )
     return payload, trace
+
 
 def _refine_stage_payload(
     self,
@@ -106,12 +123,19 @@ def _refine_stage_payload(
     current_payload = _pack_stage_payload(pack, stage_key)
     support_context = self._refine_support_context(pack=pack, stage_key=stage_key)
     fallback_stage_payload = current_payload or (
-        _fallback_map(pack) if stage_key == "map"
-        else _fallback_story_engine(pack) if stage_key == "story_engine"
-        else _fallback_world(project, pack) if stage_key == "world"
-        else _fallback_brief(project, pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {})
+        _fallback_map(pack)
+        if stage_key == "map"
+        else _fallback_story_engine(pack)
+        if stage_key == "story_engine"
+        else _fallback_world(project, pack)
+        if stage_key == "world"
+        else _fallback_brief(
+            project,
+            pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {},
+        )
         if stage_key == "brief"
-        else _fallback_blueprint(project, pack) if stage_key == "book_blueprint"
+        else _fallback_blueprint(project, pack)
+        if stage_key == "book_blueprint"
         else _fallback_bootstrap(project, pack)
     )
     if normalized_target_path:
@@ -154,7 +178,11 @@ def _refine_stage_payload(
                 stage_key=f"{stage_key}:refine_item",
                 max_tokens=1400,
             )
-            payload = payload.get("value", wrapped_fallback["value"]) if isinstance(payload, dict) else wrapped_fallback["value"]
+            payload = (
+                payload.get("value", wrapped_fallback["value"])
+                if isinstance(payload, dict)
+                else wrapped_fallback["value"]
+            )
         next_payload = _json_clone(current_payload)
         _set_value_at_path(next_payload, normalized_target_path, payload)
     else:
@@ -191,31 +219,46 @@ def _refine_stage_payload(
         next_payload = self._normalize_map_payload(
             payload=next_payload if isinstance(next_payload, dict) else {},
             fallback=_fallback_map(pack),
-            world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
+            world_bible=_pack_stage_payload(pack, "world").get("world_bible")
+            if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict)
+            else {},
         )
     elif stage_key == "story_engine":
         next_payload = self._normalize_story_engine_payload(
             payload=next_payload if isinstance(next_payload, dict) else {},
             fallback=_fallback_story_engine(pack),
-            world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
-            map_atlas=_pack_stage_payload(pack, "world").get("map_atlas") if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict) else {},
+            world_bible=_pack_stage_payload(pack, "world").get("world_bible")
+            if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict)
+            else {},
+            map_atlas=_pack_stage_payload(pack, "world").get("map_atlas")
+            if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict)
+            else {},
         )
     elif not isinstance(next_payload, dict):
         next_payload = fallback_stage_payload
 
     trace["input_snapshot"] = {
-        **(trace.get("input_snapshot") if isinstance(trace.get("input_snapshot"), dict) else {}),
+        **(
+            trace.get("input_snapshot")
+            if isinstance(trace.get("input_snapshot"), dict)
+            else {}
+        ),
         "instruction": instruction,
         "target_path": target_path,
         "current_stage_payload": current_payload,
     }
     trace["output_summary"] = {
-        **(trace.get("output_summary") if isinstance(trace.get("output_summary"), dict) else {}),
+        **(
+            trace.get("output_summary")
+            if isinstance(trace.get("output_summary"), dict)
+            else {}
+        ),
         "instruction": instruction,
         "target_path": target_path,
         "normalized_target_path": normalized_target_path,
     }
     return next_payload, trace
+
 
 def _call_json_with_trace(
     self,
@@ -233,6 +276,7 @@ def _call_json_with_trace(
         temperature=temperature,
         max_tokens=max_tokens,
     )
+
 
 def _call_json_with_trace_impl(
     self,
@@ -271,7 +315,10 @@ def _call_json_with_trace_impl(
         )
     retry_plan = [
         {"temperature": temperature, "max_tokens": max_tokens},
-        {"temperature": max(0.2, temperature - 0.15), "max_tokens": max(480, min(max_tokens, 900))},
+        {
+            "temperature": max(0.2, temperature - 0.15),
+            "max_tokens": max(480, min(max_tokens, 900)),
+        },
     ]
     for attempt_no, attempt in enumerate(retry_plan, start=1):
         try:
@@ -281,7 +328,9 @@ def _call_json_with_trace_impl(
                 temperature=attempt["temperature"],
                 max_tokens=attempt["max_tokens"],
                 response_format={"type": "json_object"},
-                task_family="chapter_plan_materialization" if is_chapter_plan else "genesis",
+                task_family="chapter_plan_materialization"
+                if is_chapter_plan
+                else "genesis",
                 stage_key=stage_key,
                 codex_allowed=not is_chapter_plan,
                 output_schema={"type": "object"},
@@ -339,6 +388,7 @@ def _call_json_with_trace_impl(
         output_summary={"mode": "fallback", "payload": fallback},
     )
 
+
 def _call_llm_chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
     signature = inspect.signature(self.llm_client.chat)
     parameters = signature.parameters
@@ -352,6 +402,7 @@ def _call_llm_chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         if accepts_var_kwargs or key in parameters
     }
     return self.llm_client.chat(messages, **filtered)
+
 
 def _resolve_skill_layers(self, *, stage_key: str):
     if self.skill_router is None or self.skill_prompt_layer_builder is None:
@@ -371,6 +422,7 @@ def _resolve_skill_layers(self, *, stage_key: str):
         task_family=task_family,
     )
     return selections, self.skill_prompt_layer_builder.build(selections)
+
 
 def _trace_payload(
     self,
@@ -392,10 +444,18 @@ def _trace_payload(
         if isinstance(item, dict)
     ]
     last_call_result = getattr(self.llm_client, "last_call_result", None)
-    trace = getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
-    backend = str(trace.get("backend", "") or getattr(last_call_result, "backend", "") or "")
+    trace = (
+        getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
+    )
+    backend = str(
+        trace.get("backend", "") or getattr(last_call_result, "backend", "") or ""
+    )
     permission_profile = str(trace.get("permission_profile", "") or "")
-    fallback_used = bool(getattr(last_call_result, "fallback_used", False)) if last_call_result is not None else False
+    fallback_used = (
+        bool(getattr(last_call_result, "fallback_used", False))
+        if last_call_result is not None
+        else False
+    )
     return {
         "backend": backend,
         "codex_job_id": str(trace.get("codex_job_id", "") or ""),
@@ -405,7 +465,10 @@ def _trace_payload(
         "prompt_layers": prompt_layers
         if prompt_layers is not None
         else [
-            {"role": str(item.get("role", "")).strip(), "content": str(item.get("content", ""))}
+            {
+                "role": str(item.get("role", "")).strip(),
+                "content": str(item.get("content", "")),
+            }
             for item in messages
         ],
         "input_snapshot": {
@@ -419,13 +482,15 @@ def _trace_payload(
             "model": getattr(self.llm_client, "model", ""),
             "base_url": getattr(self.llm_client, "base_url", ""),
         },
-        "attempts": (llm_attempts if isinstance(llm_attempts, list) else []) + business_attempts,
+        "attempts": (llm_attempts if isinstance(llm_attempts, list) else [])
+        + business_attempts,
         "output_summary": {
             **output_summary,
             "skill_summary": selected,
             "business_attempts": attempts,
         },
     }
+
 
 def _prepare_trace_payload_for_save(
     self,
@@ -439,6 +504,7 @@ def _prepare_trace_payload_for_save(
         project_id=project_id,
     )
 
+
 def _record_llm_events_for_trace(
     self,
     *,
@@ -448,16 +514,25 @@ def _record_llm_events_for_trace(
     trace_payload: dict[str, Any],
     decision_event_id: str = "",
 ) -> None:
-    for event_payload in build_llm_decision_event_payloads(trace_payload, prompt_trace_id=trace_id):
+    for event_payload in build_llm_decision_event_payloads(
+        trace_payload, prompt_trace_id=trace_id
+    ):
         updater.save_decision_event(
             DecisionEventInfo(
                 project_id=project_id,
                 scope="project",
-                event_family=str(event_payload.get("event_family") or "runtime_observation"),
-                event_type=str(event_payload.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
+                event_family=str(
+                    event_payload.get("event_family") or "runtime_observation"
+                ),
+                event_type=str(
+                    event_payload.get("event_type")
+                    or DecisionEventType.LLM_REQUEST_FAILED
+                ),
                 actor_type="system",
                 summary=str(event_payload.get("summary") or "Genesis LLM trace event."),
-                payload=event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {},
+                payload=event_payload.get("payload")
+                if isinstance(event_payload.get("payload"), dict)
+                else {},
                 related_object_type="prompt_trace",
                 related_object_id=trace_id,
                 parent_event_id=str(decision_event_id or ""),
@@ -469,6 +544,7 @@ def _record_llm_events_for_trace(
         trace_payload=trace_payload,
     )
 
+
 def _record_trace_performance_spans(
     self,
     *,
@@ -479,14 +555,20 @@ def _record_trace_performance_spans(
     attempts = trace_payload.get("attempts") if isinstance(trace_payload, dict) else []
     if not isinstance(attempts, list):
         return
-    trace_scope = str(trace_payload.get("trace_scope") or "genesis").strip() or "genesis"
+    trace_scope = (
+        str(trace_payload.get("trace_scope") or "genesis").strip() or "genesis"
+    )
     fallback_stage = str(trace_payload.get("stage_key") or "").strip()
     for attempt in attempts:
         if not isinstance(attempt, dict):
             continue
         stage_key = str(attempt.get("stage_key") or fallback_stage or "").strip()
         duration_ms = max(0, int(attempt.get("duration_ms") or 0))
-        failed = bool(attempt.get("error_class") or attempt.get("final_failure") or attempt.get("parse_error"))
+        failed = bool(
+            attempt.get("error_class")
+            or attempt.get("final_failure")
+            or attempt.get("parse_error")
+        )
         record = SpanRecord(
             context=OperationContext(
                 project_id=project_id,
@@ -517,7 +599,9 @@ def _record_trace_performance_spans(
             error=redact_payload(
                 {
                     "error_class": str(attempt.get("error_class") or ""),
-                    "error_message": str(attempt.get("error_message") or attempt.get("parse_error") or ""),
+                    "error_message": str(
+                        attempt.get("error_message") or attempt.get("parse_error") or ""
+                    ),
                     "error_category": str(attempt.get("error_category") or ""),
                 }
             )
@@ -533,8 +617,20 @@ def _record_trace_performance_spans(
         try:
             self.observability._record_span(record)
         except Exception:  # noqa: BLE001
-            logger.debug("Ignoring Genesis LLM performance span failure.", exc_info=True)
+            logger.debug(
+                "Ignoring Genesis LLM performance span failure.", exc_info=True
+            )
 
 
-
-__all__ = ['_generate_stage_payload', '_refine_stage_payload', '_call_json_with_trace', '_call_json_with_trace_impl', '_call_llm_chat', '_resolve_skill_layers', '_trace_payload', '_prepare_trace_payload_for_save', '_record_llm_events_for_trace', '_record_trace_performance_spans']
+__all__ = [
+    "_generate_stage_payload",
+    "_refine_stage_payload",
+    "_call_json_with_trace",
+    "_call_json_with_trace_impl",
+    "_call_llm_chat",
+    "_resolve_skill_layers",
+    "_trace_payload",
+    "_prepare_trace_payload_for_save",
+    "_record_llm_events_for_trace",
+    "_record_trace_performance_spans",
+]

@@ -4,7 +4,10 @@ import json
 import logging
 from typing import Any
 
-from forwin.governance import DecisionEventInfo, ensure_decision_event_type
+from forwin.audit.events import (
+    DecisionEventInfo,
+    ensure_decision_event_type,
+)
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
 
@@ -17,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 class DecisionEventSink:
-    def __init__(self, *, session_factory: Any | None = None, updater: Any | None = None) -> None:
+    def __init__(
+        self, *, session_factory: Any | None = None, updater: Any | None = None
+    ) -> None:
         self.session_factory = session_factory
         self.updater = updater
 
@@ -97,7 +102,10 @@ class PerformanceSpanSink:
         self.session_factory = session_factory
 
     def record_span(self, record: SpanRecord) -> PerformanceSpan | None:
-        if self.session_factory is None or not str(record.context.project_id or "").strip():
+        if (
+            self.session_factory is None
+            or not str(record.context.project_id or "").strip()
+        ):
             return None
         session = self.session_factory()
         try:
@@ -134,7 +142,9 @@ class PerformanceSpanSink:
 
 
 class PromptTraceSink:
-    def __init__(self, *, session_factory: Any | None, artifact_store: Any | None = None) -> None:
+    def __init__(
+        self, *, session_factory: Any | None, artifact_store: Any | None = None
+    ) -> None:
         self.session_factory = session_factory
         self.artifact_store = artifact_store
 
@@ -163,19 +173,33 @@ class PromptTraceSink:
             project = session.get(Project, context.project_id)
             row = updater.save_prompt_trace(
                 project_id=context.project_id,
-                genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+                genesis_revision_id=str(
+                    getattr(project, "active_genesis_revision_id", "") or ""
+                ),
                 decision_event_id=str(decision_event_id or "").strip(),
                 parent_trace_id=str(parent_trace_id or "").strip(),
                 trace_scope=str(payload.get("trace_scope", "llm") or "llm"),
                 stage_key=str(payload.get("stage_key", "") or ""),
                 template_id=str(payload.get("template_id", "") or ""),
                 template_version=str(payload.get("template_version", "v1") or "v1"),
-                effective_system_prompt=str(payload.get("effective_system_prompt", "") or ""),
-                prompt_layers_json=json.dumps(payload.get("prompt_layers", []), ensure_ascii=False),
-                input_snapshot_json=json.dumps(payload.get("input_snapshot", {}), ensure_ascii=False),
-                model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
-                attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
-                output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+                effective_system_prompt=str(
+                    payload.get("effective_system_prompt", "") or ""
+                ),
+                prompt_layers_json=json.dumps(
+                    payload.get("prompt_layers", []), ensure_ascii=False
+                ),
+                input_snapshot_json=json.dumps(
+                    payload.get("input_snapshot", {}), ensure_ascii=False
+                ),
+                model_profile_json=json.dumps(
+                    payload.get("model_profile", {}), ensure_ascii=False
+                ),
+                attempts_json=json.dumps(
+                    payload.get("attempts", []), ensure_ascii=False
+                ),
+                output_summary_json=json.dumps(
+                    payload.get("output_summary", {}), ensure_ascii=False
+                ),
                 backend=str(payload.get("backend", "") or ""),
                 codex_job_id=str(payload.get("codex_job_id", "") or ""),
                 permission_profile=str(payload.get("permission_profile", "") or ""),
@@ -192,4 +216,8 @@ class PromptTraceSink:
 
 class StdlibLogSink:
     def record(self, message: str, **fields: Any) -> None:
-        logger.info("%s %s", message, " ".join(f"{key}={value}" for key, value in fields.items()))
+        logger.info(
+            "%s %s",
+            message,
+            " ".join(f"{key}={value}" for key, value in fields.items()),
+        )

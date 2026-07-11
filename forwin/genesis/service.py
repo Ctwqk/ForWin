@@ -5,7 +5,7 @@ from forwin.models.genesis import (
     BookGenesisRevision,
     PromptTrace,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.genesis.handoff import GenesisHandoffService
 from forwin.genesis.workspace.trace_service import GenesisTraceService
 from forwin.genesis.workspace import GenesisWorkspaceService
@@ -19,10 +19,36 @@ from forwin.skills import (
 )
 from forwin.state.updater import StateUpdater
 
-from forwin.genesis.messages import _build_stage_generation_messages, _build_stage_refine_messages
-from forwin.genesis.materialize import materialize_book_arcs, materialize_arc_chapter_plans, _ensure_arc_map_expansion, promote_next_arc_if_needed
-from forwin.genesis.llm import _generate_stage_payload, _refine_stage_payload, _call_json_with_trace, _call_json_with_trace_impl, _call_llm_chat, _resolve_skill_layers, _trace_payload, _prepare_trace_payload_for_save, _record_llm_events_for_trace, _record_trace_performance_spans
-from forwin.genesis.normalize import _normalize_world_payload, _normalize_world_root_payload, _normalize_scope_profile, _normalize_blueprint_payload, _normalize_map_payload, _normalize_story_engine_payload
+from forwin.genesis.messages import (
+    _build_stage_generation_messages,
+    _build_stage_refine_messages,
+)
+from forwin.genesis.materialize import (
+    materialize_book_arcs,
+    materialize_arc_chapter_plans,
+    _ensure_arc_map_expansion,
+    promote_next_arc_if_needed,
+)
+from forwin.genesis.llm import (
+    _generate_stage_payload,
+    _refine_stage_payload,
+    _call_json_with_trace,
+    _call_json_with_trace_impl,
+    _call_llm_chat,
+    _resolve_skill_layers,
+    _trace_payload,
+    _prepare_trace_payload_for_save,
+    _record_llm_events_for_trace,
+    _record_trace_performance_spans,
+)
+from forwin.genesis.normalize import (
+    _normalize_world_payload,
+    _normalize_world_root_payload,
+    _normalize_scope_profile,
+    _normalize_blueprint_payload,
+    _normalize_map_payload,
+    _normalize_story_engine_payload,
+)
 from forwin.genesis.planning import _refine_support_context, _plan_arc_chapters
 
 
@@ -206,5 +232,6 @@ class BookGenesisService:
     _normalize_story_engine_payload = _normalize_story_engine_payload
     _refine_support_context = _refine_support_context
     _plan_arc_chapters = _plan_arc_chapters
+
 
 __all__ = ["BookGenesisService"]

@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     BandCheckpointDetail,
     BlockingReasonInfo,
 )
@@ -71,7 +71,9 @@ class TaskResponse(BaseModel):
     max_chapters: int = 0
     pausable: bool = False
     resumable: bool = False
-    generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)
+    generation_control: GenerationControlInfo = Field(
+        default_factory=GenerationControlInfo
+    )
     terminable: bool = False
     deletable: bool = False
     interrupted_by_restart: bool = False
@@ -125,7 +127,9 @@ class TaskCenterItemResponse(BaseModel):
     max_chapters: int = 0
     pausable: bool = False
     resumable: bool = False
-    generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)
+    generation_control: GenerationControlInfo = Field(
+        default_factory=GenerationControlInfo
+    )
     terminable: bool = False
     deletable: bool = False
     interrupted_by_restart: bool = False
@@ -172,15 +176,15 @@ class ProjectBulkDeleteRequest(BaseModel):
 
 
 __all__ = [
-    'CodexBridgeStatusResponse',
-    'GenerationControlInfo',
-    'TaskResponse',
-    'TaskSummaryResponse',
-    'TaskCenterItemResponse',
-    'ActiveGenerationTaskCheckResponse',
-    'TaskMutationResponse',
-    'BulkDeleteResponse',
-    'TaskBulkDeleteItem',
-    'TaskBulkDeleteRequest',
-    'ProjectBulkDeleteRequest',
+    "CodexBridgeStatusResponse",
+    "GenerationControlInfo",
+    "TaskResponse",
+    "TaskSummaryResponse",
+    "TaskCenterItemResponse",
+    "ActiveGenerationTaskCheckResponse",
+    "TaskMutationResponse",
+    "BulkDeleteResponse",
+    "TaskBulkDeleteItem",
+    "TaskBulkDeleteRequest",
+    "ProjectBulkDeleteRequest",
 ]

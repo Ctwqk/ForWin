@@ -17,23 +17,29 @@ from forwin.api_schema import (
 from forwin.generation.continue_workset import (
     ContinueGenerationWorkset,
 )
-from forwin.governance import (
+from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.map.models import MapNodeRow
-from forwin.map.service import build_interconnections_from_genesis_atlas, create_or_update_book_map
+from forwin.map.service import (
+    build_interconnections_from_genesis_atlas,
+    create_or_update_book_map,
+)
 from forwin.models.draft import ChapterReview
 from forwin.models.genesis import PromptTrace
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.observability.payloads import audit_payload
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
-from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
+from forwin.state.query_helpers import (
+    load_latest_drafts_by_plan_id,
+    load_latest_rewrite_attempts_by_chapter,
+)
 from forwin.state.updater import StateUpdater
 
 
@@ -48,6 +54,7 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "paused",
 }
 
+
 def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPException:
     if workset.reason == "pending_review_blocker":
         return HTTPException(409, "仍有章节等待 review")
@@ -57,12 +64,14 @@ def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPExce
         return HTTPException(400, "项目已完成，没有剩余章节需要继续生成")
     return HTTPException(400, "没有剩余章节需要继续生成")
 
+
 def _load_json_object(raw: str, default):
     try:
         value = json.loads(raw or "")
     except (json.JSONDecodeError, TypeError):
         return default
     return value if isinstance(value, type(default)) else default
+
 
 def _load_json_int_list(raw: str | None) -> list[int]:
     try:
@@ -79,6 +88,7 @@ def _load_json_int_list(raw: str | None) -> list[int]:
             continue
     return result
 
+
 def _latest_active_generation_task(session, project_id: str) -> GenerationTask | None:
     return session.execute(
         select(GenerationTask)
@@ -92,6 +102,7 @@ def _latest_active_generation_task(session, project_id: str) -> GenerationTask |
         .limit(1)
     ).scalar_one_or_none()
 
+
 def latest_rewrite_attempts_by_chapter(
     session,
     project_id: str,
@@ -99,7 +110,10 @@ def latest_rewrite_attempts_by_chapter(
 ) -> dict[int, ChapterRewriteAttempt]:
     return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
 
-def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask | None) -> ProjectDetail:
+
+def _overlay_active_generation_task(
+    detail: ProjectDetail, task: GenerationTask | None
+) -> ProjectDetail:
     if task is None:
         return detail
     stage = str(task.current_stage or "queued").strip() or "queued"
@@ -112,7 +126,8 @@ def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask 
         update={
             "current_stage": stage,
             "current_chapter": current_chapter,
-            "can_pause": status in {"queued", "starting", "running"} and not pause_requested,
+            "can_pause": status in {"queued", "starting", "running"}
+            and not pause_requested,
             "can_resume": status == "paused",
             "pause_requested": pause_requested,
             "next_gate": "",
@@ -120,20 +135,28 @@ def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask 
     )
     return detail
 
+
 def _new_operation_id(value: str = "") -> str:
     normalized = str(value or "").strip()
     return normalized or uuid.uuid4().hex
 
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat() if value.tzinfo else value.isoformat()
+        return (
+            value.astimezone(timezone.utc).isoformat()
+            if value.tzinfo
+            else value.isoformat()
+        )
     return value
+
 
 def _serialize_model_row(row) -> dict[str, Any]:  # noqa: ANN001
     return {
         column.name: _jsonable(getattr(row, column.name))
         for column in row.__table__.columns
     }
+
 
 def _ensure_initial_book_map_from_genesis(
     *,
@@ -175,9 +198,13 @@ def _ensure_initial_book_map_from_genesis(
     world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
     if not world:
         world = {
-            "map_atlas": pack.get("map_atlas") if isinstance(pack.get("map_atlas"), dict) else {},
+            "map_atlas": pack.get("map_atlas")
+            if isinstance(pack.get("map_atlas"), dict)
+            else {},
         }
-    map_atlas = world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
+    map_atlas = (
+        world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
+    )
     specs = build_subworld_map_specs_from_genesis(
         project_id=project.id,
         genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -205,11 +232,13 @@ def _ensure_initial_book_map_from_genesis(
             parent_event_id=decision_event_id,
         )
     )
-    interconnections, interconnection_source = build_interconnections_from_genesis_atlas(
-        project_id=project.id,
-        specs=specs,
-        map_atlas=map_atlas,
-        genesis_revision_id=str(getattr(revision, "id", "") or ""),
+    interconnections, interconnection_source = (
+        build_interconnections_from_genesis_atlas(
+            project_id=project.id,
+            specs=specs,
+            map_atlas=map_atlas,
+            genesis_revision_id=str(getattr(revision, "id", "") or ""),
+        )
     )
     result = create_or_update_book_map(
         session,
@@ -219,7 +248,9 @@ def _ensure_initial_book_map_from_genesis(
         commit=False,
     )
     if not result.validation_report.valid:
-        message = "；".join(result.validation_report.errors) or "BookMap validation failed."
+        message = (
+            "；".join(result.validation_report.errors) or "BookMap validation failed."
+        )
         raise ValueError(message)
 
     summary = {
@@ -230,7 +261,9 @@ def _ensure_initial_book_map_from_genesis(
         "map_edge_count": sum(len(item.map_edges) for item in result.subworld_results)
         + len(result.inter_subworld_edges),
         "inter_subworld_edge_count": len(result.inter_subworld_edges),
-        "interconnection_source": result.summary.get("interconnection_source", interconnection_source),
+        "interconnection_source": result.summary.get(
+            "interconnection_source", interconnection_source
+        ),
         "generation_run_count": len(result.subworld_results),
         "subworld_ids": [item.subworld_id for item in result.subworld_results],
     }
@@ -242,13 +275,16 @@ def _ensure_initial_book_map_from_genesis(
             event_type=DecisionEventType.MAP_GENERATION_SUCCEEDED,
             actor_type="system",
             summary="Genesis map_atlas 已生成 Scheme C BookMap。",
-            payload=audit_payload(stage="map_generation", status="succeeded", **summary),
+            payload=audit_payload(
+                stage="map_generation", status="succeeded", **summary
+            ),
             related_object_type="book_genesis_revision",
             related_object_id=str(getattr(revision, "id", "") or ""),
             parent_event_id=decision_event_id,
         )
     )
     return summary
+
 
 def _export_project_audit_bundle(
     *,
@@ -258,31 +294,49 @@ def _export_project_audit_bundle(
     operation_id: str,
     test_run_id: str = "",
 ) -> str:
-    artifact_root = Path(str(getattr(config, "artifact_root", "data/artifacts") or "data/artifacts"))
+    artifact_root = Path(
+        str(getattr(config, "artifact_root", "data/artifacts") or "data/artifacts")
+    )
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     bundle_dir = artifact_root / "audit_bundles" / "projects" / project.id
     bundle_dir.mkdir(parents=True, exist_ok=True)
     path = bundle_dir / f"{timestamp}_{operation_id}.json"
-    decision_events = session.execute(
-        select(DecisionEvent)
-        .where(DecisionEvent.project_id == project.id)
-        .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-    ).scalars().all()
-    prompt_traces = session.execute(
-        select(PromptTrace)
-        .where(PromptTrace.project_id == project.id)
-        .order_by(PromptTrace.created_at.asc(), PromptTrace.id.asc())
-    ).scalars().all()
-    tasks = session.execute(
-        select(GenerationTask)
-        .where(GenerationTask.project_id == project.id)
-        .order_by(GenerationTask.created_at.asc(), GenerationTask.id.asc())
-    ).scalars().all()
-    chapter_plans = session.execute(
-        select(ChapterPlan)
-        .where(ChapterPlan.project_id == project.id)
-        .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
-    ).scalars().all()
+    decision_events = (
+        session.execute(
+            select(DecisionEvent)
+            .where(DecisionEvent.project_id == project.id)
+            .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    prompt_traces = (
+        session.execute(
+            select(PromptTrace)
+            .where(PromptTrace.project_id == project.id)
+            .order_by(PromptTrace.created_at.asc(), PromptTrace.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    tasks = (
+        session.execute(
+            select(GenerationTask)
+            .where(GenerationTask.project_id == project.id)
+            .order_by(GenerationTask.created_at.asc(), GenerationTask.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    chapter_plans = (
+        session.execute(
+            select(ChapterPlan)
+            .where(ChapterPlan.project_id == project.id)
+            .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
+        )
+        .scalars()
+        .all()
+    )
     payload = {
         "schema_version": "v3.8",
         "bundle_type": "project_delete_audit",
@@ -389,13 +443,17 @@ def _extension_continuity_guard(req: ProjectExtendGenerationRequest) -> str:
         "任何时间跳跃都必须先解释倒计时被中止、锁定、转移或分支。"
     )
 
+
 def _extension_arc_synopsis(
     *,
     req: ProjectExtendGenerationRequest,
     start_chapter: int,
     end_chapter: int,
 ) -> str:
-    title = str(req.arc_title or "").strip() or f"续写弧线：第{start_chapter}-{end_chapter}章"
+    title = (
+        str(req.arc_title or "").strip()
+        or f"续写弧线：第{start_chapter}-{end_chapter}章"
+    )
     synopsis = str(req.arc_synopsis or "").strip()
     guard = _extension_continuity_guard(req)
     parts = [title]
@@ -404,6 +462,7 @@ def _extension_arc_synopsis(
     parts.append(guard)
     return "\n".join(parts)
 
+
 def _extension_chapter_blueprint(
     *,
     chapter_number: int,
@@ -411,9 +470,13 @@ def _extension_chapter_blueprint(
     guard: str,
     end_chapter: int,
 ) -> tuple[str, str, list[str], ChapterExperiencePlan]:
-    beat_title, beat_line = _EXTENSION_BEATS[offset] if offset < len(_EXTENSION_BEATS) else (
-        f"续写推进 {offset + 1}",
-        "推进最新 canon 后果，关闭已登记的主线缺口，并保持倒计时、地点、身份和角色状态连续。",
+    beat_title, beat_line = (
+        _EXTENSION_BEATS[offset]
+        if offset < len(_EXTENSION_BEATS)
+        else (
+            f"续写推进 {offset + 1}",
+            "推进最新 canon 后果，关闭已登记的主线缺口，并保持倒计时、地点、身份和角色状态连续。",
+        )
     )
     title = f"第{chapter_number}章 {beat_title}"
     one_line = f"{beat_line} 连续性护栏：{guard}"
@@ -423,7 +486,9 @@ def _extension_chapter_blueprint(
         beat_line,
     ]
     if chapter_number == end_chapter:
-        goals.append("作为当前追加段落的终点，必须关闭 P0/P1 主线缺口，不能留下主线倒计时或身份债。")
+        goals.append(
+            "作为当前追加段落的终点，必须关闭 P0/P1 主线缺口，不能留下主线倒计时或身份债。"
+        )
     experience_plan = ChapterExperiencePlan(
         question_hook="最新 canon 的分钟级危机如何被推进或关闭？",
         question_resolution=beat_line,
@@ -433,6 +498,7 @@ def _extension_chapter_blueprint(
         relationship_or_status_shift="跟踪主角、盟友、反派与系统权限的最新状态变化。",
     )
     return title, one_line, goals, experience_plan
+
 
 def _normalize_chapter_page(offset: int, limit: int) -> tuple[int, int]:
     try:
@@ -446,16 +512,29 @@ def _normalize_chapter_page(offset: int, limit: int) -> tuple[int, int]:
     normalized_limit = min(_MAX_CHAPTER_PAGE_LIMIT, max(1, normalized_limit))
     return normalized_offset, normalized_limit
 
-def _chapter_infos_for_plans(session, project_id: str, plans: list[ChapterPlan]) -> list[ChapterInfo]:
+
+def _chapter_infos_for_plans(
+    session, project_id: str, plans: list[ChapterPlan]
+) -> list[ChapterInfo]:
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
-    review_draft_ids = {
-        draft_id
-        for draft_id in session.execute(
-            select(ChapterReview.draft_id)
-            .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
-            .distinct()
-        ).scalars().all()
-    } if draft_map else set()
+    review_draft_ids = (
+        {
+            draft_id
+            for draft_id in session.execute(
+                select(ChapterReview.draft_id)
+                .where(
+                    ChapterReview.draft_id.in_(
+                        [draft.id for draft in draft_map.values()]
+                    )
+                )
+                .distinct()
+            )
+            .scalars()
+            .all()
+        }
+        if draft_map
+        else set()
+    )
     latest_attempt_map = latest_rewrite_attempts_by_chapter(
         session,
         project_id,
@@ -466,22 +545,24 @@ def _chapter_infos_for_plans(session, project_id: str, plans: list[ChapterPlan])
     for plan in plans:
         draft = draft_map.get(plan.id)
         latest_attempt = latest_attempt_map.get(plan.chapter_number)
-        result.append(ChapterInfo(
-            chapter_number=plan.chapter_number,
-            title=plan.title,
-            status=plan.status,
-            char_count=draft.char_count if draft else 0,
-            summary=draft.summary if draft else "",
-            has_draft=draft is not None,
-            has_review=bool(draft and draft.id in review_draft_ids),
-            acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
-            repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
-            canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
-            latest_repair_scope=normalize_repair_scope(
-                getattr(latest_attempt, "repair_scope", ""),
-                default="",
-            ),
-        ))
+        result.append(
+            ChapterInfo(
+                chapter_number=plan.chapter_number,
+                title=plan.title,
+                status=plan.status,
+                char_count=draft.char_count if draft else 0,
+                summary=draft.summary if draft else "",
+                has_draft=draft is not None,
+                has_review=bool(draft and draft.id in review_draft_ids),
+                acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
+                repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
+                canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
+                latest_repair_scope=normalize_repair_scope(
+                    getattr(latest_attempt, "repair_scope", ""),
+                    default="",
+                ),
+            )
+        )
     return result
 
 
@@ -489,5 +570,4 @@ __all__ = [
     name
     for name, value in globals().items()
     if name.startswith("_") and callable(value)
-] + [
-]
+] + []

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from forwin.application.generation import GenerationApplicationService
     from forwin.canon import CanonAdmissionService
     from forwin.generation.gate_delegation import GateDelegationService
-    from forwin.review import DraftReviewService
+    from forwin.review.draft_service import DraftReviewService
     from forwin.review.repair import RepairService, RepairVerifier
 
 

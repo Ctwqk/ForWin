@@ -8,7 +8,7 @@ from forwin.observability.payloads import (
     event_error_payload,
     safe_error_summary,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.state.updater import StateUpdater
 import time
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure

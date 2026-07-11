@@ -6,8 +6,8 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
-from forwin.models.governance import DecisionEvent
+from forwin.audit.events import DecisionEventType
+from forwin.models.audit import DecisionEvent
 from forwin.runtime.policy import RuntimePolicy
 
 
@@ -50,6 +50,7 @@ def evaluate_pulp_beat_policy(
         threshold=threshold,
     )
 
+
 def _pulp_beat_payload(hard_floor_result: Any) -> dict[str, Any]:
     metadata = getattr(hard_floor_result, "metadata", {}) or {}
     beat = metadata.get("pulp_beat") if isinstance(metadata, dict) else None
@@ -77,7 +78,9 @@ def _prior_consecutive_missing(
                 DecisionEvent.event_type == DecisionEventType.PULP_BEAT_EVALUATED,
                 DecisionEvent.chapter_number < int(chapter_number or 0),
             )
-            .order_by(DecisionEvent.chapter_number.desc(), DecisionEvent.created_at.desc())
+            .order_by(
+                DecisionEvent.chapter_number.desc(), DecisionEvent.created_at.desc()
+            )
             .limit(limit)
         )
         .scalars()

@@ -4,9 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import (
-    DecisionEventInfo,
-)
+from forwin.audit.events import DecisionEventInfo
 
 
 class ChapterDetail(BaseModel):
@@ -270,25 +268,25 @@ class CandidateDraftDetail(BaseModel):
 
 
 __all__ = [
-    'ChapterDetail',
-    'ChapterReviewIssueInfo',
-    'LintSignalInfo',
-    'RepairVerificationInfo',
-    'FinalResidualDecisionInfo',
-    'ChapterRewriteAttemptInfo',
-    'ChapterReviewDetail',
-    'ChapterReviewApproveRequest',
-    'ChapterReviewRetryRequest',
-    'ChapterReviewApproveResponse',
-    'TropeTemplateInfo',
-    'TropeRegistrySummaryResponse',
-    'TropeTemplateValidationRequest',
-    'TropeTemplateValidationResponse',
-    'BandExperienceOverrideRequest',
-    'BandExperienceOverrideResponse',
-    'ProvisionalChapterLedgerInfo',
-    'ProvisionalBandDetail',
-    'ScenarioRehearsalDetail',
-    'ScenarioPlanPatchApproveRequest',
-    'CandidateDraftDetail',
+    "ChapterDetail",
+    "ChapterReviewIssueInfo",
+    "LintSignalInfo",
+    "RepairVerificationInfo",
+    "FinalResidualDecisionInfo",
+    "ChapterRewriteAttemptInfo",
+    "ChapterReviewDetail",
+    "ChapterReviewApproveRequest",
+    "ChapterReviewRetryRequest",
+    "ChapterReviewApproveResponse",
+    "TropeTemplateInfo",
+    "TropeRegistrySummaryResponse",
+    "TropeTemplateValidationRequest",
+    "TropeTemplateValidationResponse",
+    "BandExperienceOverrideRequest",
+    "BandExperienceOverrideResponse",
+    "ProvisionalChapterLedgerInfo",
+    "ProvisionalBandDetail",
+    "ScenarioRehearsalDetail",
+    "ScenarioPlanPatchApproveRequest",
+    "CandidateDraftDetail",
 ]

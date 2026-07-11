@@ -5,7 +5,7 @@ import hashlib
 import json
 from typing import Any
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 
 from .redaction import redact_payload
 
@@ -89,7 +89,10 @@ def build_llm_decision_event_payloads(
         stage = str(attempt.get("stage_key") or prompt_trace.get("stage_key") or "")
         model = str(attempt.get("model") or "")
         has_parse_error = bool(attempt.get("parse_error"))
-        if int(attempt.get("sleep_ms") or 0) > 0 or attempt.get("retry_after") is not None:
+        if (
+            int(attempt.get("sleep_ms") or 0) > 0
+            or attempt.get("retry_after") is not None
+        ):
             events.append(
                 {
                     "event_family": "runtime_observation",
@@ -113,12 +116,20 @@ def build_llm_decision_event_payloads(
                         "parser_name": str(attempt.get("parser_name") or ""),
                         "schema_name": str(attempt.get("schema_name") or ""),
                         "parse_error": str(attempt.get("parse_error") or ""),
-                        "raw_output_preview": str(attempt.get("raw_output_preview") or ""),
-                        "raw_output_artifact_uri": str(attempt.get("raw_output_artifact_uri") or ""),
+                        "raw_output_preview": str(
+                            attempt.get("raw_output_preview") or ""
+                        ),
+                        "raw_output_artifact_uri": str(
+                            attempt.get("raw_output_artifact_uri") or ""
+                        ),
                     },
                 }
             )
-        if str(attempt.get("error_class") or "") or bool(attempt.get("final_failure")) or has_parse_error:
+        if (
+            str(attempt.get("error_class") or "")
+            or bool(attempt.get("final_failure"))
+            or has_parse_error
+        ):
             events.append(
                 {
                     "event_family": "runtime_observation",
@@ -136,10 +147,13 @@ def build_llm_decision_event_payloads(
                     "payload": base_payload,
                 }
             )
-        next_attempt = dict_attempts[index + 1] if index + 1 < len(dict_attempts) else None
+        next_attempt = (
+            dict_attempts[index + 1] if index + 1 < len(dict_attempts) else None
+        )
         if (
             next_attempt is not None
-            and str(next_attempt.get("attempt_group_id") or "") == str(attempt.get("attempt_group_id") or "")
+            and str(next_attempt.get("attempt_group_id") or "")
+            == str(attempt.get("attempt_group_id") or "")
             and str(next_attempt.get("model") or "") != str(attempt.get("model") or "")
             and (attempt.get("fallback_eligible") or attempt.get("final_failure"))
         ):
@@ -157,7 +171,11 @@ def build_llm_decision_event_payloads(
                         "from_model": str(attempt.get("model") or ""),
                         "to_profile_id": str(next_attempt.get("profile_id") or ""),
                         "to_model": str(next_attempt.get("model") or ""),
-                        "reason": str(attempt.get("error_message") or attempt.get("error_category") or ""),
+                        "reason": str(
+                            attempt.get("error_message")
+                            or attempt.get("error_category")
+                            or ""
+                        ),
                     },
                 }
             )
@@ -240,7 +258,9 @@ def _prepare_attempt(
                 chapter_number=chapter_number,
                 attempt_group_id=group_id,
                 attempt_no=attempt_no,
-                content_type="application/json" if response_text.strip().startswith(("{", "[")) else "text/plain; charset=utf-8",
+                content_type="application/json"
+                if response_text.strip().startswith(("{", "["))
+                else "text/plain; charset=utf-8",
             )
             prepared["response_artifact_uri"] = response_meta["artifact_uri"]
             prepared["raw_response_artifact_uri"] = response_meta["artifact_uri"]
@@ -258,7 +278,9 @@ def _save_llm_artifact(artifact_store: object, **kwargs: Any) -> dict[str, Any]:
     return dict(save(**kwargs) or {})
 
 
-def _event_attempt_payload(attempt: dict[str, Any], *, prompt_trace_id: str) -> dict[str, Any]:
+def _event_attempt_payload(
+    attempt: dict[str, Any], *, prompt_trace_id: str
+) -> dict[str, Any]:
     keys = {
         "attempt_group_id",
         "attempt_no",
@@ -306,7 +328,11 @@ def _redacted_request_payload(raw_request: Any) -> Any:
                 content = str(item.get("content") or "")
                 redacted_messages.append(
                     {
-                        **{key: value for key, value in item.items() if key != "content"},
+                        **{
+                            key: value
+                            for key, value in item.items()
+                            if key != "content"
+                        },
                         "content_preview": _preview(content, limit=180),
                         "content_hash": _hash_text(content),
                         "content_chars": len(content),

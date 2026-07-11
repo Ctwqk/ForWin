@@ -4,7 +4,10 @@ import json
 
 from sqlalchemy import select
 
-from forwin.api_governance_ops import approve_scenario_plan_patch, rerun_scenario_rehearsal
+from forwin.api_project_control_ops import (
+    approve_scenario_plan_patch,
+    rerun_scenario_rehearsal,
+)
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
@@ -52,7 +55,9 @@ def _setup_project(session, *, chapter_start: int = 1, chapter_end: int = 4):
     return project, arc, chapters
 
 
-def test_trigger_evaluator_skips_low_risk_and_triggers_review_repair_future_dependencies() -> None:
+def test_trigger_evaluator_skips_low_risk_and_triggers_review_repair_future_dependencies() -> (
+    None
+):
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
@@ -132,7 +137,9 @@ def test_hybrid_simulation_uses_director_but_deterministic_block_wins() -> None:
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project, arc, chapters = _setup_project(session, chapter_start=10, chapter_end=12)
+        project, arc, chapters = _setup_project(
+            session, chapter_start=10, chapter_end=12
+        )
         contracts = WorldContractRepository(session)
         contracts.save_arc_contract(
             ArcWorldContract(
@@ -161,7 +168,9 @@ def test_hybrid_simulation_uses_director_but_deterministic_block_wins() -> None:
             )
         )
 
-        report = ScenarioRehearsalRunner(session, director=_DirectorPassesDanger()).run_for_band(
+        report = ScenarioRehearsalRunner(
+            session, director=_DirectorPassesDanger()
+        ).run_for_band(
             project_id=project.id,
             arc_id=arc.id,
             band_id="band:10:12",
@@ -171,7 +180,10 @@ def test_hybrid_simulation_uses_director_but_deterministic_block_wins() -> None:
         assert report.recommendation == ScenarioRehearsalRecommendation.BLOCK
         assert report.metadata["simulation_mode"] == "hybrid"
         assert report.metadata["director_used"] is True
-        assert any(finding.risk_type == "early_reveal_blocker" for finding in report.risk_findings)
+        assert any(
+            finding.risk_type == "early_reveal_blocker"
+            for finding in report.risk_findings
+        )
 
 
 def test_hybrid_simulation_fallback_records_director_error() -> None:
@@ -203,13 +215,17 @@ def test_hybrid_simulation_fallback_records_director_error() -> None:
             )
         )
 
-        director_report = ScenarioRehearsalRunner(session, director=_DirectorFindsFutureLock()).run_for_band(
+        director_report = ScenarioRehearsalRunner(
+            session, director=_DirectorFindsFutureLock()
+        ).run_for_band(
             project_id=project.id,
             arc_id=arc.id,
             band_id="band:1:4",
             chapter_numbers=[chapter.chapter_number for chapter in chapters],
         )
-        fallback_report = ScenarioRehearsalRunner(session, director=_DirectorFails()).run_for_band(
+        fallback_report = ScenarioRehearsalRunner(
+            session, director=_DirectorFails()
+        ).run_for_band(
             project_id=project.id,
             arc_id=arc.id,
             band_id="band:1:4",
@@ -217,7 +233,10 @@ def test_hybrid_simulation_fallback_records_director_error() -> None:
         )
 
         assert director_report.recommendation == ScenarioRehearsalRecommendation.REPLAN
-        assert any(finding.risk_type == "director_future_lock_in" for finding in director_report.risk_findings)
+        assert any(
+            finding.risk_type == "director_future_lock_in"
+            for finding in director_report.risk_findings
+        )
         assert fallback_report.metadata["director_used"] is False
         assert "director unavailable" in fallback_report.metadata["director_error"]
         assert fallback_report.recommendation == ScenarioRehearsalRecommendation.REPLAN
@@ -237,7 +256,9 @@ def test_subworld_resource_rehearsal_checks_region_node_culture_and_key_roles() 
             purpose="新地图",
             scope="arc_local",
             status="active",
-            metadata_json=json.dumps({"culture_profile_id": "culture-a"}, ensure_ascii=False),
+            metadata_json=json.dumps(
+                {"culture_profile_id": "culture-a"}, ensure_ascii=False
+            ),
         )
         session.add(subworld)
         session.flush()
@@ -248,7 +269,9 @@ def test_subworld_resource_rehearsal_checks_region_node_culture_and_key_roles() 
                 display_name="灰港向导",
                 role_hint="helper",
                 status="planned_slot",
-                metadata_json=json.dumps({"culture_profile_id": "culture-b"}, ensure_ascii=False),
+                metadata_json=json.dumps(
+                    {"culture_profile_id": "culture-b"}, ensure_ascii=False
+                ),
             )
         )
         session.flush()
@@ -264,7 +287,9 @@ def test_subworld_resource_rehearsal_checks_region_node_culture_and_key_roles() 
                 schedule_json=json.dumps(
                     {
                         "active_subworld_ids": [subworld.id],
-                        "chapter_entry_targets": [{"subworld_id": subworld.id, "entity_name": "灰港向导"}],
+                        "chapter_entry_targets": [
+                            {"subworld_id": subworld.id, "entity_name": "灰港向导"}
+                        ],
                         "critical_role_slots": [
                             {"subworld_id": subworld.id, "role": "boss"},
                             {"subworld_id": subworld.id, "role": "rival"},

@@ -19,7 +19,7 @@ def test_service_process_roadmap_doc_defines_logical_write_ownership() -> None:
         "generation task enqueue/control",
         "generation task lease/progress",
         "BookState/canon writes",
-        "review/governance results",
+        "review/project-control/audit results",
         "publisher upload/comment/cover jobs",
         "MCP operations",
         "knowledge index writes",

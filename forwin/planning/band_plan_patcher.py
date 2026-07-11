@@ -4,7 +4,11 @@ import json
 import re
 from typing import Any
 
-from forwin.governance import PlanTaskItem, load_plan_task_contract, plan_task_contract_to_json
+from forwin.planning.contracts import (
+    PlanTaskItem,
+    load_plan_task_contract,
+    plan_task_contract_to_json,
+)
 from forwin.models.base import new_id
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
@@ -44,7 +48,9 @@ class BandPlanPatcher:
             old_contract=_band_contract_snapshot(band_row),
             new_contract={"band_obligation_contract": contract.model_dump(mode="json")},
             diff_summary=f"Bind {len(source_ids)} narrative obligation(s) to band plan {band_row.band_id}.",
-            must_not_change=[f"remove unresolved obligation {item}" for item in source_ids],
+            must_not_change=[
+                f"remove unresolved obligation {item}" for item in source_ids
+            ],
             writer_context_injections=list(contract.writer_context_injections),
             reviewer_context_injections=list(contract.reviewer_context_injections),
             expected_resolution_tests=[
@@ -69,7 +75,9 @@ class BandPlanPatcher:
         existing = schedule.band_obligation_contract
         incoming = _incoming_contract(patch=patch, obligations=obligations, row=row)
         schedule.band_obligation_contract = _merge_contracts(existing, incoming)
-        row.schedule_json = json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False)
+        row.schedule_json = json.dumps(
+            schedule.model_dump(mode="json"), ensure_ascii=False
+        )
         row.task_contract_json = plan_task_contract_to_json(
             _merge_task_contracts(
                 load_plan_task_contract(row.task_contract_json),
@@ -120,7 +128,9 @@ def _contract_from_obligations(
         if not obligation_id:
             continue
         _append_unique(contract.open_obligations, obligation_id)
-        if obligation.priority in {"P0", "P1"} or int(obligation.deadline_chapter or 0) <= int(band_end or 0):
+        if obligation.priority in {"P0", "P1"} or int(
+            obligation.deadline_chapter or 0
+        ) <= int(band_end or 0):
             _append_unique(contract.must_resolve_by_band_end, obligation_id)
         else:
             _append_unique(contract.allowed_carry_forward, obligation_id)
@@ -143,14 +153,26 @@ def _contract_from_obligations(
             "deadline_chapter": obligation.deadline_chapter,
             "payoff_test": obligation.payoff_test,
         }
-        _append_dict_unique(contract.writer_context_injections, writer_injection, key="obligation_id")
-        _append_dict_unique(contract.reviewer_context_injections, reviewer_injection, key="obligation_id")
+        _append_dict_unique(
+            contract.writer_context_injections, writer_injection, key="obligation_id"
+        )
+        _append_dict_unique(
+            contract.reviewer_context_injections,
+            reviewer_injection,
+            key="obligation_id",
+        )
     return contract
 
 
-def _merge_contracts(existing: BandObligationContract, incoming: BandObligationContract) -> BandObligationContract:
+def _merge_contracts(
+    existing: BandObligationContract, incoming: BandObligationContract
+) -> BandObligationContract:
     result = existing.model_copy(deep=True)
-    for field in ("open_obligations", "must_resolve_by_band_end", "allowed_carry_forward"):
+    for field in (
+        "open_obligations",
+        "must_resolve_by_band_end",
+        "allowed_carry_forward",
+    ):
         target = getattr(result, field)
         for obligation_id in getattr(incoming, field):
             _append_unique(target, obligation_id)
@@ -159,7 +181,9 @@ def _merge_contracts(existing: BandObligationContract, incoming: BandObligationC
     for item in incoming.writer_context_injections:
         _append_dict_unique(result.writer_context_injections, item, key="obligation_id")
     for item in incoming.reviewer_context_injections:
-        _append_dict_unique(result.reviewer_context_injections, item, key="obligation_id")
+        _append_dict_unique(
+            result.reviewer_context_injections, item, key="obligation_id"
+        )
     return result
 
 
@@ -169,10 +193,13 @@ def _merge_task_contracts(
     obligations: list[NarrativeObligation],
 ) -> list[PlanTaskItem]:
     result = [
-        item for item in existing
+        item
+        for item in existing
         if not (
             str(item.source or "") == "narrative_obligation"
-            and any(_task_matches_obligation(item, obligation) for obligation in obligations)
+            and any(
+                _task_matches_obligation(item, obligation) for obligation in obligations
+            )
         )
     ]
     for obligation in obligations:
@@ -183,20 +210,29 @@ def _merge_task_contracts(
                 task_type="plot_advance",
                 description=obligation.payoff_test or obligation.summary,
                 target_name=obligation.id,
-                required_keywords=_required_keywords(obligation.payoff_test or obligation.summary),
+                required_keywords=_required_keywords(
+                    obligation.payoff_test or obligation.summary
+                ),
                 source="narrative_obligation",
             )
         )
     return result
 
 
-def _task_matches_obligation(task: PlanTaskItem, obligation: NarrativeObligation) -> bool:
+def _task_matches_obligation(
+    task: PlanTaskItem, obligation: NarrativeObligation
+) -> bool:
     obligation_id = str(obligation.id or "")
-    return bool(obligation_id and (task.target_name == obligation_id or obligation_id in task.description))
+    return bool(
+        obligation_id
+        and (task.target_name == obligation_id or obligation_id in task.description)
+    )
 
 
 def _required_keywords(text: str) -> list[str]:
-    cleaned = re.sub(r"^第\d+章[前内]?(必须|需要)?", "", str(text or "").strip("。；; "))
+    cleaned = re.sub(
+        r"^第\d+章[前内]?(必须|需要)?", "", str(text or "").strip("。；; ")
+    )
     cleaned = re.sub(r"^(必须|需要|给出|兑现|解释|补足)+", "", cleaned)
     if "给出" in cleaned:
         cleaned = cleaned.split("给出", 1)[1]
@@ -208,7 +244,9 @@ def _required_keywords(text: str) -> list[str]:
     return list(dict.fromkeys(parts[:3]))
 
 
-def _future_band_chapters(*, chapter_start: int, chapter_end: int, current_chapter: int) -> list[int]:
+def _future_band_chapters(
+    *, chapter_start: int, chapter_end: int, current_chapter: int
+) -> list[int]:
     start = max(int(chapter_start or 0), int(current_chapter or 0) + 1)
     end = int(chapter_end or 0)
     if start <= 0 or end < start:
@@ -222,9 +260,12 @@ def _band_contract_snapshot(row: BandExperiencePlan) -> dict[str, Any]:
         "band_id": str(row.band_id or ""),
         "chapter_start": int(row.chapter_start or 0),
         "chapter_end": int(row.chapter_end or 0),
-        "band_obligation_contract": schedule.band_obligation_contract.model_dump(mode="json"),
+        "band_obligation_contract": schedule.band_obligation_contract.model_dump(
+            mode="json"
+        ),
         "task_contract": [
-            item.model_dump(mode="json") for item in load_plan_task_contract(row.task_contract_json)
+            item.model_dump(mode="json")
+            for item in load_plan_task_contract(row.task_contract_json)
         ],
     }
 
@@ -235,8 +276,12 @@ def _append_unique(target: list[str], value: str) -> None:
         target.append(text)
 
 
-def _append_dict_unique(target: list[dict[str, Any]], value: dict[str, Any], *, key: str) -> None:
+def _append_dict_unique(
+    target: list[dict[str, Any]], value: dict[str, Any], *, key: str
+) -> None:
     marker = str(value.get(key) or "").strip()
     if marker:
-        target[:] = [item for item in target if str(item.get(key) or "").strip() != marker]
+        target[:] = [
+            item for item in target if str(item.get(key) or "").strip() != marker
+        ]
     target.append(value)

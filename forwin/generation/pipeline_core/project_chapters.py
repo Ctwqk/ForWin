@@ -11,7 +11,7 @@ from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
     record_deferred_maintenance,
 )
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.generation.pipeline_core.chapter_review_gate import (
     handle_chapter_review_gate,
 )
@@ -19,14 +19,10 @@ from forwin.generation.pipeline_core.obligation_resolution import (
     _verify_obligations_after_acceptance,
 )
 from forwin.generation.pipeline_core.result import RunResult
-from forwin.governance import (
-    BandCheckpointDetail,
-    DecisionEventType,
-)
-from forwin.governance import (
-    BandCheckpointIssueInfo,
-    issue_group_for_issue,
-)
+from forwin.planning.checkpoints import BandCheckpointDetail
+from forwin.audit.events import DecisionEventType
+from forwin.planning.checkpoints import BandCheckpointIssueInfo
+from forwin.review.issue_groups import issue_group_for_issue
 import json
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
 from forwin.checker.rules import ContinuityChecker

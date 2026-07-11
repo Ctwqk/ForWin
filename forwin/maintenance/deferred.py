@@ -4,7 +4,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 
 
 class DeferredMaintenanceRecord(BaseModel):

@@ -4,12 +4,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     BandCheckpointDetail,
     BlockingReasonInfo,
-    DecisionEventInfo,
-    NarrativeConstraintInfo,
 )
+from forwin.audit.events import DecisionEventInfo
+from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.long_run_policy import LongRunPolicy
 from forwin.protocol.subworld import SubWorldSummary
 from forwin.runtime.policy import RuntimePolicy
@@ -81,8 +81,12 @@ class ProjectAutomationSettings(BaseModel):
     daily_publish_quota: int = 0
     stop_when_review_pending: bool = True
     auto_publish: bool = False
-    publish: ProjectAutomationPublishSettings = Field(default_factory=ProjectAutomationPublishSettings)
-    publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
+    publish: ProjectAutomationPublishSettings = Field(
+        default_factory=ProjectAutomationPublishSettings
+    )
+    publish_bindings: list[ProjectAutomationPublishSettings] = Field(
+        default_factory=list
+    )
     long_run_policy: LongRunPolicy = Field(default_factory=LongRunPolicy)
     last_scheduler_date: str = ""
     last_scheduler_at: str = ""
@@ -108,7 +112,9 @@ class ProjectSummary(ProjectArcSnapshotFields):
     active_genesis_revision_id: str = ""
     genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
     can_start_writing: bool = False
-    automation: ProjectAutomationSettings = Field(default_factory=ProjectAutomationSettings)
+    automation: ProjectAutomationSettings = Field(
+        default_factory=ProjectAutomationSettings
+    )
     runtime_policy: RuntimePolicy
     runtime_policy_version: int
     latest_stage: str = ""
@@ -120,7 +126,9 @@ class ProjectSummary(ProjectArcSnapshotFields):
     current_time_label: str = ""
     world_pressure_level: str = ""
     world_pressure_summary: str = ""
-    generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)
+    generation_control: GenerationControlInfo = Field(
+        default_factory=GenerationControlInfo
+    )
     chapters: list[dict[str, object]] = Field(default_factory=list)
     latest_band_checkpoint: BandCheckpointDetail | None = None
     blocking_reason: BlockingReasonInfo = Field(default_factory=BlockingReasonInfo)
@@ -183,7 +191,9 @@ class ProjectDetail(ProjectArcSnapshotFields):
     needs_review_chapter_count: int = 0
     upload_task_count: int = 0
     uploaded_chapter_count: int = 0
-    automation: ProjectAutomationSettings = Field(default_factory=ProjectAutomationSettings)
+    automation: ProjectAutomationSettings = Field(
+        default_factory=ProjectAutomationSettings
+    )
     runtime_policy: RuntimePolicy
     runtime_policy_version: int
     characters: list[EntityInfo] = []
@@ -202,7 +212,9 @@ class ProjectDetail(ProjectArcSnapshotFields):
     world_pressure_summary: str = ""
     npc_intent_count: int = 0
     recent_npc_intents: list[dict[str, object]] = []
-    generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)
+    generation_control: GenerationControlInfo = Field(
+        default_factory=GenerationControlInfo
+    )
     latest_band_checkpoint: BandCheckpointDetail | None = None
     blocking_reason: BlockingReasonInfo = Field(default_factory=BlockingReasonInfo)
     next_gate: str = ""
@@ -228,7 +240,9 @@ class ProjectCreateRequest(BaseModel):
     core_delight: str = ""
     inspiration_notes: str = ""
     content_guardrails: list[str] = Field(default_factory=list)
-    publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
+    publish_bindings: list[ProjectAutomationPublishSettings] = Field(
+        default_factory=list
+    )
     publish_platform: str = ""
     publish_book_name: str = ""
     publish_upload_url: str = ""
@@ -263,18 +277,18 @@ class ProjectExtendGenerationRequest(BaseModel):
 
 
 __all__ = [
-    'ProjectArcSnapshotFields',
-    'ProjectAutomationPublishSettings',
-    'ProjectAutomationSettings',
-    'ProjectSummary',
-    'EntityInfo',
-    'ThreadInfo',
-    'ChapterInfo',
-    'ChapterListResponse',
-    'ProjectDetail',
-    'ProjectDeleteResponse',
-    'ProjectCreateRequest',
-    'ProjectCreateResponse',
-    'ProjectContinueGenerationRequest',
-    'ProjectExtendGenerationRequest',
+    "ProjectArcSnapshotFields",
+    "ProjectAutomationPublishSettings",
+    "ProjectAutomationSettings",
+    "ProjectSummary",
+    "EntityInfo",
+    "ThreadInfo",
+    "ChapterInfo",
+    "ChapterListResponse",
+    "ProjectDetail",
+    "ProjectDeleteResponse",
+    "ProjectCreateRequest",
+    "ProjectCreateResponse",
+    "ProjectContinueGenerationRequest",
+    "ProjectExtendGenerationRequest",
 ]

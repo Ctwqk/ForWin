@@ -4,9 +4,9 @@ import json
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.models.publisher import PublisherRawComment
 from forwin.publisher_runtime.service import PublisherRuntimeService
@@ -85,16 +85,25 @@ def test_comment_sync_service_claim_ingest_and_result_keep_audit_redacted() -> N
         assert claimed["job_id"] == job["job_id"]
         assert batch["inserted"] == 1
         assert finished["status"] == "succeeded"
-        assert runtime.comment_sync.get_comment_sync_job(job["job_id"])["job_id"] == job["job_id"]
-        assert runtime.comment_sync.list_comment_sync_jobs()[0]["job_id"] == job["job_id"]
+        assert (
+            runtime.comment_sync.get_comment_sync_job(job["job_id"])["job_id"]
+            == job["job_id"]
+        )
+        assert (
+            runtime.comment_sync.list_comment_sync_jobs()[0]["job_id"] == job["job_id"]
+        )
 
         with runtime.session_factory() as session:
             stored_comment = session.execute(select(PublisherRawComment)).scalar_one()
-            events = session.execute(
-                select(DecisionEvent)
-                .where(DecisionEvent.project_id == project_id)
-                .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-            ).scalars().all()
+            events = (
+                session.execute(
+                    select(DecisionEvent)
+                    .where(DecisionEvent.project_id == project_id)
+                    .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
+                )
+                .scalars()
+                .all()
+            )
 
         assert stored_comment.like_count == 3
         assert stored_comment.reply_count == 1
@@ -103,7 +112,9 @@ def test_comment_sync_service_claim_ingest_and_result_keep_audit_redacted() -> N
         assert DecisionEventType.COMMENT_SYNC_JOB_CLAIMED in event_types
         assert DecisionEventType.RAW_COMMENTS_INGESTED in event_types
         for event in events:
-            payload_text = json.dumps(json.loads(event.payload_json or "{}"), ensure_ascii=False)
+            payload_text = json.dumps(
+                json.loads(event.payload_json or "{}"), ensure_ascii=False
+            )
             assert "private-author-id" not in payload_text
             assert "隐私作者" not in payload_text
     finally:

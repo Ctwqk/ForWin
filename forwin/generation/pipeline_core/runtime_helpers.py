@@ -15,7 +15,7 @@ from forwin.observability.spans import (
     current_span,
     SpanRecord,
 )
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 import inspect
 from forwin.models import new_id
 from forwin.observability.context import OperationContext
@@ -252,7 +252,7 @@ class RuntimeSupportStage:
                 )
             context = OperationContext(
                 project_id=project_id,
-                task_id=self._governance_task_id,
+                task_id=self._audit_task_id,
                 chapter_number=int(chapter_number or 0),
                 stage=stage_key,
                 operation_id=self._audit_operation_id(),

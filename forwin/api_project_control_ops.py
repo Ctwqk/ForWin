@@ -20,7 +20,7 @@ from forwin.api_schema import (
     BandExperienceOverrideResponse,
     CausalReplayResponse,
     DecisionEventsResponse,
-    GovernanceInsightsResponse,
+    AuditInsightsResponse,
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
@@ -34,18 +34,24 @@ from forwin.api_schema import (
     TropeTemplateValidationRequest,
     TropeTemplateValidationResponse,
 )
-from forwin.governance import (
-    DecisionEventType,
+from forwin.audit.events import DecisionEventType
+from forwin.planning.contracts import (
     load_plan_task_contract,
     plan_task_contract_to_json,
 )
 from forwin.models.base import Base
-from forwin.models.governance import BandCheckpoint, NarrativeConstraint
+from forwin.models.planning_control import (
+    BandCheckpoint,
+    NarrativeConstraint,
+)
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
 from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
-from forwin.protocol.scenario_rehearsal import ScenarioPlanPatch, ScenarioRehearsalReport
+from forwin.protocol.scenario_rehearsal import (
+    ScenarioPlanPatch,
+    ScenarioRehearsalReport,
+)
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.trope_library import (
     load_trope_template_library,
@@ -79,7 +85,9 @@ def create_manual_checkpoint(
             raise HTTPException(409, "当前项目未启用 manual checkpoint。")
         boundary_kind = str(req.boundary_kind or "").strip()
         if boundary_kind not in {"chapter_start", "chapter_accepted", "band_end"}:
-            raise HTTPException(400, "manual checkpoint 仅支持章开始前、章 accepted 后、band 结束处。")
+            raise HTTPException(
+                400, "manual checkpoint 仅支持章开始前、章 accepted 后、band 结束处。"
+            )
         active_arc = session.execute(
             select(Base.metadata.tables["arc_plan_versions"].c.id)
             .where(
@@ -115,7 +123,9 @@ def create_manual_checkpoint(
                 .limit(1)
             ).scalar_one_or_none()
         if band is None:
-            raise HTTPException(400, "未找到对应 band，manual checkpoint 只能落在章边界或 band 边界。")
+            raise HTTPException(
+                400, "未找到对应 band，manual checkpoint 只能落在章边界或 band 边界。"
+            )
         if boundary_kind == "band_end":
             chapter_number = int(band.chapter_end or 0)
         row = BandCheckpoint(
@@ -165,7 +175,9 @@ def get_band_checkpoint(
 ) -> BandCheckpointDetail:
     session = get_session()
     try:
-        row = latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id)
+        row = latest_band_checkpoint_row(
+            session, project_id=project_id, band_id=band_id
+        )
         if row is None:
             raise HTTPException(404, "band checkpoint 不存在")
         return serialize_band_checkpoint(row, session=session)
@@ -187,7 +199,9 @@ def approve_band_checkpoint(
 ) -> BandCheckpointDetail:
     session = get_session()
     try:
-        row = latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id)
+        row = latest_band_checkpoint_row(
+            session, project_id=project_id, band_id=band_id
+        )
         if row is None:
             raise HTTPException(404, "band checkpoint 不存在")
         parent = latest_related_decision_event(
@@ -199,7 +213,9 @@ def approve_band_checkpoint(
         next_status = str(req.status or "overridden").strip() or "overridden"
         reason = require_reason(
             req.reason,
-            action="pass checkpoint" if next_status == "pass" else "override checkpoint",
+            action="pass checkpoint"
+            if next_status == "pass"
+            else "override checkpoint",
         )
         row.status = next_status
         row.reason = reason
@@ -213,7 +229,9 @@ def approve_band_checkpoint(
             band_id=band_id,
             chapter_number=int(row.boundary_chapter or 0),
             event_family="audit_action",
-            event_type=DecisionEventType.BAND_CHECKPOINT_APPROVED if next_status == "pass" else DecisionEventType.BAND_CHECKPOINT_OVERRIDDEN,
+            event_type=DecisionEventType.BAND_CHECKPOINT_APPROVED
+            if next_status == "pass"
+            else DecisionEventType.BAND_CHECKPOINT_OVERRIDDEN,
             actor_type="manual_ui",
             scope="band",
             summary="band checkpoint 已人工放行。",
@@ -320,7 +338,9 @@ def get_band_task_contract(
                 BandExperiencePlan.project_id == project_id,
                 BandExperiencePlan.band_id == band_id,
             )
-            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+            .order_by(
+                BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
+            )
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
@@ -353,7 +373,9 @@ def update_band_task_contract(
                 BandExperiencePlan.project_id == project_id,
                 BandExperiencePlan.band_id == band_id,
             )
-            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+            .order_by(
+                BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
+            )
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
@@ -401,12 +423,20 @@ def list_project_constraints(
 ) -> NarrativeConstraintsResponse:
     session = get_session()
     try:
-        rows = session.execute(
-            select(NarrativeConstraint)
-            .where(NarrativeConstraint.project_id == project_id)
-            .order_by(NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc())
-        ).scalars().all()
-        return NarrativeConstraintsResponse(items=[serialize_constraint(row) for row in rows])
+        rows = (
+            session.execute(
+                select(NarrativeConstraint)
+                .where(NarrativeConstraint.project_id == project_id)
+                .order_by(
+                    NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return NarrativeConstraintsResponse(
+            items=[serialize_constraint(row) for row in rows]
+        )
     finally:
         session.close()
 
@@ -491,7 +521,9 @@ def update_project_constraint(
         old_status = str(row.status or "")
         changes: dict[str, Any] = {}
         next_constraint_type, next_level, next_status = validate_constraint_payload(
-            constraint_type=req.constraint_type if req.constraint_type is not None else row.constraint_type,
+            constraint_type=req.constraint_type
+            if req.constraint_type is not None
+            else row.constraint_type,
             level=req.level if req.level is not None else row.level,
             status=req.status if req.status is not None else row.status,
         )
@@ -504,23 +536,41 @@ def update_project_constraint(
                 changes[attr] = {"from": getattr(row, attr), "to": next_value}
                 setattr(row, attr, next_value)
 
-        _set_if_present("constraint_type", req.constraint_type, lambda _item: next_constraint_type)
+        _set_if_present(
+            "constraint_type", req.constraint_type, lambda _item: next_constraint_type
+        )
         _set_if_present("level", req.level, lambda _item: next_level)
-        _set_if_present("subject_name", req.subject_name, lambda item: str(item or "").strip())
-        _set_if_present("description", req.description, lambda item: str(item or "").strip())
+        _set_if_present(
+            "subject_name", req.subject_name, lambda item: str(item or "").strip()
+        )
+        _set_if_present(
+            "description", req.description, lambda item: str(item or "").strip()
+        )
         if req.payload is not None:
             payload_json = json.dumps(req.payload or {}, ensure_ascii=False)
             if row.payload_json != payload_json:
-                changes["payload"] = {"from": json_load_object(row.payload_json), "to": req.payload or {}}
+                changes["payload"] = {
+                    "from": json_load_object(row.payload_json),
+                    "to": req.payload or {},
+                }
                 row.payload_json = payload_json
         _set_if_present("arc_id", req.arc_id, lambda item: str(item or "").strip())
         _set_if_present("band_id", req.band_id, lambda item: str(item or "").strip())
-        _set_if_present("effective_from_chapter", req.effective_from_chapter, lambda item: max(1, int(item or 1)))
-        _set_if_present("protect_until_chapter", req.protect_until_chapter, lambda item: max(0, int(item or 0)))
+        _set_if_present(
+            "effective_from_chapter",
+            req.effective_from_chapter,
+            lambda item: max(1, int(item or 1)),
+        )
+        _set_if_present(
+            "protect_until_chapter",
+            req.protect_until_chapter,
+            lambda item: max(0, int(item or 0)),
+        )
         _set_if_present("status", req.status, lambda _item: next_status)
         event_type = (
             DecisionEventType.CONSTRAINT_ARCHIVED
-            if old_status == "active" and str(row.status or "") in {"inactive", "archived"}
+            if old_status == "active"
+            and str(row.status or "") in {"inactive", "archived"}
             else DecisionEventType.CONSTRAINT_UPDATED
         )
         session.add(row)
@@ -533,7 +583,9 @@ def update_project_constraint(
             event_type=event_type,
             actor_type="manual_ui",
             scope="project",
-            summary="已停用 narrative constraint。" if event_type == DecisionEventType.CONSTRAINT_ARCHIVED else "已更新 narrative constraint。",
+            summary="已停用 narrative constraint。"
+            if event_type == DecisionEventType.CONSTRAINT_ARCHIVED
+            else "已更新 narrative constraint。",
             reason=reason,
             payload={"changes": changes},
             related_object_type="narrative_constraint",
@@ -577,7 +629,9 @@ def list_project_decision_events(
             limit=200,
             ascending=False,
         )
-        return DecisionEventsResponse(items=[serialize_decision_event(row) for row in rows])
+        return DecisionEventsResponse(
+            items=[serialize_decision_event(row) for row in rows]
+        )
     finally:
         session.close()
 
@@ -608,15 +662,15 @@ def get_project_causal_replay(
         session.close()
 
 
-def get_project_governance_insights(
+def get_project_audit_insights(
     project_id: str,
     *,
     get_session,
-    build_governance_insights,
-) -> GovernanceInsightsResponse:
+    build_audit_insights,
+) -> AuditInsightsResponse:
     session = get_session()
     try:
-        return build_governance_insights(session, project_id=project_id)
+        return build_audit_insights(session, project_id=project_id)
     finally:
         session.close()
 
@@ -708,7 +762,9 @@ def rerun_scenario_rehearsal(
             trigger_reasons=list(report.trigger_reasons),
             recommendation=report.recommendation.value,
             risk_count=len(report.risk_findings),
-            blocker_count=sum(1 for item in report.risk_findings if item.severity == "fail"),
+            blocker_count=sum(
+                1 for item in report.risk_findings if item.severity == "fail"
+            ),
             required_patch_count=len(report.required_plan_patches),
             resolution_status=report.resolution_status,
             patch_attempt_count=report.patch_attempt_count,
@@ -738,11 +794,15 @@ def approve_scenario_plan_patch(
         if run is None:
             raise HTTPException(404, "scenario rehearsal run 不存在")
         try:
-            report = ScenarioRehearsalReport.model_validate(json.loads(run.report_json or "{}"))
+            report = ScenarioRehearsalReport.model_validate(
+                json.loads(run.report_json or "{}")
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(409, "scenario rehearsal report 无法解析") from exc
         try:
-            patch = ScenarioPlanPatch.model_validate(json.loads(patch_row.patch_json or "{}"))
+            patch = ScenarioPlanPatch.model_validate(
+                json.loads(patch_row.patch_json or "{}")
+            )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise HTTPException(409, "scenario plan patch 无法解析") from exc
         coordinator = ScenarioRehearsalCoordinator(session)
@@ -752,7 +812,9 @@ def approve_scenario_plan_patch(
         status = applied[0].status if applied else "failed"
         patch_row.status = "applied" if status == "applied" else status
         patch_row.approval_reason = str(reason or "")
-        patch_row.applied_at = datetime.now(timezone.utc) if patch_row.status == "applied" else None
+        patch_row.applied_at = (
+            datetime.now(timezone.utc) if patch_row.status == "applied" else None
+        )
         session.add(patch_row)
         session.commit()
         detail = build_scenario_rehearsal_detail(
@@ -818,14 +880,18 @@ def get_trope_template_summary() -> TropeRegistrySummaryResponse:
     )
 
 
-def validate_trope_templates(req: TropeTemplateValidationRequest) -> TropeTemplateValidationResponse:
+def validate_trope_templates(
+    req: TropeTemplateValidationRequest,
+) -> TropeTemplateValidationResponse:
     templates, errors = validate_trope_template_payload(
         req.templates,
         require_full=bool(req.require_full),
     )
     category_counts: dict[str, int] = {}
     for template in templates:
-        category_counts[str(template.category)] = category_counts.get(str(template.category), 0) + 1
+        category_counts[str(template.category)] = (
+            category_counts.get(str(template.category), 0) + 1
+        )
     return TropeTemplateValidationResponse(
         ok=not errors,
         total_count=len(templates),
@@ -861,7 +927,9 @@ def override_band_experience(
         if band_row is None:
             raise HTTPException(404, f"band 不存在: {band_id}")
 
-        current_payload = json.loads(band_row.schedule_json or "{}") if band_row.schedule_json else {}
+        current_payload = (
+            json.loads(band_row.schedule_json or "{}") if band_row.schedule_json else {}
+        )
         if not isinstance(current_payload, dict):
             current_payload = {}
         if req.scheduled_rewards:
@@ -869,29 +937,37 @@ def override_band_experience(
         if req.curiosity_beats:
             current_payload["curiosity_beats"] = req.curiosity_beats
         if req.immersion_anchor_scene_goal.strip():
-            current_payload["immersion_anchor_scene_goal"] = req.immersion_anchor_scene_goal.strip()
+            current_payload["immersion_anchor_scene_goal"] = (
+                req.immersion_anchor_scene_goal.strip()
+            )
         current_payload.setdefault("band_id", band_row.band_id)
         current_payload.setdefault("chapter_start", band_row.chapter_start)
         current_payload.setdefault("chapter_end", band_row.chapter_end)
         current_payload.setdefault("stall_guard_max_gap", band_row.stall_guard_max_gap)
 
         schedule = BandDelightSchedule.model_validate(current_payload)
-        band_row.schedule_json = json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False)
+        band_row.schedule_json = json.dumps(
+            schedule.model_dump(mode="json"), ensure_ascii=False
+        )
         band_row.stall_guard_max_gap = schedule.stall_guard_max_gap
         session.add(band_row)
 
         if pipeline is not None:
             arc_structure = repo.get_latest_arc_structure_draft(project_id)
             structure_data = pipeline._structure_data_from_row(arc_structure)
-            for chapter_number in range(schedule.chapter_start, schedule.chapter_end + 1):
+            for chapter_number in range(
+                schedule.chapter_start, schedule.chapter_end + 1
+            ):
                 chapter_plan = repo.get_chapter_plan(project_id, chapter_number)
                 if chapter_plan is None:
                     continue
-                experience_plan = pipeline.arc_envelope_manager._derive_chapter_experience_plan(
-                    chapter_number=chapter_number,
-                    structure=structure_data,
-                    schedule=schedule,
-                    chapter_plan=chapter_plan,
+                experience_plan = (
+                    pipeline.arc_envelope_manager._derive_chapter_experience_plan(
+                        chapter_number=chapter_number,
+                        structure=structure_data,
+                        schedule=schedule,
+                        chapter_plan=chapter_plan,
+                    )
                 )
                 chapter_plan.experience_plan_json = json.dumps(
                     experience_plan.model_dump(mode="json"),

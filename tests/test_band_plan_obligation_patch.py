@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from forwin.governance import load_plan_task_contract
+from forwin.planning.contracts import load_plan_task_contract
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.band_plan_patcher import BandPlanPatcher
@@ -68,10 +68,14 @@ def test_band_plan_patcher_writes_obligation_contract_and_band_task_contract() -
     assert contract.payoff_tests["obl-band"] == obligation.payoff_test
     assert contract.affected_chapters["obl-band"] == [11, 12, 13, 14]
     assert contract.writer_context_injections[0]["obligation_id"] == "obl-band"
-    assert contract.reviewer_context_injections[0]["payoff_test"] == obligation.payoff_test
+    assert (
+        contract.reviewer_context_injections[0]["payoff_test"] == obligation.payoff_test
+    )
 
     tasks = load_plan_task_contract(row.task_contract_json)
-    assert [(task.source, task.description, task.required_keywords) for task in tasks] == [
+    assert [
+        (task.source, task.description, task.required_keywords) for task in tasks
+    ] == [
         (
             "narrative_obligation",
             obligation.payoff_test,

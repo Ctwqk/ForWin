@@ -452,23 +452,23 @@
     </aside>
   </div>
 
-  <div id="governance_action_modal_shell" class="modal-shell" onclick="dismissModal(event, 'governance_action_modal_shell')">
+  <div id="project_control_action_modal_shell" class="modal-shell" onclick="dismissModal(event, 'project_control_action_modal_shell')">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="section-head" style="margin-bottom:0;">
         <div>
-          <h3 id="governance_action_modal_title">治理动作</h3>
-          <p id="governance_action_modal_description">所有治理动作都要求填写原因，便于进入决策链与审计时间线。</p>
+          <h3 id="project_control_action_modal_title">项目控制动作</h3>
+          <p id="project_control_action_modal_description">所有项目控制动作都要求填写原因，便于进入决策链与审计时间线。</p>
         </div>
-        <button class="ghost" type="button" onclick="closeGovernanceActionModal()">关闭</button>
+        <button class="ghost" type="button" onclick="closeProjectControlActionModal()">关闭</button>
       </div>
-      <div id="governance_action_modal_fields" class="field-grid"></div>
+      <div id="project_control_action_modal_fields" class="field-grid"></div>
       <div>
-        <label for="governance_action_modal_reason">Reason</label>
-        <textarea id="governance_action_modal_reason" placeholder="写清为什么要执行这次治理动作。"></textarea>
+        <label for="project_control_action_modal_reason">Reason</label>
+        <textarea id="project_control_action_modal_reason" placeholder="写清为什么要执行这次项目控制动作。"></textarea>
       </div>
       <div class="action-row" style="justify-content:flex-end;">
-        <button class="ghost" type="button" onclick="closeGovernanceActionModal()">取消</button>
-        <button id="governance_action_modal_submit" class="primary" type="button" onclick="submitGovernanceActionModal()">提交</button>
+        <button class="ghost" type="button" onclick="closeProjectControlActionModal()">取消</button>
+        <button id="project_control_action_modal_submit" class="primary" type="button" onclick="submitProjectControlActionModal()">提交</button>
       </div>
     </div>
   </div>

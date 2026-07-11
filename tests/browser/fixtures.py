@@ -11,7 +11,14 @@ from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import Page, Route, expect
 
 
-GENESIS_STAGES = ["brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"]
+GENESIS_STAGES = [
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+]
 
 
 def now_text() -> str:
@@ -93,17 +100,39 @@ class MockForWinBackend:
         self.settings = self.settings or sample_settings()
         self.platforms = self.platforms or sample_platforms()
         self.projects = self.projects or [sample_project()]
-        self.tasks = self.tasks or {"task-1": sample_generation_task("task-1", project_id=self.projects[0]["id"])}
-        self.upload_jobs = self.upload_jobs or {"upload-1": sample_upload_job("upload-1")}
-        self.genesis = self.genesis or {self.projects[0]["id"]: sample_genesis_detail(self.projects[0]["id"])}
-        self.world_pages = self.world_pages or sample_world_pages(self.projects[0]["id"])
-        self.world_snapshots = self.world_snapshots or sample_world_snapshots(self.projects[0]["id"])
+        self.tasks = self.tasks or {
+            "task-1": sample_generation_task(
+                "task-1", project_id=self.projects[0]["id"]
+            )
+        }
+        self.upload_jobs = self.upload_jobs or {
+            "upload-1": sample_upload_job("upload-1")
+        }
+        self.genesis = self.genesis or {
+            self.projects[0]["id"]: sample_genesis_detail(self.projects[0]["id"])
+        }
+        self.world_pages = self.world_pages or sample_world_pages(
+            self.projects[0]["id"]
+        )
+        self.world_snapshots = self.world_snapshots or sample_world_snapshots(
+            self.projects[0]["id"]
+        )
         self.world_conflicts = self.world_conflicts or sample_world_conflicts()
         self.world_proposals = self.world_proposals or sample_world_proposals()
         self.personality_skills = self.personality_skills or sample_personality_skills()
-        self.character_personalities = self.character_personalities or sample_character_personalities()
-        self.personality_coverage = self.personality_coverage or sample_personality_coverage(self.projects[0]["id"], self.character_personalities)
-        self.personality_metrics = self.personality_metrics or sample_personality_metrics(self.projects[0]["id"])
+        self.character_personalities = (
+            self.character_personalities or sample_character_personalities()
+        )
+        self.personality_coverage = (
+            self.personality_coverage
+            or sample_personality_coverage(
+                self.projects[0]["id"], self.character_personalities
+            )
+        )
+        self.personality_metrics = (
+            self.personality_metrics
+            or sample_personality_metrics(self.projects[0]["id"])
+        )
 
     def install(self, page: Page) -> None:
         page.route("**/api/**", self.handle)
@@ -119,7 +148,9 @@ class MockForWinBackend:
             }
         )
 
-    def captured_payloads(self, path: str, method: str = "POST") -> list[dict[str, Any]]:
+    def captured_payloads(
+        self, path: str, method: str = "POST"
+    ) -> list[dict[str, Any]]:
         return [
             item["payload"]
             for item in self.captured
@@ -127,13 +158,17 @@ class MockForWinBackend:
         ]
 
     def project_ref(self, project_id: str) -> dict[str, Any]:
-        project = next((item for item in self.projects if item["id"] == project_id), None)
+        project = next(
+            (item for item in self.projects if item["id"] == project_id), None
+        )
         if project is None:
             project = sample_project(project_id)
             self.projects.append(project)
         return project
 
-    def mark_generation_started(self, project_id: str, task_id: str, action: str) -> None:
+    def mark_generation_started(
+        self, project_id: str, task_id: str, action: str
+    ) -> None:
         project = self.project_ref(project_id)
         chapters = project.setdefault(
             "chapters",
@@ -147,7 +182,11 @@ class MockForWinBackend:
             project["creation_status"] = "writing"
         project["chapter_count"] = len(chapters)
         project["generated_chapter_count"] = len(
-            [item for item in chapters if item.get("status") in {"accepted", "drafted", "needs_review"}]
+            [
+                item
+                for item in chapters
+                if item.get("status") in {"accepted", "drafted", "needs_review"}
+            ]
         )
         project["accepted_chapter_count"] = len(
             [item for item in chapters if item.get("status") == "accepted"]
@@ -168,13 +207,24 @@ class MockForWinBackend:
             json_reply(route, self.settings)
             return
         if path == "/api/settings/codex/health":
-            json_reply(route, {"enabled": False, "healthy": False, "status": "disabled", "bridge_url": "", "message": "disabled"})
+            json_reply(
+                route,
+                {
+                    "enabled": False,
+                    "healthy": False,
+                    "status": "disabled",
+                    "bridge_url": "",
+                    "message": "disabled",
+                },
+            )
             return
 
         if path == "/api/personality-skills" and method == "GET":
             json_reply(route, {"skills": self.personality_skills})
             return
-        character_personality_list = re.fullmatch(r"/api/projects/([^/]+)/book-state/characters/personality", path)
+        character_personality_list = re.fullmatch(
+            r"/api/projects/([^/]+)/book-state/characters/personality", path
+        )
         if character_personality_list and method == "GET":
             project_id = character_personality_list.group(1)
             json_reply(
@@ -187,29 +237,63 @@ class MockForWinBackend:
                 },
             )
             return
-        character_personality_loadout = re.fullmatch(r"/api/projects/([^/]+)/book-state/characters/([^/]+)/personality-loadout", path)
+        character_personality_loadout = re.fullmatch(
+            r"/api/projects/([^/]+)/book-state/characters/([^/]+)/personality-loadout",
+            path,
+        )
         if character_personality_loadout and method in {"GET", "PUT"}:
             project_id, character_id = character_personality_loadout.groups()
             character = self._character_personality(character_id)
             if method == "PUT":
                 payload = read_json(route)
                 self.capture(route, payload)
-                character["personality_loadout"] = payload.get("personality_loadout") or character.get("personality_loadout") or {}
-            json_reply(route, {"schema_version": "book_state.character_personality.v1", "project_id": project_id, **character})
+                character["personality_loadout"] = (
+                    payload.get("personality_loadout")
+                    or character.get("personality_loadout")
+                    or {}
+                )
+            json_reply(
+                route,
+                {
+                    "schema_version": "book_state.character_personality.v1",
+                    "project_id": project_id,
+                    **character,
+                },
+            )
             return
-        personality_coverage = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/coverage", path)
+        personality_coverage = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/personality/coverage", path
+        )
         if personality_coverage and method == "GET":
-            json_reply(route, {**self.personality_coverage, "project_id": personality_coverage.group(1)})
+            json_reply(
+                route,
+                {
+                    **self.personality_coverage,
+                    "project_id": personality_coverage.group(1),
+                },
+            )
             return
-        personality_metrics = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/metrics", path)
+        personality_metrics = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/personality/metrics", path
+        )
         if personality_metrics and method == "GET":
-            json_reply(route, {**self.personality_metrics, "project_id": personality_metrics.group(1)})
+            json_reply(
+                route,
+                {
+                    **self.personality_metrics,
+                    "project_id": personality_metrics.group(1),
+                },
+            )
             return
-        personality_preview = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/preview", path)
+        personality_preview = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/personality/preview", path
+        )
         if personality_preview and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
-            json_reply(route, sample_personality_preview(personality_preview.group(1), payload))
+            json_reply(
+                route, sample_personality_preview(personality_preview.group(1), payload)
+            )
             return
         character_create = re.fullmatch(r"/api/projects/([^/]+)/characters", path)
         if character_create and method == "POST":
@@ -219,7 +303,8 @@ class MockForWinBackend:
             created = {
                 "character_id": character_id,
                 "character_name": payload.get("name") or "新角色",
-                "personality_loadout": payload.get("personality_loadout") or sample_personality_loadout(),
+                "personality_loadout": payload.get("personality_loadout")
+                or sample_personality_loadout(),
             }
             self.character_personalities.append(created)
             json_reply(
@@ -232,7 +317,10 @@ class MockForWinBackend:
                 },
             )
             return
-        personality_assignment_report = re.fullmatch(r"/api/projects/([^/]+)/characters/([^/]+)/personality/assignment-report", path)
+        personality_assignment_report = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/([^/]+)/personality/assignment-report",
+            path,
+        )
         if personality_assignment_report and method == "GET":
             project_id, character_id = personality_assignment_report.groups()
             character = self._character_personality(character_id)
@@ -248,13 +336,17 @@ class MockForWinBackend:
                 },
             )
             return
-        personality_reassign = re.fullmatch(r"/api/projects/([^/]+)/characters/([^/]+)/personality/reassign", path)
+        personality_reassign = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/([^/]+)/personality/reassign", path
+        )
         if personality_reassign and method == "POST":
             project_id, character_id = personality_reassign.groups()
             payload = read_json(route)
             self.capture(route, payload)
             character = self._character_personality(character_id)
-            character["personality_loadout"] = sample_personality_loadout("trait-cautious-strategist")
+            character["personality_loadout"] = sample_personality_loadout(
+                "trait-cautious-strategist"
+            )
             json_reply(
                 route,
                 {
@@ -263,12 +355,16 @@ class MockForWinBackend:
                     "character_id": character_id,
                     "preserved": False,
                     "personality_loadout": character["personality_loadout"],
-                    "personality_assignment": sample_personality_assignment("auto_rule"),
+                    "personality_assignment": sample_personality_assignment(
+                        "auto_rule"
+                    ),
                     "diff": {"reason": payload.get("reason") or ""},
                 },
             )
             return
-        active_context_preview = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/active-context/preview", path)
+        active_context_preview = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/personality/active-context/preview", path
+        )
         if active_context_preview and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
@@ -287,7 +383,9 @@ class MockForWinBackend:
                 },
             )
             return
-        relationship_enrichment = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/relationships/enrich", path)
+        relationship_enrichment = re.fullmatch(
+            r"/api/projects/([^/]+)/characters/personality/relationships/enrich", path
+        )
         if relationship_enrichment and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
@@ -317,20 +415,31 @@ class MockForWinBackend:
             self.upload_jobs[job_id] = job
             json_reply(route, job)
             return
-        upload_match = re.fullmatch(r"/api/publishers/upload-jobs/([^/]+)(?:/(terminate))?", path)
+        upload_match = re.fullmatch(
+            r"/api/publishers/upload-jobs/([^/]+)(?:/(terminate))?", path
+        )
         if upload_match:
             job_id, action = upload_match.groups()
             if method == "GET":
-                json_reply(route, self.upload_jobs.get(job_id) or sample_upload_job(job_id))
+                json_reply(
+                    route, self.upload_jobs.get(job_id) or sample_upload_job(job_id)
+                )
                 return
             self.capture(route, {})
             if action == "terminate" and method == "POST":
-                self.upload_jobs.setdefault(job_id, sample_upload_job(job_id))["status"] = "cancelled"
-                json_reply(route, {"message": "upload terminated", **self.upload_jobs[job_id]})
+                self.upload_jobs.setdefault(job_id, sample_upload_job(job_id))[
+                    "status"
+                ] = "cancelled"
+                json_reply(
+                    route, {"message": "upload terminated", **self.upload_jobs[job_id]}
+                )
                 return
             if method == "DELETE":
                 self.upload_jobs.pop(job_id, None)
-                json_reply(route, {"message": "upload deleted", "deleted_id": f"upload:{job_id}"})
+                json_reply(
+                    route,
+                    {"message": "upload deleted", "deleted_id": f"upload:{job_id}"},
+                )
                 return
 
         if path == "/api/projects" and method == "GET":
@@ -340,13 +449,19 @@ class MockForWinBackend:
             payload = read_json(route)
             self.capture(route, payload)
             project_id = f"project-{len(self.projects) + 1}"
-            project = sample_project(project_id, title=payload.get("title") or "测试新书", creation_status="creating")
+            project = sample_project(
+                project_id,
+                title=payload.get("title") or "测试新书",
+                creation_status="creating",
+            )
             project.update(
                 {
                     "premise": payload.get("premise") or "",
                     "genre": payload.get("genre") or "玄幻",
                     "target_total_chapters": payload.get("target_total_chapters") or 3,
-                    "automation": {"publish_bindings": payload.get("publish_bindings") or []},
+                    "automation": {
+                        "publish_bindings": payload.get("publish_bindings") or []
+                    },
                 }
             )
             self.projects.append(project)
@@ -368,7 +483,9 @@ class MockForWinBackend:
                 return
             if method == "DELETE":
                 self.capture(route, {})
-                self.projects = [item for item in self.projects if item["id"] != project_id]
+                self.projects = [
+                    item for item in self.projects if item["id"] != project_id
+                ]
                 json_reply(route, {"project_id": project_id, "message": "书本已删除"})
                 return
 
@@ -377,11 +494,14 @@ class MockForWinBackend:
             project_id = policy_match.group(1)
             project = self.project_ref(project_id)
             if method == "GET":
-                json_reply(route, {
-                    "project_id": project_id,
-                    "version": project["runtime_policy_version"],
-                    "policy": project["runtime_policy"],
-                })
+                json_reply(
+                    route,
+                    {
+                        "project_id": project_id,
+                        "version": project["runtime_policy_version"],
+                        "policy": project["runtime_policy"],
+                    },
+                )
                 return
             if method == "PUT":
                 payload = read_json(route)
@@ -406,33 +526,48 @@ class MockForWinBackend:
                     "generation_audit_pauses": payload["generation_audit_pauses"],
                     "gate_delegate": payload["gate_delegate"],
                 }
-                json_reply(route, {
-                    "project_id": project_id,
-                    "version": project["runtime_policy_version"],
-                    "policy": policy,
-                    "message": "项目运行策略已保存。",
-                })
+                json_reply(
+                    route,
+                    {
+                        "project_id": project_id,
+                        "version": project["runtime_policy_version"],
+                        "policy": policy,
+                        "message": "项目运行策略已保存。",
+                    },
+                )
                 return
 
         if method == "GET" and re.fullmatch(r"/api/projects/[^/]+/genesis", path):
             project_id = path.split("/")[3]
-            json_reply(route, self.genesis.setdefault(project_id, sample_genesis_detail(project_id)))
+            json_reply(
+                route,
+                self.genesis.setdefault(project_id, sample_genesis_detail(project_id)),
+            )
             return
         if method == "PATCH" and re.fullmatch(r"/api/projects/[^/]+/genesis", path):
             project_id = path.split("/")[3]
             payload = read_json(route)
             self.capture(route, payload)
-            detail = self.genesis.setdefault(project_id, sample_genesis_detail(project_id))
+            detail = self.genesis.setdefault(
+                project_id, sample_genesis_detail(project_id)
+            )
             apply_genesis_patch(detail, payload)
             json_reply(route, detail)
             return
-        stage_action = re.fullmatch(r"/api/projects/([^/]+)/genesis/stages/([^/]+)/(generate|rerun|lock|refine)", path)
+        stage_action = re.fullmatch(
+            r"/api/projects/([^/]+)/genesis/stages/([^/]+)/(generate|rerun|lock|refine)",
+            path,
+        )
         if stage_action:
             project_id, stage, action = stage_action.groups()
             payload = read_json(route)
             self.capture(route, payload)
-            detail = self.genesis.setdefault(project_id, sample_genesis_detail(project_id))
-            state = detail["pack"]["stage_states"].setdefault(stage, {"stage_key": stage})
+            detail = self.genesis.setdefault(
+                project_id, sample_genesis_detail(project_id)
+            )
+            state = detail["pack"]["stage_states"].setdefault(
+                stage, {"stage_key": stage}
+            )
             state["status"] = "complete"
             state["updated_at"] = now_text()
             if action == "lock":
@@ -440,62 +575,104 @@ class MockForWinBackend:
             if action in {"generate", "rerun", "refine"}:
                 state["locked"] = False
                 ensure_stage_payload(detail, stage, action)
-            detail["can_start_writing"] = all(detail["pack"]["stage_states"].get(item, {}).get("locked") for item in GENESIS_STAGES)
+            detail["can_start_writing"] = all(
+                detail["pack"]["stage_states"].get(item, {}).get("locked")
+                for item in GENESIS_STAGES
+            )
             json_reply(route, detail)
             return
-        if method == "POST" and re.fullmatch(r"/api/projects/[^/]+/genesis/generate-name", path):
+        if method == "POST" and re.fullmatch(
+            r"/api/projects/[^/]+/genesis/generate-name", path
+        ):
             payload = read_json(route)
             self.capture(route, payload)
             json_reply(route, {"value": f"{payload.get('kind') or 'name'}-测试名"})
             return
-        start_writing = re.fullmatch(r"/api/projects/([^/]+)/(start-writing|continue-generation)", path)
+        start_writing = re.fullmatch(
+            r"/api/projects/([^/]+)/(start-writing|continue-generation)", path
+        )
         if start_writing and method == "POST":
             project_id, action = start_writing.groups()
             payload = read_json(route)
             self.capture(route, payload)
             task_id = f"task-{len(self.tasks) + 1}"
             self.mark_generation_started(project_id, task_id, action)
-            json_reply(route, {"task_id": task_id, "message": "已启动写作" if action == "start-writing" else "已继续生成"})
+            json_reply(
+                route,
+                {
+                    "task_id": task_id,
+                    "message": "已启动写作"
+                    if action == "start-writing"
+                    else "已继续生成",
+                },
+            )
             return
 
         if path == "/api/generate" and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
             task_id = f"task-{len(self.tasks) + 1}"
-            self.tasks[task_id] = sample_generation_task(task_id, project_id=payload.get("project_id") or "")
+            self.tasks[task_id] = sample_generation_task(
+                task_id, project_id=payload.get("project_id") or ""
+            )
             json_reply(route, {"task_id": task_id, **self.tasks[task_id]})
             return
         if path == "/api/task-center/items" and method == "GET":
             json_reply(route, self.task_center_items())
             return
-        task_detail = re.fullmatch(r"/api/task-center/items/(generation|upload)/([^/]+)", path)
+        task_detail = re.fullmatch(
+            r"/api/task-center/items/(generation|upload)/([^/]+)", path
+        )
         if task_detail and method == "GET":
             kind, task_id = task_detail.groups()
             if kind == "upload":
-                json_reply(route, {"task_kind": "upload", "task_id": task_id, **(self.upload_jobs.get(task_id) or sample_upload_job(task_id))})
+                json_reply(
+                    route,
+                    {
+                        "task_kind": "upload",
+                        "task_id": task_id,
+                        **(self.upload_jobs.get(task_id) or sample_upload_job(task_id)),
+                    },
+                )
             else:
-                json_reply(route, self.tasks.get(task_id) or sample_generation_task(task_id, project_id=self.projects[0]["id"]))
+                json_reply(
+                    route,
+                    self.tasks.get(task_id)
+                    or sample_generation_task(
+                        task_id, project_id=self.projects[0]["id"]
+                    ),
+                )
             return
         task_mutation = re.fullmatch(r"/api/tasks/([^/]+)(?:/(pause|terminate))?", path)
         if task_mutation:
             task_id, action = task_mutation.groups()
             self.capture(route, {})
             if action == "pause" and method == "POST":
-                self.tasks.setdefault(task_id, sample_generation_task(task_id))["pause_requested"] = True
+                self.tasks.setdefault(task_id, sample_generation_task(task_id))[
+                    "pause_requested"
+                ] = True
                 json_reply(route, {"message": "已发送安全暂停请求。"})
                 return
             if action == "terminate" and method == "POST":
-                self.tasks.setdefault(task_id, sample_generation_task(task_id))["status"] = "cancelled"
+                self.tasks.setdefault(task_id, sample_generation_task(task_id))[
+                    "status"
+                ] = "cancelled"
                 json_reply(route, {"message": "已发送终止请求。"})
                 return
             if method == "DELETE":
                 self.tasks.pop(task_id, None)
-                json_reply(route, {"message": "task deleted", "deleted_id": f"generation:{task_id}"})
+                json_reply(
+                    route,
+                    {"message": "task deleted", "deleted_id": f"generation:{task_id}"},
+                )
                 return
         if path == "/api/tasks/bulk-delete" and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
-            deleted = [f"{item.get('task_kind')}:{item.get('task_id')}" for item in payload.get("items", [])]
+            deleted = [
+                f"{item.get('task_kind')}:{item.get('task_id')}"
+                for item in payload.get("items", [])
+            ]
             json_reply(route, {"deleted_ids": deleted, "message": "批量删除完成"})
             return
 
@@ -509,16 +686,19 @@ class MockForWinBackend:
             offset = int((query.get("offset") or ["0"])[0] or 0)
             limit = int((query.get("limit") or ["60"])[0] or 60)
             all_chapters = self.project_detail(chapter_page.group(1))["chapters"]
-            page = all_chapters[offset:offset + limit]
+            page = all_chapters[offset : offset + limit]
             self.capture(route, {})
-            json_reply(route, {
-                "project_id": chapter_page.group(1),
-                "total": len(all_chapters),
-                "offset": offset,
-                "limit": limit,
-                "has_more": offset + len(page) < len(all_chapters),
-                "chapters": page,
-            })
+            json_reply(
+                route,
+                {
+                    "project_id": chapter_page.group(1),
+                    "total": len(all_chapters),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + len(page) < len(all_chapters),
+                    "chapters": page,
+                },
+            )
             return
         chapters = re.fullmatch(r"/api/projects/([^/]+)/chapters", path)
         if chapters and method == "GET":
@@ -529,22 +709,42 @@ class MockForWinBackend:
             _, chapter_number = chapter_detail.groups()
             json_reply(route, sample_chapter(int(chapter_number), body=True))
             return
-        review = re.fullmatch(r"/api/projects/([^/]+)/chapters/(\d+)/review(?:/(approve|retry))?", path)
+        review = re.fullmatch(
+            r"/api/projects/([^/]+)/chapters/(\d+)/review(?:/(approve|retry))?", path
+        )
         if review:
             project_id, chapter_number, action = review.groups()
             if action == "approve" and method == "POST":
                 payload = read_json(route)
                 self.capture(route, payload)
-                json_reply(route, {"message": "review approved", "task_id": payload.get("continue_generation") and "task-continue" or ""})
+                json_reply(
+                    route,
+                    {
+                        "message": "review approved",
+                        "task_id": payload.get("continue_generation")
+                        and "task-continue"
+                        or "",
+                    },
+                )
                 return
             if action == "retry" and method == "POST":
                 payload = read_json(route)
                 self.capture(route, payload)
-                json_reply(route, {"message": "review retried", "task_id": payload.get("continue_generation") and "task-retry" or ""})
+                json_reply(
+                    route,
+                    {
+                        "message": "review retried",
+                        "task_id": payload.get("continue_generation")
+                        and "task-retry"
+                        or "",
+                    },
+                )
                 return
             json_reply(route, sample_review(project_id, int(chapter_number)))
             return
-        if method == "POST" and re.fullmatch(r"/api/projects/[^/]+/manual-checkpoints", path):
+        if method == "POST" and re.fullmatch(
+            r"/api/projects/[^/]+/manual-checkpoints", path
+        ):
             payload = read_json(route)
             self.capture(route, payload)
             json_reply(route, {"message": "manual checkpoint 已创建"})
@@ -554,20 +754,37 @@ class MockForWinBackend:
             self.capture(route, payload)
             json_reply(route, {"message": "constraint created", "id": "constraint-new"})
             return
-        if method == "PATCH" and re.fullmatch(r"/api/projects/[^/]+/constraints/[^/]+", path):
+        if method == "PATCH" and re.fullmatch(
+            r"/api/projects/[^/]+/constraints/[^/]+", path
+        ):
             payload = read_json(route)
             self.capture(route, payload)
             json_reply(route, {"message": "constraint updated"})
             return
-        if method == "PUT" and re.fullmatch(r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path):
+        if method == "PUT" and re.fullmatch(
+            r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path
+        ):
             payload = read_json(route)
             self.capture(route, payload)
-            json_reply(route, {"items": payload.get("items") or [], "message": "task contract updated"})
+            json_reply(
+                route,
+                {
+                    "items": payload.get("items") or [],
+                    "message": "task contract updated",
+                },
+            )
             return
-        if method == "GET" and re.fullmatch(r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path):
-            json_reply(route, {"items": [{"task_type": "plot_advance", "description": "推进主线"}]})
+        if method == "GET" and re.fullmatch(
+            r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path
+        ):
+            json_reply(
+                route,
+                {"items": [{"task_type": "plot_advance", "description": "推进主线"}]},
+            )
             return
-        if method == "POST" and re.fullmatch(r"/api/projects/[^/]+/bands/[^/]+/checkpoint/approve", path):
+        if method == "POST" and re.fullmatch(
+            r"/api/projects/[^/]+/bands/[^/]+/checkpoint/approve", path
+        ):
             payload = read_json(route)
             self.capture(route, payload)
             json_reply(route, {"message": "checkpoint approved"})
@@ -575,15 +792,30 @@ class MockForWinBackend:
         if method == "GET" and re.fullmatch(r"/api/projects/[^/]+/causal-replay", path):
             json_reply(route, sample_causal_replay())
             return
-        if method == "GET" and re.fullmatch(r"/api/projects/[^/]+/governance-insights", path):
-            json_reply(route, sample_governance_insights())
+        if method == "GET" and re.fullmatch(
+            r"/api/projects/[^/]+/audit-insights", path
+        ):
+            json_reply(route, sample_audit_insights())
             return
-        v4 = re.fullmatch(r"/api/projects/([^/]+)/world-model/v4/(debug|lines|gaps|reveals|export)", path)
+        v4 = re.fullmatch(
+            r"/api/projects/([^/]+)/world-model/v4/(debug|lines|gaps|reveals|export)",
+            path,
+        )
         if v4 and method == "GET":
             _, endpoint = v4.groups()
-            json_reply(route, {"project_id": v4.group(1), "endpoint": endpoint, "items": [{"id": f"{endpoint}-1", "title": "V4 调试项"}]})
+            json_reply(
+                route,
+                {
+                    "project_id": v4.group(1),
+                    "endpoint": endpoint,
+                    "items": [{"id": f"{endpoint}-1", "title": "V4 调试项"}],
+                },
+            )
             return
-        world = re.fullmatch(r"/api/projects/([^/]+)/world-model/(pages|snapshots|conflicts|proposals)", path)
+        world = re.fullmatch(
+            r"/api/projects/([^/]+)/world-model/(pages|snapshots|conflicts|proposals)",
+            path,
+        )
         if world and method == "GET":
             kind = world.group(2)
             payload = {
@@ -615,9 +847,21 @@ class MockForWinBackend:
         proposal_get = re.fullmatch(r"/api/projects/([^/]+)/proposals/([^/]+)", path)
         if proposal_get and method == "GET":
             proposal_id = proposal_get.group(2)
-            json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
+            json_reply(
+                route,
+                next(
+                    (
+                        item
+                        for item in self.world_proposals
+                        if item["id"] == proposal_id
+                    ),
+                    sample_world_proposals()[0],
+                ),
+            )
             return
-        proposal_decision = re.fullmatch(r"/api/projects/([^/]+)/proposals/([^/]+)/(approve|reject)", path)
+        proposal_decision = re.fullmatch(
+            r"/api/projects/([^/]+)/proposals/([^/]+)/(approve|reject)", path
+        )
         if proposal_decision and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
@@ -628,27 +872,73 @@ class MockForWinBackend:
                     proposal["status"] = status
                     proposal["reviewed_at"] = now_text()
                     proposal["review_reason"] = payload.get("reason", "")
-            json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
+            json_reply(
+                route,
+                next(
+                    (
+                        item
+                        for item in self.world_proposals
+                        if item["id"] == proposal_id
+                    ),
+                    sample_world_proposals()[0],
+                ),
+            )
             return
         book_state_edges = re.fullmatch(r"/api/projects/([^/]+)/book-state/edges", path)
         if book_state_edges and method == "GET":
-            json_reply(route, {"project_id": book_state_edges.group(1), "as_of_chapter": 2, "edges": sample_book_state_edges()})
+            json_reply(
+                route,
+                {
+                    "project_id": book_state_edges.group(1),
+                    "as_of_chapter": 2,
+                    "edges": sample_book_state_edges(),
+                },
+            )
             return
-        world_studio_search = re.fullmatch(r"/api/projects/([^/]+)/world-studio/search", path)
+        world_studio_search = re.fullmatch(
+            r"/api/projects/([^/]+)/world-studio/search", path
+        )
         if world_studio_search and method == "GET":
-            json_reply(route, {"project_id": world_studio_search.group(1), "results": sample_world_studio_search_results()})
+            json_reply(
+                route,
+                {
+                    "project_id": world_studio_search.group(1),
+                    "results": sample_world_studio_search_results(),
+                },
+            )
             return
-        export = re.fullmatch(r"/api/projects/([^/]+)/world-model/(export-obsidian|import-obsidian)", path)
+        export = re.fullmatch(
+            r"/api/projects/([^/]+)/world-model/(export-obsidian|import-obsidian)", path
+        )
         if export and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
             action = export.group(2)
             if action == "export-obsidian":
-                json_reply(route, {"ok": True, "vault_root": payload.get("vault_root") or "/tmp/forwin-vault", "exported_count": len(self.world_pages), "message": "已导出 WorldModel。"})
+                json_reply(
+                    route,
+                    {
+                        "ok": True,
+                        "vault_root": payload.get("vault_root") or "/tmp/forwin-vault",
+                        "exported_count": len(self.world_pages),
+                        "message": "已导出 WorldModel。",
+                    },
+                )
             else:
-                json_reply(route, {"ok": True, "vault_root": payload.get("vault_root") or "/tmp/forwin-vault", "proposal_count": len(self.world_proposals), "changed_paths": ["world.md"], "message": "已导入 proposal。"})
+                json_reply(
+                    route,
+                    {
+                        "ok": True,
+                        "vault_root": payload.get("vault_root") or "/tmp/forwin-vault",
+                        "proposal_count": len(self.world_proposals),
+                        "changed_paths": ["world.md"],
+                        "message": "已导入 proposal。",
+                    },
+                )
             return
-        proposal_review = re.fullmatch(r"/api/projects/([^/]+)/world-model/proposals/([^/]+)/review", path)
+        proposal_review = re.fullmatch(
+            r"/api/projects/([^/]+)/world-model/proposals/([^/]+)/review", path
+        )
         if proposal_review and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
@@ -656,7 +946,17 @@ class MockForWinBackend:
             for proposal in self.world_proposals:
                 if proposal["id"] == proposal_id:
                     proposal["status"] = payload.get("status") or "accepted"
-            json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
+            json_reply(
+                route,
+                next(
+                    (
+                        item
+                        for item in self.world_proposals
+                        if item["id"] == proposal_id
+                    ),
+                    sample_world_proposals()[0],
+                ),
+            )
             return
         api_error(route, f"Unhandled mock API route: {method} {path}", 501)
 
@@ -683,12 +983,20 @@ class MockForWinBackend:
     def project_detail(self, project_id: str) -> dict[str, Any]:
         project = deepcopy(self.project_ref(project_id))
         project["id"] = project_id
-        project.setdefault("chapters", [sample_chapter(1), sample_chapter(2, status="needs_review", has_review=True)])
+        project.setdefault(
+            "chapters",
+            [
+                sample_chapter(1),
+                sample_chapter(2, status="needs_review", has_review=True),
+            ],
+        )
         project.setdefault("latest_band_checkpoint", sample_band_checkpoint())
         project.setdefault("narrative_constraints", [sample_constraint()])
         project.setdefault("decision_timeline", sample_decision_events())
         project.setdefault("automation", sample_automation())
-        project.setdefault("generation_control", sample_generation_control(can_resume=True))
+        project.setdefault(
+            "generation_control", sample_generation_control(can_resume=True)
+        )
         project.setdefault("active_arc_id", "arc-1")
         project.setdefault("next_gate", "chapter_accepted")
         return project
@@ -781,12 +1089,27 @@ def sample_automation() -> dict[str, Any]:
         "daily_chapter_quota": 2,
         "daily_start_time": "09:30",
         "auto_publish": True,
-        "publish": {"platform": "fanqie", "book_name": "雾港潮生录", "create_if_missing": False},
-        "publish_bindings": [{"platform": "fanqie", "book_name": "雾港潮生录", "create_if_missing": False}],
+        "publish": {
+            "platform": "fanqie",
+            "book_name": "雾港潮生录",
+            "create_if_missing": False,
+        },
+        "publish_bindings": [
+            {
+                "platform": "fanqie",
+                "book_name": "雾港潮生录",
+                "create_if_missing": False,
+            }
+        ],
     }
 
 
-def sample_project(project_id: str = "project-1", *, title: str = "雾港潮生录", creation_status: str = "active") -> dict[str, Any]:
+def sample_project(
+    project_id: str = "project-1",
+    *,
+    title: str = "雾港潮生录",
+    creation_status: str = "active",
+) -> dict[str, Any]:
     return {
         "id": project_id,
         "title": title,
@@ -801,7 +1124,11 @@ def sample_project(project_id: str = "project-1", *, title: str = "雾港潮生�
         "needs_review_chapter_count": 1,
         "latest_stage": "paused_for_review",
         "pacing_summary": "稳定推进",
-        "chapters": [sample_chapter(1), sample_chapter(2, status="needs_review", has_review=True), sample_chapter(3, status="planned")],
+        "chapters": [
+            sample_chapter(1),
+            sample_chapter(2, status="needs_review", has_review=True),
+            sample_chapter(3, status="planned"),
+        ],
         "runtime_policy": sample_runtime_policy(),
         "runtime_policy_version": 1,
         "automation": sample_automation(),
@@ -809,7 +1136,13 @@ def sample_project(project_id: str = "project-1", *, title: str = "雾港潮生�
     }
 
 
-def sample_chapter(chapter_number: int, *, status: str = "accepted", has_review: bool = False, body: bool = False) -> dict[str, Any]:
+def sample_chapter(
+    chapter_number: int,
+    *,
+    status: str = "accepted",
+    has_review: bool = False,
+    body: bool = False,
+) -> dict[str, Any]:
     payload = {
         "chapter_number": chapter_number,
         "title": f"潮声第{chapter_number}章",
@@ -836,13 +1169,19 @@ def sample_generation_control(*, can_resume: bool = False) -> dict[str, Any]:
         "review_interval_chapters": 2,
         "chapters_until_review": 1,
         "chapters_until_replan_eligible": 2,
-        "blocking_reason": {"code": "review_required", "message": "第 2 章需要人工检查", "decision_event_id": "decision-2"},
+        "blocking_reason": {
+            "code": "review_required",
+            "message": "第 2 章需要人工检查",
+            "decision_event_id": "decision-2",
+        },
         "latest_band_checkpoint": sample_band_checkpoint(),
         "next_gate": "chapter_accepted",
     }
 
 
-def sample_generation_task(task_id: str, project_id: str = "project-1") -> dict[str, Any]:
+def sample_generation_task(
+    task_id: str, project_id: str = "project-1"
+) -> dict[str, Any]:
     return {
         "task_kind": "generation",
         "task_id": task_id,
@@ -862,7 +1201,12 @@ def sample_generation_task(task_id: str, project_id: str = "project-1") -> dict[
             {"stage": "planning_arc", "at": "2026-04-24T12:00:01Z"},
             {"stage": "assembling_context", "chapter": 1, "at": "2026-04-24T12:00:02Z"},
             {"stage": "writing_chapter", "chapter": 1, "at": "2026-04-24T12:00:03Z"},
-            {"stage": "paused_for_review", "chapter": 2, "at": "2026-04-24T12:00:04Z", "message": "人工检查点"},
+            {
+                "stage": "paused_for_review",
+                "chapter": 2,
+                "at": "2026-04-24T12:00:04Z",
+                "message": "人工检查点",
+            },
         ],
         "generation_control": sample_generation_control(can_resume=True),
         "pausable": True,
@@ -874,7 +1218,9 @@ def sample_generation_task(task_id: str, project_id: str = "project-1") -> dict[
     }
 
 
-def sample_upload_job(job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def sample_upload_job(
+    job_id: str, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     payload = payload or {}
     return {
         "job_id": job_id,
@@ -920,7 +1266,14 @@ def sample_band_checkpoint() -> dict[str, Any]:
         "summary": "节奏略慢，需要人工确认。",
         "boundary_kind": "band_end",
         "boundary_chapter": 2,
-        "issues": [{"severity": "warn", "issue_group": "pacing", "category": "density", "description": "爽点密度不足"}],
+        "issues": [
+            {
+                "severity": "warn",
+                "issue_group": "pacing",
+                "category": "density",
+                "description": "爽点密度不足",
+            }
+        ],
         "decision_refs": [{"id": "decision-3", "event_type": "band_checkpoint_hit"}],
     }
 
@@ -940,9 +1293,36 @@ def sample_constraint() -> dict[str, Any]:
 
 def sample_decision_events() -> list[dict[str, Any]]:
     return [
-        {"id": "decision-1", "scope": "project", "event_family": "business_event", "event_type": "run_started", "summary": "生成启动", "created_at": "2026-04-24T12:00:00Z", "causal_root_id": "decision-1"},
-        {"id": "decision-2", "scope": "chapter", "chapter_number": 2, "event_family": "evaluation_verdict", "event_type": "review_verdict_recorded", "summary": "第 2 章需要人工检查", "reason": "人工检查间隔", "parent_event_id": "decision-1", "causal_root_id": "decision-1"},
-        {"id": "decision-3", "scope": "band", "band_id": "band-1", "event_family": "audit_action", "event_type": "band_checkpoint_hit", "summary": "Band checkpoint warn", "parent_event_id": "decision-2", "causal_root_id": "decision-1"},
+        {
+            "id": "decision-1",
+            "scope": "project",
+            "event_family": "business_event",
+            "event_type": "run_started",
+            "summary": "生成启动",
+            "created_at": "2026-04-24T12:00:00Z",
+            "causal_root_id": "decision-1",
+        },
+        {
+            "id": "decision-2",
+            "scope": "chapter",
+            "chapter_number": 2,
+            "event_family": "evaluation_verdict",
+            "event_type": "review_verdict_recorded",
+            "summary": "第 2 章需要人工检查",
+            "reason": "人工检查间隔",
+            "parent_event_id": "decision-1",
+            "causal_root_id": "decision-1",
+        },
+        {
+            "id": "decision-3",
+            "scope": "band",
+            "band_id": "band-1",
+            "event_family": "audit_action",
+            "event_type": "band_checkpoint_hit",
+            "summary": "Band checkpoint warn",
+            "parent_event_id": "decision-2",
+            "causal_root_id": "decision-1",
+        },
     ]
 
 
@@ -955,8 +1335,17 @@ def sample_review(project_id: str, chapter_number: int) -> dict[str, Any]:
         "verdict": "needs_review",
         "recommended_action": "manual_accept",
         "review_summary": "章节可接受，但需要人工确认伏笔密度。",
-        "issues": [{"severity": "warn", "issue_group": "pacing", "issue_type": "delight_density", "description": "爽点密度偏低"}],
-        "decision_refs": [{"id": "decision-2", "event_type": "review_verdict_recorded"}],
+        "issues": [
+            {
+                "severity": "warn",
+                "issue_group": "pacing",
+                "issue_type": "delight_density",
+                "description": "爽点密度偏低",
+            }
+        ],
+        "decision_refs": [
+            {"id": "decision-2", "event_type": "review_verdict_recorded"}
+        ],
         "review_engine_decision": {
             "rule_id": "arc_patcher_disabled",
             "reason": "arc patcher disabled",
@@ -977,21 +1366,41 @@ def sample_causal_replay() -> dict[str, Any]:
     }
 
 
-def sample_governance_insights() -> dict[str, Any]:
+def sample_audit_insights() -> dict[str, Any]:
     return {
         "most_common_blocking_reasons": [{"name": "review_required", "count": 2}],
         "top_override_rule_types": [{"name": "band_checkpoint", "count": 1}],
         "forced_accept_frequency": 0,
         "recent_band_checkpoint_distribution": [{"name": "warn", "count": 1}],
         "issue_group_distribution": [{"name": "pacing", "count": 2}],
-        "recommended_adjustments": [{"type": "tighten", "target": "pacing", "reason": "Review warn 较多", "count": 2}],
-        "recent_examples": [{"event_id": "decision-2", "event_type": "review_verdict_recorded", "summary": "第 2 章需要人工检查", "chapter_number": 2}],
+        "recommended_adjustments": [
+            {
+                "type": "tighten",
+                "target": "pacing",
+                "reason": "Review warn 较多",
+                "count": 2,
+            }
+        ],
+        "recent_examples": [
+            {
+                "event_id": "decision-2",
+                "event_type": "review_verdict_recorded",
+                "summary": "第 2 章需要人工检查",
+                "chapter_number": 2,
+            }
+        ],
     }
 
 
 def sample_genesis_detail(project_id: str) -> dict[str, Any]:
     stage_states = {
-        stage: {"stage_key": stage, "status": "drafted", "locked": False, "updated_at": "2026-04-24T12:00:00Z", "last_trace_id": ""}
+        stage: {
+            "stage_key": stage,
+            "status": "drafted",
+            "locked": False,
+            "updated_at": "2026-04-24T12:00:00Z",
+            "last_trace_id": "",
+        }
         for stage in GENESIS_STAGES
     }
     return {
@@ -1046,12 +1455,28 @@ def sample_genesis_detail(project_id: str) -> dict[str, Any]:
                     "long_arcs": ["寻找潮门密钥"],
                     "core_cast": [{"id": "char-1", "name": "林夜"}],
                     "factions": [{"id": "faction-1", "name": "灯塔会"}],
-                    "arcs": [{"arc_number": 1, "title": "雾港初潮", "chapter_start": 1, "chapter_end": 6, "chapter_count": 6}],
+                    "arcs": [
+                        {
+                            "arc_number": 1,
+                            "title": "雾港初潮",
+                            "chapter_start": 1,
+                            "chapter_end": 6,
+                            "chapter_count": 6,
+                        }
+                    ],
                 },
             },
             "book_arc_blueprint": {
                 "summary": "第一卷从失踪航线切入。",
-                "arcs": [{"arc_number": 1, "title": "雾港初潮", "chapter_start": 1, "chapter_end": 6, "chapter_count": 6}],
+                "arcs": [
+                    {
+                        "arc_number": 1,
+                        "title": "雾港初潮",
+                        "chapter_start": 1,
+                        "chapter_end": 6,
+                        "chapter_count": 6,
+                    }
+                ],
             },
             "execution_bootstrap": {
                 "pipeline": "strict_blackbox",
@@ -1117,7 +1542,11 @@ def sample_world_pages(project_id: str) -> list[dict[str, Any]]:
             "title": "林夜",
             "vault_path": "Entities/林夜.md",
             "markdown": "# 林夜\n\n## Canon Summary\n见习记录员。\n\n## Manual Notes\n_empty_\n\n## Human Questions\n_empty_\n\n## Proposed Correction\n_empty_\n",
-            "frontmatter": {"status": "active", "node_id": "linye", "source_refs": ["book_state:node:linye"]},
+            "frontmatter": {
+                "status": "active",
+                "node_id": "linye",
+                "source_refs": ["book_state:node:linye"],
+            },
             "projection_kind": "world_studio",
             "projection_version": "obsidian_v2",
             "source_digest": "1234567890abcdef",
@@ -1141,7 +1570,10 @@ def sample_world_pages(project_id: str) -> list[dict[str, Any]]:
             "title": "雾港",
             "vault_path": "Locations/雾港.md",
             "markdown": "# 雾港\n\n## Canon Summary\n潮雾之城。\n\n## Manual Notes\n_empty_\n\n## Human Questions\n_empty_\n\n## Proposed Correction\n_empty_\n",
-            "frontmatter": {"node_id": "fog-port", "source_refs": ["book_state:node:fog-port"]},
+            "frontmatter": {
+                "node_id": "fog-port",
+                "source_refs": ["book_state:node:fog-port"],
+            },
             "projection_kind": "world_studio",
             "projection_version": "obsidian_v2",
             "source_digest": "abcdef1234567890",
@@ -1279,7 +1711,9 @@ def sample_character_personalities() -> list[dict[str, Any]]:
     ]
 
 
-def sample_personality_coverage(project_id: str, characters: list[dict[str, Any]]) -> dict[str, Any]:
+def sample_personality_coverage(
+    project_id: str, characters: list[dict[str, Any]]
+) -> dict[str, Any]:
     return {
         "schema_version": "character.personality_coverage.v1",
         "project_id": project_id,
@@ -1321,7 +1755,9 @@ def sample_personality_metrics(project_id: str) -> dict[str, Any]:
     }
 
 
-def sample_personality_preview(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def sample_personality_preview(
+    project_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     name = str(payload.get("name") or "").strip() or "新角色"
     return {
         "schema_version": "character.personality_preview.v1",
@@ -1348,7 +1784,9 @@ def switch_home_tab(page: Page, tab: str) -> None:
     page.get_by_role("button", name=labels[tab]).click()
 
 
-def goto_publishers(page: Page, base_url: str, backend: MockForWinBackend, *, bridge: bool = True) -> None:
+def goto_publishers(
+    page: Page, base_url: str, backend: MockForWinBackend, *, bridge: bool = True
+) -> None:
     if bridge:
         install_extension_bridge(page)
     backend.install(page)

@@ -5,7 +5,7 @@ import time
 from typing import Any, Callable
 
 from forwin.generation.task_payload import GenerationExecutionContext
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.generation.pipeline import ChapterPipeline
@@ -66,13 +66,16 @@ def _build_task_progress_changes(
 
 def _paused_chapters_message(result, *, prefix: str = "") -> str:
     system_block_chapters = [
-        int(chapter)
-        for chapter in getattr(result, "system_block_chapters", []) or []
+        int(chapter) for chapter in getattr(result, "system_block_chapters", []) or []
     ]
     if system_block_chapters:
         chapter_str = ", ".join(str(chapter) for chapter in system_block_chapters)
-        return f"{prefix}章节 {chapter_str} 遇到 canon system block，需处理系统阻断后重试"
-    paused_str = ", ".join(str(chapter) for chapter in getattr(result, "paused_chapters", []) or [])
+        return (
+            f"{prefix}章节 {chapter_str} 遇到 canon system block，需处理系统阻断后重试"
+        )
+    paused_str = ", ".join(
+        str(chapter) for chapter in getattr(result, "paused_chapters", []) or []
+    )
     if prefix:
         return f"{prefix}遇到质量门阻断，需自动修复或重试章节: {paused_str}"
     return f"质量门阻断，需自动修复或重试章节: {paused_str}"
@@ -128,7 +131,9 @@ def _record_task_observability_event(
         session.commit()
     except Exception:  # noqa: BLE001
         session.rollback()
-        logging.getLogger(__name__).debug("Ignoring task observability event failure.", exc_info=True)
+        logging.getLogger(__name__).debug(
+            "Ignoring task observability event failure.", exc_info=True
+        )
     finally:
         session.close()
 
@@ -201,7 +206,9 @@ def run_pipeline_task(
                 payload={"status_after": "running"},
             )
             result = operation()
-            observed_project_id = str(getattr(result, "project_id", "") or observed_project_id or "").strip()
+            observed_project_id = str(
+                getattr(result, "project_id", "") or observed_project_id or ""
+            ).strip()
             if observed_project_id and hasattr(span, "context"):
                 span.context = OperationContext(
                     project_id=observed_project_id,
@@ -210,8 +217,12 @@ def run_pipeline_task(
                     operation_id=task_id,
                 )
             span.tag("status_after", str(result.status or ""))
-            span.metric("failed_chapters", len(getattr(result, "failed_chapters", []) or []))
-            span.metric("paused_chapters", len(getattr(result, "paused_chapters", []) or []))
+            span.metric(
+                "failed_chapters", len(getattr(result, "failed_chapters", []) or [])
+            )
+            span.metric(
+                "paused_chapters", len(getattr(result, "paused_chapters", []) or [])
+            )
             update_task(
                 task_id,
                 status=result.status,
@@ -228,9 +239,15 @@ def run_pipeline_task(
                 summary="生成任务 operation 已完成。",
                 payload={
                     "status_after": result.status,
-                    "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
-                    "failed_chapters": list(getattr(result, "failed_chapters", []) or []),
-                    "paused_chapters": list(getattr(result, "paused_chapters", []) or []),
+                    "duration_ms": max(
+                        0, int((time.perf_counter() - started_at) * 1000)
+                    ),
+                    "failed_chapters": list(
+                        getattr(result, "failed_chapters", []) or []
+                    ),
+                    "paused_chapters": list(
+                        getattr(result, "paused_chapters", []) or []
+                    ),
                 },
             )
         if progress_handler is not None:
@@ -242,7 +259,9 @@ def run_pipeline_task(
                 logger.exception("Post-completion handler failed for task %s", task_id)
     except Exception as exc:
         logger.exception("%s for task %s", error_message, task_id)
-        observed_project_id = str(getattr(exc, "project_id", observed_project_id) or observed_project_id or "").strip()
+        observed_project_id = str(
+            getattr(exc, "project_id", observed_project_id) or observed_project_id or ""
+        ).strip()
         _record_task_observability_event(
             pipeline,
             task_id=task_id,
@@ -407,6 +426,7 @@ def run_continue_project_with_context(
     component: str = "api",
 ) -> None:
     task_id = context.task_id
+
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
         changes = _build_task_progress_changes(event, payload)
         if changes:
@@ -448,9 +468,13 @@ def run_continue_project_with_context(
                 ),
             )
         elif result.paused_chapters:
-            update_task(task_id, message=_paused_chapters_message(result, prefix="继续执行后"))
+            update_task(
+                task_id, message=_paused_chapters_message(result, prefix="继续执行后")
+            )
         elif result.completed_chapters:
-            completed_str = ", ".join(str(chapter) for chapter in result.completed_chapters)
+            completed_str = ", ".join(
+                str(chapter) for chapter in result.completed_chapters
+            )
             update_task(task_id, message=f"继续执行完成章节: {completed_str}")
         else:
             update_task(task_id, message="没有剩余章节需要继续执行。")

@@ -34,8 +34,8 @@ class GateDelegationStage:
     ) -> GateResolution:
         request = GateDelegationRequest(
             project_id=project_id,
-            task_id=self._governance_task_id,
-            causal_root_id=self._governance_root_event_id,
+            task_id=self._audit_task_id,
+            causal_root_id=self._audit_root_event_id,
             parent_event_id=parent_event_id,
             gate_kind=gate_kind,
             scope=scope,
@@ -131,7 +131,7 @@ class GateDelegationStage:
             return False
         checkpoint.status = "overridden"
         checkpoint.reason = outcome.reason
-        checkpoint.related_task_id = self._governance_task_id
+        checkpoint.related_task_id = self._audit_task_id
         checkpoint.resolved_at = datetime.now(timezone.utc)
         updater.session.add(checkpoint)
         updater.session.flush()

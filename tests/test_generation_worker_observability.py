@@ -13,9 +13,12 @@ from forwin.generation.worker_observability import (
     record_worker_claim,
 )
 from forwin.generation.worker import run_one_generation_task
-from forwin.governance import DecisionEventType, ensure_decision_event_type
+from forwin.audit.events import (
+    DecisionEventType,
+    ensure_decision_event_type,
+)
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
 from forwin.models.task import GenerationTask
@@ -52,7 +55,9 @@ def test_generation_worker_decision_event_types_are_registered() -> None:
     )
 
 
-def _seed_project_task(Session, *, task_id: str, project_id: str = "project-worker-obs") -> None:
+def _seed_project_task(
+    Session, *, task_id: str, project_id: str = "project-worker-obs"
+) -> None:
     with Session.begin() as session:
         session.add(
             Project(
@@ -97,7 +102,9 @@ def test_record_worker_claim_writes_project_scoped_decision_event() -> None:
             claim = GenerationTaskClaimResult(task=task, claim_kind="queued")
             record_worker_claim(
                 session_factory=Session,
-                config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
+                config=InfrastructureConfig(
+                    database_url=database_url, minimax_api_key=""
+                ),
                 worker_id="worker-1",
                 claim=claim,
                 resume_from_chapter=4,
@@ -139,7 +146,9 @@ def test_record_worker_reclaim_includes_previous_lease_metadata() -> None:
             )
             record_worker_claim(
                 session_factory=Session,
-                config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
+                config=InfrastructureConfig(
+                    database_url=database_url, minimax_api_key=""
+                ),
                 worker_id="worker-2",
                 claim=claim,
                 resume_from_chapter=9,
@@ -177,7 +186,9 @@ def test_generation_worker_span_records_performance_span() -> None:
 
         with Session() as session:
             row = session.execute(
-                select(PerformanceSpan).where(PerformanceSpan.task_id == "task-worker-span")
+                select(PerformanceSpan).where(
+                    PerformanceSpan.task_id == "task-worker-span"
+                )
             ).scalar_one()
         assert row.span_name == "generation_worker.claim"
         assert row.span_kind == "worker"
@@ -247,11 +258,17 @@ def test_run_one_generation_task_records_claim_event_and_execute_span() -> None:
         events = _task_events(Session, "task-worker-integrated-claim")
         assert "generation_worker_claimed" in [event.event_type for event in events]
         with Session() as session:
-            spans = session.execute(
-                select(PerformanceSpan)
-                .where(PerformanceSpan.task_id == "task-worker-integrated-claim")
-                .order_by(PerformanceSpan.created_at.asc(), PerformanceSpan.id.asc())
-            ).scalars().all()
+            spans = (
+                session.execute(
+                    select(PerformanceSpan)
+                    .where(PerformanceSpan.task_id == "task-worker-integrated-claim")
+                    .order_by(
+                        PerformanceSpan.created_at.asc(), PerformanceSpan.id.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
         assert "generation_worker.claim" in [span.span_name for span in spans]
         assert "generation_worker.execute" in [span.span_name for span in spans]
         assert all(span.component == "worker" for span in spans)
@@ -324,7 +341,8 @@ def test_run_one_generation_task_records_heartbeat_failure_event() -> None:
         )
 
         assert "generation_worker_heartbeat_failed" in [
-            event.event_type for event in _task_events(Session, "task-worker-heartbeat-failed")
+            event.event_type
+            for event in _task_events(Session, "task-worker-heartbeat-failed")
         ]
     finally:
         engine.dispose()
@@ -358,9 +376,14 @@ def test_run_one_generation_task_records_execution_failed_event() -> None:
         except RuntimeError:
             pass
         else:
-            raise AssertionError("run_one_generation_task should propagate executor failure")
+            raise AssertionError(
+                "run_one_generation_task should propagate executor failure"
+            )
 
-        event_types = [event.event_type for event in _task_events(Session, "task-worker-execution-failed")]
+        event_types = [
+            event.event_type
+            for event in _task_events(Session, "task-worker-execution-failed")
+        ]
         assert "generation_worker_execution_failed" in event_types
         with Session() as session:
             row = session.get(GenerationTask, "task-worker-execution-failed")

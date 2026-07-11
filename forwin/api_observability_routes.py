@@ -19,7 +19,7 @@ from forwin.api_schema import (
 from forwin.config import InfrastructureConfig
 from forwin.models.draft import ChapterDraft
 from forwin.models.genesis import PromptTrace
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
 from forwin.observability.query_service import ObservabilityQueryService
@@ -90,7 +90,9 @@ def build_handlers(
             rows = sorted(
                 rows,
                 key=lambda row: (
-                    0 if not str(getattr(row, "parent_event_id", "") or "").strip() else 1,
+                    0
+                    if not str(getattr(row, "parent_event_id", "") or "").strip()
+                    else 1,
                     str(getattr(row, "created_at", "") or ""),
                     str(getattr(row, "id", "") or ""),
                 ),
@@ -106,7 +108,9 @@ def build_handlers(
                         + [
                             item
                             for row in rows
-                            for item in collect_operation_ids(json_load_object(row.payload_json))
+                            for item in collect_operation_ids(
+                                json_load_object(row.payload_json)
+                            )
                         ]
                     )
                 ),
@@ -145,7 +149,11 @@ def build_handlers(
         found: list[str] = []
         if isinstance(value, dict):
             for key, item in value.items():
-                if str(key) == "operation_id" and isinstance(item, str) and item.strip():
+                if (
+                    str(key) == "operation_id"
+                    and isinstance(item, str)
+                    and item.strip()
+                ):
                     found.append(item.strip())
                 found.extend(collect_operation_ids(item))
         elif isinstance(value, list):
@@ -153,12 +161,17 @@ def build_handlers(
                 found.extend(collect_operation_ids(item))
         return found
 
-    def stage_duration_aggregates(event_rows: list[DecisionEvent]) -> list[StageDurationAggregate]:
+    def stage_duration_aggregates(
+        event_rows: list[DecisionEvent],
+    ) -> list[StageDurationAggregate]:
         grouped: dict[str, dict[str, int]] = {}
         for event in event_rows:
             payload = json_load_object(event.payload_json)
             event_type = str(event.event_type or "")
-            if event_type not in {"stage_duration_summary", "stage_exited"} and "duration_ms" not in payload:
+            if (
+                event_type not in {"stage_duration_summary", "stage_exited"}
+                and "duration_ms" not in payload
+            ):
                 continue
             try:
                 duration_ms = max(0, int(payload.get("duration_ms") or 0))
@@ -166,10 +179,18 @@ def build_handlers(
                 continue
             if duration_ms <= 0:
                 continue
-            stage = str(payload.get("stage") or event_type or "unknown").strip() or "unknown"
+            stage = (
+                str(payload.get("stage") or event_type or "unknown").strip()
+                or "unknown"
+            )
             current = grouped.setdefault(
                 stage,
-                {"event_count": 0, "total_duration_ms": 0, "max_duration_ms": 0, "last_duration_ms": 0},
+                {
+                    "event_count": 0,
+                    "total_duration_ms": 0,
+                    "max_duration_ms": 0,
+                    "last_duration_ms": 0,
+                },
             )
             current["event_count"] += 1
             current["total_duration_ms"] += duration_ms
@@ -199,7 +220,9 @@ def build_handlers(
             uri=uri,
             kind=str(value.get("kind") or value.get("artifact_kind") or "").strip(),
             redaction_state=str(value.get("redaction_state") or "").strip(),
-            source_event_id=str(value.get("source_event_id") or source_event_id or "").strip(),
+            source_event_id=str(
+                value.get("source_event_id") or source_event_id or ""
+            ).strip(),
             trace_id=str(value.get("trace_id") or trace_id or "").strip(),
             hash=str(value.get("hash") or "").strip(),
             size=size,
@@ -237,21 +260,29 @@ def build_handlers(
                 trace_id=trace_id,
             )
             if normalized_self is not None and (
-                normalized_self.redaction_state or normalized_self.kind or normalized_self.source_event_id
+                normalized_self.redaction_state
+                or normalized_self.kind
+                or normalized_self.source_event_id
             ):
                 found.append(normalized_self)
             for item in value.values():
                 found.extend(
-                    collect_artifact_manifest(item, source_event_id=source_event_id, trace_id=trace_id)
+                    collect_artifact_manifest(
+                        item, source_event_id=source_event_id, trace_id=trace_id
+                    )
                 )
         elif isinstance(value, list):
             for item in value:
                 found.extend(
-                    collect_artifact_manifest(item, source_event_id=source_event_id, trace_id=trace_id)
+                    collect_artifact_manifest(
+                        item, source_event_id=source_event_id, trace_id=trace_id
+                    )
                 )
         return found
 
-    def dedupe_manifest(items: list[ArtifactManifestItem]) -> list[ArtifactManifestItem]:
+    def dedupe_manifest(
+        items: list[ArtifactManifestItem],
+    ) -> list[ArtifactManifestItem]:
         deduped: dict[tuple[str, str, str], ArtifactManifestItem] = {}
         for item in items:
             key = (item.uri, item.kind, item.source_event_id)
@@ -259,7 +290,9 @@ def build_handlers(
                 deduped[key] = item
         return list(deduped.values())
 
-    def get_chapter_observability_ledger(project_id: str, chapter_number: int) -> ChapterLedgerResponse:
+    def get_chapter_observability_ledger(
+        project_id: str, chapter_number: int
+    ) -> ChapterLedgerResponse:
         normalized_project_id = str(project_id or "").strip()
         normalized_chapter = int(chapter_number or 0)
         if not normalized_project_id or normalized_chapter <= 0:
@@ -280,12 +313,16 @@ def build_handlers(
                 limit=500,
                 ascending=True,
             )
-            traces = session.execute(
-                select(PromptTrace)
-                .where(PromptTrace.project_id == normalized_project_id)
-                .order_by(PromptTrace.created_at.asc(), PromptTrace.id.asc())
-                .limit(500)
-            ).scalars().all()
+            traces = (
+                session.execute(
+                    select(PromptTrace)
+                    .where(PromptTrace.project_id == normalized_project_id)
+                    .order_by(PromptTrace.created_at.asc(), PromptTrace.id.asc())
+                    .limit(500)
+                )
+                .scalars()
+                .all()
+            )
             trace_ids: list[str] = []
             artifact_uris: list[str] = []
             operation_ids: list[str] = []
@@ -293,20 +330,32 @@ def build_handlers(
             for trace in traces:
                 input_snapshot = json_load_object(trace.input_snapshot_json)
                 output_summary = json_load_object(trace.output_summary_json)
-                trace_chapter = int(input_snapshot.get("chapter_number") or output_summary.get("chapter_number") or 0)
+                trace_chapter = int(
+                    input_snapshot.get("chapter_number")
+                    or output_summary.get("chapter_number")
+                    or 0
+                )
                 if trace_chapter in {0, normalized_chapter}:
                     trace_ids.append(trace.id)
                     artifact_uris.extend(collect_artifact_uris(input_snapshot))
                     artifact_uris.extend(collect_artifact_uris(output_summary))
                     operation_ids.extend(collect_operation_ids(input_snapshot))
                     operation_ids.extend(collect_operation_ids(output_summary))
-                    artifact_manifest.extend(collect_artifact_manifest(input_snapshot, trace_id=trace.id))
-                    artifact_manifest.extend(collect_artifact_manifest(output_summary, trace_id=trace.id))
-            drafts = session.execute(
-                select(ChapterDraft)
-                .where(ChapterDraft.chapter_plan_id == plan.id)
-                .order_by(ChapterDraft.created_at.asc(), ChapterDraft.id.asc())
-            ).scalars().all()
+                    artifact_manifest.extend(
+                        collect_artifact_manifest(input_snapshot, trace_id=trace.id)
+                    )
+                    artifact_manifest.extend(
+                        collect_artifact_manifest(output_summary, trace_id=trace.id)
+                    )
+            drafts = (
+                session.execute(
+                    select(ChapterDraft)
+                    .where(ChapterDraft.chapter_plan_id == plan.id)
+                    .order_by(ChapterDraft.created_at.asc(), ChapterDraft.id.asc())
+                )
+                .scalars()
+                .all()
+            )
             for draft in drafts:
                 raw_response = str(draft.llm_raw_response or "").strip()
                 if raw_response:
@@ -318,9 +367,13 @@ def build_handlers(
                     operation_ids.append(str(event.task_id or "").strip())
                 operation_ids.extend(collect_operation_ids(payload))
                 artifact_manifest.extend(
-                    collect_artifact_manifest(payload, source_event_id=str(event.id or ""))
+                    collect_artifact_manifest(
+                        payload, source_event_id=str(event.id or "")
+                    )
                 )
-            deduped_artifacts = list(dict.fromkeys(item for item in artifact_uris if item))
+            deduped_artifacts = list(
+                dict.fromkeys(item for item in artifact_uris if item)
+            )
             return ChapterLedgerResponse(
                 project_id=normalized_project_id,
                 chapter_number=normalized_chapter,
@@ -329,11 +382,15 @@ def build_handlers(
                 prompt_trace_ids=list(dict.fromkeys(trace_ids)),
                 artifact_uris=deduped_artifacts,
                 stage_durations=stage_duration_aggregates(event_rows),
-                operation_ids=list(dict.fromkeys(item for item in operation_ids if item)),
+                operation_ids=list(
+                    dict.fromkeys(item for item in operation_ids if item)
+                ),
                 artifact_manifest=dedupe_manifest(artifact_manifest),
             )
 
-    def read_artifact_preview(uri: str, preview_chars: int = 20000) -> ArtifactReadResponse:
+    def read_artifact_preview(
+        uri: str, preview_chars: int = 20000
+    ) -> ArtifactReadResponse:
         normalized_uri = str(uri or "").strip()
         if not normalized_uri:
             raise HTTPException(404, "artifact 不存在")
@@ -370,9 +427,13 @@ def build_handlers(
         normalized_project_id = str(project_id or "").strip()
         if not normalized_project_id:
             raise HTTPException(404, "项目不存在")
-        return query_service().project_performance_report(normalized_project_id, limit=limit)
+        return query_service().project_performance_report(
+            normalized_project_id, limit=limit
+        )
 
-    def get_chapter_performance_report(project_id: str, chapter_number: int, limit: int = 1000):
+    def get_chapter_performance_report(
+        project_id: str, chapter_number: int, limit: int = 1000
+    ):
         normalized_project_id = str(project_id or "").strip()
         normalized_chapter = int(chapter_number or 0)
         if not normalized_project_id or normalized_chapter <= 0:

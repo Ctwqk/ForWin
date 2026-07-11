@@ -14,7 +14,10 @@ from forwin.generation.review_auto_retry import (
     reset_chapter_for_auto_review_retry,
 )
 from forwin.generation.run_target import resolve_generation_run_target
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.project import ChapterPlan, Project
 from forwin.state.updater import StateUpdater
 
@@ -57,7 +60,9 @@ class GenerationAutoContinueController:
             return self._record_decision(
                 project_id=project_id,
                 parent_task_id=parent_task_id,
-                decision=AutoContinueDecision(decision="stop", reason="auto_continue_disabled"),
+                decision=AutoContinueDecision(
+                    decision="stop", reason="auto_continue_disabled"
+                ),
             )
         terminal_block_reason = self._terminal_block_reason(result)
         if terminal_block_reason:
@@ -73,7 +78,9 @@ class GenerationAutoContinueController:
             return self._record_decision(
                 project_id=project_id,
                 parent_task_id=parent_task_id,
-                decision=AutoContinueDecision(decision="stop", reason=terminal_block_reason),
+                decision=AutoContinueDecision(
+                    decision="stop", reason=terminal_block_reason
+                ),
             )
 
         with self.session_factory() as session:
@@ -81,9 +88,13 @@ class GenerationAutoContinueController:
             if project is None:
                 return AutoContinueDecision(decision="stop", reason="project_not_found")
 
-            target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
+            target_total_chapters = int(
+                getattr(project, "target_total_chapters", 0) or 0
+            )
             normalized_until = (
-                target_total_chapters if run_until_chapter is None else int(run_until_chapter)
+                target_total_chapters
+                if run_until_chapter is None
+                else int(run_until_chapter)
             )
             project_title = str(getattr(project, "title", "") or "")
             project_genre = str(getattr(project, "genre", "") or "")
@@ -95,7 +106,11 @@ class GenerationAutoContinueController:
                 ).scalars()
             )
             accepted_max = max(
-                (int(plan.chapter_number or 0) for plan in plans if str(plan.status or "") == "accepted"),
+                (
+                    int(plan.chapter_number or 0)
+                    for plan in plans
+                    if str(plan.status or "") == "accepted"
+                ),
                 default=0,
             )
             if any(str(plan.status or "") == "needs_review" for plan in plans):
@@ -124,7 +139,8 @@ class GenerationAutoContinueController:
             if accepted_max >= normalized_until:
                 reason = (
                     "target_total_reached"
-                    if target_total_chapters > 0 and accepted_max >= target_total_chapters
+                    if target_total_chapters > 0
+                    and accepted_max >= target_total_chapters
                     else "run_until_reached"
                 )
                 return self._record_decision(
@@ -189,7 +205,9 @@ class GenerationAutoContinueController:
                 decision="continue",
                 reason=reason,
                 next_task_id=next_task_id,
-                next_chapter=workset.chapter_numbers[0] if workset.chapter_numbers else next_chapter,
+                next_chapter=workset.chapter_numbers[0]
+                if workset.chapter_numbers
+                else next_chapter,
                 run_until_chapter=target.run_until_chapter,
                 target_total_chapters=target.target_total_chapters,
                 requested_chapters=workset.requested_chapters,
@@ -202,7 +220,9 @@ class GenerationAutoContinueController:
             return "cancelled"
         if list(getattr(result, "failed_chapters", []) or []):
             return "failed_chapters_blocker"
-        paused_chapters = set(_chapter_numbers(getattr(result, "paused_chapters", []) or []))
+        paused_chapters = set(
+            _chapter_numbers(getattr(result, "paused_chapters", []) or [])
+        )
         completed_chapters = set(
             _chapter_numbers(getattr(result, "completed_chapters", []) or [])
         )
@@ -267,7 +287,10 @@ class GenerationAutoContinueController:
         run_until_chapter: int | None,
         max_chapters: int | None,
     ) -> AutoContinueDecision | None:
-        if terminal_block_reason not in {"pending_review_blocker", "needs_review_blocker"}:
+        if terminal_block_reason not in {
+            "pending_review_blocker",
+            "needs_review_blocker",
+        }:
             return None
         project_id = str(getattr(result, "project_id", "") or "").strip()
         if not project_id:
@@ -308,9 +331,13 @@ class GenerationAutoContinueController:
             if _prior_auto_review_retry_count(session, project_id, chapter_number) > 0:
                 return None
 
-            target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
+            target_total_chapters = int(
+                getattr(project, "target_total_chapters", 0) or 0
+            )
             normalized_until = (
-                target_total_chapters if run_until_chapter is None else int(run_until_chapter)
+                target_total_chapters
+                if run_until_chapter is None
+                else int(run_until_chapter)
             )
             target = resolve_generation_run_target(
                 project,
@@ -345,7 +372,8 @@ class GenerationAutoContinueController:
                     parent_task_id=parent_task_id,
                     decision=AutoContinueDecision(
                         decision="stop",
-                        reason=workset.reason or "no_remaining_chapters_after_auto_retry",
+                        reason=workset.reason
+                        or "no_remaining_chapters_after_auto_retry",
                         next_chapter=chapter_number,
                         run_until_chapter=target.run_until_chapter,
                         target_total_chapters=target.target_total_chapters,

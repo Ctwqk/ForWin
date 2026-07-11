@@ -8,7 +8,7 @@ from forwin.models import Entity, Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.protocol import EntityMention, WriterOutput
-from forwin.review import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 
 
 def _session():

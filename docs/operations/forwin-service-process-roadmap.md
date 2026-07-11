@@ -20,7 +20,7 @@ while running role-specific processes:
 - future `knowledge-worker`
 - future `outbox-worker`
 
-Genesis/planning, review/governance, and BookState/canon stay in-process until
+Genesis/planning, review/project control/audit, and BookState/canon stay in-process until
 their port contracts, idempotency behavior, and recovery behavior are proven.
 
 ## Logical Write Ownership
@@ -34,7 +34,7 @@ allowed to mutate each state family.
 | generation task enqueue/control | web API through generation task port | Creates, pauses, cancels, and reports task state |
 | generation task lease/progress | generation-worker | Claims queued or expired tasks and refreshes heartbeat |
 | BookState/canon writes | CanonPort | The only intended entry for accepted graph deltas and snapshots |
-| review/governance results | ReviewPort and generation runtime | Review stays synchronous in the generation correctness path |
+| review/project-control/audit results | ReviewPort, project-control application boundary, audit event store, and generation runtime | Review stays synchronous in the generation correctness path; operator control and audit remain separately owned |
 | publisher upload/comment/cover jobs | Publisher runtime, publisher-worker, publisher-browser API calls | Browser automation should not write the database directly |
 | MCP operations | forwin-mcp through HTTP API | MCP must not bypass workflow APIs or inspect raw database state |
 | knowledge index writes | KnowledgeIndexPort, later knowledge-worker | Expensive rebuild/index work can become async before read APIs split |

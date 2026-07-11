@@ -15,7 +15,7 @@ from forwin.generation.gate_delegation import GateDelegationService
 from forwin.generation.pipeline_core.acceptance import AcceptanceStage
 from forwin.generation.pipeline_core.finalization import FinalizationStage
 from forwin.generation.pipeline_core.gate_delegation import GateDelegationStage
-from forwin.generation.pipeline_core.governance import GovernanceStage
+from forwin.generation.pipeline_core.audit_control import AuditControlStage
 from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
 from forwin.generation.pipeline_core.quality_gates import QualityDiagnosticsStage
 from forwin.generation.pipeline_core.repair_patches import RepairPlanningStage
@@ -35,7 +35,7 @@ from forwin.planning.stage_analysis import (
     StageAnalyzer,
 )
 from forwin.retrieval import RetrievalBroker
-from forwin.review import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairExecution, RepairService, RepairVerifier
 from forwin.runtime.policy import RuntimePolicy
 from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
@@ -49,7 +49,7 @@ from forwin.writer.chapter_writer import ChapterWriter
 class ChapterPipeline(
     RunControlStage,
     AcceptanceStage,
-    GovernanceStage,
+    AuditControlStage,
     RuntimeSupportStage,
     ReviewWorkflowStage,
     RepairPlanningStage,
@@ -99,14 +99,14 @@ class ChapterPipeline(
         self.progress_callback = progress_callback
         self.should_abort = should_abort
         self.should_pause = should_pause
-        self._governance_task_id = str(task_id or "").strip()
-        self._governance_root_event_id = str(root_event_id or "").strip()
-        self._governance_runtime_project_id = ""
-        self._governance_runtime_updater: StateUpdater | None = None
-        self._governance_stage_name = ""
-        self._governance_stage_started_at = 0.0
-        self._governance_stage_chapter_number = 0
-        self._governance_stage_span: SpanHandle | None = None
+        self._audit_task_id = str(task_id or "").strip()
+        self._audit_root_event_id = str(root_event_id or "").strip()
+        self._audit_project_id = ""
+        self._audit_updater: StateUpdater | None = None
+        self._audit_stage_name = ""
+        self._audit_stage_started_at = 0.0
+        self._audit_stage_chapter_number = 0
+        self._audit_stage_span: SpanHandle | None = None
 
         self.engine = engine
         self._SessionFactory = session_factory

@@ -25,7 +25,10 @@ from forwin.genesis.names_paths import (
     _ensure_revision_is_current,
     _json_load_list_dicts,
 )
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+)
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import Project
 from forwin.state.updater import StateUpdater
@@ -62,7 +65,9 @@ class GenesisWorkspaceService:
         self.normalizer = GenesisNormalizer(owner)
         self.name_suggestions = GenesisNameSuggestionService(owner)
 
-    def active_revision(self, session: Session, project: Project) -> BookGenesisRevision | None:
+    def active_revision(
+        self, session: Session, project: Project
+    ) -> BookGenesisRevision | None:
         return self.revisions.active_revision(session, project)
 
     def load_pack(self, revision: BookGenesisRevision | None) -> dict[str, Any]:
@@ -126,21 +131,29 @@ class GenesisWorkspaceService:
                 payload=next_pack.get("world") or {},
                 fallback=_fallback_world(project, current),
             )
-        if "book_arc_blueprint" in patch and isinstance(next_pack.get("book_arc_blueprint"), dict):
+        if "book_arc_blueprint" in patch and isinstance(
+            next_pack.get("book_arc_blueprint"), dict
+        ):
             next_pack["book_arc_blueprint"] = self.normalizer.normalize_book_blueprint(
                 project=project,
                 payload=next_pack.get("book_arc_blueprint") or {},
                 fallback=_fallback_blueprint(project, current),
             )
         now = _utc_iso()
-        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else {}
+        stage_states = (
+            next_pack.get("stage_states")
+            if isinstance(next_pack.get("stage_states"), dict)
+            else {}
+        )
         for stage_key, section_key in _STAGE_TO_SECTION.items():
             patched = False
             if section_key in patch:
                 if stage_key == "world":
                     patched = not _deep_equal(
                         _world_stage_state_view(previous_stage_payloads.get(stage_key)),
-                        _world_stage_state_view(_pack_stage_payload(next_pack, stage_key)),
+                        _world_stage_state_view(
+                            _pack_stage_payload(next_pack, stage_key)
+                        ),
                     )
                 else:
                     patched = True
@@ -148,7 +161,9 @@ class GenesisWorkspaceService:
                 if stage_key == "world":
                     patched = not _deep_equal(
                         _world_stage_state_view(previous_stage_payloads.get(stage_key)),
-                        _world_stage_state_view(_pack_stage_payload(next_pack, stage_key)),
+                        _world_stage_state_view(
+                            _pack_stage_payload(next_pack, stage_key)
+                        ),
                     )
                 else:
                     patched = not _deep_equal(
@@ -157,7 +172,11 @@ class GenesisWorkspaceService:
                     )
             if not patched:
                 continue
-            state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
+            state = (
+                stage_states.get(stage_key)
+                if isinstance(stage_states.get(stage_key), dict)
+                else {}
+            )
             state.update(
                 {
                     "stage_key": stage_key,
@@ -209,12 +228,22 @@ class GenesisWorkspaceService:
         if stage_key not in GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         pack = self.load_pack(revision)
-        generated, trace_payload = self.owner._generate_stage_payload(project=project, pack=pack, stage_key=stage_key)
+        generated, trace_payload = self.owner._generate_stage_payload(
+            project=project, pack=pack, stage_key=stage_key
+        )
         _ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
         _set_pack_stage_payload(next_pack, stage_key, generated)
-        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else _empty_stage_states()
-        stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
+        stage_states = (
+            next_pack.get("stage_states")
+            if isinstance(next_pack.get("stage_states"), dict)
+            else _empty_stage_states()
+        )
+        stage_state = (
+            stage_states.get(stage_key)
+            if isinstance(stage_states.get(stage_key), dict)
+            else {}
+        )
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
         stage_state.update(
             {
@@ -239,7 +268,9 @@ class GenesisWorkspaceService:
                 related_object_id=str(getattr(revision, "id", "") or ""),
             )
         )
-        trace_payload = self.owner._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
+        trace_payload = self.owner._prepare_trace_payload_for_save(
+            trace_payload, project_id=project.id
+        )
         trace = updater.save_prompt_trace(
             project_id=project.id,
             genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -249,7 +280,9 @@ class GenesisWorkspaceService:
             stage_key=stage_key,
             template_id=f"genesis:{stage_key}",
             template_version="v1",
-            effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
+            effective_system_prompt=str(
+                trace_payload.get("effective_system_prompt", "")
+            ),
             prompt_layers_json=_json_dump(trace_payload.get("prompt_layers", [])),
             input_snapshot_json=_json_dump(trace_payload.get("input_snapshot", {})),
             model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
@@ -329,8 +362,16 @@ class GenesisWorkspaceService:
         _ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
         _set_pack_stage_payload(next_pack, stage_key, refined_payload)
-        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else _empty_stage_states()
-        stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
+        stage_states = (
+            next_pack.get("stage_states")
+            if isinstance(next_pack.get("stage_states"), dict)
+            else _empty_stage_states()
+        )
+        stage_state = (
+            stage_states.get(stage_key)
+            if isinstance(stage_states.get(stage_key), dict)
+            else {}
+        )
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
         stage_state.update(
             {
@@ -351,12 +392,18 @@ class GenesisWorkspaceService:
                 actor_type="manual_ui",
                 summary=f"Genesis 阶段 {stage_key} 已按指令改写。",
                 reason=str(reason or normalized_instruction),
-                payload={"stage_key": stage_key, "instruction": normalized_instruction, "target_path": normalized_path},
+                payload={
+                    "stage_key": stage_key,
+                    "instruction": normalized_instruction,
+                    "target_path": normalized_path,
+                },
                 related_object_type="book_genesis_revision",
                 related_object_id=str(getattr(revision, "id", "") or ""),
             )
         )
-        trace_payload = self.owner._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
+        trace_payload = self.owner._prepare_trace_payload_for_save(
+            trace_payload, project_id=project.id
+        )
         trace = updater.save_prompt_trace(
             project_id=project.id,
             genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -366,7 +413,9 @@ class GenesisWorkspaceService:
             stage_key=stage_key,
             template_id=f"genesis_refine:{stage_key}",
             template_version="v1",
-            effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
+            effective_system_prompt=str(
+                trace_payload.get("effective_system_prompt", "")
+            ),
             prompt_layers_json=_json_dump(trace_payload.get("prompt_layers", [])),
             input_snapshot_json=_json_dump(trace_payload.get("input_snapshot", {})),
             model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
@@ -412,8 +461,16 @@ class GenesisWorkspaceService:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         _ensure_revision_is_current(session, project, revision)
         pack = self.load_pack(revision)
-        stage_states = pack.get("stage_states") if isinstance(pack.get("stage_states"), dict) else _empty_stage_states()
-        stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
+        stage_states = (
+            pack.get("stage_states")
+            if isinstance(pack.get("stage_states"), dict)
+            else _empty_stage_states()
+        )
+        stage_state = (
+            stage_states.get(stage_key)
+            if isinstance(stage_states.get(stage_key), dict)
+            else {}
+        )
         stage_state.update(
             {
                 "stage_key": stage_key,
@@ -453,17 +510,27 @@ class GenesisWorkspaceService:
 
     def build_detail(self, *, session: Session, project: Project) -> dict[str, Any]:
         revision = self.active_revision(session, project)
-        pack = self.load_pack(revision) if revision is not None else _initial_pack(project)
-        prompt_traces = session.execute(
-            select(PromptTrace)
-            .where(PromptTrace.project_id == project.id)
-            .order_by(PromptTrace.created_at.desc())
-            .limit(50)
-        ).scalars().all()
+        pack = (
+            self.load_pack(revision) if revision is not None else _initial_pack(project)
+        )
+        prompt_traces = (
+            session.execute(
+                select(PromptTrace)
+                .where(PromptTrace.project_id == project.id)
+                .order_by(PromptTrace.created_at.desc())
+                .limit(50)
+            )
+            .scalars()
+            .all()
+        )
         return {
             "project_id": project.id,
-            "creation_status": str(getattr(project, "creation_status", "") or "creating"),
-            "active_genesis_revision_id": str(getattr(project, "active_genesis_revision_id", "") or ""),
+            "creation_status": str(
+                getattr(project, "creation_status", "") or "creating"
+            ),
+            "active_genesis_revision_id": str(
+                getattr(project, "active_genesis_revision_id", "") or ""
+            ),
             "revision": int(getattr(revision, "revision", 1) or 1),
             "pack": pack,
             "prompt_traces": [

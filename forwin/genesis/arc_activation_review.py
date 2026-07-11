@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.repository import BookStateRepository
 from forwin.models.draft import ChapterDraft
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
 from forwin.models.publisher import SignalWindowAggregate
@@ -201,7 +201,9 @@ def _recent_director_events(
             select(DecisionEvent)
             .where(
                 DecisionEvent.project_id == project_id,
-                DecisionEvent.event_family.in_(("director_imbalance", "evaluation_verdict")),
+                DecisionEvent.event_family.in_(
+                    ("director_imbalance", "evaluation_verdict")
+                ),
             )
             .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
             .limit(limit)
@@ -230,7 +232,9 @@ def _audience_signals(
             select(SignalWindowAggregate)
             .where(
                 SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist", "candidate")),
+                SignalWindowAggregate.signal_level.in_(
+                    ("confirmed", "watchlist", "candidate")
+                ),
             )
             .order_by(
                 SignalWindowAggregate.window_chapter_end.desc(),

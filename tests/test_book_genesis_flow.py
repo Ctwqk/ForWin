@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
-import forwin.api as api_module
+import forwin.api_core.app as api_app
+from forwin.api_core import state as api_state
 from forwin.api_schema import (
     BookGenesisPatchRequest,
     BookGenesisRefineRequest,
@@ -25,17 +27,24 @@ from forwin.genesis.fallbacks import (
 )
 from forwin.genesis.helpers import _fallback_brief
 from forwin.config import InfrastructureConfig
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
+
+
+api_module = SimpleNamespace(
+    **api_app._registered_route_handlers,
+    _build_genesis_service=api_app._build_genesis_service,
+    _close_genesis_service=api_app._close_genesis_service,
+)
 
 
 class BookGenesisFlowTests(unittest.TestCase):
@@ -45,10 +54,10 @@ class BookGenesisFlowTests(unittest.TestCase):
         init_db(engine)
         self.session_factory = get_session_factory(engine)
         self.engine = engine
-        self.old_session_factory = api_module._SessionFactory
-        self.old_config = api_module._config
-        api_module._SessionFactory = self.session_factory
-        api_module._config = InfrastructureConfig(
+        self.old_session_factory = api_state._SessionFactory
+        self.old_config = api_state._config
+        api_state._SessionFactory = self.session_factory
+        api_state._config = InfrastructureConfig(
             database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
@@ -65,11 +74,13 @@ class BookGenesisFlowTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
-        api_module._SessionFactory = self.old_session_factory
-        api_module._config = self.old_config
+        api_state._SessionFactory = self.old_session_factory
+        api_state._config = self.old_config
         self.engine.dispose()
 
-    def test_create_project_enters_creating_and_creates_initial_genesis_revision(self) -> None:
+    def test_create_project_enters_creating_and_creates_initial_genesis_revision(
+        self,
+    ) -> None:
         response = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
@@ -83,7 +94,9 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         with self.session_factory() as session:
             project = session.get(Project, response.project_id)
-            revision = session.get(BookGenesisRevision, response.active_genesis_revision_id)
+            revision = session.get(
+                BookGenesisRevision, response.active_genesis_revision_id
+            )
 
         assert project is not None
         assert revision is not None
@@ -93,7 +106,9 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(response.creation_status, "creating")
         self.assertTrue(response.workspace_url.endswith(f"project_id={project.id}"))
 
-    def test_fallback_map_does_not_promote_placeholder_guardrails_to_places(self) -> None:
+    def test_fallback_map_does_not_promote_placeholder_guardrails_to_places(
+        self,
+    ) -> None:
         pack = {
             "book_brief": {
                 "premise": "主角：陆明。质量要求：不要使用“相关人员”等正文占位符。",
@@ -102,7 +117,9 @@ class BookGenesisFlowTests(unittest.TestCase):
             "world": {
                 "world_bible": {
                     "overview": "旧城由核心系统记忆系统维持公共档案秩序。",
-                    "culture_profiles": [{"id": "culture-main-stage", "generator_civilization": "中华"}],
+                    "culture_profiles": [
+                        {"id": "culture-main-stage", "generator_civilization": "中华"}
+                    ],
                 }
             },
         }
@@ -250,7 +267,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                     "world": {
                         "map_atlas": {
                             "overview": "细化后的地图",
-                            "topology_rules": ["行动必须有路程与风险成本", "跨区移动要付出公开代价"],
+                            "topology_rules": [
+                                "行动必须有路程与风险成本",
+                                "跨区移动要付出公开代价",
+                            ],
                             "submaps": [],
                             "regions": [],
                             "nodes": [],
@@ -268,7 +288,9 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(detail.pack.stage_states["map"].status, "edited")
         self.assertEqual(detail.pack.world["map_atlas"]["overview"], "细化后的地图")
 
-    def test_start_writing_materializes_arc_skeletons_and_active_arc_chapters(self) -> None:
+    def test_start_writing_materializes_arc_skeletons_and_active_arc_chapters(
+        self,
+    ) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
@@ -322,15 +344,27 @@ class BookGenesisFlowTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
+                    "execution_bootstrap": {
+                        "pipeline": "strict_blackbox",
+                        "root_ready": True,
+                    },
                 }
             ),
         )
 
-        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+        for stage_key in (
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+        ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
-        def fake_genesis_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_genesis_call(
+            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+        ):
             if str(stage_key).startswith("launch_arc_"):
                 return (
                     {
@@ -354,7 +388,9 @@ class BookGenesisFlowTests(unittest.TestCase):
                     },
                     {
                         "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [{"role": "system", "content": "launch arc planner"}],
+                        "prompt_layers": [
+                            {"role": "system", "content": "launch arc planner"}
+                        ],
                         "input_snapshot": {"stage_key": stage_key},
                         "model_profile": {"model": "fake-model"},
                         "attempts": [{"attempt": 1, "status": "success"}],
@@ -371,8 +407,14 @@ class BookGenesisFlowTests(unittest.TestCase):
             }
 
         with (
-            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
-            patch("forwin.api._create_continue_generation_task", return_value="task-genesis-001"),
+            patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=fake_genesis_call,
+            ),
+            patch(
+                "forwin.api_core.app._create_continue_generation_task",
+                return_value="task-genesis-001",
+            ),
         ):
             response = api_module.start_project_writing(created.project_id)
 
@@ -382,36 +424,78 @@ class BookGenesisFlowTests(unittest.TestCase):
                 BookGenesisRevision,
                 str(project.active_genesis_revision_id or ""),
             )
-            arcs = session.execute(
-                select(ArcPlanVersion)
-                .where(ArcPlanVersion.project_id == created.project_id)
-                .order_by(ArcPlanVersion.arc_number.asc())
-            ).scalars().all()
-            plans = session.execute(
-                select(ChapterPlan)
-                .where(ChapterPlan.project_id == created.project_id)
-                .order_by(ChapterPlan.chapter_number.asc())
-            ).scalars().all()
-            traces = session.execute(
-                select(PromptTrace)
-                .where(PromptTrace.project_id == created.project_id)
-                .order_by(PromptTrace.created_at.asc())
-            ).scalars().all()
-            map_runs = session.execute(
-                select(MapGenerationRunRow).where(MapGenerationRunRow.project_id == created.project_id)
-            ).scalars().all()
-            map_region_count = session.execute(
-                select(MapRegionRow).where(MapRegionRow.project_id == created.project_id)
-            ).scalars().all()
-            map_node_count = session.execute(
-                select(MapNodeRow).where(MapNodeRow.project_id == created.project_id)
-            ).scalars().all()
-            map_edge_count = session.execute(
-                select(MapEdgeRow).where(MapEdgeRow.project_id == created.project_id)
-            ).scalars().all()
-            decision_events = session.execute(
-                select(DecisionEvent).where(DecisionEvent.project_id == created.project_id)
-            ).scalars().all()
+            arcs = (
+                session.execute(
+                    select(ArcPlanVersion)
+                    .where(ArcPlanVersion.project_id == created.project_id)
+                    .order_by(ArcPlanVersion.arc_number.asc())
+                )
+                .scalars()
+                .all()
+            )
+            plans = (
+                session.execute(
+                    select(ChapterPlan)
+                    .where(ChapterPlan.project_id == created.project_id)
+                    .order_by(ChapterPlan.chapter_number.asc())
+                )
+                .scalars()
+                .all()
+            )
+            traces = (
+                session.execute(
+                    select(PromptTrace)
+                    .where(PromptTrace.project_id == created.project_id)
+                    .order_by(PromptTrace.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+            map_runs = (
+                session.execute(
+                    select(MapGenerationRunRow).where(
+                        MapGenerationRunRow.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            map_region_count = (
+                session.execute(
+                    select(MapRegionRow).where(
+                        MapRegionRow.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            map_node_count = (
+                session.execute(
+                    select(MapNodeRow).where(
+                        MapNodeRow.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            map_edge_count = (
+                session.execute(
+                    select(MapEdgeRow).where(
+                        MapEdgeRow.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            decision_events = (
+                session.execute(
+                    select(DecisionEvent).where(
+                        DecisionEvent.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert project is not None
         assert revision is not None
@@ -429,7 +513,10 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertTrue(map_node_count)
         self.assertTrue(map_edge_count)
         self.assertTrue(
-            any(event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED for event in decision_events)
+            any(
+                event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED
+                for event in decision_events
+            )
         )
 
     def test_start_writing_blocks_when_initial_book_map_generation_fails(self) -> None:
@@ -470,21 +557,45 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
+                    "execution_bootstrap": {
+                        "pipeline": "strict_blackbox",
+                        "root_ready": True,
+                    },
                 }
             ),
         )
-        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+        for stage_key in (
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+        ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
-        def fake_genesis_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_genesis_call(
+            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+        ):
             if str(stage_key).startswith("launch_arc_"):
                 return (
                     {
                         "chapters": [
-                            {"title": "雨夜", "one_line": "主角进入旧城。", "goals": ["建立危机"]},
-                            {"title": "债务", "one_line": "势力围拢。", "goals": ["扩大冲突"]},
-                            {"title": "遗迹", "one_line": "得到遗迹坐标。", "goals": ["转入下一阶段"]},
+                            {
+                                "title": "雨夜",
+                                "one_line": "主角进入旧城。",
+                                "goals": ["建立危机"],
+                            },
+                            {
+                                "title": "债务",
+                                "one_line": "势力围拢。",
+                                "goals": ["扩大冲突"],
+                            },
+                            {
+                                "title": "遗迹",
+                                "one_line": "得到遗迹坐标。",
+                                "goals": ["转入下一阶段"],
+                            },
                         ]
                     },
                     {
@@ -510,9 +621,15 @@ class BookGenesisFlowTests(unittest.TestCase):
             validation_report=MapValidationReport(valid=False, errors=["bad map"]),
         )
         with (
-            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
-            patch("forwin.genesis.handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
-            patch("forwin.api._create_continue_generation_task") as task_mock,
+            patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=fake_genesis_call,
+            ),
+            patch(
+                "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
+                return_value=invalid_map,
+            ),
+            patch("forwin.api_core.app._create_continue_generation_task") as task_mock,
         ):
             with self.assertRaises(HTTPException) as raised:
                 api_module.start_project_writing(created.project_id)
@@ -521,17 +638,34 @@ class BookGenesisFlowTests(unittest.TestCase):
         task_mock.assert_not_called()
         with self.session_factory() as session:
             project = session.get(Project, created.project_id)
-            plans = session.execute(
-                select(ChapterPlan).where(ChapterPlan.project_id == created.project_id)
-            ).scalars().all()
-            events = session.execute(
-                select(DecisionEvent).where(DecisionEvent.project_id == created.project_id)
-            ).scalars().all()
+            plans = (
+                session.execute(
+                    select(ChapterPlan).where(
+                        ChapterPlan.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            events = (
+                session.execute(
+                    select(DecisionEvent).where(
+                        DecisionEvent.project_id == created.project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert project is not None
         self.assertEqual(project.creation_status, "genesis_ready")
         self.assertEqual(plans, [])
-        self.assertTrue(any(event.event_type == DecisionEventType.MAP_GENERATION_FAILED for event in events))
+        self.assertTrue(
+            any(
+                event.event_type == DecisionEventType.MAP_GENERATION_FAILED
+                for event in events
+            )
+        )
 
     def test_arc_envelope_uses_genesis_persisted_arc_sizing(self) -> None:
         created = api_module.create_project(
@@ -573,15 +707,27 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
+                    "execution_bootstrap": {
+                        "pipeline": "strict_blackbox",
+                        "root_ready": True,
+                    },
                 }
             ),
         )
 
-        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+        for stage_key in (
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+        ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
-        def fake_genesis_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_genesis_call(
+            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+        ):
             if str(stage_key).startswith("launch_arc_"):
                 return (
                     {
@@ -595,7 +741,9 @@ class BookGenesisFlowTests(unittest.TestCase):
                     },
                     {
                         "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [{"role": "system", "content": "launch arc planner"}],
+                        "prompt_layers": [
+                            {"role": "system", "content": "launch arc planner"}
+                        ],
                         "input_snapshot": {"stage_key": stage_key},
                         "model_profile": {"model": "fake-model"},
                         "attempts": [{"attempt": 1, "status": "success"}],
@@ -612,8 +760,14 @@ class BookGenesisFlowTests(unittest.TestCase):
             }
 
         with (
-            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
-            patch("forwin.api._create_continue_generation_task", return_value="task-genesis-size-001"),
+            patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=fake_genesis_call,
+            ),
+            patch(
+                "forwin.api_core.app._create_continue_generation_task",
+                return_value="task-genesis-size-001",
+            ),
         ):
             api_module.start_project_writing(created.project_id)
 
@@ -640,7 +794,9 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(envelope.base_soft_min, 7)
         self.assertEqual(envelope.base_soft_max, 11)
 
-    def test_refine_stage_updates_stage_json_and_records_instruction_trace(self) -> None:
+    def test_refine_stage_updates_stage_json_and_records_instruction_trace(
+        self,
+    ) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
@@ -658,7 +814,12 @@ class BookGenesisFlowTests(unittest.TestCase):
                     "world": {
                         "story_engine": {
                             "core_cast": [
-                                {"name": "林昭", "role": "主角", "desire": "活下去", "fear": "拖累家人"}
+                                {
+                                    "name": "林昭",
+                                    "role": "主角",
+                                    "desire": "活下去",
+                                    "fear": "拖累家人",
+                                }
                             ],
                             "factions": [],
                             "opposition": [],
@@ -673,9 +834,21 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         test_case = self
 
-        def fake_refine_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
-            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        def fake_refine_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
+            system_prompt = "\n".join(
+                item["content"] for item in messages if item["role"] == "system"
+            )
+            user_prompt = next(
+                item["content"] for item in reversed(messages) if item["role"] == "user"
+            )
             test_case.assertEqual(stage_key, "story_engine:refine")
             test_case.assertIn("优先局部改动", system_prompt)
             test_case.assertIn("【用户指令】", user_prompt)
@@ -684,10 +857,21 @@ class BookGenesisFlowTests(unittest.TestCase):
             return (
                 {
                     "core_cast": [
-                        {"name": "林昭", "role": "主角", "desire": "活下去", "fear": "更阴郁地害怕拖累家人", "secret": "对旧秩序有复杂阴影"}
+                        {
+                            "name": "林昭",
+                            "role": "主角",
+                            "desire": "活下去",
+                            "fear": "更阴郁地害怕拖累家人",
+                            "secret": "对旧秩序有复杂阴影",
+                        }
                     ],
                     "factions": [
-                        {"name": "城防司", "role": "秩序势力", "goal": "控制城内异动", "leverage": "武力与法统"}
+                        {
+                            "name": "城防司",
+                            "role": "秩序势力",
+                            "goal": "控制城内异动",
+                            "leverage": "武力与法统",
+                        }
                     ],
                     "opposition": [],
                     "relationship_axes": ["林昭与旧秩序"],
@@ -704,7 +888,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_refine_call,
+        ):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "story_engine",
@@ -716,16 +903,28 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.world["story_engine"]["core_cast"][0]["fear"], "更阴郁地害怕拖累家人")
-        self.assertEqual(detail.pack.world["story_engine"]["core_cast"][0]["secret"], "对旧秩序有复杂阴影")
-        self.assertEqual(detail.pack.world["story_engine"]["factions"][0]["name"], "城防司")
+        self.assertEqual(
+            detail.pack.world["story_engine"]["core_cast"][0]["fear"],
+            "更阴郁地害怕拖累家人",
+        )
+        self.assertEqual(
+            detail.pack.world["story_engine"]["core_cast"][0]["secret"],
+            "对旧秩序有复杂阴影",
+        )
+        self.assertEqual(
+            detail.pack.world["story_engine"]["factions"][0]["name"], "城防司"
+        )
 
         with self.session_factory() as session:
-            traces = session.execute(
-                select(PromptTrace)
-                .where(PromptTrace.project_id == created.project_id)
-                .order_by(PromptTrace.created_at.desc())
-            ).scalars().all()
+            traces = (
+                session.execute(
+                    select(PromptTrace)
+                    .where(PromptTrace.project_id == created.project_id)
+                    .order_by(PromptTrace.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
 
         self.assertTrue(traces)
         self.assertEqual(traces[0].trace_scope, "genesis_refine")
@@ -756,14 +955,34 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         test_case = self
 
-        def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
-            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        def fake_generate_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
+            system_prompt = "\n".join(
+                item["content"] for item in messages if item["role"] == "system"
+            )
+            user_prompt = next(
+                item["content"] for item in reversed(messages) if item["role"] == "user"
+            )
             test_case.assertEqual(stage_key, "world")
-            test_case.assertEqual(getattr(_service.llm_client, "profile_id", ""), "genesis-alt")
-            test_case.assertEqual(getattr(_service.llm_client, "profile_name", ""), "Genesis Alt")
-            test_case.assertEqual(getattr(_service.llm_client, "model", ""), "alt-model")
-            test_case.assertEqual(getattr(_service.llm_client, "base_url", ""), "http://alt.invalid")
+            test_case.assertEqual(
+                getattr(_service.llm_client, "profile_id", ""), "genesis-alt"
+            )
+            test_case.assertEqual(
+                getattr(_service.llm_client, "profile_name", ""), "Genesis Alt"
+            )
+            test_case.assertEqual(
+                getattr(_service.llm_client, "model", ""), "alt-model"
+            )
+            test_case.assertEqual(
+                getattr(_service.llm_client, "base_url", ""), "http://alt.invalid"
+            )
             test_case.assertIn("Genesis 总设计师", system_prompt)
             test_case.assertIn("【阶段】", user_prompt)
             test_case.assertIn("【阶段硬约束】", user_prompt)
@@ -791,21 +1010,30 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_generate_call,
+        ):
             detail = api_module.generate_project_genesis_stage(
                 created.project_id,
                 "world",
                 BookGenesisStageRunRequest(),
             )
 
-        self.assertEqual(detail.pack.world["world_bible"]["overview"], "被选中模型生成的世界观。")
+        self.assertEqual(
+            detail.pack.world["world_bible"]["overview"], "被选中模型生成的世界观。"
+        )
 
         with self.session_factory() as session:
-            trace = session.execute(
-                select(PromptTrace)
-                .where(PromptTrace.project_id == created.project_id)
-                .order_by(PromptTrace.created_at.desc())
-            ).scalars().first()
+            trace = (
+                session.execute(
+                    select(PromptTrace)
+                    .where(PromptTrace.project_id == created.project_id)
+                    .order_by(PromptTrace.created_at.desc())
+                )
+                .scalars()
+                .first()
+            )
 
         assert trace is not None
         self.assertIn('"profile_id": "genesis-alt"', trace.model_profile_json)
@@ -843,8 +1071,18 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         test_case = self
 
-        def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        def fake_generate_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
+            user_prompt = next(
+                item["content"] for item in reversed(messages) if item["role"] == "user"
+            )
             test_case.assertEqual(stage_key, "map")
             test_case.assertIn("【已锁定阶段上下文（视为当前真值）】", user_prompt)
             test_case.assertIn('"stage_key": "brief"', user_prompt)
@@ -863,7 +1101,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_generate_call,
+        ):
             detail = api_module.generate_project_genesis_stage(
                 created.project_id,
                 "map",
@@ -884,12 +1125,22 @@ class BookGenesisFlowTests(unittest.TestCase):
             )
         )
 
-        def fake_fallback_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_fallback_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
             return (
                 fallback,
                 {
                     "effective_system_prompt": f"genesis {stage_key}",
-                    "prompt_layers": [{"role": "system", "content": f"genesis {stage_key}"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": f"genesis {stage_key}"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fallback-model"},
                     "attempts": [{"attempt": 1, "status": "fallback"}],
@@ -897,7 +1148,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_fallback_call,
+        ):
             api_module.generate_project_genesis_stage(
                 created.project_id,
                 "brief",
@@ -956,7 +1210,16 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(protagonist["current_base"], node["id"])
         self.assertEqual(faction["id"], "faction-main-stage")
         self.assertEqual(protagonist["affiliated_faction"], faction["id"])
-        self.assertEqual(len([item for item in protagonist["faction_memberships"] if item["is_primary"]]), 1)
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in protagonist["faction_memberships"]
+                    if item["is_primary"]
+                ]
+            ),
+            1,
+        )
         self.assertEqual(faction["culture_profile_id"], culture_profile["id"])
         self.assertEqual(faction["base_subworld"], submap["id"])
         self.assertEqual(faction["headquarters_region"], child_region["id"])
@@ -987,12 +1250,22 @@ class BookGenesisFlowTests(unittest.TestCase):
             )
         )
 
-        def fake_fallback_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+        def fake_fallback_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
             return (
                 fallback,
                 {
                     "effective_system_prompt": f"genesis {stage_key}",
-                    "prompt_layers": [{"role": "system", "content": f"genesis {stage_key}"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": f"genesis {stage_key}"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fallback-model"},
                     "attempts": [{"attempt": 1, "status": "fallback"}],
@@ -1000,7 +1273,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_fallback_call,
+        ):
             api_module.generate_project_genesis_stage(
                 created.project_id,
                 "brief",
@@ -1025,7 +1301,9 @@ class BookGenesisFlowTests(unittest.TestCase):
         world = detail.pack.world
         cast_names = {item["name"] for item in world["story_engine"]["core_cast"]}
         faction_names = {item["name"] for item in world["story_engine"]["factions"]}
-        opposition_names = {item["name"] for item in world["story_engine"]["opposition"]}
+        opposition_names = {
+            item["name"] for item in world["story_engine"]["opposition"]
+        }
         map_names = {
             *(item["name"] for item in world["map_atlas"]["submaps"]),
             *(item["name"] for item in world["map_atlas"]["regions"]),
@@ -1086,9 +1364,21 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         test_case = self
 
-        def fake_refine_item_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
-            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        def fake_refine_item_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
+            system_prompt = "\n".join(
+                item["content"] for item in messages if item["role"] == "system"
+            )
+            user_prompt = next(
+                item["content"] for item in reversed(messages) if item["role"] == "user"
+            )
             test_case.assertEqual(stage_key, "map:refine_item")
             test_case.assertIn("定向改写模式", system_prompt)
             test_case.assertIn("submaps[0]", user_prompt)
@@ -1104,7 +1394,9 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
                 {
                     "effective_system_prompt": "genesis refine item",
-                    "prompt_layers": [{"role": "system", "content": "genesis refine item"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": "genesis refine item"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fake-model"},
                     "attempts": [{"attempt": 1, "status": "success"}],
@@ -1112,7 +1404,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_item_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_refine_item_call,
+        ):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "map",
@@ -1125,8 +1420,13 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.world["map_atlas"]["submaps"][0]["key_locations"], ["焚化塔", "封存轨道站"])
-        self.assertEqual(detail.pack.world["map_atlas"]["submaps"][1]["summary"], "商业区")
+        self.assertEqual(
+            detail.pack.world["map_atlas"]["submaps"][0]["key_locations"],
+            ["焚化塔", "封存轨道站"],
+        )
+        self.assertEqual(
+            detail.pack.world["map_atlas"]["submaps"][1]["summary"], "商业区"
+        )
 
     def test_refine_stage_target_path_can_update_scalar_world_field(self) -> None:
         created = api_module.create_project(
@@ -1158,18 +1458,32 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         test_case = self
 
-        def fake_refine_scalar_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
-            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+        def fake_refine_scalar_call(
+            _service,
+            *,
+            messages,
+            fallback,
+            stage_key,
+            temperature=0.45,
+            max_tokens=None,
+        ):
+            system_prompt = "\n".join(
+                item["content"] for item in messages if item["role"] == "system"
+            )
+            user_prompt = next(
+                item["content"] for item in reversed(messages) if item["role"] == "user"
+            )
             test_case.assertEqual(stage_key, "world:refine_item")
-            test_case.assertIn("{\"value\": <更新后的 JSON 值>}", system_prompt)
+            test_case.assertIn('{"value": <更新后的 JSON 值>}', system_prompt)
             test_case.assertIn("history_slice", user_prompt)
             test_case.assertIn("【当前目标值】", user_prompt)
             return (
                 {"value": "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。"},
                 {
                     "effective_system_prompt": "genesis refine scalar item",
-                    "prompt_layers": [{"role": "system", "content": "genesis refine scalar item"}],
+                    "prompt_layers": [
+                        {"role": "system", "content": "genesis refine scalar item"}
+                    ],
                     "input_snapshot": {"stage_key": stage_key},
                     "model_profile": {"model": "fake-model"},
                     "attempts": [{"attempt": 1, "status": "success"}],
@@ -1177,7 +1491,10 @@ class BookGenesisFlowTests(unittest.TestCase):
                 },
             )
 
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=fake_refine_scalar_call):
+        with patch(
+            "forwin.genesis.BookGenesisService._call_json_with_trace",
+            new=fake_refine_scalar_call,
+        ):
             detail = api_module.refine_project_genesis_stage(
                 created.project_id,
                 "world",
@@ -1190,8 +1507,13 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.world["world_bible"]["history_slice"], "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。")
-        self.assertEqual(detail.pack.world["world_bible"]["naming_style"], "中文网文风格，短促有力。")
+        self.assertEqual(
+            detail.pack.world["world_bible"]["history_slice"],
+            "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。",
+        )
+        self.assertEqual(
+            detail.pack.world["world_bible"]["naming_style"], "中文网文风格，短促有力。"
+        )
 
     def test_stale_genesis_revision_cannot_overwrite_newer_revision(self) -> None:
         created = api_module.create_project(
@@ -1237,7 +1559,15 @@ class BookGenesisFlowTests(unittest.TestCase):
                         updater=updater,
                         project=project,
                         revision=stale_revision,
-                        patch={"world": {"story_engine": {"core_cast": [{"name": "旧角色", "role": "过期写入"}]}}},
+                        patch={
+                            "world": {
+                                "story_engine": {
+                                    "core_cast": [
+                                        {"name": "旧角色", "role": "过期写入"}
+                                    ]
+                                }
+                            }
+                        },
                         reason="stale_write",
                     )
             finally:
@@ -1301,7 +1631,9 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(response.generator_civilization, "中华+基督教")
         self.assertEqual(len(response.suggestions), 4)
         self.assertEqual(response.applied_value, response.suggestions)
-        self.assertTrue(all(isinstance(item, str) and item.strip() for item in response.suggestions))
+        self.assertTrue(
+            all(isinstance(item, str) and item.strip() for item in response.suggestions)
+        )
 
     def test_patch_world_auto_fills_missing_submap_node_and_faction_ids(self) -> None:
         created = api_module.create_project(
@@ -1323,8 +1655,16 @@ class BookGenesisFlowTests(unittest.TestCase):
                             "overview": "旧城地图",
                             "topology_rules": ["移动有代价"],
                             "submaps": [{"name": "主舞台", "scope": "macro_region"}],
-                            "regions": [{"name": "主城", "subworld_name": "主舞台", "level": 1}],
-                            "nodes": [{"name": "旧城", "parent_subworld": "主舞台", "parent_region_id": "region-1"}],
+                            "regions": [
+                                {"name": "主城", "subworld_name": "主舞台", "level": 1}
+                            ],
+                            "nodes": [
+                                {
+                                    "name": "旧城",
+                                    "parent_subworld": "主舞台",
+                                    "parent_region_id": "region-1",
+                                }
+                            ],
                             "edges": [],
                         },
                         "story_engine": {
@@ -1362,7 +1702,9 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         with self.session_factory() as session:
             project = session.get(Project, created.project_id)
-            revision = session.get(BookGenesisRevision, created.active_genesis_revision_id)
+            revision = session.get(
+                BookGenesisRevision, created.active_genesis_revision_id
+            )
             assert project is not None
             assert revision is not None
             revision.pack_json = json.dumps(
@@ -1382,9 +1724,15 @@ class BookGenesisFlowTests(unittest.TestCase):
             session.commit()
 
         detail = api_module.get_project_genesis(created.project_id)
-        self.assertNotEqual(detail.pack.world["world_bible"].get("overview"), "旧格式世界观")
-        self.assertNotEqual(detail.pack.world["map_atlas"].get("overview"), "旧格式地图")
-        self.assertNotEqual(detail.pack.world["story_engine"].get("long_arcs"), ["旧格式引擎"])
+        self.assertNotEqual(
+            detail.pack.world["world_bible"].get("overview"), "旧格式世界观"
+        )
+        self.assertNotEqual(
+            detail.pack.world["map_atlas"].get("overview"), "旧格式地图"
+        )
+        self.assertNotEqual(
+            detail.pack.world["story_engine"].get("long_arcs"), ["旧格式引擎"]
+        )
         self.assertIn("minimum_world_system", detail.pack.world)
 
         detail = api_module.patch_project_genesis(
@@ -1393,12 +1741,16 @@ class BookGenesisFlowTests(unittest.TestCase):
                 {"world": {"world_bible": {"history_slice": "升级后新写回"}}}
             ),
         )
-        self.assertEqual(detail.pack.world["world_bible"]["history_slice"], "升级后新写回")
+        self.assertEqual(
+            detail.pack.world["world_bible"]["history_slice"], "升级后新写回"
+        )
 
         with self.session_factory() as session:
             project = session.get(Project, created.project_id)
             assert project is not None
-            latest_revision = session.get(BookGenesisRevision, project.active_genesis_revision_id)
+            latest_revision = session.get(
+                BookGenesisRevision, project.active_genesis_revision_id
+            )
             assert latest_revision is not None
             saved_payload = json.loads(latest_revision.pack_json or "{}")
 
@@ -1452,14 +1804,20 @@ class BookGenesisFlowTests(unittest.TestCase):
                 )
 
         _registry, router, prompt_layer_builder = build_skill_runtime_components(
-            root=Path(self.skill_root if hasattr(self, "skill_root") else Path(__file__).resolve().parents[1] / "forwin_skills"),
+            root=Path(
+                self.skill_root
+                if hasattr(self, "skill_root")
+                else Path(__file__).resolve().parents[1] / "forwin_skills"
+            ),
             enabled=True,
             strictness="normal",
         )
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = session.get(Project, created.project_id)
-            revision = session.get(BookGenesisRevision, created.active_genesis_revision_id)
+            revision = session.get(
+                BookGenesisRevision, created.active_genesis_revision_id
+            )
             assert project is not None
             assert revision is not None
             service = BookGenesisService(
@@ -1479,14 +1837,22 @@ class BookGenesisFlowTests(unittest.TestCase):
         with self.session_factory() as session:
             project = session.get(Project, created.project_id)
             assert project is not None
-            revision = session.get(BookGenesisRevision, project.active_genesis_revision_id)
+            revision = session.get(
+                BookGenesisRevision, project.active_genesis_revision_id
+            )
             assert revision is not None
             detail_pack = json.loads(revision.pack_json)
-        self.assertEqual(detail_pack.get("world", {}).get("world_bible", {}).get("overview"), "根世界观已建立。")
+        self.assertEqual(
+            detail_pack.get("world", {}).get("world_bible", {}).get("overview"),
+            "根世界观已建立。",
+        )
         with self.session_factory() as session:
             trace = session.execute(
                 select(PromptTrace)
-                .where(PromptTrace.project_id == created.project_id, PromptTrace.stage_key == "world")
+                .where(
+                    PromptTrace.project_id == created.project_id,
+                    PromptTrace.stage_key == "world",
+                )
                 .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
                 .limit(1)
             ).scalar_one()

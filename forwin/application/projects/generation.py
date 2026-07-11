@@ -16,9 +16,7 @@ from forwin.api_schema import (
 from forwin.generation.continue_workset import (
     build_continue_generation_workset,
 )
-from forwin.governance import (
-    DecisionEventType,
-)
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
@@ -97,27 +95,47 @@ def continue_project_generation(
         if project is None:
             raise HTTPException(404, "项目不存在")
         if str(project.creation_status or "") in {"creating", "genesis_ready"}:
-            raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
+            raise HTTPException(
+                409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。"
+            )
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
-        plans = session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id == project_id)
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-        waiting_review, reset_orphan_review = _reset_orphan_needs_review_plans(session, plans)
-        if reset_orphan_review:
-            session.commit()
-            plans = session.execute(
+        plans = (
+            session.execute(
                 select(ChapterPlan)
                 .where(ChapterPlan.project_id == project_id)
                 .order_by(ChapterPlan.chapter_number.asc())
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
+        )
+        waiting_review, reset_orphan_review = _reset_orphan_needs_review_plans(
+            session, plans
+        )
+        if reset_orphan_review:
+            session.commit()
+            plans = (
+                session.execute(
+                    select(ChapterPlan)
+                    .where(ChapterPlan.project_id == project_id)
+                    .order_by(ChapterPlan.chapter_number.asc())
+                )
+                .scalars()
+                .all()
+            )
         if waiting_review:
-            raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
-        waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
+            raise HTTPException(
+                409,
+                f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}",
+            )
+        waiting_acceptance = [
+            plan.chapter_number for plan in plans if plan.status == "drafted"
+        ]
         if waiting_acceptance:
-            raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
+            raise HTTPException(
+                409,
+                f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}",
+            )
         project_detail = build_project_detail(
             session=session,
             project=project,
@@ -131,7 +149,8 @@ def continue_project_generation(
                 event_type=DecisionEventType.HARD_GATE_HIT,
                 actor_type="api",
                 scope="project",
-                summary=project_detail.blocking_reason.message or project_detail.blocking_reason.code,
+                summary=project_detail.blocking_reason.message
+                or project_detail.blocking_reason.code,
                 payload={"blocking_reason": project_detail.blocking_reason.code},
                 band_id=project_detail.blocking_reason.band_id,
                 chapter_number=int(project_detail.blocking_reason.chapter_number or 0),
@@ -141,7 +160,11 @@ def continue_project_generation(
             session.commit()
             raise HTTPException(409, project_detail.blocking_reason.message)
         max_chapters = req.max_chapters if req is not None else None
-        auto_continue = True if req is None or req.auto_continue is None else bool(req.auto_continue)
+        auto_continue = (
+            True
+            if req is None or req.auto_continue is None
+            else bool(req.auto_continue)
+        )
         run_until_chapter = req.run_until_chapter if req is not None else None
         workset = build_continue_generation_workset(
             session,
@@ -197,6 +220,7 @@ def continue_project_generation(
         session.close()
     return serialize_task(task_id, get_generation_task_or_404(task_id))
 
+
 def extend_project_generation(
     project_id: str,
     req: ProjectExtendGenerationRequest,
@@ -212,25 +236,39 @@ def extend_project_generation(
         if project is None:
             raise HTTPException(404, "项目不存在")
         if str(project.creation_status or "") in {"creating", "genesis_ready"}:
-            raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
+            raise HTTPException(
+                409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。"
+            )
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
 
-        plans = session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id == project_id)
-            .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
-        ).scalars().all()
-        waiting_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
+        plans = (
+            session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id == project_id)
+                .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        waiting_review = [
+            plan.chapter_number for plan in plans if plan.status == "needs_review"
+        ]
         if waiting_review:
-            raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
-        waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
+            raise HTTPException(
+                409,
+                f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}",
+            )
+        waiting_acceptance = [
+            plan.chapter_number for plan in plans if plan.status == "drafted"
+        ]
         if waiting_acceptance:
-            raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
+            raise HTTPException(
+                409,
+                f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}",
+            )
         failed_generation = [
-            plan.chapter_number
-            for plan in plans
-            if str(plan.status or "") == "failed"
+            plan.chapter_number for plan in plans if str(plan.status or "") == "failed"
         ]
         if failed_generation:
             raise HTTPException(
@@ -247,12 +285,16 @@ def extend_project_generation(
             raise HTTPException(400, "追加章节数必须大于 0")
 
         max_arc_number = session.execute(
-            select(func.max(ArcPlanVersion.arc_number)).where(ArcPlanVersion.project_id == project_id)
+            select(func.max(ArcPlanVersion.arc_number)).where(
+                ArcPlanVersion.project_id == project_id
+            )
         ).scalar_one()
         next_arc_number = int(max_arc_number or 0) + 1
         guard = _extension_continuity_guard(req)
         updater = StateUpdater(session)
-        project.target_total_chapters = max(int(project.target_total_chapters or 0), end_chapter)
+        project.target_total_chapters = max(
+            int(project.target_total_chapters or 0), end_chapter
+        )
         session.add(project)
         arc = updater.create_arc_plan(
             project_id=project_id,
@@ -268,7 +310,9 @@ def extend_project_generation(
             chapter_end=end_chapter,
             planned_target_size=additional_chapters,
             planned_soft_min=max(1, int(round(additional_chapters * 0.85))),
-            planned_soft_max=max(additional_chapters, int(round(additional_chapters * 1.20))),
+            planned_soft_max=max(
+                additional_chapters, int(round(additional_chapters * 1.20))
+            ),
         )
         for offset, chapter_number in enumerate(range(start_chapter, end_chapter + 1)):
             title, one_line, goals, experience_plan = _extension_chapter_blueprint(
@@ -294,6 +338,7 @@ def extend_project_generation(
         )
     finally:
         session.close()
+
 
 def update_project_automation(
     project_id: str,
@@ -326,8 +371,7 @@ def update_project_automation(
             payload["publish"] = req.publish.model_dump(mode="json")
         if req.publish_bindings is not None:
             payload["publish_bindings"] = [
-                binding.model_dump(mode="json")
-                for binding in req.publish_bindings
+                binding.model_dump(mode="json") for binding in req.publish_bindings
             ]
         updated = normalize_project_automation(payload)
         stored = persist_project_automation(session, project, updated)
@@ -342,4 +386,8 @@ def update_project_automation(
         session.close()
 
 
-__all__ = ['continue_project_generation', 'extend_project_generation', 'update_project_automation']
+__all__ = [
+    "continue_project_generation",
+    "extend_project_generation",
+    "update_project_automation",
+]

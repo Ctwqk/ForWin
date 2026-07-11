@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from forwin.config import InfrastructureConfig
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.genesis import PromptTrace
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.observability import PerformanceSpan
 from forwin.models.phase import TropeUsageRecord
 from forwin.models.project import ChapterPlan
@@ -75,9 +75,7 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
     decision_events = _decision_events_by_chapter(session, project_id)
     spans = _spans_by_chapter(session, project_id)
     prompt_trace_count = (
-        session.query(PromptTrace)
-        .filter(PromptTrace.project_id == project_id)
-        .count()
+        session.query(PromptTrace).filter(PromptTrace.project_id == project_id).count()
     )
 
     rows: list[ChapterMetric] = []
@@ -93,7 +91,9 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
             reward_beats_in_plan=_reward_beats_in_plan(plan),
             selected_trope_ids=_selected_trope_ids(plan),
             selected_trope_categories=_selected_trope_categories(plan),
-            rewrite_count=int(getattr(plan, "repair_attempt_count", 0) or 0) if plan else None,
+            rewrite_count=int(getattr(plan, "repair_attempt_count", 0) or 0)
+            if plan
+            else None,
             hard_floor_passed=_hard_floor_passed(events, plan),
             hard_floor_fail_reasons=_hard_floor_fail_reasons(events),
             visible_payoff_present=_visible_payoff_present(events),
@@ -103,8 +103,12 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
             bookstate_compile_succeeded=_bookstate_compile_succeeded(events),
             wall_time_seconds=_wall_time_seconds(row_spans),
             llm_call_count=_llm_call_count(row_spans),
-            output_token_count=_sum_metric(row_spans, "output_token_count", "completion_tokens"),
-            prompt_char_count=_sum_metric(row_spans, "prompt_char_count", "prompt_chars"),
+            output_token_count=_sum_metric(
+                row_spans, "output_token_count", "completion_tokens"
+            ),
+            prompt_char_count=_sum_metric(
+                row_spans, "prompt_char_count", "prompt_chars"
+            ),
             context_pack_char_count=_sum_metric(
                 row_spans,
                 "context_pack_char_count",
@@ -136,8 +140,14 @@ def compute_summary(
         for field in fields(ChapterMetric)
         if any(getattr(row, field.name) is None for row in rows)
     )
-    reward_gaps = [row.reward_gap_since_last for row in rows if row.reward_gap_since_last is not None]
-    wall_times = [row.wall_time_seconds for row in rows if row.wall_time_seconds is not None]
+    reward_gaps = [
+        row.reward_gap_since_last
+        for row in rows
+        if row.reward_gap_since_last is not None
+    ]
+    wall_times = [
+        row.wall_time_seconds for row in rows if row.wall_time_seconds is not None
+    ]
     return {
         "chapter_count": len(rows),
         "accepted_chapter_count": sum(1 for row in rows if row.verdict == "accepted"),
@@ -146,7 +156,9 @@ def compute_summary(
         "avg_llm_calls_per_chapter": _average(row.llm_call_count for row in rows),
         "p95_wall_time_seconds": _percentile(wall_times, 0.95),
         "prompt_char_count_slope": _slope(row.prompt_char_count for row in rows),
-        "context_pack_char_count_slope": _slope(row.context_pack_char_count for row in rows),
+        "context_pack_char_count_slope": _slope(
+            row.context_pack_char_count for row in rows
+        ),
         "reward_gap_p95": _percentile(reward_gaps, 0.95),
         "max_reward_gap": max(reward_gaps) if reward_gaps else None,
         "visible_payoff_missing_rate": _missing_rate(
@@ -154,7 +166,9 @@ def compute_summary(
         ),
         "hard_floor_fail_rate": _false_rate(row.hard_floor_passed for row in rows),
         "canon_extraction_failure_rate": _extraction_failure_rate(rows),
-        "repeat_trope_template_rate": _repeat_rate(row.selected_trope_ids for row in rows),
+        "repeat_trope_template_rate": _repeat_rate(
+            row.selected_trope_ids for row in rows
+        ),
         "repeat_trope_category_rate": _repeat_rate(
             row.selected_trope_categories for row in rows
         ),
@@ -218,10 +232,18 @@ def write_reports(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Write pulp profile pressure-test reports.")
-    parser.add_argument("--project-id", required=True, help="ForWin project id to pressure test.")
-    parser.add_argument("--chapters", type=int, default=30, help="Number of chapter rows to collect.")
-    parser.add_argument("--output", type=Path, required=True, help="Output report directory.")
+    parser = argparse.ArgumentParser(
+        description="Write pulp profile pressure-test reports."
+    )
+    parser.add_argument(
+        "--project-id", required=True, help="ForWin project id to pressure test."
+    )
+    parser.add_argument(
+        "--chapters", type=int, default=30, help="Number of chapter rows to collect."
+    )
+    parser.add_argument(
+        "--output", type=Path, required=True, help="Output report directory."
+    )
     args = parser.parse_args(argv)
     if args.chapters < 1:
         parser.error("--chapters must be at least 1")
@@ -252,7 +274,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_URL") or InfrastructureConfig.from_env().database_url
+    return (
+        os.environ.get("DATABASE_URL") or InfrastructureConfig.from_env().database_url
+    )
 
 
 def _latest_drafts_by_chapter(session, project_id: str) -> dict[int, ChapterDraft]:  # noqa: ANN001
@@ -315,7 +339,9 @@ def _trope_usage_counts(session, project_id: str) -> dict[str, int]:  # noqa: AN
     return counts
 
 
-def _decision_events_by_chapter(session, project_id: str) -> dict[int, list[DecisionEvent]]:  # noqa: ANN001
+def _decision_events_by_chapter(
+    session, project_id: str
+) -> dict[int, list[DecisionEvent]]:  # noqa: ANN001
     grouped: dict[int, list[DecisionEvent]] = {}
     events = _project_decision_events(session, project_id)
     for event in events:
@@ -338,8 +364,12 @@ def _spans_by_chapter(session, project_id: str) -> dict[int, list[PerformanceSpa
     grouped: dict[int, list[PerformanceSpan]] = {}
     spans = (
         session.query(PerformanceSpan)
-        .filter(PerformanceSpan.project_id == project_id, PerformanceSpan.chapter_number > 0)
-        .order_by(PerformanceSpan.chapter_number.asc(), PerformanceSpan.created_at.asc())
+        .filter(
+            PerformanceSpan.project_id == project_id, PerformanceSpan.chapter_number > 0
+        )
+        .order_by(
+            PerformanceSpan.chapter_number.asc(), PerformanceSpan.created_at.asc()
+        )
         .all()
     )
     for span in spans:
@@ -361,12 +391,18 @@ def _reward_beats_in_plan(plan: ChapterPlan | None) -> int | None:
         if not isinstance(item, dict):
             continue
         text = json.dumps(item, ensure_ascii=False)
-        if any(keyword in text for keyword in ("experience_delivery", "payoff", "reward", "爽点", "收益")):
+        if any(
+            keyword in text
+            for keyword in ("experience_delivery", "payoff", "reward", "爽点", "收益")
+        ):
             beats += 1
     experience_plan = _json_loads(getattr(plan, "experience_plan_json", "{}"), {})
     if isinstance(experience_plan, dict) and experience_plan:
         text = json.dumps(experience_plan, ensure_ascii=False)
-        if any(keyword in text for keyword in ("payoff", "reward", "爽点", "visible_payoff")):
+        if any(
+            keyword in text
+            for keyword in ("payoff", "reward", "爽点", "visible_payoff")
+        ):
             beats = max(beats, 1)
     return beats
 
@@ -409,7 +445,9 @@ def _selected_trope_categories(plan: ChapterPlan | None) -> list[str] | None:
     return [str(item).strip() for item in candidates if str(item).strip()]
 
 
-def _hard_floor_passed(events: list[DecisionEvent], plan: ChapterPlan | None) -> bool | None:
+def _hard_floor_passed(
+    events: list[DecisionEvent], plan: ChapterPlan | None
+) -> bool | None:
     for event in events:
         if event.event_type == DecisionEventType.HARD_GATE_HIT:
             payload = _json_loads(event.payload_json, {})
@@ -431,7 +469,9 @@ def _hard_floor_fail_reasons(events: list[DecisionEvent]) -> list[str] | None:
         if isinstance(payload, dict) and isinstance(payload.get("fail_reasons"), list):
             return [str(item) for item in payload["fail_reasons"]]
         if event.reason:
-            return [part.strip() for part in str(event.reason).split(";") if part.strip()]
+            return [
+                part.strip() for part in str(event.reason).split(";") if part.strip()
+            ]
         return []
     return None
 
@@ -512,7 +552,8 @@ def _llm_call_count(spans: list[PerformanceSpan]) -> int | None:
     return sum(
         1
         for span in spans
-        if str(span.span_kind or "") == "llm" or str(span.span_name or "").startswith("llm.")
+        if str(span.span_kind or "") == "llm"
+        or str(span.span_name or "").startswith("llm.")
     )
 
 
@@ -545,7 +586,9 @@ def _average(values: Iterable[float | int | None]) -> float | int | None:
     return round(average, 3)
 
 
-def _percentile(values: Iterable[float | int | None], percentile: float) -> float | int | None:
+def _percentile(
+    values: Iterable[float | int | None], percentile: float
+) -> float | int | None:
     present_values = sorted(value for value in values if value is not None)
     if not present_values:
         return None
@@ -571,7 +614,9 @@ def _false_rate(values: Iterable[bool | None]) -> float | None:
     present_values = [value for value in values if value is not None]
     if not present_values:
         return None
-    return round(sum(1 for value in present_values if value is False) / len(present_values), 3)
+    return round(
+        sum(1 for value in present_values if value is False) / len(present_values), 3
+    )
 
 
 def _missing_rate(values: Iterable[bool | None]) -> float | None:
@@ -579,7 +624,11 @@ def _missing_rate(values: Iterable[bool | None]) -> float | None:
 
 
 def _extraction_failure_rate(rows: list[ChapterMetric]) -> float | None:
-    statuses = [row.structured_extraction_status for row in rows if row.structured_extraction_status is not None]
+    statuses = [
+        row.structured_extraction_status
+        for row in rows
+        if row.structured_extraction_status is not None
+    ]
     if not statuses:
         return None
     failures = {"degraded", "partial_degraded", "deferred"}
@@ -653,7 +702,9 @@ def _future_plan_issue_rate(
     ]
     if not audit_events:
         return None
-    matches = sum(1 for event in audit_events if _event_has_issue_type(event, issue_type))
+    matches = sum(
+        1 for event in audit_events if _event_has_issue_type(event, issue_type)
+    )
     return round(matches / len(audit_events), 3)
 
 

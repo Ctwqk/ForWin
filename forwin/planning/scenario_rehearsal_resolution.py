@@ -6,16 +6,22 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.governance import (
+from forwin.planning.checkpoints import (
     BandCheckpointDetail,
     BandCheckpointIssueInfo,
+)
+from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
-    issue_group_for_issue,
 )
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.base import new_id
-from forwin.models.governance import DecisionEvent
-from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ProjectReplanEvent
+from forwin.models.audit import DecisionEvent
+from forwin.models.phase import (
+    ArcStructureDraft,
+    BandExperiencePlan,
+    ProjectReplanEvent,
+)
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
@@ -91,19 +97,33 @@ class ScenarioRehearsalCoordinator:
         if report.recommendation == ScenarioRehearsalRecommendation.PASS:
             status = "skipped" if report.metadata.get("skipped") else "passed"
             report = self._finalize_report(report, resolution_status=status)
-            self._save_and_record_evaluation(report, summary=f"Scenario rehearsal {status}。")
-            return ScenarioRehearsalOutcome(status=status, report=report, applied_patches=[])
+            self._save_and_record_evaluation(
+                report, summary=f"Scenario rehearsal {status}。"
+            )
+            return ScenarioRehearsalOutcome(
+                status=status, report=report, applied_patches=[]
+            )
 
         if report.recommendation == ScenarioRehearsalRecommendation.PATCH:
-            applied = self._apply_known_patches(report) if max_patch_attempts > 0 else []
+            applied = (
+                self._apply_known_patches(report) if max_patch_attempts > 0 else []
+            )
             if applied:
                 self._record_scenario_event(
                     report,
                     event_type=DecisionEventType.SCENARIO_REHEARSAL_PATCH_APPLIED,
                     summary="Scenario rehearsal 已尝试计划补丁。",
-                    payload={"applied_patches": [item.model_dump(mode="json") for item in applied]},
+                    payload={
+                        "applied_patches": [
+                            item.model_dump(mode="json") for item in applied
+                        ]
+                    },
                 )
-            if applied and all(item.status == "applied" for item in applied) and max_patch_attempts > 0:
+            if (
+                applied
+                and all(item.status == "applied" for item in applied)
+                and max_patch_attempts > 0
+            ):
                 rerun = self.runner.evaluate_for_band(
                     project_id=project_id,
                     arc_id=arc_id,
@@ -117,7 +137,9 @@ class ScenarioRehearsalCoordinator:
                         applied_patches=applied,
                         patch_attempt_count=1,
                     )
-                    self._save_and_record_evaluation(rerun, summary="Scenario rehearsal 计划补丁后通过。")
+                    self._save_and_record_evaluation(
+                        rerun, summary="Scenario rehearsal 计划补丁后通过。"
+                    )
                     return ScenarioRehearsalOutcome(
                         status="patched_passed",
                         report=rerun,
@@ -135,7 +157,9 @@ class ScenarioRehearsalCoordinator:
                     patch_attempt_count=1,
                     checkpoint_id=checkpoint_id,
                 )
-                self._save_and_record_evaluation(rerun, summary="Scenario rehearsal 计划补丁后仍需人工处理。")
+                self._save_and_record_evaluation(
+                    rerun, summary="Scenario rehearsal 计划补丁后仍需人工处理。"
+                )
                 return ScenarioRehearsalOutcome(
                     status="manual_patch_required",
                     report=rerun,
@@ -153,7 +177,9 @@ class ScenarioRehearsalCoordinator:
                 applied_patches=applied,
                 checkpoint_id=checkpoint_id,
             )
-            self._save_and_record_evaluation(report, summary="Scenario rehearsal 需要人工计划补丁。")
+            self._save_and_record_evaluation(
+                report, summary="Scenario rehearsal 需要人工计划补丁。"
+            )
             return ScenarioRehearsalOutcome(
                 status="manual_patch_required",
                 report=report,
@@ -193,7 +219,9 @@ class ScenarioRehearsalCoordinator:
                         resolution_status="replanned_passed",
                         replan_event_id=event_id,
                     )
-                    self._save_and_record_evaluation(rerun, summary="Scenario rehearsal 重排计划后通过。")
+                    self._save_and_record_evaluation(
+                        rerun, summary="Scenario rehearsal 重排计划后通过。"
+                    )
                     return ScenarioRehearsalOutcome(
                         status="replanned_passed",
                         report=rerun,
@@ -211,7 +239,9 @@ class ScenarioRehearsalCoordinator:
                     checkpoint_id=checkpoint_id,
                     replan_event_id=event_id,
                 )
-                self._save_and_record_evaluation(rerun, summary="Scenario rehearsal 重排计划后仍未通过。")
+                self._save_and_record_evaluation(
+                    rerun, summary="Scenario rehearsal 重排计划后仍未通过。"
+                )
                 return ScenarioRehearsalOutcome(
                     status="replan_required",
                     report=rerun,
@@ -239,7 +269,9 @@ class ScenarioRehearsalCoordinator:
                 checkpoint_id=checkpoint_id,
                 replan_event_id=event_id,
             )
-            self._save_and_record_evaluation(report, summary="Scenario rehearsal 等待重排计划。")
+            self._save_and_record_evaluation(
+                report, summary="Scenario rehearsal 等待重排计划。"
+            )
             return ScenarioRehearsalOutcome(
                 status="replan_required",
                 report=report,
@@ -325,7 +357,11 @@ class ScenarioRehearsalCoordinator:
             "arc_id": report.arc_id,
             "band_id": report.band_id,
             "chapter_numbers": list(report.chapter_numbers),
-            "recommendation": str(report.recommendation.value if hasattr(report.recommendation, "value") else report.recommendation),
+            "recommendation": str(
+                report.recommendation.value
+                if hasattr(report.recommendation, "value")
+                else report.recommendation
+            ),
             "resolution_status": report.resolution_status,
             "trigger_reasons": list(report.trigger_reasons),
             **(payload or {}),
@@ -353,26 +389,46 @@ class ScenarioRehearsalCoordinator:
             self.session.flush()
         return row
 
-    def _apply_known_patches(self, report: ScenarioRehearsalReport) -> list[ScenarioAppliedPatch]:
+    def _apply_known_patches(
+        self, report: ScenarioRehearsalReport
+    ) -> list[ScenarioAppliedPatch]:
         applied: list[ScenarioAppliedPatch] = []
         for patch in report.required_plan_patches:
             if patch.patch_type not in AUTO_PATCH_TYPES:
-                applied.append(self._patch_result(patch, status="unsupported", message="Patch type requires manual handling."))
+                applied.append(
+                    self._patch_result(
+                        patch,
+                        status="unsupported",
+                        message="Patch type requires manual handling.",
+                    )
+                )
                 continue
             method = getattr(self, f"_apply_{patch.patch_type}", None)
             if method is None:
-                applied.append(self._patch_result(patch, status="unsupported", message="Patch handler is not registered."))
+                applied.append(
+                    self._patch_result(
+                        patch,
+                        status="unsupported",
+                        message="Patch handler is not registered.",
+                    )
+                )
                 continue
             try:
                 method(report, patch)
             except Exception as exc:  # noqa: BLE001
-                applied.append(self._patch_result(patch, status="failed", message=str(exc)))
+                applied.append(
+                    self._patch_result(patch, status="failed", message=str(exc))
+                )
             else:
-                applied.append(self._patch_result(patch, status="applied", message=patch.message))
+                applied.append(
+                    self._patch_result(patch, status="applied", message=patch.message)
+                )
         return applied
 
     @staticmethod
-    def _patch_result(patch: ScenarioPlanPatch, *, status: str, message: str) -> ScenarioAppliedPatch:
+    def _patch_result(
+        patch: ScenarioPlanPatch, *, status: str, message: str
+    ) -> ScenarioAppliedPatch:
         return ScenarioAppliedPatch(
             patch_type=patch.patch_type,
             target=patch.target,
@@ -399,7 +455,11 @@ class ScenarioRehearsalCoordinator:
         gap_id = (
             contract.major_gap_ids[0]
             if contract.major_gap_ids
-            else (contract.hidden_world_line_ids[0] if contract.hidden_world_line_ids else "scenario_gap")
+            else (
+                contract.hidden_world_line_ids[0]
+                if contract.hidden_world_line_ids
+                else "scenario_gap"
+            )
         )
         existing = {str(step.gap_id or "") for step in contract.reveal_ladder}
         if gap_id not in existing:
@@ -411,7 +471,9 @@ class ScenarioRehearsalCoordinator:
                     from_state="hidden",
                     to_state="hinted",
                     method="scenario_auto_patch",
-                    fairness_evidence=list(patch.evidence_refs or ["scenario_rehearsal"]),
+                    fairness_evidence=list(
+                        patch.evidence_refs or ["scenario_rehearsal"]
+                    ),
                 )
             )
         self.contracts.save_arc_contract(contract)
@@ -426,14 +488,18 @@ class ScenarioRehearsalCoordinator:
             raise ValueError("band contract is missing")
         hints = list(contract.required_hints)
         for chapter_number in report.chapter_numbers:
-            intent = self.contracts.get_chapter_intent(report.project_id, chapter_number)
+            intent = self.contracts.get_chapter_intent(
+                report.project_id, chapter_number
+            )
             if intent is None:
                 continue
             hints.extend(intent.hint_delta_intents)
             hints.extend(f"hint:{item}" for item in intent.must_not_reveal)
         if not hints:
             hints.extend(f"hint:{item}" for item in contract.hidden_world_line_ids)
-        contract.required_hints = list(dict.fromkeys(str(item) for item in hints if str(item or "").strip()))
+        contract.required_hints = list(
+            dict.fromkeys(str(item) for item in hints if str(item or "").strip())
+        )
         self.contracts.save_band_contract(contract)
 
     def _apply_add_subworld_roster_slot(
@@ -446,7 +512,10 @@ class ScenarioRehearsalCoordinator:
             raise ValueError("subworld_id is required")
         existing = self.session.execute(
             select(SubWorldRosterItem)
-            .where(SubWorldRosterItem.project_id == report.project_id, SubWorldRosterItem.subworld_id == subworld_id)
+            .where(
+                SubWorldRosterItem.project_id == report.project_id,
+                SubWorldRosterItem.subworld_id == subworld_id,
+            )
             .limit(1)
         ).scalar_one_or_none()
         if existing is not None:
@@ -458,12 +527,16 @@ class ScenarioRehearsalCoordinator:
                 entity_kind="character",
                 display_name="待定角色",
                 slot_key=f"scenario_slot:{report.band_id}",
-                role_hint=str(patch.metadata.get("role") or "scenario rehearsal 自动补位"),
+                role_hint=str(
+                    patch.metadata.get("role") or "scenario rehearsal 自动补位"
+                ),
                 description="用于防止 writer 随机创造关键角色。",
                 is_core=True,
                 status="planned_slot",
                 activation_chapter=min(report.chapter_numbers or [0]),
-                metadata_json=json.dumps({"source": "scenario_rehearsal"}, ensure_ascii=False),
+                metadata_json=json.dumps(
+                    {"source": "scenario_rehearsal"}, ensure_ascii=False
+                ),
             )
         )
         self.session.flush()
@@ -518,27 +591,48 @@ class ScenarioRehearsalCoordinator:
             raise ValueError("subworld_id is required")
         row = self.session.execute(
             select(BandExperiencePlan)
-            .where(BandExperiencePlan.project_id == report.project_id, BandExperiencePlan.band_id == report.band_id)
-            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+            .where(
+                BandExperiencePlan.project_id == report.project_id,
+                BandExperiencePlan.band_id == report.band_id,
+            )
+            .order_by(
+                BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
+            )
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
             raise ValueError("band experience plan is missing")
         payload = self._json_object(row.schedule_json)
-        targets = [item for item in (payload.get("chapter_entry_targets") or []) if isinstance(item, dict)]
-        if not any(str(item.get("subworld_id") or "") == subworld_id for item in targets):
+        targets = [
+            item
+            for item in (payload.get("chapter_entry_targets") or [])
+            if isinstance(item, dict)
+        ]
+        if not any(
+            str(item.get("subworld_id") or "") == subworld_id for item in targets
+        ):
             roster = self.session.execute(
                 select(SubWorldRosterItem)
-                .where(SubWorldRosterItem.project_id == report.project_id, SubWorldRosterItem.subworld_id == subworld_id)
-                .order_by(SubWorldRosterItem.is_core.desc(), SubWorldRosterItem.created_at.asc())
+                .where(
+                    SubWorldRosterItem.project_id == report.project_id,
+                    SubWorldRosterItem.subworld_id == subworld_id,
+                )
+                .order_by(
+                    SubWorldRosterItem.is_core.desc(),
+                    SubWorldRosterItem.created_at.asc(),
+                )
                 .limit(1)
             ).scalar_one_or_none()
             targets.append(
                 {
                     "chapter_hint": min(report.chapter_numbers or [0]),
-                    "entity_name": str(getattr(roster, "display_name", "") or "待定角色"),
+                    "entity_name": str(
+                        getattr(roster, "display_name", "") or "待定角色"
+                    ),
                     "subworld_id": subworld_id,
-                    "role_hint": str(getattr(roster, "role_hint", "") or "scenario rehearsal 补位"),
+                    "role_hint": str(
+                        getattr(roster, "role_hint", "") or "scenario rehearsal 补位"
+                    ),
                 }
             )
         payload["chapter_entry_targets"] = targets
@@ -551,13 +645,16 @@ class ScenarioRehearsalCoordinator:
         report: ScenarioRehearsalReport,
         _patch: ScenarioPlanPatch,
     ) -> None:
-        plans = self.session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == report.project_id,
-                ChapterPlan.chapter_number.in_(report.chapter_numbers),
+        plans = (
+            self.session.execute(
+                select(ChapterPlan).where(
+                    ChapterPlan.project_id == report.project_id,
+                    ChapterPlan.chapter_number.in_(report.chapter_numbers),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for plan in plans:
             payload = self._json_object(plan.experience_plan_json)
             payload["entity_admission_rule"] = "strict_named_character"
@@ -608,22 +705,29 @@ class ScenarioRehearsalCoordinator:
         active_arc = self.session.get(ArcPlanVersion, report.arc_id)
         if active_arc is None:
             return {}
-        start_chapter = min(report.chapter_numbers or [int(active_arc.chapter_start or 1)])
+        start_chapter = min(
+            report.chapter_numbers or [int(active_arc.chapter_start or 1)]
+        )
         end_chapter = max(report.chapter_numbers or [int(active_arc.chapter_end or 0)])
         max_version = self.session.execute(
-            select(func.max(ArcPlanVersion.version)).where(ArcPlanVersion.project_id == report.project_id)
+            select(func.max(ArcPlanVersion.version)).where(
+                ArcPlanVersion.project_id == report.project_id
+            )
         ).scalar_one() or int(active_arc.version or 0)
         next_version = int(max_version or 0) + 1
         risk_summary = "; ".join(
             f"{item.risk_type}: {item.message}" for item in report.risk_findings
         ).strip()
-        for row in self.session.execute(
-            select(ArcPlanVersion)
-            .where(
-                ArcPlanVersion.project_id == report.project_id,
-                ArcPlanVersion.status == "active",
+        for row in (
+            self.session.execute(
+                select(ArcPlanVersion).where(
+                    ArcPlanVersion.project_id == report.project_id,
+                    ArcPlanVersion.status == "active",
+                )
             )
-        ).scalars().all():
+            .scalars()
+            .all()
+        ):
             row.status = "superseded"
             self.session.add(row)
         new_arc = ArcPlanVersion(
@@ -645,15 +749,21 @@ class ScenarioRehearsalCoordinator:
         self.session.add(new_arc)
         self.session.flush()
 
-        future_plans = self.session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == report.project_id,
-                ChapterPlan.chapter_number >= start_chapter,
+        future_plans = (
+            self.session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == report.project_id,
+                    ChapterPlan.chapter_number >= start_chapter,
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
             )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-        goal = f"Scenario Rehearsal replan: {risk_summary or '补足认知/visibility 约束'}"
+            .scalars()
+            .all()
+        )
+        goal = (
+            f"Scenario Rehearsal replan: {risk_summary or '补足认知/visibility 约束'}"
+        )
         for plan in future_plans:
             plan.arc_plan_id = new_arc.id
             goals = self._json_list(plan.goals_json)
@@ -697,13 +807,16 @@ class ScenarioRehearsalCoordinator:
             start_chapter=start_chapter,
             risk_summary=risk_summary,
         )
-        for band_plan in self.session.execute(
-            select(BandExperiencePlan)
-            .where(
-                BandExperiencePlan.project_id == report.project_id,
-                BandExperiencePlan.band_id == report.band_id,
+        for band_plan in (
+            self.session.execute(
+                select(BandExperiencePlan).where(
+                    BandExperiencePlan.project_id == report.project_id,
+                    BandExperiencePlan.band_id == report.band_id,
+                )
             )
-        ).scalars().all():
+            .scalars()
+            .all()
+        ):
             band_plan.arc_id = new_arc.id
             self.session.add(band_plan)
         self.session.flush()
@@ -725,7 +838,9 @@ class ScenarioRehearsalCoordinator:
         start_chapter: int,
         risk_summary: str,
     ) -> None:
-        old_arc_contract = self.contracts.get_arc_contract(report.project_id, old_arc_id)
+        old_arc_contract = self.contracts.get_arc_contract(
+            report.project_id, old_arc_id
+        )
         if old_arc_contract is None:
             new_arc_contract = ArcWorldContract(
                 contract_id=f"arc_contract:{new_arc.id}",
@@ -762,7 +877,9 @@ class ScenarioRehearsalCoordinator:
             )
         self.contracts.save_arc_contract(new_arc_contract)
 
-        old_band_contract = self.contracts.get_band_contract(report.project_id, report.band_id)
+        old_band_contract = self.contracts.get_band_contract(
+            report.project_id, report.band_id
+        )
         if old_band_contract is not None:
             self.contracts.save_band_contract(
                 old_band_contract.model_copy(
@@ -781,15 +898,24 @@ class ScenarioRehearsalCoordinator:
                 )
             )
 
-    def _create_replan_event(self, report: ScenarioRehearsalReport, *, status: str) -> str:
-        max_version = self.session.execute(
-            select(func.max(ArcPlanVersion.version)).where(ArcPlanVersion.project_id == report.project_id)
-        ).scalar_one() or 0
+    def _create_replan_event(
+        self, report: ScenarioRehearsalReport, *, status: str
+    ) -> str:
+        max_version = (
+            self.session.execute(
+                select(func.max(ArcPlanVersion.version)).where(
+                    ArcPlanVersion.project_id == report.project_id
+                )
+            ).scalar_one()
+            or 0
+        )
         row = ProjectReplanEvent(
             project_id=report.project_id,
             trigger_chapter=min(report.chapter_numbers or [0]),
             risk_level="high",
-            reason="; ".join(f"{item.risk_type}: {item.message}" for item in report.risk_findings),
+            reason="; ".join(
+                f"{item.risk_type}: {item.message}" for item in report.risk_findings
+            ),
             focus_threads_json=json.dumps(
                 list(dict.fromkeys(item.risk_type for item in report.risk_findings)),
                 ensure_ascii=False,
@@ -822,11 +948,15 @@ class ScenarioRehearsalCoordinator:
         return payload if isinstance(payload, dict) else {}
 
 
-def latest_blocking_scenario_rehearsal(session: Session, project_id: str) -> ScenarioRehearsalRunRow | None:
+def latest_blocking_scenario_rehearsal(
+    session: Session, project_id: str
+) -> ScenarioRehearsalRunRow | None:
     row = session.execute(
         select(ScenarioRehearsalRunRow)
         .where(ScenarioRehearsalRunRow.project_id == project_id)
-        .order_by(ScenarioRehearsalRunRow.created_at.desc(), ScenarioRehearsalRunRow.id.desc())
+        .order_by(
+            ScenarioRehearsalRunRow.created_at.desc(), ScenarioRehearsalRunRow.id.desc()
+        )
         .limit(1)
     ).scalar_one_or_none()
     if row is None:
@@ -835,6 +965,9 @@ def latest_blocking_scenario_rehearsal(session: Session, project_id: str) -> Sce
         payload = json.loads(row.report_json or "{}") or {}
     except (TypeError, ValueError, json.JSONDecodeError):
         payload = {}
-    if str(payload.get("resolution_status") or "") in TERMINAL_BLOCKING_RESOLUTION_STATUSES:
+    if (
+        str(payload.get("resolution_status") or "")
+        in TERMINAL_BLOCKING_RESOLUTION_STATUSES
+    ):
         return row
     return None

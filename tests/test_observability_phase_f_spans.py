@@ -41,7 +41,9 @@ def test_observability_service_records_nested_spans_and_errors() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-spans"), minimax_api_key=""),
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("phase-f-spans"), minimax_api_key=""
+            ),
         )
         ctx = OperationContext(
             project_id=project_id,
@@ -53,28 +55,47 @@ def test_observability_service_records_nested_spans_and_errors() -> None:
 
         with obs.span(ctx, "task.operation", span_kind="task", component="api") as root:
             root.metric("completed_chapters", 1)
-            with obs.span(ctx, "writer.write_chapter", span_kind="writer", component="writer") as writer:
+            with obs.span(
+                ctx, "writer.write_chapter", span_kind="writer", component="writer"
+            ) as writer:
                 writer.tag("mode", "scene")
                 writer.metric("char_count", 1200)
             try:
-                with obs.span(ctx, "review.hub", span_kind="reviewer", component="reviewer"):
+                with obs.span(
+                    ctx, "review.hub", span_kind="reviewer", component="reviewer"
+                ):
                     raise RuntimeError("review failed")
             except RuntimeError:
                 pass
 
         with Session() as session:
-            rows = session.execute(
-                select(PerformanceSpan).where(PerformanceSpan.project_id == project_id)
-            ).scalars().all()
+            rows = (
+                session.execute(
+                    select(PerformanceSpan).where(
+                        PerformanceSpan.project_id == project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         by_name = {row.span_name: row for row in rows}
         assert set(by_name) == {"task.operation", "writer.write_chapter", "review.hub"}
         assert by_name["task.operation"].parent_span_id == ""
-        assert by_name["writer.write_chapter"].parent_span_id == by_name["task.operation"].span_id
+        assert (
+            by_name["writer.write_chapter"].parent_span_id
+            == by_name["task.operation"].span_id
+        )
         assert by_name["review.hub"].status == "failed"
-        assert json.loads(by_name["review.hub"].error_json)["error_class"] == "RuntimeError"
+        assert (
+            json.loads(by_name["review.hub"].error_json)["error_class"]
+            == "RuntimeError"
+        )
         assert json.loads(by_name["writer.write_chapter"].tags_json)["mode"] == "scene"
-        assert json.loads(by_name["writer.write_chapter"].metrics_json)["char_count"] == 1200
+        assert (
+            json.loads(by_name["writer.write_chapter"].metrics_json)["char_count"]
+            == 1200
+        )
     finally:
         engine.dispose()
 
@@ -92,13 +113,24 @@ def test_null_observability_is_noop() -> None:
         obs = NullObservability()
         with obs.span(ctx, "task.operation") as span:
             span.metric("ignored", 1)
-        obs.event(ctx, event_family="runtime_observation", event_type="ignored", summary="ignored")
+        obs.event(
+            ctx,
+            event_family="runtime_observation",
+            event_type="ignored",
+            summary="ignored",
+        )
         obs.flush()
 
         with Session() as session:
-            count = session.execute(
-                select(PerformanceSpan).where(PerformanceSpan.project_id == project_id)
-            ).scalars().all()
+            count = (
+                session.execute(
+                    select(PerformanceSpan).where(
+                        PerformanceSpan.project_id == project_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
         assert count == []
     finally:
         engine.dispose()
@@ -116,13 +148,21 @@ def test_query_service_builds_task_critical_path_and_breakdowns() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-query"), minimax_api_key=""),
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("phase-f-query"), minimax_api_key=""
+            ),
         )
-        ctx = OperationContext(project_id=project_id, task_id="task-query", operation_id="task-query")
+        ctx = OperationContext(
+            project_id=project_id, task_id="task-query", operation_id="task-query"
+        )
         with obs.span(ctx, "task.operation", span_kind="task", component="api"):
-            with obs.span(ctx, "context.provider.map", span_kind="context", component="context"):
+            with obs.span(
+                ctx, "context.provider.map", span_kind="context", component="context"
+            ):
                 pass
-            with obs.span(ctx, "llm.request", span_kind="llm", component="writer") as span:
+            with obs.span(
+                ctx, "llm.request", span_kind="llm", component="writer"
+            ) as span:
                 span.tag("stage_key", "chapter_draft")
                 span.tag("model", "fake-model")
                 span.metric("input_chars", 100)
@@ -137,7 +177,11 @@ def test_query_service_builds_task_critical_path_and_breakdowns() -> None:
         assert report.project_id == project_id
         assert report.critical_path
         assert report.critical_path[0].span_name == "task.operation"
-        assert {item.key for item in report.component_breakdown} >= {"api", "context", "writer"}
+        assert {item.key for item in report.component_breakdown} >= {
+            "api",
+            "context",
+            "writer",
+        }
         assert report.llm_breakdown[0].key == "chapter_draft:fake-model"
     finally:
         engine.dispose()
@@ -155,12 +199,15 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-prompt-parent"), minimax_api_key=""),
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("phase-f-prompt-parent"),
+                minimax_api_key="",
+            ),
         )
         pipeline = ChapterPipeline.__new__(ChapterPipeline)
         pipeline.observability = obs
-        pipeline._governance_task_id = "task-prompt-parent"
-        pipeline._governance_root_event_id = ""
+        pipeline._audit_task_id = "task-prompt-parent"
+        pipeline._audit_root_event_id = ""
 
         ctx = OperationContext(
             project_id=project_id,
@@ -169,7 +216,9 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
             stage="writing_chapter",
             operation_id="task-prompt-parent",
         )
-        with obs.span(ctx, "stage.writing_chapter", span_kind="stage", component="pipeline") as stage_span:
+        with obs.span(
+            ctx, "stage.writing_chapter", span_kind="stage", component="pipeline"
+        ) as stage_span:
             pipeline._record_prompt_trace_performance_spans(
                 project_id=project_id,
                 chapter_number=3,
@@ -193,7 +242,9 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
 
         with Session() as session:
             llm_row = session.execute(
-                select(PerformanceSpan).where(PerformanceSpan.span_name == "llm.request")
+                select(PerformanceSpan).where(
+                    PerformanceSpan.span_name == "llm.request"
+                )
             ).scalar_one()
 
         assert llm_row.parent_span_id == parent_span_id
@@ -202,7 +253,9 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
         engine.dispose()
 
 
-def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on() -> None:
+def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on() -> (
+    None
+):
     engine = get_engine(postgres_test_url("phase-f-stage-chapter"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -214,17 +267,20 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-stage-chapter"), minimax_api_key=""),
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("phase-f-stage-chapter"),
+                minimax_api_key="",
+            ),
         )
         pipeline = ChapterPipeline.__new__(ChapterPipeline)
         pipeline.observability = obs
-        pipeline._governance_task_id = "task-stage-chapter"
-        pipeline._governance_root_event_id = ""
-        pipeline._governance_runtime_project_id = project_id
-        pipeline._governance_runtime_updater = object()
-        pipeline._governance_stage_name = ""
-        pipeline._governance_stage_started_at = 0.0
-        pipeline._governance_stage_span = None
+        pipeline._audit_task_id = "task-stage-chapter"
+        pipeline._audit_root_event_id = ""
+        pipeline._audit_project_id = project_id
+        pipeline._audit_updater = object()
+        pipeline._audit_stage_name = ""
+        pipeline._audit_stage_started_at = 0.0
+        pipeline._audit_stage_span = None
         recorded_events = []
 
         def record_event(**kwargs):
@@ -249,12 +305,16 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
 
         with Session() as session:
             row = session.execute(
-                select(PerformanceSpan).where(PerformanceSpan.span_name == "stage.running_post_acceptance")
+                select(PerformanceSpan).where(
+                    PerformanceSpan.span_name == "stage.running_post_acceptance"
+                )
             ).scalar_one()
 
         assert row.chapter_number == 28
         assert json.loads(row.metrics_json)["chapter_number"] == 28
-        exited_event = next(item for item in recorded_events if item["event_type"] == "stage_exited")
+        exited_event = next(
+            item for item in recorded_events if item["event_type"] == "stage_exited"
+        )
         assert exited_event["chapter_number"] == 28
     finally:
         engine.dispose()
@@ -273,9 +333,13 @@ def test_sqlalchemy_probe_records_db_metrics_on_active_span() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-db-probe"), minimax_api_key=""),
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("phase-f-db-probe"), minimax_api_key=""
+            ),
         )
-        ctx = OperationContext(project_id=project_id, task_id="task-db", operation_id="task-db")
+        ctx = OperationContext(
+            project_id=project_id, task_id="task-db", operation_id="task-db"
+        )
         with obs.span(ctx, "db.probed-work", span_kind="stage", component="test"):
             with Session() as session:
                 session.execute(text("SELECT 1")).scalar_one()
@@ -296,6 +360,8 @@ def test_sqlalchemy_probe_records_db_metrics_on_active_span() -> None:
 
 
 def test_db_probe_is_enabled_by_default_for_runtime_configs() -> None:
-    config = InfrastructureConfig(database_url=postgres_test_url("phase-f-db-probe-default"), minimax_api_key="")
+    config = InfrastructureConfig(
+        database_url=postgres_test_url("phase-f-db-probe-default"), minimax_api_key=""
+    )
 
     assert config.observability_record_db_spans is True

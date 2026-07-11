@@ -711,20 +711,20 @@
       }
     }
 
-    function closeGovernanceActionModal() {
-      document.getElementById('governance_action_modal_shell').classList.remove('open');
-      currentGovernanceAction = null;
-      clearNode(document.getElementById('governance_action_modal_fields'));
-      document.getElementById('governance_action_modal_reason').value = '';
+    function closeProjectControlActionModal() {
+      document.getElementById('project_control_action_modal_shell').classList.remove('open');
+      currentProjectControlAction = null;
+      clearNode(document.getElementById('project_control_action_modal_fields'));
+      document.getElementById('project_control_action_modal_reason').value = '';
     }
 
-    function openGovernanceActionModal(config = {}) {
-      currentGovernanceAction = config || {};
-      document.getElementById('governance_action_modal_title').textContent = config.title || '治理动作';
-      document.getElementById('governance_action_modal_description').textContent = config.description || '所有治理动作都要求填写原因，便于进入决策链与审计时间线。';
-      document.getElementById('governance_action_modal_submit').textContent = config.confirmLabel || '提交';
-      document.getElementById('governance_action_modal_reason').value = config.reason || '';
-      const fields = document.getElementById('governance_action_modal_fields');
+    function openProjectControlActionModal(config = {}) {
+      currentProjectControlAction = config || {};
+      document.getElementById('project_control_action_modal_title').textContent = config.title || '项目控制动作';
+      document.getElementById('project_control_action_modal_description').textContent = config.description || '所有项目控制动作都要求填写原因，便于进入决策链与审计时间线。';
+      document.getElementById('project_control_action_modal_submit').textContent = config.confirmLabel || '提交';
+      document.getElementById('project_control_action_modal_reason').value = config.reason || '';
+      const fields = document.getElementById('project_control_action_modal_fields');
       clearNode(fields);
       (Array.isArray(config.fields) ? config.fields : []).forEach((field) => {
         let control = null;
@@ -751,22 +751,22 @@
           }
           control.value = String(field.value ?? '');
         }
-        control.id = `governance_action_field_${field.name}`;
+        control.id = `project_control_action_field_${field.name}`;
         fields.appendChild(createLabeledField(field.label || field.name, control));
       });
-      document.getElementById('governance_action_modal_shell').classList.add('open');
+      document.getElementById('project_control_action_modal_shell').classList.add('open');
     }
 
-    async function submitGovernanceActionModal() {
-      if (!currentGovernanceAction?.onSubmit) return;
-      const reason = String(document.getElementById('governance_action_modal_reason').value || '').trim();
+    async function submitProjectControlActionModal() {
+      if (!currentProjectControlAction?.onSubmit) return;
+      const reason = String(document.getElementById('project_control_action_modal_reason').value || '').trim();
       if (!reason) {
-        setGlobalStatus('治理动作必须填写 reason。', '治理动作');
+        setGlobalStatus('项目控制动作必须填写 reason。', '项目控制动作');
         return;
       }
       const values = {};
-      (Array.isArray(currentGovernanceAction.fields) ? currentGovernanceAction.fields : []).forEach((field) => {
-        const control = document.getElementById(`governance_action_field_${field.name}`);
+      (Array.isArray(currentProjectControlAction.fields) ? currentProjectControlAction.fields : []).forEach((field) => {
+        const control = document.getElementById(`project_control_action_field_${field.name}`);
         if (!control) return;
         if (field.type === 'number') {
           values[field.name] = Number(control.value || 0);
@@ -775,10 +775,10 @@
         }
       });
       try {
-        await currentGovernanceAction.onSubmit({ reason, ...values });
-        closeGovernanceActionModal();
+        await currentProjectControlAction.onSubmit({ reason, ...values });
+        closeProjectControlActionModal();
       } catch (error) {
-        setGlobalStatus(error.message || String(error), currentGovernanceAction.errorTitle || '治理动作失败');
+        setGlobalStatus(error.message || String(error), currentProjectControlAction.errorTitle || '项目控制动作失败');
       }
     }
 

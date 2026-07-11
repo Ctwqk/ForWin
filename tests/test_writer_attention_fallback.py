@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from forwin.config import InfrastructureConfig
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ChapterPlan
 from forwin.generation.pipeline import ChapterPipeline

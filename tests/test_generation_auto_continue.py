@@ -8,7 +8,7 @@ from forwin.generation.auto_continue import (
     GenerationAutoContinueController,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from tests.postgres import postgres_test_url
 
@@ -45,7 +45,16 @@ def _project(session, project_id: str = "project-auto", total: int = 6) -> Proje
     return project
 
 
-def _arc(session, *, project_id: str, arc_id: str, number: int, status: str, start: int, end: int) -> None:
+def _arc(
+    session,
+    *,
+    project_id: str,
+    arc_id: str,
+    number: int,
+    status: str,
+    start: int,
+    end: int,
+) -> None:
     session.add(
         ArcPlanVersion(
             id=arc_id,
@@ -60,7 +69,9 @@ def _arc(session, *, project_id: str, arc_id: str, number: int, status: str, sta
     )
 
 
-def _chapter(session, *, project_id: str, arc_id: str, number: int, status: str) -> None:
+def _chapter(
+    session, *, project_id: str, arc_id: str, number: int, status: str
+) -> None:
     session.add(
         ChapterPlan(
             id=f"plan-{number}",
@@ -79,14 +90,38 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
-            _arc(session, project_id=project.id, arc_id="arc-2", number=2, status="planned", start=4, end=6)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-2",
+                number=2,
+                status="planned",
+                start=4,
+                end=6,
+            )
             for number in range(1, 4):
-                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+                _chapter(
+                    session,
+                    project_id=project.id,
+                    arc_id="arc-1",
+                    number=number,
+                    status="accepted",
+                )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
-            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-next",
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-next"
+            ),
         )
         decision = controller.after_task_completion(
             ResultStub(project_id="project-auto", completed_chapters=[1, 2, 3]),
@@ -133,16 +168,38 @@ def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None
                 start=1,
                 end=3,
             )
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="planned")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=3, status="planned")
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="planned",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=3,
+                status="planned",
+            )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
-            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-next",
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-next"
+            ),
         )
         decision = controller.after_task_completion(
-            ResultStub(project_id="project-auto", completed_chapters=[1], paused_chapters=[1]),
+            ResultStub(
+                project_id="project-auto", completed_chapters=[1], paused_chapters=[1]
+            ),
             parent_task_id="task-prev",
             run_until_chapter=3,
             max_chapters=None,
@@ -182,13 +239,33 @@ def test_controller_ignores_safe_paused_status_for_already_accepted_chapter() ->
                 start=1,
                 end=3,
             )
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="planned")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=3, status="planned")
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="planned",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=3,
+                status="planned",
+            )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
-            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-next",
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-next"
+            ),
         )
         decision = controller.after_task_completion(
             ResultStub(
@@ -253,10 +330,32 @@ def test_controller_uses_exact_generation_task_factory_signature() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
-            _arc(session, project_id=project.id, arc_id="arc-2", number=2, status="planned", start=4, end=6)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-2",
+                number=2,
+                status="planned",
+                start=4,
+                end=6,
+            )
             for number in range(1, 4):
-                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+                _chapter(
+                    session,
+                    project_id=project.id,
+                    arc_id="arc-1",
+                    number=number,
+                    status="accepted",
+                )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
@@ -292,9 +391,23 @@ def test_controller_stops_when_run_until_reached() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
             for number in range(1, 4):
-                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+                _chapter(
+                    session,
+                    project_id=project.id,
+                    arc_id="arc-1",
+                    number=number,
+                    status="accepted",
+                )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
@@ -320,9 +433,23 @@ def test_controller_audit_payload_contains_target_fields() -> None:
     try:
         with Session.begin() as session:
             project = _project(session, total=3)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
             for number in range(1, 4):
-                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+                _chapter(
+                    session,
+                    project_id=project.id,
+                    arc_id="arc-1",
+                    number=number,
+                    status="accepted",
+                )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
@@ -337,7 +464,11 @@ def test_controller_audit_payload_contains_target_fields() -> None:
         )
 
         with Session() as session:
-            event = session.query(DecisionEvent).filter_by(event_type="auto_continue_decision").one()
+            event = (
+                session.query(DecisionEvent)
+                .filter_by(event_type="auto_continue_decision")
+                .one()
+            )
             payload = json.loads(event.payload_json)
 
         assert payload["decision"] == "stop"
@@ -353,9 +484,29 @@ def test_controller_stops_on_pending_review_and_records_audit_event() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="needs_review")
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="needs_review",
+            )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
@@ -370,7 +521,9 @@ def test_controller_stops_on_pending_review_and_records_audit_event() -> None:
         )
 
         with Session() as session:
-            events = session.query(DecisionEvent).filter_by(project_id="project-auto").all()
+            events = (
+                session.query(DecisionEvent).filter_by(project_id="project-auto").all()
+            )
 
         assert decision.decision == "stop"
         assert decision.reason == "pending_review_blocker"
@@ -385,10 +538,36 @@ def test_controller_auto_retries_system_block_review_once() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="needs_review")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=3, status="planned")
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="needs_review",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=3,
+                status="planned",
+            )
             plan = session.get(ChapterPlan, "plan-2")
             assert plan is not None
             plan.repair_attempt_count = 0
@@ -398,7 +577,9 @@ def test_controller_auto_retries_system_block_review_once() -> None:
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
-            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-auto-retry",
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-auto-retry"
+            ),
         )
         decision = controller.after_task_completion(
             ResultStub(
@@ -416,7 +597,9 @@ def test_controller_auto_retries_system_block_review_once() -> None:
         with Session() as session:
             plan = session.get(ChapterPlan, "plan-2")
             assert plan is not None
-            events = session.query(DecisionEvent).filter_by(project_id="project-auto").all()
+            events = (
+                session.query(DecisionEvent).filter_by(project_id="project-auto").all()
+            )
             retry_events = [
                 event
                 for event in events
@@ -455,9 +638,29 @@ def test_controller_does_not_auto_retry_hard_canon_review_blocker() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=2)
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="needs_review")
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=2,
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="needs_review",
+            )
             plan = session.get(ChapterPlan, "plan-2")
             assert plan is not None
             plan.canon_risk_level = "high"
@@ -473,10 +676,14 @@ def test_controller_does_not_auto_retry_hard_canon_review_blocker() -> None:
 
         controller = GenerationAutoContinueController(
             session_factory=Session,
-            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-auto-retry",
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-auto-retry"
+            ),
         )
         decision = controller.after_task_completion(
-            ResultStub(project_id="project-auto", completed_chapters=[1], paused_chapters=[2]),
+            ResultStub(
+                project_id="project-auto", completed_chapters=[1], paused_chapters=[2]
+            ),
             parent_task_id="task-prev",
             run_until_chapter=2,
             max_chapters=None,
@@ -500,8 +707,22 @@ def test_controller_never_emits_no_rule_matched_as_stop_reason() -> None:
     try:
         with Session.begin() as session:
             project = _project(session)
-            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=2)
-            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=2,
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
 
         controller = GenerationAutoContinueController(
             session_factory=Session,

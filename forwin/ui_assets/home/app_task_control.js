@@ -214,13 +214,13 @@
       return card;
     }
 
-    async function renderGovernanceInsightsCard(item) {
+    async function renderAuditInsightsCard(item) {
       const card = createNode('section', '', 'detail-card');
       card.appendChild(createNode('div', '治理洞察', 'task-id'));
       const content = createNode('div', '正在加载治理洞察...', 'meta-line');
       card.appendChild(content);
       try {
-        const insights = await requestJson(`/api/projects/${item.project_id}/governance-insights`);
+        const insights = await requestJson(`/api/projects/${item.project_id}/audit-insights`);
         clearNode(content);
         const headline = [
           Array.isArray(insights.most_common_blocking_reasons) && insights.most_common_blocking_reasons.length
@@ -293,7 +293,7 @@
     }
 
     function saveProjectRuntimePolicyFromDrawer(projectId, expectedVersion, fields) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: '保存运行策略',
         description: `将项目 RuntimePolicy 从 v${expectedVersion} 更新到下一版本。`,
         confirmLabel: '保存运行策略',
@@ -320,7 +320,7 @@
     }
 
     function createManualCheckpointFromDrawer(projectId, defaults = {}) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: '插入 Manual Checkpoint',
         description: 'v1 只支持章开始前、章 accepted 后、band 结束处三个边界。',
         confirmLabel: '创建 Checkpoint',
@@ -368,7 +368,7 @@
     }
 
     function createNarrativeConstraintFromDrawer(projectId) {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: '新增 Narrative Constraint',
         description: 'constraint 可保存展示；只有启用 future constraints 后才参与 review/checkpoint 判定。',
         confirmLabel: '创建 Constraint',
@@ -412,7 +412,7 @@
 
     function editNarrativeConstraintFromDrawer(projectId, constraint) {
       if (!constraint?.id) return;
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: '编辑 Narrative Constraint',
         description: '修改会写入 constraint_updated 决策事件。',
         confirmLabel: '保存 Constraint',
@@ -439,7 +439,7 @@
 
     function archiveNarrativeConstraintFromDrawer(projectId, constraint) {
       if (!constraint?.id) return;
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: '停用 Narrative Constraint',
         description: '停用后 constraint 仍会保留展示，但不再作为 active constraint。',
         confirmLabel: '停用 Constraint',
@@ -497,7 +497,7 @@
         : `/api/projects/${projectId}/chapters/${Number(identifier || 0)}/task-contract`;
       try {
         const current = await requestJson(url);
-        openGovernanceActionModal({
+        openProjectControlActionModal({
           title: scope === 'band' ? `编辑 Band Task Contract · ${identifier}` : `编辑 Chapter Task Contract · 第${identifier}章`,
           description: '填写 PlanTaskItem JSON 数组。修改会进入决策时间线，review/checkpoint 会使用这份合同判断规划履约。',
           confirmLabel: '保存 Task Contract',
@@ -542,7 +542,7 @@
     }
 
     function approveBandCheckpointFromDrawer(projectId, bandId, status = 'overridden') {
-      openGovernanceActionModal({
+      openProjectControlActionModal({
         title: status === 'pass' ? `放行 Checkpoint · ${bandId}` : `Override Checkpoint · ${bandId}`,
         description: status === 'pass'
           ? '人工确认当前 band checkpoint 可以 pass。'
@@ -553,7 +553,7 @@
       });
     }
 
-    function renderGovernanceCard(item, project = {}) {
+    function renderProjectControlCard(item, project = {}) {
       const policy = project.runtime_policy || runtimeCatalogState?.bootstrap_policy || {};
       const chapterLength = policy.chapter_length || {};
       const pausePolicy = policy.pause || {};
@@ -803,9 +803,9 @@
 
       body.appendChild(renderGenerationControlPanel(item, projectDetail, projectChapters || []));
       if (item.project_id && projectDetail) {
-        body.appendChild(renderGovernanceCard(item, projectDetail));
+        body.appendChild(renderProjectControlCard(item, projectDetail));
         body.appendChild(await renderCausalReplayCard(item, projectDetail));
-        body.appendChild(await renderGovernanceInsightsCard(item));
+        body.appendChild(await renderAuditInsightsCard(item));
       }
 
       const top = createNode('section', '', 'detail-card');

@@ -18,7 +18,9 @@ class ApiSplitModuleTests(unittest.TestCase):
         publishers = self._import_required_module("forwin.api_pages_publishers")
 
         self.assertFalse(hasattr(shared, "LLM_PROVIDER_PRESETS"))
-        self.assertIn("function clearNode(node)", getattr(shared, "PAGE_DOM_HELPERS_JS", ""))
+        self.assertIn(
+            "function clearNode(node)", getattr(shared, "PAGE_DOM_HELPERS_JS", "")
+        )
 
         home_html = home.render_home_page()
         self.assertIn("ForWin 工作台", home_html)
@@ -35,7 +37,9 @@ class ApiSplitModuleTests(unittest.TestCase):
     def test_application_services_are_available(self) -> None:
         publisher = self._import_required_module("forwin.application.publisher")
         projects = self._import_required_module("forwin.application.projects")
-        governance_ops = self._import_required_module("forwin.api_governance_ops")
+        project_control_ops = self._import_required_module(
+            "forwin.api_project_control_ops"
+        )
 
         for owner, names in (
             (
@@ -58,17 +62,20 @@ class ApiSplitModuleTests(unittest.TestCase):
                 ),
             ),
             (
-                governance_ops,
+                project_control_ops,
                 (
                     "create_manual_checkpoint",
                     "get_project_causal_replay",
-                    "get_project_governance_insights",
+                    "get_project_audit_insights",
                     "override_band_experience",
                 ),
             ),
         ):
             for name in names:
-                self.assertTrue(callable(getattr(owner, name, None)), f"expected {owner.__name__}.{name}")
+                self.assertTrue(
+                    callable(getattr(owner, name, None)),
+                    f"expected {owner.__name__}.{name}",
+                )
 
     def test_api_entrypoint_exports_only_asgi_contract(self) -> None:
         api_module = self._import_required_module("forwin.api")
@@ -100,13 +107,15 @@ class ApiSplitModuleTests(unittest.TestCase):
             "forwin/api_project_routes.py": 80,
             "forwin/application/publisher/service.py": 400,
             "forwin/application/projects/service.py": 500,
-            "forwin/api_governance_routes.py": 500,
-            "forwin/api_governance_support.py": 900,
+            "forwin/api_project_control_routes.py": 500,
+            "forwin/api_project_control_support.py": 900,
             "forwin/api_automation.py": 450,
         }
         for relative_path, max_lines in line_limits.items():
             path = repo_root / relative_path
-            self.assertTrue(path.exists(), f"expected split file {relative_path} to exist")
+            self.assertTrue(
+                path.exists(), f"expected split file {relative_path} to exist"
+            )
             self.assertLessEqual(
                 len(path.read_text(encoding="utf-8").splitlines()),
                 max_lines,
@@ -119,7 +128,9 @@ class ApiSplitModuleTests(unittest.TestCase):
         }
         for relative_dir, rules in asset_limits.items():
             directory = repo_root / relative_dir
-            self.assertTrue(directory.is_dir(), f"expected asset directory {relative_dir}")
+            self.assertTrue(
+                directory.is_dir(), f"expected asset directory {relative_dir}"
+            )
             files = [path for path in directory.rglob("*") if path.is_file()]
             self.assertGreaterEqual(
                 len(files),

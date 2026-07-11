@@ -19,7 +19,7 @@ from forwin.models.base import new_id
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -71,23 +71,24 @@ class CanonAdmissionService:
 
                 prior = session.execute(
                     select(CanonCommitRecord)
-                    .where(
-                        CanonCommitRecord.idempotency_key
-                        == plan.idempotency_key
-                    )
+                    .where(CanonCommitRecord.idempotency_key == plan.idempotency_key)
                     .with_for_update()
                 ).scalar_one_or_none()
                 if prior is not None:
                     return _outcome_from_record(prior, idempotent=True)
 
-                chapter = session.execute(
-                    select(ChapterPlan)
-                    .where(
-                        ChapterPlan.project_id == plan.project_id,
-                        ChapterPlan.chapter_number == plan.chapter_number,
+                chapter = (
+                    session.execute(
+                        select(ChapterPlan)
+                        .where(
+                            ChapterPlan.project_id == plan.project_id,
+                            ChapterPlan.chapter_number == plan.chapter_number,
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
-                ).scalars().first()
+                    .scalars()
+                    .first()
+                )
                 candidate = session.execute(
                     select(CandidateDraftRecord)
                     .where(CandidateDraftRecord.id == plan.candidate_id)
@@ -128,9 +129,7 @@ class CanonAdmissionService:
                 session.flush()
                 inject("entity")
 
-                NarrativeObligationRepository(
-                    session
-                ).activate_planned_for_chapter(
+                NarrativeObligationRepository(session).activate_planned_for_chapter(
                     plan.project_id,
                     origin_chapter_number=plan.chapter_number,
                 )
@@ -203,9 +202,7 @@ class CanonAdmissionService:
                         expected_previous_accepted_chapter=(
                             plan.expected_previous_accepted_chapter
                         ),
-                        expected_book_state_chapter=(
-                            plan.expected_book_state_chapter
-                        ),
+                        expected_book_state_chapter=(plan.expected_book_state_chapter),
                         graph_delta_ids_json=json.dumps(
                             compile_result.graph_delta_ids,
                             ensure_ascii=False,
@@ -313,10 +310,7 @@ class CanonAdmissionService:
             )
             or 0
         )
-        if (
-            previous_accepted_chapter
-            != plan.expected_previous_accepted_chapter
-        ):
+        if previous_accepted_chapter != plan.expected_previous_accepted_chapter:
             raise CanonStaleVersion("accepted chapter version changed")
         book_state_chapter = int(
             session.scalar(
@@ -352,9 +346,7 @@ class CanonAdmissionService:
         trigger: str,
     ) -> CanonWorldEditOutcome:
         project = session.execute(
-            select(Project)
-            .where(Project.id == project_id)
-            .with_for_update()
+            select(Project).where(Project.id == project_id).with_for_update()
         ).scalar_one_or_none()
         if project is None:
             raise CanonStaleVersion("project no longer exists")
@@ -366,9 +358,7 @@ class CanonAdmissionService:
         if proposal is None or proposal.project_id != project_id:
             raise CanonStaleVersion("world edit proposal no longer exists")
         if proposal.status not in {"pending", "proposed"}:
-            raise CanonStaleVersion(
-                f"world edit proposal is already {proposal.status}"
-            )
+            raise CanonStaleVersion(f"world edit proposal is already {proposal.status}")
         if approved_changes.project_id != project_id:
             raise CanonStaleVersion("world edit project changed")
 
@@ -390,14 +380,11 @@ class CanonAdmissionService:
         proposal.reviewed_at = datetime.now(UTC)
         proposal.review_reason = reason
         proposal.graph_delta_id = (
-            compile_result.graph_delta_ids[0]
-            if compile_result.graph_delta_ids
-            else ""
+            compile_result.graph_delta_ids[0] if compile_result.graph_delta_ids else ""
         )
         session.add(proposal)
         event_id = (
-            f"canon-world-edit:{proposal.id}:"
-            f"{proposal.graph_delta_id}:projection"
+            f"canon-world-edit:{proposal.id}:{proposal.graph_delta_id}:projection"
         )
         enqueue_outbox_event(
             session,
@@ -456,6 +443,7 @@ class CanonAdmissionService:
                 )
         except Exception:  # noqa: BLE001
             logger.exception("Could not mark candidate %s failed.", candidate_id)
+
 
 def _ignore_failure_stage(_stage: str) -> None:
     return None

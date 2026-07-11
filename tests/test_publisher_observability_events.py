@@ -6,9 +6,9 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy import select
 
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.publishers.manager import PublisherManager
 
@@ -19,7 +19,9 @@ def _event_payload(row: DecisionEvent) -> dict[str, object]:
     return value
 
 
-def test_publisher_upload_job_lifecycle_records_project_events_without_body_text() -> None:
+def test_publisher_upload_job_lifecycle_records_project_events_without_body_text() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         engine = get_engine(postgres_test_url("publisher-events"))
         init_db(engine)
@@ -66,11 +68,17 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
             )
 
             with session_factory() as session:
-                rows = session.execute(
-                    select(DecisionEvent)
-                    .where(DecisionEvent.project_id == project_id)
-                    .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-                ).scalars().all()
+                rows = (
+                    session.execute(
+                        select(DecisionEvent)
+                        .where(DecisionEvent.project_id == project_id)
+                        .order_by(
+                            DecisionEvent.created_at.asc(), DecisionEvent.id.asc()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
         finally:
             engine.dispose()
 
@@ -86,7 +94,9 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
             assert "正文" not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_comment_sync_and_ingest_records_project_events_without_author_identity() -> None:
+def test_comment_sync_and_ingest_records_project_events_without_author_identity() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         engine = get_engine(postgres_test_url("comment-events"))
         init_db(engine)
@@ -138,11 +148,17 @@ def test_comment_sync_and_ingest_records_project_events_without_author_identity(
             )
 
             with session_factory() as session:
-                rows = session.execute(
-                    select(DecisionEvent)
-                    .where(DecisionEvent.project_id == project_id)
-                    .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
-                ).scalars().all()
+                rows = (
+                    session.execute(
+                        select(DecisionEvent)
+                        .where(DecisionEvent.project_id == project_id)
+                        .order_by(
+                            DecisionEvent.created_at.asc(), DecisionEvent.id.asc()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
         finally:
             engine.dispose()
 

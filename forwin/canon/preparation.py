@@ -13,10 +13,10 @@ from forwin.book_state.extraction_contract import BookStateExtractionRequest
 from forwin.book_state.extraction_contract import BookStateExtractionResult
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
-from forwin.governance import DecisionEventType
+from forwin.audit.events import DecisionEventType
 from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
 from forwin.planning.world_contracts import WorldContractRepository

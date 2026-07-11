@@ -8,9 +8,23 @@ REVEAL_KEYWORDS = ("真相", "秘密", "身份", "揭露", "公开", "坦白", "
 RELATION_BREAK_KEYWORDS = ("决裂", "断绝", "反目", "分手", "离婚", "背叛")
 LOCATION_DESTROY_KEYWORDS = ("毁灭", "坍塌", "封锁", "不可进入", "失守", "焚毁")
 RULE_BREAK_KEYWORDS = ("失效", "崩坏", "破除", "废除", "不可逆", "解除")
-RESOURCE_CLOSURE_KEYWORDS = ("彻底解决", "完全结束", "永远离开", "彻底公开", "永久失去", "不可逆")
+RESOURCE_CLOSURE_KEYWORDS = (
+    "彻底解决",
+    "完全结束",
+    "永远离开",
+    "彻底公开",
+    "永久失去",
+    "不可逆",
+)
 THREAD_CLOSURE_KEYWORDS = ("结案", "了结", "落幕", "终结", "收束", "完结")
-GROWTH_COMPLETION_KEYWORDS = ("完成成长", "彻底成熟", "终于成为", "再无成长空间", "终极形态", "圆满毕业")
+GROWTH_COMPLETION_KEYWORDS = (
+    "完成成长",
+    "彻底成熟",
+    "终于成为",
+    "再无成长空间",
+    "终极形态",
+    "圆满毕业",
+)
 
 NEGATION_MARKERS = ("避免", "不要", "不得", "不能", "防止", "禁止", "阻止误写")
 
@@ -70,7 +84,9 @@ def _keyword_occurrences(text: str, keyword: str) -> list[int]:
     return indexes
 
 
-def _occurrence_is_prefix_negated(text: str, keyword: str, index: int, *, window: int = 12) -> bool:
+def _occurrence_is_prefix_negated(
+    text: str, keyword: str, index: int, *, window: int = 12
+) -> bool:
     if not keyword or index < 0:
         return False
     local = str(text or "")

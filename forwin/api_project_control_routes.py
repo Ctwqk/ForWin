@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from forwin import api_governance_ops
+from forwin import api_project_control_ops
 from forwin.api_schema import (
     BandCheckpointApproveRequest,
     BandExperienceOverrideRequest,
@@ -27,14 +27,14 @@ def build_handlers(
     list_decision_event_rows: Callable[..., list[Any]],
     serialize_decision_event: Callable[[Any], Any],
     build_causal_replay: Callable[..., Any],
-    build_governance_insights: Callable[..., Any],
+    build_audit_insights: Callable[..., Any],
     latest_band_checkpoint_row: Callable[..., Any],
     latest_related_decision_event: Callable[..., Any],
     log_decision_event: Callable[..., Any],
     json_load_object: Callable[[str | None], dict[str, Any]],
 ) -> dict[str, Callable[..., Any]]:
     def create_manual_checkpoint(project_id: str, req: ManualCheckpointRequest):
-        return api_governance_ops.create_manual_checkpoint(
+        return api_project_control_ops.create_manual_checkpoint(
             project_id,
             req,
             get_session=get_session,
@@ -44,7 +44,7 @@ def build_handlers(
         )
 
     def get_band_checkpoint(project_id: str, band_id: str):
-        return api_governance_ops.get_band_checkpoint(
+        return api_project_control_ops.get_band_checkpoint(
             project_id,
             band_id,
             get_session=get_session,
@@ -52,8 +52,10 @@ def build_handlers(
             serialize_band_checkpoint=serialize_band_checkpoint,
         )
 
-    def approve_band_checkpoint(project_id: str, band_id: str, req: BandCheckpointApproveRequest):
-        return api_governance_ops.approve_band_checkpoint(
+    def approve_band_checkpoint(
+        project_id: str, band_id: str, req: BandCheckpointApproveRequest
+    ):
+        return api_project_control_ops.approve_band_checkpoint(
             project_id,
             band_id,
             req,
@@ -66,7 +68,7 @@ def build_handlers(
         )
 
     def get_chapter_task_contract(project_id: str, chapter_number: int):
-        return api_governance_ops.get_chapter_task_contract(
+        return api_project_control_ops.get_chapter_task_contract(
             project_id,
             chapter_number,
             get_session=get_session,
@@ -77,7 +79,7 @@ def build_handlers(
         chapter_number: int,
         req: TaskContractUpdateRequest,
     ):
-        return api_governance_ops.update_chapter_task_contract(
+        return api_project_control_ops.update_chapter_task_contract(
             project_id,
             chapter_number,
             req,
@@ -87,14 +89,16 @@ def build_handlers(
         )
 
     def get_band_task_contract(project_id: str, band_id: str):
-        return api_governance_ops.get_band_task_contract(
+        return api_project_control_ops.get_band_task_contract(
             project_id,
             band_id,
             get_session=get_session,
         )
 
-    def update_band_task_contract(project_id: str, band_id: str, req: TaskContractUpdateRequest):
-        return api_governance_ops.update_band_task_contract(
+    def update_band_task_contract(
+        project_id: str, band_id: str, req: TaskContractUpdateRequest
+    ):
+        return api_project_control_ops.update_band_task_contract(
             project_id,
             band_id,
             req,
@@ -104,14 +108,16 @@ def build_handlers(
         )
 
     def list_project_constraints(project_id: str):
-        return api_governance_ops.list_project_constraints(
+        return api_project_control_ops.list_project_constraints(
             project_id,
             get_session=get_session,
             serialize_constraint=serialize_constraint,
         )
 
-    def create_project_constraint(project_id: str, req: NarrativeConstraintCreateRequest):
-        return api_governance_ops.create_project_constraint(
+    def create_project_constraint(
+        project_id: str, req: NarrativeConstraintCreateRequest
+    ):
+        return api_project_control_ops.create_project_constraint(
             project_id,
             req,
             get_session=get_session,
@@ -126,7 +132,7 @@ def build_handlers(
         constraint_id: str,
         req: NarrativeConstraintUpdateRequest,
     ):
-        return api_governance_ops.update_project_constraint(
+        return api_project_control_ops.update_project_constraint(
             project_id,
             constraint_id,
             req,
@@ -149,7 +155,7 @@ def build_handlers(
         related_object_id: str = "",
         causal_root_id: str = "",
     ):
-        return api_governance_ops.list_project_decision_events(
+        return api_project_control_ops.list_project_decision_events(
             project_id,
             get_session=get_session,
             list_decision_event_rows=list_decision_event_rows,
@@ -172,7 +178,7 @@ def build_handlers(
         chapter_number: int = 0,
         task_id: str = "",
     ):
-        return api_governance_ops.get_project_causal_replay(
+        return api_project_control_ops.get_project_causal_replay(
             project_id,
             get_session=get_session,
             build_causal_replay=build_causal_replay,
@@ -183,29 +189,29 @@ def build_handlers(
             task_id=task_id,
         )
 
-    def get_project_governance_insights(project_id: str):
-        return api_governance_ops.get_project_governance_insights(
+    def get_project_audit_insights(project_id: str):
+        return api_project_control_ops.get_project_audit_insights(
             project_id,
             get_session=get_session,
-            build_governance_insights=build_governance_insights,
+            build_audit_insights=build_audit_insights,
         )
 
     def get_latest_provisional_band(project_id: str):
-        return api_governance_ops.get_latest_provisional_band(
+        return api_project_control_ops.get_latest_provisional_band(
             project_id,
             get_session=get_session,
             display_datetime=display_datetime,
         )
 
     def get_latest_scenario_rehearsal(project_id: str):
-        return api_governance_ops.get_latest_scenario_rehearsal(
+        return api_project_control_ops.get_latest_scenario_rehearsal(
             project_id,
             get_session=get_session,
             display_datetime=display_datetime,
         )
 
     def rerun_scenario_rehearsal(project_id: str, run_id: str):
-        return api_governance_ops.rerun_scenario_rehearsal(
+        return api_project_control_ops.rerun_scenario_rehearsal(
             project_id,
             run_id,
             get_session=get_session,
@@ -217,7 +223,7 @@ def build_handlers(
         patch_id: str,
         req: ScenarioPlanPatchApproveRequest,
     ):
-        return api_governance_ops.approve_scenario_plan_patch(
+        return api_project_control_ops.approve_scenario_plan_patch(
             project_id,
             patch_id,
             reason=req.reason,
@@ -226,24 +232,24 @@ def build_handlers(
         )
 
     def get_trope_templates(category: str = "", q: str = "", limit: int = 0):
-        return api_governance_ops.get_trope_templates(
+        return api_project_control_ops.get_trope_templates(
             category=category,
             q=q,
             limit=limit,
         )
 
     def get_trope_template_summary():
-        return api_governance_ops.get_trope_template_summary()
+        return api_project_control_ops.get_trope_template_summary()
 
     def validate_trope_templates(req: TropeTemplateValidationRequest):
-        return api_governance_ops.validate_trope_templates(req)
+        return api_project_control_ops.validate_trope_templates(req)
 
     def override_band_experience(
         project_id: str,
         band_id: str,
         req: BandExperienceOverrideRequest,
     ):
-        return api_governance_ops.override_band_experience(
+        return api_project_control_ops.override_band_experience(
             project_id,
             band_id,
             req,
@@ -264,7 +270,7 @@ def build_handlers(
         "update_project_constraint": update_project_constraint,
         "list_project_decision_events": list_project_decision_events,
         "get_project_causal_replay": get_project_causal_replay,
-        "get_project_governance_insights": get_project_governance_insights,
+        "get_project_audit_insights": get_project_audit_insights,
         "get_latest_provisional_band": get_latest_provisional_band,
         "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
         "rerun_scenario_rehearsal": rerun_scenario_rehearsal,

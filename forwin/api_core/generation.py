@@ -15,9 +15,7 @@ from forwin.application.generation import (
     EnqueueGenerationCommand,
     GenerationApplicationService,
 )
-from forwin.governance import (
-    DecisionEventType,
-)
+from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project, ChapterPlan
 from forwin.models.publisher import (
     PublisherUploadJob,

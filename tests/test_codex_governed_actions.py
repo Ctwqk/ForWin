@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from forwin.codex_governance import CodexGovernedActionProcessor, CodexGovernedActionRequest
+from forwin.codex_bridge.governed_actions import (
+    CodexGovernedActionProcessor,
+    CodexGovernedActionRequest,
+)
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.state.updater import StateUpdater
 
 
-class CodexGovernanceTests(unittest.TestCase):
+class CodexGovernedActionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.engine = get_engine(postgres_test_url("codex_governance"))
+        self.engine = get_engine(postgres_test_url("codex_governed_actions"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
 
@@ -24,7 +26,7 @@ class CodexGovernanceTests(unittest.TestCase):
 
     def test_world_edit_proposal_action_creates_pending_proposal_only(self) -> None:
         with self.session_factory() as session:
-            project = Project(title="Codex Governance", premise="测试 Codex 受控写入。")
+            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。")
             session.add(project)
             session.flush()
 
@@ -39,7 +41,11 @@ class CodexGovernanceTests(unittest.TestCase):
             )
             session.commit()
 
-            proposals = session.query(KnowledgeEditProposalRow).filter_by(project_id=project.id).all()
+            proposals = (
+                session.query(KnowledgeEditProposalRow)
+                .filter_by(project_id=project.id)
+                .all()
+            )
             self.assertTrue(result.ok)
             self.assertEqual(result.created_object_type, "world_edit_proposal")
             self.assertEqual(len(proposals), 1)
@@ -48,7 +54,7 @@ class CodexGovernanceTests(unittest.TestCase):
 
     def test_non_whitelisted_action_is_rejected(self) -> None:
         with self.session_factory() as session:
-            project = Project(title="Codex Governance", premise="测试 Codex 受控写入。")
+            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。")
             session.add(project)
             session.flush()
 

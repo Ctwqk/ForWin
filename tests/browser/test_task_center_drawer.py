@@ -7,13 +7,17 @@ from playwright.sync_api import expect
 from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
 
 
-def test_task_center_drawer_controls_and_bulk_delete(page, browser_test_base_url: str) -> None:
+def test_task_center_drawer_controls_and_bulk_delete(
+    page, browser_test_base_url: str
+) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
 
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#task_drawer_overlay")).to_have_class(
+        re.compile(r".*\bopen\b.*")
+    )
     expect(page.locator("#drawer_body")).to_contain_text("任务主线")
     expect(page.locator("#drawer_body")).to_contain_text("治理设置")
     expect(page.locator("#drawer_body")).to_contain_text("因果回放")
@@ -35,7 +39,9 @@ def test_task_center_drawer_controls_and_bulk_delete(page, browser_test_base_url
     assert backend.captured_payloads("/api/tasks/bulk-delete")[-1]["items"]
 
 
-def test_task_drawer_operator_review_queue_actions(page, browser_test_base_url: str) -> None:
+def test_task_drawer_operator_review_queue_actions(
+    page, browser_test_base_url: str
+) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
 
@@ -49,32 +55,50 @@ def test_task_drawer_operator_review_queue_actions(page, browser_test_base_url: 
     expect(drawer).to_contain_text("repair-exhausted queue")
 
     drawer.get_by_role("button", name="Retry Review").first.click()
-    page.locator("#governance_action_modal_reason").fill("operator retries soft review blocker")
-    page.locator("#governance_action_modal_submit").click()
+    page.locator("#project_control_action_modal_reason").fill(
+        "operator retries soft review blocker"
+    )
+    page.locator("#project_control_action_modal_submit").click()
     expect(page.locator("#global_status")).to_contain_text("review retried")
-    retry_payload = backend.captured_payloads("/api/projects/project-1/chapters/2/review/retry")[-1]
+    retry_payload = backend.captured_payloads(
+        "/api/projects/project-1/chapters/2/review/retry"
+    )[-1]
     assert retry_payload["continue_generation"] is False
     assert retry_payload["reason"] == "operator retries soft review blocker"
 
     drawer.get_by_role("button", name="Register Entity").first.click()
-    page.locator("#governance_action_modal_reason").fill("register named entity from review")
-    page.locator("#governance_action_field_entity_name").fill("许潮")
-    page.locator("#governance_action_field_subworld_id").fill("fog-port")
-    page.locator("#governance_action_field_role_hint").fill("harbor witness")
-    page.locator("#governance_action_modal_submit").click()
-    expect(page.locator("#global_status")).to_contain_text("SubworldEntityRegistrationProposal")
-    proposal_payload = backend.captured_payloads("/api/projects/project-1/proposals")[-1]
+    page.locator("#project_control_action_modal_reason").fill(
+        "register named entity from review"
+    )
+    page.locator("#project_control_action_field_entity_name").fill("许潮")
+    page.locator("#project_control_action_field_subworld_id").fill("fog-port")
+    page.locator("#project_control_action_field_role_hint").fill("harbor witness")
+    page.locator("#project_control_action_modal_submit").click()
+    expect(page.locator("#global_status")).to_contain_text(
+        "SubworldEntityRegistrationProposal"
+    )
+    proposal_payload = backend.captured_payloads("/api/projects/project-1/proposals")[
+        -1
+    ]
     assert proposal_payload["proposal_type"] == "SubworldEntityRegistrationProposal"
     assert proposal_payload["proposed_patch"]["action"] == "register_entity"
     assert proposal_payload["proposed_patch"]["entity_name"] == "许潮"
 
 
-def test_upload_task_modal_payload_combinations(page, browser_test_base_url: str) -> None:
+def test_upload_task_modal_payload_combinations(
+    page, browser_test_base_url: str
+) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
 
     combos = [
-        {"platform": platform, "publish": publish, "create_if_missing": create, "audience": audience, "url": url}
+        {
+            "platform": platform,
+            "publish": publish,
+            "create_if_missing": create,
+            "audience": audience,
+            "url": url,
+        }
         for platform in ["fanqie", "qidian"]
         for publish in [False, True]
         for create in [False, True]
@@ -114,31 +138,46 @@ def test_upload_task_modal_payload_combinations(page, browser_test_base_url: str
     assert {payload["publish"] for payload in payloads} == {False, True}
     assert {payload["create_if_missing"] for payload in payloads} == {False, True}
     assert any(payload["upload_url"] is None for payload in payloads)
-    assert any(payload["upload_url"] == "https://editor.example/chapter" for payload in payloads)
+    assert any(
+        payload["upload_url"] == "https://editor.example/chapter"
+        for payload in payloads
+    )
 
 
-def test_stale_drawer_closes_when_task_detail_404s(page, browser_test_base_url: str) -> None:
+def test_stale_drawer_closes_when_task_detail_404s(
+    page, browser_test_base_url: str
+) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#task_drawer_overlay")).to_have_class(
+        re.compile(r".*\bopen\b.*")
+    )
 
     backend.fail["/api/task-center/items/generation/task-1"] = (404, "404 missing task")
     page.evaluate("() => window.refreshCurrentDrawerIfChanged()")
-    expect(page.locator("#task_drawer_overlay")).not_to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#task_drawer_overlay")).not_to_have_class(
+        re.compile(r".*\bopen\b.*")
+    )
     expect(page.locator("#global_status")).to_contain_text("当前任务已不存在")
 
 
-def test_stale_drawer_closes_when_task_disappears_from_list(page, browser_test_base_url: str) -> None:
+def test_stale_drawer_closes_when_task_disappears_from_list(
+    page, browser_test_base_url: str
+) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#task_drawer_overlay")).to_have_class(
+        re.compile(r".*\bopen\b.*")
+    )
 
     del backend.tasks["task-1"]
     page.evaluate("() => window.loadTaskCenter()")
 
-    expect(page.locator("#task_drawer_overlay")).not_to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#task_drawer_overlay")).not_to_have_class(
+        re.compile(r".*\bopen\b.*")
+    )
     expect(page.locator("#global_status")).to_contain_text("已从任务中心移除")

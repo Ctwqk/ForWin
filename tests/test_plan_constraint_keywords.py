@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from forwin.governance import NarrativeConstraintInfo
-from forwin.governance_checks import evaluate_constraint_issues
-from forwin.governance_keywords import constraint_keywords
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.review.plan_checks import evaluate_constraint_issues
+from forwin.review.constraint_keywords import constraint_keywords
 
 
 def test_constraint_keywords_are_available_from_single_registry() -> None:

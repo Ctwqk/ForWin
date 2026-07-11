@@ -11,7 +11,7 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
-from forwin.models.governance import DecisionEvent
+from forwin.models.audit import DecisionEvent
 from forwin.models.outbox import OutboxEvent
 from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.models.project import ChapterPlan
@@ -29,7 +29,9 @@ def _session_factory(name: str):
 
 
 def _create_project_with_node(session) -> str:
-    project = Project(title="Projection Outbox", premise="测试 projection outbox。", genre="玄幻")
+    project = Project(
+        title="Projection Outbox", premise="测试 projection outbox。", genre="玄幻"
+    )
     session.add(project)
     session.flush()
     BookStateRepository(session).create_world_node(
@@ -254,12 +256,16 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
                     CandidateDraftRecord.project_id == project_id
                 )
             ).scalar_one()
-            deferred = session.execute(
-                select(DecisionEvent).where(
-                    DecisionEvent.project_id == project_id,
-                    DecisionEvent.event_type == "deferred_maintenance_recorded",
+            deferred = (
+                session.execute(
+                    select(DecisionEvent).where(
+                        DecisionEvent.project_id == project_id,
+                        DecisionEvent.event_type == "deferred_maintenance_recorded",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert row is not None
             assert row.status == "pending"
             assert row.attempts == 1

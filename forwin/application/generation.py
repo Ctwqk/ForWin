@@ -22,7 +22,7 @@ from forwin.generation.task_repository import (
     GenerationTaskRepository,
     new_task_id,
 )
-from forwin.governance import (
+from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
     ensure_decision_event_type,
@@ -199,7 +199,9 @@ class GenerationApplicationService:
         def read() -> bool:
             with self.session_factory() as session:
                 task = session.get(GenerationTask, task_id)
-                return bool(getattr(task, attribute, False)) if task is not None else True
+                return (
+                    bool(getattr(task, attribute, False)) if task is not None else True
+                )
 
         return read
 

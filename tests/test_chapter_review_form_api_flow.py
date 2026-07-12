@@ -6,6 +6,7 @@ from forwin.models.canon_quality import CharacterStateTransitionRow
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.protocol.writer import WriterOutput
+from tests.postgres import postgres_test_url
 
 
 class FakeReviewClient:
@@ -49,6 +50,18 @@ def test_analyze_writer_output_quality_uses_form_only_and_persists_projection() 
             project = Project(title="表单门禁", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
             session.add(project)
             session.flush()
+            session.add(
+                CharacterStateTransitionRow(
+                    project_id=project.id,
+                    character_name="林青",
+                    chapter_number=0,
+                    transition_type="life_state",
+                    from_state="unknown",
+                    to_state="alive",
+                    payload_json='{"source":"test_fixture"}',
+                )
+            )
+            session.flush()
             output = WriterOutput(
                 project_id=project.id,
                 chapter_number=1,
@@ -71,7 +84,11 @@ def test_analyze_writer_output_quality_uses_form_only_and_persists_projection() 
             session.commit()
 
         with session_factory() as session:
-            transitions = session.query(CharacterStateTransitionRow).filter_by(project_id=project.id).all()
+            transitions = (
+                session.query(CharacterStateTransitionRow)
+                .filter_by(project_id=project.id, chapter_number=1)
+                .all()
+            )
             assert result.mode == "chapter_review_form"
             assert result.raw_analyzer_results[0]["analyzer"] == "ChapterReviewForm"
             assert transitions[0].payload_json

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from forwin.llm.compat import call_chat_compat
 from forwin.utils.json_repair import parse_llm_json
 
+from .evidence_validator import validate_answers
 from .errors import ChapterReviewFormSchemaInvalid, ChapterReviewFormUnavailable
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
 
@@ -50,6 +51,9 @@ SYSTEM_PROMPT = (
     "to a tracked entity, resolve subject_of_quote to that entity's canonical name from the form's "
     "name field, or to one of that entity's aliases. Example: if the form asks for name='角色A' "
     "and the chapter says '那个穿白衣的人倒下', return subject_of_quote='角色A', not '那个穿白衣的人'. "
+    "Every evidence quote must be one contiguous verbatim substring copied from the chapter, including "
+    "its punctuation. Never paraphrase, splice separate passages, or repeat text inside a quote. Omit an "
+    "optional new observation when no exact quote supports it. "
     "Each tracked answer array must contain exactly one answer for every matching item in the form "
     "and no unasked items. Put newly observed entities only in new_observations. "
     "If uncertain, set confidence below 0.5 and explain."
@@ -107,11 +111,21 @@ def call_form(
         last_raw = raw_result
         try:
             raw = _normalize_answer_payload(raw_result, form=form)
-            return ChapterReviewAnswers.model_validate(raw)
+            answers = ChapterReviewAnswers.model_validate(raw)
         except ChapterReviewFormSchemaInvalid as exc:
             last_error = str(exc)
         except ValidationError as exc:
             last_error = str(exc)
+        else:
+            evidence_report = validate_answers(
+                form=form,
+                answers=answers,
+                chapter_text=chapter_text,
+            )
+            if evidence_report.rejected and attempt_index + 1 < max_attempts:
+                last_error = _evidence_validation_error(evidence_report.rejected)
+                continue
+            return answers
 
     raise ChapterReviewFormSchemaInvalid(last_error or "LLM response did not match ChapterReviewAnswers schema.")
 
@@ -415,13 +429,23 @@ def _repair_messages(
         {
             "role": "user",
             "content": (
-                "The previous JSON did not match the ChapterReviewAnswers schema. "
-                "Return a corrected answer object only. Do not echo the input payload, and do not omit required nested fields.\n\n"
+                "The previous JSON did not satisfy the ChapterReviewAnswers contract. "
+                "Return a corrected answer object only. Do not echo the input payload, and do not omit required nested fields. "
+                "Every evidence quote must be one contiguous verbatim substring copied from the chapter; "
+                "never paraphrase or splice passages. Omit unsupported optional new observations.\n\n"
                 f"Validation error:\n{_truncate_for_prompt(validation_error)}\n\n"
                 f"Previous JSON:\n{_truncate_for_prompt(previous_json)}"
             ),
         },
     ]
+
+
+def _evidence_validation_error(rejections: list[Any]) -> str:
+    lines = [
+        f"{rejection.path}: {rejection.reason}: {rejection.message}"
+        for rejection in rejections
+    ]
+    return "Evidence validation failed:\n" + "\n".join(lines)
 
 
 def _truncate_for_prompt(value: str, limit: int = 12000) -> str:

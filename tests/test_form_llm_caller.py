@@ -149,6 +149,33 @@ class RepairingUnaskedClient:
         }
 
 
+class EvidenceRepairingClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append(kwargs)
+        quote = "墙上的规则要求三分钟内提交一致性标记。"
+        if len(self.calls) > 1:
+            quote = "三分钟内未提交一致性标记，触发迟滞罚则。"
+        return {
+            "characters": [],
+            "countdowns": [],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {
+                "new_world_facts": [
+                    {
+                        "fact": "一致性标记有三分钟提交时限。",
+                        "evidence_quote": quote,
+                        "category": "rule",
+                    }
+                ]
+            },
+            "chapter_summary": "规则首次出现。",
+        }
+
+
 def test_call_form_uses_single_structured_json_call() -> None:
     client = FakeClient()
     form = ChapterReviewForm(
@@ -228,7 +255,7 @@ def test_call_form_repairs_schema_invalid_payload_once() -> None:
     assert answers.chapter_summary == "ok after repair"
     assert answers.characters[0].appears_in_chapter is True
     assert len(client.calls) == 2
-    assert "previous JSON did not match" in client.calls[1]["messages"][-1]["content"]
+    assert "previous JSON did not satisfy" in client.calls[1]["messages"][-1]["content"]
 
 
 def test_call_form_accepts_flat_form_answer_shapes() -> None:
@@ -289,11 +316,68 @@ def test_call_form_repairs_unasked_tracked_items_instead_of_discarding_them() ->
     )
 
     assert len(client.calls) == 2
-    assert "previous JSON did not match" in client.calls[1]["messages"][-1]["content"]
+    assert "previous JSON did not satisfy" in client.calls[1]["messages"][-1]["content"]
     assert answers.characters == []
     assert answers.countdowns == []
     assert answers.obligations == []
     assert answers.open_signals == []
+
+
+def test_call_form_repairs_non_verbatim_evidence_quote_once() -> None:
+    client = EvidenceRepairingClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=1,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+    chapter_text = "墙上写着：三分钟内未提交一致性标记，触发迟滞罚则。"
+
+    answers = call_form(
+        form=form,
+        chapter_text=chapter_text,
+        prior_canon_summary="",
+        llm_client=client,
+    )
+
+    assert len(client.calls) == 2
+    repair_prompt = client.calls[1]["messages"][-1]["content"]
+    assert "quote_not_found" in repair_prompt
+    assert "contiguous verbatim substring" in repair_prompt
+    assert (
+        answers.new_observations.new_world_facts[0].evidence_quote
+        == "三分钟内未提交一致性标记，触发迟滞罚则。"
+    )
+
+
+def test_call_form_preserves_evidence_warnings_when_retry_budget_is_zero() -> None:
+    client = EvidenceRepairingClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=1,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    answers = call_form(
+        form=form,
+        chapter_text="墙上写着：三分钟内未提交一致性标记，触发迟滞罚则。",
+        prior_canon_summary="",
+        llm_client=client,
+        max_schema_retries=0,
+    )
+
+    assert len(client.calls) == 1
+    assert (
+        answers.new_observations.new_world_facts[0].evidence_quote
+        == "墙上的规则要求三分钟内提交一致性标记。"
+    )
 
 
 def test_system_prompt_instructs_canonical_name_resolution() -> None:

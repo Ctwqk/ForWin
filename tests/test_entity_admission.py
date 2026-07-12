@@ -6,11 +6,14 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from forwin.book_state import BookStateRepository
+from forwin.book_state.writer_contract import WriterContractDeltaBuilder
 from forwin.models import Entity, Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
 from forwin.protocol import EntityMention, SceneOutput, WriterOutput
+from forwin.protocol.book_state import WorldNode
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.review.draft_service import DraftReviewService
 
@@ -268,6 +271,87 @@ def test_admission_does_not_reclassify_typed_non_character_participants() -> Non
             "季澈",
             "样本-17",
         ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_reuses_known_non_character_canon_entity() -> None:
+    class UnexpectedClassifier:
+        def classify(self, **_kwargs):
+            raise AssertionError("known Canon entity must not reach character admission")
+
+    engine, session = _session()
+    try:
+        project = Project(title="既有规则", premise="R11 是归档规则。", genre="pulp")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="rule-r11",
+                project_id=project.id,
+                node_type="rule",
+                name="R11",
+                state={"status": "active"},
+            )
+        )
+        repo.append_world_node_state(
+            project_id=project.id,
+            node_id="rule-r11",
+            node_type="rule",
+            as_of_chapter=2,
+            state={"status": "active"},
+        )
+
+        result = EntityRegistrar(
+            session=session,
+            classifier=UnexpectedClassifier(),
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=3,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=3,
+                title="第三章",
+                body="R11 改变了归档路径。",
+                end_of_chapter_summary="R11 的路径发生变化。",
+                entity_mentions=[
+                    EntityMention(entity_name="R11", entity_kind="character")
+                ],
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="R11",
+                        entity_kind="character",
+                        field="status",
+                        old_value="active",
+                        new_value="rerouted",
+                        reason="归档路径改变",
+                    )
+                ],
+            ),
+        )
+
+        assert result.plan.decisions == []
+        assert result.plan_conflicts == []
+        assert DraftReviewService._entity_admission_issues(result.writer_output) == []
+        contract = WriterContractDeltaBuilder(session).build(
+            project_id=project.id,
+            chapter_number=3,
+            writer_output=result.writer_output,
+            review_verdict_id="review-3",
+        )
+        assert contract.issues == []
+        assert any(
+            patch.node_id == "rule-r11"
+            and patch.field_path == "state.status"
+            and patch.new_value == "rerouted"
+            for patch in contract.graph_deltas[0].node_patches
+        )
+        assert not any(
+            patch.op == "create" and patch.node_type == "character"
+            for patch in contract.graph_deltas[0].node_patches
+        )
     finally:
         session.close()
         engine.dispose()

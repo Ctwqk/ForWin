@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
@@ -16,7 +15,7 @@ from forwin.checker.reference_classifier import (
     looks_like_non_character_reference,
 )
 from forwin.models.base import new_id
-from forwin.models.entity import Entity, EntityAlias
+from forwin.models.entity import Entity
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
@@ -562,31 +561,12 @@ class EntityRegistrar:
         mentioned = _structured_character_reference_names(writer_output)
         if not mentioned:
             return []
-        known = self._entities_by_names(
+        known = self.book_state.entities_by_names(
             project_id,
             mentioned,
             as_of_chapter=max(int(writer_output.chapter_number) - 1, 0),
         )
         return [name for name in mentioned if name not in known]
-
-    def _entities_by_names(
-        self,
-        project_id: str,
-        names: list[str],
-        *,
-        as_of_chapter: int,
-    ) -> dict[str, EntitySnapshot]:
-        requested = set(_dedupe(names))
-        mapping: dict[str, EntitySnapshot] = {}
-        for entity in self.book_state.active_entities(
-            project_id,
-            as_of_chapter=as_of_chapter,
-            kinds={"character"},
-        ):
-            for name in (entity.name, *entity.aliases):
-                if name in requested:
-                    mapping[name] = entity
-        return mapping
 
     def _name_owners(
         self,
@@ -605,14 +585,6 @@ class EntityRegistrar:
             as_of_chapter=as_of_chapter,
         ).items():
             owners[name].add(entity.entity_id)
-        alias_rows = self.session.execute(
-            select(EntityAlias.alias, EntityAlias.entity_id).where(
-                EntityAlias.project_id == project_id,
-                EntityAlias.alias.in_(normalized),
-            )
-        ).all()
-        for alias, entity_id in alias_rows:
-            owners[str(alias)].add(str(entity_id))
         return owners
 
     def _resolve_character_target(

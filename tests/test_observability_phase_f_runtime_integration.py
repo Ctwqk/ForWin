@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.api_runtime import run_pipeline_task
+from forwin.application.generation_execution import execute_pipeline_task
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
@@ -28,7 +28,7 @@ class _FakeRuntimeEngine:
         self.disposed = True
 
 
-def test_run_pipeline_task_records_operation_and_cleanup_spans() -> None:
+def test_execute_pipeline_task_records_operation_and_cleanup_spans() -> None:
     engine = get_engine(postgres_test_url("phase-f-runtime"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -66,7 +66,7 @@ def test_run_pipeline_task_records_operation_and_cleanup_spans() -> None:
             frozen_artifacts=[],
         )
 
-        run_pipeline_task(
+        execute_pipeline_task(
             "task-phase-f-runtime",
             pipeline,
             lambda: result,
@@ -95,7 +95,7 @@ def test_run_pipeline_task_records_operation_and_cleanup_spans() -> None:
         engine.dispose()
 
 
-def test_run_pipeline_task_records_worker_component_when_requested() -> None:
+def test_execute_pipeline_task_records_worker_component_when_requested() -> None:
     engine = get_engine(postgres_test_url("phase-f-runtime-worker-component"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -133,7 +133,7 @@ def test_run_pipeline_task_records_worker_component_when_requested() -> None:
             frozen_artifacts=[],
         )
 
-        run_pipeline_task(
+        execute_pipeline_task(
             "task-phase-f-runtime-worker-component",
             pipeline,
             lambda: result,

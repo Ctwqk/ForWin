@@ -23,6 +23,12 @@ from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from .common import (
+    _export_project_audit_bundle,
+    _latest_active_generation_task,
+    _new_operation_id,
+    _overlay_active_generation_task,
+)
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -35,14 +41,6 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
-
-from .common import (
-    _export_project_audit_bundle,
-    _latest_active_generation_task,
-    _new_operation_id,
-    _overlay_active_generation_task,
-)
-
 
 def list_projects(
     *,

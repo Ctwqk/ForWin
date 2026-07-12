@@ -908,6 +908,130 @@
       width:min(1320px, 100%);
       max-height:min(94vh, 100%);
     }
+    .modal.review-modal {
+      width:min(1480px, 100%);
+      max-height:min(94vh, 100%);
+      border-radius:8px;
+      background:#fbfaf7;
+    }
+    .review-modal-head,
+    .review-band-head,
+    .review-modal-actions {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+    }
+    .review-modal-head h3,
+    .review-band-head h4 {
+      margin:0;
+      font-family:var(--serif);
+      letter-spacing:0;
+    }
+    .review-modal-head h3 { font-size:24px; }
+    .review-band-head h4 { font-size:17px; }
+    .icon-button {
+      width:38px;
+      height:38px;
+      flex:0 0 38px;
+      display:inline-grid;
+      place-items:center;
+      border-radius:6px;
+      padding:0;
+      background:#fff;
+      border-color:rgba(109,98,85,.2);
+      color:var(--ink);
+      font:500 25px/1 var(--ui);
+    }
+    .review-layer-flow {
+      display:grid;
+      grid-template-columns:repeat(5, minmax(0, 1fr));
+      gap:8px;
+      align-items:stretch;
+    }
+    .review-layer-panel {
+      min-width:0;
+      min-height:248px;
+      display:grid;
+      grid-template-rows:auto auto minmax(72px, 1fr) auto;
+      align-content:start;
+      gap:10px;
+      padding:14px;
+      border:1px solid rgba(109,98,85,.18);
+      border-top:4px solid var(--accent-2);
+      border-radius:6px;
+      background:#fff;
+    }
+    .review-layer-panel[data-blocking="true"] {
+      border-top-color:var(--danger);
+      background:#fffafa;
+    }
+    .review-layer-title {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:8px;
+      min-width:0;
+    }
+    .review-layer-title strong,
+    .review-layer-outcome,
+    .review-layer-summary,
+    .review-evidence-item,
+    .review-detail-row {
+      overflow-wrap:anywhere;
+      word-break:break-word;
+    }
+    .review-layer-title strong { font:700 14px/1.35 var(--ui); }
+    .review-layer-outcome { color:var(--ink); font:700 15px/1.35 var(--ui); }
+    .review-layer-summary { color:var(--muted); font:500 13px/1.55 var(--ui); }
+    .review-layer-footer {
+      display:grid;
+      gap:8px;
+      align-self:end;
+    }
+    .review-evidence-list {
+      display:grid;
+      gap:4px;
+      max-height:92px;
+      overflow:auto;
+    }
+    .review-evidence-item {
+      padding:5px 7px;
+      border-left:2px solid rgba(31,91,84,.28);
+      color:var(--muted);
+      background:rgba(31,91,84,.035);
+      font:500 11px/1.35 var(--mono);
+    }
+    .review-layer-audit {
+      width:100%;
+      border-radius:6px;
+      padding:8px 10px;
+      font-size:12px;
+    }
+    .review-detail-band {
+      display:grid;
+      gap:10px;
+      padding-top:14px;
+      border-top:1px solid rgba(109,98,85,.18);
+    }
+    .review-detail-list { display:grid; gap:8px; }
+    .review-detail-row {
+      display:grid;
+      grid-template-columns:minmax(140px, .28fr) minmax(0, 1fr);
+      gap:12px;
+      padding:10px 0;
+      border-bottom:1px solid rgba(109,98,85,.1);
+      font:500 13px/1.55 var(--ui);
+    }
+    .review-detail-row:last-child { border-bottom:0; }
+    .review-detail-label { display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap; }
+    .review-detail-copy { color:var(--muted); }
+    .review-modal-actions {
+      justify-content:flex-end;
+      align-items:center;
+      flex-wrap:wrap;
+      padding-top:4px;
+    }
     .genesis-layout {
       display:grid;
       grid-template-columns:minmax(0, 1.15fr) minmax(320px, .85fr);
@@ -1093,5 +1217,10 @@
       .drawer-head { top:-16px; padding:16px 0 8px; }
       .modal-shell { padding:12px; }
       .modal { padding:16px; }
+      .review-layer-flow { grid-template-columns:minmax(0, 1fr); }
+      .review-layer-panel { min-height:0; }
+      .review-detail-row { grid-template-columns:minmax(0, 1fr); }
+      .review-modal-actions { justify-content:stretch; }
+      .review-modal-actions button { flex:1 1 150px; }
     }
   

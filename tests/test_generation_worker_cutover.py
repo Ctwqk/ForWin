@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-import forwin.api as api_module
+import forwin.api as api_entrypoint
 from forwin.application.generation import GenerationApplicationService
 from forwin.config import InfrastructureConfig
 from forwin.generation.worker import run_one_generation_task
@@ -12,6 +12,7 @@ from forwin.models.project import ArcPlanVersion, Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
+from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 
 
@@ -20,13 +21,12 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
     engine = get_engine(database_url)
     init_db(engine)
     Session = get_session_factory(engine)
-    old_session_factory = api_module._SessionFactory
-    old_config = api_module._config
-    old_runtime_container = api_module._runtime_container
-    api_module._SessionFactory = Session
     infrastructure = InfrastructureConfig(database_url=database_url, minimax_api_key="sk-test")
-    api_module._config = infrastructure
-    api_module._runtime_container = None
+    api = HttpRuntimeHarness(
+        session_factory=Session,
+        config=infrastructure,
+        engine=engine,
+    )
     calls: list[dict[str, object]] = []
     now = datetime.now(timezone.utc)
     try:
@@ -58,7 +58,7 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
                 )
             )
 
-        task_id = api_module._create_continue_generation_task(
+        task_id = api._create_continue_generation_task(
             project_id="project-worker-cutover",
             requested_chapters=1,
             max_chapters=1,
@@ -66,15 +66,15 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
             title="Worker Cutover",
             subtitle="继续生成",
         )
-        queued = api_module._get_generation_task_or_404(task_id)
+        queued = api._get_generation_task_or_404(task_id)
         assert queued["status"] == "queued"
 
-        def fake_run_continue_project_with_context(*args, **kwargs):
+        def fake_execute_continuation(*args, **kwargs):
             calls.append({"args": args, "kwargs": kwargs})
 
         monkeypatch.setattr(
-            "forwin.api_runtime.run_continue_project_with_context",
-            fake_run_continue_project_with_context,
+            "forwin.application.generation_execution.execute_continuation",
+            fake_execute_continuation,
         )
 
         result = run_one_generation_task(
@@ -94,14 +94,11 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
             assert row.status == "running"
             assert row.lease_owner == "worker-cutover"
     finally:
-        api_module._SessionFactory = old_session_factory
-        api_module._config = old_config
-        api_module._runtime_container = old_runtime_container
         engine.dispose()
 
 
 def test_generation_api_no_longer_starts_daemon_generation_threads() -> None:
-    source = Path("forwin/api_core/generation.py").read_text()
+    source = Path("forwin/http/generation.py").read_text()
 
     assert "target=_run_generation_with_config" not in source
     assert "target=_run_continue_project_with_config" not in source
@@ -109,7 +106,7 @@ def test_generation_api_no_longer_starts_daemon_generation_threads() -> None:
 
 
 def test_api_split_removes_private_run_alias_compatibility() -> None:
-    assert not hasattr(api_module, "_build_runtime_config")
-    assert not hasattr(api_module, "_build_saved_runtime_config")
-    assert not hasattr(api_module, "_run_generation_with_config")
-    assert not hasattr(api_module, "_run_continue_project_with_config")
+    assert not hasattr(api_entrypoint, "_build_runtime_config")
+    assert not hasattr(api_entrypoint, "_build_saved_runtime_config")
+    assert not hasattr(api_entrypoint, "_run_generation_with_config")
+    assert not hasattr(api_entrypoint, "_run_continue_project_with_config")

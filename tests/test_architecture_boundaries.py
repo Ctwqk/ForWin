@@ -12,14 +12,10 @@ import forwin.book_state as book_state
 import forwin.map as book_map
 import forwin.review as review
 import forwin.world_v4_review_gate as world_v4_review_gate
-from forwin.api_route_registry import (
+from forwin.http.routes import (
     ApiRouteDeps,
     CoreDeps,
-    ProjectControlDeps,
-    ObservabilityDeps,
-    ProjectDeps,
     PublisherDeps,
-    TaskDeps,
 )
 
 
@@ -150,61 +146,8 @@ def test_api_route_deps_are_grouped_by_domain() -> None:
 
 
 def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
-    def noop(*args, **kwargs):
-        return None
-
-    def noop_str(*args, **kwargs) -> str:
-        return ""
-
-    legacy_kwargs = {
-        name: noop
-        for group in (
-            CoreDeps,
-            TaskDeps,
-            ProjectDeps,
-            ProjectControlDeps,
-            ObservabilityDeps,
-            PublisherDeps,
-        )
-        for name in group.__annotations__
-    }
-    legacy_kwargs.update(
-        {
-            "render_home_page": noop_str,
-            "render_publishers_page": noop_str,
-            "active_generation_task_error_cls": RuntimeError,
-            "display_datetime": lambda value: "",
-            "json_load_object": lambda value: {},
-            "serialize_task": lambda task_id, task: {},
-            "get_generation_task_or_404": lambda task_id: {},
-            "active_generation_task_ids": lambda project_id: [],
-            "generation_task_conflict_message": lambda project_id: "",
-            "list_generation_tasks": lambda limit: [],
-            "serialize_generation_task_center_item": lambda task_id, task: {},
-            "serialize_upload_task_center_item": lambda task: {},
-            "list_project_backed_task_items": lambda limit: [],
-            "parse_project_task_id": lambda task_id: None,
-            "get_project_backed_task_item_or_404": lambda task_id: {},
-            "task_is_terminal": lambda status: False,
-            "task_is_terminable": lambda task: False,
-            "task_is_pausable": lambda task: False,
-            "task_is_deletable": lambda task: False,
-            "require_genesis_project": lambda project: None,
-            "genesis_patch_payload": lambda revision: {},
-            "project_delete_blockers": lambda *args, **kwargs: [],
-            "project_delete_conflict_message": lambda blockers: "",
-            "require_reason": lambda reason: reason,
-            "governance_request_payload": lambda payload: {},
-            "decision_refs_for_chapter_review": lambda *args, **kwargs: [],
-            "validate_constraint_payload": lambda *args, **kwargs: ("", "", ""),
-            "serialize_constraint": lambda value: {},
-            "list_decision_event_rows": lambda *args, **kwargs: [],
-            "serialize_decision_event": lambda value: {},
-        }
-    )
-
     with pytest.raises(TypeError):
-        ApiRouteDeps(**legacy_kwargs)
+        ApiRouteDeps(get_session=lambda: None)
 
 
 def test_design_status_contains_deprecation_matrix() -> None:
@@ -637,21 +580,26 @@ def test_entry_adapters_use_explicit_application_services() -> None:
         "forwin/api_project_ops.py",
         "forwin/api_project_policy.py",
         "forwin/api_publisher_ops.py",
+        "forwin/api_task_center_service.py",
         "forwin/project_ops",
     ):
         assert not (ROOT / removed_path).exists()
 
     api_entry = _read("forwin/api.py")
-    assert '__all__ = ["app", "lifespan"]' in api_entry
+    assert '__all__ = ["app", "create_app", "lifespan"]' in api_entry
     assert "ModuleType" not in api_entry
     assert "__class__" not in api_entry
 
-    api_app = _read("forwin/api_core/app.py")
+    api_app = _read("forwin/http/app.py")
     assert "globals().update" not in api_app
-    assert '__all__ = ["app", "lifespan"]' in api_app
+    assert '__all__ = ["create_app", "lifespan"]' in api_app
+    assert "def create_app(" in api_app
+    assert "app = FastAPI" in api_app
+    assert not (ROOT / "forwin/api_core").exists()
+    assert not (ROOT / "forwin/api_route_registry.py").exists()
 
-    project_routes = _read("forwin/api_project_routes.py")
-    publisher_routes = _read("forwin/api_publisher_routes.py")
+    project_routes = _read("forwin/http/adapters/api_project_routes.py")
+    publisher_routes = _read("forwin/http/adapters/api_publisher_routes.py")
     assert "ProjectApplicationService" in project_routes
     assert "PublisherApplicationService" in publisher_routes
     assert "project_ops" not in project_routes
@@ -662,12 +610,19 @@ def test_entry_adapters_use_explicit_application_services() -> None:
     assert "class PublisherApplicationService" in _read(
         "forwin/application/publisher/service.py"
     )
+    assert "TaskApplicationService" in _read(
+        "forwin/http/adapters/api_task_routes.py"
+    )
+    assert "ProjectControlApplicationService" in _read(
+        "forwin/http/adapters/api_project_control_routes.py"
+    )
+    assert "TaskCenterService" in _read("forwin/application/task_center.py")
 
 
 def test_generation_task_producers_use_application_service() -> None:
     for rel_path in (
-        "forwin/api_core/automation.py",
-        "forwin/api_core/generation.py",
+        "forwin/http/automation.py",
+        "forwin/http/generation.py",
         "forwin/generation/worker.py",
         "forwin/production/executor.py",
         "forwin/production/scheduler.py",

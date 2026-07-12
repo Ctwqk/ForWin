@@ -15,6 +15,10 @@ from forwin.models.phase import (
     ProvisionalBandExecution,
     ProvisionalChapterLedger,
 )
+from .common import (
+    _json_object,
+    _load_json_list,
+)
 
 
 DisplayDatetime = Callable[[datetime | None], str]
@@ -28,10 +32,6 @@ _GENESIS_STAGE_ORDER = (
 )
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .common import (
-    _json_object,
-    _load_json_list,
-)
 
 
 def latest_provisional_band_execution(

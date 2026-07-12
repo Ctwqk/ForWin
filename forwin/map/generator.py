@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """方案 C：Graph-based Weighted Map Generation.
 
 The generator is intentionally graph-first: narrative anchors create regions and
 MapNodes, MST guarantees connectivity, extra edges add route variety, and
 weighted directed MapEdges power path validation.
 """
+
+from __future__ import annotations
 
 import hashlib
 import random

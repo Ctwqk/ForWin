@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from forwin.api_publisher_routes import build_handlers
+from forwin.http.adapters.api_publisher_routes import build_handlers
 from forwin.api_schema import (
     ExtensionHeartbeatRequest,
     ExtensionLoginQrNotifyRequest,

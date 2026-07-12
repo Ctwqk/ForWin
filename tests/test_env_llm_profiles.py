@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import forwin.api as api_module
 from forwin.config import InfrastructureConfig
+from tests.http_runtime_harness import HttpRuntimeHarness
 
 
 def test_config_builds_kimi_and_deepseek_profiles_from_env(monkeypatch) -> None:
@@ -48,23 +48,21 @@ def test_config_builds_provider_profiles_from_env_file(monkeypatch, tmp_path: Pa
 
 
 def test_runtime_catalog_is_read_only_and_secret_free() -> None:
-    previous = api_module._config
-    api_module._config = InfrastructureConfig(
-        minimax_api_key="secret-minimax-env",
-        llm_env_profiles=[
-            {
-                "id": "env-kimi",
-                "name": "Kimi (.env)",
-                "api_key": "secret-kimi-env",
-                "base_url": "https://api.moonshot.cn/v1",
-                "model": "kimi-k2.5",
-            }
-        ]
+    api = HttpRuntimeHarness(
+        config=InfrastructureConfig(
+            minimax_api_key="secret-minimax-env",
+            llm_env_profiles=[
+                {
+                    "id": "env-kimi",
+                    "name": "Kimi (.env)",
+                    "api_key": "secret-kimi-env",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                }
+            ],
+        )
     )
-    try:
-        response = api_module.get_runtime_catalog()
-    finally:
-        api_module._config = previous
+    response = api.get_runtime_catalog()
 
     assert response.bootstrap_policy.quality_profile == "standard"
     profiles = {profile.id: profile for profile in response.model_profiles}
@@ -90,9 +88,10 @@ def test_explicit_env_minimax_profile_resolves_to_environment_default() -> None:
 
 
 def test_runtime_catalog_routes_are_read_only() -> None:
+    api = HttpRuntimeHarness(config=InfrastructureConfig())
     routes = {
         (route.path, method)
-        for route in api_module.app.routes
+        for route in api.app.routes
         for method in (route.methods or set())
     }
 

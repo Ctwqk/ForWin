@@ -6,6 +6,7 @@ import logging
 import json
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -22,26 +23,31 @@ from forwin.models.project import Project
 import forwin.models.phase  # noqa: F401
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from forwin.http.runtime import HttpRuntime
+
 
 logger = logging.getLogger(__name__)
 
-from forwin.api_core import state as api_state
 
-
-def _get_session():
-    return api_state._SessionFactory()
+def _get_session(runtime: HttpRuntime) -> Session:
+    return runtime.get_session()
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _display_datetime(value: datetime | None) -> str:
+def _display_datetime(
+    value: datetime | None,
+    *,
+    display_timezone: ZoneInfo | None = None,
+) -> str:
     if value is None:
         return ""
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(api_state._DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    target_timezone = display_timezone or ZoneInfo("America/Los_Angeles")
+    return value.astimezone(target_timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def _json_load_list(raw: str | None) -> list[Any]:
@@ -66,27 +72,26 @@ def _json_dump(value: Any, fallback: Any) -> str:
 
 
 def _build_genesis_service(
+    runtime: HttpRuntime,
     infrastructure: InfrastructureConfig | None = None,
     *,
     model_profile_id: str = "",
 ) -> BookGenesisService:
-    resolved = (
-        infrastructure or api_state._config or InfrastructureConfig(minimax_api_key="")
-    )
+    resolved = infrastructure or runtime.config or InfrastructureConfig(minimax_api_key="")
     resolved_profile = resolved.resolve_model_profile(model_profile_id).model_dump(
         mode="python"
     )
     shared_container = (
         infrastructure is None
         and not model_profile_id
-        and api_state._runtime_container is not None
+        and runtime.container is not None
     )
     policy = RuntimePolicy.for_profile(
         "standard",
         model_profile_id=str(model_profile_id or "").strip(),
     )
     container = (
-        api_state._runtime_container
+        runtime.container
         if shared_container
         else RuntimeContainer.from_config(resolved, policy=policy, role="api")
     )
@@ -97,7 +102,7 @@ def _build_genesis_service(
     )
     setattr(service, "_forwin_runtime_owned", True)
     setattr(
-        service, "_forwin_runtime_container", container if shared_container else None
+        service, "_forwin_runtime_container", None if shared_container else container
     )
     setattr(service, "_forwin_runtime_shared", bool(shared_container))
     setattr(service.llm_client, "profile_id", resolved_profile.get("id", ""))
@@ -105,7 +110,10 @@ def _build_genesis_service(
     return service
 
 
-def _close_genesis_service(service: BookGenesisService | None) -> None:
+def _close_genesis_service(
+    runtime: HttpRuntime,
+    service: BookGenesisService | None,
+) -> None:
     if getattr(service, "_forwin_runtime_shared", False):
         return
     client = getattr(service, "llm_client", None)
@@ -116,7 +124,7 @@ def _close_genesis_service(service: BookGenesisService | None) -> None:
         except Exception:  # noqa: BLE001
             logger.debug("BookGenesisService client close failed", exc_info=True)
     container = getattr(service, "_forwin_runtime_container", None)
-    if container is not None and container is not api_state._runtime_container:
+    if container is not None and container is not runtime.container:
         try:
             container.services().engine.dispose()
         except Exception:  # noqa: BLE001

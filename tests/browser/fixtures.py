@@ -608,15 +608,6 @@ class MockForWinBackend:
             )
             return
 
-        if path == "/api/generate" and method == "POST":
-            payload = read_json(route)
-            self.capture(route, payload)
-            task_id = f"task-{len(self.tasks) + 1}"
-            self.tasks[task_id] = sample_generation_task(
-                task_id, project_id=payload.get("project_id") or ""
-            )
-            json_reply(route, {"task_id": task_id, **self.tasks[task_id]})
-            return
         if path == "/api/task-center/items" and method == "GET":
             json_reply(route, self.task_center_items())
             return
@@ -1346,7 +1337,58 @@ def sample_review(project_id: str, chapter_number: int) -> dict[str, Any]:
         "decision_refs": [
             {"id": "decision-2", "event_type": "review_verdict_recorded"}
         ],
-        "review_engine_decision": {
+        "decision_layers": [
+            {
+                "layer": "draft_review",
+                "status": "complete",
+                "outcome": "warn",
+                "summary": "伏笔密度需要确认。",
+                "blocking": False,
+                "evidence_refs": ["review:decision-2"],
+                "decision_refs": [
+                    {"id": "decision-2", "event_type": "review_verdict_recorded"}
+                ],
+            },
+            {
+                "layer": "repair",
+                "status": "not_required",
+                "outcome": "not_required",
+                "summary": "无需修复",
+                "blocking": False,
+                "evidence_refs": [],
+                "decision_refs": [],
+            },
+            {
+                "layer": "residual_eligibility",
+                "status": "complete",
+                "outcome": "force_accept",
+                "summary": "软质量残余可接受",
+                "blocking": False,
+                "evidence_refs": ["arc_patch"],
+                "decision_refs": [],
+            },
+            {
+                "layer": "gate_delegation",
+                "status": "not_required",
+                "outcome": "not_delegated",
+                "summary": "未调用委托门禁",
+                "blocking": False,
+                "evidence_refs": [],
+                "decision_refs": [],
+            },
+            {
+                "layer": "canon",
+                "status": "pending",
+                "outcome": "ready_for_canon",
+                "summary": "等待 Canon 提交",
+                "blocking": True,
+                "evidence_refs": ["candidate:candidate-2"],
+                "decision_refs": [],
+            },
+        ],
+        "rewrite_attempts": [],
+        "residual_review_issues": [],
+        "rule_decision": {
             "rule_id": "arc_patcher_disabled",
             "reason": "arc patcher disabled",
             "missing_evidence": ["arc_patch"],

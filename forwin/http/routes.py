@@ -8,11 +8,12 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from forwin.application.projects import (
-    ProjectApplicationDeps,
     ProjectApplicationService,
 )
+from forwin.application.project_control import ProjectControlApplicationService
+from forwin.application.tasks import TaskApplicationService
 from forwin.application.publisher import PublisherApplicationService
-from forwin import (
+from forwin.http.adapters import (
     api_book_state_routes,
     api_project_control_routes,
     api_llm_kb_routes,
@@ -102,65 +103,25 @@ from forwin.api_schema import (
 @dataclass(frozen=True)
 class CoreDeps:
     get_config: Callable[[], Any]
-    get_pipeline: Callable[[], Any]
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
-    active_generation_task_error_cls: type[Exception]
-    display_datetime: Callable[[Any], str]
-    json_load_object: Callable[[str | None], dict[str, Any]]
     get_memory_index: Callable[[], Any] = lambda: None
 
 
 @dataclass(frozen=True)
 class TaskDeps:
-    create_generation_task: Callable[..., str]
-    serialize_task: Callable[[str, dict[str, Any]], Any]
-    get_generation_task_or_404: Callable[[str], dict[str, Any]]
-    project_has_active_generation_task: Callable[..., bool]
-    active_generation_task_ids: Callable[[str], list[str]]
-    generation_task_conflict_message: Callable[[str], str]
-    list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
-    serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any]
-    serialize_upload_task_center_item: Callable[[dict[str, Any]], Any]
-    list_project_backed_task_items: Callable[[int], list[Any]]
-    parse_project_task_id: Callable[[str], str | None]
-    get_project_backed_task_item_or_404: Callable[[str], Any]
-    task_is_terminal: Callable[[str], bool]
-    task_is_terminable: Callable[[dict[str, Any]], bool]
-    task_is_pausable: Callable[[dict[str, Any]], bool]
-    task_is_deletable: Callable[[dict[str, Any]], bool]
-    update_task: Callable[..., None]
-    create_continue_generation_task: Callable[..., str]
+    service: TaskApplicationService
     get_task_timeline: Callable[..., Any]
 
 
 @dataclass(frozen=True)
 class ProjectDeps:
-    build_genesis_service: Callable[..., Any]
-    close_genesis_service: Callable[..., None]
-    require_genesis_project: Callable[[Any], None]
-    active_genesis_revision: Callable[..., Any]
-    genesis_patch_payload: Callable[[Any], dict[str, Any]]
-    delete_project_impl: Callable[..., None]
-    project_delete_blockers: Callable[..., list[str]]
-    project_delete_conflict_message: Callable[[list[str]], str]
-    persist_project_automation: Callable[..., Any]
-    require_reason: Callable[[str], str]
+    service: ProjectApplicationService
 
 
 @dataclass(frozen=True)
 class ProjectControlDeps:
-    latest_related_decision_event: Callable[..., Any]
-    log_decision_event: Callable[..., Any]
-    decision_refs_for_chapter_review: Callable[..., list[Any]]
-    validate_constraint_payload: Callable[..., tuple[str, str, str]]
-    serialize_band_checkpoint: Callable[..., Any]
-    serialize_constraint: Callable[[Any], Any]
-    list_decision_event_rows: Callable[..., list[Any]]
-    serialize_decision_event: Callable[[Any], Any]
-    build_causal_replay: Callable[..., Any]
-    build_audit_insights: Callable[..., Any]
-    latest_band_checkpoint_row: Callable[..., Any]
+    service: ProjectControlApplicationService
 
 
 @dataclass(frozen=True)
@@ -191,84 +152,28 @@ class ApiRouteDeps:
     observability: ObservabilityDeps
     publisher: PublisherDeps
 
-    def __getattr__(self, name: str) -> Any:
-        for group_name in (
-            "core",
-            "task",
-            "project",
-            "project_control",
-            "observability",
-            "publisher",
-        ):
-            group = object.__getattribute__(self, group_name)
-            if hasattr(group, name):
-                return getattr(group, name)
-        raise AttributeError(name)
-
-
 def register_api_routes(
     app: FastAPI,
     *,
     deps: ApiRouteDeps,
 ) -> dict[str, Callable[..., Any]]:
-    get_config = deps.get_config
+    get_config = deps.core.get_config
     get_publisher_manager = deps.publisher.get_publisher_manager
-    get_pipeline = deps.get_pipeline
-    get_session = deps.get_session
-    render_home_page = deps.render_home_page
+    get_session = deps.core.get_session
+    render_home_page = deps.core.render_home_page
     render_publishers_page = deps.publisher.render_publishers_page
-    create_generation_task = deps.create_generation_task
-    serialize_task = deps.serialize_task
-    get_generation_task_or_404 = deps.get_generation_task_or_404
-    project_has_active_generation_task = deps.project_has_active_generation_task
-    active_generation_task_ids = deps.active_generation_task_ids
-    generation_task_conflict_message = deps.generation_task_conflict_message
-    active_generation_task_error_cls = deps.active_generation_task_error_cls
-    list_generation_tasks = deps.list_generation_tasks
-    serialize_generation_task_center_item = deps.serialize_generation_task_center_item
-    serialize_upload_task_center_item = deps.serialize_upload_task_center_item
-    list_project_backed_task_items = deps.list_project_backed_task_items
-    parse_project_task_id = deps.parse_project_task_id
-    get_project_backed_task_item_or_404 = deps.get_project_backed_task_item_or_404
-    task_is_terminal = deps.task_is_terminal
-    task_is_terminable = deps.task_is_terminable
-    task_is_pausable = deps.task_is_pausable
-    task_is_deletable = deps.task_is_deletable
-    latest_related_decision_event = deps.latest_related_decision_event
-    log_decision_event = deps.log_decision_event
-    update_task = deps.update_task
-    display_datetime = deps.display_datetime
-    build_genesis_service = deps.build_genesis_service
-    close_genesis_service = deps.close_genesis_service
-    require_genesis_project = deps.require_genesis_project
-    active_genesis_revision = deps.active_genesis_revision
-    genesis_patch_payload = deps.genesis_patch_payload
-    delete_project_impl = deps.delete_project_impl
-    project_delete_blockers = deps.project_delete_blockers
-    project_delete_conflict_message = deps.project_delete_conflict_message
-    create_continue_generation_task = deps.create_continue_generation_task
-    persist_project_automation = deps.persist_project_automation
-    require_reason = deps.require_reason
-    decision_refs_for_chapter_review = deps.decision_refs_for_chapter_review
-    validate_constraint_payload = deps.validate_constraint_payload
-    serialize_band_checkpoint = deps.serialize_band_checkpoint
-    serialize_constraint = deps.serialize_constraint
-    list_decision_event_rows = deps.list_decision_event_rows
-    serialize_decision_event = deps.serialize_decision_event
-    build_causal_replay = deps.build_causal_replay
-    build_audit_insights = deps.build_audit_insights
-    latest_band_checkpoint_row = deps.latest_band_checkpoint_row
-    json_load_object = deps.json_load_object
-    get_task_timeline = deps.get_task_timeline
-    get_chapter_observability_ledger = deps.get_chapter_observability_ledger
-    get_prompt_trace_detail = deps.get_prompt_trace_detail
-    read_artifact_preview = deps.read_artifact_preview
-    get_task_performance_report = deps.get_task_performance_report
-    get_project_performance_report = deps.get_project_performance_report
-    get_chapter_performance_report = deps.get_chapter_performance_report
-    get_slow_performance_spans = deps.get_slow_performance_spans
-    get_llm_performance_report = deps.get_llm_performance_report
-    get_db_performance_report = deps.get_db_performance_report
+    get_task_timeline = deps.task.get_task_timeline
+    get_chapter_observability_ledger = (
+        deps.observability.get_chapter_observability_ledger
+    )
+    get_prompt_trace_detail = deps.observability.get_prompt_trace_detail
+    read_artifact_preview = deps.observability.read_artifact_preview
+    get_task_performance_report = deps.observability.get_task_performance_report
+    get_project_performance_report = deps.observability.get_project_performance_report
+    get_chapter_performance_report = deps.observability.get_chapter_performance_report
+    get_slow_performance_spans = deps.observability.get_slow_performance_spans
+    get_llm_performance_report = deps.observability.get_llm_performance_report
+    get_db_performance_report = deps.observability.get_db_performance_report
     get_memory_index = deps.core.get_memory_index
 
     system_handlers = api_system_routes.build_handlers(
@@ -277,35 +182,10 @@ def register_api_routes(
         get_session=get_session,
         render_home_page=render_home_page,
         render_publishers_page=render_publishers_page,
-        create_generation_task=create_generation_task,
-        serialize_task=serialize_task,
-        get_generation_task_or_404=get_generation_task_or_404,
-        project_has_active_generation_task=project_has_active_generation_task,
-        generation_task_conflict_message=generation_task_conflict_message,
-        active_generation_task_error_cls=active_generation_task_error_cls,
         get_memory_index=get_memory_index,
     )
     task_handlers = api_task_routes.build_handlers(
-        deps=api_task_routes.TaskRouteDeps(
-            get_session=get_session,
-            get_publisher_manager=get_publisher_manager,
-            list_generation_tasks=list_generation_tasks,
-            serialize_task=serialize_task,
-            get_generation_task_or_404=get_generation_task_or_404,
-            active_generation_task_ids=active_generation_task_ids,
-            serialize_generation_task_center_item=serialize_generation_task_center_item,
-            serialize_upload_task_center_item=serialize_upload_task_center_item,
-            list_project_backed_task_items=list_project_backed_task_items,
-            parse_project_task_id=parse_project_task_id,
-            get_project_backed_task_item_or_404=get_project_backed_task_item_or_404,
-            task_is_terminal=task_is_terminal,
-            task_is_terminable=task_is_terminable,
-            task_is_pausable=task_is_pausable,
-            task_is_deletable=task_is_deletable,
-            latest_related_decision_event=latest_related_decision_event,
-            log_decision_event=log_decision_event,
-            update_task=update_task,
-        ),
+        service=deps.task.service,
     )
     publisher_handlers = api_publisher_routes.build_handlers(
         service=PublisherApplicationService(
@@ -313,52 +193,9 @@ def register_api_routes(
             extension_root=Path.cwd() / "browser_extension" / "forwin-publisher",
         )
     )
-    project_handlers = api_project_routes.build_handlers(
-        service=ProjectApplicationService(
-            ProjectApplicationDeps(
-                get_session=get_session,
-                get_config=get_config,
-                get_pipeline=get_pipeline,
-                get_publisher_manager=get_publisher_manager,
-                display_datetime=display_datetime,
-                build_genesis_service=build_genesis_service,
-                close_genesis_service=close_genesis_service,
-                require_genesis_project=require_genesis_project,
-                active_genesis_revision=active_genesis_revision,
-                genesis_patch_payload=genesis_patch_payload,
-                delete_project_impl=delete_project_impl,
-                project_delete_blockers=project_delete_blockers,
-                project_delete_conflict_message=project_delete_conflict_message,
-                project_has_active_generation_task=project_has_active_generation_task,
-                generation_task_conflict_message=generation_task_conflict_message,
-                create_continue_generation_task=create_continue_generation_task,
-                persist_project_automation=persist_project_automation,
-                log_decision_event=log_decision_event,
-                serialize_task=serialize_task,
-                get_generation_task_or_404=get_generation_task_or_404,
-                active_generation_task_error_cls=active_generation_task_error_cls,
-                require_reason=require_reason,
-                decision_refs_for_chapter_review=decision_refs_for_chapter_review,
-                update_task=update_task,
-            )
-        )
-    )
+    project_handlers = api_project_routes.build_handlers(service=deps.project.service)
     project_control_handlers = api_project_control_routes.build_handlers(
-        get_session=get_session,
-        get_pipeline=get_pipeline,
-        display_datetime=display_datetime,
-        require_reason=require_reason,
-        validate_constraint_payload=validate_constraint_payload,
-        serialize_band_checkpoint=serialize_band_checkpoint,
-        serialize_constraint=serialize_constraint,
-        list_decision_event_rows=list_decision_event_rows,
-        serialize_decision_event=serialize_decision_event,
-        build_causal_replay=build_causal_replay,
-        build_audit_insights=build_audit_insights,
-        latest_band_checkpoint_row=latest_band_checkpoint_row,
-        latest_related_decision_event=latest_related_decision_event,
-        log_decision_event=log_decision_event,
-        json_load_object=json_load_object,
+        service=deps.project_control.service,
     )
     world_model_handlers = api_world_model_routes.build_handlers(
         get_session=get_session,
@@ -433,12 +270,6 @@ def register_api_routes(
             ["GET"],
             handlers["search_project_world_studio"],
             {},
-        ),
-        (
-            "/api/generate",
-            ["POST"],
-            handlers["generate"],
-            {"response_model": TaskResponse},
         ),
         (
             "/api/settings/codex/health",

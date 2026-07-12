@@ -10,9 +10,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 
-from forwin import (
-    api_project_control_support,
-)
+from forwin.application.project_control import support as project_control_support
 from forwin.api_schema import (
     BandCheckpointDetail,
     CausalReplayResponse,
@@ -35,15 +33,16 @@ from forwin.models.phase import (
 )
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
-
-logger = logging.getLogger(__name__)
-
-from forwin.api_core import state as api_state
-from forwin.api_core.runtime import (
+from forwin.http.request_support import (
     _get_session,
     _utcnow,
 )
-from forwin.api_core.tasks import (
+from forwin.http.runtime import (
+    GENERATION_TERMINAL_STAGE_BY_STATUS,
+    GENERATION_TERMINAL_STATUSES,
+    HttpRuntime,
+)
+from forwin.http.tasks import (
     _apply_generation_task_to_row,
     _clear_task_persistence_degraded,
     _coerce_task_datetime,
@@ -55,6 +54,9 @@ from forwin.api_core.tasks import (
     _sync_task_cache,
     GenerationTaskPersistenceError,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _delete_project(session, project_id: str) -> None:
@@ -103,12 +105,18 @@ def _delete_project(session, project_id: str) -> None:
     session.execute(delete(Project).where(Project.id == project_id))
 
 
-def _update_task(task_id: str, **changes: Any) -> None:
-    task = _load_generation_task(task_id, include_deleted=True)
+def _update_task(runtime: HttpRuntime, task_id: str, **changes: Any) -> None:
+    task = _load_generation_task(runtime, task_id, include_deleted=True)
     if task is None or task.get("deleted"):
         return
     normalized = dict(changes)
     normalized.pop("requested_chapters", None)
+    current_status = str(task.get("status", "") or "").strip()
+    if current_status == "queued":
+        if bool(normalized.get("cancel_requested")):
+            normalized["status"] = "cancelled"
+        elif bool(normalized.get("pause_requested")):
+            normalized["status"] = "paused"
     if task.get("cancel_requested") and normalized.get("status") in {
         "starting",
         "running",
@@ -137,7 +145,7 @@ def _update_task(task_id: str, **changes: Any) -> None:
     if "status" in normalized and normalized["status"] == "terminating":
         normalized["current_stage"] = "terminating"
     elif "status" in normalized:
-        terminal_stage = api_state._GENERATION_TERMINAL_STAGE_BY_STATUS.get(
+        terminal_stage = GENERATION_TERMINAL_STAGE_BY_STATUS.get(
             str(normalized["status"]).strip()
         )
         if terminal_stage:
@@ -176,12 +184,12 @@ def _update_task(task_id: str, **changes: Any) -> None:
 
     task.update(normalized)
     task["updated_at"] = now
-    _sync_task_cache(task_id, task)
+    _sync_task_cache(runtime, task_id, task)
 
-    if api_state._SessionFactory is not None:
+    if runtime.session_factory is not None:
 
         def _operation() -> None:
-            with _get_session() as session:
+            with _get_session(runtime) as session:
                 row = session.get(GenerationTask, task_id)
                 if row is None:
                     row = GenerationTask(id=task_id)
@@ -194,11 +202,11 @@ def _update_task(task_id: str, **changes: Any) -> None:
                 _operation, context=f"update_generation_task:{task_id}"
             )
         except GenerationTaskPersistenceError as exc:
-            if task.get("status") in api_state._GENERATION_TERMINAL_STATUSES:
+            if task.get("status") in GENERATION_TERMINAL_STATUSES:
                 raise
-            _mark_task_persistence_degraded(task_id, task, exc)
+            _mark_task_persistence_degraded(runtime, task_id, task, exc)
         else:
-            _clear_task_persistence_degraded(task_id, task)
+            _clear_task_persistence_degraded(runtime, task_id, task)
 
 
 def _running_task_lease_seconds(task: dict[str, Any]) -> int:
@@ -212,23 +220,26 @@ def _running_task_lease_seconds(task: dict[str, Any]) -> int:
     return 300
 
 
-def _task_should_abort(task_id: str) -> bool:
-    task = _load_generation_task(task_id)
+def _task_should_abort(runtime: HttpRuntime, task_id: str) -> bool:
+    task = _load_generation_task(runtime, task_id)
     if task is None or task.get("deleted"):
         return True
     return bool(task.get("cancel_requested"))
 
 
-def _task_should_pause(task_id: str) -> bool:
-    task = _load_generation_task(task_id)
+def _task_should_pause(runtime: HttpRuntime, task_id: str) -> bool:
+    task = _load_generation_task(runtime, task_id)
     if task is None or task.get("deleted"):
         return False
     return bool(task.get("pause_requested")) and not bool(task.get("cancel_requested"))
 
 
-def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
-    _prune_tasks(include_db=False)
-    task = _load_generation_task(task_id)
+def _get_generation_task_or_404(
+    runtime: HttpRuntime,
+    task_id: str,
+) -> dict[str, Any]:
+    _prune_tasks(runtime, include_db=False)
+    task = _load_generation_task(runtime, task_id)
     if task is None or task.get("deleted"):
         raise HTTPException(404, "任务不存在")
     return task
@@ -244,7 +255,7 @@ def _require_reason(reason: str, *, action: str) -> str:
 def _validate_constraint_payload(
     *, constraint_type: str, level: str, status: str
 ) -> tuple[str, str, str]:
-    return api_project_control_support.validate_constraint_payload(
+    return project_control_support.validate_constraint_payload(
         constraint_type=constraint_type,
         level=level,
         status=status,
@@ -256,17 +267,17 @@ def _persist_project_automation(
     project: Project,
     automation: ProjectAutomationSettings,
 ) -> ProjectAutomationSettings:
-    return api_project_control_support.persist_project_automation(
+    return project_control_support.persist_project_automation(
         session, project, automation
     )
 
 
 def _log_decision_event(session, **kwargs):
-    return api_project_control_support.log_decision_event(session, **kwargs)
+    return project_control_support.log_decision_event(session, **kwargs)
 
 
 def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
-    return api_project_control_support.latest_band_checkpoint_row(
+    return project_control_support.latest_band_checkpoint_row(
         session,
         project_id=project_id,
         band_id=band_id,
@@ -276,33 +287,33 @@ def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
 def _serialize_band_checkpoint(
     row: BandCheckpoint, *, session=None
 ) -> BandCheckpointDetail:
-    return api_project_control_support.serialize_band_checkpoint(row, session=session)
+    return project_control_support.serialize_band_checkpoint(row, session=session)
 
 
 def _serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
-    return api_project_control_support.serialize_constraint(row)
+    return project_control_support.serialize_constraint(row)
 
 
 def _serialize_decision_event(row: DecisionEvent) -> DecisionEventInfo:
-    return api_project_control_support.serialize_decision_event(row)
+    return project_control_support.serialize_decision_event(row)
 
 
 def _decision_event_stmt(**kwargs):
-    return api_project_control_support.decision_event_stmt(**kwargs)
+    return project_control_support.decision_event_stmt(**kwargs)
 
 
 def _list_decision_event_rows(session, **kwargs) -> list[DecisionEvent]:
-    return api_project_control_support.list_decision_event_rows(session, **kwargs)
+    return project_control_support.list_decision_event_rows(session, **kwargs)
 
 
 def _latest_related_decision_event(session, **kwargs) -> DecisionEvent | None:
-    return api_project_control_support.latest_related_decision_event(session, **kwargs)
+    return project_control_support.latest_related_decision_event(session, **kwargs)
 
 
 def _decision_refs_for_checkpoint(
     session, row: BandCheckpoint
 ) -> list[DecisionEventInfo]:
-    return api_project_control_support.decision_refs_for_checkpoint(session, row)
+    return project_control_support.decision_refs_for_checkpoint(session, row)
 
 
 def _decision_refs_for_chapter_review(
@@ -312,7 +323,7 @@ def _decision_refs_for_chapter_review(
     chapter_number: int,
     review_id: str,
 ) -> list[DecisionEventInfo]:
-    return api_project_control_support.decision_refs_for_chapter_review(
+    return project_control_support.decision_refs_for_chapter_review(
         session,
         project_id=project_id,
         chapter_number=chapter_number,
@@ -321,7 +332,7 @@ def _decision_refs_for_chapter_review(
 
 
 def _counter_rows(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any]]:
-    return api_project_control_support.counter_rows(counter, limit=limit)
+    return project_control_support.counter_rows(counter, limit=limit)
 
 
 def _build_causal_replay(
@@ -334,7 +345,7 @@ def _build_causal_replay(
     chapter_number: int = 0,
     task_id: str = "",
 ) -> CausalReplayResponse:
-    return api_project_control_support.build_causal_replay(
+    return project_control_support.build_causal_replay(
         session,
         project_id=project_id,
         scope=scope,
@@ -346,7 +357,7 @@ def _build_causal_replay(
 
 
 def _build_audit_insights(session, *, project_id: str) -> AuditInsightsResponse:
-    return api_project_control_support.build_audit_insights(
+    return project_control_support.build_audit_insights(
         session, project_id=project_id
     )
 

@@ -1,5 +1,7 @@
 # ForWin 三层 Plan 与人机边界解耦计划
 
+> 状态：historical-plan。当前实现与入口以 `Design-docs/CURRENT_ARCHITECTURE.md` 为准；本文保留用于解释旧耦合来源，不再作为实施契约。
+
 > 代码基线：`Ctwqk/ForWin@0f7b802b171b7c60c8d111a1844f231584a65c79`  
 > 目标：把 Arc / Band / Chapter 三层计划机制、Genesis 设计器、写作更新节奏规划器、发布/上传自动化的职责边界拆清楚，让“人类交互模块”和“后台自动化模块”不再互相穿透。
 

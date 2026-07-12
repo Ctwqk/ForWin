@@ -205,7 +205,6 @@ def _review_candidate(
     context,
     writer_output: WriterOutput,
 ) -> tuple[WriterOutput, ReviewVerdict, bool]:
-    current_context = context
     current_output = writer_output
     current_writer_trace_id = self._save_prompt_trace_payload(
         session=session,
@@ -316,7 +315,6 @@ def _review_candidate(
         current_draft=current_draft,
         current_review=current_review,
         current_review_row=current_review_row,
-        current_writer_trace_id=current_writer_trace_id,
         current_review_trace_id=current_review_trace_id,
         current_review_event=current_review_event,
         repair_phase=REVIEW_REPAIR_PHASE,
@@ -386,7 +384,6 @@ def _repair_canon_block(
         current_draft=current_draft,
         current_review=synthetic_review,
         current_review_row=current_review_row,
-        current_writer_trace_id="",
         current_review_trace_id="",
         current_review_event=current_review_event,
         repair_phase=CANON_REPAIR_PHASE,
@@ -407,7 +404,6 @@ def _run_repair_loop_for_phase(
     current_draft: ChapterDraft,
     current_review: ReviewVerdict,
     current_review_row: ChapterReview,
-    current_writer_trace_id: str,
     current_review_trace_id: str,
     current_review_event,
     repair_phase: str,
@@ -932,7 +928,6 @@ def _run_repair_loop_for_phase(
         current_draft = rewritten_draft
         current_review = rewritten_review
         current_review_row = rewritten_review_row
-        current_writer_trace_id = rewritten_writer_trace_id
         if rewritten_review.verdict != "fail":
             return rewritten_output, rewritten_review, False
 

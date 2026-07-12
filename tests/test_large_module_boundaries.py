@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +27,7 @@ NEW_MODULE_MAX_LINES = 1100
 
 def test_giant_module_public_imports_remain_available() -> None:
     from forwin.project_payloads import build_project_detail, build_project_summaries
-    from forwin.api_schema import GenerateRequest, ProjectDetail, ProjectSummary
+    from forwin.api_schema import ProjectDetail, ProjectSummary
     from forwin.genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
     from forwin.context.assembler_core import ChapterContextAssembler, assemble_context
     from forwin.generation.pipeline import ChapterPipeline
@@ -43,7 +42,6 @@ def test_giant_module_public_imports_remain_available() -> None:
 
     assert build_project_detail is not None
     assert build_project_summaries is not None
-    assert GenerateRequest is not None
     assert ProjectDetail is not None
     assert ProjectSummary is not None
     assert BookGenesisService is not None

@@ -92,5 +92,3 @@ class EvalRunConfig(BaseModel):
     warmup_rounds: int = 1
     rounds: int = 1
     debug_save_redacted_io: bool = False
-    allow_production_data: bool = False
-    base_url: str = ""

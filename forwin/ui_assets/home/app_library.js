@@ -707,6 +707,10 @@
           closeGenesisWorkspace();
           return;
         }
+        if (id === 'review_modal_shell') {
+          closeReviewModal();
+          return;
+        }
         document.getElementById(id).classList.remove('open');
       }
     }

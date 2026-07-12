@@ -9,14 +9,11 @@ from sqlalchemy import select
 
 from forwin.api_schema import (
     CodexBridgeStatusResponse,
-    GenerateRequest,
     RuntimeCatalogResponse,
     runtime_catalog,
 )
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.audit import DecisionEvent
-from forwin.models.project import Project
-from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.review.decision.dashboard import build_waiting_review_breakdown
 
 
@@ -30,12 +27,6 @@ def build_handlers(
     get_session: Callable[[], Any],
     render_home_page: Callable[..., str],
     render_publishers_page: Callable[..., str],
-    create_generation_task: Callable[..., str],
-    serialize_task: Callable[..., Any],
-    get_generation_task_or_404: Callable[[str], dict[str, Any]],
-    project_has_active_generation_task: Callable[..., bool],
-    generation_task_conflict_message: Callable[[str], str],
-    active_generation_task_error_cls: type[Exception],
     get_memory_index: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[..., Any]]:
     def health():
@@ -85,55 +76,6 @@ def build_handlers(
         if config is None:
             raise HTTPException(503, "服务尚未初始化")
         return runtime_catalog(config)
-
-    def generate(req: GenerateRequest):
-        config = get_config()
-        if not config:
-            raise HTTPException(503, "服务尚未初始化")
-
-        normalized_project_id = str(req.project_id or "").strip()
-        if not normalized_project_id:
-            raise HTTPException(400, "v5 generation requires an existing project_id")
-        task_title = (req.premise or "").strip()[:36] or "未命名生成任务"
-        task_subtitle = f"{req.genre} · {req.num_chapters} 章"
-        session = get_session()
-        try:
-            project = session.get(Project, normalized_project_id)
-            if project is None:
-                raise HTTPException(404, "项目不存在")
-            if str(project.creation_status or "") in {"creating", "genesis_ready"}:
-                raise HTTPException(
-                    409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。"
-                )
-            if project_has_active_generation_task(
-                normalized_project_id, session=session
-            ):
-                raise HTTPException(
-                    409, generation_task_conflict_message(normalized_project_id)
-                )
-            policy_record = ProjectPolicyStore(session).load(project)
-            task_policy = policy_record.policy
-            task_title = project.title or task_title
-            task_subtitle = f"书本生成 · {project.genre} · {req.num_chapters} 章"
-        finally:
-            session.close()
-
-        model_profile = config.resolve_model_profile(task_policy.model_profile_id)
-        if not model_profile.api_key and not config.codex_enabled:
-            raise HTTPException(400, "所选模型 profile 未配置 API Key。")
-
-        try:
-            task_id = create_generation_task(
-                premise=req.premise,
-                genre=req.genre,
-                num_chapters=req.num_chapters,
-                project_id=normalized_project_id,
-                title=task_title,
-                subtitle=task_subtitle,
-            )
-        except active_generation_task_error_cls as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return serialize_task(task_id, get_generation_task_or_404(task_id))
 
     def get_codex_bridge_status() -> CodexBridgeStatusResponse:
         config = get_config()
@@ -211,7 +153,6 @@ def build_handlers(
         "home_page": home_page,
         "publishers_page": publishers_page,
         "get_runtime_catalog": get_runtime_catalog,
-        "generate": generate,
         "get_codex_bridge_status": get_codex_bridge_status,
     }
 

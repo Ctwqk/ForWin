@@ -3,11 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from forwin.protocol.experience import ChapterExperiencePlan
-from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.protocol.review import RepairInstruction
 
 
-def test_api_genesis_service_uses_runtime_container_when_available(monkeypatch) -> None:
-    from forwin import api as api_module
+def test_api_genesis_service_uses_runtime_container_when_available() -> None:
+    from forwin.http import HttpRuntime
 
     service = SimpleNamespace(
         llm_client=SimpleNamespace(client=SimpleNamespace(close=lambda: None))
@@ -17,17 +17,12 @@ def test_api_genesis_service_uses_runtime_container_when_available(monkeypatch) 
         def services(self):
             return SimpleNamespace(book_genesis=service)
 
-    old_container = api_module._runtime_container
-    try:
-        api_module._runtime_container = FakeContainer()
+    runtime = HttpRuntime(container=FakeContainer())
+    built = runtime.build_genesis_service()
 
-        built = api_module._build_genesis_service()
-
-        assert built is service
-        assert getattr(built, "_forwin_runtime_owned") is True
-        api_module._close_genesis_service(built)
-    finally:
-        api_module._runtime_container = old_container
+    assert built is service
+    assert getattr(built, "_forwin_runtime_owned") is True
+    runtime.close_genesis_service(built)
 
 
 def test_api_automation_can_use_runtime_production_scheduler_factory() -> None:

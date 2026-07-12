@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from forwin.api_book_state_routes import build_handlers
+from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.api_schema import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateRepository
 from forwin.book_state.schema import validate_world_node

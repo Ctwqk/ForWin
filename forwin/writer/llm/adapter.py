@@ -9,18 +9,17 @@ import httpx
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.model_adapter import ModelCapabilities
-
-logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v3.8-stage-aware-hard-replacement"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
-
 from .embeddings import EmbeddingsMixin
 from .errors import ErrorsMixin
 from .profile_options import ProfileOptionsMixin
 from .routing import RoutingMixin
 from .telemetry import TelemetryMixin
 from .transport import TransportMixin
+
+logger = logging.getLogger(__name__)
+_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+_LLM_ROUTE_POLICY_VERSION = "v3.8-stage-aware-hard-replacement"
+_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 class OpenAICompatibleAdapter(
@@ -242,7 +241,6 @@ class OpenAICompatibleAdapter(
         effective_request_timeout = self._effective_timeout_for_profile(
             profile,
             request_timeout,
-            llm_task_route=llm_task_route,
             explicit_timeout=explicit_timeout,
         )
         effective_response_format = self._effective_response_format_for_profile(

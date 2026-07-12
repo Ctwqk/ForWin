@@ -396,6 +396,10 @@ def decision_refs_for_chapter_review(
         DecisionEventType.CANON_COMMIT,
         DecisionEventType.CANON_COMMIT_FAILED,
         DecisionEventType.HARD_GATE_HIT,
+        DecisionEventType.GATE_DELEGATION_REQUESTED,
+        DecisionEventType.GATE_DELEGATION_DECIDED,
+        DecisionEventType.GATE_DELEGATION_FAILED,
+        DecisionEventType.GATE_DELEGATION_APPROVED,
     }
     ordered: dict[str, DecisionEventInfo] = {}
     rows = list_decision_event_rows(

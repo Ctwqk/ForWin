@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from forwin.api_projection_routes import build_handlers as build_projection_handlers
+from forwin.http.adapters.api_projection_routes import build_handlers as build_projection_handlers
 from forwin.book_state import BookStateRepository
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db

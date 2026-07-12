@@ -9,24 +9,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select
-from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
-from forwin.api_task_center_service import TaskCenterService
-from forwin.api_task_history import augment_task_with_rehearsal_history
+from forwin.application.task_center import TaskCenterService
 from forwin.api_schema import (
     GenerationControlInfo,
     TaskCenterItemResponse,
     TaskSummaryResponse,
 )
-from forwin.models.project import Project, ChapterPlan
 from forwin.models.task import GenerationTask
 import forwin.models.phase  # noqa: F401
-
-logger = logging.getLogger(__name__)
-
-from forwin.api_core import state as api_state
-from forwin.application.errors import ActiveGenerationTaskError
-from forwin.api_core.runtime import (
+from forwin.http.request_support import (
     _coerce_int_list,
     _display_datetime,
     _get_session,
@@ -35,6 +28,14 @@ from forwin.api_core.runtime import (
     _json_load_object,
     _utcnow,
 )
+from forwin.http.runtime import (
+    GENERATION_TERMINAL_STAGE_BY_STATUS,
+    GENERATION_TERMINAL_STATUSES,
+    HttpRuntime,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def _generation_task_conflict_message(project_id: str) -> str:
@@ -156,17 +157,24 @@ def _apply_generation_task_to_row(
         row.finished_at = None
 
 
-def _sync_task_cache(task_id: str, task: dict[str, Any] | None) -> None:
-    with api_state._tasks_lock:
+def _sync_task_cache(
+    runtime: HttpRuntime,
+    task_id: str,
+    task: dict[str, Any] | None,
+) -> None:
+    with runtime.tasks_lock:
         if task is None or task.get("deleted"):
-            api_state._tasks.pop(task_id, None)
+            runtime.tasks.pop(task_id, None)
         else:
-            api_state._tasks[task_id] = dict(task)
+            runtime.tasks[task_id] = dict(task)
 
 
-def _cached_generation_task(task_id: str) -> dict[str, Any] | None:
-    with api_state._tasks_lock:
-        task = api_state._tasks.get(task_id)
+def _cached_generation_task(
+    runtime: HttpRuntime,
+    task_id: str,
+) -> dict[str, Any] | None:
+    with runtime.tasks_lock:
+        task = runtime.tasks.get(task_id)
         return dict(task) if task is not None else None
 
 
@@ -185,31 +193,33 @@ def _coerce_task_datetime(value: Any) -> datetime:
     return timestamp.astimezone(timezone.utc)
 
 
-def _get_task_center_service() -> TaskCenterService:
-    if api_state._task_center_service is not None:
-        return api_state._task_center_service
+def _get_task_center_service(runtime: HttpRuntime) -> TaskCenterService:
+    if runtime.task_center_service is not None:
+        return runtime.task_center_service
 
     def _iter_cached_generation_tasks() -> list[tuple[str, dict[str, Any]]]:
-        with api_state._tasks_lock:
-            return [(task_id, dict(task)) for task_id, task in api_state._tasks.items()]
+        with runtime.tasks_lock:
+            return [(task_id, dict(task)) for task_id, task in runtime.tasks.items()]
 
-    api_state._task_center_service = TaskCenterService(
-        get_session=_get_session,
-        has_db_session=lambda: api_state._SessionFactory is not None,
-        prune_tasks=_prune_tasks,
+    runtime.task_center_service = TaskCenterService(
+        get_session=lambda: _get_session(runtime),
+        has_db_session=lambda: runtime.session_factory is not None,
+        prune_task_cache=lambda: _prune_tasks(runtime, include_db=False),
         utcnow=_utcnow,
         display_datetime=_display_datetime,
         coerce_task_datetime=_coerce_task_datetime,
         new_stage_history_entry=_new_stage_history_entry,
-        cached_generation_task=_cached_generation_task,
+        cached_generation_task=lambda task_id: _cached_generation_task(
+            runtime, task_id
+        ),
         iter_cached_generation_tasks=_iter_cached_generation_tasks,
         prefer_cached_generation_task=_prefer_cached_generation_task,
         generation_task_from_row=_generation_task_from_row,
-        config_provider=lambda: api_state._config,
-        terminal_statuses=api_state._GENERATION_TERMINAL_STATUSES,
-        terminal_stage_by_status=api_state._GENERATION_TERMINAL_STAGE_BY_STATUS,
+        config_provider=lambda: runtime.config,
+        terminal_statuses=GENERATION_TERMINAL_STATUSES,
+        terminal_stage_by_status=GENERATION_TERMINAL_STAGE_BY_STATUS,
     )
-    return api_state._task_center_service
+    return runtime.task_center_service
 
 
 def _task_history_len(task: dict[str, Any] | None) -> int:
@@ -238,32 +248,15 @@ def _prefer_cached_generation_task(
     return persisted
 
 
-def _task_has_stage(task: dict[str, Any], stage: str) -> bool:
-    return _get_task_center_service().task_has_stage(task, stage)
-
-
-def _normalize_loaded_generation_task(task: dict[str, Any]) -> dict[str, Any]:
-    return _get_task_center_service().normalize_loaded_generation_task(task)
-
-
 def _apply_task_visibility_rules(
+    runtime: HttpRuntime,
     task: dict[str, Any] | None,
     *,
     include_deleted: bool,
 ) -> dict[str, Any] | None:
-    return _get_task_center_service().apply_task_visibility_rules(
+    return _get_task_center_service(runtime).apply_task_visibility_rules(
         task,
         include_deleted=include_deleted,
-    )
-
-
-def _augment_task_with_provisional_history(
-    session, task: dict[str, Any]
-) -> dict[str, Any]:
-    return augment_task_with_rehearsal_history(
-        session,
-        task,
-        display_datetime=_display_datetime,
     )
 
 
@@ -341,45 +334,55 @@ def _run_generation_task_db_write(
 
 
 def _mark_task_persistence_degraded(
-    task_id: str, task: dict[str, Any], exc: Exception
+    runtime: HttpRuntime,
+    task_id: str,
+    task: dict[str, Any],
+    exc: Exception,
 ) -> None:
     task["persistence_degraded"] = True
     task["persistence_error"] = str(exc)
     task["updated_at"] = _utcnow()
-    _sync_task_cache(task_id, task)
+    _sync_task_cache(runtime, task_id, task)
 
 
-def _clear_task_persistence_degraded(task_id: str, task: dict[str, Any]) -> None:
+def _clear_task_persistence_degraded(
+    runtime: HttpRuntime,
+    task_id: str,
+    task: dict[str, Any],
+) -> None:
     if task.get("persistence_degraded") or task.get("persistence_error"):
         task["persistence_degraded"] = False
         task["persistence_error"] = None
-        _sync_task_cache(task_id, task)
+        _sync_task_cache(runtime, task_id, task)
 
 
-def _prune_generation_tasks_db(now: datetime | None = None) -> None:
-    if api_state._SessionFactory is None:
+def _prune_generation_tasks_db(
+    runtime: HttpRuntime,
+    now: datetime | None = None,
+) -> None:
+    if runtime.session_factory is None:
         return
 
     current = now or _utcnow()
-    if api_state._last_generation_task_db_prune_at is not None:
+    if runtime.last_generation_task_db_prune_at is not None:
         elapsed = (
-            current - api_state._last_generation_task_db_prune_at
+            current - runtime.last_generation_task_db_prune_at
         ).total_seconds()
-        if elapsed < api_state._TASK_DB_PRUNE_INTERVAL_SECONDS:
+        if elapsed < runtime.task_db_prune_interval_seconds:
             return
 
-    api_state._last_generation_task_db_prune_at = current
-    cutoff = current - timedelta(seconds=api_state._TASK_RETENTION_SECONDS)
+    runtime.last_generation_task_db_prune_at = current
+    cutoff = current - timedelta(seconds=runtime.task_retention_seconds)
 
     def _operation() -> None:
-        with _get_session() as session:
+        with _get_session(runtime) as session:
             session.execute(
                 delete(GenerationTask).where(
                     or_(
                         GenerationTask.deleted_at.is_not(None),
                         (
                             GenerationTask.status.in_(
-                                tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                                tuple(GENERATION_TERMINAL_STATUSES)
                             )
                             & (GenerationTask.updated_at < cutoff)
                         ),
@@ -391,7 +394,7 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
                     GenerationTask.deleted_at.is_(None)
                 )
             ).scalar_one()
-            overflow = max(0, int(total_rows or 0) - api_state._MAX_TASKS)
+            overflow = max(0, int(total_rows or 0) - runtime.max_tasks)
             if overflow:
                 overflow_ids = (
                     session.execute(
@@ -399,7 +402,7 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
                         .where(
                             GenerationTask.deleted_at.is_(None),
                             GenerationTask.status.in_(
-                                tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                                tuple(GENERATION_TERMINAL_STATUSES)
                             ),
                         )
                         .order_by(GenerationTask.updated_at.asc())
@@ -425,31 +428,34 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
     )
 
 
-def _prune_tasks(*, include_db: bool = True) -> None:
+def _prune_tasks(runtime: HttpRuntime, *, include_db: bool = True) -> None:
     now = _utcnow()
-    with api_state._tasks_lock:
+    with runtime.tasks_lock:
         stale_ids = [
             task_id
-            for task_id, task in api_state._tasks.items()
+            for task_id, task in runtime.tasks.items()
             if task.get("deleted")
             or (
-                task.get("status") in api_state._GENERATION_TERMINAL_STATUSES
+                task.get("status") in GENERATION_TERMINAL_STATUSES
                 and (now - task.get("updated_at", now)).total_seconds()
-                > api_state._TASK_RETENTION_SECONDS
+                > runtime.task_retention_seconds
             )
         ]
         for task_id in stale_ids:
-            api_state._tasks.pop(task_id, None)
+            runtime.tasks.pop(task_id, None)
 
     if include_db:
-        _prune_generation_tasks_db(now)
+        _prune_generation_tasks_db(runtime, now)
 
 
 def _load_generation_task(
-    task_id: str, *, include_deleted: bool = False
+    runtime: HttpRuntime,
+    task_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> dict[str, Any] | None:
     try:
-        return _get_task_center_service().load_generation_task(
+        return _get_task_center_service(runtime).load_generation_task(
             task_id,
             include_deleted=include_deleted,
         )
@@ -461,60 +467,25 @@ def _load_generation_task(
             task_id,
         )
         return _apply_task_visibility_rules(
-            _cached_generation_task(task_id),
+            runtime,
+            _cached_generation_task(runtime, task_id),
             include_deleted=include_deleted,
         )
 
 
-def _persist_generation_task(task_id: str, task: dict[str, Any]) -> None:
-    _sync_task_cache(task_id, task)
-    if api_state._SessionFactory is None:
-        return
-
-    def _operation() -> None:
-        with _get_session() as session:
-            row = session.get(GenerationTask, task_id)
-            if row is None:
-                row = GenerationTask(id=task_id)
-            _apply_generation_task_to_row(row, task)
-            session.add(row)
-            session.commit()
-
-    try:
-        _run_generation_task_db_write(
-            _operation, context=f"persist_generation_task:{task_id}"
-        )
-    except IntegrityError as exc:
-        _sync_task_cache(task_id, None)
-        project_id = str(task.get("project_id", "") or "").strip()
-        if "ux_generation_tasks_one_active_per_project" in str(exc):
-            raise ActiveGenerationTaskError(
-                _generation_task_conflict_message(project_id)
-                if project_id
-                else "已有运行中的生成任务，请先终止或等待当前任务完成。"
-            ) from exc
-        raise
-    except GenerationTaskPersistenceError as exc:
-        if task.get("status") in api_state._GENERATION_TERMINAL_STATUSES:
-            raise
-        _mark_task_persistence_degraded(task_id, task, exc)
-    else:
-        _clear_task_persistence_degraded(task_id, task)
-
-
-def _recover_interrupted_generation_tasks() -> list[str]:
-    if api_state._SessionFactory is None:
+def recover_interrupted_generation_tasks(runtime: HttpRuntime) -> list[str]:
+    if runtime.session_factory is None:
         return []
 
     now = _utcnow()
     recovered_ids: list[str] = []
-    with _get_session() as session:
+    with _get_session(runtime) as session:
         rows = (
             session.execute(
                 select(GenerationTask).where(
                     GenerationTask.deleted_at.is_(None),
                     GenerationTask.status.notin_(
-                        tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                        tuple(GENERATION_TERMINAL_STATUSES)
                     ),
                 )
             )
@@ -565,7 +536,7 @@ def _recover_interrupted_generation_tasks() -> list[str]:
                     )
                 )
                 task["stage_history"] = history
-            if task.get("status") in api_state._GENERATION_TERMINAL_STATUSES:
+            if task.get("status") in GENERATION_TERMINAL_STATUSES:
                 task["finished_at"] = now
             _apply_generation_task_to_row(row, task, now=now)
             recovered_ids.append(row.id)
@@ -590,7 +561,7 @@ def _new_stage_history_entry(
 
 
 def _task_is_terminal(status: str) -> bool:
-    return status in api_state._GENERATION_TERMINAL_STATUSES
+    return status in GENERATION_TERMINAL_STATUSES
 
 
 def _task_is_terminable(task: dict[str, Any]) -> bool:
@@ -644,50 +615,6 @@ def _task_recovery_suggestion(task: dict[str, Any]) -> str:
     if task.get("frozen_artifacts"):
         return "check_artifact"
     return ""
-
-
-def _create_task_record(
-    message: str = "",
-    *,
-    title: str = "",
-    subtitle: str = "",
-    requested_chapters: int = 0,
-    task_kind: str = "generation",
-) -> dict[str, Any]:
-    now = _utcnow()
-    _prune_tasks()
-    return {
-        "task_kind": task_kind,
-        "status": "queued",
-        "title": title,
-        "subtitle": subtitle,
-        "project_id": None,
-        "extension_client_id": "",
-        "error": None,
-        "message": message,
-        "current_stage": "queued",
-        "stage_history": [_new_stage_history_entry("queued", now=now, message=message)],
-        "requested_chapters": int(requested_chapters or 0),
-        "current_chapter": 0,
-        "completed_chapters": [],
-        "failed_chapters": [],
-        "paused_chapters": [],
-        "frozen_artifacts": [],
-        "cancel_requested": False,
-        "pause_requested": False,
-        "lease_owner": "",
-        "lease_expires_at": None,
-        "heartbeat_at": None,
-        "resume_from_chapter": 0,
-        "run_until_chapter": 0,
-        "max_chapters": 0,
-        "execution_payload": {},
-        "deleted": False,
-        "persistence_degraded": False,
-        "persistence_error": None,
-        "created_at": now,
-        "updated_at": now,
-    }
 
 
 def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
@@ -786,40 +713,24 @@ def _serialize_upload_task_center_item(
     )
 
 
-def _project_task_id(project_id: str) -> str:
-    return _get_task_center_service().project_task_id(project_id)
+def _parse_project_task_id(runtime: HttpRuntime, task_id: str) -> str | None:
+    return _get_task_center_service(runtime).parse_project_task_id(task_id)
 
 
-def _parse_project_task_id(task_id: str) -> str | None:
-    return _get_task_center_service().parse_project_task_id(task_id)
+def _list_project_backed_task_items(
+    runtime: HttpRuntime,
+    limit: int,
+) -> list[TaskCenterItemResponse]:
+    return _get_task_center_service(runtime).list_project_backed_task_items(limit)
 
 
-def _load_project_task_center_plans(
-    session, project_ids: list[str]
-) -> dict[str, list[ChapterPlan]]:
-    return _get_task_center_service()._load_project_task_center_plans(
-        session, project_ids
-    )
-
-
-def _build_project_task_center_item(
-    project: Project,
-    plans: list[ChapterPlan],
+def _get_project_backed_task_item_or_404(
+    runtime: HttpRuntime,
+    task_id: str,
 ) -> TaskCenterItemResponse:
-    return _get_task_center_service()._build_project_task_center_item(
-        project,
-        plans,
-        latest_band_checkpoint=None,
-        decision_events=[],
+    return _get_task_center_service(runtime).get_project_backed_task_item_or_404(
+        task_id
     )
-
-
-def _list_project_backed_task_items(limit: int) -> list[TaskCenterItemResponse]:
-    return _get_task_center_service().list_project_backed_task_items(limit)
-
-
-def _get_project_backed_task_item_or_404(task_id: str) -> TaskCenterItemResponse:
-    return _get_task_center_service().get_project_backed_task_item_or_404(task_id)
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

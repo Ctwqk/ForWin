@@ -81,7 +81,7 @@ class LintSignalCollector:
                         message=str(item.get("Message") or "Vale finding"),
                         line=int(item.get("Line") or 0),
                         evidence_refs=[
-                            f"tool=vale",
+                            "tool=vale",
                             f"line={item.get('Line', 0)}",
                             f"span={item.get('Span', [])}",
                         ],

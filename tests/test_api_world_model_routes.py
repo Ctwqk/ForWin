@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from forwin import api_world_model_routes
+from forwin.http.adapters import api_world_model_routes
 
 
 def test_world_studio_asset_rejects_common_prefix_sibling(tmp_path, monkeypatch) -> None:

@@ -11,6 +11,7 @@ from forwin.project_payloads import build_project_detail
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.api_schema import (
     CandidateDraftDetail,
+    ChapterDecisionLayerInfo,
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
@@ -40,6 +41,7 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import load_latest_rewrite_attempts_by_chapter
+from .common import _load_json_object
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -53,17 +55,361 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "paused",
 }
 
-from .common import (
-    _load_json_object,
-)
-
-
 def latest_rewrite_attempts_by_chapter(
     session,
     project_id: str,
     chapter_numbers: list[int] | None = None,
 ) -> dict[int, ChapterRewriteAttempt]:
     return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
+
+
+def _decision_refs_for_types(
+    decision_refs: list[Any],
+    event_types: set[str],
+) -> list[Any]:
+    matching = [
+        event
+        for event in decision_refs
+        if str(getattr(event, "event_type", "") or "") in event_types
+    ]
+    return sorted(
+        matching,
+        key=lambda event: (
+            str(getattr(event, "created_at", "") or ""),
+            str(getattr(event, "id", "") or ""),
+        ),
+    )
+
+
+def _unique_refs(*groups: Any) -> list[str]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        values = group if isinstance(group, (list, tuple, set)) else [group]
+        for value in values:
+            normalized = str(value or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            refs.append(normalized)
+    return refs
+
+
+def _event_evidence_refs(events: list[Any]) -> list[str]:
+    refs: list[str] = []
+    for event in events:
+        payload = getattr(event, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        refs.extend(
+            _unique_refs(
+                f"decision_event:{getattr(event, 'id', '')}",
+                f"prompt_trace:{payload.get('trace_id', '')}"
+                if payload.get("trace_id")
+                else "",
+                payload.get("evidence", []),
+                payload.get("missing_evidence", []),
+            )
+        )
+    return _unique_refs(refs)
+
+
+def _build_decision_layers(
+    *,
+    review: Any,
+    review_meta: dict[str, Any],
+    issues: list[dict[str, Any]],
+    rewrite_attempts: list[Any],
+    candidate: Any | None,
+    decision_refs: list[Any],
+) -> list[ChapterDecisionLayerInfo]:
+    draft_refs = _decision_refs_for_types(
+        decision_refs,
+        {DecisionEventType.REVIEW_VERDICT_RECORDED},
+    )
+    issue_evidence = [
+        ref
+        for issue in issues
+        if isinstance(issue, dict)
+        for ref in issue.get("evidence_refs", []) or []
+    ]
+    verdict = str(getattr(review, "verdict", "") or "").strip() or "unknown"
+    layers = [
+        ChapterDecisionLayerInfo(
+            layer="draft_review",
+            status="complete",
+            outcome=verdict,
+            summary=str(
+                review_meta.get("review_summary")
+                or review_meta.get("recommended_action")
+                or "草稿评审已记录。"
+            ),
+            blocking=verdict == "fail",
+            evidence_refs=_unique_refs(
+                review_meta.get("evidence_refs", []),
+                issue_evidence,
+                _event_evidence_refs(draft_refs),
+            ),
+            decision_refs=draft_refs,
+        )
+    ]
+
+    repair_refs = _decision_refs_for_types(
+        decision_refs,
+        {
+            DecisionEventType.REPAIR_STARTED,
+            DecisionEventType.REPAIR_FAILED,
+            DecisionEventType.REPAIR_SUCCEEDED,
+        },
+    )
+    if rewrite_attempts:
+        latest_attempt = rewrite_attempts[0]
+        failure_reason = str(getattr(latest_attempt, "failure_reason", "") or "")
+        result_verdict = str(getattr(latest_attempt, "result_verdict", "") or "")
+        verification = _load_json_object(
+            getattr(latest_attempt, "verification_json", "{}"), {}
+        )
+        verification_blocked = bool(verification) and (
+            not bool(verification.get("fixed_all_must_fix"))
+            or not bool(verification.get("preserved_all_must_preserve"))
+        )
+        repair_failed = bool(failure_reason) or result_verdict == "fail"
+        repair_pending = not repair_failed and not result_verdict
+        repair_status = (
+            "failed" if repair_failed else "pending" if repair_pending else "complete"
+        )
+        repair_outcome = (
+            "failed"
+            if repair_failed
+            else result_verdict or "verification_pending"
+        )
+        repair_scope = normalize_repair_scope(
+            getattr(latest_attempt, "repair_scope", ""), default=""
+        )
+        layers.append(
+            ChapterDecisionLayerInfo(
+                layer="repair",
+                status=repair_status,
+                outcome=repair_outcome,
+                summary=(
+                    failure_reason
+                    or f"已执行 {len(rewrite_attempts)} 次修复；最新范围：{repair_scope or '未标注'}。"
+                ),
+                blocking=repair_failed or repair_pending or verification_blocked,
+                evidence_refs=_unique_refs(
+                    f"rewrite_attempt:{getattr(latest_attempt, 'id', '')}",
+                    f"source_draft:{getattr(latest_attempt, 'source_draft_id', '')}",
+                    f"result_draft:{getattr(latest_attempt, 'result_draft_id', '')}",
+                    f"result_review:{getattr(latest_attempt, 'result_review_id', '')}",
+                    _event_evidence_refs(repair_refs),
+                ),
+                decision_refs=repair_refs,
+            )
+        )
+    else:
+        repair_required = verdict == "fail"
+        layers.append(
+            ChapterDecisionLayerInfo(
+                layer="repair",
+                status="pending" if repair_required else "not_required",
+                outcome="not_started" if repair_required else "not_required",
+                summary=(
+                    "草稿评审要求修复，但尚无修复尝试。"
+                    if repair_required
+                    else "当前草稿评审不需要修复。"
+                ),
+                blocking=repair_required,
+                evidence_refs=_event_evidence_refs(repair_refs),
+                decision_refs=repair_refs,
+            )
+        )
+
+    residual_refs = _decision_refs_for_types(
+        decision_refs,
+        {
+            DecisionEventType.FORCED_ACCEPT_APPLIED,
+            DecisionEventType.HARD_GATE_HIT,
+        },
+    )
+    final_residual = review_meta.get("final_residual_decision")
+    if isinstance(final_residual, dict):
+        residual_outcome = str(final_residual.get("decision") or "unknown")
+        residual_blocking = residual_outcome != "force_accept"
+        residual_status = "blocked" if residual_blocking else "complete"
+        residual_summary = str(
+            final_residual.get("reason") or "最终残余资格判定已完成。"
+        )
+        residual_evidence = _unique_refs(
+            [
+                f"residual_issue:{item}"
+                for item in final_residual.get("residual_issues", []) or []
+            ],
+            _event_evidence_refs(residual_refs),
+        )
+    else:
+        eligibility = (
+            _load_json_object(candidate.eligibility_decision_json, {})
+            if candidate is not None
+            else {}
+        )
+        if eligibility:
+            eligible = bool(eligibility.get("eligible"))
+            residual_outcome = "eligible" if eligible else "ineligible"
+            residual_status = "complete" if eligible else "blocked"
+            residual_blocking = not eligible
+            residual_summary = str(
+                eligibility.get("reason")
+                or (
+                    "候选稿已通过 Canon 资格检查。"
+                    if eligible
+                    else "候选稿未通过 Canon 资格检查。"
+                )
+            )
+            residual_evidence = _unique_refs(
+                f"candidate:{getattr(candidate, 'id', '')}",
+                f"body_hash:{eligibility.get('body_hash', '')}",
+                f"plan_revision:{eligibility.get('plan_revision', '')}",
+                _event_evidence_refs(residual_refs),
+            )
+        elif candidate is not None and str(candidate.status or "") in {
+            "needs_review",
+            "failed",
+        }:
+            residual_outcome = "ineligible"
+            residual_status = "blocked"
+            residual_blocking = True
+            residual_summary = str(candidate.failure_reason or "候选稿资格被阻断。")
+            residual_evidence = _unique_refs(
+                f"candidate:{candidate.id}",
+                _event_evidence_refs(residual_refs),
+            )
+        else:
+            residual_outcome = "not_evaluated"
+            residual_status = "pending"
+            residual_blocking = True
+            residual_summary = "尚未形成最终残余资格判定。"
+            residual_evidence = _event_evidence_refs(residual_refs)
+    layers.append(
+        ChapterDecisionLayerInfo(
+            layer="residual_eligibility",
+            status=residual_status,
+            outcome=residual_outcome,
+            summary=residual_summary,
+            blocking=residual_blocking,
+            evidence_refs=residual_evidence,
+            decision_refs=residual_refs,
+        )
+    )
+
+    gate_types = {
+        DecisionEventType.GATE_DELEGATION_REQUESTED,
+        DecisionEventType.GATE_DELEGATION_DECIDED,
+        DecisionEventType.GATE_DELEGATION_FAILED,
+        DecisionEventType.GATE_DELEGATION_APPROVED,
+    }
+    gate_refs = _decision_refs_for_types(decision_refs, gate_types)
+    if not gate_refs:
+        gate_status = "not_required"
+        gate_outcome = "not_delegated"
+        gate_summary = "本章未调用委托门禁。"
+        gate_blocking = False
+    else:
+        latest_gate = gate_refs[-1]
+        latest_type = str(getattr(latest_gate, "event_type", "") or "")
+        payload = getattr(latest_gate, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if latest_type == DecisionEventType.GATE_DELEGATION_APPROVED:
+            gate_status, gate_outcome, gate_blocking = "complete", "approved", False
+        elif latest_type == DecisionEventType.GATE_DELEGATION_FAILED:
+            gate_status, gate_outcome, gate_blocking = "failed", "failed", True
+        elif latest_type == DecisionEventType.GATE_DELEGATION_DECIDED:
+            gate_outcome = str(payload.get("decision") or "unknown")
+            gate_status = "complete"
+            gate_blocking = gate_outcome != "approve"
+        else:
+            gate_status, gate_outcome, gate_blocking = "pending", "pending", True
+        gate_summary = str(
+            getattr(latest_gate, "summary", "")
+            or getattr(latest_gate, "reason", "")
+            or "委托门禁已记录。"
+        )
+    layers.append(
+        ChapterDecisionLayerInfo(
+            layer="gate_delegation",
+            status=gate_status,
+            outcome=gate_outcome,
+            summary=gate_summary,
+            blocking=gate_blocking,
+            evidence_refs=_event_evidence_refs(gate_refs),
+            decision_refs=gate_refs,
+        )
+    )
+
+    canon_refs = _decision_refs_for_types(
+        decision_refs,
+        {DecisionEventType.CANON_COMMIT, DecisionEventType.CANON_COMMIT_FAILED},
+    )
+    if candidate is None:
+        canon_status, canon_outcome, canon_blocking = "missing", "no_candidate", True
+        canon_summary = "缺少候选稿记录，无法确认 Canon 状态。"
+        canon_evidence: list[str] = _event_evidence_refs(canon_refs)
+    else:
+        candidate_status = str(candidate.status or "")
+        candidate_canon_status = str(candidate.canon_status or "candidate")
+        commit_id = str(candidate.canon_commit_id or "")
+        if (
+            candidate_status == "accepted"
+            and candidate_canon_status == "canon"
+            and commit_id
+        ):
+            canon_status, canon_outcome, canon_blocking = (
+                "complete",
+                "committed",
+                False,
+            )
+            canon_summary = f"Canon 已提交：{commit_id}"
+        elif candidate_status in {"needs_review", "failed"}:
+            canon_status, canon_outcome, canon_blocking = (
+                "blocked",
+                candidate_status,
+                True,
+            )
+            canon_summary = str(candidate.failure_reason or "Canon 提交被阻断。")
+        elif candidate_status == "accepted":
+            canon_status, canon_outcome, canon_blocking = (
+                "blocked",
+                "inconsistent_commit",
+                True,
+            )
+            canon_summary = "候选稿标记 accepted，但缺少完整 Canon commit 身份。"
+        else:
+            canon_status, canon_outcome, canon_blocking = (
+                "pending",
+                candidate_status or candidate_canon_status,
+                True,
+            )
+            canon_summary = "候选稿尚未完成 Canon 原子提交。"
+        canon_evidence = _unique_refs(
+            f"candidate:{candidate.id}",
+            f"canon_commit:{commit_id}" if commit_id else "",
+            f"canon_artifact:{candidate.canon_artifact_path}"
+            if candidate.canon_artifact_path
+            else "",
+            _event_evidence_refs(canon_refs),
+        )
+    layers.append(
+        ChapterDecisionLayerInfo(
+            layer="canon",
+            status=canon_status,
+            outcome=canon_outcome,
+            summary=canon_summary,
+            blocking=canon_blocking,
+            evidence_refs=canon_evidence,
+            decision_refs=canon_refs,
+        )
+    )
+    return layers
 
 
 def get_chapter_review(
@@ -124,6 +470,10 @@ def get_chapter_review(
             project_id=project_id,
             chapter_number=chapter_number,
             review_id=review.id,
+        )
+        candidate = CandidateDraftRepository(session).latest_for_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
         )
         latest_attempt = rewrite_attempts[0] if rewrite_attempts else None
         residual_review_issues = (
@@ -267,6 +617,14 @@ def get_chapter_review(
                 for item in reversed(rewrite_attempts)
             ],
             decision_refs=decision_refs,
+            decision_layers=_build_decision_layers(
+                review=review,
+                review_meta=review_meta,
+                issues=[item for item in issues if isinstance(item, dict)],
+                rewrite_attempts=rewrite_attempts,
+                candidate=candidate,
+                decision_refs=decision_refs,
+            ),
             rule_decision=_latest_rule_decision(decision_refs),
         )
     finally:

@@ -1,19 +1,11 @@
 # 写作流程状态机
 
-更新时间：2026-04-26
+更新时间：2026-07-10
 
-本文档描述当前代码里的**写作任务**状态机。范围包括 API 任务状态、`start-writing` 之后的 orchestrator 主流程、单章流水线、人工 review/continue、安全暂停/强制终止，以及 LLM retry/fallback。
-
-V4.5.1 只在本文档维护后端主链节点：`MapMovementReview`、`BookStateReviewGate`、`BookStateCompile`、`LegacyProjection`。World Studio、dashboard、脚本型 Skill runtime 的产品/UI 状态图归入 V4.6+，不写入本文档。
+本文档描述当前代码里的**写作任务**状态机。范围包括 HTTP 入队、durable worker、`start-writing` 后的章节主流程、五层 review、暂停/终止，以及 LLM retry/fallback。
 
 `V2.9.2` 起，“创建书本”已经前移为 Genesis Workflow；Genesis 本身不属于本文档的写作任务状态机。  
-本文档只描述：
-
-- `POST /api/generate`
-- `POST /api/projects/{project_id}/start-writing`
-- `POST /continue-generation`
-
-进入正式写作任务后的状态机。
+本文档只描述 `POST /api/projects/{project_id}/start-writing` 与 `POST /api/projects/{project_id}/continue-generation` 入队后的正式写作任务。已删除的 `/api/generate` 不属于当前状态机。
 
 ## 图形版
 
@@ -21,8 +13,8 @@ V4.5.1 只在本文档维护后端主链节点：`MapMovementReview`、`BookStat
 
 ```mermaid
 stateDiagram-v2
-    [*] --> starting: POST /api/generate\nPOST /continue-generation
-    starting --> running: worker thread starts
+    [*] --> queued: start-writing\ncontinue-generation
+    queued --> running: durable worker claims lease
     running --> running: progress stage update
 
     running --> paused: POST /pause requested\nsafe checkpoint reached
@@ -32,13 +24,13 @@ stateDiagram-v2
     running --> partial_failed: some accepted + some failed
     running --> failed: no accepted chapter + failed
 
-    starting --> cancelled: terminate before start
-    starting --> paused: recovered with pause_requested
+    queued --> cancelled: terminate before claim
+    queued --> paused: pause before claim
 
-    needs_review --> starting: approve review\ncontinue_generation=true
-    paused --> starting: POST /continue-generation
-    partial_failed --> starting: POST /continue-generation\nretry failed chapters
-    failed --> starting: POST /continue-generation\nretry failed/planned chapters
+    needs_review --> queued: approve review\ncontinue_generation=true
+    paused --> queued: POST /continue-generation
+    partial_failed --> queued: POST /continue-generation\nretry failed chapters
+    failed --> queued: POST /continue-generation\nretry failed/planned chapters
 
     completed --> [*]
     cancelled --> [*]
@@ -50,9 +42,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> planning_arc: POST /api/generate\nlegacy project or empty existing project
     [*] --> creating_project: POST /api/projects/{id}/start-writing\nGenesis-ready project
-    planning_arc --> creating_project: arc plan ok
     creating_project --> resolving_arc_envelope: seed project state
     resolving_arc_envelope --> provisional_gate: ensure active arc resolution
     provisional_gate --> provisional_failed: new failed provisional execution
@@ -100,14 +90,15 @@ stateDiagram-v2
     drafted --> paused_for_review: blackbox fail without force accept
     drafted --> paused_for_review: verdict not canon-applicable
     drafted --> paused_for_review: review_interval hit
-    drafted --> BookStateReviewGate: pass/warn/force_accept applies
+    drafted --> CanonPreparation: eligible candidate
 
-    BookStateReviewGate --> BookStateCompile: approved graph delta
-    BookStateReviewGate --> paused_for_review: BookState review failed
-    BookStateCompile --> LegacyProjection: BookState canon committed
-    BookStateCompile --> paused_for_review: BookState compile failed/frozen
-    LegacyProjection --> running_post_acceptance: projection ok or compatibility failure recorded
-    LegacyProjection --> paused: safe pause
+    CanonPreparation --> GateDelegation: delegation policy enabled
+    CanonPreparation --> CanonAdmission: no delegation required
+    CanonPreparation --> paused_for_review: eligibility/quality/BookState gate blocked
+    GateDelegation --> CanonAdmission: delegated gate approved
+    GateDelegation --> paused_for_review: delegated gate blocked/error
+    CanonAdmission --> running_post_acceptance: atomic Canon commit succeeded
+    CanonAdmission --> paused_for_review: stale/system/Canon commit block
 
     running_post_acceptance --> accepted: memory index + phase3/phase4 done
     running_post_acceptance --> paused: safe pause
@@ -143,17 +134,17 @@ stateDiagram-v2
 
 ### 任务级状态
 
-`starting`
+`queued`
 
-任务记录已创建，worker thread 准备运行。入口包括新生成任务和继续生成任务。
+持久化任务已创建，等待 generation worker claim。API 不启动章节生成线程。
 
 `running`
 
-worker 已开始推进。API 层会根据 progress stage 更新 `current_stage`、`current_chapter`、`completed_chapters`、`failed_chapters`、`paused_chapters`。
+worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 progress stage 更新 `current_stage`、`current_chapter`、`completed_chapters`、`failed_chapters`、`paused_chapters`。
 
 `paused`
 
-安全暂停终态。用户调用 pause 后只设置 `pause_requested`，不会中断正在进行的 HTTP request；orchestrator 在安全 checkpoint 检测到后返回 `RunResult(paused=True)`，任务进入 `paused`。可通过 continue 从未完成章节继续。
+安全暂停终态。用户调用 pause 后只设置 `pause_requested`，不会中断正在进行的 LLM request；pipeline 在安全 checkpoint 检测到后返回 `RunResult(paused=True)`，任务进入 `paused`。可通过 continue 从未完成章节继续。
 
 `needs_review`
 
@@ -161,7 +152,7 @@ worker 已开始推进。API 层会根据 progress stage 更新 `current_stage`�
 
 `cancelled`
 
-强制终止终态。用户调用 terminate 后设置 `cancel_requested`，orchestrator 在 checkpoint 检测到后返回 cancelled。与 pause 不同，cancelled 不用于继续。
+强制终止终态。用户调用 terminate 后设置 `cancel_requested`，pipeline 在 checkpoint 检测到后返回 cancelled。与 pause 不同，cancelled 不用于继续。
 
 `failed`
 
@@ -177,14 +168,12 @@ worker 已开始推进。API 层会根据 progress stage 更新 `current_stage`�
 
 ### 主流程
 
-1. 旧式新建生成或空项目仍可进入 `planning_arc`，调用 arc director 生成 arc plan。
-2. `V2.9.2` 新项目默认先走 Genesis；显式 `start-writing` 后直接进入 `creating_project`，从 Genesis blueprint materialize arc 骨架，并只为当前 active arc 生成 `ChapterPlan`。
-3. `creating_project` 创建或更新 project，写入初始 state、arc skeleton、当前 active arc 的 chapter plans、entities、threads。
-4. `resolving_arc_envelope` 保证 active arc resolution 存在。
-5. provisional gate 检查最近一次 provisional execution；如果出现新的 failed provisional execution，相关章节标记 failed，任务结束为 failed。
-6. 进入 chapter loop，按章节依次执行单章流水线。
-7. 如果是继续生成，先加载已有 chapter plans；真实 `needs_review` 章节会阻塞继续，没有 draft 的孤儿 `needs_review` 会重置回 `planned`。
-8. continue 只选择当前 active arc 的 `planned` 和 `failed` 章节，不重写 accepted 章节；若当前 arc 已无 pending work，系统可先 materialize 下一条 planned arc。
+1. 新项目必须先完成并锁定 Genesis；`start-writing` 从 Genesis blueprint 物化项目与当前 active arc 的 `ChapterPlan`，然后创建 durable generation task。
+2. generation worker claim 任务后，由 `GenerationApplicationService.execute_claimed` 构造不可变 execution context，并进入 project-backed continuation。
+3. `resolving_arc_envelope` 保证 active arc resolution 存在；provisional/scenario 检查产生显式阻断状态。
+4. chapter loop 只处理当前 workset 的 `planned` 和 `failed` 章节，不重写 accepted 章节。
+5. 真实 `needs_review` 章节会阻塞 continue；处理 review 后可显式创建下一条 continuation task。
+6. 当前 arc 无 pending work 时，planning service 可物化下一条已批准 arc，再由新的 durable task 继续。
 
 ### 单章流程
 
@@ -198,19 +187,19 @@ worker 已开始推进。API 层会根据 progress stage 更新 `current_stage`�
    - `copilot`：`pass` 才继续，`warn/fail` 进入 `needs_review`。
    - `blackbox`：`fail` 且没有 force accept 时进入 `needs_review`；`pass/warn/force_accept` 可进入 canon。
 7. 如果 `review_interval_chapters > 0` 且当前章节命中周期，并且不是本次最后一章，在 canon 前把当前章标为 `needs_review`。
-8. `BookStateReviewGate` 对 adapter 生成的 `ApprovedGraphDeltaSet` 做 deterministic guardrail；失败进入 `needs_review`。
-9. `BookStateCompile` 优先提交 BookState canon、snapshot 与 replay ledger；失败且允许 freeze 时冻结候选并进入 `needs_review`。
-10. `LegacyProjection` 只做旧 `world_model_v4` compatibility projection；projection failure 写入 DecisionEvent，不覆盖已提交的 BookState canon。
-11. `running_post_acceptance` 更新 memory index，并执行 phase3/phase4 后置处理。
-12. 章节标记为 `accepted`，加入 `completed_chapters`。
+8. `CanonPreparationService` 在事务外冻结 eligibility、quality、EntityAdmissionPlan 与经 `BookStateReviewGate` 批准的 GraphDelta。
+9. 配置 gate delegation 时，`GateDelegationService` 产生独立批准/阻断事件；没有 delegation 时明确记录为未委托，而不是伪造通过。
+10. `CanonAdmissionService.commit_plan` 在单事务内重验 candidate、提交 BookState/GraphDelta/snapshot、实体身份、审计和 outbox；只有事务成功才将章节标记为 `accepted`。
+11. `running_post_acceptance` 消费可重试 outbox，更新 Knowledge Projection、memory index 和发布侧投影；失败不回滚已提交 Canon。
+12. accepted 章节加入 `completed_chapters`，worker 继续当前 workset。
 
 ### Pause / Continue
 
 Pause 是安全暂停：
 
 1. `POST /api/tasks/{task_id}/pause` 只设置 `pause_requested=True`。
-2. `_update_task` 会阻止旧的 running/stage 更新覆盖暂停意图。
-3. Orchestrator 在章节边界、context 后、writer 后、review 后、canon 后、post-acceptance 后检查 pause。
+2. 任务仓储会阻止旧的 running/stage 更新覆盖暂停意图。
+3. `ChapterPipeline` 在章节边界、context 后、writer 后、review 后、canon 后、post-acceptance 后检查 pause。
 4. 检测到 pause 后返回 `paused`，不会把当前未接受章节误标为 accepted。
 
 Continue 的规则：
@@ -219,20 +208,23 @@ Continue 的规则：
 2. 如果存在真实 `needs_review`，返回 409，要求先人工处理。
 3. 只运行 `planned` 和 `failed` 章节。
 4. 已 `accepted` 章节不会重写。
-5. 任务启动时冻结 runtime config 和 fallback profile 列表，运行中修改配置不影响已启动任务。
+5. 入队时冻结 RuntimePolicy snapshot；worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。
 
 ### Review / Approve
 
 1. `GET /api/projects/{project_id}/chapters/{chapter_number}/review` 读取最新 draft 对应 review。
-2. `POST /review/approve` 调 `accept_review`，将 draft 写入 canon，章节改为 `accepted`。
-3. 如果请求 `continue_generation=true`，approve 后创建 continue task，继续剩余 `planned/failed` 章节。
+2. Review 详情分别显示 `draft_review`、`repair`、`residual_eligibility`、`gate_delegation`、`canon`；前四层通过不等于 Canon 已提交。
+3. `POST /review/approve` 进入受控接受路径，只有 `CanonAdmissionService.commit_plan` 成功后章节才成为 `accepted`。
+4. 如果请求 `continue_generation=true`，approve 后创建 continue task，继续剩余 `planned/failed` 章节。
 
 ### 状态来源
 
 核心代码位置：
 
-1. API 任务终态和 stage 映射：`forwin/api.py`
-2. progress stage 到任务 status 的映射：`forwin/api_runtime.py`
-3. orchestrator run/continue/chapter loop：`forwin/orchestrator/loop.py`
-4. review 字数检查：`forwin/checker/rules.py`
-5. LLM retry/fallback：`forwin/writer/llm_client.py`
+1. HTTP runtime 与任务终态：`forwin/http/runtime.py`
+2. durable task 入队与执行：`forwin/application/generation.py`
+3. progress stage 到任务 status：`forwin/application/generation_execution.py`
+4. run/continue/chapter loop：`forwin/generation/pipeline_core/`
+5. draft review/repair/residual：`forwin/review/`
+6. Canon 准备与原子提交：`forwin/canon/`
+7. LLM retry/fallback：`forwin/writer/llm/`

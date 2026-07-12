@@ -1,6 +1,8 @@
 """ForWin ASGI entrypoint."""
 from __future__ import annotations
 
-from forwin.api_core.app import app, lifespan
+from forwin.http import create_app, lifespan
 
-__all__ = ["app", "lifespan"]
+app = create_app()
+
+__all__ = ["app", "create_app", "lifespan"]

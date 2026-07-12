@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from forwin.api_task_routes import TaskRouteDeps, build_handlers
+from forwin.application.tasks import TaskApplicationDeps, TaskApplicationService
+from forwin.http.adapters.api_task_routes import build_handlers
 
 
 def test_build_handlers_rejects_flat_dependency_kwargs() -> None:
@@ -44,7 +45,8 @@ def test_terminate_task_marks_cancel_even_when_audit_log_is_locked() -> None:
         tasks[task_id].update(kwargs)
 
     handlers = build_handlers(
-        deps=TaskRouteDeps(
+        service=TaskApplicationService(
+            TaskApplicationDeps(
             get_session=lambda: Session(),
             get_publisher_manager=lambda: SimpleNamespace(list_upload_jobs=lambda **kwargs: []),
             list_generation_tasks=lambda limit: list(tasks.items()),
@@ -62,6 +64,7 @@ def test_terminate_task_marks_cancel_even_when_audit_log_is_locked() -> None:
             latest_related_decision_event=lambda *args, **kwargs: None,
             log_decision_event=lambda *args, **kwargs: (_ for _ in ()).throw(locked),
             update_task=update_task,
+            )
         )
     )
 

@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-import forwin.api as api_module
 from forwin.config import InfrastructureConfig
 from forwin.genesis import BookGenesisService
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
-from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.generation.pipeline import ChapterPipeline
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from tests.http_runtime_harness import HttpRuntimeHarness
 
 
 class OrdinaryAdapter:
@@ -339,9 +337,8 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(config.codex_job_timeout_seconds, 900.0)
 
     def test_api_genesis_service_uses_routed_adapter_when_codex_enabled(self) -> None:
-        old_config = api_module._config
-        try:
-            api_module._config = InfrastructureConfig(
+        api = HttpRuntimeHarness(
+            config=InfrastructureConfig(
                 database_url=postgres_test_url("forwin"),
                 minimax_api_key="ordinary-key",
                 minimax_base_url="http://ordinary.invalid/v1",
@@ -349,11 +346,12 @@ class LLMRouterTests(unittest.TestCase):
                 codex_enabled=True,
                 codex_bridge_url="http://codex.invalid",
             )
-            service = api_module._build_genesis_service()
-
+        )
+        service = api._build_genesis_service()
+        try:
             self.assertIsInstance(service.llm_client, RoutedModelAdapter)
         finally:
-            api_module._config = old_config
+            api._close_genesis_service(service)
 
     def test_pipeline_uses_routed_adapter_when_codex_enabled(self) -> None:
         config = InfrastructureConfig(

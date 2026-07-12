@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from forwin.api_book_state_routes import build_handlers
+from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.book_state import BookStateRepository
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest

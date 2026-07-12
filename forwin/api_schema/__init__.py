@@ -11,7 +11,6 @@ from forwin.planning.contracts import PlanTaskItem
 from forwin.protocol.subworld import SubWorldSummary
 
 from .llm import (
-    GenerateRequest,
     ModelProfile,
 )
 
@@ -169,6 +168,7 @@ from .review import (
     RepairVerificationInfo,
     FinalResidualDecisionInfo,
     ChapterRewriteAttemptInfo,
+    ChapterDecisionLayerInfo,
     ChapterReviewDetail,
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
@@ -195,7 +195,6 @@ __all__ = [
     "NarrativeConstraintInfo",
     "PlanTaskItem",
     "SubWorldSummary",
-    "GenerateRequest",
     "ModelProfile",
     "RuntimeCatalogResponse",
     "RuntimePolicyResponse",
@@ -326,6 +325,7 @@ __all__ = [
     "RepairVerificationInfo",
     "FinalResidualDecisionInfo",
     "ChapterRewriteAttemptInfo",
+    "ChapterDecisionLayerInfo",
     "ChapterReviewDetail",
     "ChapterReviewApproveRequest",
     "ChapterReviewRetryRequest",

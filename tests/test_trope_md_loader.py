@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from forwin import api_project_control_ops
+from forwin.application.project_control import operations as api_project_control_ops
 from forwin.protocol import trope_library
 from forwin.protocol.trope_md_loader import load_trope_templates_from_md
 

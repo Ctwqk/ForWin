@@ -13,6 +13,12 @@
         if (!shouldAutoRefreshPlatforms()) return;
         void ensureFreshPlatforms({ maxAgeMs: 1000, reason: 'visibility_resume' });
       });
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (document.getElementById('review_modal_shell')?.classList.contains('open')) {
+          closeReviewModal();
+        }
+      });
       window.setInterval(async () => {
         if (!taskPollHasActive && !currentDrawerTask) return;
         const refreshResult = await loadTaskCenter();

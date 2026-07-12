@@ -11,7 +11,6 @@ import httpx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
-import forwin.api as api_module
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
 from forwin.planning.checkpoints import (
@@ -27,11 +26,9 @@ from forwin.mcp.models import (
     GenesisView,
     MutationResult,
     ProjectListView,
-    ProjectView,
     TaskListView,
     TaskView,
     WorldModelConflictListView,
-    WorldModelConflictView,
     WorldModelExportView,
     WorldModelPageView,
     WorldModelSnapshotView,
@@ -41,6 +38,10 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.http_runtime_harness import HttpRuntimeHarness
+
+
+api_module: HttpRuntimeHarness
 
 
 class ForWinAPIClientUnitTests(unittest.TestCase):
@@ -125,6 +126,7 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
 
 class ForWinMCPIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module
         self.tmpdir = TemporaryDirectory()
         self.database_url = postgres_test_url("forwin-mcp")
         engine = get_engine(self.database_url)
@@ -132,18 +134,15 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.engine = engine
         self.session_factory = get_session_factory(engine)
 
-        self.old_session_factory = api_module._SessionFactory
-        self.old_config = api_module._config
-        with api_module._tasks_lock:
-            self.old_tasks = dict(api_module._tasks)
-            api_module._tasks.clear()
-
-        api_module._SessionFactory = self.session_factory
-        api_module._config = InfrastructureConfig(
-            database_url=self.database_url,
-            minimax_api_key="test-key",
-            minimax_base_url="http://example.invalid",
-            minimax_model="fake-model",
+        api_module = HttpRuntimeHarness(
+            session_factory=self.session_factory,
+            config=InfrastructureConfig(
+                database_url=self.database_url,
+                minimax_api_key="test-key",
+                minimax_base_url="http://example.invalid",
+                minimax_model="fake-model",
+            ),
+            engine=self.engine,
         )
 
         self.api_transport = httpx.ASGITransport(app=api_module.app)
@@ -154,11 +153,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.mcp_app = build_asgi_app(api_client=self.api_client, mcp_server=self.mcp)
 
     def tearDown(self) -> None:
-        api_module._SessionFactory = self.old_session_factory
-        api_module._config = self.old_config
         with api_module._tasks_lock:
             api_module._tasks.clear()
-            api_module._tasks.update(self.old_tasks)
         self.engine.dispose()
         self.tmpdir.cleanup()
 

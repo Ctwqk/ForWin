@@ -452,6 +452,40 @@
     </aside>
   </div>
 
+  <div id="review_modal_shell" class="modal-shell" onclick="dismissModal(event, 'review_modal_shell')">
+    <div class="modal review-modal" role="dialog" aria-modal="true" aria-labelledby="review_modal_title" onclick="event.stopPropagation()">
+      <div class="review-modal-head">
+        <div>
+          <div id="review_modal_kicker" class="task-id">Chapter Review</div>
+          <h3 id="review_modal_title">章节决策详情</h3>
+          <div id="review_modal_meta" class="meta-line"></div>
+        </div>
+        <button class="icon-button" type="button" title="关闭" aria-label="关闭 Review" onclick="closeReviewModal()">&times;</button>
+      </div>
+      <div id="review_layer_flow" class="review-layer-flow" aria-label="五层决策流程"></div>
+      <section class="review-detail-band" aria-labelledby="review_issues_heading">
+        <div class="review-band-head">
+          <h4 id="review_issues_heading">问题与证据</h4>
+          <span id="review_issue_count" class="badge"></span>
+        </div>
+        <div id="review_issue_list" class="review-detail-list"></div>
+      </section>
+      <section class="review-detail-band" aria-labelledby="review_repairs_heading">
+        <div class="review-band-head">
+          <h4 id="review_repairs_heading">修复历史</h4>
+          <span id="review_repair_count" class="badge"></span>
+        </div>
+        <div id="review_repair_list" class="review-detail-list"></div>
+      </section>
+      <div class="review-modal-actions">
+        <button id="review_modal_audit" class="ghost" type="button" onclick="jumpToReviewModalDecisionChain()">审计时间线</button>
+        <button id="review_modal_retry" class="secondary" type="button" onclick="retryReviewFromModal()">Retry Review</button>
+        <button id="review_modal_approve" class="secondary" type="button" onclick="approveReviewFromModal(false)">接受</button>
+        <button id="review_modal_continue" class="primary" type="button" onclick="approveReviewFromModal(true)">接受并继续</button>
+      </div>
+    </div>
+  </div>
+
   <div id="project_control_action_modal_shell" class="modal-shell" onclick="dismissModal(event, 'project_control_action_modal_shell')">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="section-head" style="margin-bottom:0;">

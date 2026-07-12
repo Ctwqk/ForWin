@@ -15,6 +15,7 @@ from forwin.api_schema import (
 )
 from forwin.genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.genesis.handoff import StartWritingCommand
+from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.runtime.policy_store import ProjectPolicyStore
@@ -31,9 +32,6 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
-
-from forwin.generation.run_target import resolve_generation_run_target
-
 
 def _build_project_genesis_service(session, project: Project, build_genesis_service):
     policy_record = ProjectPolicyStore(session).load(project)

@@ -328,7 +328,6 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
         current_draft=object(),
         current_review=ReviewVerdict(verdict="fail", issues=[]),
         current_review_row=SimpleNamespace(id="review-1", review_meta_json="{}"),
-        current_writer_trace_id="writer-trace",
         current_review_trace_id="review-trace",
         current_review_event=SimpleNamespace(id="review-event"),
         repair_phase="review_repair",

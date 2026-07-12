@@ -1209,7 +1209,6 @@ class LLMClientRetryTests(unittest.TestCase):
             timeout = client._effective_timeout_for_profile(
                 client._request_profiles()[0],
                 httpx.Timeout(45.0, connect=10.0),
-                llm_task_route="prose_generation",
                 explicit_timeout=True,
             )
         finally:
@@ -1228,7 +1227,6 @@ class LLMClientRetryTests(unittest.TestCase):
             timeout = client._effective_timeout_for_profile(
                 client._request_profiles()[0],
                 httpx.Timeout(30.0, connect=10.0),
-                llm_task_route="review_json",
                 explicit_timeout=True,
             )
         finally:

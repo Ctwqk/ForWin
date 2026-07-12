@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
+from forwin.application.projects.reviews import _build_decision_layers
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.context import ReviewContextPack
@@ -198,3 +203,139 @@ def test_historical_draft_review_merge_preserves_arc_repair_scope() -> None:
 
     assert merged is not None
     assert merged.repair_scope == "arc"
+
+
+def _layer_map(**overrides):
+    values = {
+        "review": SimpleNamespace(verdict="fail"),
+        "review_meta": {},
+        "issues": [],
+        "rewrite_attempts": [],
+        "candidate": None,
+        "decision_refs": [],
+    }
+    values.update(overrides)
+    return {
+        layer.layer: layer
+        for layer in _build_decision_layers(**values)
+    }
+
+
+def test_decision_layers_keep_repair_and_residual_eligibility_separate() -> None:
+    attempt = SimpleNamespace(
+        id="attempt-1",
+        repair_scope="draft",
+        result_verdict="pass",
+        failure_reason="",
+        verification_json=json.dumps(
+            {
+                "fixed_all_must_fix": True,
+                "preserved_all_must_preserve": True,
+            }
+        ),
+        source_draft_id="draft-1",
+        result_draft_id="draft-2",
+        result_review_id="review-2",
+    )
+    candidate = SimpleNamespace(
+        id="candidate-2",
+        status="ready_for_canon",
+        canon_status="candidate",
+        canon_commit_id="",
+        canon_artifact_path="",
+        failure_reason="",
+        eligibility_decision_json=json.dumps(
+            {
+                "eligible": True,
+                "body_hash": "body-hash",
+                "plan_revision": "plan-v2",
+            }
+        ),
+    )
+
+    layers = _layer_map(rewrite_attempts=[attempt], candidate=candidate)
+
+    assert layers["repair"].status == "complete"
+    assert layers["repair"].outcome == "pass"
+    assert layers["residual_eligibility"].outcome == "eligible"
+    assert layers["canon"].status == "pending"
+
+
+def test_hard_residual_decision_blocks_without_claiming_canon_failure() -> None:
+    layers = _layer_map(
+        review_meta={
+            "final_residual_decision": {
+                "decision": "manual_review_required",
+                "forceable": False,
+                "reason": "hard-residual-issue:canon_name_drift",
+                "canon_risk": "high",
+                "residual_issues": ["canon_name_drift"],
+                "requires_human": True,
+            }
+        }
+    )
+
+    assert layers["residual_eligibility"].status == "blocked"
+    assert layers["residual_eligibility"].blocking is True
+    assert layers["canon"].outcome == "no_candidate"
+
+
+def test_gate_delegation_distinguishes_no_delegate_from_spark_approval() -> None:
+    no_delegate = _layer_map()["gate_delegation"]
+    gate_events = [
+        DecisionEventInfo(
+            id="gate-approved",
+            event_type=DecisionEventType.GATE_DELEGATION_APPROVED,
+            summary="Spark gate approved",
+            payload={"trace_id": "trace-1"},
+            created_at="2026-07-10T02:00:00+00:00",
+        ),
+        DecisionEventInfo(
+            id="gate-request",
+            event_type=DecisionEventType.GATE_DELEGATION_REQUESTED,
+            summary="Spark gate requested",
+            payload={"trace_id": "trace-1"},
+            created_at="2026-07-10T01:00:00+00:00",
+        ),
+    ]
+    approved = _layer_map(decision_refs=gate_events)["gate_delegation"]
+
+    assert no_delegate.status == "not_required"
+    assert no_delegate.outcome == "not_delegated"
+    assert approved.status == "complete"
+    assert approved.outcome == "approved"
+    assert [item.id for item in approved.decision_refs] == [
+        "gate-request",
+        "gate-approved",
+    ]
+
+
+def test_canon_layer_requires_candidate_commit_identity() -> None:
+    committed_candidate = SimpleNamespace(
+        id="candidate-1",
+        status="accepted",
+        canon_status="canon",
+        canon_commit_id="commit-1",
+        canon_artifact_path="canon/chapter-1.json",
+        failure_reason="",
+        eligibility_decision_json="{}",
+    )
+    blocked_candidate = SimpleNamespace(
+        id="candidate-2",
+        status="needs_review",
+        canon_status="candidate",
+        canon_commit_id="",
+        canon_artifact_path="",
+        failure_reason="canon quality hard block",
+        eligibility_decision_json="{}",
+    )
+
+    committed = _layer_map(candidate=committed_candidate)["canon"]
+    blocked = _layer_map(candidate=blocked_candidate)["canon"]
+
+    assert committed.status == "complete"
+    assert committed.outcome == "committed"
+    assert committed.blocking is False
+    assert blocked.status == "blocked"
+    assert blocked.outcome == "needs_review"
+    assert blocked.blocking is True

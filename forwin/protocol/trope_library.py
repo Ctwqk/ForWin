@@ -129,7 +129,6 @@ def expand_trope_template_payload(
     _ = minimum_count
     expanded: list[dict] = []
     seen_ids: set[str] = set()
-    category_counts: dict[str, int] = {}
     for item in payload:
         enriched = _enrich_template_payload(item)
         template_id = str(enriched.get("template_id") or "").strip()

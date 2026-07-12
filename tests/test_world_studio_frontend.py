@@ -13,7 +13,7 @@ class WorldStudioFrontendTests(unittest.TestCase):
         main_source = (REPO_ROOT / "frontend/world-studio/src/main.tsx").read_text(encoding="utf-8")
         app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
         css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
-        route_source = (REPO_ROOT / "forwin/api_world_model_routes.py").read_text(encoding="utf-8")
+        route_source = (REPO_ROOT / "forwin/http/adapters/api_world_model_routes.py").read_text(encoding="utf-8")
 
         self.assertIn('<forwin-topbar active="world"></forwin-topbar>', index_source)
         self.assertNotIn('import "./topbar-runtime";', main_source)
@@ -42,7 +42,7 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertNotIn(".studio-nav", css_source)
 
     def test_world_studio_route_html_injects_shared_topbar_assets(self) -> None:
-        from forwin.api_world_model_routes import _world_studio_html
+        from forwin.http.adapters.api_world_model_routes import _world_studio_html
 
         html = _world_studio_html()
 

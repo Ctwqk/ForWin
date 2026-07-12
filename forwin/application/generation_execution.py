@@ -40,15 +40,8 @@ _PROGRESS_PAYLOAD_KEYS = (
 def _build_task_progress_changes(
     event: str,
     payload: dict[str, Any],
-    *,
-    include_project_created: bool = False,
 ) -> dict[str, Any]:
     changes: dict[str, Any] = {}
-    if include_project_created and event == "project_created":
-        changes["project_id"] = payload.get("project_id")
-        changes["title"] = payload.get("title") or "未命名项目"
-        changes["message"] = f"项目已创建：{payload.get('title', '')}"
-
     stage = str(payload.get("stage", "")).strip()
     if stage:
         changes["current_stage"] = stage
@@ -163,7 +156,7 @@ def _build_chapter_pipeline_for_task(
     )
 
 
-def run_pipeline_task(
+def execute_pipeline_task(
     task_id: str,
     pipeline: ChapterPipeline,
     operation,
@@ -314,105 +307,7 @@ def run_pipeline_task(
             )
 
 
-def run_generation_with_context(
-    context: GenerationExecutionContext,
-    premise: str,
-    genre: str,
-    num_chapters: int,
-    update_task: TaskUpdater,
-    logger: logging.Logger,
-    *,
-    project_id: str | None = None,
-    should_abort: Callable[[], bool] | None = None,
-    should_pause: Callable[[], bool] | None = None,
-    completion_handler: Callable[[object], None] | None = None,
-    component: str = "api",
-) -> None:
-    task_id = context.task_id
-    normalized_project_id = str(project_id or "").strip()
-
-    def _handle_progress(event: str, payload: dict[str, Any]) -> None:
-        changes = _build_task_progress_changes(
-            event,
-            payload,
-            include_project_created=True,
-        )
-        if changes:
-            update_task(task_id, **changes)
-
-    pipeline = _build_chapter_pipeline_for_task(
-        context,
-        progress_callback=_handle_progress,
-        should_abort=should_abort,
-        should_pause=should_pause,
-    )
-
-    def _handle_result(result) -> None:
-        if result.status == "cancelled":
-            update_task(
-                task_id,
-                status="cancelled",
-                message=(
-                    f"生成任务已取消。已完成 {len(result.completed_chapters)} / "
-                    f"{result.requested_chapters} 章"
-                ),
-            )
-        elif result.status == "paused":
-            update_task(
-                task_id,
-                status="paused",
-                message=(
-                    f"生成任务已安全暂停。已完成 {len(result.completed_chapters)} / "
-                    f"{result.requested_chapters} 章"
-                ),
-            )
-        elif result.failed_chapters:
-            failed_str = ", ".join(str(chapter) for chapter in result.failed_chapters)
-            update_task(
-                task_id,
-                error=f"以下章节生成失败: {failed_str}",
-                message=(
-                    f"已完成 {len(result.completed_chapters)} / {result.requested_chapters} 章，"
-                    f"失败章节: {failed_str}"
-                ),
-            )
-        elif result.paused_chapters:
-            update_task(task_id, message=_paused_chapters_message(result))
-        else:
-            update_task(
-                task_id,
-                message=f"已完成 {result.requested_chapters} / {result.requested_chapters} 章",
-            )
-
-    if normalized_project_id:
-        operation = lambda: pipeline.run_existing_project(  # noqa: E731
-            normalized_project_id,
-            num_chapters=num_chapters,
-        )
-    else:
-        operation = lambda: pipeline.run(  # noqa: E731
-            premise=premise,
-            genre=genre,
-            num_chapters=num_chapters,
-        )
-
-    run_pipeline_task(
-        task_id,
-        pipeline,
-        operation,
-        update_task=update_task,
-        logger=logger,
-        error_message="生成任务失败",
-        default_project_id=normalized_project_id or None,
-        progress_handler=_handle_result,
-        completion_handler=completion_handler,
-        should_abort=should_abort,
-        should_pause=should_pause,
-        component=component,
-    )
-
-
-def run_continue_project_with_context(
+def execute_continuation(
     context: GenerationExecutionContext,
     project_id: str,
     update_task: TaskUpdater,
@@ -479,7 +374,7 @@ def run_continue_project_with_context(
         else:
             update_task(task_id, message="没有剩余章节需要继续执行。")
 
-    run_pipeline_task(
+    execute_pipeline_task(
         task_id,
         pipeline,
         lambda: pipeline.continue_project(

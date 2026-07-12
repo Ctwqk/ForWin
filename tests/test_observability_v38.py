@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
-from unittest.mock import patch
 
-import forwin.api as api_module
-from forwin.api_runtime import run_pipeline_task
+from fastapi import HTTPException
+
+from forwin.application.generation_execution import execute_pipeline_task
 from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
+from forwin.config import InfrastructureConfig
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.genesis import PromptTrace
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.project import ArcPlanVersion, Project
 from forwin.models.task import GenerationTask
 from forwin.observability import (
     LogRecorder,
@@ -25,11 +26,15 @@ from forwin.observability import (
     redact_payload,
     stack_hash,
 )
-from forwin.generation.pipeline import ChapterPipeline
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.storage import ArtifactStore
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
+from tests.http_runtime_harness import HttpRuntimeHarness
+
+
+api_module: HttpRuntimeHarness
+logger = logging.getLogger(__name__)
 
 
 class ObservabilityCoreTests(unittest.TestCase):
@@ -158,27 +163,24 @@ class ObservabilityCoreTests(unittest.TestCase):
 
 class ObservabilityReadApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module
         self.tmpdir = TemporaryDirectory()
         self.database_url = postgres_test_url("read-api")
         self.artifact_root = Path(self.tmpdir.name) / "artifacts"
-        self.old_config = api_module._config
-        self.old_engine = api_module._engine
-        self.old_factory = api_module._SessionFactory
-        api_module._config = api_module.InfrastructureConfig(
-            database_url=self.database_url,
-            artifact_root=str(self.artifact_root),
-            minimax_api_key="",
+        self.engine = get_engine(self.database_url)
+        init_db(self.engine)
+        api_module = HttpRuntimeHarness(
+            session_factory=get_session_factory(self.engine),
+            config=InfrastructureConfig(
+                database_url=self.database_url,
+                artifact_root=str(self.artifact_root),
+                minimax_api_key="",
+            ),
+            engine=self.engine,
         )
-        api_module._engine = get_engine(self.database_url)
-        init_db(api_module._engine)
-        api_module._SessionFactory = get_session_factory(api_module._engine)
 
     def tearDown(self) -> None:
-        if api_module._engine is not None:
-            api_module._engine.dispose()
-        api_module._config = self.old_config
-        api_module._engine = self.old_engine
-        api_module._SessionFactory = self.old_factory
+        self.engine.dispose()
         self.tmpdir.cleanup()
 
     def _seed_project(self) -> tuple[str, str, str]:
@@ -329,12 +331,12 @@ class ObservabilityReadApiTests(unittest.TestCase):
         )
         self.assertEqual(artifact.preview, "artifact")
         self.assertTrue(artifact.truncated)
-        with self.assertRaises(api_module.HTTPException):
+        with self.assertRaises(HTTPException):
             api_module.read_artifact_preview(uri="/etc/passwd")
 
 
 class ApiRuntimeObservabilityTests(unittest.TestCase):
-    def test_run_pipeline_task_records_success_and_cleanup_events(self) -> None:
+    def test_execute_pipeline_task_records_success_and_cleanup_events(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("runtime-success"))
             init_db(engine)
@@ -389,26 +391,26 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     },
                 )()
 
-                run_pipeline_task(
+                execute_pipeline_task(
                     "task-runtime-success",
                     pipeline,
                     lambda: result,
                     update_task=lambda task_id, **changes: updates.append(
                         {"task_id": task_id, **changes}
                     ),
-                    logger=api_module.logger,
+                    logger=logger,
                     error_message="runtime failed",
                     default_project_id=project_id,
                 )
 
                 with session_factory() as session:
                     rows = (
-                        session.query(api_module.DecisionEvent)
+                        session.query(DecisionEvent)
                         .filter(
-                            api_module.DecisionEvent.project_id == project_id,
-                            api_module.DecisionEvent.task_id == "task-runtime-success",
+                            DecisionEvent.project_id == project_id,
+                            DecisionEvent.task_id == "task-runtime-success",
                         )
-                        .order_by(api_module.DecisionEvent.created_at.asc())
+                        .order_by(DecisionEvent.created_at.asc())
                         .all()
                     )
                 event_types = [row.event_type for row in rows]
@@ -421,7 +423,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
             finally:
                 engine.dispose()
 
-    def test_run_pipeline_task_records_failure_event_with_stack_hash(self) -> None:
+    def test_execute_pipeline_task_records_failure_event_with_stack_hash(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("runtime-failure"))
             init_db(engine)
@@ -453,23 +455,23 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     },
                 )()
 
-                run_pipeline_task(
+                execute_pipeline_task(
                     "task-runtime-failure",
                     pipeline,
                     lambda: (_ for _ in ()).throw(RuntimeError("boom")),
                     update_task=lambda *_args, **_kwargs: None,
-                    logger=api_module.logger,
+                    logger=logger,
                     error_message="runtime failed",
                     default_project_id=project_id,
                 )
 
                 with session_factory() as session:
                     row = (
-                        session.query(api_module.DecisionEvent)
+                        session.query(DecisionEvent)
                         .filter(
-                            api_module.DecisionEvent.project_id == project_id,
-                            api_module.DecisionEvent.task_id == "task-runtime-failure",
-                            api_module.DecisionEvent.event_type
+                            DecisionEvent.project_id == project_id,
+                            DecisionEvent.task_id == "task-runtime-failure",
+                            DecisionEvent.event_type
                             == DecisionEventType.TASK_OPERATION_FAILED,
                         )
                         .one()

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
-from forwin import api_project_control_ops
 from forwin.api_schema import (
     BandCheckpointApproveRequest,
     BandExperienceOverrideRequest,
@@ -14,27 +14,48 @@ from forwin.api_schema import (
     TropeTemplateValidationRequest,
 )
 
+from . import operations
 
-def build_handlers(
-    *,
-    get_session: Callable[[], Any],
-    get_pipeline: Callable[[], Any],
-    display_datetime: Callable[[Any], str],
-    require_reason: Callable[[str], str],
-    validate_constraint_payload: Callable[..., tuple[str, str, str]],
-    serialize_band_checkpoint: Callable[..., Any],
-    serialize_constraint: Callable[..., Any],
-    list_decision_event_rows: Callable[..., list[Any]],
-    serialize_decision_event: Callable[[Any], Any],
-    build_causal_replay: Callable[..., Any],
-    build_audit_insights: Callable[..., Any],
-    latest_band_checkpoint_row: Callable[..., Any],
-    latest_related_decision_event: Callable[..., Any],
-    log_decision_event: Callable[..., Any],
-    json_load_object: Callable[[str | None], dict[str, Any]],
+
+@dataclass(frozen=True, slots=True)
+class ProjectControlApplicationDeps:
+    get_session: Callable[[], Any]
+    get_pipeline: Callable[[], Any]
+    display_datetime: Callable[[Any], str]
+    require_reason: Callable[..., str]
+    validate_constraint_payload: Callable[..., tuple[str, str, str]]
+    serialize_band_checkpoint: Callable[..., Any]
+    serialize_constraint: Callable[..., Any]
+    list_decision_event_rows: Callable[..., list[Any]]
+    serialize_decision_event: Callable[[Any], Any]
+    build_causal_replay: Callable[..., Any]
+    build_audit_insights: Callable[..., Any]
+    latest_band_checkpoint_row: Callable[..., Any]
+    latest_related_decision_event: Callable[..., Any]
+    log_decision_event: Callable[..., Any]
+    json_load_object: Callable[[str | None], dict[str, Any]]
+
+
+def _build_operations(
+    deps: ProjectControlApplicationDeps,
 ) -> dict[str, Callable[..., Any]]:
+    get_session = deps.get_session
+    get_pipeline = deps.get_pipeline
+    display_datetime = deps.display_datetime
+    require_reason = deps.require_reason
+    validate_constraint_payload = deps.validate_constraint_payload
+    serialize_band_checkpoint = deps.serialize_band_checkpoint
+    serialize_constraint = deps.serialize_constraint
+    list_decision_event_rows = deps.list_decision_event_rows
+    serialize_decision_event = deps.serialize_decision_event
+    build_causal_replay = deps.build_causal_replay
+    build_audit_insights = deps.build_audit_insights
+    latest_band_checkpoint_row = deps.latest_band_checkpoint_row
+    latest_related_decision_event = deps.latest_related_decision_event
+    log_decision_event = deps.log_decision_event
+    json_load_object = deps.json_load_object
     def create_manual_checkpoint(project_id: str, req: ManualCheckpointRequest):
-        return api_project_control_ops.create_manual_checkpoint(
+        return operations.create_manual_checkpoint(
             project_id,
             req,
             get_session=get_session,
@@ -44,7 +65,7 @@ def build_handlers(
         )
 
     def get_band_checkpoint(project_id: str, band_id: str):
-        return api_project_control_ops.get_band_checkpoint(
+        return operations.get_band_checkpoint(
             project_id,
             band_id,
             get_session=get_session,
@@ -55,7 +76,7 @@ def build_handlers(
     def approve_band_checkpoint(
         project_id: str, band_id: str, req: BandCheckpointApproveRequest
     ):
-        return api_project_control_ops.approve_band_checkpoint(
+        return operations.approve_band_checkpoint(
             project_id,
             band_id,
             req,
@@ -68,7 +89,7 @@ def build_handlers(
         )
 
     def get_chapter_task_contract(project_id: str, chapter_number: int):
-        return api_project_control_ops.get_chapter_task_contract(
+        return operations.get_chapter_task_contract(
             project_id,
             chapter_number,
             get_session=get_session,
@@ -79,7 +100,7 @@ def build_handlers(
         chapter_number: int,
         req: TaskContractUpdateRequest,
     ):
-        return api_project_control_ops.update_chapter_task_contract(
+        return operations.update_chapter_task_contract(
             project_id,
             chapter_number,
             req,
@@ -89,7 +110,7 @@ def build_handlers(
         )
 
     def get_band_task_contract(project_id: str, band_id: str):
-        return api_project_control_ops.get_band_task_contract(
+        return operations.get_band_task_contract(
             project_id,
             band_id,
             get_session=get_session,
@@ -98,7 +119,7 @@ def build_handlers(
     def update_band_task_contract(
         project_id: str, band_id: str, req: TaskContractUpdateRequest
     ):
-        return api_project_control_ops.update_band_task_contract(
+        return operations.update_band_task_contract(
             project_id,
             band_id,
             req,
@@ -108,7 +129,7 @@ def build_handlers(
         )
 
     def list_project_constraints(project_id: str):
-        return api_project_control_ops.list_project_constraints(
+        return operations.list_project_constraints(
             project_id,
             get_session=get_session,
             serialize_constraint=serialize_constraint,
@@ -117,7 +138,7 @@ def build_handlers(
     def create_project_constraint(
         project_id: str, req: NarrativeConstraintCreateRequest
     ):
-        return api_project_control_ops.create_project_constraint(
+        return operations.create_project_constraint(
             project_id,
             req,
             get_session=get_session,
@@ -132,7 +153,7 @@ def build_handlers(
         constraint_id: str,
         req: NarrativeConstraintUpdateRequest,
     ):
-        return api_project_control_ops.update_project_constraint(
+        return operations.update_project_constraint(
             project_id,
             constraint_id,
             req,
@@ -155,7 +176,7 @@ def build_handlers(
         related_object_id: str = "",
         causal_root_id: str = "",
     ):
-        return api_project_control_ops.list_project_decision_events(
+        return operations.list_project_decision_events(
             project_id,
             get_session=get_session,
             list_decision_event_rows=list_decision_event_rows,
@@ -178,7 +199,7 @@ def build_handlers(
         chapter_number: int = 0,
         task_id: str = "",
     ):
-        return api_project_control_ops.get_project_causal_replay(
+        return operations.get_project_causal_replay(
             project_id,
             get_session=get_session,
             build_causal_replay=build_causal_replay,
@@ -190,28 +211,28 @@ def build_handlers(
         )
 
     def get_project_audit_insights(project_id: str):
-        return api_project_control_ops.get_project_audit_insights(
+        return operations.get_project_audit_insights(
             project_id,
             get_session=get_session,
             build_audit_insights=build_audit_insights,
         )
 
     def get_latest_provisional_band(project_id: str):
-        return api_project_control_ops.get_latest_provisional_band(
+        return operations.get_latest_provisional_band(
             project_id,
             get_session=get_session,
             display_datetime=display_datetime,
         )
 
     def get_latest_scenario_rehearsal(project_id: str):
-        return api_project_control_ops.get_latest_scenario_rehearsal(
+        return operations.get_latest_scenario_rehearsal(
             project_id,
             get_session=get_session,
             display_datetime=display_datetime,
         )
 
     def rerun_scenario_rehearsal(project_id: str, run_id: str):
-        return api_project_control_ops.rerun_scenario_rehearsal(
+        return operations.rerun_scenario_rehearsal(
             project_id,
             run_id,
             get_session=get_session,
@@ -223,7 +244,7 @@ def build_handlers(
         patch_id: str,
         req: ScenarioPlanPatchApproveRequest,
     ):
-        return api_project_control_ops.approve_scenario_plan_patch(
+        return operations.approve_scenario_plan_patch(
             project_id,
             patch_id,
             reason=req.reason,
@@ -232,24 +253,24 @@ def build_handlers(
         )
 
     def get_trope_templates(category: str = "", q: str = "", limit: int = 0):
-        return api_project_control_ops.get_trope_templates(
+        return operations.get_trope_templates(
             category=category,
             q=q,
             limit=limit,
         )
 
     def get_trope_template_summary():
-        return api_project_control_ops.get_trope_template_summary()
+        return operations.get_trope_template_summary()
 
     def validate_trope_templates(req: TropeTemplateValidationRequest):
-        return api_project_control_ops.validate_trope_templates(req)
+        return operations.validate_trope_templates(req)
 
     def override_band_experience(
         project_id: str,
         band_id: str,
         req: BandExperienceOverrideRequest,
     ):
-        return api_project_control_ops.override_band_experience(
+        return operations.override_band_experience(
             project_id,
             band_id,
             req,
@@ -280,3 +301,14 @@ def build_handlers(
         "validate_trope_templates": validate_trope_templates,
         "override_band_experience": override_band_experience,
     }
+
+
+class ProjectControlApplicationService:
+    def __init__(self, deps: ProjectControlApplicationDeps) -> None:
+        self._operations = _build_operations(deps)
+
+    def handlers(self) -> dict[str, Callable[..., Any]]:
+        return dict(self._operations)
+
+
+__all__ = ["ProjectControlApplicationDeps", "ProjectControlApplicationService"]

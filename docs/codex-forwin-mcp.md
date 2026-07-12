@@ -1,6 +1,6 @@
 # ForWin MCP Operator Runbook For Codex
 
-Codex should operate a running ForWin backend through the `forwin` MCP server. For project, Genesis, task, chapter, and WorldModel workflows, MCP is the authoritative interface. Do not inspect SQLite directly or send ad hoc HTTP requests when an equivalent MCP tool exists.
+Codex should operate a running ForWin backend through the `forwin` MCP server. For project, Genesis, task, chapter, and WorldModel workflows, MCP is the authoritative interface. Do not inspect PostgreSQL directly or send ad hoc HTTP requests when an equivalent MCP tool exists.
 
 ## Operator Preflight
 
@@ -83,8 +83,14 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
 - `project_create` creates a Genesis-backed project. It does not make the project writing-ready.
 - `project_start_writing` is the only supported handoff from Genesis into chapter production.
 - `project_continue_generation` must not be called while `task_active_generation_check` reports active generation.
+- The removed `/api/generate` shortcut is not a valid workflow. MCP, CLI, and the web console all use project creation, Genesis handoff, and durable continuation tasks.
 - `chapter_list` and `chapter_get` are the supported chapter inspection path.
 - `world_export_obsidian` is a read-oriented export workflow; canon changes still go through candidate review and Canon admission.
+
+The HTTP Review detail used by the operator console reports five independent
+layers: draft review, repair, residual eligibility, gate delegation, and Canon.
+An approval event is not proof of Canon admission; Canon truth requires the
+candidate's committed status and commit identity.
 
 ## Verification
 

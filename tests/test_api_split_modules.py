@@ -38,8 +38,9 @@ class ApiSplitModuleTests(unittest.TestCase):
         publisher = self._import_required_module("forwin.application.publisher")
         projects = self._import_required_module("forwin.application.projects")
         project_control_ops = self._import_required_module(
-            "forwin.api_project_control_ops"
+            "forwin.application.project_control.operations"
         )
+        task_center = self._import_required_module("forwin.application.task_center")
 
         for owner, names in (
             (
@@ -70,6 +71,14 @@ class ApiSplitModuleTests(unittest.TestCase):
                     "override_band_experience",
                 ),
             ),
+            (
+                task_center.TaskCenterService,
+                (
+                    "load_generation_task",
+                    "list_generation_tasks",
+                    "list_project_backed_task_items",
+                ),
+            ),
         ):
             for name in names:
                 self.assertTrue(
@@ -79,11 +88,11 @@ class ApiSplitModuleTests(unittest.TestCase):
 
     def test_api_entrypoint_exports_only_asgi_contract(self) -> None:
         api_module = self._import_required_module("forwin.api")
-        api_app = self._import_required_module("forwin.api_core.app")
+        http_app = self._import_required_module("forwin.http")
 
-        self.assertEqual(api_module.__all__, ["app", "lifespan"])
-        self.assertIs(api_module.app, api_app.app)
-        self.assertIs(api_module.lifespan, api_app.lifespan)
+        self.assertEqual(api_module.__all__, ["app", "create_app", "lifespan"])
+        self.assertIs(api_module.create_app, http_app.create_app)
+        self.assertIs(api_module.lifespan, http_app.lifespan)
         self.assertFalse(hasattr(api_module, "_SessionFactory"))
         self.assertFalse(hasattr(api_module, "_create_continue_generation_task"))
 
@@ -91,24 +100,27 @@ class ApiSplitModuleTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         line_limits = {
             "forwin/api.py": 20,
-            "forwin/api_core/app.py": 700,
-            "forwin/api_core/automation.py": 450,
-            "forwin/api_core/generation.py": 700,
-            "forwin/api_core/project_helpers.py": 700,
-            "forwin/api_core/runtime.py": 500,
-            "forwin/api_core/state.py": 120,
-            "forwin/api_core/tasks.py": 1000,
+            "forwin/http/app.py": 420,
+            "forwin/http/automation.py": 220,
+            "forwin/http/generation.py": 420,
+            "forwin/http/project_support.py": 420,
+            "forwin/http/request_support.py": 240,
+            "forwin/http/runtime.py": 220,
+            "forwin/http/tasks.py": 950,
             "forwin/api_pages.py": 80,
             "forwin/api_pages_home.py": 300,
             "forwin/api_pages_publishers.py": 250,
-            "forwin/api_system_routes.py": 500,
-            "forwin/api_task_routes.py": 500,
-            "forwin/api_publisher_routes.py": 200,
-            "forwin/api_project_routes.py": 80,
+            "forwin/http/adapters/api_system_routes.py": 500,
+            "forwin/http/adapters/api_task_routes.py": 500,
+            "forwin/http/adapters/api_publisher_routes.py": 200,
+            "forwin/http/adapters/api_project_routes.py": 80,
             "forwin/application/publisher/service.py": 400,
             "forwin/application/projects/service.py": 500,
-            "forwin/api_project_control_routes.py": 500,
-            "forwin/api_project_control_support.py": 900,
+            "forwin/http/adapters/api_project_control_routes.py": 500,
+            "forwin/application/tasks.py": 420,
+            "forwin/application/task_center.py": 650,
+            "forwin/application/project_control/service.py": 420,
+            "forwin/application/project_control/support.py": 900,
             "forwin/api_automation.py": 450,
         }
         for relative_path, max_lines in line_limits.items():

@@ -16,10 +16,17 @@ from forwin.api_schema import (
 from forwin.generation.continue_workset import (
     build_continue_generation_workset,
 )
+from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
+from .common import (
+    _continue_workset_http_error,
+    _extension_arc_synopsis,
+    _extension_chapter_blueprint,
+    _extension_continuity_guard,
+)
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -32,15 +39,6 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
-
-from .common import (
-    _continue_workset_http_error,
-    _extension_arc_synopsis,
-    _extension_chapter_blueprint,
-    _extension_continuity_guard,
-)
-from forwin.generation.run_target import resolve_generation_run_target
-
 
 def _reset_orphan_needs_review_plans(
     session,

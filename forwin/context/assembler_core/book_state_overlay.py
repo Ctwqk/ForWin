@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from forwin.protocol.book_state import MapNode, WorldNode
+from .map_context import _visible_map_edge
 
 
 logger = logging.getLogger(__name__)
@@ -10,7 +11,6 @@ logger = logging.getLogger(__name__)
 _MAP_CONTEXT_NEIGHBOR_LIMIT = 8
 _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT = 256
 _MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT = 512
-from .map_context import _visible_map_edge
 
 
 def _book_state_context_overlay(

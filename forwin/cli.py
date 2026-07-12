@@ -1,7 +1,6 @@
 """ForWin CLI – 长篇中文网文生成系统.
 
 Usage:
-    forwin generate --premise "在一个灵气复苏的末世..." [--genre 玄幻] [--chapters 3]
     forwin read --project-id <id> [--chapter 1]
     forwin status --project-id <id>
 """
@@ -9,7 +8,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import os
 import sys
 import time
 
@@ -39,183 +40,98 @@ def _get_config(args: argparse.Namespace) -> InfrastructureConfig:
 # ------------------------------------------------------------------
 
 
-def cmd_generate(args: argparse.Namespace) -> None:
-    """Generate chapters from a premise."""
-    from forwin.runtime.container import RuntimeContainer
-    from forwin.runtime.policy import RuntimePolicy
+def _api_client(args: argparse.Namespace):
+    from forwin.mcp.client import ForWinAPIClient
 
-    config = _get_config(args)
-    if not config.minimax_api_key:
-        print(
-            "错误: 未设置 API Key。请通过 --api-key 或 MINIMAX_API_KEY 环境变量设置。"
-        )
-        sys.exit(1)
-
-    pipeline = RuntimeContainer.from_config(
-        config,
-        policy=RuntimePolicy.for_profile("standard"),
-        role="generation_worker",
-    ).build_chapter_pipeline()
-    result = pipeline.run(
-        premise=args.premise,
-        genre=args.genre,
-        num_chapters=args.chapters,
+    return ForWinAPIClient(
+        base_url=str(args.api_base_url).rstrip("/"),
+        timeout=float(args.api_timeout),
     )
-    project_id = result.project_id
-    if result.failed_chapters:
-        failed_str = ", ".join(str(chapter) for chapter in result.failed_chapters)
-        print(
-            f"\n警告: 成功生成 {len(result.completed_chapters)} 章，"
-            f"失败章节: {failed_str}"
+
+
+def cmd_generate(args: argparse.Namespace) -> None:
+    """Create a Genesis project and hand it off to durable generation."""
+    from forwin.mcp.models import STAGE_KEY_ORDER
+
+    async def run() -> None:
+        client = _api_client(args)
+        created = await client.project_create(
+            title=args.title,
+            premise=args.premise,
+            genre=args.genre,
+            setting_summary=args.setting_summary,
+            target_total_chapters=args.chapters,
         )
-    print(f"\n使用以下命令阅读生成的章节:")
-    print(f"  forwin read --project-id {project_id} --chapter 1")
-    print(f"  forwin status --project-id {project_id}")
+        if created.project is None:
+            raise RuntimeError("ForWin API did not return the created project")
+        project_id = created.project.id
+        for stage_key in STAGE_KEY_ORDER:
+            print(f"Genesis {stage_key}: generate")
+            await client.genesis_stage_generate(
+                project_id=project_id,
+                stage_key=stage_key,
+            )
+            print(f"Genesis {stage_key}: lock")
+            await client.genesis_stage_lock(
+                project_id=project_id,
+                stage_key=stage_key,
+            )
+        active = await client.task_active_generation_check(project_id=project_id)
+        if active.has_active_generation_task:
+            raise RuntimeError("project already has an active generation task")
+        started = await client.project_start_writing(
+            project_id=project_id,
+            auto_continue=True,
+            run_until_chapter=args.chapters,
+            max_chapters=args.chapters,
+        )
+        task_id = started.task.task_id if started.task is not None else ""
+        print(f"project_id={project_id}")
+        print(f"task_id={task_id}")
+        print(started.message)
+
+    asyncio.run(run())
 
 
 def cmd_read(args: argparse.Namespace) -> None:
-    """Read a chapter from the database."""
-    from sqlalchemy import select
-
-    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
-    from forwin.models.draft import ChapterDraft
-    from forwin.models.project import ChapterPlan
-
-    config = _get_config(args)
-    engine = get_engine(config.database_url)
-    require_v5_schema(engine)
-    Session = get_session_factory(engine)
-    session = Session()
-
-    try:
-        # Find the chapter plan.
-        stmt = select(ChapterPlan).where(
-            ChapterPlan.project_id == args.project_id,
-            ChapterPlan.chapter_number == args.chapter,
+    """Read a chapter through the deployed HTTP API."""
+    chapter = asyncio.run(
+        _api_client(args).chapter_get(
+            project_id=args.project_id,
+            chapter_number=args.chapter,
         )
-        plan = session.execute(stmt).scalar_one_or_none()
-        if plan is None:
-            print(f"未找到项目 {args.project_id} 的第 {args.chapter} 章计划。")
-            return
-
-        # Find the latest draft for this chapter.
-        draft_stmt = (
-            select(ChapterDraft)
-            .where(ChapterDraft.chapter_plan_id == plan.id)
-            .order_by(ChapterDraft.version.desc())
-            .limit(1)
-        )
-        draft = session.execute(draft_stmt).scalar_one_or_none()
-        if draft is None:
-            print(f"第 {args.chapter} 章尚未生成。")
-            return
-
-        print(f"\n{'=' * 60}")
-        print(f"第{args.chapter}章  {plan.title}")
-        print(f"{'=' * 60}")
-        print(f"字数: {draft.char_count}  |  版本: v{draft.version}")
-        print(f"摘要: {draft.summary}")
-        print(f"{'─' * 60}\n")
-        print(draft.body_text)
-        print(f"\n{'─' * 60}")
-    finally:
-        session.close()
-        engine.dispose()
+    )
+    print(f"\n{'=' * 60}")
+    print(f"第{chapter.chapter_number}章  {chapter.title}")
+    print(f"{'=' * 60}")
+    print(f"字数: {chapter.char_count}  |  版本: v{chapter.version}")
+    print(f"摘要: {chapter.summary}")
+    print(f"{'─' * 60}\n")
+    print(chapter.body)
+    print(f"\n{'─' * 60}")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    """Show project status."""
-    from sqlalchemy import select
-
-    from forwin.book_state import BookStateQuery
-    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
-    from forwin.models.project import ChapterPlan, Project
-    from forwin.state.query_helpers import load_latest_drafts_by_plan_id
-
-    config = _get_config(args)
-    engine = get_engine(config.database_url)
-    require_v5_schema(engine)
-    Session = get_session_factory(engine)
-    session = Session()
-
-    try:
-        project = session.get(Project, args.project_id)
-        if project is None:
-            print(f"未找到项目: {args.project_id}")
-            return
-
-        print(f"\n{'=' * 60}")
-        print(f"项目: {project.title}")
-        print(f"ID: {project.id}")
-        print(f"类型: {project.genre}")
-        print(f"{'─' * 60}")
-
-        # Premise (truncated)
-        premise_display = (
-            project.premise[:100] + "..."
-            if len(project.premise) > 100
-            else project.premise
-        )
-        print(f"设定: {premise_display}")
-
-        book_state = BookStateQuery(session)
-        as_of_chapter = book_state.repository.latest_available_chapter(args.project_id)
-        entities = book_state.active_entities(
-            args.project_id,
-            as_of_chapter=as_of_chapter,
-        )
-        chars = [e for e in entities if e.kind == "character"]
-        locs = [e for e in entities if e.kind == "location"]
-        facs = [
-            e
-            for e in entities
-            if e.kind in {"faction", "organization", "family", "institution"}
-        ]
-        print(f"\n角色 ({len(chars)}): {', '.join(c.name for c in chars)}")
-        if locs:
-            print(f"地点 ({len(locs)}): {', '.join(l.name for l in locs)}")
-        if facs:
-            print(f"势力 ({len(facs)}): {', '.join(f.name for f in facs)}")
-
-        threads = book_state.active_threads(
-            args.project_id,
-            as_of_chapter=as_of_chapter,
-        )
-        if threads:
-            print(f"\n情节线 ({len(threads)}):")
-            for t in threads:
-                print(f"  [{t.status}] {t.name} (优先级{t.priority})")
-
-        # Chapters
-        plans = (
-            session.execute(
-                select(ChapterPlan)
-                .where(ChapterPlan.project_id == args.project_id)
-                .order_by(ChapterPlan.chapter_number)
+    """Show project status through the deployed HTTP API."""
+    project = asyncio.run(_api_client(args).project_get(args.project_id))
+    print(f"\n{'=' * 60}")
+    print(f"项目: {project.title}")
+    print(f"ID: {project.id}")
+    print(f"类型: {project.genre}")
+    print(f"生命周期: {project.creation_status}")
+    print(f"当前阶段: {project.latest_stage or '-'}")
+    print(f"下一门禁: {project.next_gate or '-'}")
+    print(f"接受章节: {project.accepted_chapter_count}/{project.target_total_chapters}")
+    if project.blocking_reason.message:
+        print(f"阻断: {project.blocking_reason.message}")
+    if project.chapters:
+        print("\n章节:")
+        for chapter in project.chapters:
+            print(
+                f"  第{chapter.chapter_number}章 《{chapter.title}》 "
+                f"[{chapter.status}] {chapter.char_count}字"
             )
-            .scalars()
-            .all()
-        )
-        if plans:
-            draft_map = load_latest_drafts_by_plan_id(
-                session, [plan.id for plan in plans]
-            )
-            print(f"\n章节 ({len(plans)}):")
-            for p in plans:
-                draft = draft_map.get(p.id)
-                char_info = f" ({draft.char_count}字)" if draft else ""
-                print(f"  第{p.chapter_number}章 《{p.title}》 [{p.status}]{char_info}")
-
-        event_count = book_state.event_count(
-            args.project_id,
-            as_of_chapter=as_of_chapter,
-        )
-        print(f"\n已记录事件: {event_count}")
-
-        print(f"{'=' * 60}\n")
-    finally:
-        session.close()
-        engine.dispose()
+    print(f"{'=' * 60}\n")
 
 
 def cmd_llm_eval(args: argparse.Namespace) -> None:
@@ -234,37 +150,24 @@ def cmd_llm_eval(args: argparse.Namespace) -> None:
 
 def cmd_generation_worker(args: argparse.Namespace) -> None:
     """Run the durable generation worker."""
-    from forwin.api_core import state as api_state
     from forwin.generation.worker_cli import (
         default_worker_id,
         run_generation_worker_loop,
     )
-    from forwin.runtime.container import RuntimeContainer
-    from forwin.runtime.policy import RuntimePolicy
+    from forwin.runtime.workers import build_generation_worker_runtime
 
     config = _get_config(args)
-    container = RuntimeContainer.from_config(
-        config,
-        policy=RuntimePolicy.for_profile("standard"),
-        role="generation_worker",
-    )
-    services = container.services()
+    runtime = build_generation_worker_runtime(config)
     try:
-        api_state._config = config
-        api_state._engine = services.engine
-        api_state._SessionFactory = services.session_factory
-        api_state._runtime_container = container
-
         exit_code = run_generation_worker_loop(
-            application_service=services.generation_application,
+            application_service=runtime.services.generation_application,
             worker_id=args.worker_id or default_worker_id(),
             lease_seconds=args.lease_seconds,
             poll_interval=args.poll_interval,
             once=args.once,
         )
     finally:
-        services.llm_client.close()
-        services.engine.dispose()
+        runtime.close()
     if exit_code:
         sys.exit(exit_code)
 
@@ -291,32 +194,19 @@ def run_publisher_worker_loop(
 
 def cmd_publisher_worker(args: argparse.Namespace) -> None:
     """Run publisher backend-owned jobs such as cover generation."""
-    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
-    from forwin.runtime.container import RuntimeContainer
-    from forwin.runtime.policy import RuntimePolicy
+    from forwin.runtime.workers import build_publisher_worker_runtime
 
     config = _get_config(args)
-    engine = get_engine(config.database_url)
+    runtime = build_publisher_worker_runtime(config)
     try:
-        require_v5_schema(engine)
-        Session = get_session_factory(engine)
-        runtime = (
-            RuntimeContainer.from_config(
-                config,
-                policy=RuntimePolicy.for_profile("standard"),
-                role="publisher_worker",
-            )
-            .services()
-            .publisher_runtime
-        )
         run_publisher_worker_loop(
-            runtime.backend_jobs,
+            runtime.services.publisher_runtime.backend_jobs,
             limit=args.limit,
             once=args.once,
             poll_interval=args.poll_interval,
         )
     finally:
-        engine.dispose()
+        runtime.close()
 
 
 def cmd_outbox_worker(args: argparse.Namespace) -> None:
@@ -364,15 +254,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key", default=None, help="LLM API Key")
     parser.add_argument("--model", default=None, help="LLM 模型名称")
     parser.add_argument("--base-url", default=None, help="LLM API Base URL")
+    parser.add_argument(
+        "--api-base-url",
+        default=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+        help="ForWin HTTP API base URL",
+    )
+    parser.add_argument(
+        "--api-timeout",
+        type=float,
+        default=300.0,
+        help="HTTP timeout 秒数",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="启用详细日志")
 
     sub = parser.add_subparsers(dest="command", help="子命令")
 
-    # generate
-    gen = sub.add_parser("generate", help="生成小说章节")
-    gen.add_argument("--premise", required=True, help="小说设定/前提")
-    gen.add_argument("--genre", default="玄幻", help="类型 (默认: 玄幻)")
-    gen.add_argument("--chapters", type=int, default=3, help="生成章节数 (默认: 3)")
+    generate = sub.add_parser("generate", help="创建 Genesis 项目并启动写作")
+    generate.add_argument("--title", required=True, help="书名")
+    generate.add_argument("--premise", required=True, help="小说设定/前提")
+    generate.add_argument("--genre", default="玄幻", help="类型")
+    generate.add_argument("--setting-summary", default="", help="世界设定摘要")
+    generate.add_argument("--chapters", type=int, default=3, help="目标章节数")
 
     # read
     read = sub.add_parser("read", help="阅读已生成的章节")
@@ -418,15 +320,6 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument(
         "--skip-mini-real-run", action="store_true", help="只跑 direct stage probes"
     )
-    eval_run.add_argument(
-        "--base-url", default="", help="可选：生产 ForWin base URL，用于后续 live 集成"
-    )
-    eval_run.add_argument(
-        "--allow-production-data",
-        action="store_true",
-        help="允许压测已部署实例或生产数据",
-    )
-
     eval_report = eval_sub.add_parser("report", help="读取并打印 LLM eval 报告")
     eval_report.add_argument("--run-id", required=True, help="run id")
     eval_report.add_argument("--artifact-root", default="", help="artifact root")

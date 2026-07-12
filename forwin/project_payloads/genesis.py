@@ -15,6 +15,12 @@ from forwin.api_schema import (
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import Project
 from forwin.world_templates import empty_world_root
+from .common import (
+    _deep_merge_dict,
+    _json_object,
+    _latest_rows_by_project,
+    _load_json_list,
+)
 
 
 DisplayDatetime = Callable[[datetime | None], str]
@@ -28,12 +34,6 @@ _GENESIS_STAGE_ORDER = (
 )
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .common import (
-    _deep_merge_dict,
-    _json_object,
-    _latest_rows_by_project,
-    _load_json_list,
-)
 
 
 def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:

@@ -167,7 +167,7 @@ class GenerationApplicationService:
         resume_from_chapter: int,
         _worker_id: str,
     ) -> None:
-        from forwin.api_runtime import run_continue_project_with_context
+        from forwin.application.generation_execution import execute_continuation
 
         project_id = str(task.project_id or "").strip()
         payload = payload_from_json(task.execution_payload_json)
@@ -175,7 +175,7 @@ class GenerationApplicationService:
             raise PermanentConfigurationError(
                 "v5 generation executes project-backed continuation tasks only"
             )
-        run_continue_project_with_context(
+        execute_continuation(
             context,
             project_id,
             self._task_updater(),

@@ -99,14 +99,12 @@ class ProfileOptionsMixin:
         profile: dict[str, str],
         request_timeout: httpx.Timeout,
         *,
-        llm_task_route: str = "",
         explicit_timeout: bool = False,
     ) -> httpx.Timeout:
         is_kimi = cls._is_kimi_k25_profile(profile)
         is_deepseek = cls._is_deepseek_profile(profile)
         if not (is_kimi or is_deepseek):
             return request_timeout
-        route = str(llm_task_route or "").strip().lower()
         if explicit_timeout:
             return request_timeout
         read_timeout = max(

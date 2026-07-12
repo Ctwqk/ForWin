@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,27 @@ class ChapterRewriteAttemptInfo(BaseModel):
     result_band_plan: dict[str, Any] = Field(default_factory=dict)
 
 
+ChapterDecisionLayer = Literal[
+    "draft_review",
+    "repair",
+    "residual_eligibility",
+    "gate_delegation",
+    "canon",
+]
+
+
+class ChapterDecisionLayerInfo(BaseModel):
+    model_config = {"frozen": True}
+
+    layer: ChapterDecisionLayer
+    status: str
+    outcome: str
+    summary: str = ""
+    blocking: bool = False
+    evidence_refs: list[str] = Field(default_factory=list)
+    decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
+
+
 class ChapterReviewDetail(BaseModel):
     project_id: str
     chapter_number: int
@@ -116,6 +137,7 @@ class ChapterReviewDetail(BaseModel):
     repair_exhausted: bool = False
     rewrite_attempts: list[ChapterRewriteAttemptInfo] = Field(default_factory=list)
     decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
+    decision_layers: list[ChapterDecisionLayerInfo] = Field(default_factory=list)
     rule_decision: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -274,6 +296,8 @@ __all__ = [
     "RepairVerificationInfo",
     "FinalResidualDecisionInfo",
     "ChapterRewriteAttemptInfo",
+    "ChapterDecisionLayer",
+    "ChapterDecisionLayerInfo",
     "ChapterReviewDetail",
     "ChapterReviewApproveRequest",
     "ChapterReviewRetryRequest",

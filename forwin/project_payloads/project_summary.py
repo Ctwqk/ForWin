@@ -16,19 +16,6 @@ from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
 )
-
-
-DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = (
-    "brief",
-    "world",
-    "map",
-    "story_engine",
-    "book_blueprint",
-    "bootstrap",
-)
-_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
-_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .arc_snapshot import (
     _decision_timeline_by_project,
     _latest_band_checkpoint_by_project,
@@ -45,6 +32,19 @@ from .runtime_maps import (
     load_project_upload_stats,
     normalize_project_automation,
 )
+
+
+DisplayDatetime = Callable[[datetime | None], str]
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
+_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
+_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
 
 def build_project_summaries(

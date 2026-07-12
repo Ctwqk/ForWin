@@ -18,10 +18,6 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
     if not live and not getattr(args, "dry_run", False):
         print("Refusing to run live LLM eval. Set FORWIN_LLM_EVAL_LIVE=1 or pass --dry-run.")
         return 2
-    if str(getattr(args, "base_url", "") or "").strip() and not bool(getattr(args, "allow_production_data", False)):
-        print("--base-url targets a deployed ForWin instance; pass --allow-production-data explicitly.")
-        return 2
-
     run_id = str(getattr(args, "run_id", "") or "").strip() or f"llm-eval-{uuid.uuid4().hex[:12]}"
     profiles = load_eval_profiles(
         manifest_path=str(getattr(args, "manifest", "") or ""),
@@ -59,8 +55,6 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
             suite=str(getattr(args, "suite", "medium") or "medium"),
             live=True,
             include_mini_real_run=not bool(getattr(args, "skip_mini_real_run", False)),
-            allow_production_data=bool(getattr(args, "allow_production_data", False)),
-            base_url=str(getattr(args, "base_url", "") or ""),
             rounds=int(getattr(args, "rounds", 0) or (1 if str(getattr(args, "suite", "medium")) == "smoke" else 20)),
         )
     )

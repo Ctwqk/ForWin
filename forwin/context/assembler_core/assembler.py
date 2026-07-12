@@ -9,13 +9,13 @@ from forwin.protocol.context import (
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
+from .canon_quality_context import _build_canon_quality_context
 
 logger = logging.getLogger(__name__)
 
 _MAP_CONTEXT_NEIGHBOR_LIMIT = 8
 _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT = 256
 _MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT = 512
-from .canon_quality_context import _build_canon_quality_context
 
 
 class ChapterContextAssembler:

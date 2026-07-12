@@ -170,7 +170,6 @@ class WebNovelExperienceReviewer:
         writer_output: WriterOutput,
     ) -> ReviewVerdict:
         plan = context.chapter_experience_plan
-        schedule = context.band_delight_schedule
         planned_tags = list(plan.planned_reward_tags if plan is not None else [])
         delivered_tags, delivery_refs = self._collect_delivered_reward_evidence(writer_output)
         progress_score, progress_refs = self._progress_score(context, writer_output)

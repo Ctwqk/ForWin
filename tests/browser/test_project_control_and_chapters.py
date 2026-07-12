@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import expect
 
 from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
@@ -84,13 +86,15 @@ def test_project_control_actions_review_and_chapter_operations(
         == "overridden"
     )
 
-    with page.expect_event("dialog") as review_dialog:
-        page.get_by_role("button", name="查看 Review").first.click()
-    message = review_dialog.value.message
-    review_dialog.value.accept()
-    assert "Verdict" in message
-    assert "arc_patcher_disabled" in message
-    assert "arc_patch" in message
+    page.get_by_role("button", name="查看 Review").first.click()
+    expect(page.locator("#review_modal_shell")).to_have_class(re.compile(r"\bopen\b"))
+    expect(page.locator("#review_layer_flow .review-layer-panel")).to_have_count(5)
+    expect(page.locator("#review_layer_flow")).to_contain_text("残余资格")
+    expect(page.locator("#review_repair_list")).to_contain_text(
+        "arc_patcher_disabled"
+    )
+    expect(page.locator("#review_modal_shell")).to_contain_text("arc_patch")
+    page.locator("#review_modal_shell .icon-button").click()
 
     page.get_by_role("button", name="Review 决策链").first.click()
     expect(page.locator("#global_status")).to_contain_text("已跳到")

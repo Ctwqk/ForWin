@@ -18,6 +18,7 @@ from forwin.audit.events import (
 )
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ChapterPlan, Project
+from .arc_snapshot import _band_checkpoint_detail
 
 
 DisplayDatetime = Callable[[datetime | None], str]
@@ -31,7 +32,6 @@ _GENESIS_STAGE_ORDER = (
 )
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .arc_snapshot import _band_checkpoint_detail
 
 
 def _derive_blocking_reason(

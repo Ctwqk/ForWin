@@ -21,7 +21,7 @@ from forwin.models.task import GenerationTask
 class TaskCenterService:
     get_session: Callable[[], Any]
     has_db_session: Callable[[], bool]
-    prune_tasks: Callable[[], None]
+    prune_task_cache: Callable[[], None]
     utcnow: Callable[[], datetime]
     display_datetime: Callable[[Any], str]
     coerce_task_datetime: Callable[[Any], datetime]
@@ -124,7 +124,7 @@ class TaskCenterService:
             )
 
     def list_generation_tasks(self, limit: int) -> list[tuple[str, dict[str, Any]]]:
-        self.prune_tasks()
+        self.prune_task_cache()
         normalized_limit = max(1, min(int(limit or 30), 100))
         if not self.has_db_session():
             return [

@@ -4,7 +4,7 @@ import json
 
 from sqlalchemy import select
 
-from forwin.api_project_control_ops import (
+from forwin.application.project_control.operations import (
     approve_scenario_plan_patch,
     rerun_scenario_rehearsal,
 )

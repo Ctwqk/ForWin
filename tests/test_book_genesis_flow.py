@@ -3,14 +3,11 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
-import forwin.api_core.app as api_app
-from forwin.api_core import state as api_state
 from forwin.api_schema import (
     BookGenesisPatchRequest,
     BookGenesisRefineRequest,
@@ -38,26 +35,21 @@ from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
+from tests.http_runtime_harness import HttpRuntimeHarness
 
 
-api_module = SimpleNamespace(
-    **api_app._registered_route_handlers,
-    _build_genesis_service=api_app._build_genesis_service,
-    _close_genesis_service=api_app._close_genesis_service,
-)
+api_module: HttpRuntimeHarness
 
 
 class BookGenesisFlowTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module
         self.database_url = postgres_test_url("genesis")
         engine = get_engine(self.database_url)
         init_db(engine)
         self.session_factory = get_session_factory(engine)
         self.engine = engine
-        self.old_session_factory = api_state._SessionFactory
-        self.old_config = api_state._config
-        api_state._SessionFactory = self.session_factory
-        api_state._config = InfrastructureConfig(
+        config = InfrastructureConfig(
             database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
@@ -72,10 +64,13 @@ class BookGenesisFlowTests(unittest.TestCase):
                 }
             ],
         )
+        api_module = HttpRuntimeHarness(
+            session_factory=self.session_factory,
+            config=config,
+            engine=self.engine,
+        )
 
     def tearDown(self) -> None:
-        api_state._SessionFactory = self.old_session_factory
-        api_state._config = self.old_config
         self.engine.dispose()
 
     def test_create_project_enters_creating_and_creates_initial_genesis_revision(
@@ -412,7 +407,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 new=fake_genesis_call,
             ),
             patch(
-                "forwin.api_core.app._create_continue_generation_task",
+                "forwin.http.app._create_continue_generation_task",
                 return_value="task-genesis-001",
             ),
         ):
@@ -629,7 +624,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
                 return_value=invalid_map,
             ),
-            patch("forwin.api_core.app._create_continue_generation_task") as task_mock,
+            patch("forwin.http.app._create_continue_generation_task") as task_mock,
         ):
             with self.assertRaises(HTTPException) as raised:
                 api_module.start_project_writing(created.project_id)
@@ -765,7 +760,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 new=fake_genesis_call,
             ),
             patch(
-                "forwin.api_core.app._create_continue_generation_task",
+                "forwin.http.app._create_continue_generation_task",
                 return_value="task-genesis-size-001",
             ),
         ):

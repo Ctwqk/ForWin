@@ -21,6 +21,12 @@ from forwin.models.planning_control import (
     NarrativeConstraint,
 )
 from forwin.models.audit import DecisionEvent
+from .common import (
+    _json_list_strings,
+    _json_object,
+    _latest_rows_by_project,
+    _recent_rows_by_project,
+)
 
 
 DisplayDatetime = Callable[[datetime | None], str]
@@ -34,12 +40,6 @@ _GENESIS_STAGE_ORDER = (
 )
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .common import (
-    _json_list_strings,
-    _json_object,
-    _latest_rows_by_project,
-    _recent_rows_by_project,
-)
 
 
 def _latest_band_checkpoint_by_project(

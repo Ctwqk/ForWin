@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import select
 
-import forwin.api as api_module
+from forwin.api_schema import ProjectAutomationUpdateRequest, ProjectCreateRequest
+from forwin.config import InfrastructureConfig
 from forwin.project_payloads import normalize_project_automation
-from forwin.api_schema import ProjectCreateRequest
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
+from tests.http_runtime_harness import HttpRuntimeHarness
 
 
 class ProjectPublishBindingTests(unittest.TestCase):
@@ -72,10 +72,13 @@ class ProjectPublishBindingTests(unittest.TestCase):
         engine = get_engine(postgres_test_url("projects"))
         init_db(engine)
         session_factory = get_session_factory(engine)
-        old_session_factory = api_module._SessionFactory
+        api = HttpRuntimeHarness(
+            session_factory=session_factory,
+            config=InfrastructureConfig(database_url=postgres_test_url("projects")),
+            engine=engine,
+        )
 
         try:
-            api_module._SessionFactory = session_factory
             req = ProjectCreateRequest.model_validate(
                 {
                     "title": "双平台测试书",
@@ -98,7 +101,7 @@ class ProjectPublishBindingTests(unittest.TestCase):
                 }
             )
 
-            response = api_module.create_project(req)
+            response = api.create_project(req)
 
             with session_factory() as session:
                 project = session.execute(select(Project)).scalar_one()
@@ -117,7 +120,6 @@ class ProjectPublishBindingTests(unittest.TestCase):
                 ["fanqie", "qidian"],
             )
         finally:
-            api_module._SessionFactory = old_session_factory
             engine.dispose()
             tmpdir.cleanup()
 
@@ -126,11 +128,16 @@ class ProjectPublishBindingTests(unittest.TestCase):
         engine = get_engine(postgres_test_url("project-automation"))
         init_db(engine)
         session_factory = get_session_factory(engine)
-        old_session_factory = api_module._SessionFactory
+        api = HttpRuntimeHarness(
+            session_factory=session_factory,
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("project-automation")
+            ),
+            engine=engine,
+        )
 
         try:
-            api_module._SessionFactory = session_factory
-            created = api_module.create_project(
+            created = api.create_project(
                 ProjectCreateRequest.model_validate(
                     {
                         "title": "自动化绑定测试书",
@@ -140,9 +147,9 @@ class ProjectPublishBindingTests(unittest.TestCase):
                 )
             )
 
-            updated = api_module.update_project_automation(
+            updated = api.update_project_automation(
                 created.project_id,
-                api_module.ProjectAutomationUpdateRequest.model_validate(
+                ProjectAutomationUpdateRequest.model_validate(
                     {
                         "enabled": True,
                         "auto_publish": True,
@@ -184,7 +191,6 @@ class ProjectPublishBindingTests(unittest.TestCase):
                 ["fanqie", "qidian"],
             )
         finally:
-            api_module._SessionFactory = old_session_factory
             engine.dispose()
             tmpdir.cleanup()
 

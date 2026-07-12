@@ -114,16 +114,9 @@
       if (item.project_id && chapterNumber && (status === 'needs_review' || chapter?.has_review)) {
         try {
           const review = await requestJson(`/api/projects/${item.project_id}/chapters/${chapterNumber}/review`);
-          lines.push(`Review verdict：${review.verdict || '-'}`);
-          if (Array.isArray(review.issues) && review.issues.length) {
-            lines.push('Review 问题：');
-            review.issues.forEach((issue, index) => {
-              const tags = [issue.severity || '-', issue.issue_group || '', issue.issue_type || ''].filter(Boolean).join(' / ');
-              lines.push(`${index + 1}. [${tags}] ${issue.description || issue.rule_name || '未命名问题'}`);
-            });
-          }
-          if (review.recommended_action) lines.push(`建议动作：${review.recommended_action}`);
-          if (review.review_summary) lines.push(`Review 摘要：${review.review_summary}`);
+          setGlobalStatus(lines.join(' · '), '章节阶段详情');
+          await openReviewModal(item.project_id, chapterNumber, review);
+          return;
         } catch (error) {
           lines.push(`Review 读取失败：${error.message || String(error)}`);
         }
@@ -492,29 +485,211 @@
       setGlobalStatus(`已跳到 band ${checkpoint?.band_id || '-'} checkpoint 的决策链。`, '治理时间线');
     }
 
-    async function showReview(projectId, chapterNumber) {
+    const REVIEW_LAYER_ORDER = [
+      'draft_review',
+      'repair',
+      'residual_eligibility',
+      'gate_delegation',
+      'canon',
+    ];
+    const REVIEW_LAYER_LABELS = {
+      draft_review: '草稿评审',
+      repair: '修复',
+      residual_eligibility: '残余资格',
+      gate_delegation: '门禁委托',
+      canon: 'Canon',
+    };
+    let currentReviewModal = null;
+
+    function reviewLayerBadgeClass(layer) {
+      if (layer?.blocking) return 'badge danger';
+      if (['complete', 'not_required'].includes(String(layer?.status || ''))) return 'badge ok';
+      return 'badge warn';
+    }
+
+    function appendReviewDetailRow(container, label, badges, copy, evidenceRefs = []) {
+      const row = createNode('div', '', 'review-detail-row');
+      const labelNode = createNode('div', '', 'review-detail-label');
+      labelNode.appendChild(createNode('strong', label || '未命名'));
+      (Array.isArray(badges) ? badges : []).filter(Boolean).forEach((badge) => {
+        labelNode.appendChild(createNode('span', badge, 'badge'));
+      });
+      const copyNode = createNode('div', copy || '无补充信息。', 'review-detail-copy');
+      const refs = (Array.isArray(evidenceRefs) ? evidenceRefs : []).filter(Boolean);
+      if (refs.length) {
+        copyNode.appendChild(createNode('div', `证据：${refs.join(' · ')}`, 'meta-line'));
+      }
+      row.append(labelNode, copyNode);
+      container.appendChild(row);
+    }
+
+    function renderReviewLayer(layer) {
+      const panel = createNode('article', '', 'review-layer-panel');
+      panel.dataset.blocking = String(Boolean(layer.blocking));
+      const title = createNode('div', '', 'review-layer-title');
+      title.appendChild(createNode('strong', REVIEW_LAYER_LABELS[layer.layer] || layer.layer || '决策层'));
+      title.appendChild(createNode('span', layer.status || 'unknown', reviewLayerBadgeClass(layer)));
+      panel.appendChild(title);
+      panel.appendChild(createNode('div', layer.outcome || '-', 'review-layer-outcome'));
+      panel.appendChild(createNode('div', layer.summary || '尚无摘要。', 'review-layer-summary'));
+
+      const footer = createNode('div', '', 'review-layer-footer');
+      const evidence = createNode('div', '', 'review-evidence-list');
+      const evidenceRefs = Array.isArray(layer.evidence_refs) ? layer.evidence_refs : [];
+      if (evidenceRefs.length) {
+        evidenceRefs.forEach((ref) => evidence.appendChild(createNode('div', ref, 'review-evidence-item')));
+      } else {
+        evidence.appendChild(createNode('div', '无独立证据引用', 'meta-line'));
+      }
+      footer.appendChild(evidence);
+      const auditButton = createButton('审计', () => jumpToReviewLayerDecisionChain(layer), 'ghost review-layer-audit');
+      auditButton.disabled = !latestDecisionRefId(layer.decision_refs);
+      footer.appendChild(auditButton);
+      panel.appendChild(footer);
+      return panel;
+    }
+
+    function renderReviewModal(data, projectId, chapterNumber) {
+      currentReviewModal = { projectId, chapterNumber, data };
+      document.getElementById('review_modal_kicker').textContent = `Chapter ${chapterNumber} Review`;
+      document.getElementById('review_modal_title').textContent = data.title || `第${chapterNumber}章`;
+      document.getElementById('review_modal_meta').textContent = [
+        data.status ? `章节状态 ${data.status}` : '',
+        data.verdict ? `草稿 verdict ${data.verdict}` : '',
+        data.acceptance_mode ? `接受模式 ${data.acceptance_mode}` : '',
+        data.canon_risk_level ? `Canon 风险 ${data.canon_risk_level}` : '',
+      ].filter(Boolean).join(' · ');
+
+      const layerFlow = document.getElementById('review_layer_flow');
+      clearNode(layerFlow);
+      const sourceLayers = Array.isArray(data.decision_layers) ? data.decision_layers : [];
+      const layerMap = new Map(sourceLayers.map((layer) => [layer.layer, layer]));
+      REVIEW_LAYER_ORDER.forEach((key) => {
+        layerFlow.appendChild(renderReviewLayer(layerMap.get(key) || {
+          layer: key,
+          status: 'missing',
+          outcome: 'not_reported',
+          summary: '后端未返回该决策层。',
+          blocking: true,
+          evidence_refs: [],
+          decision_refs: [],
+        }));
+      });
+
+      const issues = [
+        ...(Array.isArray(data.issues) ? data.issues.map((issue) => ({ ...issue, source: '草稿' })) : []),
+        ...(Array.isArray(data.residual_review_issues)
+          ? data.residual_review_issues.map((issue) => ({ ...issue, source: '残余' }))
+          : []),
+      ];
+      document.getElementById('review_issue_count').textContent = `${issues.length} 项`;
+      const issueList = document.getElementById('review_issue_list');
+      clearNode(issueList);
+      if (!issues.length) {
+        issueList.appendChild(createNode('div', '没有记录问题。', 'empty'));
+      } else {
+        issues.forEach((issue, index) => appendReviewDetailRow(
+          issueList,
+          `${index + 1}. ${issue.rule_name || issue.issue_type || '未命名问题'}`,
+          [issue.source, issue.severity, issue.issue_group, issue.issue_type],
+          [issue.description, issue.suggested_fix ? `建议：${issue.suggested_fix}` : ''].filter(Boolean).join(' / '),
+          issue.evidence_refs,
+        ));
+      }
+
+      const attempts = Array.isArray(data.rewrite_attempts) ? data.rewrite_attempts : [];
+      document.getElementById('review_repair_count').textContent = `${attempts.length} 次`;
+      const repairList = document.getElementById('review_repair_list');
+      clearNode(repairList);
+      if (!attempts.length) {
+        repairList.appendChild(createNode('div', '没有修复尝试。', 'empty'));
+      } else {
+        attempts.forEach((attempt) => {
+          const verification = attempt.verification || {};
+          appendReviewDetailRow(
+            repairList,
+            `Attempt ${attempt.attempt_no || '-'}`,
+            [attempt.repair_phase, attempt.repair_scope, attempt.result_verdict || '无 verdict'],
+            [
+              attempt.failure_reason || '',
+              Object.keys(verification).length
+                ? `验证：must-fix ${verification.fixed_all_must_fix ? '通过' : '未通过'}；must-preserve ${verification.preserved_all_must_preserve ? '通过' : '未通过'}`
+                : '未记录独立验证。',
+            ].filter(Boolean).join(' / '),
+            [attempt.result_review_id ? `review:${attempt.result_review_id}` : ''].filter(Boolean),
+          );
+        });
+      }
+      if (data.rule_decision?.rule_id) {
+        appendReviewDetailRow(
+          repairList,
+          `资格规则 ${data.rule_decision.rule_id}`,
+          [data.rule_decision.outcome || 'unknown'],
+          data.rule_decision.reason || '无规则说明。',
+          data.rule_decision.missing_evidence || [],
+        );
+      }
+
+      const canonLayer = layerMap.get('canon');
+      const committed = canonLayer?.outcome === 'committed';
+      document.getElementById('review_modal_retry').disabled = committed;
+      document.getElementById('review_modal_approve').disabled = committed;
+      document.getElementById('review_modal_continue').disabled = committed;
+      document.getElementById('review_modal_audit').disabled = !latestDecisionRefId(data.decision_refs);
+    }
+
+    async function openReviewModal(projectId, chapterNumber, preloadedData = null) {
+      const shell = document.getElementById('review_modal_shell');
+      shell.classList.add('open');
+      document.getElementById('review_modal_title').textContent = `第${chapterNumber}章 · 正在读取`;
       try {
-        const data = await requestJson(`/api/projects/${projectId}/chapters/${chapterNumber}/review`);
-        const lines = [
-          `章节：第${chapterNumber}章《${data.title}》`,
-          `状态：${data.status}`,
-          `Verdict：${data.verdict}`,
-          data.recommended_action ? `建议动作：${data.recommended_action}` : '',
-          data.review_summary ? `摘要：${data.review_summary}` : '',
-          Array.isArray(data.issues) && data.issues.length
-            ? data.issues.map((issue, index) => `${index + 1}. [${[issue.severity, issue.issue_group, issue.issue_type].filter(Boolean).join(' / ')}] ${issue.description}`).join('\\n')
-            : '无问题',
-          Array.isArray(data.decision_refs) && data.decision_refs.length
-            ? `决策链：${data.decision_refs.map((ref) => `${ref.event_type || 'event'}#${ref.id || ref.decision_event_id || '?'}`).join(', ')}`
-            : '',
-          data.review_engine_decision?.rule_id
-            ? `Review Engine：${data.review_engine_decision.rule_id} -> ${data.review_engine_decision.outcome || '-'}\nreason：${data.review_engine_decision.reason || '-'}\nmissing：${Array.isArray(data.review_engine_decision.missing_evidence) ? data.review_engine_decision.missing_evidence.join(', ') : '-'}`
-            : '',
-        ];
-        window.alert(lines.join('\\n'));
+        const data = preloadedData || await requestJson(`/api/projects/${projectId}/chapters/${chapterNumber}/review`);
+        renderReviewModal(data, projectId, chapterNumber);
       } catch (error) {
+        closeReviewModal();
         setGlobalStatus(error.message || String(error), 'Review 读取失败');
       }
+    }
+
+    function closeReviewModal() {
+      document.getElementById('review_modal_shell').classList.remove('open');
+      currentReviewModal = null;
+    }
+
+    function jumpToReviewLayerDecisionChain(layer) {
+      const targetId = latestDecisionRefId(layer?.decision_refs);
+      if (!targetId) return;
+      closeReviewModal();
+      if (!focusDecisionEvent(targetId, 'chapter')) {
+        setGlobalStatus('时间线里暂未返回该层对应的审计事件。', 'Review 审计');
+      }
+    }
+
+    function jumpToReviewModalDecisionChain() {
+      const targetId = latestDecisionRefId(currentReviewModal?.data?.decision_refs);
+      if (!targetId) return;
+      closeReviewModal();
+      if (!focusDecisionEvent(targetId, 'chapter')) {
+        setGlobalStatus('时间线里暂未返回 Review 对应的审计事件。', 'Review 审计');
+      }
+    }
+
+    function approveReviewFromModal(continueGeneration = false) {
+      const context = currentReviewModal;
+      if (!context) return;
+      closeReviewModal();
+      approveReview(context.projectId, context.chapterNumber, continueGeneration);
+    }
+
+    function retryReviewFromModal() {
+      const context = currentReviewModal;
+      if (!context) return;
+      closeReviewModal();
+      retryReview(context.projectId, context.chapterNumber, false);
+    }
+
+    async function showReview(projectId, chapterNumber) {
+      await openReviewModal(projectId, chapterNumber);
     }
 
     async function executeApproveReview(projectId, chapterNumber, continueGeneration = false, reason = '') {

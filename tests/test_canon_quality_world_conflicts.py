@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.api_world_model_routes import build_handlers
+from forwin.http.adapters.api_world_model_routes import build_handlers
 from forwin.book_state.repository import BookStateRepository
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.signals import CanonQualitySignal

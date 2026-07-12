@@ -13,6 +13,11 @@ from forwin.api_schema import (
 )
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan, Project
+from .common import (
+    _chapter_infos_for_plans,
+    _load_json_object,
+    _normalize_chapter_page,
+)
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -25,13 +30,6 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
-
-from .common import (
-    _chapter_infos_for_plans,
-    _load_json_object,
-    _normalize_chapter_page,
-)
-
 
 def list_chapters(project_id: str, *, get_session) -> list[ChapterInfo]:
     session = get_session()

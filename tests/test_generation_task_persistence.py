@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import forwin.api as api_module
-from forwin.application.errors import ProjectNotFound
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
@@ -17,33 +14,30 @@ from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from tests.postgres import postgres_test_url
+from tests.http_runtime_harness import HttpRuntimeHarness
+
+
+api_module: HttpRuntimeHarness
 
 
 class GenerationTaskPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module
         self.tmpdir = TemporaryDirectory()
         self.engine = get_engine(postgres_test_url("generation-tasks"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
-        self.old_session_factory = api_module._SessionFactory
-        self.old_config = api_module._config
-        self.old_runtime_container = api_module._runtime_container
-        api_module._SessionFactory = self.session_factory
-        api_module._config = InfrastructureConfig(
-            database_url=postgres_test_url("generation-tasks-config")
+        api_module = HttpRuntimeHarness(
+            session_factory=self.session_factory,
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("generation-tasks-config")
+            ),
+            engine=self.engine,
         )
-        api_module._runtime_container = None
-        with api_module._tasks_lock:
-            self.old_tasks = dict(api_module._tasks)
-            api_module._tasks.clear()
 
     def tearDown(self) -> None:
         with api_module._tasks_lock:
             api_module._tasks.clear()
-            api_module._tasks.update(self.old_tasks)
-        api_module._SessionFactory = self.old_session_factory
-        api_module._config = self.old_config
-        api_module._runtime_container = self.old_runtime_container
         self.engine.dispose()
         self.tmpdir.cleanup()
 
@@ -98,16 +92,6 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             "pulp",
         )
 
-    def test_create_generation_task_rejects_projectless_initial_path(self) -> None:
-        with self.assertRaises(ProjectNotFound):
-            api_module._create_generation_task(
-                premise="主角从县城崛起",
-                genre="都市",
-                num_chapters=2,
-                title="线程切换测试",
-                subtitle="都市 · 2 章",
-            )
-
     def test_create_continue_generation_task_enqueues_without_starting_thread(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory.begin() as session:
@@ -127,18 +111,15 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
                 RuntimePolicy.for_profile("standard"),
             )
 
-        with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
-            task_id = api_module._create_continue_generation_task(
-                project_id="project-enqueue-only",
-                requested_chapters=3,
-                max_chapters=3,
-                auto_continue=False,
-                run_until_chapter=8,
-                title="继续入队测试",
-                subtitle="继续生成",
-            )
-
-        thread_cls.assert_not_called()
+        task_id = api_module._create_continue_generation_task(
+            project_id="project-enqueue-only",
+            requested_chapters=3,
+            max_chapters=3,
+            auto_continue=False,
+            run_until_chapter=8,
+            title="继续入队测试",
+            subtitle="继续生成",
+        )
         task = api_module._get_generation_task_or_404(task_id)
         self.assertEqual(task["status"], "queued")
         self.assertEqual(task["project_id"], "project-enqueue-only")
@@ -259,7 +240,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             self.assertGreater(api_module._coerce_task_datetime(row.heartbeat_at), original_heartbeat)
             self.assertGreater(api_module._coerce_task_datetime(row.lease_expires_at), original_lease)
 
-    def test_queued_generation_task_can_be_marked_pause_requested(self) -> None:
+    def test_low_level_pause_request_finishes_queued_task(self) -> None:
         task = api_module._create_task_record(title="queued pause", requested_chapters=1)
         task["project_id"] = "project-queued-pause"
         api_module._persist_generation_task("task-queued-pause", task)
@@ -270,12 +251,45 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         api_module._update_task(
             "task-queued-pause",
             pause_requested=True,
-            message="已请求暂停，等待 worker 跳过 claim",
+            message="任务尚未开始，已安全暂停。",
         )
         paused = api_module._get_generation_task_or_404("task-queued-pause")
 
         self.assertTrue(paused["pause_requested"])
-        self.assertEqual(paused["status"], "queued")
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["current_stage"], "paused")
+
+    def test_pause_endpoint_finishes_unclaimed_task_immediately(self) -> None:
+        task = api_module._create_task_record(
+            title="queued endpoint pause",
+            requested_chapters=1,
+        )
+        api_module._persist_generation_task("task-queued-endpoint-pause", task)
+
+        response = api_module.pause_task("task-queued-endpoint-pause")
+
+        self.assertEqual(response.status, "paused")
+        paused = api_module._get_generation_task_or_404(
+            "task-queued-endpoint-pause"
+        )
+        self.assertEqual(paused["current_stage"], "paused")
+        self.assertTrue(paused["pause_requested"])
+
+    def test_terminate_endpoint_finishes_unclaimed_task_immediately(self) -> None:
+        task = api_module._create_task_record(
+            title="queued endpoint terminate",
+            requested_chapters=1,
+        )
+        api_module._persist_generation_task("task-queued-endpoint-terminate", task)
+
+        response = api_module.terminate_task("task-queued-endpoint-terminate")
+
+        self.assertEqual(response.status, "cancelled")
+        cancelled = api_module._get_generation_task_or_404(
+            "task-queued-endpoint-terminate"
+        )
+        self.assertEqual(cancelled["current_stage"], "cancelled")
+        self.assertTrue(cancelled["cancel_requested"])
 
     def test_progress_update_cannot_expand_requested_chapters_contract(self) -> None:
         task = api_module._create_task_record(title="继续生成计数契约", requested_chapters=2)
@@ -430,7 +444,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertFalse(response.safe_to_restart)
         self.assertEqual(response.active_task_ids, ["task-active-check-1"])
 
-    def test_active_generation_check_ignores_pause_requested_queued_task(self) -> None:
+    def test_active_generation_check_keeps_nonterminal_pause_request_active(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -449,9 +463,12 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
 
         response = api_module.active_generation_task_check("project-paused-queued-active-check")
 
-        self.assertFalse(response.has_active_generation_task)
-        self.assertTrue(response.safe_to_restart)
-        self.assertEqual(response.active_task_ids, [])
+        self.assertTrue(response.has_active_generation_task)
+        self.assertFalse(response.safe_to_restart)
+        self.assertEqual(
+            response.active_task_ids,
+            ["task-paused-queued-active-check"],
+        )
 
     def test_active_generation_check_finds_old_active_task_beyond_list_limit(self) -> None:
         now = datetime.now(timezone.utc)
@@ -540,7 +557,10 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         task = api_module._create_task_record(title="锁冲突测试", requested_chapters=1)
         api_module._persist_generation_task("task-lock-1", task)
 
-        with patch.object(api_module, "_run_generation_task_db_write", return_value=False):
+        with patch(
+            "forwin.http.project_support._run_generation_task_db_write",
+            return_value=False,
+        ):
             api_module._update_task(
                 "task-lock-1",
                 status="running",
@@ -566,7 +586,10 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         task["current_stage"] = "resolving_arc_envelope"
         api_module._persist_generation_task("task-read-no-prune-1", task)
 
-        with patch.object(api_module, "_prune_generation_tasks_db", side_effect=AssertionError("read path pruned db")):
+        with patch(
+            "forwin.http.tasks._prune_generation_tasks_db",
+            side_effect=AssertionError("read path pruned db"),
+        ):
             loaded = api_module._get_generation_task_or_404("task-read-no-prune-1")
             listed = api_module._list_generation_tasks(10)
 

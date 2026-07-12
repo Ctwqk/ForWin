@@ -72,7 +72,11 @@
 | `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
 | `WritingOrchestrator` + `forwin.orchestrator*` | removed | `forwin.generation.pipeline.ChapterPipeline` | 已删除 | pipeline 静态组合 typed stage owner；模块回注、身份伪装和类体函数赋值均不存在。 |
 | `book_genesis.py` / `book_genesis_core` / `genesis_workspace` / `genesis_handoff` | removed | `forwin.genesis` | 已删除 | Genesis service、workspace 与 handoff 归入一个包；不再经延迟 facade 查询 helper。 |
-| `api.py` 动态代理 + `api_core.exports` | removed | explicit ASGI `app` / `lifespan` | 已删除 | `forwin.api` 只公开 ASGI 契约，不再传播私有 patch point。 |
+| `api.py` 动态代理 + `api_core` | removed | `forwin.http.create_app` + instance `HttpRuntime` | 已删除 | `forwin.api` 只公开 `app/create_app/lifespan`；每个 App 独立持有 session、pipeline、task cache、scheduler 与 publisher 状态。 |
+| root `api_route_registry.py` + `api_*_routes.py` | removed | `forwin.http.routes` + `forwin.http.adapters` | 已删除 | HTTP adapters 归同一 transport owner，不保留旧导入 alias。 |
+| `/api/generate` + `GenerateRequest` | removed | Genesis handoff + project continuation | 已删除 | 不允许绕过 Genesis 或 durable generation task；CLI/MCP/UI 使用同一 HTTP workflow。 |
+| `api_runtime.py` generic project creation runner | removed | `application.generation_execution.execute_continuation` | 已删除 | worker 只执行 project-backed claimed task；无项目 `pipeline.run()` 分支已删除。 |
+| `api_project_control_ops/support` | removed | `forwin.application.project_control` | 已删除 | project-control HTTP adapter 只绑定 `ProjectControlApplicationService`。 |
 | `api_project_ops` / `api_project_policy` / root `project_ops` | removed | `forwin.application.projects.ProjectApplicationService` | 已删除 | 项目、Genesis、章节和 review 路由只绑定 application service。 |
 | `api_publisher_ops` | removed | `forwin.application.publisher.PublisherApplicationService` | 已删除 | extension auth、publisher jobs、cover 与 comment sync 共享一个应用边界。 |
 | `forwin.reviewer` | removed | `forwin.review` | 已删除 | 草稿评审、decision rules 与 repair 归入一个 bounded package，不留旧导入 alias。 |
@@ -147,17 +151,20 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 
 ## 2026-07 V5 Slice 5 Status
 
-状态：implementation-partial，未部署，长跑 gate 与全量测试未执行。
+状态：implementation-complete，local verification complete；deploy / 200-chapter no-hotfix gate 待执行。
 
 - `WritingOrchestrator`、`forwin.orchestrator` 与 `orchestrator_loop_core` 已删除；`ChapterPipeline` 静态组合 12 个 typed stage owner，显式接收具体类型协作者，类体跨模块函数赋值为零。
 - Genesis 已收口为 `forwin.genesis/{workspace,handoff}`；旧四个包/门面和 workspace 对 `book_genesis` 的延迟查询全部删除。
-- `forwin.api` 只公开 `app/lifespan`；动态 module proxy、`api_core.exports` 和 route handler `globals()` 注入已删除。
-- `ProjectApplicationService` 接管项目、Genesis、章节和 review 入口；`PublisherApplicationService` 接管 publisher/extension 入口；`GenerationApplicationService` 仍是唯一生成任务入口。
+- `forwin.http.create_app()` 与 instance-owned `HttpRuntime` 已接管 FastAPI 生命周期；`api_core`、根 route registry、根 route modules、模块级 API mutable state 全部删除。
+- `forwin.api` 只公开 `app/create_app/lifespan`；动态 module proxy、route handler `globals()` 注入与私有 patch point 已删除。
+- `ProjectApplicationService` 接管项目、Genesis、章节和 review；`TaskApplicationService` 接管任务；`ProjectControlApplicationService` 接管 project-control；`PublisherApplicationService` 接管 publisher/extension；`GenerationApplicationService` 是唯一 durable generation task 入口。
+- `/api/generate`、`GenerateRequest` 与远程 LLM-eval 调用已删除；CLI 的 generate/read/status 全部通过 `ForWinAPIClient`，worker 只调用 `execute_claimed`。
+- Chapter Review API 与操作台按 `draft_review -> repair -> residual_eligibility -> gate_delegation -> canon` 五层展示；Canon 只认 candidate commit 身份，Review 详情不再使用 alert 或 `review_engine_decision`。
 - 根层 `api_project_ops`、`api_project_policy`、`api_publisher_ops`、`project_ops`、`api_schemas`、`api_project_payloads` 及 context/retrieval/writer 转发壳已物理删除。
 - D25 命名与所有权切换完成：audit event、planning control、review rule、Codex action、HTTP project-control 和 UI project-control 各有唯一 owner；生产 Python/JS/HTML 对 `governance` 零命中。
 - 全仓生产代码不再使用星号导入、类/模块身份篡改或 `common/constants` 借道 re-export；机械删除 2,336 个未使用 import，并修复因此暴露的 8 个隐性依赖和 `llm_eval` 未定义配置。
 
-此前记录的编译、Ruff、路由导入和 collect 证据只适用于当时提交。当前 v5 总验收仍需在 HTTP app factory、application adapters 与 layered review UI 完成后重跑；不得据此前证据宣称 Phase E/F 完成。
+当前验收证据：`ruff check forwin` 与 `compileall -q forwin` 通过；factory/architecture 39 项、durable task/application/worker 39 项、project operation 28 项、五层 Review 与页面渲染 14 项、Canon repair 32 项、MCP 代表路径 6 项通过；rendered inline JavaScript 通过 Node syntax check，Review 模态窗 Playwright 交互 1 项通过。内置 Browser 不可用，按批准的 fallback 使用仓库 Playwright。全仓 1565 tests collect 成功且无收集错误。release smoke、部署与真实 200 章 no-hotfix gate 尚未执行，完成前不得宣称 Phase E/F 完成。
 
 ## 2026-07 Integrated Roadmap Status
 

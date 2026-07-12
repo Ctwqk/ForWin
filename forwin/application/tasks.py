@@ -49,7 +49,7 @@ def _is_retryable_db_error(exc: OperationalError) -> bool:
 
 
 @dataclass(frozen=True)
-class TaskRouteDeps:
+class TaskApplicationDeps:
     get_session: Callable[[], Any]
     get_publisher_manager: Callable[[], Any]
     list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
@@ -70,7 +70,9 @@ class TaskRouteDeps:
     active_generation_task_ids: Callable[[str], list[str]] | None = None
 
 
-def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
+def _build_operations(
+    deps: TaskApplicationDeps,
+) -> dict[str, Callable[..., Any]]:
     def active_generation_task_check(
         project_id: str = "",
     ) -> ActiveGenerationTaskCheckResponse:
@@ -156,12 +158,17 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
         if not deps.task_is_terminable(task):
             raise HTTPException(400, "当前任务状态不支持终止")
         project_id = str(task.get("project_id", "") or "").strip()
+        queued = str(task.get("status", "") or "").strip() == "queued"
         deps.update_task(
             task_id,
             cancel_requested=True,
-            status="terminating",
-            current_stage="terminating",
-            message="已请求终止生成任务，系统会在下一个安全检查点停止。",
+            status="cancelled" if queued else "terminating",
+            current_stage="cancelled" if queued else "terminating",
+            message=(
+                "任务尚未开始，已取消。"
+                if queued
+                else "已请求终止生成任务，系统会在下一个安全检查点停止。"
+            ),
         )
         if project_id:
             try:
@@ -209,10 +216,21 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
         if not deps.task_is_pausable(task):
             raise HTTPException(400, "当前任务状态不支持安全暂停")
         project_id = str(task.get("project_id", "") or "").strip()
+        queued = str(task.get("status", "") or "").strip() == "queued"
         deps.update_task(
             task_id,
             pause_requested=True,
-            message="已请求安全暂停，系统会在下一个安全检查点保存进度并暂停。",
+            status="paused" if queued else str(task.get("status", "") or ""),
+            current_stage=(
+                "paused"
+                if queued
+                else str(task.get("current_stage", "") or "")
+            ),
+            message=(
+                "任务尚未开始，已安全暂停。"
+                if queued
+                else "已请求安全暂停，系统会在下一个安全检查点保存进度并暂停。"
+            ),
         )
         if project_id:
             try:
@@ -323,3 +341,41 @@ def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
         "delete_task": delete_task,
         "bulk_delete_tasks": bulk_delete_tasks,
     }
+
+
+class TaskApplicationService:
+    def __init__(self, deps: TaskApplicationDeps) -> None:
+        self._operations = _build_operations(deps)
+
+    def active_generation_task_check(
+        self,
+        project_id: str = "",
+    ) -> ActiveGenerationTaskCheckResponse:
+        return self._operations["active_generation_task_check"](project_id)
+
+    def get_task(self, task_id: str):
+        return self._operations["get_task"](task_id)
+
+    def list_tasks(self, limit: int = 30):
+        return self._operations["list_tasks"](limit)
+
+    def list_task_center_items(self, limit: int = 50):
+        return self._operations["list_task_center_items"](limit)
+
+    def get_task_center_item(self, task_kind: str, task_id: str):
+        return self._operations["get_task_center_item"](task_kind, task_id)
+
+    def terminate_task(self, task_id: str) -> TaskMutationResponse:
+        return self._operations["terminate_task"](task_id)
+
+    def pause_task(self, task_id: str) -> TaskMutationResponse:
+        return self._operations["pause_task"](task_id)
+
+    def delete_task(self, task_id: str) -> TaskMutationResponse:
+        return self._operations["delete_task"](task_id)
+
+    def bulk_delete_tasks(self, req: TaskBulkDeleteRequest) -> BulkDeleteResponse:
+        return self._operations["bulk_delete_tasks"](req)
+
+
+__all__ = ["TaskApplicationDeps", "TaskApplicationService"]

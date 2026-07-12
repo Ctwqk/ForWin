@@ -462,8 +462,6 @@ class LLMReliabilityRunner:
         )
 
     def run_mini_real_for_profile(self, profile: EvalProfile) -> dict[str, Any]:
-        if self.config.base_url:
-            return self.run_remote_mini_real_for_profile(profile)
         database_url = os.environ.get("FORWIN_EVAL_DATABASE_URL", InfrastructureConfig.from_env().database_url)
         artifact_root = self.run_dir / f"mini_real_{profile.id}_artifacts"
         started_at = time.perf_counter()
@@ -546,63 +544,5 @@ class LLMReliabilityRunner:
                 pipeline.engine.dispose()
             except Exception:  # noqa: BLE001
                 pass
-        _json_dump_line(self.full_runs_path, payload)
-        return payload
-
-    def run_remote_mini_real_for_profile(self, profile: EvalProfile) -> dict[str, Any]:
-        base_url = self.config.base_url.rstrip("/")
-        started_at = time.perf_counter()
-        payload: dict[str, Any] = {
-            "run_id": self.config.run_id,
-            "profile_id": profile.id,
-            "status": "started",
-            "base_url": base_url,
-            "remote": True,
-        }
-        try:
-            with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-                response = client.post(
-                    f"{base_url}/api/generate",
-                    json={
-                        "premise": "LLM eval：主角在潮雾旧城得到一枚会记录未来声音的罗盘。",
-                        "genre": "玄幻",
-                        "num_chapters": 2,
-                        "api_key": profile.api_key,
-                        "base_url": profile.base_url,
-                        "model": profile.model,
-                    },
-                )
-                response.raise_for_status()
-                created = response.json()
-                task_id = str(created.get("id") or created.get("task_id") or "")
-                payload["task_id"] = task_id
-                terminal = {"completed", "partial_failed", "failed", "needs_review", "cancelled", "paused"}
-                last_task: dict[str, Any] = {}
-                deadline = time.monotonic() + 900
-                while task_id and time.monotonic() < deadline:
-                    task_response = client.get(f"{base_url}/api/tasks/{task_id}", timeout=30.0)
-                    task_response.raise_for_status()
-                    last_task = task_response.json()
-                    if str(last_task.get("status") or "") in terminal:
-                        break
-                    time.sleep(5.0)
-                payload.update(
-                    {
-                        "status": str(last_task.get("status") or "unknown"),
-                        "project_id": str(last_task.get("project_id") or ""),
-                        "completed_chapters": last_task.get("completed_chapters") or [],
-                        "failed_chapters": last_task.get("failed_chapters") or [],
-                        "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001
-            payload.update(
-                {
-                    "status": "failed",
-                    "error_class": exc.__class__.__name__,
-                    "error_message": str(exc),
-                    "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
-                }
-            )
         _json_dump_line(self.full_runs_path, payload)
         return payload

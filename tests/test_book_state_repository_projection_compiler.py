@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.context.assembler_core import assemble_context
-from forwin.api_book_state_routes import build_handlers
+from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow, WorldNodeStateRow

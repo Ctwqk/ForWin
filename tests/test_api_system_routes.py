@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from forwin.api_system_routes import _load_rule_decision_breakdown, build_handlers
+from forwin.http.adapters.api_system_routes import _load_rule_decision_breakdown, build_handlers
 
 
 class _ScalarResult:
@@ -65,12 +65,6 @@ def _codex_health_handler(config: SimpleNamespace):
         get_session=lambda: None,
         render_home_page=lambda **_kwargs: "",
         render_publishers_page=lambda **_kwargs: "",
-        create_generation_task=lambda *_args, **_kwargs: "",
-        serialize_task=lambda *_args, **_kwargs: {},
-        get_generation_task_or_404=lambda _task_id: {},
-        project_has_active_generation_task=lambda *_args, **_kwargs: False,
-        generation_task_conflict_message=lambda _project_id: "",
-        active_generation_task_error_cls=RuntimeError,
     )["get_codex_bridge_status"]
 
 
@@ -81,12 +75,6 @@ def _system_handlers(config: SimpleNamespace, *, memory_index=None):
         get_session=lambda: None,
         render_home_page=lambda **_kwargs: "",
         render_publishers_page=lambda **_kwargs: "",
-        create_generation_task=lambda *_args, **_kwargs: "",
-        serialize_task=lambda *_args, **_kwargs: {},
-        get_generation_task_or_404=lambda _task_id: {},
-        project_has_active_generation_task=lambda *_args, **_kwargs: False,
-        generation_task_conflict_message=lambda _project_id: "",
-        active_generation_task_error_cls=RuntimeError,
         get_memory_index=lambda: memory_index,
     )
 
@@ -136,7 +124,7 @@ def test_codex_health_rejects_ok_payload_without_bridge_identity() -> None:
     )
     handler = _codex_health_handler(config)
 
-    with patch("forwin.api_system_routes.CodexBridgeClient", WrongServiceClient):
+    with patch("forwin.http.adapters.api_system_routes.CodexBridgeClient", WrongServiceClient):
         result = handler()
 
     assert result.healthy is False

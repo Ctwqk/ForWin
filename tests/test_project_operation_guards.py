@@ -8,15 +8,11 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-import forwin.api_core.app as api_app
 from forwin.application.projects import generation as project_generation
 from forwin.application.projects import genesis as project_genesis
-from forwin.api_core import state as api_state
-from forwin.api_core.tasks import _create_task_record, _persist_generation_task
 from forwin.api_schema import (
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
-    GenerateRequest,
     ProjectBulkDeleteRequest,
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
@@ -31,39 +27,35 @@ from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
+from tests.http_runtime_harness import HttpRuntimeHarness
 
 
-api_module = SimpleNamespace(
-    **api_app._registered_route_handlers,
-    _create_task_record=_create_task_record,
-    _persist_generation_task=_persist_generation_task,
-)
+api_module: HttpRuntimeHarness
+api_state: HttpRuntimeHarness
 
 
 class ProjectOperationGuardTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module, api_state
         self.tmpdir = TemporaryDirectory()
         self.engine = get_engine(postgres_test_url("operation-guards"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
 
-        self.old_session_factory = api_state._SessionFactory
-        self.old_config = api_state._config
-        self.old_pipeline = api_state._pipeline
-
-        api_state._SessionFactory = self.session_factory
-        api_state._config = InfrastructureConfig(
+        config = InfrastructureConfig(
             database_url=postgres_test_url("operation-guards"),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
         )
-        api_state._pipeline = None
+        api_module = HttpRuntimeHarness(
+            session_factory=self.session_factory,
+            config=config,
+            engine=self.engine,
+        )
+        api_state = api_module
 
     def tearDown(self) -> None:
-        api_state._SessionFactory = self.old_session_factory
-        api_state._config = self.old_config
-        api_state._pipeline = self.old_pipeline
         self.engine.dispose()
         self.tmpdir.cleanup()
 
@@ -86,38 +78,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
             session.commit()
             return project
-
-    def test_generate_rejects_existing_project_with_active_generation_task(
-        self,
-    ) -> None:
-        project = self._create_project(
-            project_id="proj-active-generate", creation_status="writing"
-        )
-        with self.session_factory() as session:
-            session.add(
-                GenerationTask(
-                    id="task-active-generate",
-                    project_id=project.id,
-                    task_kind="generation",
-                    status="running",
-                    current_stage="writing_chapter",
-                    message="still running",
-                )
-            )
-            session.commit()
-
-        with self.assertRaises(HTTPException) as ctx:
-            api_module.generate(
-                GenerateRequest(
-                    project_id=project.id,
-                    premise="测试 premise",
-                    genre="玄幻",
-                    num_chapters=1,
-                )
-            )
-
-        self.assertEqual(ctx.exception.status_code, 409)
-        self.assertIn("运行中的生成任务", str(ctx.exception.detail))
 
     def test_project_detail_overlays_active_generation_task_stage(self) -> None:
         project = self._create_project(project_id="proj-active-detail")
@@ -448,14 +408,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             return "task-review-gate-auto-retry"
 
         api_state._pipeline = SimpleNamespace(accept_review=accept_review)
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             payload = api_module.approve_chapter_review(
@@ -527,14 +487,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 session.commit()
             return {"status": "accepted", "message": "accepted", "frozen_artifact": ""}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             return "task-approve-workset"
 
         api_state._pipeline = SimpleNamespace(accept_review=accept_review)
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             payload = api_module.approve_chapter_review(
@@ -625,12 +585,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             return "task-retry-workset"
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             payload = api_module.retry_chapter_review(
@@ -1207,7 +1167,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             task_id = "task-orphan-review-placeholders"
             task = api_module._create_task_record(
@@ -1221,7 +1181,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             response = api_module.continue_project_generation(
@@ -1274,7 +1234,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             task_id = "task-continue-sized"
             task = api_module._create_task_record(
@@ -1288,7 +1248,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             response = api_module.continue_project_generation(
@@ -1335,7 +1295,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             task_id = "task-continue-auto-target"
             task = api_module._create_task_record(
@@ -1349,7 +1309,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             response = api_module.continue_project_generation(
@@ -1397,7 +1357,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             task_id = "task-continue-auto-false"
             task = api_module._create_task_record(
@@ -1409,7 +1369,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             response = api_module.continue_project_generation(
@@ -1453,6 +1413,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             session.commit()
 
         def strict_task_creation(
+            _runtime,
             *,
             project_id,
             requested_chapters,
@@ -1477,7 +1438,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=strict_task_creation,
         ):
             response = api_module.continue_project_generation(
@@ -1535,7 +1496,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def capture_task_creation(**kwargs):
+        def capture_task_creation(_runtime, **kwargs):
             captured.update(kwargs)
             task_id = "task-continue-active-only"
             task = api_module._create_task_record(
@@ -1547,7 +1508,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             return task_id
 
         with patch(
-            "forwin.api_core.app._create_continue_generation_task",
+            "forwin.http.app._create_continue_generation_task",
             new=capture_task_creation,
         ):
             response = api_module.continue_project_generation(

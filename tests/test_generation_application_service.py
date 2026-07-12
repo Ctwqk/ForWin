@@ -197,7 +197,7 @@ def test_default_runner_executes_project_task_and_persists_updates(
         )
 
     monkeypatch.setattr(
-        "forwin.api_runtime.run_continue_project_with_context",
+        "forwin.application.generation_execution.execute_continuation",
         fake_run,
     )
 

@@ -7,9 +7,9 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 
-from forwin import api_obsidian_routes
+from forwin.http.adapters import api_obsidian_routes
 from forwin.api_pages_shared import join_page_assets
-from forwin.api_projection_routes import _page_info
+from forwin.http.adapters.api_projection_routes import _page_info
 from forwin.api_schema import (
     WorldEditProposalReviewRequest,
     WorldModelConflictInfo,

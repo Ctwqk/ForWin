@@ -27,6 +27,11 @@ from forwin.state.query_helpers import (
     load_latest_stage_analysis_by_project,
     load_latest_world_turn_by_project,
 )
+from .common import (
+    _latest_rows_by_project,
+    _normalized_project_ids,
+    _recent_rows_by_project,
+)
 
 
 DisplayDatetime = Callable[[datetime | None], str]
@@ -40,11 +45,6 @@ _GENESIS_STAGE_ORDER = (
 )
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .common import (
-    _latest_rows_by_project,
-    _normalized_project_ids,
-    _recent_rows_by_project,
-)
 
 
 def load_recent_replan_events_by_project(

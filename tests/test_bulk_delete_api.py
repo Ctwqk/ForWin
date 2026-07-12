@@ -5,34 +5,38 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import forwin.api as api_module
 from forwin.api_schema import ProjectBulkDeleteRequest, TaskBulkDeleteRequest
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
+from tests.http_runtime_harness import HttpRuntimeHarness
+
+
+api_module: HttpRuntimeHarness
 
 
 class BulkDeleteApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        global api_module
         self.tmpdir = TemporaryDirectory()
         self.engine = get_engine(postgres_test_url("bulk-delete"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
-        self.old_session_factory = api_module._SessionFactory
-        self.old_config = api_module._config
-        api_module._SessionFactory = self.session_factory
-        api_module._config = api_module.InfrastructureConfig(
-            database_url=postgres_test_url("bulk-delete"),
-            artifact_root=str(Path(self.tmpdir.name) / "artifacts"),
-            minimax_api_key="",
+        api_module = HttpRuntimeHarness(
+            session_factory=self.session_factory,
+            config=InfrastructureConfig(
+                database_url=postgres_test_url("bulk-delete"),
+                artifact_root=str(Path(self.tmpdir.name) / "artifacts"),
+                minimax_api_key="",
+            ),
+            engine=self.engine,
         )
 
     def tearDown(self) -> None:
-        api_module._SessionFactory = self.old_session_factory
-        api_module._config = self.old_config
         self.engine.dispose()
         self.tmpdir.cleanup()
 

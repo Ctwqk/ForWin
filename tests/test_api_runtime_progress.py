@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from forwin import api_runtime
-from forwin.api_runtime import _build_task_progress_changes
+from forwin.application import generation_execution
+from forwin.application.generation_execution import _build_task_progress_changes
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_payload import (
     GenerationTaskExecutionPayload,
@@ -65,9 +65,9 @@ def test_task_pipeline_builder_consumes_execution_context(monkeypatch) -> None:
             calls.update(kwargs)
             return pipeline
 
-    monkeypatch.setattr(api_runtime, "RuntimeContainer", FakeContainer)
+    monkeypatch.setattr(generation_execution, "RuntimeContainer", FakeContainer)
 
-    result = api_runtime._build_chapter_pipeline_for_task(context)
+    result = generation_execution._build_chapter_pipeline_for_task(context)
 
     assert result is pipeline
     assert calls == {

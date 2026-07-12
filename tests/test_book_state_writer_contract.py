@@ -576,6 +576,75 @@ def test_named_non_character_nodes_use_only_canonical_fields() -> None:
         engine.dispose()
 
 
+def test_noncanonical_writer_fields_do_not_pollute_canonical_state() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="字段归档", premise="物件进入证据链。", genre="pulp")
+        session.add(project)
+        session.flush()
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=1,
+            title="第一章",
+            body="样本-17被装入证据盒，核验流程留下审计注记。",
+            end_of_chapter_summary="证据链完成登记。",
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="样本-17",
+                    entity_kind="item",
+                    field="custody_state",
+                    old_value="留在队列",
+                    new_value="被装入证据盒",
+                    reason="保全证据",
+                ),
+                StateChangeCandidate(
+                    entity_name="核验流程",
+                    entity_kind="rule",
+                    field="audit_note",
+                    old_value="",
+                    new_value="仅允许最小账本复核",
+                    reason="限制记忆债",
+                ),
+            ],
+        )
+
+        result = WriterContractDeltaBuilder(session).build(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=output,
+            review_verdict_id="review-writer-fields",
+        )
+        patches = result.graph_deltas[0].node_patches
+        assert any(
+            patch.node_type == "item"
+            and patch.field_path == "state.state_summary"
+            and patch.new_value == "被装入证据盒"
+            for patch in patches
+        )
+        assert any(
+            patch.node_type == "rule"
+            and patch.field_path == "metadata.writer_state.audit_note"
+            and patch.new_value == "仅允许最小账本复核"
+            for patch in patches
+        )
+        assert not any(
+            patch.field_path.startswith("state.metadata.")
+            for patch in patches
+        )
+        review = BookStateReviewGate(session).review(
+            ApprovedGraphDeltaSet(
+                project_id=project.id,
+                chapter_number=1,
+                graph_deltas=result.graph_deltas,
+            )
+        )
+        assert review.accepted is True
+        assert review.issues == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_unadmitted_character_state_change_fails_closed() -> None:
     engine, session = _session()
     try:

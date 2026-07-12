@@ -59,6 +59,7 @@ _FIELD_ALIASES = {
         "location": "state.location_id",
         "owner": "state.owner_id",
         "holder": "state.holder_id",
+        "custody_state": "state.state_summary",
     },
 }
 _WRITER_LOCATION_METADATA_PATH = "metadata.writer_location"
@@ -679,7 +680,7 @@ def _book_state_field_path(kind: str, field: str) -> str:
         return f"state.{normalized_field}"
     if normalized_field in fields.get("profile", set()):
         return f"profile.{normalized_field}"
-    return f"state.metadata.{normalized_field or 'unspecified'}"
+    return f"metadata.writer_state.{normalized_field or 'unspecified'}"
 
 
 def _is_location_id_field(field_path: str) -> bool:

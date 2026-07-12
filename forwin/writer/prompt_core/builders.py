@@ -363,8 +363,17 @@ def build_scene_generation_prompt(
 def build_scene_stitch_prompt(
     context: ChapterContextPack,
     scene_outputs: list[SceneOutput],
+    *,
+    target_chars: int = 2800,
+    min_chars: int = 2500,
+    max_chars: int = 3200,
     skill_layers: list[object] | None = None,
 ) -> list[dict]:
+    target_chars, min_chars, max_chars = _normalize_char_targets(
+        target_chars=target_chars,
+        min_chars=min_chars,
+        max_chars=max_chars,
+    )
     stitched_input = "\n\n".join(
         (
             f"[Scene {scene.scene_no}]\n"
@@ -400,9 +409,11 @@ def build_scene_stitch_prompt(
         "1. 保持人称、文风、时间地点衔接一致。\n"
         "2. 必须显式利用每个 scene 的 continuation 信息承接动作、时间、地点和角色焦点。\n"
         "3. 只做轻量衔接和润色，不要改写核心事件。\n"
-        f"4. {_chapter_hook_requirement(context)}\n"
-        "5. 不要输出 JSON，不要解释。\n"
-        "6. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
+        f"4. 拼接后的目标正文长度 {target_chars} 到 {max_chars} 中文字，"
+        f"不得低于 {min_chars} 中文字；不足时补足动作、感官和因果衔接，不得重复灌水。\n"
+        f"5. {_chapter_hook_requirement(context)}\n"
+        "6. 不要输出 JSON，不要解释。\n"
+        "7. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
         "<<FORWIN_TITLE>>\n"
         "这里写章节标题\n"
         "<<FORWIN_BODY>>\n"

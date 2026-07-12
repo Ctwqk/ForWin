@@ -244,6 +244,7 @@ class ChapterWriter:
             max_attempts=max_attempts,
             retry_on_timeout=retry_on_timeout,
             stage_key=trace_stage_key,
+            min_body_chars=self.min_chapter_chars,
         )
         draft_data = self._parse_preview_text(
             preview_text,
@@ -340,6 +341,7 @@ class ChapterWriter:
             max_attempts=max_attempts,
             retry_on_timeout=retry_on_timeout,
             stage_key=trace_stage_key,
+            min_body_chars=self.min_chapter_chars,
         )
         draft_data = self._parse_preview_text(
             raw_draft,
@@ -713,7 +715,14 @@ class ChapterWriter:
         skill_layers: list[object] | None = None,
     ) -> dict:
         raw_stitched = self._chat_preview_text(
-            build_scene_stitch_prompt(context, scene_outputs, skill_layers=skill_layers),
+            build_scene_stitch_prompt(
+                context,
+                scene_outputs,
+                target_chars=self.target_chapter_chars,
+                min_chars=self.min_chapter_chars,
+                max_chars=self.max_chapter_chars,
+                skill_layers=skill_layers,
+            ),
             temperature=0.5,
             max_tokens=min(
                 self.max_tokens,
@@ -723,6 +732,7 @@ class ChapterWriter:
             max_attempts=1,
             retry_on_timeout=False,
             stage_key="scene_stitch",
+            min_body_chars=self.min_chapter_chars,
         )
         return self._parse_preview_text(
             raw_stitched,
@@ -1038,6 +1048,7 @@ class ChapterWriter:
         max_attempts: int = 2,
         retry_on_timeout: bool = True,
         stage_key: str = "chapter_draft",
+        min_body_chars: int = 0,
     ) -> str:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -1061,10 +1072,16 @@ class ChapterWriter:
                 )
                 parsed = self._parse_preview_text(raw, fallback_title="")
                 body = str(parsed.get("body", "") or "").strip()
-                if body and self._body_looks_complete(body):
-                    return raw
                 if body:
-                    raise ValueError("preview response body appears incomplete")
+                    if not self._body_looks_complete(body):
+                        raise ValueError("preview response body appears incomplete")
+                    required_chars = max(0, int(min_body_chars or 0))
+                    if len(body) < required_chars:
+                        raise ValueError(
+                            f"preview response body has {len(body)} chars, "
+                            f"below minimum {required_chars}"
+                        )
+                    return raw
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
                 if raw:

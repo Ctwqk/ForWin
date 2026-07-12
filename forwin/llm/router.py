@@ -9,6 +9,7 @@ from forwin.model_adapter import ModelCapabilities, adapter_capabilities
 CODEX_ALLOWED_FAMILIES = {
     "arc_planning",
     "chapter_review_form",
+    "entity_admission",
     "feedback",
     "genesis",
     "planning",
@@ -26,6 +27,7 @@ CODEX_EXCLUDED_FAMILIES = {"chapter_plan_materialization"}
 CODEX_PRIMARY_FAMILIES = {
     "arc_planning",
     "chapter_review_form",
+    "entity_admission",
     "feedback",
     "genesis",
     "planning",

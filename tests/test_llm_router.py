@@ -127,6 +127,23 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(len(codex.calls), 1)
         self.assertEqual(len(ordinary.calls), 0)
 
+    def test_codex_primary_for_entity_admission_when_enabled(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        router = LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True)
+
+        result = router.chat(
+            [{"role": "user", "content": "classify named characters"}],
+            intent=LLMCallIntent(
+                task_family="entity_admission",
+                stage_key="entity_registrar",
+            ),
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(len(codex.calls), 1)
+        self.assertEqual(len(ordinary.calls), 0)
+
     def test_codex_primary_for_chapter_review_form_when_enabled(self) -> None:
         ordinary = OrdinaryAdapter()
         codex = FakeCodexClient()

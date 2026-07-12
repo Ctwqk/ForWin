@@ -86,7 +86,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
             def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
                 return self.responses.pop(0)
 
-        writer = ChapterWriter(FakeClient(), writer_mode="single")
+        writer = ChapterWriter(
+            FakeClient(),
+            writer_mode="single",
+            min_chapter_chars=300,
+        )
         context = ChapterContextPack(
             project_id="p1",
             project_title="测试书",
@@ -158,7 +162,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
             def _plan_scenes(self, context, *, skill_layers=None):  # type: ignore[no-untyped-def]
                 raise ValueError("scene failed")
 
-        writer = FallbackWriter(FakeClient(), writer_mode="scene")
+        writer = FallbackWriter(
+            FakeClient(),
+            writer_mode="scene",
+            min_chapter_chars=300,
+        )
         context = ChapterContextPack(
             project_id="p1",
             project_title="测试书",
@@ -203,7 +211,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
             def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
                 return self.responses.pop(0)
 
-        writer = ChapterWriter(FakeClient(), writer_mode="single")
+        writer = ChapterWriter(
+            FakeClient(),
+            writer_mode="single",
+            min_chapter_chars=300,
+        )
         context = ChapterContextPack(
             project_id="p1",
             project_title="测试书",
@@ -252,6 +264,31 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(client.max_tokens, [2400, 2400])
         self.assertIn("appears incomplete", writer._business_retry_events[0]["reason"])
 
+    def test_preview_text_retries_complete_but_underlength_body(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.responses = [
+                    "<<FORWIN_BODY>>\n短稿。",
+                    "<<FORWIN_BODY>>\n" + "林夜沿着旧站台追查异常报站声。" * 8,
+                ]
+
+            def chat(self, _messages, **_kwargs) -> str:
+                return self.responses.pop(0)
+
+        writer = ChapterWriter(FakeClient(), writer_mode="single")
+
+        raw = writer._chat_preview_text(
+            [{"role": "user", "content": "写一章"}],
+            temperature=0.6,
+            max_tokens=2400,
+            max_attempts=2,
+            min_body_chars=40,
+        )
+
+        parsed = writer._parse_preview_text(raw, fallback_title="")
+        self.assertGreaterEqual(len(parsed["body"]), 40)
+        self.assertIn("below minimum 40", writer._business_retry_events[0]["reason"])
+
     def test_scene_stitch_uses_full_chapter_token_budget(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
@@ -271,6 +308,7 @@ class SplitWriterPipelineTests(unittest.TestCase):
             client,
             writer_mode="scene",
             max_tokens=10000,
+            min_chapter_chars=300,
             target_chapter_chars=2800,
             max_chapter_chars=3200,
         )
@@ -292,6 +330,48 @@ class SplitWriterPipelineTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(client.max_tokens[0], 5000)
+
+    def test_scene_stitch_prompt_includes_runtime_length_contract(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.messages: list[list[dict]] = []
+
+            def chat(self, messages, **_kwargs) -> str:
+                self.messages.append(messages)
+                return (
+                    "<<FORWIN_TITLE>>\n旧站来声\n<<FORWIN_BODY>>\n"
+                    + "林夜沿着旧站台追查异常报站声。" * 25
+                    + "\n<<FORWIN_SUMMARY>>\n林夜确认广播异常。"
+                )
+
+        client = FakeClient()
+        writer = ChapterWriter(
+            client,
+            writer_mode="scene",
+            min_chapter_chars=300,
+            target_chapter_chars=350,
+            max_chapter_chars=400,
+        )
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=4,
+            chapter_plan_title="第四章",
+            chapter_plan_one_line="主角进入旧站",
+            chapter_goals=["进入旧站", "确认广播异常"],
+        )
+
+        writer._stitch_scenes(
+            context,
+            [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+        )
+
+        prompt = client.messages[0][1]["content"]
+        self.assertIn("目标正文长度 350 到 400 中文字", prompt)
+        self.assertIn("不得低于 300 中文字", prompt)
 
     def test_scene_stitch_timeout_uses_single_attempt_before_outer_fallback(self) -> None:
         class FakeClient:
@@ -361,7 +441,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
                 ][self.json_calls - 1]
 
         client = FakeClient()
-        writer = ChapterWriter(client, writer_mode="scene")
+        writer = ChapterWriter(
+            client,
+            writer_mode="scene",
+            min_chapter_chars=300,
+        )
         context = ChapterContextPack(
             project_id="p1",
             project_title="测试书",
@@ -420,7 +504,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
             def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
                 return self.responses.pop(0)
 
-        writer = ChapterWriter(FakeClient(), writer_mode="scene")
+        writer = ChapterWriter(
+            FakeClient(),
+            writer_mode="scene",
+            min_chapter_chars=300,
+        )
         context = ChapterContextPack(
             project_id="p1",
             project_title="测试书",

@@ -1015,6 +1015,31 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(route, "review_json")
         self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
 
+    def test_entity_admission_routes_as_review_json_for_minimax_fallback(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        try:
+            route = client._llm_task_route(
+                task_family="entity_admission",
+                stage_key="entity_registrar",
+                response_format={"type": "json_object"},
+            )
+            routed = client._route_profiles(
+                client._request_profiles(),
+                task_family="entity_admission",
+                stage_key="entity_registrar",
+                response_format={"type": "json_object"},
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(route, "review_json")
+        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
+
     def test_minimax_only_canon_route_fails_without_call(self) -> None:
         client = LLMClient(
             api_key="minimax-key",

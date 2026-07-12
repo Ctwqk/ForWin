@@ -236,8 +236,14 @@ class RoutingMixin:
             "chapter_review",
             "chapter_review_form",
             "chapter_review_json_repair",
+            "entity_registrar",
             "repair_verification",
-        } or family in {"chapter_review_form", "reviewer", "review"}:
+        } or family in {
+            "chapter_review_form",
+            "entity_admission",
+            "reviewer",
+            "review",
+        }:
             return "review_json"
         if any(token in stage for token in ("chapter_rewrite", "repair")) or family == "repair":
             return "repair_generation"

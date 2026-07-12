@@ -17,7 +17,7 @@ class CodexExecRequest:
     cwd: str = ""
     model: str = ""
     permission_profile: str = "prompt_only_readonly"
-    ignore_user_config: bool = False
+    ignore_user_config: bool = True
     ephemeral: bool = False
 
 
@@ -81,6 +81,8 @@ class CodexExecRunner:
                 "read-only",
                 "-c",
                 'approval_policy="never"',
+                "-c",
+                'model_reasoning_effort="high"',
                 "--output-last-message",
                 str(output_path),
                 "-C",

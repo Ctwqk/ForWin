@@ -161,7 +161,7 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(result.json()["status"], "failed")
         self.assertIn("schema_parse_failed", result.json()["error"])
 
-    def test_codex_runner_uses_current_cli_approval_config(self) -> None:
+    def test_codex_runner_isolates_background_cli_config(self) -> None:
         captured: dict[str, object] = {}
 
         def fake_run(cmd, **kwargs):
@@ -183,6 +183,8 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("-c", cmd)
         self.assertIn('approval_policy="never"', cmd)
+        self.assertIn('model_reasoning_effort="high"', cmd)
+        self.assertIn("--ignore-user-config", cmd)
         self.assertNotIn("--ask-for-approval", cmd)
         self.assertEqual(captured["input"], "ping")
         self.assertEqual(captured["schema"]["additionalProperties"], False)

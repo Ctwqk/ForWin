@@ -171,3 +171,50 @@ def test_engine_blocks_final_p1_book_signal() -> None:
     assert decision.sub_action["review_action"] == "block"
     assert decision.sub_action["minimum_scope"] == "book"
     assert decision.sub_action["blocking_signal_ids"] == ["sig-final"]
+
+
+def test_engine_accepts_unrouted_nonblocking_warning_as_observation() -> None:
+    decision = _decision(
+        _input(
+            review=ReviewVerdict(
+                verdict="warn",
+                issues=[
+                    ContinuityIssue(
+                        rule_name="plan_task_unfulfilled",
+                        severity="warning",
+                        description="计划任务未明显交付。",
+                        issue_type="plan_task_fulfillment",
+                        target_scope="chapter",
+                        blocking=False,
+                    )
+                ],
+            )
+        )
+    )
+
+    assert decision.outcome == "accept"
+    assert decision.sub_action["review_action"] == "commit_clean"
+    assert decision.sub_action["primary_issue_class"] == "plan_task_fulfillment"
+
+
+def test_engine_blocks_unrouted_explicitly_blocking_warning() -> None:
+    decision = _decision(
+        _input(
+            review=ReviewVerdict(
+                verdict="warn",
+                issues=[
+                    ContinuityIssue(
+                        rule_name="unknown_hard_contract",
+                        severity="warning",
+                        description="未知硬契约被违反。",
+                        issue_type="unknown_hard_contract",
+                        target_scope="chapter",
+                        blocking=True,
+                    )
+                ],
+            )
+        )
+    )
+
+    assert decision.outcome == "system_block"
+    assert decision.sub_action["review_action"] == "block"

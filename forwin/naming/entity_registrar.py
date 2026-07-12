@@ -710,7 +710,11 @@ class EntityRegistrar:
 def writer_output_admission_fingerprint(writer_output: WriterOutput) -> str:
     payload = writer_output.model_dump(
         mode="json",
-        exclude={"generation_meta", "draft_blob_path"},
+        exclude={
+            "generation_meta": True,
+            "draft_blob_path": True,
+            "scene_outputs": {"__all__": {"text_blob_path"}},
+        },
     )
     encoded = json.dumps(
         payload,

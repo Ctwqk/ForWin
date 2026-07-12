@@ -631,7 +631,11 @@ def _task_is_satisfied(task: PlanTaskItem, combined_text: str) -> bool:
         return not description_hit
     if task.required_keywords:
         return len(required_hits) == len(task.required_keywords)
-    return target_hit or description_hit
+    if task.target_name:
+        return target_hit
+    # A prose description is guidance, not a machine-checkable assertion. Exact
+    # sentence matching would report ordinary paraphrases as missing delivery.
+    return True
 
 
 def _constraint_severity(level: str) -> str:

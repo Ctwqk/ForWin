@@ -10,7 +10,7 @@ from forwin.models import Entity, Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
-from forwin.protocol import EntityMention, WriterOutput
+from forwin.protocol import EntityMention, SceneOutput, WriterOutput
 from forwin.review.draft_service import DraftReviewService
 
 
@@ -292,6 +292,98 @@ def test_admission_plan_is_invalidated_when_candidate_changes() -> None:
         assert len(issues) == 1
         assert issues[0].issue_type == "entity_admission_plan_invalid"
         assert "stale" in issues[0].description
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_plan_ignores_artifact_storage_paths() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="准入存储路径", premise="主角陆明。", genre="pulp")
+        session.add(project)
+        session.flush()
+        registrar = EntityRegistrar(session=session)
+        planned = registrar.plan_writer_output(
+            project_id=project.id,
+            chapter_number=7,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=7,
+                title="第七章",
+                body="陆明进入现场。",
+                end_of_chapter_summary="陆明抵达。",
+                scene_outputs=[
+                    SceneOutput(
+                        scene_no=1,
+                        scene_objective="抵达现场",
+                        text="陆明进入现场。",
+                    )
+                ],
+            ),
+        )
+        persisted = planned.writer_output.model_copy(
+            update={
+                "draft_blob_path": "minio://drafts/chapter-7.txt",
+                "scene_outputs": [
+                    planned.writer_output.scene_outputs[0].model_copy(
+                        update={"text_blob_path": "minio://scenes/chapter-7-scene-1.txt"}
+                    )
+                ],
+            }
+        )
+
+        verified = registrar.verify_writer_output_admission(
+            project_id=project.id,
+            writer_output=persisted,
+        )
+
+        assert verified == planned.plan
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_plan_still_rejects_semantic_scene_changes() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="准入场景语义", premise="主角陆明。", genre="pulp")
+        session.add(project)
+        session.flush()
+        registrar = EntityRegistrar(session=session)
+        planned = registrar.plan_writer_output(
+            project_id=project.id,
+            chapter_number=8,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=8,
+                title="第八章",
+                body="陆明进入现场。",
+                end_of_chapter_summary="陆明抵达。",
+                scene_outputs=[
+                    SceneOutput(
+                        scene_no=1,
+                        scene_objective="抵达现场",
+                        text="陆明进入现场。",
+                    )
+                ],
+            ),
+        )
+        changed = planned.writer_output.model_copy(
+            update={
+                "scene_outputs": [
+                    planned.writer_output.scene_outputs[0].model_copy(
+                        update={"text": "陆明离开现场。"}
+                    )
+                ]
+            }
+        )
+
+        with pytest.raises(ValueError, match="stale"):
+            registrar.verify_writer_output_admission(
+                project_id=project.id,
+                writer_output=changed,
+            )
     finally:
         session.close()
         engine.dispose()

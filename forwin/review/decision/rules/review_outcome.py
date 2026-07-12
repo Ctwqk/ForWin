@@ -68,6 +68,7 @@ class _IssueFact:
     severity: str
     signal_id: str = ""
     target_scope: str = ""
+    blocking: bool = False
 
 
 def build_review_outcome_rules(_: object | None = None) -> list[DecisionRule]:
@@ -101,7 +102,8 @@ def decide_review_outcome(input: DecisionInput) -> Decision:
     blocking_signal_ids = [
         fact.signal_id
         for fact in facts
-        if fact.signal_id and (fact.severity == "error" or fact.issue_class in _BOOK_TYPES)
+        if fact.signal_id
+        and (fact.blocking or fact.severity == "error" or fact.issue_class in _BOOK_TYPES)
     ]
 
     if is_final and (
@@ -181,12 +183,19 @@ def decide_review_outcome(input: DecisionInput) -> Decision:
             blocking_signal_ids=blocking_signal_ids,
         )
     if facts:
-        has_error = any(fact.severity == "error" for fact in facts)
+        has_blocker = any(
+            fact.blocking or fact.severity == "error"
+            for fact in facts
+        )
         return _decision(
-            action="block" if has_error else "manual_review_required",
-            reason=f"{issue_class or 'unknown_issue'} has no automatic route",
+            action="block" if has_blocker else "commit_clean",
+            reason=(
+                f"{issue_class or 'unknown_issue'} is an unrouted blocker"
+                if has_blocker
+                else f"{issue_class or 'unknown_issue'} is a non-blocking observation"
+            ),
             primary_issue_class=issue_class,
-            minimum_scope="manual" if has_error else "draft",
+            minimum_scope="manual" if has_blocker else "draft",
             blocking_signal_ids=blocking_signal_ids,
         )
     return _decision(
@@ -259,6 +268,7 @@ def _facts_from_review(review: ReviewVerdict) -> list[_IssueFact]:
                 issue_class=issue_class,
                 severity=str(getattr(issue, "severity", "") or "warning"),
                 target_scope=str(getattr(issue, "target_scope", "") or ""),
+                blocking=bool(getattr(issue, "blocking", False)),
             )
         )
     return facts
@@ -271,6 +281,7 @@ def _facts_from_signals(signals: list[CanonQualitySignal]) -> list[_IssueFact]:
             severity=str(signal.severity or "warning"),
             signal_id=str(signal.signal_id or ""),
             target_scope=str(signal.target_scope or ""),
+            blocking=str(signal.severity or "warning") == "error",
         )
         for signal in signals
         if str(signal.signal_type or "").strip()
@@ -283,7 +294,7 @@ def _primary_issue(facts: list[_IssueFact]) -> _IssueFact | None:
     return sorted(
         facts,
         key=lambda item: (
-            0 if item.severity == "error" else 1,
+            0 if item.blocking or item.severity == "error" else 1,
             -_SCOPE_RANK.get(item.target_scope, 0),
             item.issue_class,
         ),

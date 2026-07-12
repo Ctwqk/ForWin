@@ -59,8 +59,8 @@ class BookStateDeltaAdapter:
         )
 
     def _world_delta(self, delta: WorldDelta) -> GraphDelta:
-        event_id = f"event_{delta.delta_id}"
-        fact_id = f"fact_{delta.delta_id}"
+        event_id = _scoped_id("event", delta.project_id, delta.delta_id)
+        fact_id = _scoped_id("fact", delta.project_id, delta.delta_id)
         related_refs = [
             *(f"node:{item}" for item in delta.affected_entities),
             *(f"node:{item}" for item in delta.affected_factions),
@@ -84,7 +84,7 @@ class BookStateDeltaAdapter:
                     )
                 )
         return GraphDelta(
-            id=f"book_delta_{delta.delta_id}",
+            id=_scoped_id("book_delta", delta.project_id, delta.delta_id),
             project_id=delta.project_id,
             chapter_number=delta.narrative_chapter or 0,
             story_time=delta.objective_story_time,
@@ -186,7 +186,7 @@ class BookStateDeltaAdapter:
         )
 
     def _belief_delta(self, project_id: str, chapter_number: int, belief: Belief) -> GraphDelta:
-        fact_id = f"fact_{belief.belief_id}"
+        fact_id = _scoped_id("fact", project_id, belief.belief_id)
         field_path = _belief_field_path(str(belief.belief_status))
         cognition_patches = []
         if field_path:
@@ -223,7 +223,7 @@ class BookStateDeltaAdapter:
                 )
             )
         return GraphDelta(
-            id=f"book_delta_{belief.belief_id}",
+            id=_scoped_id("book_delta", project_id, belief.belief_id),
             project_id=project_id,
             chapter_number=chapter_number,
             story_time=belief.created_at_story_time,
@@ -262,7 +262,7 @@ class BookStateDeltaAdapter:
 
     def _gap_delta(self, project_id: str, chapter_number: int, gap: KnowledgeGap) -> GraphDelta:
         return GraphDelta(
-            id=f"book_delta_{gap.gap_id}",
+            id=_scoped_id("book_delta", project_id, gap.gap_id),
             project_id=project_id,
             chapter_number=chapter_number,
             story_time=gap.happened_at_story_time,
@@ -314,7 +314,7 @@ class BookStateDeltaAdapter:
                 )
             )
         return GraphDelta(
-            id=f"book_delta_{reveal.reveal_event_id}",
+            id=_scoped_id("book_delta", project_id, reveal.reveal_event_id),
             project_id=project_id,
             chapter_number=chapter_number,
             delta_type=GraphDeltaType.NARRATIVE_CONTROL,
@@ -340,7 +340,11 @@ class BookStateDeltaAdapter:
 
     def _reader_experience_delta(self, delta: ReaderExperienceDelta) -> GraphDelta:
         return GraphDelta(
-            id=f"book_delta_{delta.reader_experience_delta_id}",
+            id=_scoped_id(
+                "book_delta",
+                delta.project_id,
+                delta.reader_experience_delta_id,
+            ),
             project_id=delta.project_id,
             chapter_number=delta.chapter_number,
             delta_type=GraphDeltaType.NARRATIVE_CONTROL,
@@ -366,6 +370,10 @@ class BookStateDeltaAdapter:
             evidence_refs=list(delta.source_refs),
             metadata={"reader_experience_delta": delta.model_dump(mode="json")},
         )
+
+
+def _scoped_id(prefix: str, project_id: str, local_id: str) -> str:
+    return f"{prefix}_{project_id}_{local_id}"
 
 
 def _visibility_field_path(visibility: str) -> str:

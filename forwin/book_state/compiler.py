@@ -38,7 +38,27 @@ class BookStateCompiler:
         compiler_run_id: str = "",
     ) -> BookStateCompileResult:
         requested_delta_ids = [delta.id for delta in approved_changes.graph_deltas]
-        existing_delta_ids = self.repo.graph_delta_ids_exist(requested_delta_ids)
+        existing_delta_projects = self.repo.graph_delta_projects(requested_delta_ids)
+        cross_project_delta_ids = sorted(
+            delta_id
+            for delta_id, project_id in existing_delta_projects.items()
+            if project_id != approved_changes.project_id
+        )
+        if cross_project_delta_ids:
+            return BookStateCompileResult(
+                project_id=approved_changes.project_id,
+                chapter_number=approved_changes.chapter_number,
+                compiler_run_id=compiler_run_id
+                or f"book_state_compile_blocked_{approved_changes.project_id}_{approved_changes.chapter_number}",
+                committed=False,
+                graph_delta_ids=cross_project_delta_ids,
+                blocked_reasons=[
+                    "graph_delta ids belong to another project: "
+                    f"{cross_project_delta_ids}"
+                ],
+                forced_accept_reason=approved_changes.forced_accept_reason,
+            )
+        existing_delta_ids = set(existing_delta_projects)
         if existing_delta_ids:
             if existing_delta_ids == set(requested_delta_ids):
                 world_snapshot = self.repo.latest_world_snapshot(

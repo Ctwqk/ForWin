@@ -375,6 +375,64 @@ def test_compiler_create_character_patch_assigns_personality_loadout() -> None:
     assert state_count == 2
 
 
+def test_compiler_rejects_graph_delta_id_owned_by_another_project() -> None:
+    engine = get_engine(postgres_test_url("compiler-cross-project-delta-id"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        first_project_id = _create_project(session)
+        second_project_id = _create_project(session)
+        first = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=first_project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="shared_delta_id",
+                        project_id=first_project_id,
+                        chapter_number=1,
+                    )
+                ],
+            )
+        )
+        replayed = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=first_project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="shared_delta_id",
+                        project_id=first_project_id,
+                        chapter_number=1,
+                    )
+                ],
+            )
+        )
+        second = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=second_project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="shared_delta_id",
+                        project_id=second_project_id,
+                        chapter_number=1,
+                    )
+                ],
+            )
+        )
+
+    assert first.committed is True
+    assert replayed.committed is True
+    assert replayed.metadata == {"idempotent": True}
+    assert second.committed is False
+    assert second.metadata.get("idempotent") is not True
+    assert second.blocked_reasons == [
+        "graph_delta ids belong to another project: ['shared_delta_id']"
+    ]
+
+
 def test_projection_does_not_replay_persisted_cognition_overlay_evidence() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)

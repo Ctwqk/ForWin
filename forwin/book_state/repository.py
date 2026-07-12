@@ -395,13 +395,18 @@ class BookStateRepository:
         ]
 
     def graph_delta_ids_exist(self, delta_ids: list[str]) -> set[str]:
+        return set(self.graph_delta_projects(delta_ids))
+
+    def graph_delta_projects(self, delta_ids: list[str]) -> dict[str, str]:
         if not delta_ids:
-            return set()
+            return {}
         return {
-            row
-            for row in self.session.execute(
-                select(GraphDeltaRow.id).where(GraphDeltaRow.id.in_(delta_ids))
-            ).scalars()
+            delta_id: project_id
+            for delta_id, project_id in self.session.execute(
+                select(GraphDeltaRow.id, GraphDeltaRow.project_id).where(
+                    GraphDeltaRow.id.in_(delta_ids)
+                )
+            )
         }
 
     def create_map_node(self, node: MapNode) -> MapNodeRow:

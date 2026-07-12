@@ -1,18 +1,49 @@
 from __future__ import annotations
 
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
-from forwin.canon_quality.chapter_review_form.form_schema import ChapterReviewForm
-from forwin.canon_quality.chapter_review_form.form_schema import ChapterReviewAnswers
+from forwin.canon_quality.chapter_review_form.form_schema import (
+    ChapterReviewAnswers,
+    ChapterReviewForm,
+    CharacterReviewAsk,
+    CountdownReviewAsk,
+)
 from forwin.canon_quality.chapter_review_form.llm_caller import _normalize_answer_payload
 
 
-def _form() -> ChapterReviewForm:
+def _form(
+    *,
+    include_character: bool = False,
+    include_countdown: bool = False,
+) -> ChapterReviewForm:
     return ChapterReviewForm(
         project_id="p1",
         chapter_number=18,
         form_schema_version=FORM_SCHEMA_VERSION,
-        characters=[],
-        countdowns=[],
+        characters=(
+            [
+                CharacterReviewAsk(
+                    name="角色A",
+                    prior_life_state="alive",
+                    prior_custody_state="free",
+                    last_seen_chapter=17,
+                )
+            ]
+            if include_character
+            else []
+        ),
+        countdowns=(
+            [
+                CountdownReviewAsk(
+                    key="main",
+                    label="主倒计时",
+                    prior_value_minutes=60,
+                    prior_status="active",
+                    last_updated_chapter=17,
+                )
+            ]
+            if include_countdown
+            else []
+        ),
         obligations=[],
         open_signals=[],
     )
@@ -36,7 +67,10 @@ def test_nested_dict_bool_values_are_coerced_to_schema_strings() -> None:
         "new_observations": {},
     }
 
-    normalized = _normalize_answer_payload(payload, form=_form())
+    normalized = _normalize_answer_payload(
+        payload,
+        form=_form(include_countdown=True),
+    )
 
     countdown = normalized["countdowns"][0]
     assert countdown["status_in_this_chapter"]["value"] == "true"
@@ -78,7 +112,10 @@ def test_schema_bool_fields_are_unwrapped_from_llm_answer_objects() -> None:
         "new_observations": {},
     }
 
-    normalized = _normalize_answer_payload(payload, form=_form())
+    normalized = _normalize_answer_payload(
+        payload,
+        form=_form(include_character=True, include_countdown=True),
+    )
 
     assert normalized["characters"][0]["appears_in_chapter"] is True
     assert normalized["countdowns"][0]["mentioned_in_chapter"] is True
@@ -102,7 +139,10 @@ def test_nested_dict_none_value_is_coerced_to_empty_schema_string() -> None:
         "new_observations": {},
     }
 
-    normalized = _normalize_answer_payload(payload, form=_form())
+    normalized = _normalize_answer_payload(
+        payload,
+        form=_form(include_character=True),
+    )
 
     assert normalized["characters"][0]["life_state"]["value"] == ""
 
@@ -128,7 +168,10 @@ def test_missing_participation_value_is_inferred_from_appearance() -> None:
         "new_observations": {},
     }
 
-    normalized = _normalize_answer_payload(payload, form=_form())
+    normalized = _normalize_answer_payload(
+        payload,
+        form=_form(include_character=True),
+    )
 
     assert normalized["characters"][0]["participation"]["value"] == "present_acting"
     ChapterReviewAnswers.model_validate(normalized)

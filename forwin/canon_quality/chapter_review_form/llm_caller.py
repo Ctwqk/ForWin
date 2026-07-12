@@ -50,6 +50,8 @@ SYSTEM_PROMPT = (
     "to a tracked entity, resolve subject_of_quote to that entity's canonical name from the form's "
     "name field, or to one of that entity's aliases. Example: if the form asks for name='角色A' "
     "and the chapter says '那个穿白衣的人倒下', return subject_of_quote='角色A', not '那个穿白衣的人'. "
+    "Each tracked answer array must contain exactly one answer for every matching item in the form "
+    "and no unasked items. Put newly observed entities only in new_observations. "
     "If uncertain, set confidence below 0.5 and explain."
 )
 
@@ -195,10 +197,52 @@ def _normalize_answer_payload(raw: dict[str, Any], *, form: ChapterReviewForm) -
     payload["project_id"] = form.project_id
     payload["chapter_number"] = form.chapter_number
     payload["form_schema_version"] = form.form_schema_version
+    _align_tracked_answers(payload, form=form)
     _normalize_form_answer_shapes(payload)
     if form.final_chapter is None:
         payload["final_chapter"] = None
     return payload
+
+
+def _align_tracked_answers(
+    payload: dict[str, Any],
+    *,
+    form: ChapterReviewForm,
+) -> None:
+    tracked_sections = (
+        ("characters", "name", [ask.name for ask in form.characters]),
+        ("countdowns", "key", [ask.key for ask in form.countdowns]),
+        ("obligations", "id", [ask.id for ask in form.obligations]),
+        ("open_signals", "id", [ask.id for ask in form.open_signals]),
+    )
+    for section, identity_key, expected_ids in tracked_sections:
+        expected = set(expected_ids)
+        answers_by_id: dict[str, dict[str, Any]] = {}
+        duplicates: list[str] = []
+        unasked: list[str] = []
+        for item in _list_items(payload.get(section)):
+            identity = str(item.get(identity_key) or "").strip()
+            if identity not in expected:
+                unasked.append(identity or f"<missing {identity_key}>")
+                continue
+            if identity in answers_by_id:
+                duplicates.append(identity)
+                continue
+            answers_by_id[identity] = item
+        if unasked:
+            raise ChapterReviewFormSchemaInvalid(
+                f"Unasked {section} answers: {', '.join(_dedupe_strings(unasked))}"
+            )
+        if duplicates:
+            raise ChapterReviewFormSchemaInvalid(
+                f"Duplicate {section} answers: {', '.join(_dedupe_strings(duplicates))}"
+            )
+        missing = [identity for identity in expected_ids if identity not in answers_by_id]
+        if missing:
+            raise ChapterReviewFormSchemaInvalid(
+                f"Missing {section} answers: {', '.join(missing)}"
+            )
+        payload[section] = [answers_by_id[identity] for identity in expected_ids]
 
 
 def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
@@ -305,6 +349,10 @@ def _list_items(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _first_string(item: dict[str, Any], *keys: str) -> str:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -7,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from forwin.models import Entity, Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
+from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
 from forwin.protocol import EntityMention, WriterOutput
 from forwin.review.draft_service import DraftReviewService
 
@@ -92,6 +95,140 @@ def test_reference_classifier_marks_generic_role_without_llm() -> None:
     finally:
         session.close()
         engine.dispose()
+
+
+def test_reference_classifier_drops_named_mention_without_prose_evidence() -> None:
+    class UnexpectedClassifier:
+        def classify(self, **_kwargs):
+            raise AssertionError("unsupported mention must not reach LLM classifier")
+
+    engine, session = _session()
+    try:
+        project = Project(title="抽取噪声", premise="潮序局负责复核。", genre="pulp")
+        session.add(project)
+        session.flush()
+        result = EntityRegistrar(
+            session=session,
+            classifier=UnexpectedClassifier(),
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=4,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=4,
+                title="第四章",
+                body="潮序局关闭了复核窗口。",
+                end_of_chapter_summary="复核窗口关闭。",
+                entity_mentions=[
+                    EntityMention(
+                        entity_name="蔡序",
+                        entity_kind="character",
+                        is_named=True,
+                    )
+                ],
+            ),
+        )
+
+        assert result.background_generic_names == ["蔡序"]
+        assert result.writer_output.entity_mentions == []
+        assert result.plan_conflicts == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_classifier_accepts_unknown_name_as_backward_compatible_identity_key() -> None:
+    class UnknownNameClassifier:
+        def classify(self, **_kwargs):
+            return [
+                {
+                    "unknown_name": "蔡序",
+                    "decision": "register_character",
+                    "canonical_name": "蔡序",
+                    "aliases": [],
+                    "role_hint": "复核员",
+                }
+            ]
+
+    engine, session = _session()
+    try:
+        project = Project(title="分类契约", premise="蔡序负责复核。", genre="pulp")
+        session.add(project)
+        session.flush()
+        result = EntityRegistrar(
+            session=session,
+            classifier=UnknownNameClassifier(),
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=4,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=4,
+                title="第四章",
+                body="蔡序在窗口后核对签名。",
+                end_of_chapter_summary="蔡序完成核对。",
+                entity_mentions=[
+                    EntityMention(
+                        entity_name="蔡序",
+                        entity_kind="character",
+                        is_named=True,
+                    )
+                ],
+            ),
+        )
+
+        assert result.registered_names == ["蔡序"]
+        assert result.plan_conflicts == []
+        assert result.plan.decisions[0].mention_name == "蔡序"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_llm_classifier_includes_evidence_for_mentions_after_body_excerpt() -> None:
+    class CapturingClient:
+        def __init__(self) -> None:
+            self.messages = []
+
+        def chat(self, messages, **_kwargs):
+            self.messages = messages
+            return json.dumps(
+                {
+                    "decisions": [
+                        {
+                            "name": "蔡序",
+                            "decision": "register_character",
+                            "canonical_name": "蔡序",
+                            "aliases": [],
+                            "role_hint": "复核员",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    client = CapturingClient()
+    classifier = LLMEntityAdmissionClassifier(client)
+    body = ("前置场景。" * 500) + "蔡序在复核窗口后核对签名。"
+
+    classifier.classify(
+        project_id="project-1",
+        chapter_number=1,
+        names=["蔡序"],
+        writer_output=WriterOutput(
+            project_id="project-1",
+            chapter_number=1,
+            title="第一章",
+            body=body,
+            end_of_chapter_summary="签名完成核对。",
+        ),
+        existing_entities=[],
+    )
+
+    payload = json.loads(client.messages[1]["content"])
+    assert "蔡序" not in payload["body_excerpt"]
+    assert "蔡序在复核窗口后核对签名" in payload["mention_evidence"][0]["quotes"][0]
+    assert "必须包含 name 字段" in client.messages[0]["content"]
 
 
 def test_canon_verifier_rejects_admission_conflict_without_reclassification() -> None:

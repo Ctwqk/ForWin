@@ -114,15 +114,20 @@ class CodexExecRunner:
             events = self._parse_jsonl(proc.stdout)
             thread_id = self._thread_id_from_events(events)
             actual_model = self._actual_model_from_session(thread_id)
-            content = output_path.read_text(encoding="utf-8") if output_path.exists() else self._content_from_events(events)
-            if not content:
-                content = (proc.stdout or "").strip()
+            content = (
+                output_path.read_text(encoding="utf-8")
+                if output_path.exists()
+                else self._content_from_events(events)
+            ).strip()
+            error = (proc.stderr or "").strip() or self._error_from_events(events)
+            if not content and not error:
+                error = "codex exec completed without a final message"
             return CodexExecResult(
-                ok=proc.returncode == 0,
+                ok=proc.returncode == 0 and bool(content),
                 content=content,
                 raw_events=events,
                 returncode=proc.returncode,
-                error=(proc.stderr or "").strip(),
+                error=error,
                 actual_model=actual_model,
                 thread_id=thread_id,
             )
@@ -185,15 +190,32 @@ class CodexExecRunner:
     @staticmethod
     def _content_from_events(events: list[dict[str, Any]]) -> str:
         for event in reversed(events):
-            for key in ("content", "message", "text", "last_message"):
+            for key in ("content", "text", "last_message"):
                 value = event.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
             item = event.get("item")
             if isinstance(item, dict):
-                value = item.get("content")
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+                for key in ("content", "text"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+        return ""
+
+    @staticmethod
+    def _error_from_events(events: list[dict[str, Any]]) -> str:
+        for event in reversed(events):
+            error = event.get("error")
+            if isinstance(error, str) and error.strip():
+                return error.strip()
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+            if str(event.get("type") or "") == "error":
+                message = event.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
         return ""
 
     @classmethod
@@ -208,6 +230,14 @@ class CodexExecRunner:
         if not isinstance(node, dict):
             return node
         normalized = dict(node)
+        normalized.pop("default", None)
+        for key in ("$defs", "definitions"):
+            definitions = normalized.get(key)
+            if isinstance(definitions, dict):
+                normalized[key] = {
+                    name: cls._normalize_schema_node(value)
+                    for name, value in definitions.items()
+                }
         node_type = normalized.get("type")
         if node_type == "object":
             normalized.setdefault("additionalProperties", False)
@@ -217,9 +247,13 @@ class CodexExecRunner:
                     key: cls._normalize_schema_node(value)
                     for key, value in properties.items()
                 }
-                normalized.setdefault("required", list(properties.keys()))
+                normalized["required"] = list(properties.keys())
         elif node_type == "array" and "items" in normalized:
             normalized["items"] = cls._normalize_schema_node(normalized["items"])
+        if isinstance(normalized.get("additionalProperties"), dict):
+            normalized["additionalProperties"] = cls._normalize_schema_node(
+                normalized["additionalProperties"]
+            )
         for key in ("anyOf", "oneOf", "allOf"):
             if key in normalized:
                 normalized[key] = cls._normalize_schema_node(normalized[key])

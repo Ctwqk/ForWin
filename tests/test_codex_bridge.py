@@ -189,6 +189,50 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(captured["input"], "ping")
         self.assertEqual(captured["schema"]["additionalProperties"], False)
 
+    def test_codex_runner_strictifies_defs_and_removes_defaults(self) -> None:
+        schema = {
+            "$defs": {
+                "NestedAnswer": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string", "default": ""},
+                        "confidence": {"type": "number", "default": 0.0},
+                    },
+                    "required": ["value"],
+                }
+            },
+            "type": "object",
+            "properties": {"answer": {"$ref": "#/$defs/NestedAnswer"}},
+        }
+
+        normalized = CodexExecRunner._codex_output_schema(schema)
+        nested = normalized["$defs"]["NestedAnswer"]
+
+        self.assertEqual(normalized["required"], ["answer"])
+        self.assertFalse(nested["additionalProperties"])
+        self.assertEqual(nested["required"], ["value", "confidence"])
+        self.assertNotIn("default", nested["properties"]["value"])
+        self.assertNotIn("default", nested["properties"]["confidence"])
+
+    def test_codex_runner_rejects_zero_exit_without_final_message(self) -> None:
+        def fake_run(_cmd, **_kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    '{"type":"thread.started","thread_id":"thread-empty"}\n'
+                    '{"type":"turn.completed"}\n'
+                ),
+                stderr="",
+            )
+
+        runner = CodexExecRunner(default_cwd=".")
+        with patch("forwin.codex_bridge.runner.subprocess.run", side_effect=fake_run):
+            result = runner.run(CodexExecRequest(prompt="ping"))
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("without a final message", result.error)
+
     def test_codex_runner_reads_actual_model_from_cli_session_metadata(self) -> None:
         thread_id = "019f-model-proof"
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,6 +307,32 @@ class CodexBridgeTests(unittest.TestCase):
                     "type": "object",
                     "properties": {"decision": {"type": "string"}},
                     "required": ["decision"],
+                    "additionalProperties": False,
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("schema_additional_properties", response.json()["detail"]["error"])
+
+    def test_bridge_validates_nested_local_schema_refs(self) -> None:
+        runner = FakeCodexRunner(content='{"answer":{"value":"ok","extra":true}}')
+        response = TestClient(build_app(token="", runner=runner)).post(
+            "/v1/codex/chat",
+            json={
+                "prompt": "review",
+                "output_schema": {
+                    "$defs": {
+                        "NestedAnswer": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "required": ["value"],
+                            "additionalProperties": False,
+                        }
+                    },
+                    "type": "object",
+                    "properties": {"answer": {"$ref": "#/$defs/NestedAnswer"}},
+                    "required": ["answer"],
                     "additionalProperties": False,
                 },
             },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
@@ -12,6 +13,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .runner import CodexExecRequest, CodexExecResult, CodexExecRunner
+
+
+logger = logging.getLogger(__name__)
 
 
 class CodexBridgeChatRequest(BaseModel):
@@ -85,10 +89,72 @@ def _schema_validation_error(content: str, output_schema: dict[str, Any] | None)
             parsed = json.loads(content)
         except Exception as exc:  # noqa: BLE001
             return f"schema_parse_failed: {exc}"
-    return _validate_schema_node(parsed, output_schema, path="$")
+    return _validate_schema_node(
+        parsed,
+        output_schema,
+        path="$",
+        root_schema=output_schema,
+        ref_stack=frozenset(),
+    )
 
 
-def _validate_schema_node(value: Any, schema: dict[str, Any], *, path: str) -> str:
+def _validate_schema_node(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    path: str,
+    root_schema: dict[str, Any],
+    ref_stack: frozenset[str],
+) -> str:
+    ref = str(schema.get("$ref") or "").strip()
+    if ref:
+        if ref in ref_stack:
+            return f"schema_ref_cycle: {ref}"
+        resolved = _resolve_local_schema_ref(root_schema, ref)
+        if resolved is None:
+            return f"schema_ref_unresolved: {ref}"
+        merged = dict(resolved)
+        merged.update({key: item for key, item in schema.items() if key != "$ref"})
+        return _validate_schema_node(
+            value,
+            merged,
+            path=path,
+            root_schema=root_schema,
+            ref_stack=ref_stack | {ref},
+        )
+
+    for combinator in ("anyOf", "oneOf"):
+        branches = schema.get(combinator)
+        if isinstance(branches, list):
+            branch_errors = [
+                _validate_schema_node(
+                    value,
+                    branch,
+                    path=path,
+                    root_schema=root_schema,
+                    ref_stack=ref_stack,
+                )
+                for branch in branches
+                if isinstance(branch, dict)
+            ]
+            if any(not error for error in branch_errors):
+                break
+            return f"schema_{combinator}_mismatch: {path}"
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for branch in all_of:
+            if not isinstance(branch, dict):
+                continue
+            error = _validate_schema_node(
+                value,
+                branch,
+                path=path,
+                root_schema=root_schema,
+                ref_stack=ref_stack,
+            )
+            if error:
+                return error
+
     expected_type = str(schema.get("type") or "").strip()
     type_matches = {
         "object": isinstance(value, dict),
@@ -118,17 +184,44 @@ def _validate_schema_node(value: Any, schema: dict[str, Any], *, path: str) -> s
         for key, child_schema in property_map.items():
             if key not in value or not isinstance(child_schema, dict):
                 continue
-            error = _validate_schema_node(value[key], child_schema, path=f"{path}.{key}")
+            error = _validate_schema_node(
+                value[key],
+                child_schema,
+                path=f"{path}.{key}",
+                root_schema=root_schema,
+                ref_stack=ref_stack,
+            )
             if error:
                 return error
     if expected_type == "array" and isinstance(value, list):
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(value):
-                error = _validate_schema_node(item, item_schema, path=f"{path}[{index}]")
+                error = _validate_schema_node(
+                    item,
+                    item_schema,
+                    path=f"{path}[{index}]",
+                    root_schema=root_schema,
+                    ref_stack=ref_stack,
+                )
                 if error:
                     return error
     return ""
+
+
+def _resolve_local_schema_ref(
+    root_schema: dict[str, Any],
+    ref: str,
+) -> dict[str, Any] | None:
+    if not ref.startswith("#/"):
+        return None
+    node: Any = root_schema
+    for raw_token in ref[2:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(node, dict) or token not in node:
+            return None
+        node = node[token]
+    return node if isinstance(node, dict) else None
 
 
 def _utc_now_iso() -> str:
@@ -178,6 +271,12 @@ def build_app(
                 thread_id=result.thread_id,
             )
         if not result.ok:
+            logger.warning(
+                "Codex bridge call failed thread_id=%s returncode=%s error=%s",
+                result.thread_id,
+                result.returncode,
+                result.error[:1000],
+            )
             raise HTTPException(
                 status_code=502,
                 detail=_response_from_result(result).model_dump(mode="json"),

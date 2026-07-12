@@ -4,7 +4,11 @@ import pytest
 
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.chapter_review_form.errors import ChapterReviewFormUnavailable
-from forwin.canon_quality.chapter_review_form.form_schema import ChapterReviewForm
+from forwin.canon_quality.chapter_review_form.form_schema import (
+    ChapterReviewForm,
+    CharacterReviewAsk,
+    CountdownReviewAsk,
+)
 from forwin.canon_quality.chapter_review_form.llm_caller import call_form
 
 
@@ -120,6 +124,31 @@ class FlatAnswerClient:
         }
 
 
+class RepairingUnaskedClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append(kwargs)
+        if len(self.calls) > 1:
+            return {
+                "characters": [],
+                "countdowns": [],
+                "obligations": [],
+                "open_signals": [],
+                "new_observations": {},
+                "chapter_summary": "tracked noise repaired",
+            }
+        return {
+            "characters": [{"name": "伪角色", "unexpected": "malformed"}],
+            "countdowns": [{"key": "伪倒计时", "unexpected": "malformed"}],
+            "obligations": [{"id": "伪义务", "unexpected": "malformed"}],
+            "open_signals": [{"id": "伪信号", "unexpected": "malformed"}],
+            "new_observations": {},
+            "chapter_summary": "tracked noise removed",
+        }
+
+
 def test_call_form_uses_single_structured_json_call() -> None:
     client = FakeClient()
     form = ChapterReviewForm(
@@ -181,7 +210,14 @@ def test_call_form_repairs_schema_invalid_payload_once() -> None:
         project_id="p1",
         chapter_number=7,
         form_schema_version=FORM_SCHEMA_VERSION,
-        characters=[],
+        characters=[
+            CharacterReviewAsk(
+                name="林青",
+                prior_life_state="alive",
+                prior_custody_state="free",
+                last_seen_chapter=6,
+            )
+        ],
         countdowns=[],
         obligations=[],
         open_signals=[],
@@ -201,8 +237,23 @@ def test_call_form_accepts_flat_form_answer_shapes() -> None:
         project_id="p1",
         chapter_number=7,
         form_schema_version=FORM_SCHEMA_VERSION,
-        characters=[],
-        countdowns=[],
+        characters=[
+            CharacterReviewAsk(
+                name="林青",
+                prior_life_state="alive",
+                prior_custody_state="free",
+                last_seen_chapter=6,
+            )
+        ],
+        countdowns=[
+            CountdownReviewAsk(
+                key="main",
+                label="主倒计时",
+                prior_value_minutes=60,
+                prior_status="active",
+                last_updated_chapter=6,
+            )
+        ],
         obligations=[],
         open_signals=[],
     )
@@ -216,6 +267,33 @@ def test_call_form_accepts_flat_form_answer_shapes() -> None:
     assert answers.countdowns[0].consistent_with_prior.value == "true"
     assert answers.countdowns[0].new_value_evidence
     assert answers.countdowns[0].new_value_evidence.value == "50"
+
+
+def test_call_form_repairs_unasked_tracked_items_instead_of_discarding_them() -> None:
+    client = RepairingUnaskedClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=1,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    answers = call_form(
+        form=form,
+        chapter_text="正文没有需要追踪的既有对象。",
+        prior_canon_summary="",
+        llm_client=client,
+    )
+
+    assert len(client.calls) == 2
+    assert "previous JSON did not match" in client.calls[1]["messages"][-1]["content"]
+    assert answers.characters == []
+    assert answers.countdowns == []
+    assert answers.obligations == []
+    assert answers.open_signals == []
 
 
 def test_system_prompt_instructs_canonical_name_resolution() -> None:

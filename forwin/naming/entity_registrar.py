@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,6 +72,8 @@ class LLMEntityAdmissionClassifier:
                     "register_character 需要 canonical_name, aliases, role_hint。"
                     "register_alias 需要 entity_id 和 aliases。"
                     "background_generic 不入实体表。plan_conflict 表示与计划或 canon 冲突。"
+                    "每条 decision 必须包含 name 字段，并完全复制对应 unknown_names 原值；"
+                    "不得使用 unknown_name 或 entity_name 替代 name。"
                     "不得添加 unknown_names 之外的名字。"
                 ),
             },
@@ -84,6 +87,16 @@ class LLMEntityAdmissionClassifier:
                         "title": writer_output.title,
                         "body_excerpt": str(writer_output.body or "")[:2400],
                         "summary": writer_output.end_of_chapter_summary,
+                        "mention_evidence": [
+                            {
+                                "name": name,
+                                "quotes": _mention_quotes(
+                                    str(writer_output.body or ""),
+                                    name,
+                                ),
+                            }
+                            for name in names
+                        ],
                         "existing_characters": entity_rows[:80],
                     },
                     ensure_ascii=False,
@@ -133,7 +146,10 @@ class EntityRegistrar:
         decisions: list[EntityAdmissionDecision] = []
         for raw_decision in raw_decisions:
             mention_name = str(
-                raw_decision.get("name") or raw_decision.get("entity_name") or ""
+                raw_decision.get("name")
+                or raw_decision.get("entity_name")
+                or raw_decision.get("unknown_name")
+                or ""
             ).strip()
             action = str(
                 raw_decision.get("decision") or raw_decision.get("action") or ""
@@ -446,16 +462,27 @@ class EntityRegistrar:
         names: list[str],
         writer_output: WriterOutput,
     ) -> list[dict[str, Any]]:
-        deterministic = [
-            {
-                "decision": "background_generic",
-                "name": name,
-                "reason": "deterministic reference classifier",
-            }
-            for name in names
-            if looks_like_generic_character_reference(name)
-            or looks_like_non_character_reference(name)
-        ]
+        prose_evidence = "\n".join(
+            (
+                str(writer_output.body or ""),
+                str(writer_output.end_of_chapter_summary or ""),
+            )
+        )
+        deterministic: list[dict[str, Any]] = []
+        for name in names:
+            reason = ""
+            if looks_like_generic_character_reference(name) or looks_like_non_character_reference(name):
+                reason = "deterministic reference classifier"
+            elif not _has_prose_evidence(prose_evidence, name):
+                reason = "named mention has no exact prose evidence"
+            if reason:
+                deterministic.append(
+                    {
+                        "decision": "background_generic",
+                        "name": name,
+                        "reason": reason,
+                    }
+                )
         deterministic_names = {str(item["name"]) for item in deterministic}
         unresolved_names = [name for name in names if name not in deterministic_names]
         if not unresolved_names:
@@ -506,7 +533,12 @@ class EntityRegistrar:
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or item.get("entity_name") or "").strip()
+            name = str(
+                item.get("name")
+                or item.get("entity_name")
+                or item.get("unknown_name")
+                or ""
+            ).strip()
             if name in expected and name not in decision_by_name:
                 decision_by_name[name] = item
         classified = [
@@ -721,6 +753,45 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(value)
             seen.add(value)
     return result
+
+
+def _mention_quotes(
+    text: str,
+    name: str,
+    *,
+    radius: int = 120,
+    limit: int = 3,
+) -> list[str]:
+    quotes: list[str] = []
+    for evidence_name in _prose_evidence_names(name):
+        start_at = 0
+        while len(quotes) < limit:
+            index = text.find(evidence_name, start_at)
+            if index < 0:
+                break
+            quote_start = max(0, index - radius)
+            quote_end = min(len(text), index + len(evidence_name) + radius)
+            quote = text[quote_start:quote_end]
+            if quote not in quotes:
+                quotes.append(quote)
+            start_at = index + len(evidence_name)
+        if len(quotes) >= limit:
+            break
+    return quotes
+
+
+def _has_prose_evidence(text: str, name: str) -> bool:
+    return any(evidence_name in text for evidence_name in _prose_evidence_names(name))
+
+
+def _prose_evidence_names(name: str) -> list[str]:
+    base_name = re.sub(r"\s*[（(][^（）()]{1,40}[）)]\s*$", "", name).strip()
+    return _dedupe(
+        [
+            name,
+            base_name if len(base_name) >= 2 else "",
+        ]
+    )
 
 
 __all__ = [

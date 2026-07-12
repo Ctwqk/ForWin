@@ -497,27 +497,6 @@ def _arc_envelope_section(context: ChapterContextPack, *, compact: bool = False)
     )
 
 
-def _npc_intents_section(
-    context: ChapterContextPack,
-    *,
-    limit: int,
-    detailed: bool,
-) -> str | None:
-    intents = getattr(context, "npc_intents", None)
-    if not intents:
-        return None
-    if detailed:
-        return "【NPC 当前意图】\n" + "\n".join(
-            f"  · {item.entity_name}（{item.intent_kind}，紧急度{item.urgency}）：{item.objective}"
-            + (f"；策略：{item.tactic}" if item.tactic else "")
-            for item in intents[:limit]
-        )
-    return "【NPC 当前意图】\n" + "\n".join(
-        f"  · {item.entity_name}：{item.objective}"
-        for item in intents[:limit]
-    )
-
-
 def _world_pressure_section(context: ChapterContextPack) -> str | None:
     pressure = getattr(context, "world_pressure", None)
     if not pressure:
@@ -616,7 +595,6 @@ __all__ = [
     '_active_threads_section',
     '_canon_name_anchor_section',
     '_arc_envelope_section',
-    '_npc_intents_section',
     '_world_pressure_section',
     '_world_model_section',
     '_audience_hints_section',

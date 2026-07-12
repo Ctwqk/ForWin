@@ -27,7 +27,6 @@ from .generation import (
 
 from .runtime_maps import (
     load_recent_replan_events_by_project,
-    load_recent_npc_intents_by_project,
     _load_latest_arc_structure_by_project,
     _load_latest_band_experience_by_project,
     normalize_project_automation,
@@ -80,7 +79,6 @@ __all__ = [
     'effective_target_total_chapters',
     'build_generation_control',
     'load_recent_replan_events_by_project',
-    'load_recent_npc_intents_by_project',
     '_load_latest_arc_structure_by_project',
     '_load_latest_band_experience_by_project',
     'normalize_project_automation',

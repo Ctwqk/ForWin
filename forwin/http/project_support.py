@@ -31,7 +31,6 @@ from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterRevie
 from forwin.models.phase import (
     ChapterRewriteAttempt,
 )
-from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.http.request_support import (
     _get_session,
@@ -92,10 +91,6 @@ def _delete_project(session, project_id: str) -> None:
                 delete(ChapterReview).where(ChapterReview.draft_id.in_(draft_ids))
             )
             session.execute(delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids)))
-
-    session.execute(
-        delete(NPCIntentSnapshot).where(NPCIntentSnapshot.project_id == project_id)
-    )
 
     for table in reversed(Base.metadata.sorted_tables):
         if table.name == "projects" or "project_id" not in table.c:

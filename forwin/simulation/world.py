@@ -9,17 +9,14 @@ from typing import Any, Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.query import BookStateQuery
 from forwin.models import (
     CommentSignalCandidate,
-    NPCIntentSnapshot,
     Project,
     PublisherRawComment,
     WorldSimulationTurn,
     new_id,
 )
 from forwin.book_state.thread_sampling import SampledThread, sample_active_threads
-from forwin.protocol.context import EntitySnapshot
 from forwin.utils import parse_llm_json
 from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
@@ -91,17 +88,6 @@ class SignalDraft:
     severity: int
     confidence: float
     evidence_span: str
-
-
-@dataclass(slots=True)
-class NPCIntentDraft:
-    entity_id: str
-    entity_name: str
-    intent_kind: str
-    objective: str
-    tactic: str
-    urgency: int
-    notes: str
 
 
 @dataclass(slots=True)
@@ -715,227 +701,6 @@ def build_reader_feedback_snapshot(
     }
 
 
-class NPCIntentGenerator:
-    def __init__(self, *, llm_client=None, active_thread_limit: int = 20) -> None:
-        self.llm_client = llm_client
-        self.active_thread_limit = max(1, int(active_thread_limit))
-
-    def generate(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        chapter_number: int,
-        limit: int = 5,
-    ) -> list[NPCIntentDraft]:
-        project = session.get(Project, project_id)
-        entities = BookStateQuery(session).active_entities(
-            project_id,
-            as_of_chapter=max(int(chapter_number), 0),
-            kinds={"character"},
-        )[:limit]
-
-        active_threads = sample_active_threads(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            limit=min(2, self.active_thread_limit),
-            stale_window=2,
-            recent_window=2,
-        ).threads
-        thread_focus = "、".join(thread.name for thread in active_threads) or "当前主线"
-        feedback = _load_reader_feedback(
-            session,
-            project.title if project else "",
-            project_id=project_id,
-            chapter_number=chapter_number,
-            limit=6,
-            llm_client=self.llm_client,
-        )
-
-        llm_intents = self._generate_with_llm(
-            entities=entities,
-            active_threads=active_threads,
-            chapter_number=chapter_number,
-            thread_focus=thread_focus,
-            feedback_summary=str(feedback.get("summary") or ""),
-        )
-        if llm_intents is not None:
-            return llm_intents
-
-        intents: list[NPCIntentDraft] = []
-        dominant_sentiment = str(feedback.get("dominant_sentiment") or "neutral")
-        for index, entity in enumerate(entities):
-            state = dict(entity.current_state)
-            status = str(state.get("status", "normal") or "normal")
-            location = str(
-                state.get("location_id", "")
-                or state.get("current_location_id", "")
-                or state.get("location", "")
-                or ""
-            )
-
-            intent_kind = "pressure" if index == 0 else "pursue"
-            urgency = max(1, min(5, 5 - index))
-            objective = (
-                f"围绕{thread_focus}采取下一步行动，争取在下一章改变局面。"
-                if status in {"normal", "active", ""}
-                else f"在{status}状态下寻找翻盘机会，仍然围绕{thread_focus}行动。"
-            )
-            tactic_parts = []
-            if location:
-                tactic_parts.append(f"优先利用{location}的地利")
-            if index == 0:
-                tactic_parts.append("主动制造信息差")
-            else:
-                tactic_parts.append("跟进主角留下的线索")
-
-            if dominant_sentiment.startswith("risk:"):
-                urgency = min(5, urgency + 1)
-                tactic_parts.append("优先消化读者指出的风险点")
-            elif dominant_sentiment.startswith("pacing:"):
-                urgency = min(5, urgency + 1)
-                tactic_parts.append("尽快回应读者对节奏推进的担忧")
-            elif dominant_sentiment.startswith("confusion:"):
-                tactic_parts.append("优先回应读者困惑较多的悬念信息点")
-            elif dominant_sentiment.startswith("character_heat:"):
-                tactic_parts.append("顺势照顾读者关注度较高的角色线")
-            elif dominant_sentiment.startswith("relationship_interest:"):
-                tactic_parts.append("顺势推进读者持续关注的关系/互动张力")
-            elif dominant_sentiment.startswith("prediction:"):
-                tactic_parts.append("保持受控 ambiguity，不要太早摊开谜底")
-            elif dominant_sentiment == "negative":
-                urgency = min(5, urgency + 1)
-                tactic_parts.append("尽快回应读者对推进节奏的担忧")
-            elif dominant_sentiment == "curious":
-                tactic_parts.append("优先回应读者最关心的悬念")
-            elif dominant_sentiment == "positive":
-                tactic_parts.append("照顾读者当前最期待的兑现点")
-
-            notes = f"重要度{entity.importance}，第{chapter_number + 1}章前生效。"
-            intents.append(
-                NPCIntentDraft(
-                    entity_id=entity.entity_id,
-                    entity_name=entity.name,
-                    intent_kind=intent_kind,
-                    objective=objective,
-                    tactic="；".join(tactic_parts),
-                    urgency=urgency,
-                    notes=notes,
-                )
-            )
-        return intents
-
-    def _generate_with_llm(
-        self,
-        *,
-        entities: list[EntitySnapshot],
-        active_threads: list[SampledThread],
-        chapter_number: int,
-        thread_focus: str,
-        feedback_summary: str,
-    ) -> list[NPCIntentDraft] | None:
-        if self.llm_client is None or not entities:
-            return None
-        entity_payload = [
-            {
-                "entity_id": entity.entity_id,
-                "entity_name": entity.name,
-                "importance": entity.importance,
-            }
-            for entity in entities
-        ]
-        prompt = [
-            {
-                "role": "system",
-                "content": "你是网文角色调度器，只输出 JSON，不要解释。",
-            },
-            {
-                "role": "user",
-                "content": (
-                    "请为下一章生成 NPC 意图，只输出 JSON。\n"
-                    f"当前章节：第 {chapter_number} 章\n"
-                    f"主线焦点：{thread_focus}\n"
-                    f"活跃线程：{json.dumps([t.name for t in active_threads], ensure_ascii=False)}\n"
-                    f"读者反馈摘要：{feedback_summary}\n"
-                    f"候选角色：{json.dumps(entity_payload, ensure_ascii=False)}\n\n"
-                    "返回格式："
-                    '{"intents":[{"entity_name":"角色名","intent_kind":"pursue|pressure|evade|ally","objective":"一句中文目标","tactic":"一句中文策略","urgency":1,"notes":"补充说明"}]}'
-                ),
-            },
-        ]
-        try:
-            raw = call_chat_compat(
-                self.llm_client,
-                prompt,
-                temperature=0.45,
-                max_tokens=900,
-                response_format={"type": "json_object"},
-                task_family="phase4",
-                stage_key="npc_intents",
-                output_schema={"type": "object"},
-                timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
-                retry_on_timeout=False,
-            )
-        except TypeError as exc:
-            if "response_format" not in str(exc):
-                logger.warning("Phase4 NPC LLM call failed.", exc_info=True)
-                return None
-            try:
-                raw = call_chat_compat(
-                    self.llm_client,
-                    prompt,
-                    temperature=0.45,
-                    max_tokens=900,
-                    task_family="phase4",
-                    stage_key="npc_intents",
-                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
-                    retry_on_timeout=False,
-                )
-            except Exception:
-                logger.warning("Phase4 NPC LLM fallback call failed.", exc_info=True)
-                return None
-        except Exception:
-            logger.warning("Phase4 NPC LLM call failed.", exc_info=True)
-            return None
-        try:
-            payload = parse_llm_json(raw, error_prefix="NPC intent parser")
-        except Exception as exc:  # noqa: BLE001
-            mark_latest_attempt_parse_failure(
-                self.llm_client,
-                parser_name="NPC intent parser",
-                stage_key="npc_intents",
-                schema_name="npc_intents",
-                raw_output=raw,
-                error=exc,
-            )
-            logger.warning("Phase4 NPC intent parse failed.", exc_info=True)
-            return None
-        entity_map = {entity.name: entity for entity in entities}
-        intents: list[NPCIntentDraft] = []
-        for row in payload.get("intents") or []:
-            if not isinstance(row, dict):
-                continue
-            entity = entity_map.get(str(row.get("entity_name", "")).strip())
-            if entity is None:
-                continue
-            try:
-                intents.append(
-                    NPCIntentDraft(
-                        entity_id=entity.entity_id,
-                        entity_name=entity.name,
-                        intent_kind=str(row.get("intent_kind") or "pursue"),
-                        objective=str(row.get("objective") or "").strip(),
-                        tactic=str(row.get("tactic") or "").strip(),
-                        urgency=max(1, min(5, int(row.get("urgency") or 3))),
-                        notes=str(row.get("notes") or "").strip(),
-                    )
-                )
-            except Exception:
-                continue
-        return intents or None
-
-
 class WorldSimulator:
     def __init__(self, *, llm_client=None, active_thread_limit: int = 20) -> None:
         self.llm_client = llm_client
@@ -1159,31 +924,6 @@ def _load_reader_feedback(
         ],
         "signals": snapshot["signals"],
     }
-
-
-def save_npc_intents(
-    *,
-    session: Session,
-    project_id: str,
-    chapter_number: int,
-    intents: list[NPCIntentDraft],
-) -> None:
-    for item in intents:
-        session.add(
-            NPCIntentSnapshot(
-                id=new_id(),
-                project_id=project_id,
-                chapter_number=chapter_number,
-                entity_id=item.entity_id,
-                entity_name=item.entity_name,
-                intent_kind=item.intent_kind,
-                objective=item.objective,
-                tactic=item.tactic,
-                urgency=item.urgency,
-                notes=item.notes,
-            )
-        )
-    session.flush()
 
 
 def save_world_turn(

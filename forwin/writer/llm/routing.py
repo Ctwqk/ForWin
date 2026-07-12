@@ -226,7 +226,7 @@ class RoutingMixin:
             return "canon_extraction"
         if stage in {"writer_preview", "writer_preview_fallback", "chapter_preview_fallback"}:
             return "writer_preview"
-        if stage in {"comment_analysis", "npc_intents", "world_pressure"} or family in {
+        if stage in {"comment_analysis", "world_pressure"} or family in {
             "feedback",
             "phase4",
             "reader_feedback",

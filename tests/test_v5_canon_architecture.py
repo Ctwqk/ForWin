@@ -114,3 +114,13 @@ def test_post_commit_handlers_are_registered_and_retryable() -> None:
     assert 'CANON_PUBLISHER_EVENT = "canon.publisher.requested"' in canon_outbox
     assert "mark_outbox_event_failed(" in worker
     assert "mark_outbox_event_processed(" in worker
+
+
+def test_npc_intent_projection_stays_deleted_from_v5_runtime() -> None:
+    offenders = []
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        source = path.read_text(encoding="utf-8").lower()
+        if "npc_intent" in source:
+            offenders.append(path.relative_to(ROOT).as_posix())
+
+    assert offenders == []

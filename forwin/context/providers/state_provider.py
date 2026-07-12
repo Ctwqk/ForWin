@@ -31,7 +31,6 @@ class StateContextProvider:
             entity_names=allowed_entities,
         )
 
-        npc_intents_getter = getattr(repo, "get_recent_npc_intents", None)
         world_pressure_getter = getattr(repo, "get_latest_world_pressure", None)
         active_subworld_summary_getter = getattr(
             repo, "get_active_subworld_summary", None
@@ -56,13 +55,6 @@ class StateContextProvider:
                 "timeline": book_state.current_timeline(
                     project_id,
                     as_of_chapter=as_of_chapter,
-                ),
-                "npc_intents": (
-                    npc_intents_getter(
-                        project_id, before_chapter=chapter_plan.chapter_number
-                    )
-                    if callable(npc_intents_getter)
-                    else []
                 ),
                 "world_pressure": (
                     world_pressure_getter(

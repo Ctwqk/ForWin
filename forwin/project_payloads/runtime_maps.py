@@ -16,7 +16,6 @@ from forwin.models.phase import (
     BandExperiencePlan,
     ProjectReplanEvent,
 )
-from forwin.models.phase4 import NPCIntentSnapshot
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.models.publisher import PublisherUploadJob
 from forwin.state.query_helpers import (
@@ -62,27 +61,6 @@ def load_recent_replan_events_by_project(
             ProjectReplanEvent.trigger_chapter.desc(),
             ProjectReplanEvent.created_at.desc(),
             ProjectReplanEvent.id.desc(),
-        ),
-        limit=limit,
-    )
-
-
-def load_recent_npc_intents_by_project(
-    session: Session,
-    project_ids: list[str],
-    *,
-    limit: int,
-) -> dict[str, list[NPCIntentSnapshot]]:
-    return _recent_rows_by_project(
-        session,
-        NPCIntentSnapshot,
-        NPCIntentSnapshot.project_id,
-        project_ids,
-        order_by=(
-            NPCIntentSnapshot.chapter_number.desc(),
-            NPCIntentSnapshot.urgency.desc(),
-            NPCIntentSnapshot.created_at.desc(),
-            NPCIntentSnapshot.id.desc(),
         ),
         limit=limit,
     )
@@ -387,7 +365,6 @@ def load_project_runtime_maps(
     recent_replans_map = load_recent_replan_events_by_project(
         session, project_ids, limit=5
     )
-    recent_npc_map = load_recent_npc_intents_by_project(session, project_ids, limit=6)
     return {
         "latest_stage_map": latest_stage_map,
         "last_replan_map": last_replan_map,
@@ -399,13 +376,11 @@ def load_project_runtime_maps(
         "latest_arc_structure_map": latest_arc_structure_map,
         "latest_band_experience_map": latest_band_experience_map,
         "recent_replans_map": recent_replans_map,
-        "recent_npc_map": recent_npc_map,
     }
 
 
 __all__ = [
     "load_recent_replan_events_by_project",
-    "load_recent_npc_intents_by_project",
     "_load_latest_arc_structure_by_project",
     "_load_latest_band_experience_by_project",
     "normalize_project_automation",

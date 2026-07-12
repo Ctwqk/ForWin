@@ -38,7 +38,7 @@ from forwin.retrieval import RetrievalBroker
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairExecution, RepairService, RepairVerifier
 from forwin.runtime.policy import RuntimePolicy
-from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
+from forwin.simulation.world import WorldSimulator
 from forwin.skills import SkillPromptLayerBuilder, SkillRouter
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
@@ -80,7 +80,6 @@ class ChapterPipeline(
         stage_analyzer: StageAnalyzer,
         pacing_strategist: PacingStrategist,
         replan_governor: ReplanGovernor,
-        npc_intent_generator: NPCIntentGenerator,
         world_simulator: WorldSimulator,
         arc_envelope_manager: ArcEnvelopeManager,
         draft_review: DraftReviewService,
@@ -124,7 +123,6 @@ class ChapterPipeline(
         self.stage_analyzer = stage_analyzer
         self.pacing_strategist = pacing_strategist
         self.replan_governor = replan_governor
-        self.npc_intent_generator = npc_intent_generator
         self.world_simulator = world_simulator
         self.arc_envelope_manager = arc_envelope_manager
         self.draft_review = draft_review

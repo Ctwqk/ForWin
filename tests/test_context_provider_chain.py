@@ -75,9 +75,6 @@ class _FakeRepo:
     def get_current_timeline(self, project_id: str):
         return None
 
-    def get_recent_npc_intents(self, project_id: str, before_chapter: int):
-        return []
-
     def get_latest_world_pressure(self, project_id: str, before_chapter: int):
         return None
 

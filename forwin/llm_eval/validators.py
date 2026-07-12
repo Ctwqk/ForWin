@@ -16,7 +16,6 @@ REQUIRED_JSON_KEYS: dict[str, list[str]] = {
     "lore_timeline_notes": ["lore_candidates", "timeline_hints", "writer_notes", "entity_mentions"],
     "review_json": ["verdict", "issues"],
     "comment_analysis": ["signals"],
-    "npc_intents": ["intents"],
     "world_pressure": ["pressure_level", "pressure_summary"],
 }
 

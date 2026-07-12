@@ -21,7 +21,6 @@ from .sections import (
     _experience_overlay_section,
     _map_runtime_section,
     _normalize_char_targets,
-    _npc_intents_section,
     _personality_context_section,
     _previous_summaries_section,
     _retrieved_memories_section,
@@ -91,8 +90,6 @@ def _scene_prompt_sections(
     entity_limit: int,
     thread_limit: int,
     memory_limit: int,
-    npc_limit: int,
-    feedback_detailed: bool,
     envelope_compact: bool,
     extra_sections: list[str] | None = None,
 ) -> str:
@@ -109,11 +106,6 @@ def _scene_prompt_sections(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
-        _npc_intents_section(
-            context,
-            limit=npc_limit,
-            detailed=feedback_detailed,
-        ),
         _world_pressure_section(context),
         _world_model_section(context),
         _audience_hints_section(context),
@@ -153,7 +145,6 @@ def build_single_chapter_draft_prompt(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=False),
-        _npc_intents_section(context, limit=4, detailed=True),
         _world_pressure_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
@@ -213,7 +204,6 @@ def build_preview_chapter_prompt(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=True),
-        _npc_intents_section(context, limit=3, detailed=False),
         _world_pressure_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
@@ -279,8 +269,6 @@ def build_scene_breakdown_prompt(
         entity_limit=6,
         thread_limit=6,
         memory_limit=3,
-        npc_limit=4,
-        feedback_detailed=True,
         envelope_compact=False,
     )
     user_content = (
@@ -313,14 +301,12 @@ def build_scene_generation_prompt(
         entity_limit=5,
         thread_limit=6,
         memory_limit=2,
-        npc_limit=3,
-        feedback_detailed=False,
         envelope_compact=True,
         extra_sections=[_scene_task_section(scene_plan, include_target_chars=True)],
     )
     user_content = (
         f"{scene_sections}\n\n"
-        "请显式参考当前 NPC 意图、世界压力和读者信号提示来组织这个 scene。\n\n"
+        "请显式参考当前世界压力和读者信号提示来组织这个 scene。\n\n"
         "输出要求：\n"
         "1. 只写当前这个 scene，不要偷跑到下一 scene。\n"
         "2. 不要输出 JSON，不要解释。\n"
@@ -395,8 +381,6 @@ def build_scene_stitch_prompt(
         entity_limit=5,
         thread_limit=6,
         memory_limit=2,
-        npc_limit=3,
-        feedback_detailed=False,
         envelope_compact=True,
         extra_sections=[
             f"请把以下 scenes 拼接成《{context.project_title}》第 {context.chapter_number} 章的完整章节。",

@@ -3180,29 +3180,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "npc_intent_snapshots",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("chapter_number", sa.Integer(), nullable=False),
-        sa.Column("entity_id", sa.String(), nullable=False),
-        sa.Column("entity_name", sa.String(), nullable=False),
-        sa.Column("intent_kind", sa.String(), nullable=False),
-        sa.Column("objective", sa.Text(), nullable=False),
-        sa.Column("tactic", sa.Text(), nullable=False),
-        sa.Column("urgency", sa.Integer(), nullable=False),
-        sa.Column("notes", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["entity_id"],
-            ["entities.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_table(
         "provisional_band_executions",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -3673,7 +3650,6 @@ def downgrade() -> None:
         table_name="provisional_band_executions",
     )
     op.drop_table("provisional_band_executions")
-    op.drop_table("npc_intent_snapshots")
     op.drop_index("ix_map_regions_project_type", table_name="map_regions")
     op.drop_index("ix_map_regions_project_subworld", table_name="map_regions")
     op.drop_index("ix_map_regions_project_status", table_name="map_regions")

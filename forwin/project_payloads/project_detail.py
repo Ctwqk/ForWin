@@ -227,7 +227,6 @@ def build_project_detail(
     latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(project_id)
     latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
-    npc_intents = runtime_maps["recent_npc_map"].get(project_id, [])
     replan_events = runtime_maps["recent_replans_map"].get(project_id, [])
     active_subworld_ids: set[str] = set()
     if latest_band_experience is not None:
@@ -327,7 +326,6 @@ def build_project_detail(
         current_time_label=latest_stage.timeline_label if latest_stage else "",
         world_pressure_level=latest_world.pressure_level if latest_world else "",
         world_pressure_summary=latest_world.pressure_summary if latest_world else "",
-        npc_intent_count=len(npc_intents),
         **project_arc_snapshot_payload(
             latest_arc_envelope,
             latest_arc_analysis,
@@ -336,18 +334,6 @@ def build_project_detail(
             latest_band_experience,
             latest_scenario_rehearsal,
         ),
-        recent_npc_intents=[
-            {
-                "chapter_number": item.chapter_number,
-                "entity_name": item.entity_name,
-                "intent_kind": item.intent_kind,
-                "objective": item.objective,
-                "tactic": item.tactic,
-                "urgency": item.urgency,
-                "notes": item.notes,
-            }
-            for item in npc_intents
-        ],
         generation_control=generation_control,
         latest_band_checkpoint=generation_control.latest_band_checkpoint,
         blocking_reason=generation_control.blocking_reason,

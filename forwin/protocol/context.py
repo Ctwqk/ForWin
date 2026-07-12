@@ -66,15 +66,6 @@ class MemorySnippet(BaseModel):
     score: float = 0.0
 
 
-class NPCIntentView(BaseModel):
-    entity_name: str
-    intent_kind: str
-    objective: str
-    tactic: str = ""
-    urgency: int = 1
-    notes: str = ""
-
-
 class WorldPressureView(BaseModel):
     pressure_level: str
     pressure_summary: str
@@ -204,7 +195,6 @@ class ChapterContextPack(BaseModel):
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
     timeline: TimelineSnapshot | None = None
     retrieved_memories: list[MemorySnippet] = Field(default_factory=list)
-    npc_intents: list[NPCIntentView] = Field(default_factory=list)
     world_pressure: WorldPressureView | None = None
     reader_feedback: ReaderFeedbackView | None = None
     current_arc_envelope: ArcEnvelopeView | None = None

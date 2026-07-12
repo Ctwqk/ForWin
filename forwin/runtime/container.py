@@ -21,7 +21,7 @@ from forwin.planning.stage_analysis import (
     ReplanGovernor,
     StageAnalyzer,
 )
-from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
+from forwin.simulation.world import WorldSimulator
 from forwin.observability.service import ObservabilityService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
@@ -144,7 +144,6 @@ class RuntimeContainer:
             stage_analyzer=services.stage_analyzer,
             pacing_strategist=services.pacing_strategist,
             replan_governor=services.replan_governor,
-            npc_intent_generator=services.npc_intent_generator,
             world_simulator=services.world_simulator,
             arc_envelope_manager=services.arc_envelope_manager,
             draft_review=services.draft_review,
@@ -273,10 +272,6 @@ class RuntimeContainer:
         phase4_llm = (
             llm_client if policy.planning.use_llm_simulation and llm_available else None
         )
-        npc_intent_generator = NPCIntentGenerator(
-            llm_client=phase4_llm,
-            active_thread_limit=infrastructure.phase_active_thread_limit,
-        )
         world_simulator = WorldSimulator(
             llm_client=phase4_llm,
             active_thread_limit=infrastructure.phase_active_thread_limit,
@@ -340,7 +335,6 @@ class RuntimeContainer:
             stage_analyzer=stage_analyzer,
             pacing_strategist=pacing_strategist,
             replan_governor=replan_governor,
-            npc_intent_generator=npc_intent_generator,
             world_simulator=world_simulator,
             arc_envelope_manager=arc_envelope_manager,
             genesis_workspace_service=book_genesis.workspace,

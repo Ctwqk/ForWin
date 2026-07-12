@@ -19,6 +19,7 @@ from forwin.audit.events import (
     DecisionEventType,
 )
 from forwin.models.project import ChapterPlan, Project
+from forwin.models.task import GenerationTask
 from forwin.state.updater import StateUpdater
 
 
@@ -56,6 +57,16 @@ class GenerationAutoContinueController:
         project_id = str(getattr(result, "project_id", "") or "").strip()
         if not project_id:
             return AutoContinueDecision(decision="stop", reason="missing_project_id")
+        parent_stop_reason = self._parent_task_stop_reason(parent_task_id)
+        if parent_stop_reason:
+            return self._record_decision(
+                project_id=project_id,
+                parent_task_id=parent_task_id,
+                decision=AutoContinueDecision(
+                    decision="stop",
+                    reason=parent_stop_reason,
+                ),
+            )
         if not auto_continue:
             return self._record_decision(
                 project_id=project_id,
@@ -214,6 +225,20 @@ class GenerationAutoContinueController:
                 workset_reason=workset.reason,
             ),
         )
+
+    def _parent_task_stop_reason(self, parent_task_id: str) -> str:
+        normalized_id = str(parent_task_id or "").strip()
+        if not normalized_id:
+            return ""
+        with self.session_factory() as session:
+            task = session.get(GenerationTask, normalized_id)
+            if task is None:
+                return ""
+            if bool(task.cancel_requested):
+                return "cancel_requested"
+            if bool(task.pause_requested):
+                return "user_pause_requested"
+        return ""
 
     def _terminal_block_reason(self, result: Any) -> str:
         if bool(getattr(result, "cancelled", False)):

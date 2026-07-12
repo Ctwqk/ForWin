@@ -210,8 +210,6 @@ class ProjectDetail(ProjectArcSnapshotFields):
     recent_replans: list[dict[str, object]] = []
     world_pressure_level: str = ""
     world_pressure_summary: str = ""
-    npc_intent_count: int = 0
-    recent_npc_intents: list[dict[str, object]] = []
     generation_control: GenerationControlInfo = Field(
         default_factory=GenerationControlInfo
     )

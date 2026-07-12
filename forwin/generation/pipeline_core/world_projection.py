@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.protocol.writer import WriterOutput
-from forwin.simulation.world import save_npc_intents, save_world_turn
+from forwin.simulation.world import save_world_turn
 
 
 def _prompt_trace_success_summary(
@@ -103,24 +103,6 @@ class PostCanonStage:
             project_id=project_id,
             chapter_number=chapter_number,
             reason="accepted-into-canon",
-        )
-        intents = self.npc_intent_generator.generate(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
-        self._flush_background_llm_trace(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            stage_key="npc_intents",
-            trace_scope="phase4",
-        )
-        save_npc_intents(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            intents=intents,
         )
         world_turn = self.world_simulator.simulate(
             session=session,

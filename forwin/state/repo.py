@@ -30,7 +30,6 @@ from forwin.models import (
     FeedbackActionRecord,
     MapRegionRow,
     NarrativeConstraint,
-    NPCIntentSnapshot,
     Project,
     PromptTrace,
     PublisherRawComment,
@@ -46,7 +45,6 @@ from forwin.protocol import (
     AudienceTrendView,
     BandDelightSchedule,
     ChapterExperiencePlan,
-    NPCIntentView,
     ReaderPromise,
     ReaderCommentView,
     ReaderFeedbackView,
@@ -848,41 +846,6 @@ class StateRepository:
                 parent_event_id=str(getattr(row, "parent_event_id", "") or ""),
                 causal_root_id=str(getattr(row, "causal_root_id", "") or ""),
                 created_at=row.created_at.isoformat() if row.created_at else "",
-            )
-            for row in rows
-        ]
-
-    def get_recent_npc_intents(
-        self,
-        project_id: str,
-        before_chapter: int,
-        limit: int = 5,
-    ) -> list[NPCIntentView]:
-        rows = (
-            self.session.execute(
-                select(NPCIntentSnapshot)
-                .where(
-                    NPCIntentSnapshot.project_id == project_id,
-                    NPCIntentSnapshot.chapter_number < before_chapter,
-                )
-                .order_by(
-                    NPCIntentSnapshot.chapter_number.desc(),
-                    NPCIntentSnapshot.urgency.desc(),
-                    NPCIntentSnapshot.created_at.desc(),
-                )
-                .limit(limit)
-            )
-            .scalars()
-            .all()
-        )
-        return [
-            NPCIntentView(
-                entity_name=row.entity_name,
-                intent_kind=row.intent_kind,
-                objective=row.objective,
-                tactic=row.tactic,
-                urgency=row.urgency,
-                notes=row.notes,
             )
             for row in rows
         ]

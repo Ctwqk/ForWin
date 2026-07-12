@@ -30,7 +30,6 @@ DEFAULT_STAGES = (
     "scene_generation",
     "scene_stitch",
     "subworld_delta",
-    "npc_intents",
     "world_pressure",
     "state_event_extraction",
     "thread_time_extraction",

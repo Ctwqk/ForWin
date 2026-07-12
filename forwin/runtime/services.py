@@ -47,7 +47,6 @@ class RuntimeServices:
     stage_analyzer: Any
     pacing_strategist: Any
     replan_governor: Any
-    npc_intent_generator: Any
     world_simulator: Any
 
     arc_envelope_manager: Any

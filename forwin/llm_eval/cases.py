@@ -199,24 +199,6 @@ def default_eval_cases(*, suite: str = "medium") -> list[EvalCase]:
             response_format=_json_response_format(),
         ),
         EvalCase(
-            case_id="npc_intents",
-            stage_key="npc_intents",
-            task_family="phase4",
-            expected_output_kind="json",
-            schema_name="npc_intents",
-            messages=[
-                {"role": "system", "content": "你是网文角色调度器，只输出 JSON，不要解释。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请为下一章生成 NPC 意图，只输出 {\"intents\":[]}。"
-                        "角色：周澜；当前目标：隐藏账本主人身份。"
-                    ),
-                },
-            ],
-            response_format=_json_response_format(),
-        ),
-        EvalCase(
             case_id="world_pressure",
             stage_key="world_pressure",
             task_family="phase4",

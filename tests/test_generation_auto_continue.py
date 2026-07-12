@@ -10,6 +10,7 @@ from forwin.generation.auto_continue import (
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.task import GenerationTask
 from tests.postgres import postgres_test_url
 
 
@@ -149,6 +150,65 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
         assert calls[0]["title"] == "Auto Book"
         assert calls[0]["subtitle"] == "自动续跑 · 玄幻"
         assert calls[0]["message"] == "前一批完成，无阻断，自动继续生成。"
+    finally:
+        engine.dispose()
+
+
+def test_controller_does_not_continue_after_parent_pause_wins_completion_race() -> None:
+    engine, Session = _session_factory("auto-continue-parent-pause")
+    calls: list[dict[str, object]] = []
+    try:
+        with Session.begin() as session:
+            project = _project(session, total=2)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=2,
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="accepted",
+            )
+            _chapter(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=2,
+                status="planned",
+            )
+            session.add(
+                GenerationTask(
+                    id="task-paused-at-completion",
+                    project_id=project.id,
+                    status="completed",
+                    pause_requested=True,
+                )
+            )
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: (
+                calls.append(kwargs) or "task-next"
+            ),
+        )
+        decision = controller.after_task_completion(
+            ResultStub(project_id="project-auto", completed_chapters=[1]),
+            parent_task_id="task-paused-at-completion",
+            run_until_chapter=2,
+            max_chapters=None,
+            auto_continue=True,
+        )
+
+        assert decision.decision == "stop"
+        assert decision.reason == "user_pause_requested"
+        assert calls == []
     finally:
         engine.dispose()
 

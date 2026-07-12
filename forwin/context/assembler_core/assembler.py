@@ -114,7 +114,6 @@ class ChapterContextAssembler:
             active_relations=data.get("relations", []),
             active_threads=data.get("threads", []),
             timeline=data.get("timeline"),
-            npc_intents=data.get("npc_intents", []),
             world_pressure=data.get("world_pressure"),
             reader_feedback=data.get("reader_feedback"),
             current_arc_envelope=data.get("current_arc_envelope"),

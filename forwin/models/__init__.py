@@ -38,7 +38,7 @@ from .phase import (
     ProvisionalPromotionRecord,
     WorldProjectionDeltaRow,
 )
-from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
+from .phase4 import WorldSimulationTurn
 from .progression import ProjectProgressionRule
 from .publisher import (
     CommentSignalCandidate,
@@ -147,7 +147,6 @@ __all__ = [
     "ProvisionalBandExecution",
     "ProvisionalPromotionRecord",
     "WorldProjectionDeltaRow",
-    "NPCIntentSnapshot",
     "WorldSimulationTurn",
     # draft
     "ChapterDraft",

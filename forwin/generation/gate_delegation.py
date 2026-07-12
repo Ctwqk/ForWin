@@ -124,8 +124,14 @@ def _json_dump(value: Any) -> str:
 
 
 class SparkGateDelegate:
-    def __init__(self, *, llm_client: Any) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client: Any,
+        requested_model: str = SPARK_GATE_MODEL,
+    ) -> None:
         self.llm_client = llm_client
+        self.requested_model = str(requested_model or SPARK_GATE_MODEL).strip()
 
     def resolve(
         self,
@@ -146,7 +152,7 @@ class SparkGateDelegate:
                 summary=f"Gate delegation requested for {request.gate_kind}.",
                 payload={
                     "gate_kind": request.gate_kind,
-                    "requested_model": SPARK_GATE_MODEL,
+                    "requested_model": self.requested_model,
                     "related_object_type": request.related_object_type,
                     "related_object_id": request.related_object_id,
                 },
@@ -192,7 +198,7 @@ class SparkGateDelegate:
                     codex_allowed=True,
                     permission_profile=SPARK_GATE_PERMISSION_PROFILE,
                     preferred_provider_kind="spark",
-                    preferred_model=SPARK_GATE_MODEL,
+                    preferred_model=self.requested_model,
                 )
                 or ""
             )
@@ -215,10 +221,10 @@ class SparkGateDelegate:
         if call_error is not None:
             failure_reason = "llm_call_failed"
             failure_detail = f"{call_error.__class__.__name__}: {call_error}"
-        elif actual_model != SPARK_GATE_MODEL:
+        elif actual_model != self.requested_model:
             failure_reason = "model_mismatch"
             failure_detail = (
-                f"Expected {SPARK_GATE_MODEL}, got {actual_model or '<unknown>'}."
+                f"Expected {self.requested_model}, got {actual_model or '<unknown>'}."
             )
         else:
             try:
@@ -249,7 +255,7 @@ class SparkGateDelegate:
             ),
             "failure_reason": failure_reason,
             "failure_detail": failure_detail,
-            "requested_model": SPARK_GATE_MODEL,
+            "requested_model": self.requested_model,
             "actual_model": actual_model,
             "backend": backend,
         }
@@ -265,7 +271,7 @@ class SparkGateDelegate:
             input_snapshot_json=_json_dump(sanitized_snapshot),
             model_profile_json=_json_dump(
                 {
-                    "requested_model": SPARK_GATE_MODEL,
+                    "requested_model": self.requested_model,
                     "actual_model": actual_model,
                     "backend": backend,
                     "permission_profile": SPARK_GATE_PERMISSION_PROFILE,
@@ -295,7 +301,7 @@ class SparkGateDelegate:
                 payload={
                     "gate_kind": request.gate_kind,
                     "trace_id": trace.id,
-                    "requested_model": SPARK_GATE_MODEL,
+                    "requested_model": self.requested_model,
                     "actual_model": actual_model,
                     "backend": backend,
                 },
@@ -336,7 +342,7 @@ class SparkGateDelegate:
                     "decision": decision_text,
                     "failure_reason": failure_reason,
                     "trace_id": trace.id,
-                    "requested_model": SPARK_GATE_MODEL,
+                    "requested_model": self.requested_model,
                     "actual_model": actual_model,
                     "backend": backend,
                     "risk_level": parsed.risk_level if parsed is not None else "",
@@ -369,7 +375,7 @@ class SparkGateDelegate:
                     payload={
                         "gate_kind": request.gate_kind,
                         "trace_id": trace.id,
-                        "requested_model": SPARK_GATE_MODEL,
+                        "requested_model": self.requested_model,
                         "actual_model": actual_model,
                         "backend": backend,
                     },
@@ -389,6 +395,7 @@ class SparkGateDelegate:
             findings=parsed.findings if parsed is not None else [],
             evidence=parsed.evidence if parsed is not None else [],
             failure_reason=failure_reason,
+            requested_model=self.requested_model,
             actual_model=actual_model,
             backend=backend,
             trace_id=trace.id,

@@ -199,6 +199,27 @@ def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> 
     }
 
 
+def test_spark_delegate_uses_configured_codex_model() -> None:
+    updater = RecordingUpdater()
+    configured_model = "gpt-5.6-sol"
+    llm = FakeSparkLLM(_approval_json(), actual_model=configured_model)
+
+    outcome = SparkGateDelegate(
+        llm_client=llm,
+        requested_model=configured_model,
+    ).resolve(
+        updater=updater,
+        request=_delegation_request(),
+    )
+
+    assert outcome.resolved is True
+    assert outcome.approved is True
+    assert outcome.requested_model == configured_model
+    assert outcome.actual_model == configured_model
+    assert llm.calls[0]["preferred_model"] == configured_model
+    assert configured_model in str(updater.traces[0]["model_profile_json"])
+
+
 def test_unproven_actual_model_fails_closed() -> None:
     updater = RecordingUpdater()
     llm = FakeSparkLLM(_approval_json(), prove_actual_model=False)

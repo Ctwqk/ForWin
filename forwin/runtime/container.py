@@ -367,7 +367,10 @@ class RuntimeContainer:
             canon_preparation=CanonPreparationService(),
             canon_admission=CanonAdmissionService(session_factory=session_factory),
             gate_delegation=GateDelegationService(
-                spark_delegate=SparkGateDelegate(llm_client=llm_client)
+                spark_delegate=SparkGateDelegate(
+                    llm_client=llm_client,
+                    requested_model=infrastructure.codex_default_model,
+                )
             ),
         )
 

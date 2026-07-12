@@ -24,6 +24,7 @@ from forwin.utils import parse_llm_json
 from .types import EntityAdmissionDecision, EntityAdmissionPlan
 
 logger = logging.getLogger(__name__)
+_CHARACTER_KINDS = {"character", "person", "human"}
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,7 @@ class EntityRegistrar:
             for decision in decisions
             if decision.action == "background_generic"
         ]
-        planned_output = self._drop_background_generic_mentions(
+        planned_output = self._drop_background_generic_references(
             writer_output,
             set(background_names),
         )
@@ -558,20 +559,7 @@ class EntityRegistrar:
         project_id: str,
         writer_output: WriterOutput,
     ) -> list[str]:
-        mentioned: list[str] = []
-        seen: set[str] = set()
-        for mention in getattr(writer_output, "entity_mentions", []) or []:
-            if not bool(getattr(mention, "is_named", False)):
-                continue
-            if not bool(getattr(mention, "is_on_stage", True)):
-                continue
-            kind = str(getattr(mention, "entity_kind", "") or "").strip()
-            if kind not in {"character", "person", "human"}:
-                continue
-            name = str(getattr(mention, "entity_name", "") or "").strip()
-            if name and name not in seen:
-                mentioned.append(name)
-                seen.add(name)
+        mentioned = _structured_character_reference_names(writer_output)
         if not mentioned:
             return []
         known = self._entities_by_names(
@@ -684,7 +672,7 @@ class EntityRegistrar:
         return entity
 
     @staticmethod
-    def _drop_background_generic_mentions(
+    def _drop_background_generic_references(
         writer_output: WriterOutput,
         names: set[str],
     ) -> WriterOutput:
@@ -695,7 +683,37 @@ class EntityRegistrar:
             for mention in writer_output.entity_mentions
             if str(getattr(mention, "entity_name", "") or "").strip() not in names
         ]
-        return writer_output.model_copy(update={"entity_mentions": mentions})
+        state_changes = [
+            change
+            for change in writer_output.state_changes
+            if str(getattr(change, "entity_name", "") or "").strip() not in names
+        ]
+        events = []
+        for event in writer_output.new_events:
+            involved_entity_names: list[str] = []
+            roles: list[str] = []
+            for index, raw_name in enumerate(event.involved_entity_names):
+                name = str(raw_name or "").strip()
+                if name in names:
+                    continue
+                involved_entity_names.append(raw_name)
+                if index < len(event.roles):
+                    roles.append(event.roles[index])
+            events.append(
+                event.model_copy(
+                    update={
+                        "involved_entity_names": involved_entity_names,
+                        "roles": roles,
+                    }
+                )
+            )
+        return writer_output.model_copy(
+            update={
+                "entity_mentions": mentions,
+                "state_changes": state_changes,
+                "new_events": events,
+            }
+        )
 
     @staticmethod
     def _attach_admission_plan(
@@ -757,6 +775,49 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(value)
             seen.add(value)
     return result
+
+
+def _structured_character_reference_names(writer_output: WriterOutput) -> list[str]:
+    character_candidates: list[str] = []
+    non_character_names: set[str] = set()
+
+    for mention in writer_output.entity_mentions:
+        if not bool(getattr(mention, "is_named", False)):
+            continue
+        if not bool(getattr(mention, "is_on_stage", True)):
+            continue
+        name = str(getattr(mention, "entity_name", "") or "").strip()
+        kind = str(getattr(mention, "entity_kind", "") or "").strip().lower()
+        if not name:
+            continue
+        if kind in _CHARACTER_KINDS:
+            character_candidates.append(name)
+        else:
+            non_character_names.add(name)
+
+    for change in writer_output.state_changes:
+        name = str(getattr(change, "entity_name", "") or "").strip()
+        kind = str(getattr(change, "entity_kind", "") or "").strip().lower()
+        if not name:
+            continue
+        if kind in _CHARACTER_KINDS:
+            character_candidates.append(name)
+        else:
+            non_character_names.add(name)
+
+    for event in writer_output.new_events:
+        for raw_name in event.involved_entity_names:
+            name = str(raw_name or "").strip()
+            if name and name not in non_character_names:
+                character_candidates.append(name)
+
+    return _dedupe(
+        [
+            name
+            for name in character_candidates
+            if name not in non_character_names
+        ]
+    )
 
 
 def _mention_quotes(

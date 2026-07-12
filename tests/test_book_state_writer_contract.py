@@ -673,8 +673,13 @@ def test_event_contract_ignores_generic_and_non_character_participants() -> None
             for patch in result.graph_deltas[0].node_patches
             if patch.node_type == "event"
         )
+        admitted_character = next(
+            decision
+            for decision in planned.plan.decisions
+            if decision.mention_name == "季澈"
+        )
         assert event_patch.new_value["state"]["participant_ids"] == [
-            planned.plan.decisions[0].entity_id
+            admitted_character.entity_id
         ]
     finally:
         session.close()

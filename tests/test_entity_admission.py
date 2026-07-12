@@ -11,6 +11,7 @@ from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
 from forwin.protocol import EntityMention, SceneOutput, WriterOutput
+from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.review.draft_service import DraftReviewService
 
 
@@ -132,6 +133,192 @@ def test_reference_classifier_drops_named_mention_without_prose_evidence() -> No
         assert result.background_generic_names == ["蔡序"]
         assert result.writer_output.entity_mentions == []
         assert result.plan_conflicts == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_discovers_character_references_outside_entity_mentions() -> None:
+    class Classifier:
+        def __init__(self) -> None:
+            self.names: list[str] = []
+
+        def classify(self, **kwargs):
+            self.names = list(kwargs["names"])
+            return [
+                {
+                    "name": name,
+                    "decision": "register_character",
+                    "canonical_name": name,
+                    "role_hint": "本章在场角色",
+                }
+                for name in self.names
+            ]
+
+    classifier = Classifier()
+    engine, session = _session()
+    try:
+        project = Project(title="结构化角色", premise="三人联合复核。", genre="pulp")
+        session.add(project)
+        session.flush()
+        result = EntityRegistrar(
+            session=session,
+            classifier=classifier,
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=1,
+                title="第一章",
+                body="季澈与白铭交出证据，梁祚批准联合窗口。",
+                end_of_chapter_summary="梁祚批准三人联合追查。",
+                entity_mentions=[
+                    EntityMention(entity_name="季澈", entity_kind="character"),
+                    EntityMention(entity_name="白铭", entity_kind="character"),
+                ],
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="梁祚",
+                        entity_kind="character",
+                        field="role_state",
+                        old_value="常规调度",
+                        new_value="批准联合窗口",
+                        reason="偏移证据成立",
+                    )
+                ],
+                new_events=[
+                    EventCandidate(
+                        summary="梁祚批准联合窗口",
+                        significance="major",
+                        involved_entity_names=["季澈", "白铭", "梁祚"],
+                        roles=["protagonist", "support", "admin"],
+                    )
+                ],
+            ),
+        )
+
+        assert classifier.names == ["季澈", "白铭", "梁祚"]
+        assert result.registered_names == ["季澈", "白铭", "梁祚"]
+        assert result.plan_conflicts == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_does_not_reclassify_typed_non_character_participants() -> None:
+    class Classifier:
+        def __init__(self) -> None:
+            self.names: list[str] = []
+
+        def classify(self, **kwargs):
+            self.names = list(kwargs["names"])
+            return [
+                {
+                    "name": name,
+                    "decision": "register_character",
+                    "canonical_name": name,
+                }
+                for name in self.names
+            ]
+
+    classifier = Classifier()
+    engine, session = _session()
+    try:
+        project = Project(title="类型保留", premise="季澈复核样本。", genre="pulp")
+        session.add(project)
+        session.flush()
+        result = EntityRegistrar(
+            session=session,
+            classifier=classifier,
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=1,
+                title="第一章",
+                body="季澈将样本-17转入证据链。",
+                end_of_chapter_summary="样本-17完成复核。",
+                entity_mentions=[
+                    EntityMention(entity_name="季澈", entity_kind="character")
+                ],
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="样本-17",
+                        entity_kind="item",
+                        field="status",
+                        old_value="待复核",
+                        new_value="已复核",
+                        reason="偏移确认",
+                    )
+                ],
+                new_events=[
+                    EventCandidate(
+                        summary="季澈完成样本复核",
+                        involved_entity_names=["季澈", "样本-17"],
+                        roles=["protagonist", "evidence"],
+                    )
+                ],
+            ),
+        )
+
+        assert classifier.names == ["季澈"]
+        assert result.writer_output.new_events[0].involved_entity_names == [
+            "季澈",
+            "样本-17",
+        ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_admission_drops_generic_refs_from_structured_character_surfaces() -> None:
+    class UnexpectedClassifier:
+        def classify(self, **_kwargs):
+            raise AssertionError("generic refs must not reach the LLM classifier")
+
+    engine, session = _session()
+    try:
+        project = Project(title="结构泛称", premise="系统发出告警。", genre="pulp")
+        session.add(project)
+        session.flush()
+        result = EntityRegistrar(
+            session=session,
+            classifier=UnexpectedClassifier(),
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=1,
+                title="第一章",
+                body="系统提示不明追踪者正在覆盖记录。",
+                end_of_chapter_summary="覆盖请求被拦截。",
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="不明追踪者",
+                        entity_kind="character",
+                        field="status",
+                        old_value="未知",
+                        new_value="正在覆盖记录",
+                        reason="系统告警",
+                    )
+                ],
+                new_events=[
+                    EventCandidate(
+                        summary="系统报告覆盖请求",
+                        involved_entity_names=["系统", "不明追踪者"],
+                        roles=["observer", "antagonist"],
+                    )
+                ],
+            ),
+        )
+
+        assert result.background_generic_names == ["不明追踪者", "系统"]
+        assert result.writer_output.state_changes == []
+        assert result.writer_output.new_events[0].involved_entity_names == []
+        assert result.writer_output.new_events[0].roles == []
     finally:
         session.close()
         engine.dispose()

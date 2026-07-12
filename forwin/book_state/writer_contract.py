@@ -6,6 +6,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from forwin.checker.reference_classifier import (
+    looks_like_generic_character_reference,
+    looks_like_non_character_reference,
+)
 from forwin.naming.types import EntityAdmissionPlan
 from forwin.protocol.book_state import (
     FactPatch,
@@ -57,6 +61,56 @@ _FIELD_ALIASES = {
         "holder": "state.holder_id",
     },
 }
+_WRITER_LOCATION_METADATA_PATH = "metadata.writer_location"
+_MIN_EMBEDDED_LOCATION_LABEL_LENGTH = 3
+
+
+class _MapLocationResolver:
+    def __init__(self, nodes: Any) -> None:
+        self.node_ids: set[str] = set()
+        node_ids_by_label: dict[str, set[str]] = {}
+        for node in nodes:
+            node_id = str(node.id or "").strip()
+            if not node_id:
+                continue
+            self.node_ids.add(node_id)
+            for value in (node.name, *node.aliases):
+                label = _normalize_location_text(value)
+                if label:
+                    node_ids_by_label.setdefault(label, set()).add(node_id)
+        self.unique_node_id_by_label = {
+            label: next(iter(node_ids))
+            for label, node_ids in node_ids_by_label.items()
+            if len(node_ids) == 1
+        }
+
+    def resolve(self, value: Any) -> str | None:
+        raw_value = str(value or "").strip()
+        if raw_value in self.node_ids:
+            return raw_value
+        text = _normalize_location_text(raw_value)
+        if not text:
+            return None
+        exact = self.unique_node_id_by_label.get(text)
+        if exact is not None:
+            return exact
+        candidates = [
+            (len(label), node_id)
+            for label, node_id in self.unique_node_id_by_label.items()
+            if len(label) >= _MIN_EMBEDDED_LOCATION_LABEL_LENGTH
+            and label in text
+        ]
+        if not candidates:
+            return None
+        longest = max(length for length, _node_id in candidates)
+        node_ids = {
+            node_id
+            for length, node_id in candidates
+            if length == longest
+        }
+        if len(node_ids) != 1:
+            return None
+        return next(iter(node_ids))
 
 
 class WriterContractIssue(BaseModel):
@@ -88,6 +142,7 @@ class WriterContractDeltaBuilder:
             project_id,
             as_of_chapter=max(int(chapter_number) - 1, 0),
         )
+        location_resolver = _MapLocationResolver(runtime.map.nodes_by_id.values())
         node_by_name = _world_node_name_index(runtime.world.nodes_by_id.values())
         node_kind_by_name = {
             name: str(node.node_type)
@@ -159,21 +214,53 @@ class WriterContractDeltaBuilder:
                 issues.append(_unresolved_character_issue(name, chapter_number))
                 continue
             resolved_kind = str(node.node_type or kind)
+            field_path = _book_state_field_path(
+                resolved_kind,
+                str(change.field or ""),
+            )
+            reported_old = (
+                str(change.old_value)
+                if str(change.old_value or "").strip()
+                else None
+            )
+            reported_new = str(change.new_value or "")
+            if _is_location_id_field(field_path):
+                node_patches.append(
+                    NodePatch(
+                        node_id=node.id,
+                        node_type=resolved_kind,
+                        op="set",
+                        field_path=_WRITER_LOCATION_METADATA_PATH,
+                        old_value=_current_node_value(
+                            runtime,
+                            node.id,
+                            _WRITER_LOCATION_METADATA_PATH,
+                        ),
+                        new_value={
+                            "reported_old": reported_old or "",
+                            "reported_new": reported_new,
+                        },
+                        reason=str(change.reason or "writer location description"),
+                    )
+                )
+                resolved_new = location_resolver.resolve(reported_new)
+                if reported_new.strip() and resolved_new is None:
+                    continue
+                new_value = resolved_new or ""
+            else:
+                new_value = reported_new
             node_patches.append(
                 NodePatch(
                     node_id=node.id,
                     node_type=resolved_kind,
                     op="set",
-                    field_path=_book_state_field_path(
-                        resolved_kind,
-                        str(change.field or ""),
+                    field_path=field_path,
+                    old_value=_current_node_value(
+                        runtime,
+                        node.id,
+                        field_path,
                     ),
-                    old_value=(
-                        str(change.old_value)
-                        if str(change.old_value or "").strip()
-                        else None
-                    ),
-                    new_value=str(change.new_value or ""),
+                    new_value=new_value,
                     reason=str(change.reason or "writer state change"),
                 )
             )
@@ -183,6 +270,8 @@ class WriterContractDeltaBuilder:
             unresolved_names: list[str] = []
             for name in event.involved_entity_names:
                 normalized_name = str(name or "").strip()
+                if not normalized_name:
+                    continue
                 node = node_by_name.get(normalized_name)
                 if node is None:
                     kind = mention_kind_by_name.get(normalized_name, "")
@@ -198,6 +287,11 @@ class WriterContractDeltaBuilder:
                         )
                         node_by_name[normalized_name] = node
                         node_kind_by_name[normalized_name] = kind
+                if node is None and (
+                    looks_like_generic_character_reference(normalized_name)
+                    or looks_like_non_character_reference(normalized_name)
+                ):
+                    continue
                 if node is None:
                     unresolved_names.append(normalized_name)
                 else:
@@ -507,7 +601,7 @@ class WriterContractDeltaBuilder:
             description=f"由结构化 WriterOutput 在第{chapter_number}章登记。",
             importance=4,
             created_at_chapter=chapter_number,
-            profile={"summary": reason},
+            profile={},
             state={"status": "active"},
             metadata={"source": "writer_contract", "reason": reason},
         )
@@ -586,6 +680,33 @@ def _book_state_field_path(kind: str, field: str) -> str:
     if normalized_field in fields.get("profile", set()):
         return f"profile.{normalized_field}"
     return f"state.metadata.{normalized_field or 'unspecified'}"
+
+
+def _is_location_id_field(field_path: str) -> bool:
+    return field_path.startswith("state.") and field_path.rsplit(".", 1)[-1].endswith(
+        "location_id"
+    )
+
+
+def _current_node_value(runtime: Any, node_id: str, field_path: str) -> Any:
+    node = runtime.world.nodes_by_id.get(node_id)
+    if node is None:
+        return None
+    if field_path.startswith("state."):
+        payload: Any = runtime.world.get_state(node_id)
+        parts = field_path.removeprefix("state.").split(".")
+    else:
+        payload = node.model_dump(mode="json")
+        parts = field_path.split(".")
+    for part in parts:
+        if not isinstance(payload, dict):
+            return None
+        payload = payload.get(part)
+    return payload
+
+
+def _normalize_location_text(value: Any) -> str:
+    return "".join(str(value or "").split()).casefold()
 
 
 def _stable_id(prefix: str, *parts: Any) -> str:

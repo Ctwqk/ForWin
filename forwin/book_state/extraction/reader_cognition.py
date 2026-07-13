@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.types import V4ReviewIssue
+from forwin.book_state.extraction.types import BookStateExtractionGateIssue
 
 
 class ReaderCognitionReviewer:
@@ -14,8 +14,8 @@ class ReaderCognitionReviewer:
         *,
         chapter_intent: ChapterWorldDeltaIntent | None,
         promise_debt_count: int = 0,
-    ) -> list[V4ReviewIssue]:
-        issues: list[V4ReviewIssue] = []
+    ) -> list[BookStateExtractionGateIssue]:
+        issues: list[BookStateExtractionGateIssue] = []
         planned_reader_payoff = bool(
             chapter_intent and chapter_intent.reader_experience_intents
         )
@@ -32,7 +32,7 @@ class ReaderCognitionReviewer:
         )
         if int(promise_debt_count or 0) >= 5 and not has_increment:
             issues.append(
-                V4ReviewIssue(
+                BookStateExtractionGateIssue(
                     reviewer=self.name,
                     severity="fail",
                     failure_type="missing_chapter_increment",
@@ -46,7 +46,7 @@ class ReaderCognitionReviewer:
             )
         if int(promise_debt_count or 0) >= 3 and not planned_reader_payoff and not delivered_reader_payoff:
             issues.append(
-                V4ReviewIssue(
+                BookStateExtractionGateIssue(
                     reviewer=self.name,
                     severity="warn",
                     failure_type="unpaid_promise_debt",

@@ -10,7 +10,7 @@ from forwin.protocol.world_v4 import (
     WorldDelta,
 )
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
-from forwin.world_v4_review_gate import V4ReviewGate
+from forwin.book_state.extraction import BookStateExtractionGate
 
 
 def _intent() -> ChapterWorldDeltaIntent:
@@ -44,7 +44,7 @@ def test_gate_fails_when_protagonist_acts_on_unknown_hidden_truth() -> None:
         ],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_intent(),
         chapter_body="主角忽然意识到父亲被围，立刻决定返航救父。",
@@ -70,7 +70,7 @@ def test_gate_fails_world_delta_without_source_type() -> None:
         world_deltas=[bad_delta],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_intent(),
         chapter_body="母星突然沦陷。",
@@ -83,7 +83,7 @@ def test_gate_fails_world_delta_without_source_type() -> None:
 def test_gate_fails_early_reveal_against_must_not_reveal() -> None:
     extracted = ExtractedWorldChangeSet(project_id="project-1", chapter_number=23)
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_intent(),
         chapter_body="通讯终于接通，父亲明确说自己已经在母星被围。",
@@ -96,7 +96,7 @@ def test_gate_fails_early_reveal_against_must_not_reveal() -> None:
 def test_gate_warns_when_promise_debt_grows_without_payoff_plan() -> None:
     extracted = ExtractedWorldChangeSet(project_id="project-1", chapter_number=23)
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_intent().model_copy(update={"reader_experience_intents": []}),
         chapter_body="本章继续制造新问题，没有关闭旧问题。",
@@ -133,7 +133,7 @@ def test_gate_passes_chapter_23_hint_with_local_reader_experience() -> None:
         ],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_intent(),
         chapter_body="防线修复后，通讯台传出乱码和父亲旧部呼号。",

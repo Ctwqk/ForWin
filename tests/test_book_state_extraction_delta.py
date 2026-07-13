@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.extractor.world_v4 import WorldDeltaExtractor
+from forwin.book_state.extraction.delta_extractor import BookStateExtractionDeltaExtractor
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import DeltaKind, KnowledgeUpdateType, VisibilityState
 from forwin.protocol.writer import WriterOutput
@@ -27,7 +27,7 @@ def test_extractor_derives_hint_delta_and_reader_cognition_from_chapter_intent()
         },
     )
 
-    extracted = WorldDeltaExtractor().extract(
+    extracted = BookStateExtractionDeltaExtractor().extract(
         writer_output,
         chapter_intent=intent,
     )
@@ -56,7 +56,7 @@ def test_extractor_preserves_writer_self_reported_v4_changes() -> None:
         must_not_reveal_violations=[],
     )
 
-    extracted = WorldDeltaExtractor().extract(self_reported)
+    extracted = BookStateExtractionDeltaExtractor().extract(self_reported)
 
     assert extracted.project_id == "project-1"
     assert extracted.chapter_number == 23

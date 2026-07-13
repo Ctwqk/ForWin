@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.types import V4ReviewIssue
+from forwin.book_state.extraction.types import BookStateExtractionGateIssue
 
 
 class RevealReviewer:
@@ -14,10 +14,10 @@ class RevealReviewer:
         *,
         chapter_intent: ChapterWorldDeltaIntent | None,
         chapter_body: str,
-    ) -> list[V4ReviewIssue]:
+    ) -> list[BookStateExtractionGateIssue]:
         if chapter_intent is None or "father_sieged" not in chapter_intent.must_not_reveal:
             return []
-        issues: list[V4ReviewIssue] = []
+        issues: list[BookStateExtractionGateIssue] = []
         text = chapter_body or ""
         summaries = "；".join(delta.summary for delta in extracted.world_deltas)
         combined = text + summaries
@@ -28,7 +28,7 @@ class RevealReviewer:
         )
         if planned_reveal_chapter and extracted.chapter_number < planned_reveal_chapter and has_reveal_delta:
             issues.append(
-                V4ReviewIssue(
+                BookStateExtractionGateIssue(
                     reviewer=self.name,
                     severity="fail",
                     failure_type="reveal_before_planned_chapter",
@@ -50,7 +50,7 @@ class RevealReviewer:
         )
         if early_reveal:
             issues.append(
-                V4ReviewIssue(
+                BookStateExtractionGateIssue(
                     reviewer=self.name,
                     severity="fail",
                     failure_type="early_reveal",

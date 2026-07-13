@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.extractor.world_v4 import WorldDeltaExtractor
+from forwin.book_state.extraction.delta_extractor import BookStateExtractionDeltaExtractor
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import DeltaKind
 from forwin.protocol.writer import WriterOutput
@@ -29,7 +29,7 @@ def test_extractor_extracts_body_span_hint_and_offscreen_source() -> None:
         end_of_chapter_summary="通讯异常升级。",
     )
 
-    extracted = WorldDeltaExtractor().extract(
+    extracted = BookStateExtractionDeltaExtractor().extract(
         writer_output,
         chapter_intent=_chapter_23_intent(),
     )

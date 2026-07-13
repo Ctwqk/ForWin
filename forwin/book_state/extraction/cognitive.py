@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.types import V4ReviewIssue
+from forwin.book_state.extraction.types import BookStateExtractionGateIssue
 
 
 class CognitiveConsistencyReviewer:
@@ -14,13 +14,13 @@ class CognitiveConsistencyReviewer:
         *,
         chapter_intent: ChapterWorldDeltaIntent | None,
         chapter_body: str,
-    ) -> list[V4ReviewIssue]:
-        issues: list[V4ReviewIssue] = []
+    ) -> list[BookStateExtractionGateIssue]:
+        issues: list[BookStateExtractionGateIssue] = []
         for belief in extracted.belief_updates:
             truth_relation = str(getattr(belief.truth_relation, "value", belief.truth_relation))
             if truth_relation == "false" and not belief.evidence_sources:
                 issues.append(
-                    V4ReviewIssue(
+                    BookStateExtractionGateIssue(
                         reviewer=self.name,
                         severity="warn",
                         failure_type="unsupported_false_belief",
@@ -48,7 +48,7 @@ class CognitiveConsistencyReviewer:
         hidden_truth_named = any(token in body + summaries for token in ("父亲被围", "母星被围"))
         if hidden_guarded and protagonist_not_known and acts_on_rescue_truth and hidden_truth_named:
             issues.append(
-                V4ReviewIssue(
+                BookStateExtractionGateIssue(
                     reviewer=self.name,
                     severity="fail",
                     failure_type="character_omniscience",

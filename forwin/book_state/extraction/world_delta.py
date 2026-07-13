@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.types import V4ReviewIssue
+from forwin.book_state.extraction.types import BookStateExtractionGateIssue
 
 
 def _source_type_value(source_type) -> str:
@@ -17,12 +17,12 @@ class WorldDeltaReviewer:
         extracted: ExtractedWorldChangeSet,
         *,
         chapter_intent: ChapterWorldDeltaIntent | None = None,
-    ) -> list[V4ReviewIssue]:
-        issues: list[V4ReviewIssue] = []
+    ) -> list[BookStateExtractionGateIssue]:
+        issues: list[BookStateExtractionGateIssue] = []
         for delta in extracted.world_deltas:
             if not str(getattr(delta, "world_line_id", "") or "").strip():
                 issues.append(
-                    V4ReviewIssue(
+                    BookStateExtractionGateIssue(
                         reviewer=self.name,
                         severity="fail",
                         failure_type="missing_world_line",
@@ -33,7 +33,7 @@ class WorldDeltaReviewer:
             source = getattr(delta, "source", None)
             if source is None or not _source_type_value(getattr(source, "source_type", "")):
                 issues.append(
-                    V4ReviewIssue(
+                    BookStateExtractionGateIssue(
                         reviewer=self.name,
                         severity="fail",
                         failure_type="missing_delta_source",
@@ -52,7 +52,7 @@ class WorldDeltaReviewer:
                 and not chapter_intent.reveal_delta_intents
             ):
                 issues.append(
-                    V4ReviewIssue(
+                    BookStateExtractionGateIssue(
                         reviewer=self.name,
                         severity="warn",
                         failure_type="offscreen_without_reveal_plan",

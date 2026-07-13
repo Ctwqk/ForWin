@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from forwin.book_state.extraction_contract import BookStateExtractionRequest
+from forwin.book_state.extraction.contract import BookStateExtractionRequest
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
-from forwin.extractor.book_state_graph_delta import (
+from forwin.book_state.extraction.graph_delta import (
     BookStateGraphDeltaExtractor,
     _filter_graph_delta_layers,
 )
@@ -27,7 +27,7 @@ from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
-from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
+from forwin.book_state.extraction.types import BookStateExtractionGateVerdict
 from tests.postgres import postgres_test_url
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models import Project
@@ -628,16 +628,16 @@ def test_world_layer_filter_preserves_summary_only_world_delta() -> None:
 
 
 def _install_empty_world_delta_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    class EmptyWorldDeltaExtractor:
+    class EmptyBookStateExtractionDeltaExtractor:
         def extract(self, writer_output, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
             return ExtractedWorldChangeSet(
                 project_id=writer_output.project_id,
                 chapter_number=writer_output.chapter_number,
             )
 
-    class PassingV4ReviewGate:
+    class PassingBookStateExtractionGate:
         def review(self, extracted, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
-            return V4ReviewGateVerdict(
+            return BookStateExtractionGateVerdict(
                 passed=True,
                 approved_changes=ApprovedWorldChangeSet(
                     project_id=extracted.project_id,
@@ -647,12 +647,12 @@ def _install_empty_world_delta_path(monkeypatch: pytest.MonkeyPatch) -> None:
             )
 
     monkeypatch.setattr(
-        "forwin.extractor.book_state_graph_delta.WorldDeltaExtractor",
-        EmptyWorldDeltaExtractor,
+        "forwin.book_state.extraction.graph_delta.BookStateExtractionDeltaExtractor",
+        EmptyBookStateExtractionDeltaExtractor,
     )
     monkeypatch.setattr(
-        "forwin.extractor.book_state_graph_delta.V4ReviewGate",
-        PassingV4ReviewGate,
+        "forwin.book_state.extraction.graph_delta.BookStateExtractionGate",
+        PassingBookStateExtractionGate,
     )
 
 

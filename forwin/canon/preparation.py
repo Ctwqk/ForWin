@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.candidate_drafts import candidate_body_hash
-from forwin.book_state.extraction_contract import BookStateExtractionRequest
-from forwin.book_state.extraction_contract import BookStateExtractionResult
+from forwin.book_state.extraction.contract import BookStateExtractionRequest
+from forwin.book_state.extraction.contract import BookStateExtractionResult
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
-from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
+from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
 from forwin.audit.events import DecisionEventType
 from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow

@@ -6,7 +6,7 @@ from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
+from forwin.book_state.extraction.types import BookStateExtractionGateVerdict
 
 
 class BookStateExtractionRequest(BaseModel):
@@ -32,8 +32,8 @@ class BookStateExtractionResult(BaseModel):
     accepted: bool
     changes: ApprovedGraphDeltaSet | None = None
     issues: list[BookStateExtractionIssue] = Field(default_factory=list)
-    compatibility_extracted: ExtractedWorldChangeSet | None = None
-    compatibility_gate_verdict: V4ReviewGateVerdict | None = None
+    extracted_changes: ExtractedWorldChangeSet | None = None
+    gate_verdict: BookStateExtractionGateVerdict | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
 

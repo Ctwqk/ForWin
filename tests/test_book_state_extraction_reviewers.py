@@ -12,7 +12,7 @@ from forwin.protocol.world_v4 import (
     TruthRelation,
     WorldDelta,
 )
-from forwin.world_v4_review_gate import V4ReviewGate
+from forwin.book_state.extraction import BookStateExtractionGate
 
 
 def _chapter_23_intent() -> ChapterWorldDeltaIntent:
@@ -43,7 +43,7 @@ def test_reviewers_warn_false_belief_without_evidence() -> None:
         ],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=_chapter_23_intent(),
         chapter_body="主角仍以为通讯问题只是距离导致。",
@@ -73,7 +73,7 @@ def test_reveal_reviewer_blocks_reveal_before_ladder_step() -> None:
         ],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=intent,
         chapter_body="父亲明确说自己已经被围。",
@@ -100,7 +100,7 @@ def test_world_delta_reviewer_warns_hidden_line_without_hint_plan() -> None:
         ],
     )
 
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         extracted,
         chapter_intent=ChapterWorldDeltaIntent(
             intent_id="ch24",
@@ -115,7 +115,7 @@ def test_world_delta_reviewer_warns_hidden_line_without_hint_plan() -> None:
 
 
 def test_reader_cognition_reviewer_fails_band_without_increment() -> None:
-    verdict = V4ReviewGate().review(
+    verdict = BookStateExtractionGate().review(
         ExtractedWorldChangeSet(project_id="project-1", chapter_number=24),
         chapter_intent=ChapterWorldDeltaIntent(
             intent_id="ch24",

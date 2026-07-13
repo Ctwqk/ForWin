@@ -5,15 +5,15 @@ from hashlib import sha1
 from typing import TYPE_CHECKING
 
 from forwin.book_state.adapter import BookStateDeltaAdapter
-from forwin.book_state.extraction_contract import (
+from forwin.book_state.extraction.contract import (
     BookStateExtractionIssue,
     BookStateExtractionRequest,
     BookStateExtractionResult,
 )
 from forwin.book_state.writer_contract import WriterContractDeltaBuilder
 from forwin.protocol.book_state import FactPatch, GraphDelta, GraphDeltaType, NodePatch
-from forwin.extractor.world_v4 import WorldDeltaExtractor
-from forwin.world_v4_review_gate import V4ReviewGate
+from forwin.book_state.extraction.delta_extractor import BookStateExtractionDeltaExtractor
+from forwin.book_state.extraction.gate import BookStateExtractionGate
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -143,10 +143,9 @@ def _filter_graph_delta_layers(
 class BookStateGraphDeltaExtractor:
     """Deterministically extract BookState GraphDelta candidates from writer output.
 
-    The first direct-path slice reuses the existing deterministic world_v4
-    extraction rules, then converts the approved result into BookState
-    GraphDelta candidates. The pipeline no longer treats the world_v4
-    compiler as the canon success condition.
+    The extractor applies deterministic evidence rules, reviews the candidate,
+    then converts the approved result into BookState GraphDelta candidates.
+    Canon admission remains a separate atomic operation.
     """
 
     def __init__(
@@ -160,11 +159,11 @@ class BookStateGraphDeltaExtractor:
 
     def extract(self, request: BookStateExtractionRequest) -> BookStateExtractionResult:
         writer_output = request.writer_output.model_copy(update={"project_id": request.project_id})
-        extracted = WorldDeltaExtractor().extract(
+        extracted = BookStateExtractionDeltaExtractor().extract(
             writer_output,
             chapter_intent=request.chapter_intent,
         )
-        gate_verdict = V4ReviewGate().review(
+        gate_verdict = BookStateExtractionGate().review(
             extracted,
             chapter_intent=request.chapter_intent,
             chapter_body=writer_output.body,
@@ -174,8 +173,8 @@ class BookStateGraphDeltaExtractor:
                 project_id=request.project_id,
                 chapter_number=request.chapter_number,
                 accepted=False,
-                compatibility_extracted=extracted,
-                compatibility_gate_verdict=gate_verdict,
+                extracted_changes=extracted,
+                gate_verdict=gate_verdict,
                 issues=[
                     BookStateExtractionIssue(
                         severity="error" if issue.severity == "fail" else issue.severity,
@@ -201,19 +200,19 @@ class BookStateGraphDeltaExtractor:
             ),
             forced_accept_reason=request.forced_accept_reason,
         )
-        compatibility_deltas = [
+        extracted_graph_deltas = [
             delta.model_copy(
                 update={
                     "metadata": {
                         **dict(delta.metadata),
                         "extraction_path": "book_state_direct",
-                        "compatibility_source": "world_v4_extractor",
+                        "extraction_source": "book_state_extraction_delta",
                     }
                 }
             )
             for delta in changes.graph_deltas
         ]
-        graph_deltas = _filter_graph_delta_layers(compatibility_deltas, self.layers)
+        graph_deltas = _filter_graph_delta_layers(extracted_graph_deltas, self.layers)
         if self.session is not None:
             contract_result = WriterContractDeltaBuilder(self.session).build(
                 project_id=request.project_id,
@@ -229,8 +228,8 @@ class BookStateGraphDeltaExtractor:
                     project_id=request.project_id,
                     chapter_number=request.chapter_number,
                     accepted=False,
-                    compatibility_extracted=extracted,
-                    compatibility_gate_verdict=gate_verdict,
+                    extracted_changes=extracted,
+                    gate_verdict=gate_verdict,
                     issues=[
                         BookStateExtractionIssue(
                             severity="error",
@@ -258,8 +257,8 @@ class BookStateGraphDeltaExtractor:
                     project_id=request.project_id,
                     chapter_number=request.chapter_number,
                     accepted=False,
-                    compatibility_extracted=extracted,
-                    compatibility_gate_verdict=gate_verdict,
+                    extracted_changes=extracted,
+                    gate_verdict=gate_verdict,
                     issues=[
                         BookStateExtractionIssue(
                             severity="error",
@@ -276,8 +275,8 @@ class BookStateGraphDeltaExtractor:
             chapter_number=request.chapter_number,
             accepted=True,
             changes=changes,
-            compatibility_extracted=extracted,
-            compatibility_gate_verdict=gate_verdict,
+            extracted_changes=extracted,
+            gate_verdict=gate_verdict,
             metadata={
                 "extraction_path": "book_state_direct",
                 "graph_delta_count": len(graph_deltas),
@@ -435,7 +434,7 @@ def _light_state_extraction_delta(
         review_verdict_id=review_verdict_id,
         metadata={
             "extraction_path": "pulp_light_state_extraction",
-            "compatibility_source": "empty_world_v4_extractor",
+            "extraction_source": "empty_book_state_extraction_delta",
             "characters": characters,
             "possessions": possessions,
             "factions": factions,

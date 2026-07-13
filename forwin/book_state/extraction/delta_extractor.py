@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.extractor.world_v4_rules import (
+from forwin.book_state.extraction.evidence_rules import (
     find_hint_spans,
     find_offscreen_spans,
     infer_source_type,
@@ -36,7 +36,7 @@ def _visibility(value: str) -> VisibilityState:
     return VisibilityState.UNKNOWN
 
 
-class WorldDeltaExtractor:
+class BookStateExtractionDeltaExtractor:
     """Deterministic v4 extractor for writer output and chapter intent."""
 
     def extract(

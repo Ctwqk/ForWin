@@ -11,7 +11,7 @@ import pytest
 import forwin.book_state as book_state
 import forwin.map as book_map
 import forwin.review as review
-import forwin.world_v4_review_gate as world_v4_review_gate
+import forwin.book_state.extraction as book_state_extraction
 from forwin.http.routes import (
     ApiRouteDeps,
     CoreDeps,
@@ -42,7 +42,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
     assert "Chapter draft review domain" in inspect.getdoc(review)
-    assert "Canonical import path" in inspect.getdoc(world_v4_review_gate)
+    assert "BookState candidate extraction" in inspect.getdoc(book_state_extraction)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
 
@@ -156,7 +156,7 @@ def test_design_status_contains_deprecation_matrix() -> None:
     assert "兼容 / 弃用矩阵" in status_doc
     assert "`forwin.world_model` | removed | `forwin.knowledge_system`" in status_doc
     assert (
-        "`forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate`" in status_doc
+        "`forwin.reviewer_v4` | removed | `forwin.book_state.extraction`" in status_doc
     )
     assert "`forwin.planning.scenario_rehearsal` | removed" in status_doc
 
@@ -783,3 +783,34 @@ def test_future_plan_pre_audits_are_owner_local() -> None:
         "signal_pre_audit.py",
     ):
         assert (owner / module_name).is_file()
+
+
+def test_book_state_extraction_has_one_current_owner() -> None:
+    assert not list((ROOT / "forwin/world_v4_review_gate").glob("*.py"))
+    assert not list((ROOT / "forwin/extractor").glob("*.py"))
+
+    owner = ROOT / "forwin/book_state/extraction"
+    assert (owner / "__init__.py").is_file()
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(owner.glob("*.py"))
+    )
+    for current_type in (
+        "BookStateExtractionGate",
+        "BookStateExtractionGateIssue",
+        "BookStateExtractionGateVerdict",
+        "BookStateExtractionDeltaExtractor",
+        "BookStateGraphDeltaExtractor",
+    ):
+        assert current_type in source
+
+    production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    for removed_type in (
+        "V4" + "ReviewGate",
+        "V4" + "ReviewIssue",
+        "V4" + "ReviewGateVerdict",
+        "World" + "DeltaExtractor",
+    ):
+        assert removed_type not in production

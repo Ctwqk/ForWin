@@ -3,15 +3,15 @@ from __future__ import annotations
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.review import RepairInstruction
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
-from forwin.world_v4_review_gate.cognitive import CognitiveConsistencyReviewer
-from forwin.world_v4_review_gate.reader_cognition import ReaderCognitionReviewer
-from forwin.world_v4_review_gate.reveal import RevealReviewer
-from forwin.world_v4_review_gate.types import V4ReviewGateVerdict, V4ReviewIssue
-from forwin.world_v4_review_gate.world_delta import WorldDeltaReviewer
+from forwin.book_state.extraction.cognitive import CognitiveConsistencyReviewer
+from forwin.book_state.extraction.reader_cognition import ReaderCognitionReviewer
+from forwin.book_state.extraction.reveal import RevealReviewer
+from forwin.book_state.extraction.types import BookStateExtractionGateVerdict, BookStateExtractionGateIssue
+from forwin.book_state.extraction.world_delta import WorldDeltaReviewer
 
 
-class V4ReviewGate:
-    """Aggregate deterministic v4 reviewers before compiler commit."""
+class BookStateExtractionGate:
+    """Aggregate deterministic extraction reviewers before compiler commit."""
 
     def __init__(self) -> None:
         self.cognitive = CognitiveConsistencyReviewer()
@@ -26,8 +26,8 @@ class V4ReviewGate:
         chapter_intent: ChapterWorldDeltaIntent | None = None,
         chapter_body: str = "",
         promise_debt_count: int = 0,
-    ) -> V4ReviewGateVerdict:
-        issues: list[V4ReviewIssue] = []
+    ) -> BookStateExtractionGateVerdict:
+        issues: list[BookStateExtractionGateIssue] = []
         issues.extend(self.world_delta.review(extracted, chapter_intent=chapter_intent))
         issues.extend(
             self.cognitive.review(
@@ -67,7 +67,7 @@ class V4ReviewGate:
         repair_instruction = (
             None if passed else self._build_repair_instruction(issues, chapter_intent)
         )
-        return V4ReviewGateVerdict(
+        return BookStateExtractionGateVerdict(
             passed=passed,
             issues=issues,
             approved_changes=approved_changes,
@@ -76,11 +76,11 @@ class V4ReviewGate:
 
     @staticmethod
     def _build_repair_instruction(
-        issues: list[V4ReviewIssue],
+        issues: list[BookStateExtractionGateIssue],
         chapter_intent: ChapterWorldDeltaIntent | None,
     ) -> RepairInstruction:
         fail_issues = [issue for issue in issues if issue.severity == "fail"] or issues
-        failure_type = V4ReviewGate._repair_failure_type(
+        failure_type = BookStateExtractionGate._repair_failure_type(
             fail_issues[0].failure_type if fail_issues else "world_model_conflict"
         )
         required_delta_patch: dict[str, object] = {}

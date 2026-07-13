@@ -19,7 +19,7 @@ def test_current_architecture_and_design_status_are_documented() -> None:
     assert "唯一 canon source 是 `BookState DB Canon`" in current
     assert "地图 canon：`BookMap / Scheme C`" in current
     assert "`world_model_v4`：已删除的旧 compatibility projection" in current
-    assert "`world_v4_review_gate`：BookState extraction deterministic gate" in current
+    assert "`forwin.book_state.extraction`：BookState candidate extraction" in current
     assert "CURRENT_ARCHITECTURE.md" in readme
     assert "DESIGN_STATUS.md" in readme
 

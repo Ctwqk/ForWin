@@ -75,8 +75,9 @@
 | `forwin.world_model` | removed | `forwin.knowledge_system` + `forwin.book_state` | 已删除 | live page/proposal/Obsidian/retrieval helper 已迁入 owner；`/world-model/*` 只保留 HTTP 传输契约名。 |
 | `forwin.world_model_v4` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection/debug bridge 已从生产模块删除。 |
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
-| `forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate` | 已删除 | 旧导入 alias 包已物理删除。 |
-| `forwin.world_v4_review_gate` | active-internal | `forwin.book_state` extraction path | v5 后按 BookState extraction contract 演进 | 确定性 extraction gate，不是主 chapter reviewer。 |
+| `forwin.reviewer_v4` | removed | `forwin.book_state.extraction` | 已删除 | 旧导入 alias 包已物理删除。 |
+| `forwin.world_v4_review_gate` + `forwin.extractor` | removed | `forwin.book_state.extraction` | 已删除 | extraction contract、evidence rules、deterministic gate 与 GraphDelta converter 归同一 owner；`V4Review*` / `WorldDeltaExtractor` 旧类型无 alias。 |
+| `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。 |
 | `forwin.planning.scenario_rehearsal` | removed | `forwin.planning.scenario_rehearsal_service` | 已删除 | runner/repository 实现迁入 `scenario_rehearsal_engine`；生产编排只经 service。 |
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
 | `forwin.planning.scenario_rehearsal_engine` | active-internal | service / resolution owner | 无 | 确定性 runner 与 repository，不作为应用入口。 |

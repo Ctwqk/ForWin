@@ -16,7 +16,7 @@ from forwin.models.phase import (
     BandExperiencePlan,
     ProjectReplanEvent,
 )
-from forwin.models.world_v4 import ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from forwin.models.publisher import PublisherUploadJob
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,

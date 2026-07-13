@@ -183,6 +183,32 @@ def test_removed_world_v4_projection_modules_stay_removed() -> None:
     assert not (ROOT / "forwin/world_v4_compat").exists()
 
 
+def test_v5_schema_has_no_dead_world_v4_model_or_tables() -> None:
+    assert not (ROOT / "forwin/models/world_v4.py").exists()
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        if "migrations/versions" not in path.as_posix()
+    )
+    assert "forwin.models.world_v4" not in production_source
+
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+    dead_tables = {
+        "beliefs",
+        "cognition_snapshots",
+        "knowledge_gaps",
+        "knowledge_update_events",
+        "reader_experience_deltas",
+        "reveal_events",
+        "world_compile_runs_v4",
+        "world_deltas",
+        "world_lines",
+        "world_model_snapshots_v4",
+    }
+    assert [table for table in sorted(dead_tables) if f'"{table}"' in baseline] == []
+
+
 def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
     versions = sorted(
         path.name

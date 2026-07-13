@@ -11,7 +11,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.world_v4 import ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from forwin.audit.events import DecisionEventType
 from forwin.planning.scenario_rehearsal_engine import ScenarioRehearsalRunner
 from forwin.planning.scenario_rehearsal_resolution import (

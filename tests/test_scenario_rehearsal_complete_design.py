@@ -10,7 +10,10 @@ from forwin.application.project_control.operations import (
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import (
+    ScenarioPlanPatchRow,
+    ScenarioRehearsalRunRow,
+)
 from forwin.planning.scenario_rehearsal_engine import ScenarioRehearsalRunner
 from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
 from forwin.planning.scenario_triggers import ScenarioTriggerEvaluator

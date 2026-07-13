@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import (
+    ScenarioPlanPatchRow,
+    ScenarioRehearsalRunRow,
+)
 from forwin.planning.scenario_triggers import ScenarioTriggerContext, ScenarioTriggerEvaluator
 from forwin.planning.world_contracts import (
     ArcWorldContract,

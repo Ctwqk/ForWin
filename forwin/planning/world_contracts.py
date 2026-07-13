@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.models.world_v4 import (
+from forwin.models.world_contract import (
     ArcWorldContractRow,
     BandWorldContractRow,
     ChapterWorldDeltaIntentRow,

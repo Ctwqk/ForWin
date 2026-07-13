@@ -57,7 +57,10 @@ from forwin.models.planning_control import (
 )
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan, Project
-from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import (
+    ScenarioPlanPatchRow,
+    ScenarioRehearsalRunRow,
+)
 from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
 from forwin.protocol.scenario_rehearsal import (
     ScenarioPlanPatch,

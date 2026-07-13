@@ -25,7 +25,7 @@ from forwin.models.phase import (
 )
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.world_v4 import ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from forwin.planning.scenario_rehearsal_engine import (
     ScenarioRehearsalRepository,
     ScenarioRehearsalRunner,

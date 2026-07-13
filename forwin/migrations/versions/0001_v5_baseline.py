@@ -500,42 +500,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "beliefs",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("belief_id", sa.String(), nullable=False),
-        sa.Column("holder_type", sa.String(), nullable=False),
-        sa.Column("holder_id", sa.String(), nullable=False),
-        sa.Column("proposition", sa.Text(), nullable=False),
-        sa.Column("truth_relation", sa.String(), nullable=False),
-        sa.Column("confidence", sa.Float(), nullable=False),
-        sa.Column("belief_status", sa.String(), nullable=False),
-        sa.Column("evidence_sources_json", sa.Text(), nullable=False),
-        sa.Column("created_at_chapter", sa.Integer(), nullable=False),
-        sa.Column("created_at_story_time", sa.Text(), nullable=False),
-        sa.Column("contradicted_by_json", sa.Text(), nullable=False),
-        sa.Column("last_updated_at_chapter", sa.Integer(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_beliefs_project_holder",
-        "beliefs",
-        ["project_id", "holder_type", "holder_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_beliefs_project_status",
-        "beliefs",
-        ["project_id", "belief_status"],
-        unique=False,
-    )
-    op.create_table(
         "book_cognition_snapshots",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -941,33 +905,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "cognition_snapshots",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("cognition_state_id", sa.String(), nullable=False),
-        sa.Column("observer_type", sa.String(), nullable=False),
-        sa.Column("observer_id", sa.String(), nullable=False),
-        sa.Column("as_of_chapter", sa.Integer(), nullable=False),
-        sa.Column("as_of_story_time", sa.Text(), nullable=False),
-        sa.Column("beliefs_json", sa.Text(), nullable=False),
-        sa.Column("known_delta_ids_json", sa.Text(), nullable=False),
-        sa.Column("suspected_gap_ids_json", sa.Text(), nullable=False),
-        sa.Column("visibility_by_delta_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("rebuilt_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_cognition_snapshots_project_observer",
-        "cognition_snapshots",
-        ["project_id", "observer_type", "observer_id", "as_of_chapter"],
-        unique=False,
-    )
-    op.create_table(
         "comment_signal_candidates",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -1356,42 +1293,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "knowledge_gaps",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("gap_id", sa.String(), nullable=False),
-        sa.Column("objective_truth", sa.Text(), nullable=False),
-        sa.Column("happened_at_story_time", sa.Text(), nullable=False),
-        sa.Column("related_world_line_id", sa.String(), nullable=False),
-        sa.Column("observer_states_json", sa.Text(), nullable=False),
-        sa.Column("narrative_function", sa.Text(), nullable=False),
-        sa.Column("planned_closure", sa.Text(), nullable=False),
-        sa.Column("maximum_safe_delay", sa.Integer(), nullable=False),
-        sa.Column("fairness_requirements_json", sa.Text(), nullable=False),
-        sa.Column("status", sa.String(), nullable=False),
-        sa.Column("source_refs_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_knowledge_gaps_project_line",
-        "knowledge_gaps",
-        ["project_id", "related_world_line_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_knowledge_gaps_project_status",
-        "knowledge_gaps",
-        ["project_id", "status"],
-        unique=False,
-    )
-    op.create_table(
         "knowledge_projection_pages",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -1470,41 +1371,6 @@ def upgrade() -> None:
         postgresql_where=sa.text(
             "status = 'canon_live' AND logical_identity_key <> ''"
         ),
-    )
-    op.create_table(
-        "knowledge_update_events",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("update_event_id", sa.String(), nullable=False),
-        sa.Column("update_type", sa.String(), nullable=False),
-        sa.Column("observer_type", sa.String(), nullable=False),
-        sa.Column("observer_id", sa.String(), nullable=False),
-        sa.Column("related_gap_id", sa.String(), nullable=False),
-        sa.Column("related_delta_id", sa.String(), nullable=False),
-        sa.Column("from_state", sa.String(), nullable=False),
-        sa.Column("to_state", sa.String(), nullable=False),
-        sa.Column("evidence_refs_json", sa.Text(), nullable=False),
-        sa.Column("chapter_number", sa.Integer(), nullable=False),
-        sa.Column("story_time", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_knowledge_updates_project_gap",
-        "knowledge_update_events",
-        ["project_id", "related_gap_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_knowledge_updates_project_observer",
-        "knowledge_update_events",
-        ["project_id", "observer_type", "observer_id"],
-        unique=False,
     )
     op.create_table(
         "map_edges",
@@ -2160,36 +2026,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "reader_experience_deltas",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("reader_experience_delta_id", sa.String(), nullable=False),
-        sa.Column("chapter_number", sa.Integer(), nullable=False),
-        sa.Column("reader_state_before", sa.Text(), nullable=False),
-        sa.Column("reader_state_after", sa.Text(), nullable=False),
-        sa.Column("cognition_transition", sa.Text(), nullable=False),
-        sa.Column("payoff_type", sa.String(), nullable=False),
-        sa.Column("reward_tags_json", sa.Text(), nullable=False),
-        sa.Column("emotional_effect", sa.Text(), nullable=False),
-        sa.Column("promise_debt_change", sa.Integer(), nullable=False),
-        sa.Column("next_desire", sa.Text(), nullable=False),
-        sa.Column("fairness_evidence_json", sa.Text(), nullable=False),
-        sa.Column("source_refs_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_reader_exp_project_chapter",
-        "reader_experience_deltas",
-        ["project_id", "chapter_number"],
-        unique=False,
-    )
-    op.create_table(
         "reader_scale_snapshots",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -2208,37 +2044,6 @@ def upgrade() -> None:
         "ix_reader_scale_project_chapter",
         "reader_scale_snapshots",
         ["project_id", "chapter_number"],
-        unique=False,
-    )
-    op.create_table(
-        "reveal_events",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("reveal_event_id", sa.String(), nullable=False),
-        sa.Column("reveals_fact_id", sa.String(), nullable=False),
-        sa.Column("reveals_delta_id", sa.String(), nullable=False),
-        sa.Column("related_gap_id", sa.String(), nullable=False),
-        sa.Column("reveal_to_reader", sa.Boolean(), nullable=False),
-        sa.Column("reveal_to_characters_json", sa.Text(), nullable=False),
-        sa.Column("reveal_method", sa.String(), nullable=False),
-        sa.Column("from_state", sa.String(), nullable=False),
-        sa.Column("to_state", sa.String(), nullable=False),
-        sa.Column("emotional_effect", sa.Text(), nullable=False),
-        sa.Column("narrative_function", sa.Text(), nullable=False),
-        sa.Column("fairness_evidence_json", sa.Text(), nullable=False),
-        sa.Column("source_refs_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_reveal_events_project_gap",
-        "reveal_events",
-        ["project_id", "related_gap_id"],
         unique=False,
     )
     op.create_table(
@@ -2457,81 +2262,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "world_compile_runs_v4",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("compiler_run_id", sa.String(), nullable=False),
-        sa.Column("chapter_number", sa.Integer(), nullable=False),
-        sa.Column("review_verdict_id", sa.String(), nullable=False),
-        sa.Column("committed", sa.Boolean(), nullable=False),
-        sa.Column("forced_accept_reason", sa.Text(), nullable=False),
-        sa.Column("input_json", sa.Text(), nullable=False),
-        sa.Column("result_json", sa.Text(), nullable=False),
-        sa.Column("retrieval_pack_json", sa.Text(), nullable=False),
-        sa.Column("projection_refresh_json", sa.Text(), nullable=False),
-        sa.Column("blocked_reasons_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_world_compile_runs_v4_project_chapter",
-        "world_compile_runs_v4",
-        ["project_id", "chapter_number"],
-        unique=False,
-    )
-    op.create_table(
-        "world_deltas",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("delta_id", sa.String(), nullable=False),
-        sa.Column("world_line_id", sa.String(), nullable=False),
-        sa.Column("delta_kind", sa.String(), nullable=False),
-        sa.Column("summary", sa.Text(), nullable=False),
-        sa.Column("objective_story_time", sa.Text(), nullable=False),
-        sa.Column("narrative_chapter", sa.Integer(), nullable=False),
-        sa.Column("source_type", sa.String(), nullable=False),
-        sa.Column("source_actor_id", sa.String(), nullable=False),
-        sa.Column("source_mechanism", sa.Text(), nullable=False),
-        sa.Column("source_evidence_refs_json", sa.Text(), nullable=False),
-        sa.Column("affected_entities_json", sa.Text(), nullable=False),
-        sa.Column("affected_factions_json", sa.Text(), nullable=False),
-        sa.Column("affected_locations_json", sa.Text(), nullable=False),
-        sa.Column("affected_resources_json", sa.Text(), nullable=False),
-        sa.Column("affected_rules_json", sa.Text(), nullable=False),
-        sa.Column("observer_states_json", sa.Text(), nullable=False),
-        sa.Column("allowed_for_canon", sa.Boolean(), nullable=False),
-        sa.Column("source_refs_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_world_deltas_project_chapter",
-        "world_deltas",
-        ["project_id", "narrative_chapter"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_world_deltas_project_kind",
-        "world_deltas",
-        ["project_id", "delta_kind"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_world_deltas_project_line",
-        "world_deltas",
-        ["project_id", "world_line_id"],
-        unique=False,
-    )
-    op.create_table(
         "world_edges",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -2591,67 +2321,6 @@ def upgrade() -> None:
         "ix_world_edges_project_type",
         "world_edges",
         ["project_id", "edge_type"],
-        unique=False,
-    )
-    op.create_table(
-        "world_lines",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("world_line_id", sa.String(), nullable=False),
-        sa.Column("line_type", sa.String(), nullable=False),
-        sa.Column("title", sa.Text(), nullable=False),
-        sa.Column("participants_json", sa.Text(), nullable=False),
-        sa.Column("objective_state_summary", sa.Text(), nullable=False),
-        sa.Column("is_visible_onstage", sa.Boolean(), nullable=False),
-        sa.Column("planned_reveal_chapter", sa.Integer(), nullable=True),
-        sa.Column("long_term_promise", sa.Text(), nullable=False),
-        sa.Column("source_refs_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_world_lines_project_line",
-        "world_lines",
-        ["project_id", "world_line_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_world_lines_project_type",
-        "world_lines",
-        ["project_id", "line_type"],
-        unique=False,
-    )
-    op.create_table(
-        "world_model_snapshots_v4",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("snapshot_id", sa.String(), nullable=False),
-        sa.Column("as_of_chapter", sa.Integer(), nullable=False),
-        sa.Column("as_of_story_time", sa.Text(), nullable=False),
-        sa.Column("active_world_line_ids_json", sa.Text(), nullable=False),
-        sa.Column("open_gap_ids_json", sa.Text(), nullable=False),
-        sa.Column("reader_cognition_state_json", sa.Text(), nullable=False),
-        sa.Column("character_cognition_states_json", sa.Text(), nullable=False),
-        sa.Column("objective_state_summary", sa.Text(), nullable=False),
-        sa.Column("source_delta_ids_json", sa.Text(), nullable=False),
-        sa.Column("metadata_json", sa.Text(), nullable=False),
-        sa.Column("rebuilt_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_world_snapshots_v4_project_chapter",
-        "world_model_snapshots_v4",
-        ["project_id", "as_of_chapter"],
         unique=False,
     )
     op.create_table(
@@ -3636,27 +3305,12 @@ def downgrade() -> None:
         "ix_world_node_states_project_chapter", table_name="world_node_states"
     )
     op.drop_table("world_node_states")
-    op.drop_index(
-        "ix_world_snapshots_v4_project_chapter", table_name="world_model_snapshots_v4"
-    )
-    op.drop_table("world_model_snapshots_v4")
-    op.drop_index("ix_world_lines_project_type", table_name="world_lines")
-    op.drop_index("ix_world_lines_project_line", table_name="world_lines")
-    op.drop_table("world_lines")
     op.drop_index("ix_world_edges_project_type", table_name="world_edges")
     op.drop_index("ix_world_edges_project_target", table_name="world_edges")
     op.drop_index("ix_world_edges_project_source", table_name="world_edges")
     op.drop_index("ix_world_edges_project_family", table_name="world_edges")
     op.drop_index("ix_world_edges_project_active", table_name="world_edges")
     op.drop_table("world_edges")
-    op.drop_index("ix_world_deltas_project_line", table_name="world_deltas")
-    op.drop_index("ix_world_deltas_project_kind", table_name="world_deltas")
-    op.drop_index("ix_world_deltas_project_chapter", table_name="world_deltas")
-    op.drop_table("world_deltas")
-    op.drop_index(
-        "ix_world_compile_runs_v4_project_chapter", table_name="world_compile_runs_v4"
-    )
-    op.drop_table("world_compile_runs_v4")
     op.drop_index(
         "ix_trope_usage_project_stage_created", table_name="trope_usage_records"
     )
@@ -3689,16 +3343,10 @@ def downgrade() -> None:
         "ix_reveal_registry_project_key", table_name="reveal_registry_entries"
     )
     op.drop_table("reveal_registry_entries")
-    op.drop_index("ix_reveal_events_project_gap", table_name="reveal_events")
-    op.drop_table("reveal_events")
     op.drop_index(
         "ix_reader_scale_project_chapter", table_name="reader_scale_snapshots"
     )
     op.drop_table("reader_scale_snapshots")
-    op.drop_index(
-        "ix_reader_exp_project_chapter", table_name="reader_experience_deltas"
-    )
-    op.drop_table("reader_experience_deltas")
     op.drop_index(
         "ix_quality_analysis_runs_project_chapter", table_name="quality_analysis_runs"
     )
@@ -3795,13 +3443,6 @@ def downgrade() -> None:
     op.drop_index("ix_map_edges_project_created_chapter", table_name="map_edges")
     op.drop_table("map_edges")
     op.drop_index(
-        "ix_knowledge_updates_project_observer", table_name="knowledge_update_events"
-    )
-    op.drop_index(
-        "ix_knowledge_updates_project_gap", table_name="knowledge_update_events"
-    )
-    op.drop_table("knowledge_update_events")
-    op.drop_index(
         "ux_knowledge_pages_live_identity",
         table_name="knowledge_projection_pages",
         postgresql_where=sa.text(
@@ -3828,9 +3469,6 @@ def downgrade() -> None:
         "ix_knowledge_pages_project_identity", table_name="knowledge_projection_pages"
     )
     op.drop_table("knowledge_projection_pages")
-    op.drop_index("ix_knowledge_gaps_project_status", table_name="knowledge_gaps")
-    op.drop_index("ix_knowledge_gaps_project_line", table_name="knowledge_gaps")
-    op.drop_table("knowledge_gaps")
     op.drop_index(
         "ix_knowledge_edit_proposals_project_status",
         table_name="knowledge_edit_proposals",
@@ -3899,10 +3537,6 @@ def downgrade() -> None:
         "ix_comment_signals_project_type", table_name="comment_signal_candidates"
     )
     op.drop_table("comment_signal_candidates")
-    op.drop_index(
-        "ix_cognition_snapshots_project_observer", table_name="cognition_snapshots"
-    )
-    op.drop_table("cognition_snapshots")
     op.drop_index(
         "ix_cognition_overlays_project_observer", table_name="cognition_overlays"
     )
@@ -3996,9 +3630,6 @@ def downgrade() -> None:
         table_name="book_cognition_snapshots",
     )
     op.drop_table("book_cognition_snapshots")
-    op.drop_index("ix_beliefs_project_status", table_name="beliefs")
-    op.drop_index("ix_beliefs_project_holder", table_name="beliefs")
-    op.drop_table("beliefs")
     op.drop_index(
         "ix_band_world_contracts_project_arc_band", table_name="band_world_contracts"
     )

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.world_v4 import ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.planning.scenario_rehearsal_engine import (

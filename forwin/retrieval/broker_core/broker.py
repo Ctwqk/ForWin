@@ -13,7 +13,7 @@ from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
 from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
 from forwin.llm_kb.store import LLMKnowledgeBaseStore
-from forwin.models.world_v4 import (
+from forwin.models.world_contract import (
     ArcWorldContractRow,
 )
 from forwin.planning.world_contracts import (

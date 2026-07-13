@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from forwin.api_schema import (
     ScenarioRehearsalDetail,
 )
-from forwin.models.world_v4 import ScenarioRehearsalRunRow
+from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from .common import (
     _json_list_strings,
     _json_object,

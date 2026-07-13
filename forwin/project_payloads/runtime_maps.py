@@ -21,7 +21,6 @@ from forwin.models.publisher import PublisherUploadJob
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
     load_latest_arc_envelope_analysis_by_project,
-    load_latest_provisional_band_execution_by_project,
     load_latest_replan_event_by_project,
     load_latest_stage_analysis_by_project,
     load_latest_world_turn_by_project,
@@ -350,9 +349,6 @@ def load_project_runtime_maps(
     latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(
         session, project_ids
     )
-    provisional_map = load_latest_provisional_band_execution_by_project(
-        session, project_ids
-    )
     scenario_rehearsal_map = load_latest_scenario_rehearsal_by_project(
         session, project_ids
     )
@@ -371,7 +367,6 @@ def load_project_runtime_maps(
         "latest_world_map": latest_world_map,
         "latest_arc_envelope_map": latest_arc_envelope_map,
         "latest_arc_analysis_map": latest_arc_analysis_map,
-        "provisional_map": provisional_map,
         "scenario_rehearsal_map": scenario_rehearsal_map,
         "latest_arc_structure_map": latest_arc_structure_map,
         "latest_band_experience_map": latest_band_experience_map,

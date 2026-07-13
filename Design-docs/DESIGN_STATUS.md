@@ -48,12 +48,12 @@
 | `V2_9_2.md` | baseline-with-overrides | Genesis / Writer / Review / Governance 主链基线；SubWorld / world model 语义以 V4.5、BookState 和 Scheme C 覆盖。 |
 | `V2_9_3_skill_runtime.md` | baseline-with-overrides | ForWin-native instruction-only Skill Runtime；API/UI/script/tool-backed 属 future。 |
 | `V3_8.md` | baseline-with-overrides | backend observability / audit / PromptTrace 规格；dashboard/SLO 属 future。 |
-| `provisional_mechanism_check.md` | legacy-compatibility | legacy provisional 边界说明；当前判断路径是 Scenario Rehearsal、Candidate Draft Review 和 BookState gate。 |
+| `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除记录；当前判断路径是 Scenario Rehearsal、Candidate Draft Review 和 BookState gate。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
 ## 2026-07 V5 Final Roadmap Execution Status
 
-状态：R0/R1 complete；旧长跑已安全退出，current-HEAD 测试债已清零，下一阶段为 R2 物理删除 Provisional Preview 家族。
+状态：R0-R2 complete；旧长跑已安全退出，current-HEAD 测试债已清零，Provisional Band Preview 家族已物理删除，下一阶段为 R3 低风险归位。
 
 - 旧项目 `a06cf00db3ba4cbe8b9862e20e9d6248` 的生成任务已于 2026-07-12 安全暂停，权威 active task count 为 0。
 - 该运行固定归类为 `pre-roadmap-soak`，`release_evidence=false`；路线图变更从快照之后开始，因此它不得作为最终 V6 发布证明。
@@ -62,6 +62,8 @@
 - R1 首次可信全量基线为 `97 failed, 1540 passed, 1 skipped`；97 项均已按当前 v5 公共契约修复或删除，不以放宽生产约束换取通过。
 - 测试 PostgreSQL harness 改为每个测试及时回收 transient database，browser session database 仅在进程退出时回收；全量运行后遗留测试库为 0。
 - R1 最终证据：`1602 tests collected`；全量 `1601 passed, 1 skipped, 112 warnings, 33 subtests passed in 175.31s`；`ruff check forwin tests`、`compileall -q forwin` 和 R1 聚焦门均通过。
+- R2 删除 policy 开关、第二 writer、preview service、execution/fallback/repair callback、两张表、事件、HTTP/read-model/task/UI/probe 全链，生产禁止符号零命中；保留 Arc sizing window、promotion/projection 与普通 writer preview fallback。
+- R2 最终证据：`1601 tests collected`；全量 `1599 passed, 1 skipped, 110 warnings, 33 subtests passed in 169.70s`，新增 band repair 无 preview callback 回归通过；Ruff、compileall、rendered page 测试、源码扫描和 `git diff --check` 通过。
 - 最终 200 章 gate 必须等待 A2/A4 数据决策落地与 R9 Release Candidate 冻结后，使用全新项目从第 1 章开始。
 
 ## 兼容 / 弃用矩阵
@@ -110,6 +112,7 @@
 | `book_genesis_core.workflow` unreachable implementation | removed | typed `BookGenesisService` -> `GenesisWorkspaceService` methods | 已删除 | 588 行文件整段删除；handoff 锁 active revision，四个 workspace mutation 入口 fail-closed。 |
 | SubWorld entity admission policy/patch/repair | removed | `EntityRegistrar` -> `EntityAdmissionPlan` -> Canon `EntityAdmissionCommitter` | 已删除 | 草稿期不写 Entity/EntityAlias；旧 canon checker、repair scope、nonblocking 例外和 summary 名字桥全部删除。 |
 | `planning.future_plan_auditor` re-export + `phase24.PlanningServices` bag | removed | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 已删除 | planning 包不再动态转发旧符号；future audit、patch validation、scenario rehearsal 共享 typed health contract。 |
+| Provisional Band Preview runtime | removed | `ScenarioRehearsalService` + Candidate Draft Review + writer fallback | 已删除 | 不存在 policy 开关、第二 writer、preview service、execution/ledger 表、事件、HTTP/UI 或 repair callback；同名 planning window、promotion/projection 语义不属于该功能。 |
 
 ## 2026-07 V5 Slice 1 Status
 

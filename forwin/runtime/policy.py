@@ -50,7 +50,6 @@ class ReviewPolicy(FrozenPolicyModel):
 class PlanningPolicy(FrozenPolicyModel):
     future_constraints: bool
     plan_health: bool
-    provisional_preview: bool
     use_llm_simulation: bool
     context_recency_window: int = Field(ge=0, le=1000)
 
@@ -81,7 +80,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 chapter_length=ChapterLengthPolicy(min_chars=1800, target_chars=2400, max_chars=3000),
                 pause=PausePolicy(manual_checkpoints=False, band_checkpoint_action="continue", generation_audit_interval=0),
                 review=ReviewPolicy(signals=("lint", "publisher"), repair_scopes=(), max_rewrites=0, repair_models=()),
-                planning=PlanningPolicy(future_constraints=False, plan_health=False, provisional_preview=False, use_llm_simulation=False, context_recency_window=50),
+                planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
                 canon=CanonPolicy(quality_gate="pulp_fatal", book_state_layers=("world",)),
                 writer_attention_retries=1,
             )
@@ -96,7 +95,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 max_rewrites=3,
                 repair_models=("deepseek-reasoner", "deepseek-reasoner", "gpt-5.3-codex-spark"),
             ),
-            planning=PlanningPolicy(future_constraints=True, plan_health=True, provisional_preview=False, use_llm_simulation=True, context_recency_window=0),
+            planning=PlanningPolicy(future_constraints=True, plan_health=True, use_llm_simulation=True, context_recency_window=0),
             canon=CanonPolicy(book_state_layers=("world", "map", "cognition", "narrative")),
             writer_attention_retries=3,
         )

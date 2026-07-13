@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from forwin.generation.pipeline_core.result import ProvisionalGateSnapshot, RunResult
+from forwin.generation.pipeline_core.result import RunResult
 from typing import Any
 from forwin.models.project import ChapterPlan
 import json
@@ -14,7 +14,6 @@ from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.draft import ChapterDraft
 from forwin.audit.events import DecisionEventType
 from forwin.observability.context import OperationContext
-from forwin.models import ProvisionalBandExecution
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
@@ -29,43 +28,6 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------
-
-
-def _latest_provisional_gate_snapshot(
-    session: Session,
-    project_id: str,
-) -> ProvisionalGateSnapshot | None:
-    row = (
-        session.query(ProvisionalBandExecution)
-        .filter(ProvisionalBandExecution.project_id == project_id)
-        .order_by(
-            ProvisionalBandExecution.created_at.desc(),
-            ProvisionalBandExecution.id.desc(),
-        )
-        .first()
-    )
-    if row is None:
-        return None
-    try:
-        raw_numbers = json.loads(row.chapter_numbers_json or "[]")
-    except (json.JSONDecodeError, TypeError):
-        raw_numbers = []
-    chapter_numbers: list[int] = []
-    if isinstance(raw_numbers, list):
-        for item in raw_numbers:
-            try:
-                chapter_number = int(item)
-            except (TypeError, ValueError):
-                continue
-            if chapter_number > 0:
-                chapter_numbers.append(chapter_number)
-    return ProvisionalGateSnapshot(
-        id=row.id,
-        aggregate_verdict=str(row.aggregate_verdict or "").strip().lower(),
-        failure_count=max(0, int(row.failure_count or 0)),
-        issue_count=max(0, int(row.issue_count or 0)),
-        chapter_numbers=chapter_numbers,
-    )
 
 
 def _pending_chapter_numbers_for_active_arc(
@@ -108,7 +70,6 @@ class RunControlStage:
 
     def _bind_pipeline_runtime_hooks(self) -> None:
         self.arc_envelope_manager.bind_runtime_hooks(
-            provisional_executor=self._run_provisional_band_preview,
             scenario_progress_callback=(
                 lambda **payload: self._emit_progress("stage_changed", **payload)
             ),
@@ -206,10 +167,6 @@ class RunControlStage:
             )
             if self._abort_requested():
                 return self._cancelled_result(project_id, num_chapters)
-            previous_provisional = self._latest_provisional_gate_snapshot(
-                session,
-                project_id,
-            )
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -223,35 +180,6 @@ class RunControlStage:
                     requested_chapters=num_chapters,
                     row=blocking_scenario,
                 )
-            failed_provisional = self._new_failed_provisional_gate(
-                session,
-                project_id=project_id,
-                previous_snapshot=previous_provisional,
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.PROVISIONAL_GATE_EVALUATED,
-                scope="project",
-                summary="provisional gate 已评估。",
-                payload={
-                    "blocked": failed_provisional is not None,
-                    "gate_id": getattr(failed_provisional, "id", "")
-                    if failed_provisional is not None
-                    else "",
-                },
-            )
-            session.commit()
-            if failed_provisional is not None:
-                return self._block_on_provisional_failure(
-                    session=session,
-                    updater=updater,
-                    project_id=project_id,
-                    requested_chapters=num_chapters,
-                    gate=failed_provisional,
-                )
-
             chapter_numbers = self._pending_chapter_numbers_for_active_arc(
                 session=session,
                 project_id=project_id,
@@ -398,10 +326,6 @@ class RunControlStage:
             )
             if self._abort_requested():
                 return self._cancelled_result(project_id, num_chapters)
-            previous_provisional = self._latest_provisional_gate_snapshot(
-                session,
-                project_id,
-            )
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -415,35 +339,6 @@ class RunControlStage:
                     requested_chapters=num_chapters,
                     row=blocking_scenario,
                 )
-            failed_provisional = self._new_failed_provisional_gate(
-                session,
-                project_id=project_id,
-                previous_snapshot=previous_provisional,
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.PROVISIONAL_GATE_EVALUATED,
-                scope="project",
-                summary="provisional gate 已评估。",
-                payload={
-                    "blocked": failed_provisional is not None,
-                    "gate_id": getattr(failed_provisional, "id", "")
-                    if failed_provisional is not None
-                    else "",
-                },
-            )
-            session.commit()
-            if failed_provisional is not None:
-                return self._block_on_provisional_failure(
-                    session=session,
-                    updater=updater,
-                    project_id=project_id,
-                    requested_chapters=num_chapters,
-                    gate=failed_provisional,
-                )
-
             chapter_numbers = self._pending_chapter_numbers_for_active_arc(
                 session=session,
                 project_id=project_id,
@@ -630,24 +525,6 @@ class RunControlStage:
                 chapter_number=chapter_number,
             )
 
-    def _new_failed_provisional_gate(
-        self,
-        session: Session,
-        *,
-        project_id: str,
-        previous_snapshot: ProvisionalGateSnapshot | None,
-    ) -> ProvisionalGateSnapshot | None:
-        latest = self._latest_provisional_gate_snapshot(session, project_id)
-        if latest is None:
-            return None
-        if not self.policy.planning.provisional_preview:
-            return None
-        if previous_snapshot is not None and latest.id == previous_snapshot.id:
-            return None
-        if latest.aggregate_verdict == "fail" or latest.failure_count > 0:
-            return latest
-        return None
-
     def _block_on_scenario_rehearsal(
         self,
         *,
@@ -687,43 +564,6 @@ class RunControlStage:
             requested_chapters=requested_chapters,
             paused_chapters=paused_chapters,
             paused=True,
-        )
-
-    def _block_on_provisional_failure(
-        self,
-        *,
-        session: Session,
-        updater: StateUpdater,
-        project_id: str,
-        requested_chapters: int,
-        gate: ProvisionalGateSnapshot,
-    ) -> RunResult:
-        failed_chapters = gate.chapter_numbers or [1]
-        for chapter_number in failed_chapters:
-            updater.mark_chapter_status(project_id, chapter_number, "failed")
-        session.commit()
-        self._emit_progress(
-            "stage_changed",
-            stage="provisional_failed",
-            project_id=project_id,
-            requested_chapters=requested_chapters,
-            current_chapter=failed_chapters[0],
-            completed_chapters=[],
-            failed_chapters=failed_chapters,
-            paused_chapters=[],
-        )
-        logger.error(
-            "Provisional preview blocked canon writing for project=%s verdict=%s failures=%d issues=%d chapters=%s",
-            project_id,
-            gate.aggregate_verdict,
-            gate.failure_count,
-            gate.issue_count,
-            failed_chapters,
-        )
-        return RunResult(
-            project_id=project_id,
-            requested_chapters=requested_chapters,
-            failed_chapters=failed_chapters,
         )
 
     def _materialize_next_genesis_arc_if_needed(
@@ -864,10 +704,6 @@ class RunControlStage:
             )
             if self._abort_requested():
                 return self._cancelled_result(project_id, len(pending_chapter_numbers))
-            previous_provisional = self._latest_provisional_gate_snapshot(
-                session,
-                project_id,
-            )
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -881,35 +717,6 @@ class RunControlStage:
                     requested_chapters=len(pending_chapter_numbers),
                     row=blocking_scenario,
                 )
-            failed_provisional = self._new_failed_provisional_gate(
-                session,
-                project_id=project_id,
-                previous_snapshot=previous_provisional,
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.PROVISIONAL_GATE_EVALUATED,
-                scope="project",
-                summary="provisional gate 已评估。",
-                payload={
-                    "blocked": failed_provisional is not None,
-                    "gate_id": getattr(failed_provisional, "id", "")
-                    if failed_provisional is not None
-                    else "",
-                },
-            )
-            session.commit()
-            if failed_provisional is not None:
-                return self._block_on_provisional_failure(
-                    session=session,
-                    updater=updater,
-                    project_id=project_id,
-                    requested_chapters=len(pending_chapter_numbers),
-                    gate=failed_provisional,
-                )
-
             workset = build_continue_generation_workset(
                 session,
                 project_id,
@@ -935,12 +742,6 @@ class RunControlStage:
         finally:
             self._clear_audit_context()
             session.close()
-
-    @staticmethod
-    def _latest_provisional_gate_snapshot(
-        session: Session, project_id: str
-    ) -> ProvisionalGateSnapshot | None:
-        return _latest_provisional_gate_snapshot(session, project_id)
 
     @staticmethod
     def _pending_chapter_numbers_for_active_arc(

@@ -253,8 +253,6 @@ class RoutingMixin:
             "scene_stitch",
         } or (family == "writer" and not wants_json):
             return "prose_generation"
-        if stage == "provisional_preview":
-            return "prose_generation"
         if stage == "chapter_preview":
             return "writer_preview"
         if stage in {"scene_breakdown", "genesis_brief", "brief", "arc_plan"} or stage.startswith("launch_arc_"):

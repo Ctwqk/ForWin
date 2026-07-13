@@ -8,9 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from forwin.project_payloads import (
-    build_provisional_band_detail,
     build_scenario_rehearsal_detail,
-    latest_provisional_band_execution,
     latest_scenario_rehearsal_run,
 )
 from forwin.api_schema import (
@@ -25,7 +23,6 @@ from forwin.api_schema import (
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
-    ProvisionalBandDetail,
     ScenarioRehearsalDetail,
     TaskContractResponse,
     TaskContractUpdateRequest,
@@ -671,31 +668,6 @@ def get_project_audit_insights(
     session = get_session()
     try:
         return build_audit_insights(session, project_id=project_id)
-    finally:
-        session.close()
-
-
-def get_latest_provisional_band(
-    project_id: str,
-    *,
-    get_session,
-    display_datetime,
-) -> ProvisionalBandDetail:
-    session = get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-
-        latest = latest_provisional_band_execution(session, project_id)
-        if latest is None:
-            raise HTTPException(404, "项目暂无 provisional 预演记录")
-        return build_provisional_band_detail(
-            session=session,
-            project_id=project_id,
-            latest=latest,
-            display_datetime=display_datetime,
-        )
     finally:
         session.close()
 

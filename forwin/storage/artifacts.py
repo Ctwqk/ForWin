@@ -172,25 +172,6 @@ class ArtifactStore:
             "writer_output": updated_output,
         }
 
-    def save_provisional_band(
-        self,
-        *,
-        project_id: str,
-        arc_id: str,
-        band_id: str,
-        payload: dict,
-    ) -> str:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        safe_band = "".join(
-            ch if ch.isalnum() or ch in {"-", "_"} else "_"
-            for ch in band_id
-        ).strip("_") or "band"
-        return self.object_store.write_text(
-            f"projects/{project_id}/arcs/{arc_id}/provisional/{safe_band}_{timestamp}.json",
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            content_type="application/json",
-        )
-
     def save_frozen_candidate(
         self,
         *,

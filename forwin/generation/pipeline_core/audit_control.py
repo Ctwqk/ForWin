@@ -40,7 +40,6 @@ from forwin.models.draft import (
 )
 from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.models.project import Project
-from forwin.models import ProvisionalBandExecution
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -710,26 +709,6 @@ class AuditControlStage:
                         if isinstance(item, dict)
                     ]
                     review_metas.append(review_meta)
-        latest_provisional = (
-            session.query(ProvisionalBandExecution)
-            .filter(
-                ProvisionalBandExecution.project_id == project_id,
-                ProvisionalBandExecution.arc_id == band_row.arc_id,
-                ProvisionalBandExecution.band_id == band_row.band_id,
-            )
-            .order_by(
-                ProvisionalBandExecution.created_at.desc(),
-                ProvisionalBandExecution.id.desc(),
-            )
-            .first()
-        )
-        provisional_failed = bool(
-            latest_provisional is not None
-            and (
-                str(latest_provisional.aggregate_verdict or "") == "fail"
-                or int(latest_provisional.failure_count or 0) > 0
-            )
-        )
         if any(plan.status != "accepted" for plan in band_plans):
             status = "fail"
             issues.append(
@@ -753,7 +732,6 @@ class AuditControlStage:
         intra_band_issues = evaluate_intra_band_consistency(
             unresolved_review_chapters=unresolved_review_chapters,
             review_fail_chapters=review_fail_chapters,
-            provisional_failed=provisional_failed,
             pending_checkpoint_count=len(unresolved),
             reviewer="plan_control",
             target_scope="band",

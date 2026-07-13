@@ -13,7 +13,6 @@ from forwin.models.phase import (
     ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
-    ProvisionalBandExecution,
 )
 from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ArcPlanVersion
@@ -289,19 +288,3 @@ def load_latest_arc_envelope_analysis_by_project(
         .all()
     )
     return {row.project_id: row for row in rows}
-
-
-def load_latest_provisional_band_execution_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, ProvisionalBandExecution]:
-    return _load_latest_partitioned_rows(
-        session,
-        ProvisionalBandExecution,
-        ProvisionalBandExecution.project_id,
-        project_ids,
-        order_by=(
-            ProvisionalBandExecution.created_at.desc(),
-            ProvisionalBandExecution.id.desc(),
-        ),
-    )

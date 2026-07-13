@@ -83,7 +83,6 @@ class DecisionEventType:
     SCENARIO_REHEARSAL_PATCH_APPLIED = "scenario_rehearsal_patch_applied"
     SCENARIO_REHEARSAL_REPLAN_REQUIRED = "scenario_rehearsal_replan_required"
     SCENARIO_REHEARSAL_BLOCKED = "scenario_rehearsal_blocked"
-    PROVISIONAL_GATE_EVALUATED = "provisional_gate_evaluated"
     LLM_REQUEST_STARTED = "llm_request_started"
     LLM_REQUEST_SUCCEEDED = "llm_request_succeeded"
     LLM_REQUEST_FAILED = "llm_request_failed"
@@ -234,7 +233,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.SCENARIO_REHEARSAL_PATCH_APPLIED,
     DecisionEventType.SCENARIO_REHEARSAL_REPLAN_REQUIRED,
     DecisionEventType.SCENARIO_REHEARSAL_BLOCKED,
-    DecisionEventType.PROVISIONAL_GATE_EVALUATED,
     DecisionEventType.LLM_REQUEST_STARTED,
     DecisionEventType.LLM_REQUEST_SUCCEEDED,
     DecisionEventType.LLM_REQUEST_FAILED,

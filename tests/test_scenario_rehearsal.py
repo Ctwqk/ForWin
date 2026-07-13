@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from sqlalchemy import func, select
 
 from forwin.config import InfrastructureConfig
-from forwin.models import ProvisionalBandExecution
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.planning.arc_envelope import ArcEnvelopeManager
@@ -28,16 +27,8 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-def _build_pipeline(*, provisional_preview: bool = False) -> ChapterPipeline:
+def _build_pipeline() -> ChapterPipeline:
     policy = RuntimePolicy.for_profile("standard")
-    if provisional_preview:
-        policy = policy.model_copy(
-            update={
-                "planning": policy.planning.model_copy(
-                    update={"provisional_preview": True}
-                )
-            }
-        )
     return RuntimeContainer.from_config(
         InfrastructureConfig(
             database_url=postgres_test_url(),
@@ -200,7 +191,7 @@ def test_scenario_rehearsal_low_risk_band_records_pass_skip() -> None:
         assert report.risk_findings == []
 
 
-def test_arc_envelope_prefers_scenario_rehearsal_over_legacy_preview() -> None:
+def test_arc_envelope_runs_scenario_rehearsal_before_resolution() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
@@ -208,13 +199,7 @@ def test_arc_envelope_prefers_scenario_rehearsal_over_legacy_preview() -> None:
     with Session.begin() as session:
         project, _arc, _chapters = _seed_project_with_chapters(session)
 
-        def legacy_preview_should_not_run(**_kwargs):
-            raise AssertionError("legacy provisional preview should not run when scenario rehearsal is available")
-
-        manager = ArcEnvelopeManager(
-            director=None,
-            provisional_executor=legacy_preview_should_not_run,
-        )
+        manager = ArcEnvelopeManager(director=None)
         envelope = manager.ensure_active_arc_resolution(
             session=session,
             project_id=project.id,
@@ -223,49 +208,3 @@ def test_arc_envelope_prefers_scenario_rehearsal_over_legacy_preview() -> None:
 
         assert envelope is not None
         assert session.scalar(select(func.count()).select_from(ScenarioRehearsalRunRow)) == 1
-        assert session.scalar(select(func.count()).select_from(ProvisionalBandExecution)) == 0
-
-
-def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_restore() -> None:
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
-    Session = get_session_factory(engine)
-
-    with Session.begin() as session:
-        project, arc, _chapters = _seed_project_with_chapters(session)
-        session.add(
-            ProvisionalBandExecution(
-                project_id=project.id,
-                arc_id=arc.id,
-                band_id="band:1:4",
-                chapter_numbers_json=json.dumps([1, 2, 3, 4]),
-                aggregate_verdict="fail",
-                failure_count=1,
-            )
-        )
-        project_id = project.id
-
-    with Session() as session:
-        default_pipeline = _build_pipeline()
-        try:
-            assert default_pipeline._new_failed_provisional_gate(
-                session,
-                project_id=project_id,
-                previous_snapshot=None,
-            ) is None
-        finally:
-            default_pipeline.llm_client.close()
-            default_pipeline.engine.dispose()
-
-        provisional_pipeline = _build_pipeline(provisional_preview=True)
-        try:
-            gate = provisional_pipeline._new_failed_provisional_gate(
-                session,
-                project_id=project_id,
-                previous_snapshot=None,
-            )
-            assert gate is not None
-            assert gate.aggregate_verdict == "fail"
-        finally:
-            provisional_pipeline.llm_client.close()
-            provisional_pipeline.engine.dispose()

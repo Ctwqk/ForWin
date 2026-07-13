@@ -8,7 +8,6 @@ from unittest.mock import patch
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
-from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
@@ -600,7 +599,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         task = api_module._create_task_record(title="缓存终态测试", requested_chapters=1)
         task["project_id"] = "project-stale-active"
         task["status"] = "running"
-        task["current_stage"] = "running_provisional_preview"
+        task["current_stage"] = "writing_chapter"
         api_module._persist_generation_task("task-stale-active-1", task)
 
         cached = dict(task)
@@ -629,56 +628,6 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded["status"], "failed")
         self.assertEqual(loaded["current_stage"], "failed")
         self.assertEqual(loaded["stage_history"][-1]["stage"], "failed")
-
-    def test_provisional_preview_history_is_backfilled_from_execution(self) -> None:
-        now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
-            project = Project(
-                id="project-provisional-1",
-                title="预演测试",
-                premise="测试",
-                genre="玄幻",
-                created_at=now,
-                updated_at=now,
-            )
-            arc = ArcPlanVersion(
-                id="arc-provisional-1",
-                project_id=project.id,
-                version=1,
-                arc_synopsis="测试 arc",
-                status="active",
-                created_at=now,
-            )
-            session.add(project)
-            session.commit()
-            session.add(arc)
-            session.commit()
-            session.add(
-                ProvisionalBandExecution(
-                    id="preview-provisional-1",
-                    project_id=project.id,
-                    arc_id=arc.id,
-                    band_id="band:1:4",
-                    chapter_numbers_json="[1, 2, 3, 4]",
-                    aggregate_verdict="pass",
-                    failure_count=0,
-                    created_at=now + timedelta(seconds=10),
-                )
-            )
-            session.commit()
-
-        task = api_module._create_task_record(title="预演补偿测试", requested_chapters=4)
-        task["project_id"] = "project-provisional-1"
-        task["status"] = "failed"
-        task["current_stage"] = "failed"
-        task["created_at"] = now
-        task["updated_at"] = now + timedelta(seconds=20)
-        api_module._persist_generation_task("task-provisional-1", task)
-
-        loaded = api_module._get_generation_task_or_404("task-provisional-1")
-        stages = [entry["stage"] for entry in loaded["stage_history"]]
-        self.assertIn("running_provisional_preview", stages)
-
 
 if __name__ == "__main__":
     unittest.main()

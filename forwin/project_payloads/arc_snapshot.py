@@ -200,7 +200,6 @@ def _band_checkpoint_detail(row: BandCheckpoint | None) -> BandCheckpointDetail 
 def project_arc_snapshot_payload(
     latest_arc_envelope,
     latest_arc_analysis,
-    latest_provisional,
     latest_arc_structure=None,
     latest_band_experience=None,
     latest_scenario_rehearsal=None,
@@ -219,11 +218,6 @@ def project_arc_snapshot_payload(
         "active_arc_evidence": [],
         "active_arc_expansion_signals": [],
         "active_arc_compression_signals": [],
-        "provisional_band_id": "",
-        "provisional_aggregate_verdict": "",
-        "provisional_preview_char_count": 0,
-        "provisional_issue_count": 0,
-        "provisional_failure_count": 0,
         "scenario_rehearsal_band_id": "",
         "scenario_rehearsal_recommendation": "",
         "scenario_rehearsal_risk_count": 0,
@@ -268,16 +262,6 @@ def project_arc_snapshot_payload(
                 "active_arc_compression_signals": _json_list_strings(
                     latest_arc_analysis.compression_signals_json
                 ),
-            }
-        )
-    if latest_provisional is not None:
-        payload.update(
-            {
-                "provisional_band_id": latest_provisional.band_id,
-                "provisional_aggregate_verdict": latest_provisional.aggregate_verdict,
-                "provisional_preview_char_count": latest_provisional.preview_char_count,
-                "provisional_issue_count": latest_provisional.issue_count,
-                "provisional_failure_count": latest_provisional.failure_count,
             }
         )
     if latest_scenario_rehearsal is not None:

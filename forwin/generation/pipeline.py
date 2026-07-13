@@ -76,7 +76,6 @@ class ChapterPipeline(
         artifact_store: ArtifactStore,
         observability: ObservabilityService,
         writer: ChapterWriter,
-        provisional_writer: ChapterWriter,
         stage_analyzer: StageAnalyzer,
         pacing_strategist: PacingStrategist,
         replan_governor: ReplanGovernor,
@@ -119,7 +118,6 @@ class ChapterPipeline(
         self.artifact_store = artifact_store
         self.observability = observability
         self.writer = writer
-        self.provisional_writer = provisional_writer
         self.stage_analyzer = stage_analyzer
         self.pacing_strategist = pacing_strategist
         self.replan_governor = replan_governor
@@ -164,7 +162,6 @@ class ChapterPipeline(
             ),
             _review_with_repair_verification=self._review_with_repair_verification,
             _chapter_experience_patch_payload=self._chapter_experience_patch_payload,
-            _run_provisional_band_preview=self._run_provisional_band_preview,
             _replace_band_schedule=self._replace_band_schedule,
             _band_schedule_patch_payload=self._band_schedule_patch_payload,
         )

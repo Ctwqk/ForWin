@@ -30,14 +30,3 @@ class RunResult:
         if self.failed_chapters:
             return "partial_failed"
         return "completed"
-
-
-@dataclass(slots=True)
-class ProvisionalGateSnapshot:
-    """The latest persisted provisional execution used to gate canon writing."""
-
-    id: str
-    aggregate_verdict: str
-    failure_count: int
-    issue_count: int
-    chapter_numbers: list[int]

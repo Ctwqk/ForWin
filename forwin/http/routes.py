@@ -73,7 +73,6 @@ from forwin.api_schema import (
     RuntimePolicyResponse,
     ProjectSummary,
     PromptTraceDetailResponse,
-    ProvisionalBandDetail,
     ScenarioRehearsalDetail,
     PublisherCommentSyncJobResponse,
     PublisherLoginQrOneShotResponse,
@@ -768,12 +767,6 @@ def register_api_routes(
             ["GET"],
             handlers["get_project_audit_insights"],
             {"response_model": AuditInsightsResponse},
-        ),
-        (
-            "/api/projects/{project_id}/provisional/latest",
-            ["GET"],
-            handlers["get_latest_provisional_band"],
-            {"response_model": ProvisionalBandDetail},
         ),
         (
             "/api/projects/{project_id}/scenario-rehearsal/latest",

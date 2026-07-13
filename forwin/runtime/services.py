@@ -58,7 +58,6 @@ class RuntimeServices:
     context_assembler: Any
     draft_review: DraftReviewService
     writer: Any
-    provisional_writer: Any
     repair: RepairService
     repair_verifier: RepairVerifier
     canon_preparation: Any

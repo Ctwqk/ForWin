@@ -209,39 +209,6 @@ class BandExperienceOverrideResponse(BaseModel):
     message: str
 
 
-class ProvisionalChapterLedgerInfo(BaseModel):
-    chapter_number: int
-    title: str
-    summary: str = ""
-    verdict: str
-    char_count: int = 0
-    artifact_meta_path: str = ""
-    draft_blob_path: str = ""
-    current_time_label: str = ""
-    projected_time_label: str = ""
-    state_changes: list[dict[str, Any]] = Field(default_factory=list)
-    events: list[dict[str, Any]] = Field(default_factory=list)
-    thread_beats: list[dict[str, Any]] = Field(default_factory=list)
-    time_advance: dict[str, Any] = Field(default_factory=dict)
-    issues: list[dict[str, Any]] = Field(default_factory=list)
-    error: str = ""
-    created_at: str = ""
-
-
-class ProvisionalBandDetail(BaseModel):
-    project_id: str
-    arc_id: str
-    band_id: str
-    aggregate_verdict: str
-    preview_char_count: int = 0
-    issue_count: int = 0
-    failure_count: int = 0
-    artifact_path: str = ""
-    chapter_numbers: list[int] = Field(default_factory=list)
-    created_at: str = ""
-    chapters: list[ProvisionalChapterLedgerInfo] = Field(default_factory=list)
-
-
 class ScenarioRehearsalDetail(BaseModel):
     project_id: str
     arc_id: str = ""
@@ -308,8 +275,6 @@ __all__ = [
     "TropeTemplateValidationResponse",
     "BandExperienceOverrideRequest",
     "BandExperienceOverrideResponse",
-    "ProvisionalChapterLedgerInfo",
-    "ProvisionalBandDetail",
     "ScenarioRehearsalDetail",
     "ScenarioPlanPatchApproveRequest",
     "CandidateDraftDetail",

@@ -169,11 +169,11 @@ class ChapterWriter:
         max_attempts: int = 2,
         retry_on_timeout: bool = True,
     ) -> WriterOutput:
-        """Write a lightweight provisional preview chapter.
+        """Write a lightweight fallback preview chapter.
 
         Preview generation prioritizes producing a readable draft with a
         single LLM call. It intentionally skips structured extraction so
-        provisional execution can retain real preview text without paying the
+        writer fallback can retain real preview text without paying the
         latency and failure cost of a second LLM pass.
         """
         logger.info(
@@ -268,7 +268,7 @@ class ChapterWriter:
                 body,
             ),
             generation_meta={
-                "mode": "provisional_preview",
+                "mode": "writer_preview",
                 "call_count": 1,
                 "structured_extraction": "skipped",
                 "prompt_trace": self._build_prompt_trace(
@@ -281,7 +281,7 @@ class ChapterWriter:
                         "chapter_number": context.chapter_number,
                     },
                     output_summary={
-                        "mode": "provisional_preview",
+                        "mode": "writer_preview",
                         "title": title,
                         "char_count": len(body),
                     },

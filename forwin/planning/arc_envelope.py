@@ -29,7 +29,6 @@ from forwin.planning.arc_structure_service import (
     ArcStructurePlanningResult,
 )
 from forwin.planning.band_plan_service import BandPlanningRequest
-from forwin.planning.provisional_preview_service import ProvisionalPreviewService
 from forwin.planning.service import PlanningService
 from forwin.protocol.experience import (
     ArcPayoffMap,
@@ -73,19 +72,6 @@ class ArcEnvelopeResolution:
     confidence: float
     based_on_band_id: str
     source_policy_tier: str
-
-
-@dataclass(slots=True)
-class ProvisionalBandPreview:
-    band_id: str
-    artifact_path: str
-    aggregate_verdict: str
-    preview_chapter_count: int
-    total_char_count: int
-    issue_count: int
-    failure_count: int
-    chapter_numbers: list[int]
-    summary_lines: list[str]
 
 
 def _to_core_structure(structure: ArcStructureDraftData | CoreArcStructureDraftData) -> CoreArcStructureDraftData:
@@ -137,34 +123,25 @@ class ArcEnvelopeManager:
         self,
         *,
         director: ArcDirector | None = None,
-        provisional_executor: Any | None = None,
         subworld_manager: SubWorldManager | None = None,
-        provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
         planning_service: PlanningService | None = None,
     ) -> None:
         self.director = director
-        self.provisional_executor = provisional_executor
         self.subworld_manager = subworld_manager or SubWorldManager(director=director)
-        self.provisional_preview_enabled = provisional_preview_enabled
         self.scenario_progress_callback = scenario_progress_callback
         self.planning = planning_service or PlanningService.build_default(
             director=director,
-            provisional_executor=provisional_executor,
             subworld_manager=self.subworld_manager,
-            provisional_preview_enabled=provisional_preview_enabled,
             scenario_progress_callback=scenario_progress_callback,
         )
 
     def bind_runtime_hooks(
         self,
         *,
-        provisional_executor: Any,
         scenario_progress_callback: Any,
     ) -> None:
-        self.provisional_executor = provisional_executor
         self.scenario_progress_callback = scenario_progress_callback
-        self.planning.provisional_preview.provisional_executor = provisional_executor
         self.planning.scenario_rehearsal.progress_callback = scenario_progress_callback
 
     def _emit_scenario_progress(
@@ -309,13 +286,6 @@ class ArcEnvelopeManager:
             rehearsal=rehearsal,
             activation_chapter=activation_chapter,
         )
-        preview = self.planning.provisional_preview.execute(
-            session=session,
-            project_id=project_id,
-            arc_id=state.active_arc.id,
-            band_id=state.base_context.provisional_window.band_id,
-            chapter_plans=state.base_context.provisional_window.active_band,
-        )
         envelope = self.planning.arc_envelope_resolver.ensure_resolution(
             session=session,
             project=project,
@@ -324,14 +294,7 @@ class ArcEnvelopeManager:
             activation_chapter=activation_chapter,
             structure=state.structure_result.structure,
             rehearsal_report=rehearsal,
-            preview=preview,
             base_context=state.base_context,
-        )
-        self.planning.provisional_preview.persist_execution(
-            session=session,
-            project_id=project_id,
-            arc_id=state.active_arc.id,
-            preview=preview,
         )
         self._ensure_current_band_plan_for_state(
             session=session,
@@ -468,9 +431,7 @@ class ArcEnvelopeManager:
         )
         created = 0
         original_director = self.director
-        original_executor = self.provisional_executor
         self.director = None
-        self.provisional_executor = None
         try:
             for project_id in project_ids:
                 if str(project_id or "").strip() in existing_project_ids:
@@ -484,7 +445,6 @@ class ArcEnvelopeManager:
                     created += 1
         finally:
             self.director = original_director
-            self.provisional_executor = original_executor
         return created
 
     def record_provisional_promotion(
@@ -693,7 +653,6 @@ class ArcEnvelopeManager:
         structure: ArcStructureDraftData,
         provisional_band: list[ChapterPlan],
         band_id: str,
-        preview: ProvisionalBandPreview | None,
         rehearsal: ScenarioRehearsalReport | None = None,
     ) -> ArcEnvelopeResolution:
         return self.planning.arc_envelope_resolver._resolve_envelope(
@@ -706,26 +665,5 @@ class ArcEnvelopeManager:
             structure=_to_core_structure(structure),
             provisional_band=provisional_band,
             band_id=band_id,
-            preview=preview,
             rehearsal=rehearsal,
-        )
-
-    def _execute_provisional_band(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        arc_id: str,
-        band_id: str,
-        chapter_plans: list[ChapterPlan],
-    ) -> ProvisionalBandPreview | None:
-        return ProvisionalPreviewService(
-            provisional_executor=self.provisional_executor,
-            provisional_preview_enabled=True,
-        ).execute(
-            session=session,
-            project_id=project_id,
-            arc_id=arc_id,
-            band_id=band_id,
-            chapter_plans=chapter_plans,
         )

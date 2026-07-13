@@ -289,7 +289,6 @@ def evaluate_intra_band_consistency(
     *,
     unresolved_review_chapters: list[int],
     review_fail_chapters: list[int],
-    provisional_failed: bool,
     pending_checkpoint_count: int,
     reviewer: str,
     target_scope: str,
@@ -325,20 +324,6 @@ def evaluate_intra_band_consistency(
                     f"chapters={','.join(str(ch) for ch in review_fail_chapters)}"
                 ],
                 suggested_fix="先修复失败章节，或通过明确人工决策处理。",
-            )
-        )
-    if provisional_failed:
-        issues.append(
-            ContinuityIssue(
-                rule_name="intra_band_consistency_provisional_failed",
-                severity="error",
-                description="band 的 provisional gate 存在失败记录。",
-                reviewer=reviewer,
-                issue_type="intra_band_consistency",
-                target_scope=target_scope,
-                issue_group=issue_group_for_issue(issue_type="intra_band_consistency"),
-                evidence_refs=["provisional_failed=true"],
-                suggested_fix="先处理 provisional gate 失败原因，再放行 band。",
             )
         )
     if pending_checkpoint_count:

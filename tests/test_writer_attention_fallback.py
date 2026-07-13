@@ -54,17 +54,6 @@ class WriterAttentionFallbackTests(unittest.TestCase):
         )
 
         self.assertTrue(ChapterPipeline._is_transient_llm_like(exc))
-        self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
-
-    def test_provisional_preview_generation_failure_degrades_to_shadow_plan(
-        self,
-    ) -> None:
-        exc = ValueError(
-            "ChapterWriter preview generation failed after retries: "
-            "preview response body is empty"
-        )
-
-        self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
 
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(
         self,
@@ -83,7 +72,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     body="预演正文",
                     char_count=4,
                     end_of_chapter_summary="预演摘要",
-                    generation_meta={"mode": "provisional_preview"},
+                    generation_meta={"mode": "writer_preview"},
                 )
                 updater = Mock()
                 paused_chapters: list[int] = []
@@ -147,7 +136,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     char_count=4,
                     end_of_chapter_summary="预演摘要",
                     generation_meta={
-                        "mode": "provisional_preview",
+                        "mode": "writer_preview",
                         "prompt_trace": {
                             "attempts": [
                                 {

@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from .arc_envelope_resolver import ArcEnvelopeResolver
     from .arc_structure_service import ArcStructurePlanningService
     from .band_plan_service import BandPlanService
-    from .provisional_preview_service import ProvisionalPreviewService
     from .scenario_rehearsal_service import ScenarioRehearsalService
     from .world_contract_service import WorldContractPlanningService
 
@@ -39,16 +38,13 @@ class PlanningService:
     band_plan: BandPlanService
     world_contracts: WorldContractPlanningService
     scenario_rehearsal: ScenarioRehearsalService
-    provisional_preview: ProvisionalPreviewService
 
     @classmethod
     def build_default(
         cls,
         *,
         director: ArcDirector | None = None,
-        provisional_executor: Any | None = None,
         subworld_manager: SubWorldManager | None = None,
-        provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
         trope_cost_ceiling: int = 3,
     ) -> "PlanningService":
@@ -63,7 +59,6 @@ class PlanningService:
         from .arc_envelope_resolver import ArcEnvelopeResolver
         from .arc_structure_service import ArcStructurePlanningService
         from .band_plan_service import BandPlanService
-        from .provisional_preview_service import ProvisionalPreviewService
         from .scenario_rehearsal_service import ScenarioRehearsalService
         from .world_contract_service import WorldContractPlanningService
 
@@ -98,10 +93,6 @@ class PlanningService:
             scenario_rehearsal=ScenarioRehearsalService(
                 director=director,
                 progress_callback=scenario_progress_callback,
-            ),
-            provisional_preview=ProvisionalPreviewService(
-                provisional_executor=provisional_executor,
-                provisional_preview_enabled=provisional_preview_enabled,
             ),
         )
 

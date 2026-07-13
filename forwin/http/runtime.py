@@ -49,8 +49,6 @@ GENERATION_STAGE_ORDER = (
     "running_scenario_rehearsal",
     "scenario_rehearsal_patch_required",
     "scenario_rehearsal_blocked",
-    "running_provisional_preview",
-    "provisional_failed",
     "assembling_context",
     "writing_chapter",
     "chapter_failed",

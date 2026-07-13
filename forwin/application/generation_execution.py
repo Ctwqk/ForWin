@@ -21,7 +21,6 @@ _PROGRESS_STAGE_STATUS = {
     "paused_for_review": "needs_review",
     "scenario_rehearsal_patch_required": "needs_review",
     "scenario_rehearsal_blocked": "failed",
-    "provisional_failed": "failed",
     "failed": "failed",
     "completed": "completed",
     "terminating": "terminating",

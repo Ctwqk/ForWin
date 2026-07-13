@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 
 from forwin.project_payloads import build_generation_control, _recent_rows_by_project
 from forwin.api_schema import TaskCenterItemResponse
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent
-from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
 
@@ -47,16 +45,6 @@ class TaskCenterService:
             return None
         project_id = normalized[len("project-") :].strip()
         return project_id or None
-
-    def task_has_stage(self, task: dict[str, Any], stage: str) -> bool:
-        history = task.get("stage_history", [])
-        if not isinstance(history, list):
-            return False
-        return any(
-            str(entry.get("stage", "")).strip() == stage
-            for entry in history
-            if isinstance(entry, dict)
-        )
 
     def normalize_loaded_generation_task(self, task: dict[str, Any]) -> dict[str, Any]:
         status = str(task.get("status", "")).strip()
@@ -113,12 +101,6 @@ class TaskCenterService:
             row = session.get(GenerationTask, task_id)
             persisted = self.generation_task_from_row(row) if row is not None else None
             task = self.prefer_cached_generation_task(persisted, cached)
-            if task is not None:
-                task = self._augment_task_with_provisional_history(
-                    session,
-                    task_id,
-                    task,
-                )
             return self.apply_task_visibility_rules(
                 task, include_deleted=include_deleted
             )
@@ -156,12 +138,9 @@ class TaskCenterService:
                 task = self.prefer_cached_generation_task(persisted, cached)
                 if task is not None:
                     persisted_tasks.append((row.id, task))
-            provisional_map = self._provisional_execution_map(session, persisted_tasks)
             for task_id, task in persisted_tasks:
                 visible = self.apply_task_visibility_rules(
-                    self._apply_provisional_execution(
-                        task, provisional_map.get(task_id)
-                    ),
+                    task,
                     include_deleted=False,
                 )
                 if visible is not None:
@@ -268,129 +247,6 @@ class TaskCenterService:
             )
         finally:
             session.close()
-
-    def _augment_task_with_provisional_history(
-        self,
-        session,
-        task_id: str,
-        task: dict[str, Any],
-    ) -> dict[str, Any]:
-        provisional_map = self._provisional_execution_map(session, [(task_id, task)])
-        return self._apply_provisional_execution(task, provisional_map.get(task_id))
-
-    def _provisional_execution_map(
-        self,
-        session,
-        task_entries: list[tuple[str, dict[str, Any]]],
-    ) -> dict[str, ProvisionalBandExecution]:
-        windows: list[tuple[str, str, datetime, datetime]] = []
-        project_filters: list[Any] = []
-        project_ranges: dict[str, tuple[datetime, datetime]] = {}
-        minimum = datetime.min.replace(tzinfo=timezone.utc)
-
-        for task_id, task in task_entries:
-            project_id = str(task.get("project_id", "") or "").strip()
-            if not project_id or self.task_has_stage(
-                task, "running_provisional_preview"
-            ):
-                continue
-            created_at = self.coerce_task_datetime(task.get("created_at"))
-            if created_at == minimum:
-                continue
-            finished_at = self.coerce_task_datetime(task.get("finished_at"))
-            updated_at = self.coerce_task_datetime(task.get("updated_at"))
-            window_end = max(finished_at, updated_at)
-            if window_end == minimum:
-                window_end = self.utcnow()
-            start = created_at - timedelta(seconds=5)
-            end = window_end + timedelta(seconds=5)
-            windows.append((task_id, project_id, start, end))
-            current_range = project_ranges.get(project_id)
-            if current_range is None:
-                project_ranges[project_id] = (start, end)
-            else:
-                project_ranges[project_id] = (
-                    min(current_range[0], start),
-                    max(current_range[1], end),
-                )
-
-        if not windows:
-            return {}
-
-        for project_id, (start, end) in project_ranges.items():
-            project_filters.append(
-                and_(
-                    ProvisionalBandExecution.project_id == project_id,
-                    ProvisionalBandExecution.created_at >= start,
-                    ProvisionalBandExecution.created_at <= end,
-                )
-            )
-
-        executions = (
-            session.execute(
-                select(ProvisionalBandExecution)
-                .where(or_(*project_filters))
-                .order_by(ProvisionalBandExecution.created_at.asc())
-            )
-            .scalars()
-            .all()
-        )
-
-        executions_by_project: dict[str, list[ProvisionalBandExecution]] = {}
-        for execution in executions:
-            executions_by_project.setdefault(
-                str(execution.project_id or ""), []
-            ).append(execution)
-
-        matched: dict[str, ProvisionalBandExecution] = {}
-        for task_id, project_id, start, end in windows:
-            for execution in executions_by_project.get(project_id, []):
-                created_at = self.coerce_task_datetime(
-                    getattr(execution, "created_at", None)
-                )
-                if created_at == minimum:
-                    continue
-                if start <= created_at <= end:
-                    matched[task_id] = execution
-                    break
-        return matched
-
-    def _apply_provisional_execution(
-        self,
-        task: dict[str, Any],
-        execution: ProvisionalBandExecution | None,
-    ) -> dict[str, Any]:
-        if execution is None:
-            return task
-        try:
-            chapter_numbers = json.loads(execution.chapter_numbers_json or "[]")
-        except json.JSONDecodeError:
-            chapter_numbers = []
-        chapter = int(chapter_numbers[0]) if chapter_numbers else 0
-        augmented = dict(task)
-        history = list(augmented.get("stage_history", []))
-        history.append(
-            self.new_stage_history_entry(
-                "running_provisional_preview",
-                now=self.coerce_task_datetime(execution.created_at),
-                current_chapter=chapter,
-                message=str(augmented.get("message", "")).strip(),
-            )
-        )
-        if (
-            str(execution.aggregate_verdict or "").strip().lower() == "fail"
-            or int(execution.failure_count or 0) > 0
-        ) and not self.task_has_stage(augmented, "provisional_failed"):
-            history.append(
-                self.new_stage_history_entry(
-                    "provisional_failed",
-                    now=execution.created_at,
-                    current_chapter=chapter,
-                    message="Provisional 预演失败，已阻断正式写作。",
-                )
-            )
-        augmented["stage_history"] = history
-        return augmented
 
     def _load_project_task_center_plans(
         self,

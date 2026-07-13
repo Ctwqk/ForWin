@@ -30,7 +30,6 @@ from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairService, RepairVerifier
 from forwin.runtime.factories import (
     ProductionSchedulerFactory,
-    build_provisional_writer,
     build_writer,
 )
 from forwin.runtime.policy import RuntimePolicy
@@ -140,7 +139,6 @@ class RuntimeContainer:
             artifact_store=services.artifact_store,
             observability=services.observability,
             writer=services.writer,
-            provisional_writer=services.provisional_writer,
             stage_analyzer=services.stage_analyzer,
             pacing_strategist=services.pacing_strategist,
             replan_governor=services.replan_governor,
@@ -252,9 +250,6 @@ class RuntimeContainer:
         )
 
         writer = build_writer(infrastructure, policy, llm_client, observability)
-        provisional_writer = build_provisional_writer(
-            infrastructure, policy, llm_client, observability
-        )
         stage_analyzer = StageAnalyzer()
         pacing_strategist = PacingStrategist(
             window_size=3,
@@ -279,13 +274,11 @@ class RuntimeContainer:
         planning_service = PlanningService.build_default(
             director=arc_director,
             subworld_manager=subworld_manager,
-            provisional_preview_enabled=policy.planning.provisional_preview,
             trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
         )
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,
             subworld_manager=subworld_manager,
-            provisional_preview_enabled=policy.planning.provisional_preview,
             planning_service=planning_service,
         )
 
@@ -358,7 +351,6 @@ class RuntimeContainer:
             ),
             draft_review=draft_review,
             writer=writer,
-            provisional_writer=provisional_writer,
             repair=RepairService(),
             repair_verifier=RepairVerifier(
                 llm_client=llm_client if llm_available else None,

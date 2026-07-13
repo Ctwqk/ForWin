@@ -217,13 +217,6 @@ def _build_operations(
             build_audit_insights=build_audit_insights,
         )
 
-    def get_latest_provisional_band(project_id: str):
-        return operations.get_latest_provisional_band(
-            project_id,
-            get_session=get_session,
-            display_datetime=display_datetime,
-        )
-
     def get_latest_scenario_rehearsal(project_id: str):
         return operations.get_latest_scenario_rehearsal(
             project_id,
@@ -292,7 +285,6 @@ def _build_operations(
         "list_project_decision_events": list_project_decision_events,
         "get_project_causal_replay": get_project_causal_replay,
         "get_project_audit_insights": get_project_audit_insights,
-        "get_latest_provisional_band": get_latest_provisional_band,
         "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
         "rerun_scenario_rehearsal": rerun_scenario_rehearsal,
         "approve_scenario_plan_patch": approve_scenario_plan_patch,

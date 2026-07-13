@@ -51,11 +51,6 @@ from .project_detail import (
     build_project_detail,
 )
 
-from .provisional import (
-    latest_provisional_band_execution,
-    build_provisional_band_detail,
-)
-
 from .scenario import (
     latest_scenario_rehearsal_run,
     build_scenario_rehearsal_detail,
@@ -92,8 +87,6 @@ __all__ = [
     '_prompt_trace_infos',
     'build_project_summaries',
     'build_project_detail',
-    'latest_provisional_band_execution',
-    'build_provisional_band_detail',
     'latest_scenario_rehearsal_run',
     'build_scenario_rehearsal_detail',
 ]

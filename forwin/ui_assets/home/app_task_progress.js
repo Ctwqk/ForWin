@@ -88,7 +88,7 @@
 
     function stageFailureInspectable(item, chapter, stage, state, entry, status) {
       if (state === 'failed' || state === 'paused') return true;
-      if (entry?.message && ['chapter_failed', 'paused_for_review', 'scenario_rehearsal_blocked', 'provisional_failed', 'failed'].includes(stage)) return true;
+      if (entry?.message && ['chapter_failed', 'paused_for_review', 'scenario_rehearsal_blocked', 'failed'].includes(stage)) return true;
       if (stage === 'chapter_failed' && Array.isArray(item.failed_chapters) && item.failed_chapters.includes(Number(chapter?.chapter_number || 0))) return true;
       if (status === 'failed' && stage === 'chapter_failed') return true;
       if (status === 'needs_review' && stage === 'paused_for_review') return true;
@@ -137,8 +137,6 @@
       const scenarioEntry = latestHistoryEntry(history, 'running_scenario_rehearsal');
       const scenarioPatch = latestHistoryEntry(history, 'scenario_rehearsal_patch_required');
       const scenarioBlocked = latestHistoryEntry(history, 'scenario_rehearsal_blocked');
-      const provisionalEntry = latestHistoryEntry(history, 'running_provisional_preview');
-      const provisionalFailed = latestHistoryEntry(history, 'provisional_failed');
       const currentIsChapterWork = CHAPTER_RUNTIME_STAGES.has(item.current_stage);
       const nodes = [
         {
@@ -168,14 +166,6 @@
             : (scenarioPatch
               ? formatStageNote(scenarioPatch, '等待 patch approve / rerun')
               : formatStageNote(scenarioEntry, '低风险跳过或已通过')),
-        },
-        {
-          key: 'provisional_preview',
-          label: 'Provisional Preview',
-          state: provisionalFailed ? 'failed' : (provisionalEntry ? 'completed' : 'upcoming'),
-          note: provisionalFailed
-            ? formatStageNote(provisionalFailed, 'provisional preview 失败')
-            : formatStageNote(provisionalEntry, '默认关闭'),
         },
         {
           key: 'chapter_loop',

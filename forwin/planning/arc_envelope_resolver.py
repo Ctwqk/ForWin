@@ -11,7 +11,6 @@ from forwin.arc_sizing import ArcPolicyTier, policy_for_total_chapters
 from forwin.models import ArcEnvelope, ArcEnvelopeAnalysis, ArcPlanVersion, ChapterPlan, Project, new_id
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindow, BandWindowResolver
-from forwin.planning.provisional_preview_service import ProvisionalBandPreview
 from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation, ScenarioRehearsalReport
 
 
@@ -160,7 +159,6 @@ class ArcEnvelopeResolver:
         activation_chapter: int,
         structure: ArcStructureDraftData,
         rehearsal_report: ScenarioRehearsalReport | None,
-        preview: ProvisionalBandPreview | None,
         base_context: BaseEnvelopeContext | None = None,
     ) -> ArcEnvelope:
         existing = self.get_existing_envelope(
@@ -187,7 +185,6 @@ class ArcEnvelopeResolver:
             structure=structure,
             provisional_band=context.provisional_window.active_band,
             band_id=context.provisional_window.band_id,
-            preview=preview,
             rehearsal=rehearsal_report,
         )
         envelope = ArcEnvelope(
@@ -241,7 +238,6 @@ class ArcEnvelopeResolver:
         structure: ArcStructureDraftData,
         provisional_band: list[ChapterPlan],
         band_id: str,
-        preview: ProvisionalBandPreview | None,
         rehearsal: ScenarioRehearsalReport | None = None,
     ) -> ArcEnvelopeResolution:
         evidence = [f"policy={policy.name}", f"base_target={base_target_size}", f"scenario_band={len(provisional_band)}"]
@@ -275,23 +271,6 @@ class ArcEnvelopeResolver:
             for finding in rehearsal.risk_findings:
                 if finding.severity == "fail":
                     compression_signals.append(f"scenario blocker: {finding.risk_type}")
-        if preview is not None:
-            evidence.extend(
-                [
-                    f"provisional_verdict={preview.aggregate_verdict}",
-                    f"provisional_char_count={preview.total_char_count}",
-                    f"provisional_issue_count={preview.issue_count}",
-                ]
-            )
-            if preview.aggregate_verdict == "pass":
-                expansion_signals.append("provisional band 运行顺滑")
-            elif preview.aggregate_verdict == "warn":
-                evidence.append("provisional band 有轻微审查警告")
-            else:
-                compression_signals.append("provisional band 暴露不稳定点")
-            if preview.failure_count:
-                compression_signals.append("provisional band 出现生成失败")
-
         recommendation = "keep"
         resolved_target_size = base_target_size
         if len(expansion_signals) > len(compression_signals):

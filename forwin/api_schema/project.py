@@ -32,11 +32,6 @@ class ProjectArcSnapshotFields(BaseModel):
     active_arc_evidence: list[str] = Field(default_factory=list)
     active_arc_expansion_signals: list[str] = Field(default_factory=list)
     active_arc_compression_signals: list[str] = Field(default_factory=list)
-    provisional_band_id: str = ""
-    provisional_aggregate_verdict: str = ""
-    provisional_preview_char_count: int = 0
-    provisional_issue_count: int = 0
-    provisional_failure_count: int = 0
     scenario_rehearsal_band_id: str = ""
     scenario_rehearsal_recommendation: str = ""
     scenario_rehearsal_risk_count: int = 0

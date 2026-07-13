@@ -727,3 +727,46 @@ def test_home_console_has_no_removed_generation_policy_controls() -> None:
         "runtime_policy_gate_",
     ):
         assert required in source
+
+
+def test_provisional_preview_runtime_is_removed() -> None:
+    forbidden = {
+        "provisional_preview",
+        "provisional_writer",
+        "ProvisionalPreviewService",
+        "ProvisionalBandExecution",
+        "ProvisionalChapterLedger",
+        "PROVISIONAL_GATE_EVALUATED",
+    }
+    offenders: list[tuple[str, str]] = []
+    for root in (ROOT / "forwin", ROOT / "scripts"):
+        for path in sorted(root.rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            relative = path.relative_to(ROOT).as_posix()
+            offenders.extend(
+                (relative, token) for token in forbidden if token in source
+            )
+
+    assert offenders == []
+
+    phase_source = _read("forwin/models/phase.py")
+    resolver_source = _read("forwin/planning/arc_envelope_resolver.py")
+    writer_source = _read("forwin/writer/chapter_writer.py")
+    assert "class ProvisionalPromotionRecord" in phase_source
+    assert "provisional_window" in resolver_source
+    assert "provisional_band_size" in resolver_source
+    assert "def write_preview_chapter(" in writer_source
+
+    for removed_path in (
+        "forwin/planning/provisional_preview_service.py",
+        "forwin/project_payloads/provisional.py",
+        "scripts/provisional_preview_probe.py",
+    ):
+        assert not (ROOT / removed_path).exists()
+
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+    routes = _read("forwin/http/routes.py")
+    assert "provisional_band_executions" not in baseline
+    assert "provisional_chapter_ledgers" not in baseline
+    assert "provisional_promotion_records" in baseline
+    assert "/provisional/latest" not in routes

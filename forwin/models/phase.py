@@ -144,67 +144,6 @@ class ProvisionalPromotionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
-class ProvisionalBandExecution(Base):
-    __tablename__ = "provisional_band_executions"
-    __table_args__ = (
-        Index("ix_provisional_band_exec_project_arc_band", "project_id", "arc_id", "band_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    band_id: Mapped[str] = mapped_column(String, default="")
-    chapter_numbers_json: Mapped[str] = mapped_column(Text, default="[]")
-    artifact_path: Mapped[str] = mapped_column(Text, default="")
-    aggregate_verdict: Mapped[str] = mapped_column(String, default="pass")
-    preview_char_count: Mapped[int] = mapped_column(Integer, default=0)
-    issue_count: Mapped[int] = mapped_column(Integer, default=0)
-    failure_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ProvisionalChapterLedger(Base):
-    __tablename__ = "provisional_chapter_ledgers"
-    __table_args__ = (
-        Index(
-            "ix_provisional_chapter_ledgers_project_arc_band_chapter",
-            "project_id",
-            "arc_id",
-            "band_id",
-            "chapter_number",
-        ),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    band_id: Mapped[str] = mapped_column(String, default="")
-    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
-    title: Mapped[str] = mapped_column(Text, default="")
-    summary: Mapped[str] = mapped_column(Text, default="")
-    verdict: Mapped[str] = mapped_column(String, default="pass")
-    char_count: Mapped[int] = mapped_column(Integer, default=0)
-    artifact_meta_path: Mapped[str] = mapped_column(Text, default="")
-    draft_blob_path: Mapped[str] = mapped_column(Text, default="")
-    current_time_label: Mapped[str] = mapped_column(Text, default="")
-    projected_time_label: Mapped[str] = mapped_column(Text, default="")
-    state_changes_json: Mapped[str] = mapped_column(Text, default="[]")
-    events_json: Mapped[str] = mapped_column(Text, default="[]")
-    thread_beats_json: Mapped[str] = mapped_column(Text, default="[]")
-    time_advance_json: Mapped[str] = mapped_column(Text, default="{}")
-    issues_json: Mapped[str] = mapped_column(Text, default="[]")
-    error_text: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
 class WorldProjectionDeltaRow(Base):
     __tablename__ = "world_projection_deltas"
     __table_args__ = (

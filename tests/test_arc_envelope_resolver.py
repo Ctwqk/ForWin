@@ -48,7 +48,6 @@ def test_arc_envelope_resolver_uses_planned_sizing_without_writing_band_plan() -
                 compression_candidates=[],
             ),
             rehearsal_report=None,
-            preview=None,
         )
 
         analysis_count = session.scalar(select(func.count()).select_from(ArcEnvelopeAnalysis))

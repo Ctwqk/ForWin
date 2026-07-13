@@ -22,7 +22,6 @@ from forwin.protocol.review import (
 )
 from forwin.audit.events import DecisionEventType
 from forwin.models.audit import DecisionEvent
-from forwin.planning.arc_envelope import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
 from forwin.runtime.policy import RuntimePolicy
 from sqlalchemy.orm import Session
@@ -67,7 +66,6 @@ class RepairExecution:
     _write_chapter_with_attention_fallback: Callable[..., WriterOutput | None]
     _review_with_repair_verification: Callable[..., ReviewVerdict]
     _chapter_experience_patch_payload: Callable[..., dict[str, object]]
-    _run_provisional_band_preview: Callable[..., ProvisionalBandPreview | None]
     _replace_band_schedule: Callable[..., None]
     _band_schedule_patch_payload: Callable[..., dict[str, object]]
 
@@ -1069,67 +1067,16 @@ def _apply_repair_patch(
         updated_schedule = BandDelightSchedule.model_validate(
             self._band_schedule_patch_payload(band_schedule, repair_instruction)
         )
-        with session.begin_nested() as nested:
-            self._replace_band_schedule(
-                session=session,
-                repo=repo,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                schedule=updated_schedule,
-                arc_structure=arc_structure,
-                repair_instruction=repair_instruction,
-            )
-            session.flush()
-            transient_chapter_plan = self._chapter_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_plan=chapter_plan,
-                transient_overlay=True,
-            )
-            transient_band_plan = self._band_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                schedule=updated_schedule,
-                transient_overlay=True,
-            )
-            active_arc = repo.get_active_arc_plan(project_id)
-            band_row = repo.get_band_row_for_chapter(
-                project_id, chapter_plan.chapter_number
-            )
-            if active_arc is not None and band_row is not None:
-                preview_plans = [
-                    repo.get_chapter_plan(project_id, number)
-                    for number in range(
-                        band_row.chapter_start, band_row.chapter_end + 1
-                    )
-                ]
-                preview_plans = [
-                    plan
-                    for plan in preview_plans
-                    if plan is not None and str(plan.status or "") != "accepted"
-                ]
-                preview = self._run_provisional_band_preview(
-                    session=session,
-                    project_id=project_id,
-                    arc_id=active_arc.id,
-                    band_id=band_row.band_id,
-                    chapter_plans=preview_plans,
-                    persist_result=False,
-                )
-                if preview is not None and preview.aggregate_verdict in {
-                    "fail",
-                    "error",
-                }:
-                    nested.rollback()
-                    session.expire_all()
-                    return (
-                        updated_schedule.model_dump(mode="json"),
-                        context,
-                        transient_chapter_plan,
-                        transient_band_plan,
-                        f"lightweight-provisional:{preview.aggregate_verdict}",
-                    )
+        self._replace_band_schedule(
+            session=session,
+            repo=repo,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            schedule=updated_schedule,
+            arc_structure=arc_structure,
+            repair_instruction=repair_instruction,
+        )
+        session.flush()
         return (
             updated_schedule.model_dump(mode="json"),
             self.retrieval_broker.build_chapter_context(repo, project_id, chapter_plan),

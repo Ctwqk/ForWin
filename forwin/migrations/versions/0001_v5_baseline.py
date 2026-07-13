@@ -3180,73 +3180,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "provisional_band_executions",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("arc_id", sa.String(), nullable=False),
-        sa.Column("band_id", sa.String(), nullable=False),
-        sa.Column("chapter_numbers_json", sa.Text(), nullable=False),
-        sa.Column("artifact_path", sa.Text(), nullable=False),
-        sa.Column("aggregate_verdict", sa.String(), nullable=False),
-        sa.Column("preview_char_count", sa.Integer(), nullable=False),
-        sa.Column("issue_count", sa.Integer(), nullable=False),
-        sa.Column("failure_count", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["arc_id"],
-            ["arc_plan_versions.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_provisional_band_exec_project_arc_band",
-        "provisional_band_executions",
-        ["project_id", "arc_id", "band_id"],
-        unique=False,
-    )
-    op.create_table(
-        "provisional_chapter_ledgers",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("arc_id", sa.String(), nullable=False),
-        sa.Column("band_id", sa.String(), nullable=False),
-        sa.Column("chapter_number", sa.Integer(), nullable=False),
-        sa.Column("title", sa.Text(), nullable=False),
-        sa.Column("summary", sa.Text(), nullable=False),
-        sa.Column("verdict", sa.String(), nullable=False),
-        sa.Column("char_count", sa.Integer(), nullable=False),
-        sa.Column("artifact_meta_path", sa.Text(), nullable=False),
-        sa.Column("draft_blob_path", sa.Text(), nullable=False),
-        sa.Column("current_time_label", sa.Text(), nullable=False),
-        sa.Column("projected_time_label", sa.Text(), nullable=False),
-        sa.Column("state_changes_json", sa.Text(), nullable=False),
-        sa.Column("events_json", sa.Text(), nullable=False),
-        sa.Column("thread_beats_json", sa.Text(), nullable=False),
-        sa.Column("time_advance_json", sa.Text(), nullable=False),
-        sa.Column("issues_json", sa.Text(), nullable=False),
-        sa.Column("error_text", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["arc_id"],
-            ["arc_plan_versions.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_provisional_chapter_ledgers_project_arc_band_chapter",
-        "provisional_chapter_ledgers",
-        ["project_id", "arc_id", "band_id", "chapter_number"],
-        unique=False,
-    )
-    op.create_table(
         "provisional_promotion_records",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -3640,16 +3573,6 @@ def downgrade() -> None:
         table_name="provisional_promotion_records",
     )
     op.drop_table("provisional_promotion_records")
-    op.drop_index(
-        "ix_provisional_chapter_ledgers_project_arc_band_chapter",
-        table_name="provisional_chapter_ledgers",
-    )
-    op.drop_table("provisional_chapter_ledgers")
-    op.drop_index(
-        "ix_provisional_band_exec_project_arc_band",
-        table_name="provisional_band_executions",
-    )
-    op.drop_table("provisional_band_executions")
     op.drop_index("ix_map_regions_project_type", table_name="map_regions")
     op.drop_index("ix_map_regions_project_subworld", table_name="map_regions")
     op.drop_index("ix_map_regions_project_status", table_name="map_regions")

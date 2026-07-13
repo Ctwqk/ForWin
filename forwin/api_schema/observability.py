@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from forwin.audit.events import DecisionEventInfo
+from forwin.audit.gate_ledger import GateLedgerReport
 from .genesis import PromptTraceInfo
 
 
@@ -138,6 +139,11 @@ class AuditInsightsResponse(BaseModel):
     recent_examples: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class GateLedgerReportResponse(BaseModel):
+    report: GateLedgerReport
+    markdown: str = ""
+
+
 __all__ = [
     "DecisionEventsResponse",
     "StageDurationAggregate",
@@ -151,4 +157,5 @@ __all__ = [
     "PerformanceReportResponse",
     "CausalReplayResponse",
     "AuditInsightsResponse",
+    "GateLedgerReportResponse",
 ]

@@ -193,7 +193,7 @@ def _build_operations(
 
     def get_project_causal_replay(
         project_id: str,
-        scope: str = "project",
+        scope: str = "cross_project",
         arc_id: str = "",
         band_id: str = "",
         chapter_number: int = 0,
@@ -215,6 +215,18 @@ def _build_operations(
             project_id,
             get_session=get_session,
             build_audit_insights=build_audit_insights,
+        )
+
+    def get_gate_ledger_report(
+        scope: str = "project",
+        project_id: str = "",
+        band_id: str = "",
+    ):
+        return operations.get_gate_ledger_report(
+            get_session=get_session,
+            scope=scope,
+            project_id=project_id,
+            band_id=band_id,
         )
 
     def get_latest_scenario_rehearsal(project_id: str):
@@ -285,6 +297,7 @@ def _build_operations(
         "list_project_decision_events": list_project_decision_events,
         "get_project_causal_replay": get_project_causal_replay,
         "get_project_audit_insights": get_project_audit_insights,
+        "get_gate_ledger_report": get_gate_ledger_report,
         "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
         "rerun_scenario_rehearsal": rerun_scenario_rehearsal,
         "approve_scenario_plan_patch": approve_scenario_plan_patch,

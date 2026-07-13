@@ -11,6 +11,8 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.config import InfrastructureConfig
 from forwin.planning.checkpoints import (
     BandCheckpointDetail,
@@ -23,6 +25,7 @@ from forwin.mcp.models import (
     ChapterDetailView,
     ChapterListView,
     GenesisView,
+    GateLedgerReportView,
     MutationResult,
     ProjectListView,
     TaskListView,
@@ -330,6 +333,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "project_continue_generation",
                     "project_set_gate_delegate",
                     "project_decision_events",
+                    "gate_ledger_report",
                     "project_extend_generation",
                     "task_list",
                     "task_get",
@@ -351,6 +355,69 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(
             all("Use this when" in (tool.description or "") for tool in tools)
         )
+
+    def test_gate_ledger_report_via_mcp_returns_json_and_markdown(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="Gate Ledger MCP Book",
+                premise="用来验证 gate ledger MCP 报告。",
+                genre="悬疑",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+                creation_status="writing",
+            )
+            updater.save_decision_event(
+                DecisionEventInfo(
+                    project_id=project.id,
+                    chapter_number=1,
+                    scope="chapter",
+                    event_family="evaluation_verdict",
+                    event_type=DecisionEventType.PULP_BEAT_EVALUATED,
+                    actor_type="system",
+                    payload=attach_gate_outcome(
+                        {},
+                        GateOutcome(
+                            gate_id="hard_floor",
+                            responsibility_domain="draft_quality",
+                            scope="chapter",
+                            candidate_id="mcp-candidate-1",
+                            chapter_number=1,
+                            decision="pass",
+                        ),
+                    ),
+                )
+            )
+            session.commit()
+            project_id = project.id
+
+        report_result = self._call_tool(
+            "gate_ledger_report",
+            {"scope": "project", "project_id": project_id, "format": "json"},
+        )
+        report_payload = self._result_payload(report_result)
+        report = GateLedgerReportView.model_validate(report_payload["result"])
+        hard_floor = next(
+            item for item in report.metrics if item.gate_id == "hard_floor"
+        )
+        self.assertEqual(hard_floor.opportunities, 1)
+        self.assertEqual(hard_floor.evaluations, 1)
+
+        markdown_result = self._call_tool(
+            "gate_ledger_report",
+            {"scope": "project", "project_id": project_id, "format": "markdown"},
+        )
+        markdown_payload = self._result_payload(markdown_result)
+        markdown = str(markdown_payload["result"])
+        self.assertIn("# Gate Ledger", markdown)
+        self.assertIn("post_pass_incident_proxy", markdown)
+
+        default_payload = self._result_payload(
+            self._call_tool("gate_ledger_report")
+        )
+        default_report = GateLedgerReportView.model_validate(
+            default_payload["result"]
+        )
+        self.assertEqual(default_report.scope, "cross_project")
 
     def test_project_set_gate_delegate_via_mcp_updates_runtime_policy(self) -> None:
         with self.session_factory() as session:

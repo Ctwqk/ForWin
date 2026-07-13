@@ -10,7 +10,9 @@ from forwin.generation.pipeline_core.audit_control import (
     AuditControlStage,
     _band_checkpoint_gate_outcome,
 )
-from forwin.generation.pipeline_core.project_chapters import _hard_floor_gate_outcome
+from forwin.generation.pipeline_core.chapter_execution_support import (
+    hard_floor_gate_outcome,
+)
 from forwin.generation.pipeline_core.quality_gates import _canon_quality_gate_outcome
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.checker.hard_floor import HardFloorResult
@@ -131,7 +133,7 @@ def test_band_checkpoint_gate_outcome_preserves_issue_identity() -> None:
 
 
 def test_hard_floor_gate_outcome_uses_reviewed_candidate_identity() -> None:
-    warning = _hard_floor_gate_outcome(
+    warning = hard_floor_gate_outcome(
         HardFloorResult(
             passed=True,
             warning_reasons=["ending_hook"],
@@ -141,7 +143,7 @@ def test_hard_floor_gate_outcome_uses_reviewed_candidate_identity() -> None:
         chapter_number=4,
         policy_version=2,
     )
-    blocked = _hard_floor_gate_outcome(
+    blocked = hard_floor_gate_outcome(
         HardFloorResult(
             passed=False,
             fail_reasons=["chapter_length"],

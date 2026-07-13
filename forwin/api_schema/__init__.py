@@ -147,6 +147,7 @@ from .observability import (
     PerformanceReportResponse,
     CausalReplayResponse,
     AuditInsightsResponse,
+    GateLedgerReportResponse,
 )
 
 from .project_control import (
@@ -308,6 +309,7 @@ __all__ = [
     "PerformanceReportResponse",
     "CausalReplayResponse",
     "AuditInsightsResponse",
+    "GateLedgerReportResponse",
     "ManualCheckpointRequest",
     "BandCheckpointApproveRequest",
     "NarrativeConstraintCreateRequest",

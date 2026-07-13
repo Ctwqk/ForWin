@@ -62,6 +62,36 @@ class ProjectDecisionEventsView(BaseModel):
     items: list[DecisionEventView] = Field(default_factory=list)
 
 
+class GateLedgerMetricView(BaseModel):
+    gate_id: str
+    gate_versions: list[str] = Field(default_factory=list)
+    responsibility_domains: list[str] = Field(default_factory=list)
+    opportunities: int | Literal["unknown"] = 0
+    evaluations: int = 0
+    fires: int = 0
+    blocks: int = 0
+    pauses: int = 0
+    approvals: int = 0
+    overrides: int = 0
+    post_override_incident_proxy: int = 0
+    post_pass_incident_proxy: int = 0
+    unknown_legacy_count: int = 0
+    fire_rate: float | None = None
+    block_rate: float | None = None
+    override_rate: float | None = None
+
+
+class GateLedgerReportView(BaseModel):
+    schema_version: Literal[1] = 1
+    scope: Literal["project", "band", "cross_project"]
+    project_id: str = ""
+    band_id: str = ""
+    project_count: int = 0
+    event_count: int = 0
+    checkpoint_count: int = 0
+    metrics: list[GateLedgerMetricView] = Field(default_factory=list)
+
+
 class GenerationControlView(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"

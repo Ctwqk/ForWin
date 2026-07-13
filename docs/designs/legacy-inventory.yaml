@@ -437,6 +437,26 @@ entries:
       - never, unless the inventory gate is renamed or replaced
     status: retained
 
+  - id: audit.gate_ledger.legacy_history_measurement
+    category: test_doc_followup
+    owner_area: audit
+    paths:
+      - forwin/audit/gate_ledger.py
+      - forwin/audit/gate_ledger_report.py
+      - forwin/mcp/models.py
+    allow_patterns:
+      - legacy
+      - Legacy
+      - LEGACY
+    reason: Gate Ledger reports pre-GateOutcome history as unknown; these names measure retained history and are not runtime compatibility paths.
+    removal_phase: keep
+    verification:
+      - gate_ledger_tests
+      - inventory_check
+    delete_when:
+      - retained DecisionEvent history no longer predates the GateOutcome contract
+    status: retained
+
   - id: external.legacy_migration_scripts
     category: deleted
     owner_area: migration_tools

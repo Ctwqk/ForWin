@@ -19,6 +19,7 @@ from forwin.api_schema import (
     CausalReplayResponse,
     DecisionEventsResponse,
     AuditInsightsResponse,
+    GateLedgerReportResponse,
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
@@ -32,6 +33,8 @@ from forwin.api_schema import (
     TropeTemplateValidationResponse,
 )
 from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_ledger import GateLedgerService
+from forwin.audit.gate_ledger_report import render_gate_ledger_markdown
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.planning.contracts import (
     load_plan_task_contract,
@@ -723,7 +726,7 @@ def get_project_causal_replay(
     *,
     get_session,
     build_causal_replay,
-    scope: str = "project",
+    scope: str = "cross_project",
     arc_id: str = "",
     band_id: str = "",
     chapter_number: int = 0,
@@ -753,6 +756,31 @@ def get_project_audit_insights(
     session = get_session()
     try:
         return build_audit_insights(session, project_id=project_id)
+    finally:
+        session.close()
+
+
+def get_gate_ledger_report(
+    *,
+    get_session,
+    scope: str = "project",
+    project_id: str = "",
+    band_id: str = "",
+) -> GateLedgerReportResponse:
+    session = get_session()
+    try:
+        try:
+            report = GateLedgerService(session).report(
+                scope=scope,
+                project_id=project_id,
+                band_id=band_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return GateLedgerReportResponse(
+            report=report,
+            markdown=render_gate_ledger_markdown(report),
+        )
     finally:
         session.close()
 

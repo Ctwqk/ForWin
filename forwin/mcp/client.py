@@ -13,6 +13,7 @@ from .models import (
     ChapterSummaryView,
     GenerationControlView,
     GenesisView,
+    GateLedgerReportView,
     MutationResult,
     DecisionEventView,
     ProjectDecisionEventsView,
@@ -80,6 +81,35 @@ class ForWinAPIClient:
         if normalized_event_type:
             items = [item for item in items if item.event_type == normalized_event_type]
         return ProjectDecisionEventsView(items=items[: max(1, int(limit or 1))])
+
+    async def gate_ledger_report(
+        self,
+        *,
+        scope: Literal["project", "band", "cross_project"] = "cross_project",
+        project_id: str = "",
+        band_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> GateLedgerReportView | str:
+        payload = await self._request_json(
+            "GET",
+            "/api/gate-ledger",
+            params={
+                "scope": scope,
+                "project_id": project_id,
+                "band_id": band_id,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected gate ledger report payload from ForWin API.")
+        if format == "markdown":
+            markdown = payload.get("markdown")
+            if not isinstance(markdown, str):
+                raise RuntimeError("ForWin API gate ledger payload omitted markdown.")
+            return markdown
+        report = payload.get("report")
+        if not isinstance(report, dict):
+            raise RuntimeError("ForWin API gate ledger payload omitted report JSON.")
+        return GateLedgerReportView.model_validate(report)
 
     async def project_create(
         self,

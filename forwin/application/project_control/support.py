@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -31,7 +31,6 @@ from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
 )
-from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.planning_control import (
     BandCheckpoint,
     NarrativeConstraint,
@@ -39,7 +38,6 @@ from forwin.models.planning_control import (
 from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
-from forwin.audience.feedback import derive_action_effectiveness
 
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -429,14 +427,6 @@ def decision_refs_for_chapter_review(
     return list(ordered.values())
 
 
-def counter_rows(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any]]:
-    return [
-        {"name": name, "count": count}
-        for name, count in counter.most_common(max(1, limit))
-        if str(name or "").strip()
-    ]
-
-
 def build_causal_replay(
     session,
     *,
@@ -612,233 +602,6 @@ def build_causal_replay(
 
 
 def build_audit_insights(session, *, project_id: str) -> AuditInsightsResponse:
-    event_rows = list_decision_event_rows(
-        session,
-        project_id=project_id,
-        limit=1000,
-        ascending=False,
-    )
-    override_counter: Counter[str] = Counter()
-    override_reason_counter: Counter[str] = Counter()
-    warn_allowed_counter: Counter[str] = Counter()
-    constraint_counter: Counter[str] = Counter()
-    blocking_counter: Counter[str] = Counter()
-    issue_group_counter: Counter[str] = Counter()
-    forced_accept_frequency = 0
-    recent_examples: list[dict[str, Any]] = []
-    checkpoint_rows = (
-        session.execute(
-            select(BandCheckpoint)
-            .where(BandCheckpoint.project_id == project_id)
-            .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
-            .limit(20)
-        )
-        .scalars()
-        .all()
-    )
-    checkpoint_status_counter: Counter[str] = Counter(
-        str(row.status or "")
-        for row in checkpoint_rows
-        if str(row.status or "").strip()
-    )
-    checkpoint_map = {row.id: row for row in checkpoint_rows}
-    for checkpoint in checkpoint_rows:
-        for issue in _json_load_list(checkpoint.issues_json):
-            if not isinstance(issue, dict):
-                continue
-            code = str(issue.get("code") or "").strip()
-            group = str(
-                issue.get("issue_group") or issue_group_for_issue(code=code)
-            ).strip()
-            if group:
-                issue_group_counter[group] += 1
-    for row in event_rows:
-        payload = (
-            json.loads(row.payload_json or "{}")
-            if str(row.payload_json or "").strip()
-            else {}
-        )
-        if not isinstance(payload, dict):
-            payload = {}
-        if row.event_type == DecisionEventType.FORCED_ACCEPT_APPLIED:
-            forced_accept_frequency += 1
-            override_counter["forced_accept"] += 1
-            reason = str(payload.get("reason") or row.reason or "").strip()
-            if reason:
-                override_reason_counter[reason] += 1
-            recent_examples.append(
-                {
-                    "event_id": row.id,
-                    "event_type": row.event_type,
-                    "chapter_number": int(row.chapter_number or 0),
-                    "band_id": str(row.band_id or ""),
-                    "summary": str(row.summary or ""),
-                }
-            )
-        if row.event_type == DecisionEventType.HARD_GATE_HIT:
-            blocking_counter[
-                str(payload.get("blocking_reason") or "hard_gate_hit")
-            ] += 1
-            recent_examples.append(
-                {
-                    "event_id": row.id,
-                    "event_type": row.event_type,
-                    "chapter_number": int(row.chapter_number or 0),
-                    "band_id": str(row.band_id or ""),
-                    "summary": str(row.summary or ""),
-                    "blocking_reason": str(payload.get("blocking_reason") or ""),
-                }
-            )
-        if row.event_type in {
-            DecisionEventType.BAND_CHECKPOINT_HIT,
-            DecisionEventType.BAND_CHECKPOINT_CREATED,
-        }:
-            status = str(payload.get("status") or "")
-            if status in {"warn", "fail", "error"}:
-                blocking_counter[f"band_checkpoint_{status}"] += 1
-        if row.event_type == DecisionEventType.BAND_CHECKPOINT_OVERRIDDEN:
-            override_counter["band_checkpoint_override"] += 1
-            reason = str(payload.get("reason") or row.reason or "").strip()
-            if reason:
-                override_reason_counter[reason] += 1
-            checkpoint = checkpoint_map.get(str(row.related_object_id or ""))
-            issues = (
-                _json_load_list(checkpoint.issues_json)
-                if checkpoint is not None
-                else []
-            )
-            for issue in issues:
-                code = str(
-                    issue.get("code") or issue.get("severity") or "checkpoint_issue"
-                )
-                issue_group = str(
-                    issue.get("issue_group") or issue_group_for_issue(code=code)
-                ).strip()
-                if issue_group:
-                    issue_group_counter[issue_group] += 1
-                warn_allowed_counter[code] += 1
-                if code in {
-                    "future_constraint",
-                    "future_resource_preservation",
-                    "next_band_compatibility",
-                }:
-                    constraint_counter[code] += 1
-                category = str(issue.get("category") or "").strip()
-                if category:
-                    warn_allowed_counter[category] += 1
-            recent_examples.append(
-                {
-                    "event_id": row.id,
-                    "event_type": row.event_type,
-                    "chapter_number": int(row.chapter_number or 0),
-                    "band_id": str(row.band_id or ""),
-                    "summary": str(row.summary or ""),
-                    "related_object_id": str(row.related_object_id or ""),
-                }
-            )
-        issue_types = payload.get("issue_types") or []
-        issue_groups = payload.get("issue_groups") or []
-        if row.event_type == DecisionEventType.REVIEW_APPROVED:
-            reason = str(payload.get("reason") or row.reason or "").strip()
-            if reason:
-                override_reason_counter[reason] += 1
-            for issue_type in issue_types if isinstance(issue_types, list) else []:
-                warn_allowed_counter[str(issue_type or "")] += 1
-                if "constraint" in str(issue_type or ""):
-                    constraint_counter[str(issue_type or "")] += 1
-                group = issue_group_for_issue(issue_type=str(issue_type or ""))
-                if group:
-                    issue_group_counter[group] += 1
-            for group in issue_groups if isinstance(issue_groups, list) else []:
-                normalized_group = str(group or "").strip()
-                if normalized_group:
-                    issue_group_counter[normalized_group] += 1
-            recent_examples.append(
-                {
-                    "event_id": row.id,
-                    "event_type": row.event_type,
-                    "chapter_number": int(row.chapter_number or 0),
-                    "band_id": str(row.band_id or ""),
-                    "summary": str(row.summary or ""),
-                }
-            )
-    recommended_adjustments: list[dict[str, Any]] = []
-    if override_counter.get("band_checkpoint_override", 0) >= 2:
-        recommended_adjustments.append(
-            {
-                "type": "review_band_checkpoint_policy",
-                "target": "band_checkpoint",
-                "reason": "band checkpoint override 次数偏高，建议复查 warn 阈值和 issue 口径。",
-                "count": override_counter["band_checkpoint_override"],
-            }
-        )
-    if warn_allowed_counter.get("future_resource_preservation", 0) or any(
-        key in warn_allowed_counter
-        for key in {
-            "character_locked_out",
-            "thread_closed_too_early",
-            "relationship_closed_too_early",
-            "secret_over_explained",
-            "growth_arc_completed_too_early",
-        }
-    ):
-        recommended_adjustments.append(
-            {
-                "type": "review_future_preservation_warns",
-                "target": "future_resource_preservation",
-                "reason": "未来资源保留 warn 多次被人工放行，建议复查风险分类和证据阈值。",
-                "count": warn_allowed_counter.get("future_resource_preservation", 0),
-            }
-        )
-    if forced_accept_frequency:
-        recommended_adjustments.append(
-            {
-                "type": "review_forced_accept_frequency",
-                "target": "chapter_review",
-                "reason": "forced accept 已出现，建议复查 reviewer 规则或 repair 链是否过严。",
-                "count": forced_accept_frequency,
-            }
-        )
-    if constraint_counter:
-        top_constraint = constraint_counter.most_common(1)[0]
-        recommended_adjustments.append(
-            {
-                "type": "review_constraint_quality",
-                "target": top_constraint[0],
-                "reason": "future constraint 相关问题频繁进入人工放行，建议检查 hard/soft 边界。",
-                "count": top_constraint[1],
-            }
-        )
-    if issue_group_counter.get("director_imbalance", 0) >= 2:
-        recommended_adjustments.append(
-            {
-                "type": "review_director_imbalance_rules",
-                "target": "director_imbalance",
-                "reason": "导演失衡类问题较多，建议复查 task contract、payoff 和 future preservation 口径。",
-                "count": issue_group_counter["director_imbalance"],
-            }
-        )
-    if issue_group_counter.get("fact_conflict", 0) >= 2:
-        recommended_adjustments.append(
-            {
-                "type": "review_fact_conflict_rules",
-                "target": "fact_conflict",
-                "reason": "事实冲突类问题较多，建议复查 hard/soft constraint 与 continuity 判定证据。",
-                "count": issue_group_counter["fact_conflict"],
-            }
-        )
-    return AuditInsightsResponse(
-        top_override_rule_types=counter_rows(override_counter),
-        top_override_reasons=counter_rows(override_reason_counter),
-        top_warn_but_allowed_issue_types=counter_rows(warn_allowed_counter),
-        top_constraint_false_positive_types=counter_rows(constraint_counter),
-        forced_accept_frequency=forced_accept_frequency,
-        most_common_blocking_reasons=counter_rows(blocking_counter),
-        recent_band_checkpoint_distribution=counter_rows(checkpoint_status_counter),
-        issue_group_distribution=counter_rows(issue_group_counter),
-        recent_action_effectiveness=derive_action_effectiveness(
-            session, project_id=project_id, limit=8
-        ),
-        recommended_adjustments=recommended_adjustments[:5],
-        recent_examples=recent_examples[:8],
-    )
+    from forwin.audit.gate_ledger import GateLedgerService
+
+    return GateLedgerService(session).audit_insights(project_id=project_id)

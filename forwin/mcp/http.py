@@ -14,6 +14,7 @@ from .models import (
     BandCheckpointView,
     ChapterListView,
     ChapterReviewApproveView,
+    GateLedgerReportView,
     MutationResult,
     ProjectDecisionEventsView,
     ProjectListView,
@@ -99,6 +100,23 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             event_type=event_type,
             event_family=event_family,
             limit=limit,
+        )
+
+    @register_read_tool(
+        "gate_ledger_report",
+        "Report full-history gate opportunities, evaluations, interventions, overrides, and incident proxies. Use this when comparing gate effectiveness for a project, band, or all projects without reading the database.",
+    )
+    async def gate_ledger_report(
+        scope: Literal["project", "band", "cross_project"] = "cross_project",
+        project_id: str = "",
+        band_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> GateLedgerReportView | str:
+        return await client.gate_ledger_report(
+            scope=scope,
+            project_id=project_id,
+            band_id=band_id,
+            format=format,
         )
 
     @register_write_tool(

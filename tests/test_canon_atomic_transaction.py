@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -28,6 +29,7 @@ from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan
 from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
+import forwin.outbox.store as outbox_store
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NodePatch
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
@@ -299,3 +301,110 @@ def test_stale_plan_rolls_back_and_returns_candidate_to_ready(
         candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
         assert candidate is not None
         assert candidate.status == "ready_for_canon"
+
+
+@pytest.mark.parametrize("failure_kind", ["row", "serialization", "flush"])
+def test_outbox_internal_failure_rolls_back_every_authoritative_write(
+    failure_kind: str,
+    prepared_canon: PreparedCanon,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = _authoritative_snapshot(prepared_canon)
+    message = f"injected outbox {failure_kind} failure"
+
+    if failure_kind == "row":
+
+        def fail_row_construction(**_kwargs):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(outbox_store, "OutboxEvent", fail_row_construction)
+    elif failure_kind == "serialization":
+
+        def fail_serialization(*_args, **_kwargs):
+            raise TypeError(message)
+
+        monkeypatch.setattr(
+            outbox_store,
+            "json",
+            SimpleNamespace(dumps=fail_serialization),
+        )
+    else:
+        session_type = prepared_canon.Session.class_
+        original_flush = session_type.flush
+
+        def fail_outbox_flush(session, *args, **kwargs):
+            if any(isinstance(item, OutboxEvent) for item in session.new):
+                raise RuntimeError(message)
+            return original_flush(session, *args, **kwargs)
+
+        monkeypatch.setattr(session_type, "flush", fail_outbox_flush)
+
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
+
+    assert outcome.blocked is True
+    assert outcome.block_kind == "canon_write_failed"
+    assert message in outcome.failure_reason
+    assert _authoritative_snapshot(prepared_canon) == before
+    with prepared_canon.Session() as session:
+        candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
+        assert candidate is not None
+        assert candidate.status == "failed"
+        assert message in candidate.failure_reason
+
+
+def test_candidate_change_after_entity_plan_preparation_is_stale(
+    prepared_canon: PreparedCanon,
+) -> None:
+    with prepared_canon.Session.begin() as session:
+        candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
+        assert candidate is not None
+        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
+        assert draft is not None
+        draft.body_text += " The candidate changed after entity admission."
+        session.add(draft)
+    before = _authoritative_snapshot(prepared_canon)
+
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
+
+    assert outcome.blocked is True
+    assert outcome.stale is True
+    assert outcome.block_kind == "stale_canon_plan"
+    assert "candidate body changed" in outcome.failure_reason
+    assert _authoritative_snapshot(prepared_canon) == before
+
+
+def test_alias_conflict_created_after_entity_plan_preparation_rolls_back(
+    prepared_canon: PreparedCanon,
+) -> None:
+    with prepared_canon.Session.begin() as session:
+        owner = Entity(
+            id="existing-alias-owner",
+            project_id=prepared_canon.project_id,
+            kind="character",
+            name="Existing Character",
+            aliases_json='["Archivist Shen"]',
+        )
+        session.add(owner)
+        session.flush()
+        session.add(
+            EntityAlias(
+                id="existing-conflicting-alias",
+                entity_id=owner.id,
+                project_id=prepared_canon.project_id,
+                alias="Archivist Shen",
+            )
+        )
+    before = _authoritative_snapshot(prepared_canon)
+
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
+
+    assert outcome.blocked is True
+    assert outcome.block_kind == "canon_write_failed"
+    assert "belongs to another entity" in outcome.failure_reason
+    assert _authoritative_snapshot(prepared_canon) == before

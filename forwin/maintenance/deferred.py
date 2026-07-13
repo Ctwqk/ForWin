@@ -12,16 +12,20 @@ from forwin.audit.events import (
 
 class DeferredMaintenanceRecord(BaseModel):
     project_id: str
+    task_id: str = ""
     chapter_number: int = 0
     task_type: str
     reason: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
+    related_object_type: str = ""
+    related_object_id: str = ""
 
 
 def record_deferred_maintenance(updater, record: DeferredMaintenanceRecord) -> None:  # noqa: ANN001
     updater.save_decision_event(
         DecisionEventInfo(
             project_id=record.project_id,
+            task_id=record.task_id,
             chapter_number=record.chapter_number,
             scope="chapter" if record.chapter_number else "project",
             event_family="runtime_observation",
@@ -30,5 +34,7 @@ def record_deferred_maintenance(updater, record: DeferredMaintenanceRecord) -> N
             summary=f"Deferred maintenance recorded: {record.task_type}",
             reason=record.reason,
             payload={"task_type": record.task_type, **record.payload},
+            related_object_type=record.related_object_type,
+            related_object_id=record.related_object_id,
         )
     )

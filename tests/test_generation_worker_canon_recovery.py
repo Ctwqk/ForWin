@@ -30,6 +30,7 @@ from forwin.models.book_state import (
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.entity import Entity, EntityAlias
+from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan
@@ -238,13 +239,8 @@ def _expire_lease(fixture: RecoveryFixture) -> None:
 
 
 class RecoveryPipeline:
-    def __init__(
-        self,
-        fixture: RecoveryFixture,
-        outcomes: list[object],
-    ) -> None:
+    def __init__(self, fixture: RecoveryFixture) -> None:
         self.fixture = fixture
-        self.outcomes = outcomes
         self.calls: list[tuple[str, int | None, int | None]] = []
         self._SessionFactory = fixture.Session
         self.observability = NullObservability()
@@ -259,29 +255,14 @@ class RecoveryPipeline:
         resume_from_chapter: int | None,
     ) -> RunResult:
         self.calls.append((project_id, max_chapters, resume_from_chapter))
-        with self.fixture.Session() as session:
-            chapter = session.get(ChapterPlan, self.fixture.chapter_plan_id)
-            assert chapter is not None
-            if chapter.status == "accepted":
-                return RunResult(project_id=project_id, requested_chapters=0)
-        outcome = CanonAdmissionService(
-            session_factory=self.fixture.Session
-        ).commit_plan(self.fixture.plan)
-        assert outcome.blocked is False
-        self.outcomes.append(outcome)
-        return RunResult(
-            project_id=project_id,
-            requested_chapters=1,
-            completed_chapters=[1],
-        )
+        raise AssertionError("Canon recovery must complete before pipeline execution")
 
 
 def _recovery_application(
     fixture: RecoveryFixture,
-    outcomes: list[object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[GenerationApplicationService, RecoveryPipeline]:
-    pipeline = RecoveryPipeline(fixture, outcomes)
+    pipeline = RecoveryPipeline(fixture)
     monkeypatch.setattr(
         "forwin.application.generation_execution._build_chapter_pipeline_for_task",
         lambda *_args, **_kwargs: pipeline,
@@ -311,6 +292,18 @@ def _assert_single_committed_state(fixture: RecoveryFixture) -> None:
         assert session.scalar(select(func.count(EntityAlias.id))) == 1
         assert session.scalar(select(func.count(NarrativeObligationRow.id))) == 1
         assert session.scalar(select(func.count(OutboxEvent.id))) == 2
+        deferred = list(
+            session.scalars(
+                select(DecisionEvent).where(
+                    DecisionEvent.project_id == fixture.project_id,
+                    DecisionEvent.chapter_number == 1,
+                    DecisionEvent.event_type == "deferred_maintenance_recorded",
+                    DecisionEvent.related_object_type == "generation_task",
+                    DecisionEvent.related_object_id == fixture.task_id,
+                )
+            )
+        )
+        assert len(deferred) == 1
 
 
 def test_reclaim_after_precommit_crash_commits_candidate_once(
@@ -323,11 +316,15 @@ def test_reclaim_after_precommit_crash_commits_candidate_once(
         assert candidate is not None and candidate.status == "ready_for_canon"
     _expire_lease(recovery_fixture)
     outcomes: list[object] = []
-    application, pipeline = _recovery_application(
-        recovery_fixture,
-        outcomes,
-        monkeypatch,
-    )
+    original_commit_plan = CanonAdmissionService.commit_plan
+
+    def record_commit(service, plan, **kwargs):
+        outcome = original_commit_plan(service, plan, **kwargs)
+        outcomes.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(CanonAdmissionService, "commit_plan", record_commit)
+    application, pipeline = _recovery_application(recovery_fixture, monkeypatch)
 
     result = run_one_generation_task(
         application_service=application,
@@ -339,7 +336,7 @@ def test_reclaim_after_precommit_crash_commits_candidate_once(
     assert result.task_id == recovery_fixture.task_id
     assert len(outcomes) == 1
     assert outcomes[0].idempotent is False
-    assert pipeline.calls == [(recovery_fixture.project_id, 1, 1)]
+    assert pipeline.calls == []
     _assert_single_committed_state(recovery_fixture)
 
 
@@ -357,7 +354,6 @@ def test_reclaim_after_canon_commit_replays_once_then_finishes_task(
         task = session.get(GenerationTask, recovery_fixture.task_id)
         assert task is not None and task.status == "running"
     _expire_lease(recovery_fixture)
-    outcomes: list[object] = []
     replay_outcomes: list[object] = []
     original_commit_plan = CanonAdmissionService.commit_plan
 
@@ -367,11 +363,7 @@ def test_reclaim_after_canon_commit_replays_once_then_finishes_task(
         return outcome
 
     monkeypatch.setattr(CanonAdmissionService, "commit_plan", record_replay)
-    application, pipeline = _recovery_application(
-        recovery_fixture,
-        outcomes,
-        monkeypatch,
-    )
+    application, pipeline = _recovery_application(recovery_fixture, monkeypatch)
 
     result = run_one_generation_task(
         application_service=application,
@@ -380,9 +372,81 @@ def test_reclaim_after_canon_commit_replays_once_then_finishes_task(
     )
 
     assert result.claimed is True
-    assert outcomes == []
     assert pipeline.calls == []
     assert len(replay_outcomes) == 1
     assert replay_outcomes[0].commit_id == first.commit_id
     assert replay_outcomes[0].idempotent is True
     _assert_single_committed_state(recovery_fixture)
+
+
+def test_recovered_terminal_task_still_runs_completion_handler(
+    recovery_fixture: RecoveryFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _claim(recovery_fixture)
+    outcome = CanonAdmissionService(
+        session_factory=recovery_fixture.Session
+    ).commit_plan(recovery_fixture.plan)
+    assert outcome.blocked is False
+    _expire_lease(recovery_fixture)
+    application, pipeline = _recovery_application(recovery_fixture, monkeypatch)
+    completed: list[RunResult] = []
+    monkeypatch.setattr(
+        application,
+        "_completion_handler",
+        lambda _task_id, _payload: completed.append,
+    )
+
+    run_one_generation_task(
+        application_service=application,
+        worker_id="recovery-worker",
+        lease_seconds=30,
+    )
+
+    assert pipeline.calls == []
+    assert len(completed) == 1
+    assert completed[0].project_id == recovery_fixture.project_id
+    assert completed[0].completed_chapters == [1]
+    assert completed[0].status == "completed"
+
+
+def test_stale_worker_epoch_cannot_enter_canon_transaction(
+    recovery_fixture: RecoveryFixture,
+) -> None:
+    _claim(recovery_fixture)
+    with recovery_fixture.Session() as session:
+        first_claim = session.get(GenerationTask, recovery_fixture.task_id)
+        assert first_claim is not None
+        first_epoch = int(first_claim.lease_epoch or 0)
+    _expire_lease(recovery_fixture)
+    with recovery_fixture.Session.begin() as session:
+        reclaimed = claim_generation_task(
+            session,
+            worker_id="crashed-worker",
+            lease_seconds=30,
+        )
+    assert reclaimed is not None
+    assert reclaimed.lease_epoch == first_epoch + 1
+    application = GenerationApplicationService(
+        session_factory=recovery_fixture.Session,
+        infrastructure=InfrastructureConfig(
+            database_url=recovery_fixture.database_url
+        ),
+    )
+
+    outcome = CanonAdmissionService(
+        session_factory=recovery_fixture.Session,
+        transaction_guard=application._canon_transaction_guard(
+            task_id=recovery_fixture.task_id,
+            worker_id="crashed-worker",
+            lease_epoch=first_epoch,
+        ),
+    ).commit_plan(recovery_fixture.plan)
+
+    assert outcome.blocked is True
+    assert outcome.stale is True
+    assert "lease lost" in outcome.failure_reason
+    with recovery_fixture.Session() as session:
+        assert session.scalar(select(func.count(CanonCommitRecord.id))) == 0
+        candidate = session.get(CandidateDraftRecord, recovery_fixture.candidate_id)
+        assert candidate is not None and candidate.status == "ready_for_canon"

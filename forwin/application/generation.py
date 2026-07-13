@@ -4,14 +4,17 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.plan import CanonCommitPlan
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from forwin.application.errors import (
     ActiveGenerationTaskError,
+    GenerationTaskLeaseLost,
     PermanentConfigurationError,
     ProjectNotFound,
 )
@@ -32,7 +35,12 @@ from forwin.audit.events import (
     ensure_decision_event_type,
 )
 from forwin.models.project import ChapterPlan, Project
+from forwin.models.audit import DecisionEvent
 from forwin.models.task import GenerationTask
+from forwin.maintenance.deferred import (
+    DeferredMaintenanceRecord,
+    record_deferred_maintenance,
+)
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
 
@@ -57,7 +65,7 @@ class GenerationTaskHandle:
 
 
 GenerationRunner = Callable[
-    [GenerationTask, GenerationExecutionContext, int, str],
+    [GenerationTask, GenerationExecutionContext, int, str, int],
     None,
 ]
 
@@ -151,17 +159,28 @@ class GenerationApplicationService:
         resume_from_chapter: int,
         worker_id: str,
         claim_kind: str = "queued",
+        lease_epoch: int | None = None,
     ) -> None:
+        normalized_worker_id = str(worker_id or "").strip()
+        normalized_lease_epoch = int(
+            task.lease_epoch if lease_epoch is None else lease_epoch
+        )
         if str(claim_kind or "") == "expired_running":
             resume_from_chapter = self._recover_committed_chapter(
                 task,
                 resume_from_chapter=max(0, int(resume_from_chapter or 0)),
+                worker_id=normalized_worker_id,
+                lease_epoch=normalized_lease_epoch,
             )
         completed_chapters = _task_chapter_numbers(task.completed_chapters_json)
+        payload = payload_from_json(task.execution_payload_json)
         if int(task.requested_chapters or 0) > 0 and len(completed_chapters) >= int(
             task.requested_chapters or 0
         ):
-            self._task_updater()(
+            self._task_updater(
+                worker_id=normalized_worker_id,
+                lease_epoch=normalized_lease_epoch,
+            )(
                 task.id,
                 status="completed",
                 current_stage="completed",
@@ -169,8 +188,23 @@ class GenerationApplicationService:
                 completed_chapters=completed_chapters,
                 message="已从 Canon 提交恢复任务进度。",
             )
+            from forwin.generation.pipeline_core.result import RunResult
+
+            result = RunResult(
+                project_id=str(task.project_id or ""),
+                requested_chapters=int(task.requested_chapters or 0),
+                completed_chapters=completed_chapters,
+                failed_chapters=_task_chapter_numbers(task.failed_chapters_json),
+                paused_chapters=_task_chapter_numbers(task.paused_chapters_json),
+            )
+            try:
+                self._completion_handler(task.id, payload)(result)
+            except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).exception(
+                    "Post-recovery completion handler failed for task %s",
+                    task.id,
+                )
             return
-        payload = payload_from_json(task.execution_payload_json)
         context = build_execution_context(
             self.infrastructure,
             payload,
@@ -180,7 +214,8 @@ class GenerationApplicationService:
             task,
             context,
             max(0, int(resume_from_chapter or 0)),
-            str(worker_id or ""),
+            normalized_worker_id,
+            normalized_lease_epoch,
         )
 
     def _run_claimed(
@@ -188,7 +223,8 @@ class GenerationApplicationService:
         task: GenerationTask,
         context: GenerationExecutionContext,
         resume_from_chapter: int,
-        _worker_id: str,
+        worker_id: str,
+        lease_epoch: int,
     ) -> None:
         from forwin.application.generation_execution import execute_continuation
 
@@ -201,24 +237,44 @@ class GenerationApplicationService:
         execute_continuation(
             context,
             project_id,
-            self._task_updater(),
+            self._task_updater(worker_id=worker_id, lease_epoch=lease_epoch),
             logging.getLogger(__name__),
-            should_abort=self._task_flag(task.id, "cancel_requested"),
-            should_pause=self._task_flag(task.id, "pause_requested"),
+            should_abort=self._task_flag(
+                task.id,
+                "cancel_requested",
+                worker_id=worker_id,
+                lease_epoch=lease_epoch,
+            ),
+            should_pause=self._task_flag(
+                task.id,
+                "pause_requested",
+                worker_id=worker_id,
+                lease_epoch=lease_epoch,
+            ),
             max_chapters=self._remaining_max_chapters(task, payload),
             resume_from_chapter=resume_from_chapter,
             completion_handler=self._completion_handler(task.id, payload),
+            canon_transaction_guard=self._canon_transaction_guard(
+                task_id=task.id,
+                worker_id=worker_id,
+                lease_epoch=lease_epoch,
+            ),
             component="worker",
         )
 
-    def _task_updater(self):
+    def _task_updater(self, *, worker_id: str, lease_epoch: int):
         def update(task_id: str, **changes: object) -> None:
             with self.session_factory.begin() as session:
+                task = self._require_task_lease(
+                    session,
+                    task_id=task_id,
+                    worker_id=worker_id,
+                    lease_epoch=lease_epoch,
+                )
                 normalized = dict(changes)
                 if "completed_chapters" in normalized:
-                    task = session.get(GenerationTask, task_id)
                     existing = _task_chapter_numbers(
-                        task.completed_chapters_json if task is not None else "[]"
+                        task.completed_chapters_json
                     )
                     incoming = [
                         int(chapter)
@@ -236,6 +292,8 @@ class GenerationApplicationService:
         task: GenerationTask,
         *,
         resume_from_chapter: int,
+        worker_id: str,
+        lease_epoch: int,
     ) -> int:
         chapter_number = max(0, int(resume_from_chapter or 0))
         if chapter_number < 1:
@@ -252,15 +310,26 @@ class GenerationApplicationService:
                 )
                 .first()
             )
-            if chapter is None or str(chapter.status or "") != "accepted":
+            if chapter is None:
                 return chapter_number
             candidate = CandidateDraftRepository(session).latest_for_chapter(
                 project_id=str(task.project_id or ""),
                 chapter_number=chapter_number,
             )
-            if candidate is None or str(candidate.status or "") != "accepted":
+            candidate_status = str(candidate.status or "") if candidate else ""
+            chapter_status = str(chapter.status or "") if chapter else ""
+            if candidate is None or candidate_status not in {
+                "ready_for_canon",
+                "accepted",
+            }:
+                if chapter_status == "accepted":
+                    raise PermanentConfigurationError(
+                        "accepted chapter has no accepted v5 candidate"
+                    )
+                return chapter_number
+            if candidate_status == "accepted" and chapter_status != "accepted":
                 raise PermanentConfigurationError(
-                    "accepted chapter has no accepted v5 candidate"
+                    "accepted candidate has no accepted chapter"
                 )
             try:
                 plan = CanonCommitPlan.model_validate_json(
@@ -272,9 +341,19 @@ class GenerationApplicationService:
                 ) from exc
 
         outcome = CanonAdmissionService(
-            session_factory=self.session_factory
+            session_factory=self.session_factory,
+            transaction_guard=self._canon_transaction_guard(
+                task_id=task.id,
+                worker_id=worker_id,
+                lease_epoch=lease_epoch,
+            ),
         ).commit_plan(plan)
-        if outcome.blocked or not outcome.idempotent:
+        if outcome.blocked:
+            raise PermanentConfigurationError(
+                "persisted chapter Canon plan could not be recovered: "
+                f"{outcome.failure_reason or outcome.blocked_path}"
+            )
+        if candidate_status == "accepted" and not outcome.idempotent:
             raise PermanentConfigurationError(
                 "accepted chapter Canon commit could not be replayed idempotently"
             )
@@ -289,13 +368,17 @@ class GenerationApplicationService:
             for number in _task_chapter_numbers(task.paused_chapters_json)
             if number != chapter_number
         ]
-        self._task_updater()(
-            task.id,
-            current_chapter=chapter_number,
-            completed_chapters=completed,
-            failed_chapters=failed,
-            paused_chapters=paused,
-            message=f"已从 Canon 提交恢复第{chapter_number}章进度。",
+        self._persist_recovered_chapter(
+            task=task,
+            chapter_number=chapter_number,
+            completed=completed,
+            failed=failed,
+            paused=paused,
+            worker_id=worker_id,
+            lease_epoch=lease_epoch,
+            recovery_kind=(
+                "canon_replay" if outcome.idempotent else "canon_commit"
+            ),
         )
         task.completed_chapters_json = json.dumps(completed, ensure_ascii=False)
         task.failed_chapters_json = json.dumps(failed, ensure_ascii=False)
@@ -311,15 +394,128 @@ class GenerationApplicationService:
         completed = len(_task_chapter_numbers(task.completed_chapters_json))
         return max(1, configured - completed)
 
-    def _task_flag(self, task_id: str, attribute: str):
+    def _task_flag(
+        self,
+        task_id: str,
+        attribute: str,
+        *,
+        worker_id: str,
+        lease_epoch: int,
+    ):
         def read() -> bool:
             with self.session_factory() as session:
                 task = session.get(GenerationTask, task_id)
-                return (
-                    bool(getattr(task, attribute, False)) if task is not None else True
-                )
+                if task is None:
+                    return True
+                if str(task.lease_owner or "") != str(worker_id or ""):
+                    return True
+                if int(task.lease_epoch or 0) != int(lease_epoch):
+                    return True
+                if _lease_expired(task.lease_expires_at):
+                    return True
+                return bool(getattr(task, attribute, False))
 
         return read
+
+    def _persist_recovered_chapter(
+        self,
+        *,
+        task: GenerationTask,
+        chapter_number: int,
+        completed: list[int],
+        failed: list[int],
+        paused: list[int],
+        worker_id: str,
+        lease_epoch: int,
+        recovery_kind: str,
+    ) -> None:
+        with self.session_factory.begin() as session:
+            self._require_task_lease(
+                session,
+                task_id=task.id,
+                worker_id=worker_id,
+                lease_epoch=lease_epoch,
+            )
+            GenerationTaskRepository(session).update(
+                task.id,
+                {
+                    "current_chapter": chapter_number,
+                    "completed_chapters": completed,
+                    "failed_chapters": failed,
+                    "paused_chapters": paused,
+                    "message": f"已从 Canon 提交恢复第{chapter_number}章进度。",
+                },
+            )
+            existing = session.execute(
+                select(DecisionEvent.id).where(
+                    DecisionEvent.project_id == task.project_id,
+                    DecisionEvent.chapter_number == chapter_number,
+                    DecisionEvent.event_type
+                    == DecisionEventType.DEFERRED_MAINTENANCE_RECORDED,
+                    DecisionEvent.related_object_type == "generation_task",
+                    DecisionEvent.related_object_id == task.id,
+                )
+            ).first()
+            if existing is None:
+                record_deferred_maintenance(
+                    StateUpdater(session),
+                    DeferredMaintenanceRecord(
+                        project_id=str(task.project_id or ""),
+                        task_id=task.id,
+                        chapter_number=chapter_number,
+                        task_type="post_acceptance_pipeline",
+                        reason="generation task reclaimed across Canon boundary",
+                        payload={"recovery_kind": recovery_kind},
+                        related_object_type="generation_task",
+                        related_object_id=task.id,
+                    ),
+                )
+
+    @staticmethod
+    def _require_task_lease(
+        session,
+        *,
+        task_id: str,
+        worker_id: str,
+        lease_epoch: int,
+    ) -> GenerationTask:
+        task = session.execute(
+            select(GenerationTask)
+            .where(GenerationTask.id == task_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if (
+            task is None
+            or str(task.lease_owner or "") != str(worker_id or "")
+            or int(task.lease_epoch or 0) != int(lease_epoch)
+            or _lease_expired(task.lease_expires_at)
+        ):
+            raise GenerationTaskLeaseLost(
+                f"generation task lease lost: {task_id}"
+            )
+        return task
+
+    @staticmethod
+    def _canon_transaction_guard(
+        *,
+        task_id: str,
+        worker_id: str,
+        lease_epoch: int,
+    ):
+        def guard(session) -> bool:
+            task = session.execute(
+                select(GenerationTask)
+                .where(GenerationTask.id == task_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            return bool(
+                task is not None
+                and str(task.lease_owner or "") == str(worker_id or "")
+                and int(task.lease_epoch or 0) == int(lease_epoch)
+                and not _lease_expired(task.lease_expires_at)
+            )
+
+        return guard
 
     def _completion_handler(self, task_id: str, payload):
         def handle(result: object) -> None:
@@ -381,3 +577,12 @@ def _task_chapter_numbers(raw: str) -> list[int]:
         if number > 0 and number not in result:
             result.append(number)
     return result
+
+
+def _lease_expired(value: datetime | None) -> bool:
+    if value is None:
+        return False
+    normalized = value
+    if normalized.tzinfo is None:
+        normalized = normalized.replace(tzinfo=timezone.utc)
+    return normalized <= datetime.now(timezone.utc)

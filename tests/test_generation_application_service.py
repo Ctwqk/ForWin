@@ -140,7 +140,7 @@ def test_execute_claimed_builds_context_from_immutable_payload(
     calls: list[tuple[GenerationTask, object, int, str]] = []
     service = _service(
         session_factory,
-        runner=lambda task, context, resume, worker: calls.append(
+        runner=lambda task, context, resume, worker, _lease_epoch: calls.append(
             (task, context, resume, worker)
         ),
     )
@@ -148,6 +148,10 @@ def test_execute_claimed_builds_context_from_immutable_payload(
     with session_factory() as session:
         task = session.get(GenerationTask, handle.task_id)
         assert task is not None
+        task.status = "running"
+        task.lease_owner = "worker-1"
+        task.lease_epoch = 1
+        session.commit()
         session.expunge(task)
 
     service.execute_claimed(task, resume_from_chapter=4, worker_id="worker-1")
@@ -172,6 +176,10 @@ def test_default_runner_executes_project_task_and_persists_updates(
     with session_factory() as session:
         task = session.get(GenerationTask, handle.task_id)
         assert task is not None
+        task.status = "running"
+        task.lease_owner = "worker-1"
+        task.lease_epoch = 1
+        session.commit()
         session.expunge(task)
     calls: list[dict[str, object]] = []
 
@@ -201,7 +209,12 @@ def test_default_runner_executes_project_task_and_persists_updates(
         fake_run,
     )
 
-    service.execute_claimed(task, resume_from_chapter=2, worker_id="worker-1")
+    service.execute_claimed(
+        task,
+        resume_from_chapter=2,
+        worker_id="worker-1",
+        lease_epoch=1,
+    )
 
     with session_factory() as session:
         saved = session.get(GenerationTask, task.id)

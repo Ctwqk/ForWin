@@ -8,3 +8,7 @@ class ProjectNotFound(LookupError):
 
 class ActiveGenerationTaskError(RuntimeError):
     pass
+
+
+class GenerationTaskLeaseLost(RuntimeError):
+    pass

@@ -223,6 +223,7 @@ def _claim_payload(
         "lease_expires_at": _isoformat(task.lease_expires_at),
         "resume_from_chapter": max(0, int(resume_from_chapter or 0)),
         "claim_kind": str(claim.claim_kind or ""),
+        "lease_epoch": max(0, int(claim.lease_epoch or 0)),
         "lease_seconds": max(30, int(lease_seconds or 300)),
         "execution_mode": "continue"
         if str(task.project_id or "").strip()

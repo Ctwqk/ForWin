@@ -102,6 +102,7 @@ def run_one_generation_task(
                 task_id=task_id,
                 project_id=project_id,
                 worker_id=worker_id,
+                lease_epoch=claim.lease_epoch,
                 lease_seconds=lease_seconds,
             )
             try:
@@ -110,6 +111,7 @@ def run_one_generation_task(
                     resume_from_chapter=resume_from_chapter,
                     worker_id=worker_id,
                     claim_kind=claim.claim_kind,
+                    lease_epoch=claim.lease_epoch,
                 )
             finally:
                 stop_periodic_heartbeat()
@@ -125,7 +127,11 @@ def run_one_generation_task(
         )
         with session_factory.begin() as session:
             row = session.get(GenerationTask, task_id)
-            if row is not None and row.lease_owner == worker_id:
+            if (
+                row is not None
+                and row.lease_owner == worker_id
+                and int(row.lease_epoch or 0) == int(claim.lease_epoch)
+            ):
                 row.status = "failed"
                 row.current_stage = "failed"
                 row.error_message = "generation_worker_execution_failed"
@@ -137,6 +143,7 @@ def run_one_generation_task(
             session,
             task_id=task_id,
             worker_id=worker_id,
+            lease_epoch=claim.lease_epoch,
             lease_seconds=lease_seconds,
         )
     if not heartbeat_ok:
@@ -166,6 +173,7 @@ def _start_periodic_heartbeat(
     task_id: str,
     project_id: str,
     worker_id: str,
+    lease_epoch: int,
     lease_seconds: int,
 ) -> Callable[[], None]:
     stop_event = threading.Event()
@@ -179,6 +187,7 @@ def _start_periodic_heartbeat(
                         session,
                         task_id=task_id,
                         worker_id=worker_id,
+                        lease_epoch=lease_epoch,
                         lease_seconds=lease_seconds,
                     )
             except Exception:

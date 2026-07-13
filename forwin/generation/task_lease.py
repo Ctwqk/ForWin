@@ -15,6 +15,7 @@ from forwin.models.task import GenerationTask
 class GenerationTaskClaimResult:
     task: GenerationTask
     claim_kind: Literal["queued", "expired_running"]
+    lease_epoch: int = 0
     previous_lease_owner: str = ""
     previous_lease_expires_at: datetime | None = None
 
@@ -68,6 +69,7 @@ def claim_generation_task(
     row.status = "running"
     row.current_stage = "running"
     row.lease_owner = str(worker_id or "").strip()
+    row.lease_epoch = max(0, int(row.lease_epoch or 0)) + 1
     row.lease_expires_at = expires
     row.heartbeat_at = now
     row.started_at = row.started_at or now
@@ -76,6 +78,7 @@ def claim_generation_task(
     return GenerationTaskClaimResult(
         task=row,
         claim_kind=claim_kind,
+        lease_epoch=int(row.lease_epoch or 0),
         previous_lease_owner=previous_lease_owner if claim_kind == "expired_running" else "",
         previous_lease_expires_at=previous_lease_expires_at if claim_kind == "expired_running" else None,
     )
@@ -86,11 +89,20 @@ def heartbeat_generation_task(
     *,
     task_id: str,
     worker_id: str,
+    lease_epoch: int | None = None,
     lease_seconds: int = 300,
 ) -> bool:
     now = utcnow()
     row = session.get(GenerationTask, task_id)
-    if row is None or row.lease_owner != worker_id or row.status != "running":
+    if (
+        row is None
+        or row.lease_owner != worker_id
+        or (
+            lease_epoch is not None
+            and int(row.lease_epoch or 0) != int(lease_epoch)
+        )
+        or row.status != "running"
+    ):
         return False
     row.heartbeat_at = now
     row.lease_expires_at = now + timedelta(seconds=max(30, int(lease_seconds or 300)))

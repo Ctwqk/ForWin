@@ -100,6 +100,7 @@ def test_v5_baseline_contains_candidate_and_canon_commit_contracts() -> None:
         "ux_candidate_drafts_draft",
         "ux_canon_commits_idempotency_key",
         "ux_canon_commits_candidate",
+        "ux_canon_commits_project_chapter",
     ):
         assert f'"{index}"' in baseline
 

@@ -284,6 +284,106 @@ def test_same_idempotency_key_returns_prior_commit(
     assert _authoritative_snapshot(prepared_canon) == after_first
 
 
+def test_empty_graph_delta_cannot_commit_second_candidate_for_accepted_chapter(
+    prepared_canon: PreparedCanon,
+) -> None:
+    empty_changes = ApprovedGraphDeltaSet(
+        project_id=prepared_canon.project_id,
+        chapter_number=1,
+        graph_deltas=[],
+        approved_by=["book_state_review"],
+    )
+    first_plan = prepared_canon.plan.model_copy(
+        update={
+            "approved_book_state_changes": empty_changes,
+            "entity_admission_plan": EntityAdmissionPlan(
+                project_id=prepared_canon.project_id,
+                chapter_number=1,
+                candidate_fingerprint=(
+                    prepared_canon.plan.entity_admission_plan.candidate_fingerprint
+                ),
+            ),
+        }
+    )
+    with prepared_canon.Session.begin() as session:
+        first_candidate = session.get(
+            CandidateDraftRecord,
+            prepared_canon.candidate_id,
+        )
+        assert first_candidate is not None
+        first_candidate.canon_commit_plan_json = first_plan.model_dump_json()
+
+    first = CanonAdmissionService(
+        session_factory=prepared_canon.Session
+    ).commit_plan(first_plan)
+    assert first.blocked is False
+
+    with prepared_canon.Session.begin() as session:
+        chapter = session.get(ChapterPlan, prepared_canon.chapter_plan_id)
+        assert chapter is not None and chapter.status == "accepted"
+        output = WriterOutput(
+            project_id=prepared_canon.project_id,
+            chapter_number=1,
+            title="Chapter one alternate",
+            body="An alternate draft reaches the same accepted chapter.",
+            char_count=53,
+            end_of_chapter_summary="This candidate must remain non-Canon.",
+        )
+        draft = ChapterDraft(
+            chapter_plan_id=chapter.id,
+            version=2,
+            body_text=output.body,
+            summary=output.end_of_chapter_summary,
+            char_count=output.char_count,
+        )
+        session.add(draft)
+        session.flush()
+        review = ChapterReview(
+            draft_id=draft.id,
+            verdict="pass",
+            issues_json="[]",
+            review_meta_json='{"verdict":"pass"}',
+        )
+        session.add(review)
+        session.flush()
+        second_candidate = CandidateDraftRepository(session).create_reviewed_version(
+            project_id=prepared_canon.project_id,
+            chapter_plan=chapter,
+            draft=draft,
+            review=review,
+            writer_output=output,
+            plan_revision=candidate_plan_revision(chapter),
+            policy_version=1,
+        )
+        prepared = CanonPreparationService().prepare_from_approved(
+            session=session,
+            candidate_id=second_candidate.id,
+            approved_book_state_changes=empty_changes,
+            entity_admission_plan=EntityAdmissionPlan(
+                project_id=prepared_canon.project_id,
+                chapter_number=1,
+                candidate_fingerprint=writer_output_admission_fingerprint(output),
+            ),
+            acceptance_mode="normal",
+            repair_attempt_count=0,
+            residual_review_issues=[],
+            canon_risk_level="low",
+        )
+        assert prepared.plan is not None
+        second_plan = prepared.plan
+
+    before_second = _authoritative_snapshot(prepared_canon)
+    second = CanonAdmissionService(
+        session_factory=prepared_canon.Session
+    ).commit_plan(second_plan)
+
+    assert second.blocked is True
+    assert second.stale is True
+    assert second.block_kind == "stale_canon_plan"
+    assert "already accepted" in second.failure_reason
+    assert _authoritative_snapshot(prepared_canon) == before_second
+
+
 def test_stale_plan_rolls_back_and_returns_candidate_to_ready(
     prepared_canon: PreparedCanon,
 ) -> None:

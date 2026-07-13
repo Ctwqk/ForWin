@@ -141,8 +141,9 @@ def _build_chapter_pipeline_for_task(
     progress_callback=None,
     should_abort=None,
     should_pause=None,
+    canon_transaction_guard=None,
 ) -> ChapterPipeline:
-    return RuntimeContainer.from_config(
+    pipeline = RuntimeContainer.from_config(
         context.infrastructure,
         policy=context.policy,
         role="generation_worker",
@@ -153,6 +154,14 @@ def _build_chapter_pipeline_for_task(
         task_id=context.task_id,
         root_event_id=context.root_event_id,
     )
+    if canon_transaction_guard is not None:
+        from forwin.canon.admission import CanonAdmissionService
+
+        pipeline.canon_admission = CanonAdmissionService(
+            session_factory=pipeline._SessionFactory,
+            transaction_guard=canon_transaction_guard,
+        )
+    return pipeline
 
 
 def execute_pipeline_task(
@@ -320,6 +329,7 @@ def execute_continuation(
     max_chapters: int | None = None,
     resume_from_chapter: int | None = None,
     completion_handler: Callable[[object], None] | None = None,
+    canon_transaction_guard: Callable[[Any], bool] | None = None,
     component: str = "api",
 ) -> None:
     task_id = context.task_id
@@ -334,6 +344,7 @@ def execute_continuation(
         progress_callback=_handle_progress,
         should_abort=should_abort,
         should_pause=should_pause,
+        canon_transaction_guard=canon_transaction_guard,
     )
 
     def _handle_result(result) -> None:

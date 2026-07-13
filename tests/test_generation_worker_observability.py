@@ -32,8 +32,9 @@ def _application_service(Session, database_url: str, execute):
         resume_from_chapter: int,
         worker_id: str,
         claim_kind: str,
+        lease_epoch: int,
     ) -> None:
-        _ = worker_id, claim_kind
+        _ = worker_id, claim_kind, lease_epoch
         execute(task, resume_from_chapter)
 
     return SimpleNamespace(

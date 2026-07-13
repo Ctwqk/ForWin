@@ -15,9 +15,10 @@ class CanonCommitRecord(Base):
         Index("ux_canon_commits_idempotency_key", "idempotency_key", unique=True),
         Index("ux_canon_commits_candidate", "candidate_id", unique=True),
         Index(
-            "ix_canon_commits_project_chapter",
+            "ux_canon_commits_project_chapter",
             "project_id",
             "chapter_number",
+            unique=True,
         ),
     )
 

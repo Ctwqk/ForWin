@@ -5,6 +5,10 @@ from datetime import datetime, timedelta, timezone
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
+
+from forwin.application.errors import GenerationTaskLeaseLost
+from forwin.application.generation import GenerationApplicationService
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import (
     claim_generation_task,
@@ -24,8 +28,9 @@ def _application_service(Session, database_url: str, execute):
         resume_from_chapter: int,
         worker_id: str,
         claim_kind: str,
+        lease_epoch: int,
     ) -> None:
-        _ = claim_kind
+        _ = claim_kind, lease_epoch
         execute(task, resume_from_chapter, worker_id)
 
     return SimpleNamespace(
@@ -60,6 +65,7 @@ def test_claim_generation_task_sets_lease_fields() -> None:
         assert task.lease_owner == "worker-1"
         assert task.lease_expires_at is not None
         assert task.heartbeat_at is not None
+        assert task.lease_epoch == 1
     finally:
         engine.dispose()
 
@@ -145,6 +151,7 @@ def test_expired_claim_reports_previous_lease_metadata() -> None:
         assert claim is not None
         assert claim.task.id == "task-expired-kind"
         assert claim.task.lease_owner == "worker-2"
+        assert claim.lease_epoch == 1
         assert claim.claim_kind == "expired_running"
         assert claim.previous_lease_owner == "old-worker"
         assert claim.previous_lease_expires_at == expired
@@ -236,12 +243,70 @@ def test_heartbeat_extends_matching_running_lease() -> None:
                 session,
                 task_id="task-heartbeat",
                 worker_id="worker-1",
+                lease_epoch=0,
                 lease_seconds=300,
             )
             task = session.get(GenerationTask, "task-heartbeat")
             assert task is not None
             assert task.lease_expires_at is not None
             assert task.lease_expires_at > now + timedelta(seconds=60)
+    finally:
+        engine.dispose()
+
+
+def test_stale_epoch_cannot_update_task_after_same_worker_id_reclaims() -> None:
+    database_url = postgres_test_url("generation-task-lease-epoch-fencing")
+    engine = get_engine(database_url)
+    init_db(engine)
+    Session = get_session_factory(engine)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-epoch-fence",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="project-1",
+                )
+            )
+        with Session.begin() as session:
+            first = claim_generation_task(
+                session,
+                worker_id="reused-worker-id",
+                lease_seconds=300,
+            )
+        assert first is not None
+        application = GenerationApplicationService(
+            session_factory=Session,
+            infrastructure=InfrastructureConfig(database_url=database_url),
+        )
+        stale_update = application._task_updater(
+            worker_id="reused-worker-id",
+            lease_epoch=first.lease_epoch,
+        )
+
+        with Session.begin() as session:
+            row = session.get(GenerationTask, "task-epoch-fence")
+            assert row is not None
+            row.lease_expires_at = expired
+        with Session.begin() as session:
+            second = claim_generation_task(
+                session,
+                worker_id="reused-worker-id",
+                lease_seconds=300,
+            )
+        assert second is not None
+        assert second.lease_epoch == first.lease_epoch + 1
+
+        with pytest.raises(GenerationTaskLeaseLost):
+            stale_update("task-epoch-fence", status="completed")
+
+        with Session() as session:
+            row = session.get(GenerationTask, "task-epoch-fence")
+            assert row is not None
+            assert row.status == "running"
+            assert row.lease_epoch == second.lease_epoch
     finally:
         engine.dispose()
 

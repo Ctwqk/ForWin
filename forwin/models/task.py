@@ -49,6 +49,7 @@ class GenerationTask(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     pause_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     lease_owner: Mapped[str] = mapped_column(String, default="")
+    lease_epoch: Mapped[int] = mapped_column(Integer, default=0)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     resume_from_chapter: Mapped[int] = mapped_column(Integer, default=0)

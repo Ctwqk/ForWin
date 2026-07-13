@@ -48,8 +48,10 @@ class CanonAdmissionService:
         self,
         *,
         session_factory: sessionmaker[Session] | None = None,
+        transaction_guard: Callable[[Session], bool] | None = None,
     ) -> None:
         self.session_factory = session_factory
+        self.transaction_guard = transaction_guard
 
     def commit_plan(
         self,
@@ -69,6 +71,10 @@ class CanonAdmissionService:
                 ).scalar_one_or_none()
                 if project is None:
                     raise CanonStaleVersion("project no longer exists")
+                if self.transaction_guard is not None and not self.transaction_guard(
+                    session
+                ):
+                    raise CanonStaleVersion("generation task lease lost before Canon commit")
 
                 prior = session.execute(
                     select(CanonCommitRecord)
@@ -258,6 +264,8 @@ class CanonAdmissionService:
     ) -> None:
         if chapter is None:
             raise CanonStaleVersion("chapter plan no longer exists")
+        if str(chapter.status or "") == "accepted":
+            raise CanonStaleVersion("chapter is already accepted by another Canon commit")
         if candidate is None:
             raise CanonStaleVersion("candidate no longer exists")
         if candidate.project_id != plan.project_id:

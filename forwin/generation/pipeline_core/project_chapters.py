@@ -521,6 +521,16 @@ class ChapterExecutionStage:
                             )
                         else:
                             session.commit()
+                            if self._abort_requested():
+                                return self._cancelled_result(
+                                    project_id,
+                                    requested_chapters,
+                                    completed_chapters=completed_chapters,
+                                    failed_chapters=failed_chapters,
+                                    paused_chapters=paused_chapters,
+                                    frozen_artifacts=frozen_artifacts,
+                                    current_chapter=chapter_num,
+                                )
                             canon_outcome = self.canon_admission.commit_plan(
                                 preparation.plan
                             )

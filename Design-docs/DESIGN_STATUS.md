@@ -168,13 +168,13 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 
 ## 2026-07 V5 Post-Convergence Cleanup Status
 
-状态：implementation-complete，待部署。
+状态：implementation-complete，已部署。
 
 - 删除零调用根模块 `api_artifacts.py`、`api_task_history.py`，不保留 facade。
 - 删除 audience 的 `analysis` 兼容 shim 与根级 `audience_metrics` 副本；信号分级、趋势、关键词情绪统一归 `forwin.audience.feedback`。
 - `StateRepository` 删除 6 个零调用查询：prompt trace、repair phase、review note、全量 narrative constraint、decision event、audience trend；领域查询继续由各自 owner 提供。
 - planning 删除已由 experience service 接管的 audience 查询副本和重复 calibration DTO；Writer、Review、quality gate 共享唯一 skill-layer trace 序列化函数。
-- 本 Slice 生产与测试净减 746 行；`ruff check forwin`、`compileall -q forwin`、architecture boundary 27 项通过。按用户要求未重复运行全量测试。
+- 本 Slice 生产与测试净减 734 行；`ruff check forwin`、`compileall -q forwin`、architecture boundary 27 项通过。按用户要求未重复运行全量测试。
 
 ## 2026-07 Integrated Roadmap Status
 

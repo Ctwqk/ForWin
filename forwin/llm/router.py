@@ -90,7 +90,7 @@ class LLMCallRouter:
         self._fallback_events: list[dict[str, str]] = []
         self.last_call_result: LLMCallResult | None = None
         self._last_codex_trace: dict[str, Any] = {}
-        self._codex_attempt_events: list[dict[str, object]] = []
+        self._attempt_events: list[dict[str, object]] = []
 
     def chat(
         self,
@@ -111,13 +111,17 @@ class LLMCallRouter:
         self.last_call_result = None
         self._last_codex_trace = {}
         resolved_intent = intent or LLMCallIntent(codex_allowed=False)
+        route_call_id = uuid.uuid4().hex
         fallback_used = False
         failed_codex_trace: dict[str, Any] = {}
         codex_policy = self._codex_policy(resolved_intent)
         if codex_policy == "codex_primary":
             try:
                 content = self._chat_with_codex(
-                    messages, intent=resolved_intent, **kwargs
+                    messages,
+                    intent=resolved_intent,
+                    attempt_group_id=route_call_id,
+                    **kwargs,
                 )
                 result = LLMCallResult(
                     content=content,
@@ -149,7 +153,12 @@ class LLMCallRouter:
         ordinary_kwargs.setdefault("stage_key", resolved_intent.stage_key)
         ordinary_kwargs.setdefault("output_schema", resolved_intent.output_schema)
         try:
-            ordinary_content = self.ordinary_adapter.chat(messages, **ordinary_kwargs)
+            try:
+                ordinary_content = self.ordinary_adapter.chat(
+                    messages, **ordinary_kwargs
+                )
+            finally:
+                self._capture_ordinary_attempts(attempt_group_id=route_call_id)
         except Exception as ordinary_exc:  # noqa: BLE001
             if codex_policy != "ordinary_primary":
                 self.last_call_result = self._failed_result(
@@ -162,7 +171,10 @@ class LLMCallRouter:
             ordinary_reason = str(ordinary_exc)
             try:
                 content = self._chat_with_codex(
-                    messages, intent=resolved_intent, **kwargs
+                    messages,
+                    intent=resolved_intent,
+                    attempt_group_id=route_call_id,
+                    **kwargs,
                 )
             except Exception as codex_exc:
                 self.last_call_result = self._failed_result(
@@ -242,6 +254,7 @@ class LLMCallRouter:
         messages: list[dict],
         *,
         intent: LLMCallIntent,
+        attempt_group_id: str,
         **kwargs: Any,
     ) -> str:
         codex_kwargs = dict(kwargs)
@@ -272,7 +285,7 @@ class LLMCallRouter:
                         client_trace.get("requested_model") or model
                     ),
                 }
-            self._codex_attempt_events.append(
+            self._attempt_events.append(
                 self._codex_attempt(
                     messages=messages,
                     intent=intent,
@@ -280,6 +293,7 @@ class LLMCallRouter:
                     content=content,
                     trace=self._last_codex_trace,
                     failure=failure,
+                    attempt_group_id=attempt_group_id,
                 )
             )
         return content
@@ -293,6 +307,7 @@ class LLMCallRouter:
         content: str,
         trace: dict[str, Any],
         failure: Exception | None,
+        attempt_group_id: str,
     ) -> dict[str, object]:
         input_chars = int(
             trace.get("input_chars") or len(json.dumps(messages, ensure_ascii=False))
@@ -333,7 +348,7 @@ class LLMCallRouter:
                 trace["response"], ensure_ascii=False, sort_keys=True
             )
         return {
-            "attempt_group_id": uuid.uuid4().hex,
+            "attempt_group_id": attempt_group_id,
             "attempt_no": 1,
             "profile_id": "codex_bridge",
             "profile_name": "Codex Bridge",
@@ -453,14 +468,28 @@ class LLMCallRouter:
         return events
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:
-        events = list(self._codex_attempt_events)
-        self._codex_attempt_events.clear()
+        self._capture_ordinary_attempts()
+        events = list(self._attempt_events)
+        self._attempt_events.clear()
+        return events
+
+    def peek_llm_attempt_events(self) -> list[dict[str, object]]:
+        self._capture_ordinary_attempts()
+        return [dict(event) for event in self._attempt_events]
+
+    def _capture_ordinary_attempts(self, *, attempt_group_id: str = "") -> None:
         ordinary_drain = getattr(
             self.ordinary_adapter, "drain_llm_attempt_events", None
         )
         if callable(ordinary_drain):
-            events.extend(list(ordinary_drain() or []))
-        return events
+            events = list(ordinary_drain() or [])
+            if attempt_group_id:
+                for event in events:
+                    backend_group_id = str(event.get("attempt_group_id") or "")
+                    if backend_group_id:
+                        event["backend_attempt_group_id"] = backend_group_id
+                    event["attempt_group_id"] = attempt_group_id
+            self._attempt_events.extend(events)
 
     def close(self) -> None:
         close_codex = getattr(self.codex_client, "close", None)
@@ -551,6 +580,10 @@ class RoutedModelAdapter:
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:
         return self.router.drain_llm_attempt_events()
+
+    @property
+    def llm_attempt_events(self) -> list[dict[str, object]]:
+        return self.router.peek_llm_attempt_events()
 
     def close(self) -> None:
         self.router.close()

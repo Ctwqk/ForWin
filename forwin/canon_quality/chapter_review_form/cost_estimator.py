@@ -86,12 +86,16 @@ def estimate_run(
 
 def usage_from_llm_client(llm_client: object) -> ReplayTokenUsage:
     attempts = list(getattr(llm_client, "llm_attempt_events", []) or [])
-    successes = [item for item in attempts if str(item.get("status", "")).lower() == "succeeded"]
+    successes = [item for item in attempts if _attempt_succeeded(item)]
     if not successes:
         return ReplayTokenUsage(estimated=True)
     last = successes[-1]
-    raw_input_tokens = last.get("input_tokens")
-    raw_output_tokens = last.get("output_tokens")
+    raw_input_tokens = last.get("prompt_tokens")
+    if raw_input_tokens is None:
+        raw_input_tokens = last.get("input_tokens")
+    raw_output_tokens = last.get("completion_tokens")
+    if raw_output_tokens is None:
+        raw_output_tokens = last.get("output_tokens")
     input_tokens = raw_input_tokens
     output_tokens = raw_output_tokens
     if input_tokens is None:
@@ -113,6 +117,23 @@ def usage_from_llm_client(llm_client: object) -> ReplayTokenUsage:
         output_tokens=max(0, int(output_tokens or 0)),
         estimated=raw_input_tokens is None or raw_output_tokens is None,
     )
+
+
+def _attempt_succeeded(attempt: dict) -> bool:
+    status = str(attempt.get("status") or "").strip().lower()
+    if status in {"failed", "error"}:
+        return False
+    if status in {"succeeded", "success", "ok"}:
+        return True
+    if attempt.get("error_class") or attempt.get("final_failure") or attempt.get("parse_error"):
+        return False
+    try:
+        http_status = int(attempt.get("http_status") or 0)
+    except (TypeError, ValueError):
+        http_status = 0
+    if http_status >= 400:
+        return False
+    return bool(int(attempt.get("output_chars") or 0) > 0 or 200 <= http_status < 300)
 
 
 def _estimate_attempt_tokens(

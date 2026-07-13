@@ -14,6 +14,7 @@ from .models import (
     BandCheckpointView,
     ChapterListView,
     ChapterReviewApproveView,
+    CostLedgerReportView,
     GateLedgerReportView,
     MutationResult,
     ProjectDecisionEventsView,
@@ -116,6 +117,25 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             scope=scope,
             project_id=project_id,
             band_id=band_id,
+            format=format,
+        )
+
+    @register_read_tool(
+        "cost_report",
+        "Report full-history LLM calls, characters, tokens, durations, retries, fallbacks, gate costs, and manual action counts. Use this when measuring cost for a project, chapter, band, candidate, or all projects without reading the database.",
+    )
+    async def cost_report(
+        project_id: str = "",
+        chapter_number: int = 0,
+        band_id: str = "",
+        candidate_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> CostLedgerReportView | str:
+        return await client.cost_report(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            band_id=band_id,
+            candidate_id=candidate_id,
             format=format,
         )
 

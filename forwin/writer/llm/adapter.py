@@ -410,8 +410,18 @@ class OpenAICompatibleAdapter(
                 response.raise_for_status()
 
                 response_text = self._safe_response_text(response)
+                prompt_tokens = None
+                completion_tokens = None
+                total_tokens = None
+                usage_source = "missing"
                 try:
                     data = response.json()
+                    (
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        usage_source,
+                    ) = _provider_token_usage(data)
                     content: str = data["choices"][0]["message"]["content"]
                 except Exception as exc:  # noqa: BLE001
                     self._record_llm_attempt(
@@ -428,6 +438,11 @@ class OpenAICompatibleAdapter(
                         duration_ms=max(
                             0, int((time.perf_counter() - attempt_started_at) * 1000)
                         ),
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        usage_source=usage_source,
+                        output_chars=len(response_text),
                         error_class=exc.__class__.__name__,
                         error_message=str(exc),
                         error_category="parse_error",
@@ -448,12 +463,6 @@ class OpenAICompatibleAdapter(
                     )
                     setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
                     raise
-                (
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                    usage_source,
-                ) = _provider_token_usage(data)
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,

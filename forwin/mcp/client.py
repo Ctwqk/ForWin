@@ -14,6 +14,7 @@ from .models import (
     GenerationControlView,
     GenesisView,
     GateLedgerReportView,
+    CostLedgerReportView,
     MutationResult,
     DecisionEventView,
     ProjectDecisionEventsView,
@@ -110,6 +111,37 @@ class ForWinAPIClient:
         if not isinstance(report, dict):
             raise RuntimeError("ForWin API gate ledger payload omitted report JSON.")
         return GateLedgerReportView.model_validate(report)
+
+    async def cost_report(
+        self,
+        *,
+        project_id: str = "",
+        chapter_number: int = 0,
+        band_id: str = "",
+        candidate_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> CostLedgerReportView | str:
+        payload = await self._request_json(
+            "GET",
+            "/api/cost-report",
+            params={
+                "project_id": project_id,
+                "chapter_number": chapter_number,
+                "band_id": band_id,
+                "candidate_id": candidate_id,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected cost ledger report payload from ForWin API.")
+        if format == "markdown":
+            markdown = payload.get("markdown")
+            if not isinstance(markdown, str):
+                raise RuntimeError("ForWin API cost ledger payload omitted markdown.")
+            return markdown
+        report = payload.get("report")
+        if not isinstance(report, dict):
+            raise RuntimeError("ForWin API cost ledger payload omitted report JSON.")
+        return CostLedgerReportView.model_validate(report)
 
     async def project_create(
         self,

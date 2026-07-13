@@ -382,9 +382,8 @@ class RuntimeContainer:
                     session, RetentionPolicy.from_config(config)
                 )
             logger.info(
-                "retention_cleanup_completed performance_spans=%s prompt_traces=%s candidate_drafts=%s",
+                "retention_cleanup_completed performance_spans=%s candidate_drafts=%s",
                 result.performance_spans_deleted,
-                result.prompt_traces_deleted,
                 result.candidate_drafts_deleted,
             )
         except Exception:

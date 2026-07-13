@@ -59,6 +59,7 @@ from forwin.api_schema import (
     PublisherCoverAssetResponse,
     AuditInsightsResponse,
     GateLedgerReportResponse,
+    CostLedgerReportResponse,
     MapEnsureResponse,
     MapPathResponse,
     MapRuntimeResponse,
@@ -774,6 +775,12 @@ def register_api_routes(
             ["GET"],
             handlers["get_gate_ledger_report"],
             {"response_model": GateLedgerReportResponse},
+        ),
+        (
+            "/api/cost-report",
+            ["GET"],
+            handlers["get_cost_report"],
+            {"response_model": CostLedgerReportResponse},
         ),
         (
             "/api/projects/{project_id}/scenario-rehearsal/latest",

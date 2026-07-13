@@ -128,6 +128,7 @@ class AcceptanceStage:
                 chapter_number=chapter_number,
                 event_family="audit_action",
                 event_type=DecisionEventType.REVIEW_APPROVED,
+                actor_type="manual_ui",
                 scope="chapter",
                 summary=f"第{chapter_number}章 review 已人工接受并写入 Canon。",
                 reason=str(reason or "").strip(),

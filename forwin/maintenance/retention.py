@@ -7,21 +7,18 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.draft import CandidateDraftRecord
-from forwin.models.genesis import PromptTrace
 from forwin.models.observability import PerformanceSpan
 
 
 @dataclass(frozen=True, slots=True)
 class RetentionPolicy:
     performance_span_days: int = 30
-    prompt_trace_days: int = 30
     candidate_drafts_keep_per_chapter: int = 5
 
     @classmethod
     def from_config(cls, config) -> "RetentionPolicy":  # noqa: ANN001
         return cls(
             performance_span_days=max(0, int(getattr(config, "performance_span_retention_days", 30) or 0)),
-            prompt_trace_days=max(0, int(getattr(config, "prompt_trace_retention_days", 30) or 0)),
             candidate_drafts_keep_per_chapter=max(
                 0,
                 int(getattr(config, "candidate_draft_keep_per_chapter", 5) or 0),
@@ -32,7 +29,6 @@ class RetentionPolicy:
 @dataclass(frozen=True, slots=True)
 class RetentionCleanupResult:
     performance_spans_deleted: int = 0
-    prompt_traces_deleted: int = 0
     candidate_drafts_deleted: int = 0
 
 
@@ -49,19 +45,12 @@ def run_retention_cleanup(
         current_time=current_time,
         retention_days=policy.performance_span_days,
     )
-    prompt_traces_deleted = _delete_older_than(
-        session,
-        PromptTrace,
-        current_time=current_time,
-        retention_days=policy.prompt_trace_days,
-    )
     candidate_drafts_deleted = _delete_stale_candidate_drafts(
         session,
         keep_per_chapter=policy.candidate_drafts_keep_per_chapter,
     )
     return RetentionCleanupResult(
         performance_spans_deleted=performance_spans_deleted,
-        prompt_traces_deleted=prompt_traces_deleted,
         candidate_drafts_deleted=candidate_drafts_deleted,
     )
 

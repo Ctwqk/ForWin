@@ -4,6 +4,7 @@ import json
 from unittest.mock import patch
 
 import httpx
+import pytest
 
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.llm.router import LLMCallIntent, LLMCallRouter
@@ -19,6 +20,29 @@ class _OrdinaryAdapter:
 
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
         return []
+
+
+class _FailingOrdinaryAdapter(_OrdinaryAdapter):
+    def __init__(self) -> None:
+        self._attempts: list[dict[str, object]] = []
+
+    def chat(self, _messages, **_kwargs) -> str:
+        self._attempts.append(
+            {
+                "attempt_group_id": "ordinary-first",
+                "attempt_no": 1,
+                "provider": "openai_compatible",
+                "model": "ordinary-model",
+                "error_class": "RuntimeError",
+                "final_failure": True,
+            }
+        )
+        raise RuntimeError("ordinary failed")
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        attempts = list(self._attempts)
+        self._attempts.clear()
+        return attempts
 
 
 class _BridgeResponse:
@@ -120,6 +144,43 @@ def test_openai_compatible_attempt_marks_missing_provider_usage() -> None:
     assert attempt["usage_source"] == "missing"
 
 
+def test_openai_compatible_parse_failure_still_records_provider_usage() -> None:
+    client = LLMClient(
+        api_key="test-key",
+        base_url="https://provider.example/v1",
+        model="provider-model",
+        retry_attempts=1,
+    )
+
+    def fake_post(url: str, **_kwargs) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 19,
+                    "completion_tokens": 3,
+                    "total_tokens": 22,
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    try:
+        with patch.object(client.client, "post", side_effect=fake_post):
+            with pytest.raises(IndexError):
+                client.chat([{"role": "user", "content": "hello"}])
+        attempt = client.drain_llm_attempt_events()[0]
+    finally:
+        client.close()
+
+    assert attempt["prompt_tokens"] == 19
+    assert attempt["completion_tokens"] == 3
+    assert attempt["total_tokens"] == 22
+    assert attempt["usage_source"] == "provider"
+    assert int(attempt["output_chars"]) > 0
+
+
 def test_codex_usage_is_normalized_into_routed_attempt() -> None:
     attempt = _codex_attempt(
         raw_events=[
@@ -147,3 +208,40 @@ def test_codex_missing_usage_uses_character_estimate() -> None:
         int(attempt["prompt_tokens"]) + int(attempt["completion_tokens"])
     )
     assert attempt["usage_source"] == "estimated"
+
+
+def test_ordinary_to_codex_fallback_preserves_attempt_order() -> None:
+    payload = {
+        "ok": True,
+        "content": "codex fallback",
+        "raw_events": [
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 11, "output_tokens": 4},
+            }
+        ],
+        "returncode": 0,
+        "actual_model": "gpt-5.3-codex-spark",
+        "thread_id": "thread-fallback",
+    }
+    with patch(
+        "forwin.llm.codex_client.httpx.Client",
+        return_value=_BridgeHTTPClient(payload),
+    ):
+        router = LLMCallRouter(
+            ordinary_adapter=_FailingOrdinaryAdapter(),
+            codex_client=CodexBridgeClient(bridge_url="http://bridge"),
+            codex_enabled=True,
+            codex_default_model="gpt-5.3-codex-spark",
+        )
+        router.chat(
+            [{"role": "user", "content": "write"}],
+            intent=LLMCallIntent(task_family="writer", stage_key="chapter_draft"),
+        )
+        attempts = router.drain_llm_attempt_events()
+
+    assert [item["provider"] for item in attempts] == [
+        "openai_compatible",
+        "codex_bridge",
+    ]
+    assert len({str(item["attempt_group_id"]) for item in attempts}) == 1

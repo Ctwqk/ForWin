@@ -8,6 +8,7 @@ from forwin.canon_quality.chapter_review_form.cost_estimator import (
     should_abort_for_cost_cap,
     usage_from_llm_client,
 )
+from forwin.llm.router import LLMCallRouter, RoutedModelAdapter
 
 
 class ClientWithAttempts:
@@ -42,6 +43,51 @@ class ClientWithRawPayloadAttempts:
     ]
 
 
+class ClientWithCanonicalUsageAttempts:
+    llm_attempt_events = [
+        {
+            "http_status": 429,
+            "prompt_tokens": 4,
+            "completion_tokens": 0,
+            "error_class": "HTTPStatusError",
+        },
+        {
+            "http_status": 200,
+            "output_chars": 12,
+            "prompt_tokens": 23,
+            "completion_tokens": 7,
+            "total_tokens": 30,
+        },
+    ]
+
+
+class OrdinaryRoutedUsageAdapter:
+    def __init__(self) -> None:
+        self.attempts: list[dict[str, object]] = []
+
+    def chat(self, _messages, **_kwargs) -> str:
+        self.attempts.append(
+            {
+                "attempt_group_id": "routed-usage",
+                "attempt_no": 1,
+                "http_status": 200,
+                "output_chars": 10,
+                "prompt_tokens": 29,
+                "completion_tokens": 8,
+                "total_tokens": 37,
+            }
+        )
+        return "ok"
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        attempts = list(self.attempts)
+        self.attempts.clear()
+        return attempts
+
+    def drain_model_fallback_events(self) -> list[dict[str, str]]:
+        return []
+
+
 def test_estimate_tokens_for_chinese_text_uses_half_char_ratio() -> None:
     assert estimate_tokens_for_text("主倒计时还有五十九分钟。") >= 6
 
@@ -63,6 +109,30 @@ def test_usage_from_llm_client_prefers_raw_payload_over_char_count() -> None:
     assert usage.output_tokens == estimate_tokens_for_text(ClientWithRawPayloadAttempts.response_text)
     assert usage.input_tokens < int(9999 * 0.5)
     assert usage.output_tokens < int(9999 * 0.5)
+
+
+def test_usage_from_llm_client_reads_canonical_attempt_usage() -> None:
+    usage = usage_from_llm_client(ClientWithCanonicalUsageAttempts())
+
+    assert usage.input_tokens == 23
+    assert usage.output_tokens == 7
+    assert usage.estimated is False
+
+
+def test_usage_from_routed_adapter_reads_attempts_without_draining_them() -> None:
+    adapter = RoutedModelAdapter(
+        LLMCallRouter(
+            ordinary_adapter=OrdinaryRoutedUsageAdapter(),
+            codex_enabled=False,
+        )
+    )
+    adapter.chat([{"role": "user", "content": "review"}])
+
+    usage = usage_from_llm_client(adapter)
+
+    assert usage.input_tokens == 29
+    assert usage.output_tokens == 8
+    assert adapter.drain_llm_attempt_events()[0]["total_tokens"] == 37
 
 
 def test_cost_cap_aborts_before_next_chapter_estimate_exceeds_cap() -> None:

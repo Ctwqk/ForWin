@@ -92,6 +92,71 @@ class GateLedgerReportView(BaseModel):
     metrics: list[GateLedgerMetricView] = Field(default_factory=list)
 
 
+class CostMetricsView(BaseModel):
+    attempts: int = 0
+    successes: int = 0
+    retries: int = 0
+    fallbacks: int = 0
+    input_chars: int = 0
+    output_chars: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    duration_ms: int = 0
+    provider_usage_attempts: int = 0
+    codex_usage_attempts: int = 0
+    estimated_usage_attempts: int = 0
+    missing_usage_attempts: int = 0
+
+
+class CostDimensionMetricView(BaseModel):
+    dimension: Literal[
+        "project",
+        "chapter",
+        "band",
+        "candidate",
+        "task_family",
+        "stage_key",
+        "model",
+        "provider",
+    ]
+    value: str
+    metrics: CostMetricsView = Field(default_factory=CostMetricsView)
+
+
+class GateCostMetricView(BaseModel):
+    gate_id: str
+    metrics: CostMetricsView = Field(default_factory=CostMetricsView)
+
+
+class ManualActionMetricView(BaseModel):
+    action_type: str
+    actor_type: str
+    actor_id: str = ""
+    source: str = ""
+    count: int = 0
+    duration_ms: int = 0
+    unknown_duration_count: int = 0
+
+
+class CostLedgerReportView(BaseModel):
+    schema_version: Literal[1] = 1
+    project_id: str = ""
+    chapter_number: int = 0
+    band_id: str = ""
+    candidate_id: str = ""
+    project_count: int = 0
+    trace_count: int = 0
+    event_count: int = 0
+    totals: CostMetricsView = Field(default_factory=CostMetricsView)
+    dimensions: list[CostDimensionMetricView] = Field(default_factory=list)
+    gate_costs: list[GateCostMetricView] = Field(default_factory=list)
+    manual_action_count: int = 0
+    manual_action_duration_ms: int = 0
+    unknown_manual_duration_count: int = 0
+    manual_actions: list[ManualActionMetricView] = Field(default_factory=list)
+
+
 class GenerationControlView(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"

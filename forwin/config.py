@@ -265,9 +265,6 @@ def _infrastructure_env_values() -> dict[str, object]:
         "performance_span_retention_days": _env_int(
             env, "FORWIN_PERFORMANCE_SPAN_RETENTION_DAYS", 30
         ),
-        "prompt_trace_retention_days": _env_int(
-            env, "FORWIN_PROMPT_TRACE_RETENTION_DAYS", 30
-        ),
         "candidate_draft_keep_per_chapter": _env_int(
             env, "FORWIN_CANDIDATE_DRAFT_KEEP_PER_CHAPTER", 5
         ),
@@ -391,7 +388,6 @@ class _InfrastructureFields:
     observability_record_payload_sizes: bool = True
     retention_cleanup_on_startup: bool = True
     performance_span_retention_days: int = 30
-    prompt_trace_retention_days: int = 30
     candidate_draft_keep_per_chapter: int = 5
     publisher_extension_api_key: str = ""
     publisher_session_secret: str = ""

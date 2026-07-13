@@ -20,6 +20,7 @@ from forwin.api_schema import (
     DecisionEventsResponse,
     AuditInsightsResponse,
     GateLedgerReportResponse,
+    CostLedgerReportResponse,
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
@@ -36,6 +37,10 @@ from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_ledger import GateLedgerService
 from forwin.audit.gate_ledger_report import render_gate_ledger_markdown
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
+from forwin.observability.cost_ledger import (
+    CostLedgerService,
+    render_cost_ledger_markdown,
+)
 from forwin.planning.contracts import (
     load_plan_task_contract,
     plan_task_contract_to_json,
@@ -780,6 +785,30 @@ def get_gate_ledger_report(
         return GateLedgerReportResponse(
             report=report,
             markdown=render_gate_ledger_markdown(report),
+        )
+    finally:
+        session.close()
+
+
+def get_cost_report(
+    *,
+    get_session,
+    project_id: str = "",
+    chapter_number: int = 0,
+    band_id: str = "",
+    candidate_id: str = "",
+) -> CostLedgerReportResponse:
+    session = get_session()
+    try:
+        report = CostLedgerService(session).report(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            band_id=band_id,
+            candidate_id=candidate_id,
+        )
+        return CostLedgerReportResponse(
+            report=report,
+            markdown=render_cost_ledger_markdown(report),
         )
     finally:
         session.close()

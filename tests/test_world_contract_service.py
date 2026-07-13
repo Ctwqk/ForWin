@@ -3,7 +3,9 @@ from __future__ import annotations
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.planning.world_contracts import WorldContractRepository
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def test_world_contract_service_preserves_arc_band_and_chapter_intent_semantics() -> None:
@@ -17,6 +19,7 @@ def test_world_contract_service_preserves_arc_band_and_chapter_intent_semantics(
             title="殖民地与母星",
             premise="台前建设殖民地，幕后母星危机推进。",
             genre="科幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
         )
         arc = updater.create_arc_plan(
             project.id,

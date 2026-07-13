@@ -8,6 +8,7 @@ from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.canon_quality import CharacterStateTransitionRow, QualityAnalysisRunRow
 from forwin.protocol.writer import WriterOutput
+from tests.postgres import postgres_test_url
 
 
 class CountingFormClient:
@@ -33,6 +34,18 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
                 target_total_chapters=3,
             )
             session.add(project)
+            session.flush()
+            session.add(
+                CharacterStateTransitionRow(
+                    project_id=project.id,
+                    character_name="林青",
+                    chapter_number=0,
+                    transition_type="life_state",
+                    from_state="unknown",
+                    to_state="alive",
+                    payload_json='{"source":"test_fixture"}',
+                )
+            )
             session.flush()
             arc = ArcPlanVersion(
                 project_id=project.id,
@@ -104,7 +117,11 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
             )
             session.commit()
 
-            transitions = session.query(CharacterStateTransitionRow).all()
+            transitions = (
+                session.query(CharacterStateTransitionRow)
+                .filter_by(project_id=project.id, chapter_number=1)
+                .all()
+            )
             runs = session.query(QualityAnalysisRunRow).all()
             assert client.calls == 3
             assert draft_review.summary == canon_gate.summary

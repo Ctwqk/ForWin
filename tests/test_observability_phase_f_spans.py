@@ -15,6 +15,7 @@ from forwin.observability.query_service import ObservabilityQueryService
 from forwin.observability.service import ObservabilityService
 from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
 from forwin.generation.pipeline import ChapterPipeline
+from tests.postgres import postgres_test_url
 
 
 def _seed_project(session, project_id: str) -> None:

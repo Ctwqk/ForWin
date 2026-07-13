@@ -36,14 +36,14 @@ def test_v45_docs_do_not_reintroduce_superseded_backend_status() -> None:
     assert offenders == []
 
 
-def test_writing_flow_state_machine_names_v45_book_state_map_nodes() -> None:
+def test_writing_flow_state_machine_names_current_review_and_canon_nodes() -> None:
     text = (DOC_ROOT / "writing_flow_state_machine.md").read_text(encoding="utf-8")
 
     for node_name in [
-        "BookStateReviewGate",
-        "BookStateCompile",
-        "LegacyProjection",
         "MapMovementReview",
+        "CanonPreparation",
+        "GateDelegation",
+        "CanonAdmission",
     ]:
         assert node_name in text
 

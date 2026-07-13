@@ -36,6 +36,8 @@ from forwin.protocol.state_change import TimeAdvance
 from forwin.protocol.book_state import MapEdge, MapNode, WorldNode
 from forwin.protocol.writer import WriterOutput
 from forwin.review.webnovel import WebNovelExperienceReviewer
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
 from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 from tests.postgres import postgres_test_url
@@ -608,7 +610,12 @@ def test_genesis_book_map_feeds_context_and_writer_prompt() -> None:
         "edges": [],
     }
     with Session() as session:
-        project = Project(id="p1", title="书", premise="premise", genre="玄幻")
+        project = Project(
+            id="p1",
+            title="书",
+            premise="premise",
+            genre="玄幻",
+        )
         revision = BookGenesisRevision(
             id="rev1",
             project_id="p1",
@@ -631,8 +638,10 @@ def test_genesis_book_map_feeds_context_and_writer_prompt() -> None:
             ),
         )
         project.active_genesis_revision_id = revision.id
-        session.add(project)
-        session.flush()
+        ProjectPolicyStore(session).initialize(
+            project,
+            RuntimePolicy.for_profile("standard"),
+        )
         arc = ArcPlanVersion(
             id="arc1",
             project_id="p1",

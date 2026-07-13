@@ -214,7 +214,7 @@ def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue
 
     assert result.fixed_all_must_fix is True
     assert result.unfixed == []
-    assert result.new_risks == ["命名角色「方敏」未在当前 chapter 的 subworld 准入名单中。"]
+    assert result.new_risks == ["EntityRegistrar 无法为命名角色「方敏」作出注册决定。"]
 
 
 def test_repair_verifier_treats_same_countdown_rule_as_unfixed_when_numbers_change() -> None:

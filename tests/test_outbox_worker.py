@@ -5,7 +5,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from tests.postgres import postgres_test_url
 

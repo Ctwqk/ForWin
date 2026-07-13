@@ -10,6 +10,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.models.publisher import PublisherRawComment
 from forwin.publisher_runtime.service import PublisherRuntimeService
+from tests.postgres import postgres_test_url
 
 
 def _runtime(name: str) -> tuple[object, PublisherRuntimeService]:

@@ -69,7 +69,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(
         self,
     ) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("writer-fallback")
             engine = get_engine(db_path)
             init_db(engine)
@@ -132,7 +132,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 engine.dispose()
 
     def test_preview_fallback_records_auditable_span_with_effective_model(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("writer-preview-span")
             engine = get_engine(db_path)
             init_db(engine)
@@ -290,7 +290,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             pipeline.engine.dispose()
 
     def test_transient_llm_failure_stops_before_advancing_to_next_chapter(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("transient-llm")
             pipeline = _build_pipeline(
                 db_path,

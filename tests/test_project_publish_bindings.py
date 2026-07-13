@@ -11,6 +11,7 @@ from forwin.project_payloads import normalize_project_automation
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 class ProjectPublishBindingTests(unittest.TestCase):

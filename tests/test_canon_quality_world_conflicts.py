@@ -8,6 +8,7 @@ from forwin.knowledge_system.context import KnowledgeContextQuery
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.protocol.book_state import WorldNode
+from tests.postgres import postgres_test_url
 
 
 def test_world_conflicts_include_open_canon_quality_signals() -> None:

@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 from sqlalchemy import inspect, select
 from tests_support import capture_select_statements
 
-from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ChapterPlan,
     CommentSignalCandidate,
@@ -31,6 +30,7 @@ from forwin.planning.stage_analysis import PacingStrategist
 from forwin.simulation.world import CommentAnalyzer
 from forwin.publishers import PublisherManager
 from forwin.state.repo import StateRepository
+from tests.postgres import postgres_test_url
 
 
 class _FakeLLM:

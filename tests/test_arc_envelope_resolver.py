@@ -6,7 +6,9 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.phase import ArcEnvelopeAnalysis, BandExperiencePlan
 from forwin.planning.arc_envelope_resolver import ArcEnvelopeResolver
 from forwin.planning.arc_structure_service import ArcStructureDraftData
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def test_arc_envelope_resolver_uses_planned_sizing_without_writing_band_plan() -> None:
@@ -16,7 +18,12 @@ def test_arc_envelope_resolver_uses_planned_sizing_without_writing_band_plan() -
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project("Envelope", "前提", "玄幻")
+        project = updater.create_project(
+            "Envelope",
+            "前提",
+            "玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         project.target_total_chapters = 120
         arc = updater.create_arc_plan(project.id, "计划弧", arc_number=1)
         arc.planned_target_size = 18

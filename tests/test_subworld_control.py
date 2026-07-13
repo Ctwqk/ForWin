@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
@@ -11,15 +10,18 @@ from sqlalchemy import select
 from forwin.project_payloads import build_project_detail
 from forwin.book_state import BookStateRepository
 from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
+from forwin.checker.reference_classifier import (
+    looks_like_generic_character_reference,
+    looks_like_named_character,
+    normalize_character_reference,
+)
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler_core import assemble_context
 from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.draft import ChapterDraft
 from forwin.models.genesis import BookGenesisRevision
 from forwin.map.models import MapRegionRow
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
@@ -29,7 +31,6 @@ from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
     ChapterExperiencePlan,
-    EntityMention,
     ReaderPromise,
     ReviewVerdict,
     SubWorldPlanDelta,
@@ -39,12 +40,36 @@ from forwin.protocol import (
 from forwin.protocol.book_state import WorldNode
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.review.draft_service import DraftReviewService
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
+from tests.postgres import postgres_test_url
 from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+
+
+class _BookStateQueryStub:
+    def __init__(self, recent_beats: list[str]) -> None:
+        self.recent_beats = recent_beats
+        self.thread_reads: list[tuple[str, int]] = []
+
+    def active_threads(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int,
+    ) -> list[object]:
+        self.thread_reads.append((project_id, as_of_chapter))
+        return [SimpleNamespace(description="", recent_beats=self.recent_beats)]
+
+    def active_entities(
+        self,
+        _project_id: str,
+        *,
+        as_of_chapter: int,
+    ) -> list[object]:
+        return []
 
 
 class SubWorldControlTests(unittest.TestCase):
@@ -81,11 +106,10 @@ class SubWorldControlTests(unittest.TestCase):
         ]
         for name in non_candidates:
             with self.subTest(name=name):
-                self.assertEqual(ContinuityChecker._candidate_character_name(name), "")
-                self.assertFalse(ContinuityChecker._looks_like_named_character(name))
+                self.assertFalse(looks_like_named_character(name))
 
-        self.assertEqual(ContinuityChecker._candidate_character_name("馆员陈潮白"), "陈潮白")
-        self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦"), "灰鸦")
+        self.assertEqual(normalize_character_reference("馆员陈潮白"), "陈潮白")
+        self.assertEqual(normalize_character_reference("灰鸦"), "灰鸦")
 
     def test_reference_classifier_handles_follow_up_generic_org_and_mixed_id_shapes(self) -> None:
         non_candidates = [
@@ -98,53 +122,24 @@ class SubWorldControlTests(unittest.TestCase):
         ]
         for name in non_candidates:
             with self.subTest(name=name):
-                self.assertEqual(ContinuityChecker._candidate_character_name(name), "")
-                self.assertFalse(ContinuityChecker._looks_like_named_character(name))
+                self.assertFalse(looks_like_named_character(name))
 
-        self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦/L-7"), "灰鸦")
-        self.assertEqual(ContinuityChecker._candidate_character_name("L-7/灰鸦"), "灰鸦")
+        self.assertEqual(normalize_character_reference("灰鸦/L-7"), "灰鸦")
+        self.assertEqual(normalize_character_reference("L-7/灰鸦"), "灰鸦")
 
-    def test_ensure_registry_bootstraps_global_core_with_existing_characters(self) -> None:
-        with TemporaryDirectory() as tmp:
-            engine = get_engine(postgres_test_url("subworld"))
-            init_db(engine)
-            session = get_session_factory(engine)()
-            try:
-                updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
-                entity = updater.create_entity(
-                    project_id=project.id,
-                    kind="character",
-                    name="阿青",
-                    description="常驻角色",
-                    chapter=0,
-                )
-                manager = SubWorldManager()
-
-                global_core_id = manager.ensure_registry(session, project.id)
-
-                global_core = session.get(SubWorld, global_core_id)
-                roster = session.execute(
-                    select(SubWorldRosterItem)
-                    .where(SubWorldRosterItem.entity_id == entity.id)
-                ).scalar_one_or_none()
-            finally:
-                session.close()
-                engine.dispose()
-
-        self.assertIsNotNone(global_core)
-        self.assertEqual(global_core.scope, "global_core")
-        self.assertIsNotNone(roster)
-        self.assertEqual(roster.subworld_id, global_core_id)
-
-    def test_ensure_registry_prefers_book_state_characters_without_legacy_entity(self) -> None:
-        with TemporaryDirectory() as tmp:
+    def test_ensure_registry_rosters_book_state_characters(self) -> None:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("subworld-book-state"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 BookStateRepository(session).create_world_node(
                     WorldNode(
                         id="char_book",
@@ -172,20 +167,18 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(metadata["character_id"], "char_book")
         self.assertEqual(metadata["canon_source"], "book_state")
 
-    def test_project_detail_prefers_book_state_characters_over_legacy_entities(self) -> None:
-        with TemporaryDirectory() as tmp:
+    def test_project_detail_reads_book_state_characters(self) -> None:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("project-detail-book-state-characters"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
-                updater.create_entity(
-                    project_id=project.id,
-                    kind="character",
-                    name="旧影",
-                    description="legacy 角色",
-                    chapter=0,
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
                 )
                 BookStateRepository(session).create_world_node(
                     WorldNode(
@@ -287,14 +280,19 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(normalized["new_subworlds"][0]["region_seeds"][0]["level"], 1)
         self.assertEqual(merged[0]["importance"], 5)
 
-    def test_assemble_context_uses_allowed_entities_from_active_subworlds(self) -> None:
-        with TemporaryDirectory() as tmp:
+    def test_assemble_context_uses_book_state_entities_and_active_subworlds(self) -> None:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("context"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 arc = updater.create_arc_plan(project.id, "弧线")
                 updater.create_chapter_plan(
                     project_id=project.id,
@@ -304,9 +302,60 @@ class SubWorldControlTests(unittest.TestCase):
                     one_line="开场",
                     goals=["推进"],
                 )
-                allowed = updater.create_entity(project.id, "character", "阿青", "允许角色", chapter=0)
-                blocked = updater.create_entity(project.id, "character", "小明", "未激活角色", chapter=0)
-                location = updater.create_entity(project.id, "location", "旧宅", "地点", chapter=0)
+                book_state = BookStateRepository(session)
+                book_state.create_world_node(
+                    WorldNode(
+                        id="char_allowed",
+                        project_id=project.id,
+                        node_type="character",
+                        name="阿青",
+                        description="允许角色",
+                        profile={
+                            "personality_loadout": {
+                                "dominant": {
+                                    "skill": "trait-loyal-protector",
+                                    "weight": 0.72,
+                                },
+                                "secondary": [],
+                                "social_mask": [],
+                                "stress_modes": [],
+                                "relationship_patterns": [],
+                                "overrides": {},
+                            }
+                        },
+                    )
+                )
+                book_state.create_world_node(
+                    WorldNode(
+                        id="char_other_subworld",
+                        project_id=project.id,
+                        node_type="character",
+                        name="小明",
+                        description="其他子世界角色",
+                        profile={
+                            "personality_loadout": {
+                                "dominant": {
+                                    "skill": "trait-loyal-protector",
+                                    "weight": 0.72,
+                                },
+                                "secondary": [],
+                                "social_mask": [],
+                                "stress_modes": [],
+                                "relationship_patterns": [],
+                                "overrides": {},
+                            }
+                        },
+                    )
+                )
+                book_state.create_world_node(
+                    WorldNode(
+                        id="location_old_house",
+                        project_id=project.id,
+                        node_type="location",
+                        name="旧宅",
+                        description="地点",
+                    )
+                )
                 global_core = updater.create_subworld(
                     project_id=project.id,
                     origin_arc_id=arc.id,
@@ -328,20 +377,30 @@ class SubWorldControlTests(unittest.TestCase):
                 updater.create_roster_item(
                     project_id=project.id,
                     subworld_id=global_core.id,
-                    entity_id=allowed.id,
+                    entity_id=None,
                     display_name="阿青",
                     description="允许角色",
                     is_core=True,
                     status="seeded_named",
+                    metadata={
+                        "character_id": "char_allowed",
+                        "book_state_node_id": "char_allowed",
+                        "canon_source": "book_state",
+                    },
                 )
                 updater.create_roster_item(
                     project_id=project.id,
                     subworld_id=arc_local.id,
-                    entity_id=blocked.id,
+                    entity_id=None,
                     display_name="小明",
-                    description="未激活角色",
+                    description="其他子世界角色",
                     is_core=True,
                     status="seeded_named",
+                    metadata={
+                        "character_id": "char_other_subworld",
+                        "book_state_node_id": "char_other_subworld",
+                        "canon_source": "book_state",
+                    },
                 )
                 updater.update_chapter_experience_plan(
                     project.id,
@@ -403,21 +462,26 @@ class SubWorldControlTests(unittest.TestCase):
 
         active_names = [item.name for item in context.active_entities]
         self.assertIn("阿青", active_names)
+        self.assertIn("小明", active_names)
         self.assertIn("旧宅", active_names)
-        self.assertNotIn("小明", active_names)
-        self.assertEqual(context.allowed_entities, ["阿青"])
+        self.assertEqual(set(context.allowed_entities), {"阿青", "小明"})
         self.assertEqual(context.entity_admission_rule, "strict_named_character")
         self.assertIn("Genesis 地区：主城核心区@主舞台总图·L1", context.genesis_map_overview)
         self.assertIn("运行时地区草案：江城前哨区@global_core·L1", context.genesis_map_overview)
 
     def test_active_subworld_region_drafts_read_current_region_source(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("region-source"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 global_core = updater.create_subworld(
                     project_id=project.id,
                     origin_arc_id=None,
@@ -584,28 +648,13 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertLess(content.index("母亲线索"), content.index("合作与危机"))
 
     def test_continuity_checker_rejects_canon_mother_name_drift(self) -> None:
-        class FakeRepo:
-            def get_active_entities(self, _project_id: str) -> list[object]:
-                return []
-
-            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
-                return None
-
-            def get_active_threads(self, _project_id: str) -> list[object]:
-                return [
-                    SimpleNamespace(
-                        description="",
-                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
-                    )
-                ]
-
-            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"陆明", "许安"}
-
-            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
-                return {}
-
-        checker = ContinuityChecker(FakeRepo())
+        book_state = _BookStateQueryStub(
+            ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
+        )
+        checker = ContinuityChecker(
+            SimpleNamespace(),
+            book_state_query=book_state,
+        )
         verdict = checker.check(
             "p1",
             WriterOutput(
@@ -626,30 +675,16 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("林静安", observed)
         self.assertIn("林若水", observed)
         self.assertTrue(all("林若" in issue.suggested_fix for issue in issues))
+        self.assertEqual(book_state.thread_reads, [("p1", 2)])
 
     def test_continuity_checker_rejects_canon_mother_name_drift_in_state_metadata(self) -> None:
-        class FakeRepo:
-            def get_active_entities(self, _project_id: str) -> list[object]:
-                return []
-
-            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
-                return None
-
-            def get_active_threads(self, _project_id: str) -> list[object]:
-                return [
-                    SimpleNamespace(
-                        description="",
-                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
-                    )
-                ]
-
-            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"陆明", "许安", "韩砚", "阿棠", "林若"}
-
-            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
-                return {}
-
-        checker = ContinuityChecker(FakeRepo())
+        book_state = _BookStateQueryStub(
+            ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
+        )
+        checker = ContinuityChecker(
+            SimpleNamespace(),
+            book_state_query=book_state,
+        )
         verdict = checker.check(
             "p1",
             WriterOutput(
@@ -673,6 +708,7 @@ class SubWorldControlTests(unittest.TestCase):
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
         self.assertEqual(verdict.verdict, "fail")
         self.assertEqual([issue.entity_names[0] for issue in issues], ["林清和"])
+        self.assertEqual(book_state.thread_reads, [("p1", 6)])
 
     def test_canon_name_anchor_ignores_role_title_as_mother_name(self) -> None:
         anchors = extract_canon_name_anchors(
@@ -921,14 +957,8 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
-    def test_continuity_checker_reports_only_real_canon_name_drift_from_polluted_thread(self) -> None:
-        class FakeRepo:
-            def get_active_entities(self, _project_id: str) -> list[object]:
-                return []
-
-            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
-                return None
-
+    def test_continuity_checker_ignores_legacy_repo_threads_without_book_state(self) -> None:
+        class LegacyRepo:
             def get_active_threads(self, _project_id: str) -> list[object]:
                 return [
                     SimpleNamespace(
@@ -940,13 +970,7 @@ class SubWorldControlTests(unittest.TestCase):
                     )
                 ]
 
-            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"陆明", "许安"}
-
-            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
-                return {}
-
-        checker = ContinuityChecker(FakeRepo())
+        checker = ContinuityChecker(LegacyRepo())
         verdict = checker.check(
             "p1",
             WriterOutput(
@@ -958,10 +982,8 @@ class SubWorldControlTests(unittest.TestCase):
         )
 
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
-        observed = {issue.entity_names[0] for issue in issues}
-        canonical = {issue.entity_names[1] for issue in issues}
-        self.assertEqual(observed, {"林婉清"})
-        self.assertEqual(canonical, {"林若"})
+        self.assertEqual(verdict.verdict, "warn")
+        self.assertEqual(issues, [])
 
     def test_canon_name_drift_autofix_replaces_observed_name_across_writer_output(self) -> None:
         output = WriterOutput(
@@ -1089,10 +1111,10 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("顾青", names)
 
     def test_descriptive_masked_pursuer_is_not_treated_as_named_character(self) -> None:
-        self.assertTrue(ContinuityChecker._looks_like_generic_character_reference("无脸人"))
-        self.assertFalse(ContinuityChecker._looks_like_named_character("不明追踪者"))
-        self.assertFalse(ContinuityChecker._looks_like_named_character("核心系统追踪者"))
-        self.assertFalse(ContinuityChecker._looks_like_named_character("系统巡检员"))
+        self.assertTrue(looks_like_generic_character_reference("无脸人"))
+        self.assertFalse(looks_like_named_character("不明追踪者"))
+        self.assertFalse(looks_like_named_character("核心系统追踪者"))
+        self.assertFalse(looks_like_named_character("系统巡检员"))
 
     def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
         class FakeDirector:
@@ -1133,13 +1155,18 @@ class SubWorldControlTests(unittest.TestCase):
                     "initial_active_subworld_ids": [kwargs["existing_subworlds"][0].id],
                 }
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("rearc"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 old_arc = updater.create_arc_plan(project.id, "旧弧线", version=1)
                 for number in (1, 2, 3):
                     updater.create_chapter_plan(
@@ -1203,13 +1230,18 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertNotIn("legacy_source", region_metadata)
 
     def test_phase24_persists_subworld_activation_into_band_and_chapter_plan(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("phase24"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 arc = updater.create_arc_plan(project.id, "弧线")
                 plans = [
                     updater.create_chapter_plan(
@@ -1223,17 +1255,16 @@ class SubWorldControlTests(unittest.TestCase):
                     for number in (1, 2, 3)
                 ]
                 manager = SubWorldManager()
-                global_core_id = manager.ensure_registry(session, project.id)
-                core_entity = updater.create_entity(project.id, "character", "阿青", "主角团成员", chapter=0)
-                updater.create_roster_item(
-                    project_id=project.id,
-                    subworld_id=global_core_id,
-                    entity_id=core_entity.id,
-                    display_name="阿青",
-                    description="主角团成员",
-                    is_core=True,
-                    status="seeded_named",
+                BookStateRepository(session).create_world_node(
+                    WorldNode(
+                        id="char_core_qing",
+                        project_id=project.id,
+                        node_type="character",
+                        name="阿青",
+                        description="主角团成员",
+                    )
                 )
+                manager.ensure_registry(session, project.id)
                 arc_local = updater.create_subworld(
                     project_id=project.id,
                     origin_arc_id=arc.id,
@@ -1290,13 +1321,18 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertTrue(chapter_payload.get("active_subworld_ids"))
 
     def test_project_detail_exposes_subworld_summaries(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("detail"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
                 updater = StateUpdater(session)
-                project = updater.create_project(title="书", premise="p", genre="g")
+                project = updater.create_project(
+                    title="书",
+                    premise="p",
+                    genre="g",
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
+                )
                 global_core = updater.create_subworld(
                     project_id=project.id,
                     origin_arc_id=None,
@@ -1333,7 +1369,12 @@ class SubWorldControlTests(unittest.TestCase):
         session = get_session_factory(engine)()
         try:
             updater = StateUpdater(session)
-            project = updater.create_project(title="书", premise="p", genre="g")
+            project = updater.create_project(
+                title="书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
             subworld = updater.create_subworld(
                 project_id=project.id,
                 origin_arc_id=None,
@@ -1373,7 +1414,12 @@ class SubWorldControlTests(unittest.TestCase):
         session = get_session_factory(engine)()
         try:
             updater = StateUpdater(session)
-            project = updater.create_project(title="书", premise="p", genre="g")
+            project = updater.create_project(
+                title="书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
             subworld = updater.create_subworld(
                 project_id=project.id,
                 origin_arc_id=None,
@@ -1446,7 +1492,12 @@ class SubWorldControlTests(unittest.TestCase):
         session = get_session_factory(engine)()
         try:
             updater = StateUpdater(session)
-            project = updater.create_project(title="书", premise="p", genre="g")
+            project = updater.create_project(
+                title="书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
             arc = updater.create_arc_plan(project.id, "弧线")
             manager = SubWorldManager()
             manager.apply_arc_delta(
@@ -1493,7 +1544,12 @@ class SubWorldControlTests(unittest.TestCase):
         session = get_session_factory(engine)()
         try:
             updater = StateUpdater(session)
-            project = updater.create_project(title="书", premise="p", genre="g")
+            project = updater.create_project(
+                title="书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
             arc = updater.create_arc_plan(project.id, "弧线")
             manager = SubWorldManager()
             delta = SubWorldPlanDelta.model_validate(

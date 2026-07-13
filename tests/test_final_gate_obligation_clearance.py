@@ -6,6 +6,7 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from tests.postgres import postgres_test_url
 
 
 def test_final_gate_blocks_p1_obligation_even_with_valid_plan_patch() -> None:

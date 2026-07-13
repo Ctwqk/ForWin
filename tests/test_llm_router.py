@@ -8,6 +8,7 @@ from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 class OrdinaryAdapter:

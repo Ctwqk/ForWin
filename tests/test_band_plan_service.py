@@ -12,7 +12,9 @@ from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_plan_service import BandPlanningRequest, BandPlanService
 from forwin.protocol import ArcPayoffMap, ChapterEntryTarget, ReaderPromise
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 class _SubworldManager:
@@ -46,7 +48,12 @@ def test_band_plan_service_persists_band_and_chapter_experience_overlay() -> Non
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project("Band", "前提", "玄幻")
+        project = updater.create_project(
+            "Band",
+            "前提",
+            "玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "当前弧", arc_number=1)
         chapters = [
             updater.create_chapter_plan(project.id, arc.id, number, f"第{number}章", f"推进{number}", ["推进"])
@@ -100,7 +107,12 @@ def test_band_plan_service_does_not_infer_named_entry_target_from_chapter_goal()
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project("Band", "前提", "玄幻")
+        project = updater.create_project(
+            "Band",
+            "前提",
+            "玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "当前弧", arc_number=1)
         chapters = [
             updater.create_chapter_plan(
@@ -164,7 +176,12 @@ def test_band_plan_service_does_not_use_reference_classifier_for_entry_targets()
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project("Band", "前提", "科幻悬疑")
+        project = updater.create_project(
+            "Band",
+            "前提",
+            "科幻悬疑",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "当前弧", arc_number=1)
         chapters = [
             updater.create_chapter_plan(

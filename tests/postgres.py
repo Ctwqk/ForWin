@@ -16,6 +16,7 @@ DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://forwin:forwin@127.0.0.1:55432/
 
 _LOCK = threading.Lock()
 _CREATED: set[str] = set()
+_PERSISTENT: set[str] = set()
 _TEMPLATE_NAME = ""
 
 
@@ -76,7 +77,7 @@ def _ensure_template() -> str:
         return template_name
 
 
-def postgres_test_url(name: str | None = None) -> str:
+def postgres_test_url(name: str | None = None, *, keep_until_exit: bool = False) -> str:
     base = _base_url()
     template_name = _ensure_template()
     db_name = (
@@ -94,11 +95,29 @@ def postgres_test_url(name: str | None = None) -> str:
             )
     finally:
         engine.dispose()
-    _CREATED.add(db_name)
+    with _LOCK:
+        _CREATED.add(db_name)
+        if keep_until_exit:
+            _PERSISTENT.add(db_name)
     return base.set(database=db_name).render_as_string(hide_password=False)
+
+
+def cleanup_test_databases() -> None:
+    with _LOCK:
+        transient = sorted(
+            _CREATED - _PERSISTENT - ({_TEMPLATE_NAME} if _TEMPLATE_NAME else set()),
+            reverse=True,
+        )
+    for name in transient:
+        _drop_database(name)
+        with _LOCK:
+            _CREATED.discard(name)
 
 
 @atexit.register
 def _cleanup_databases() -> None:
-    for name in sorted(_CREATED, reverse=True):
+    cleanup_test_databases()
+    with _LOCK:
+        remaining = sorted(_CREATED, reverse=True)
+    for name in remaining:
         _drop_database(name)

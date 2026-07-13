@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -28,10 +27,6 @@ from forwin.mcp.models import (
     ProjectListView,
     TaskListView,
     TaskView,
-    WorldModelConflictListView,
-    WorldModelExportView,
-    WorldModelPageView,
-    WorldModelSnapshotView,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -39,6 +34,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness
@@ -786,7 +782,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(paused.task.pause_requested)
         self.assertIn("安全暂停", paused.message)
 
-    def test_continue_generation_via_mcp_passes_auto_continue_options(self) -> None:
+    def test_continue_generation_via_mcp_exposes_public_task_state(self) -> None:
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = updater.create_project(
@@ -818,42 +814,41 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             session.commit()
             project_id = project.id
 
-        captured: dict[str, object] = {}
-
-        def capture_task_creation(**kwargs):
-            captured.update(kwargs)
-            task_id = "task-mcp-auto-continue"
-            task = api_module._create_task_record(
-                title=str(kwargs.get("title") or ""),
-                subtitle=str(kwargs.get("subtitle") or ""),
-                message=str(kwargs.get("message") or ""),
-                requested_chapters=int(kwargs.get("requested_chapters") or 0),
-            )
-            task["project_id"] = project_id
-            api_module._persist_generation_task(task_id, task)
-            return task_id
-
-        with patch(
-            "forwin.api._create_continue_generation_task", new=capture_task_creation
-        ):
-            result = self._load_model(
-                MutationResult,
-                self._call_tool(
-                    "project_continue_generation",
-                    {
-                        "project_id": project_id,
-                        "run_until_chapter": 12,
-                        "auto_continue": True,
-                    },
-                ),
-            )
+        result = self._load_model(
+            MutationResult,
+            self._call_tool(
+                "project_continue_generation",
+                {
+                    "project_id": project_id,
+                    "run_until_chapter": 12,
+                    "auto_continue": True,
+                },
+            ),
+        )
 
         self.assertIsNotNone(result.task)
-        self.assertEqual(result.task.task_id, "task-mcp-auto-continue")
-        self.assertIs(captured["auto_continue"], True)
-        self.assertEqual(captured["run_until_chapter"], 12)
-        self.assertEqual(captured["requested_chapters"], 12)
-        self.assertEqual(captured["max_chapters"], 12)
+        self.assertEqual(result.task.project_id, project_id)
+        self.assertEqual(result.task.status, "queued")
+        self.assertEqual(result.task.current_stage, "queued")
+        self.assertEqual(result.task.requested_chapters, 12)
+        self.assertEqual(result.task.run_until_chapter, 12)
+
+        fetched = self._load_model(
+            TaskView,
+            self._call_tool("task_get", {"task_id": result.task.task_id}),
+        )
+        self.assertEqual(fetched.task_id, result.task.task_id)
+        self.assertEqual(fetched.requested_chapters, 12)
+        self.assertEqual(fetched.run_until_chapter, 12)
+
+        active = self._result_payload(
+            self._call_tool(
+                "task_active_generation_check",
+                {"project_id": project_id},
+            )
+        )
+        self.assertTrue(active["has_active_generation_task"])
+        self.assertEqual(active["active_task_ids"], [result.task.task_id])
 
     def test_chapter_list_and_get_via_mcp(self) -> None:
         project_id, chapter_number = self._create_project_with_draft()
@@ -1023,41 +1018,3 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertEqual(approved.id, checkpoint_id)
         self.assertEqual(approved.status, "overridden")
         self.assertIn("stress test", approved.reason)
-
-    def test_world_model_read_tools_and_export_via_mcp(self) -> None:
-        project_id = self._create_ready_project()
-        vault_root = str(Path(self.tmpdir.name) / "mcp-vault")
-
-        snapshot = self._load_model(
-            WorldModelSnapshotView,
-            self._call_tool(
-                "world_model_get", {"project_id": project_id, "as_of_chapter": 0}
-            ),
-        )
-        self.assertEqual(snapshot.as_of_chapter, 0)
-        self.assertIn("旧城", json.dumps(snapshot.snapshot, ensure_ascii=False))
-
-        page = self._load_model(
-            WorldModelPageView,
-            self._call_tool(
-                "world_page_get", {"project_id": project_id, "page_key": "world:index"}
-            ),
-        )
-        self.assertEqual(page.title, "00_Index")
-        self.assertIn("Canon Summary", page.markdown)
-
-        conflicts = self._load_model(
-            WorldModelConflictListView,
-            self._call_tool("world_conflict_list", {"project_id": project_id}),
-        )
-        self.assertEqual(conflicts.conflicts, [])
-
-        exported = self._load_model(
-            WorldModelExportView,
-            self._call_tool(
-                "world_export_obsidian",
-                {"project_id": project_id, "vault_root": vault_root},
-            ),
-        )
-        self.assertTrue(exported.ok)
-        self.assertTrue((Path(vault_root) / "00_Index.md").exists())

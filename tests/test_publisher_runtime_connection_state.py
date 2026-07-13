@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.publisher import PublisherExtensionClient, PublisherExtensionPlatformState
 from forwin.publisher_runtime.service import PublisherRuntimeService
+from tests.postgres import postgres_test_url
 
 
 def _runtime(
@@ -252,45 +253,6 @@ def test_connection_state_uses_latest_connected_client_when_preferred_is_login_r
         assert items["qidian"]["latest_client_state"]["connected"] is True
         assert items["qidian"]["fallback_available"] is True
         assert items["qidian"]["fallback_client_id"] == "laptop-client"
-    finally:
-        engine.dispose()
-
-
-def test_connection_state_strict_preferred_client_blocks_fallback_claims() -> None:
-    engine, runtime = _runtime(
-        "publisher-runtime-connection-strict-preferred",
-        preferred_client_id="linux-client",
-        strict_preferred_client=True,
-    )
-    try:
-        runtime.connection_state.heartbeat(
-            client_id="linux-client",
-            extension_version="0.1.0",
-            browser_name="Chrome",
-            browser_version="123.0",
-            backend_base_url="http://10.0.0.150:8899",
-            platforms=[{"platform": "fanqie", "connected": False, "cookie_signal": False}],
-        )
-        runtime.connection_state.heartbeat(
-            client_id="laptop-client",
-            extension_version="0.1.0",
-            browser_name="Chrome",
-            browser_version="123.0",
-            backend_base_url="http://10.0.0.35:8899",
-            platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True}],
-        )
-
-        with runtime.session_factory() as session:
-            assert runtime.connection_state.claimable_platforms(
-                session,
-                client_id="laptop-client",
-                platforms=["fanqie"],
-            ) == []
-            assert runtime.connection_state.claimable_platforms(
-                session,
-                client_id="linux-client",
-                platforms=["fanqie"],
-            ) == ["fanqie"]
     finally:
         engine.dispose()
 

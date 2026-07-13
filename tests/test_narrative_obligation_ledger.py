@@ -9,6 +9,7 @@ from forwin.narrative_obligations.types import (
     NarrativeObligation,
     NarrativePlanPatch,
 )
+from tests.postgres import postgres_test_url
 
 
 def test_init_db_creates_narrative_obligation_tables() -> None:

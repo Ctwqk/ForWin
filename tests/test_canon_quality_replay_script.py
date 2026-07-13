@@ -5,6 +5,7 @@ from pathlib import Path
 from forwin.models import ArcPlanVersion, ChapterDraft, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from scripts.replay_canon_quality_for_project import replay_project
+from tests.postgres import postgres_test_url
 
 
 def test_replay_script_writes_markdown_report(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001

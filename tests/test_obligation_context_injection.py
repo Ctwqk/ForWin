@@ -8,6 +8,7 @@ from forwin.narrative_obligations.repository import NarrativeObligationRepositor
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.review.context_builder import build_review_context_pack
 from forwin.writer.prompt_core import _canon_quality_context_section
+from tests.postgres import postgres_test_url
 
 
 def test_canon_quality_context_injects_active_narrative_obligations() -> None:

@@ -28,6 +28,7 @@ from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness

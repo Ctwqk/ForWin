@@ -10,6 +10,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation
+from tests.postgres import postgres_test_url
 
 
 def _obligation(project_id: str = "project-1", *, payoff_test: str = "第12章必须解释钥匙来源") -> NarrativeObligation:

@@ -8,7 +8,9 @@ from forwin.arc_sizing import policy_for_total_chapters
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.phase import ArcStructureDraft
 from forwin.planning.arc_structure_service import ArcStructurePlanningService
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 class _Director:
@@ -40,7 +42,12 @@ def test_arc_structure_service_persists_structure_and_separates_experience_paylo
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project("结构测试", "主角在雨夜觉醒规则", "玄幻")
+        project = updater.create_project(
+            "结构测试",
+            "主角在雨夜觉醒规则",
+            "玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "开篇弧", arc_number=1)
         chapters = [
             updater.create_chapter_plan(project.id, arc.id, number, f"第{number}章", f"推进{number}", ["推进"])

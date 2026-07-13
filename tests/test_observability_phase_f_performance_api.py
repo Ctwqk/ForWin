@@ -8,6 +8,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 def test_performance_api_reports_task_critical_path_and_slow_spans() -> None:

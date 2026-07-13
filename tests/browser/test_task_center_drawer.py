@@ -19,7 +19,7 @@ def test_task_center_drawer_controls_and_bulk_delete(
         re.compile(r".*\bopen\b.*")
     )
     expect(page.locator("#drawer_body")).to_contain_text("任务主线")
-    expect(page.locator("#drawer_body")).to_contain_text("治理设置")
+    expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v1")
     expect(page.locator("#drawer_body")).to_contain_text("因果回放")
     expect(page.locator("#drawer_body")).to_contain_text("治理洞察")
     expect(page.locator("#drawer_body")).to_contain_text("章节流水线")

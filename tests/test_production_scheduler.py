@@ -9,6 +9,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.production.scheduler import ProductionScheduler
+from tests.postgres import postgres_test_url
 
 
 def test_scheduler_runs_due_projects_and_preserves_actions() -> None:

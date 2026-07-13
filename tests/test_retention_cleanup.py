@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.observability import PerformanceSpan
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def test_retention_cleanup_prunes_old_observability_rows_and_candidate_drafts() -> None:
@@ -21,7 +23,12 @@ def test_retention_cleanup_prunes_old_observability_rows_and_candidate_drafts() 
     try:
         with Session.begin() as session:
             updater = StateUpdater(session)
-            project = updater.create_project(title="保留策略", premise="p", genre="g")
+            project = updater.create_project(
+                title="保留策略",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
             arc = updater.create_arc_plan(project.id, "主线")
             plan = updater.create_chapter_plan(
                 project_id=project.id,

@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.context.assembler_core import assemble_context
 from forwin.http.adapters.api_book_state_routes import build_handlers
-from forwin.models import ArcPlanVersion, ChapterPlan, Project
+from forwin.models import ArcPlanVersion, ChapterPlan
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow, WorldNodeStateRow
 from forwin.protocol.book_state import (
@@ -20,18 +20,20 @@ from forwin.protocol.book_state import (
     NodePatch,
     WorldNode,
 )
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def _create_project(session, title: str = "BookState 测试") -> str:
-    project = Project(
+    project = StateUpdater(session).create_project(
         title=title,
         premise="BookState persistence",
         genre="玄幻",
         setting_summary="黑石城与上古遗迹",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
     )
-    session.add(project)
-    session.flush()
     return project.id
 
 
@@ -183,6 +185,19 @@ def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
                 node_type="character",
                 name="陆沉",
                 state={"location_id": "loc_city"},
+                profile={
+                    "personality_loadout": {
+                        "dominant": {
+                            "skill": "trait-loyal-protector",
+                            "weight": 0.72,
+                        },
+                        "secondary": [],
+                        "social_mask": [],
+                        "stress_modes": [],
+                        "relationship_patterns": [],
+                        "overrides": {},
+                    }
+                },
             )
         )
         repo.append_world_node_state(
@@ -317,7 +332,6 @@ def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
         )
         delta_count = session.scalar(select(func.count()).select_from(GraphDeltaRow))
         patch_count = session.scalar(select(func.count()).select_from(GraphDeltaPatchRow))
-        state_count = session.scalar(select(func.count()).select_from(WorldNodeStateRow))
 
     assert result.committed is True
     assert result.graph_delta_ids == ["delta_ch1"]

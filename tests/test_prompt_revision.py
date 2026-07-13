@@ -45,11 +45,12 @@ class _FakeLLM:
 
     def chat(self, messages: list[dict[str, Any]], **_: Any) -> str:
         self.last_messages = messages
+        body = "陈星推开舱门，确认异常信号仍在面板上闪烁。" * 20
         return (
             "<<FORWIN_TITLE>>\n"
             "测试章\n"
             "<<FORWIN_BODY>>\n"
-            "陈星推开舱门，确认异常信号仍在面板上闪烁。\n"
+            f"{body}\n"
             "<<FORWIN_SUMMARY>>\n"
             "陈星确认异常信号仍未消失。"
         )

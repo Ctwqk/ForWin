@@ -14,6 +14,7 @@ from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterRevie
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness

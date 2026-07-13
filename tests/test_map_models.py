@@ -8,6 +8,7 @@ from forwin.map.protocol import MapEdge, MapNode, RegionNode
 from forwin.map.repository import MapRepository
 from forwin.models import Project, SubWorld
 from forwin.models.base import get_engine, get_session_factory, init_db
+from tests.postgres import postgres_test_url
 
 
 def test_init_db_exposes_graph_map_tables_and_columns() -> None:

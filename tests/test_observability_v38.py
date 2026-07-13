@@ -27,10 +27,12 @@ from forwin.observability import (
     stack_hash,
 )
 from forwin.retrieval.broker_core import RetrievalBroker
+from forwin.runtime.policy import RuntimePolicy
 from forwin.storage import ArtifactStore
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness
@@ -61,7 +63,7 @@ class ObservabilityCoreTests(unittest.TestCase):
         self.assertEqual(payload["api_key"], "sk-secret")
 
     def test_log_recorder_persists_redacted_decision_event_with_context(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("obs"))
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -73,6 +75,7 @@ class ObservabilityCoreTests(unittest.TestCase):
                         premise="premise",
                         genre="玄幻",
                         target_total_chapters=1,
+                        runtime_policy=RuntimePolicy.for_profile("standard"),
                     )
                     root = updater.save_decision_event(
                         DecisionEventInfo(
@@ -117,7 +120,7 @@ class ObservabilityCoreTests(unittest.TestCase):
                 engine.dispose()
 
     def test_state_updater_redacts_direct_decision_event_payloads(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("direct-redaction"))
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -129,6 +132,7 @@ class ObservabilityCoreTests(unittest.TestCase):
                         premise="premise",
                         genre="玄幻",
                         target_total_chapters=1,
+                        runtime_policy=RuntimePolicy.for_profile("standard"),
                     )
                     row = updater.save_decision_event(
                         DecisionEventInfo(
@@ -337,7 +341,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
 
 class ApiRuntimeObservabilityTests(unittest.TestCase):
     def test_execute_pipeline_task_records_success_and_cleanup_events(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("runtime-success"))
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -346,7 +350,11 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 with session_factory() as session:
                     updater = StateUpdater(session)
                     updater.create_project(
-                        "Runtime", "premise", "玄幻", target_total_chapters=1
+                        "Runtime",
+                        "premise",
+                        "玄幻",
+                        target_total_chapters=1,
+                        runtime_policy=RuntimePolicy.for_profile("standard"),
                     )
                     project = session.query(Project).first()
                     project_id = project.id
@@ -424,7 +432,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 engine.dispose()
 
     def test_execute_pipeline_task_records_failure_event_with_stack_hash(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             engine = get_engine(postgres_test_url("runtime-failure"))
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -432,7 +440,11 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                 with session_factory() as session:
                     updater = StateUpdater(session)
                     project = updater.create_project(
-                        "Runtime", "premise", "玄幻", target_total_chapters=1
+                        "Runtime",
+                        "premise",
+                        "玄幻",
+                        target_total_chapters=1,
+                        runtime_policy=RuntimePolicy.for_profile("standard"),
                     )
                     project_id = project.id
                     session.commit()

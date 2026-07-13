@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.planning.world_contracts import (
     ArcWorldContract,
@@ -11,6 +12,7 @@ from forwin.planning.world_contracts import (
     RevealLadderStep,
     WorldContractRepository,
 )
+from tests.postgres import postgres_test_url
 
 
 def test_world_contract_repository_persists_arc_band_and_chapter_contracts() -> None:
@@ -24,6 +26,7 @@ def test_world_contract_repository_persists_arc_band_and_chapter_contracts() -> 
             title="殖民地与母星",
             premise="台前建设殖民地，幕后母星危机推进。",
             genre="科幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
         )
         arc = updater.create_arc_plan(
             project.id,
@@ -143,6 +146,7 @@ def test_phase24_persists_homeworld_crisis_contracts_for_arc_plan() -> None:
             premise="主角团建设新星殖民地防线，幕后父亲所在母星被敌方围困。",
             genre="科幻",
             target_total_chapters=40,
+            runtime_policy=RuntimePolicy.for_profile("standard"),
         )
         arc = updater.create_arc_plan(
             project.id,

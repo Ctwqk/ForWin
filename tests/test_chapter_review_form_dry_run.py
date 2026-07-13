@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
@@ -11,6 +9,7 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.canon_quality import CanonQualitySignalRow, CountdownLedgerRow
 from forwin.protocol.writer import WriterOutput
+from tests.postgres import postgres_test_url
 
 
 class FakeCountdownConflictClient:

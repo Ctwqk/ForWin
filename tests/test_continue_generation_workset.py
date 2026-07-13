@@ -5,6 +5,7 @@ import pytest
 from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from tests.postgres import postgres_test_url
 
 
 def _session_factory(name: str):

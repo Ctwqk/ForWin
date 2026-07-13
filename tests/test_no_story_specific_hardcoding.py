@@ -56,10 +56,7 @@ CHAPTER_REPAIR_TEST_PATHS = [
     REPO_ROOT / "tests" / "fixtures" / "repair_routing",
     REPO_ROOT / "tests" / "test_active_rule_store.py",
     REPO_ROOT / "tests" / "test_active_rules_auto_registration.py",
-    REPO_ROOT / "tests" / "test_chapter18_repair_routing_regression.py",
     REPO_ROOT / "tests" / "test_form_coercion_dict_bool.py",
-    REPO_ROOT / "tests" / "test_repair_loop_detection.py",
-    REPO_ROOT / "tests" / "test_repair_scope_router_dispatch.py",
 ]
 
 LOCAL_REWRITE_STORY_TERMS = (
@@ -73,11 +70,9 @@ ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
     "forwin/application/projects/lifecycle.py",
     "forwin/application/projects/common.py",
     "forwin/canon_quality/rule_profile.py",
-    "forwin/pipeline/loop.py",
     "forwin/review/repair/service.py",
     "forwin/generation/pipeline_core/repair_patches.py",
     "forwin/planning/future_plan_audit/helpers.py",
-    "forwin/writer/prompts.py",
 }
 
 
@@ -159,7 +154,9 @@ def test_chapter_repair_tests_do_not_reintroduce_case_specific_terms() -> None:
 
 
 def test_local_rewrite_executor_has_no_case_specific_placeholder_defaults() -> None:
-    inspected_files = [REPO_ROOT / "forwin" / "reviser" / "local_rewrite_executor.py"]
+    inspected_files = [
+        REPO_ROOT / "forwin" / "review" / "repair" / "local_rewrite_executor.py"
+    ]
 
     assert _violations(inspected_files, terms=LOCAL_REWRITE_STORY_TERMS) == []
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from forwin.application.runtime_policy import get_project_policy, update_project_policy
 from forwin.api_schema.policy import RuntimePolicyUpdateRequest

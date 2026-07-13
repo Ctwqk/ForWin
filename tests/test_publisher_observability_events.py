@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import select
@@ -11,6 +10,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.publishers.manager import PublisherManager
+from tests.postgres import postgres_test_url
 
 
 def _event_payload(row: DecisionEvent) -> dict[str, object]:
@@ -22,7 +22,7 @@ def _event_payload(row: DecisionEvent) -> dict[str, object]:
 def test_publisher_upload_job_lifecycle_records_project_events_without_body_text() -> (
     None
 ):
-    with TemporaryDirectory() as tmp:
+    with TemporaryDirectory():
         engine = get_engine(postgres_test_url("publisher-events"))
         init_db(engine)
         session_factory = get_session_factory(engine)
@@ -97,7 +97,7 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
 def test_comment_sync_and_ingest_records_project_events_without_author_identity() -> (
     None
 ):
-    with TemporaryDirectory() as tmp:
+    with TemporaryDirectory():
         engine = get_engine(postgres_test_url("comment-events"))
         init_db(engine)
         session_factory = get_session_factory(engine)

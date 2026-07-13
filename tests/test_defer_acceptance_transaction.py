@@ -14,6 +14,7 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.protocol.experience import BandDelightSchedule
+from tests.postgres import postgres_test_url
 
 
 def _obligation(project_id: str) -> NarrativeObligation:

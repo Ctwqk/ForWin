@@ -9,6 +9,7 @@ from forwin import models  # noqa: F401
 from forwin.config import InfrastructureConfig
 from forwin.models.base import Base
 from forwin.models.base import get_engine
+from tests import postgres
 
 
 def test_get_engine_rejects_sqlite_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,3 +46,18 @@ def test_postgres_metadata_ddl_compiles() -> None:
 
     assert any("CREATE TABLE projects" in statement for statement in statements)
     assert any("CREATE TABLE generation_tasks" in statement for statement in statements)
+
+
+def test_cleanup_test_databases_preserves_template_and_persistent_databases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dropped: list[str] = []
+    monkeypatch.setattr(postgres, "_CREATED", {"template", "session", "transient"})
+    monkeypatch.setattr(postgres, "_PERSISTENT", {"session"})
+    monkeypatch.setattr(postgres, "_TEMPLATE_NAME", "template")
+    monkeypatch.setattr(postgres, "_drop_database", dropped.append)
+
+    postgres.cleanup_test_databases()
+
+    assert dropped == ["transient"]
+    assert postgres._CREATED == {"template", "session"}

@@ -11,6 +11,7 @@ from forwin.models.project import Project
 from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publishers.manager import PublisherManager
+from tests.postgres import postgres_test_url
 
 
 def _runtime(name: str) -> tuple[object, PublisherRuntimeService]:

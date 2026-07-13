@@ -14,6 +14,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 class _NoApiKeyClient:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect
 
 from forwin.models.base import get_engine, init_db
+from tests.postgres import postgres_test_url
 
 
 def test_init_db_exposes_final_book_state_tables() -> None:

@@ -73,6 +73,6 @@ def test_planning_facade_replaces_dynamic_forwarding_shims() -> None:
     assert PlanningService.__name__ == "PlanningService"
     assert PlanningQuery.__name__ == "PlanningQuery"
     assert not (ROOT / "forwin" / "planning" / "future_plan_auditor.py").exists()
-    phase24 = (ROOT / "forwin" / "pipeline" / "phase24.py").read_text()
-    assert "class PlanningServices" not in phase24
-    assert "self.services" not in phase24
+    arc_envelope = (ROOT / "forwin" / "planning" / "arc_envelope.py").read_text()
+    assert "class PlanningServices" not in arc_envelope
+    assert "self.services" not in arc_envelope

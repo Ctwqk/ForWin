@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
+
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import Project
@@ -10,6 +12,7 @@ from forwin.models.canon_quality import (
     QualityAnalysisRunRow,
 )
 from forwin.protocol.writer import WriterOutput
+from tests.postgres import postgres_test_url
 
 
 class FakeFormClient:
@@ -18,6 +21,21 @@ class FakeFormClient:
 
     def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
         return self.payload
+
+
+def _seed_character_prior(session: Session, project_id: str) -> None:
+    session.add(
+        CharacterStateTransitionRow(
+            project_id=project_id,
+            character_name="林青",
+            chapter_number=0,
+            transition_type="life_state",
+            from_state="unknown",
+            to_state="alive",
+            payload_json='{"source":"test_fixture"}',
+        )
+    )
+    session.flush()
 
 
 def test_service_persists_validated_form_projection() -> None:
@@ -29,6 +47,7 @@ def test_service_persists_validated_form_projection() -> None:
             project = Project(title="表单质量", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
             session.add(project)
             session.flush()
+            _seed_character_prior(session, project.id)
             quote = "林青倒下，再无呼吸。"
             output = WriterOutput(
                 project_id=project.id,
@@ -52,12 +71,59 @@ def test_service_persists_validated_form_projection() -> None:
             session.commit()
 
         with session_factory() as session:
-            rows = session.query(CharacterStateTransitionRow).filter_by(project_id=project.id).all()
+            rows = (
+                session.query(CharacterStateTransitionRow)
+                .filter_by(project_id=project.id, chapter_number=1)
+                .all()
+            )
             assert result.mode == "chapter_review_form"
             assert result.blocking is False
             assert result.raw_analyzer_results[0]["metadata"]["source_mode"] == "chapter_review_form"
             assert rows[0].character_name == "林青"
             assert "chapter_review_form" in rows[0].payload_json
+    finally:
+        engine.dispose()
+
+
+def test_service_blocks_unasked_character_answer_without_state_write() -> None:
+    engine = get_engine(postgres_test_url("canon_quality_service_form_rejects_unasked_character"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="表单质量", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
+            session.add(project)
+            session.flush()
+            quote = "林青倒下，再无呼吸。"
+
+            result = analyze_writer_output_quality(
+                session=session,
+                project_id=project.id,
+                chapter_number=1,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=1,
+                    title="第一章",
+                    body=quote,
+                    end_of_chapter_summary="林青死亡。",
+                ),
+                draft_id="draft-1",
+                persist=True,
+                mode="primary",
+                llm_client=FakeFormClient(_payload(project.id, 1, character_quote=quote)),
+            )
+            session.commit()
+
+        with session_factory() as session:
+            rows = (
+                session.query(CharacterStateTransitionRow)
+                .filter_by(project_id=project.id, chapter_number=1)
+                .all()
+            )
+            assert result.blocking is True
+            assert result.signals[0].signal_type == "form_schema_invalid"
+            assert result.summary == "Unasked characters answers: 林青"
+            assert rows == []
     finally:
         engine.dispose()
 
@@ -71,6 +137,7 @@ def test_service_rejects_subject_misattribution_without_state_write() -> None:
             project = Project(title="表单质量", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
             session.add(project)
             session.flush()
+            _seed_character_prior(session, project.id)
             quote = "林青和委员会高层的合谋导致家族成员死亡。"
             payload = _payload(
                 project.id,
@@ -99,7 +166,11 @@ def test_service_rejects_subject_misattribution_without_state_write() -> None:
             session.commit()
 
         with session_factory() as session:
-            rows = session.query(CharacterStateTransitionRow).filter_by(project_id=project.id).all()
+            rows = (
+                session.query(CharacterStateTransitionRow)
+                .filter_by(project_id=project.id, chapter_number=1)
+                .all()
+            )
             assert result.blocking is True
             assert result.signals[0].signal_type == "form_answer_rejected"
             assert rows == []
@@ -116,6 +187,7 @@ def test_service_supersedes_stale_chapter_signal_when_quote_later_validates() ->
             project = Project(title="表单质量", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
             session.add(project)
             session.flush()
+            _seed_character_prior(session, project.id)
             quote = "死了。2014年，心脏病发作"
 
             rejected = analyze_writer_output_quality(

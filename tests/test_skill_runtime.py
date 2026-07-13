@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
+from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ReviewVerdict
@@ -35,11 +36,12 @@ class _FakeWriterLLM:
                 },
                 ensure_ascii=False,
             )
+        body = "雨夜里，他第一次看见那面会说话的镜子。" * 150
         return (
             "<<FORWIN_TITLE>>\n"
             "第一章 雨夜\n"
             "<<FORWIN_BODY>>\n"
-            "雨夜里，他第一次看见那面会说话的镜子。\n"
+            f"{body}\n"
             "<<FORWIN_SUMMARY>>\n"
             "主角在雨夜得到了危险线索。"
         )
@@ -51,6 +53,19 @@ class _FakeWriterLLM:
 class _PassChecker:
     def check(self, project_id, writer_output):  # noqa: ANN001, ANN201
         return ReviewVerdict(verdict="pass", issues=[], review_summary="ok")
+
+
+def _with_empty_entity_admission_plan(output: WriterOutput) -> WriterOutput:
+    plan = EntityAdmissionPlan(
+        project_id=output.project_id,
+        chapter_number=output.chapter_number,
+        candidate_fingerprint=writer_output_admission_fingerprint(output),
+    )
+    return output.model_copy(
+        update={
+            "generation_meta": {"entity_admission_plan": plan.model_dump(mode="json")}
+        }
+    )
 
 
 class _ReviewerLLM:
@@ -209,13 +224,15 @@ class SkillRuntimeTests(unittest.TestCase):
             project_id="project-skill",
             repo=None,
             context=self._context(),
-            writer_output=WriterOutput(
-                project_id="project-skill",
-                chapter_number=1,
-                title="第一章 雨夜",
-                body="雨夜里，他第一次看见那面会说话的镜子。",
-                char_count=20,
-                end_of_chapter_summary="主角拿到了危险线索。",
+            writer_output=_with_empty_entity_admission_plan(
+                WriterOutput(
+                    project_id="project-skill",
+                    chapter_number=1,
+                    title="第一章 雨夜",
+                    body="雨夜里，他第一次看见那面会说话的镜子。",
+                    char_count=20,
+                    end_of_chapter_summary="主角拿到了危险线索。",
+                )
             ),
             continuity_checker=_PassChecker(),
             reviewer_skill_layers=reviewer_skill_layers,
@@ -253,13 +270,15 @@ class SkillRuntimeTests(unittest.TestCase):
             project_id="project-skill",
             repo=None,
             context=self._context(),
-            writer_output=WriterOutput(
-                project_id="project-skill",
-                chapter_number=1,
-                title="第一章 雨夜",
-                body="雨夜里，他第一次看见那面会说话的镜子。",
-                char_count=20,
-                end_of_chapter_summary="主角拿到了危险线索。",
+            writer_output=_with_empty_entity_admission_plan(
+                WriterOutput(
+                    project_id="project-skill",
+                    chapter_number=1,
+                    title="第一章 雨夜",
+                    body="雨夜里，他第一次看见那面会说话的镜子。",
+                    char_count=20,
+                    end_of_chapter_summary="主角拿到了危险线索。",
+                )
             ),
             continuity_checker=_PassChecker(),
             reviewer_skill_layers=reviewer_skill_layers,

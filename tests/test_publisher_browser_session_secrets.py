@@ -9,6 +9,7 @@ from forwin.application.publisher.operations import (
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.publisher import PublisherBrowserSessionEntry
 from forwin.publishers.manager import PublisherManager
+from tests.postgres import postgres_test_url
 
 
 QIDIAN_COOKIES = [

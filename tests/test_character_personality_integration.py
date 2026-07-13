@@ -13,6 +13,7 @@ from forwin.personality.context import build_active_personality_context
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.models import PersonalityLoadout
 from forwin.protocol.book_state import WorldNode
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
@@ -29,6 +30,7 @@ def _seed_allowed_bare_character(session, *, creation_status: str | None = None,
         "premise": "p",
         "genre": "玄幻",
         "automation_json": json.dumps(automation, ensure_ascii=False),
+        "runtime_policy": RuntimePolicy.for_profile("standard"),
     }
     if creation_status is not None:
         create_kwargs["creation_status"] = creation_status
@@ -42,32 +44,13 @@ def _seed_allowed_bare_character(session, *, creation_status: str | None = None,
         one_line="开场",
         goals=["推进"],
     )
-    entity = updater.create_entity(project.id, "character", "裸角色", "允许角色", chapter=0)
-    global_core = updater.create_subworld(
-        project_id=project.id,
-        origin_arc_id=arc.id,
-        parent_subworld_id=None,
-        name="global_core",
-        purpose="核心角色",
-        scope="global_core",
-        metadata={},
-    )
-    updater.create_roster_item(
-        project_id=project.id,
-        subworld_id=global_core.id,
-        entity_id=entity.id,
-        display_name=entity.name,
-        description=entity.description,
-        is_core=True,
-        status="seeded_named",
-    )
     BookStateRepository(session).create_world_node(
         WorldNode(
             id="char_bare",
             project_id=project.id,
             node_type="character",
-            name=entity.name,
-            description=entity.description,
+            name="裸角色",
+            description="允许角色",
             metadata={"character_identity": {"canonical_character_id": "char_bare", "book_state_node_id": "char_bare"}},
         )
     )

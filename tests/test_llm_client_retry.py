@@ -13,7 +13,7 @@ from forwin.writer.llm import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
-    def test_wall_timeout_interrupts_hung_http_post(self) -> None:
+    def test_wall_timeout_closes_hung_custom_http_client(self) -> None:
         class HangingHTTPClient:
             def __init__(self) -> None:
                 self.closed = False

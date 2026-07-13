@@ -53,12 +53,15 @@
 
 ## 2026-07 V5 Final Roadmap Execution Status
 
-状态：R0 complete；旧长跑已安全退出，R1 尚未开始。
+状态：R0/R1 complete；旧长跑已安全退出，current-HEAD 测试债已清零，下一阶段为 R2 物理删除 Provisional Preview 家族。
 
 - 旧项目 `a06cf00db3ba4cbe8b9862e20e9d6248` 的生成任务已于 2026-07-12 安全暂停，权威 active task count 为 0。
 - 该运行固定归类为 `pre-roadmap-soak`，`release_evidence=false`；路线图变更从快照之后开始，因此它不得作为最终 V6 发布证明。
 - 不恢复、不清洗该项目；保留为只读回归样本。
 - 完整身份、事件、Canon、trace、投影和发布证据见 `../docs/operations/v5-pre-roadmap-soak-snapshot.md`。
+- R1 首次可信全量基线为 `97 failed, 1540 passed, 1 skipped`；97 项均已按当前 v5 公共契约修复或删除，不以放宽生产约束换取通过。
+- 测试 PostgreSQL harness 改为每个测试及时回收 transient database，browser session database 仅在进程退出时回收；全量运行后遗留测试库为 0。
+- R1 最终证据：`1602 tests collected`；全量 `1601 passed, 1 skipped, 112 warnings, 33 subtests passed in 175.31s`；`ruff check forwin tests`、`compileall -q forwin` 和 R1 聚焦门均通过。
 - 最终 200 章 gate 必须等待 A2/A4 数据决策落地与 R9 Release Candidate 冻结后，使用全新项目从第 1 章开始。
 
 ## 兼容 / 弃用矩阵

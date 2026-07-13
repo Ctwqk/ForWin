@@ -8,6 +8,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
 from forwin.production.repository import ProductionRepository
+from tests.postgres import postgres_test_url
 
 
 def test_repository_loads_backlog_statuses_and_active_tasks() -> None:

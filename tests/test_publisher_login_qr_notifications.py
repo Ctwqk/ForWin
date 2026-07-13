@@ -11,6 +11,7 @@ import forwin.publishers.manager as publisher_manager_module
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.publishers.manager import PublisherManager
 from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
+from tests.postgres import postgres_test_url
 
 
 class _FakeResponse:

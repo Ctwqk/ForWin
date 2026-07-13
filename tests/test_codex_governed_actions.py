@@ -11,6 +11,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 class CodexGovernedActionTests(unittest.TestCase):

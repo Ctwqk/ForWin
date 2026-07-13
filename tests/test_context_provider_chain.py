@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from forwin.book_state import BookStateRepository
 from forwin.context.assembler_core import assemble_context
+from forwin.models import Project
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.protocol.book_state import WorldNode
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.experience import (
     ArcPayoffMap,
@@ -11,12 +15,14 @@ from forwin.protocol.experience import (
     ChapterExperiencePlan,
     ReaderPromise,
 )
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
+from tests.postgres import postgres_test_url
 
 
 class _FakeRepo:
-    session = None
-
-    def __init__(self) -> None:
+    def __init__(self, session=None) -> None:
+        self.session = session
         self.project = SimpleNamespace(
             id="project-1",
             title="测试书",
@@ -121,17 +127,56 @@ class _FakeRepo:
 def test_assemble_context_uses_default_provider_chain() -> None:
     from forwin.context.assembler_core import ChapterContextAssembler
 
-    repo = _FakeRepo()
-    chapter_plan = SimpleNamespace(
-        chapter_number=2,
-        title="第二章",
-        one_line="陆沉确认天门有旧王痕迹",
-        goals_json=json.dumps(["找到线索"], ensure_ascii=False),
-        arc_plan_id="arc-1",
-    )
+    engine = get_engine(postgres_test_url("context-provider-chain"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            ProjectPolicyStore(session).initialize(
+                Project(
+                    id="project-1",
+                    title="测试书",
+                    premise="主角追查天门真相",
+                    genre="玄幻",
+                    setting_summary="山海边境",
+                ),
+                RuntimePolicy.for_profile("standard"),
+            )
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="char-1",
+                    project_id="project-1",
+                    node_type="character",
+                    name="陆沉",
+                    description="追查天门真相的少年",
+                    profile={
+                        "personality_loadout": {
+                            "dominant": {
+                                "skill": "trait-loyal-protector",
+                                "weight": 0.72,
+                            },
+                            "secondary": [],
+                            "social_mask": [],
+                            "stress_modes": [],
+                            "relationship_patterns": [],
+                            "overrides": {},
+                        }
+                    },
+                )
+            )
+            repo = _FakeRepo(session)
+            chapter_plan = SimpleNamespace(
+                chapter_number=2,
+                title="第二章",
+                one_line="陆沉确认天门有旧王痕迹",
+                goals_json=json.dumps(["找到线索"], ensure_ascii=False),
+                arc_plan_id="arc-1",
+            )
 
-    context = assemble_context(repo, "project-1", chapter_plan)
-    provider_names = ChapterContextAssembler().provider_names
+            context = assemble_context(repo, "project-1", chapter_plan)
+            provider_names = ChapterContextAssembler().provider_names
+    finally:
+        engine.dispose()
 
     assert provider_names == [
         "genesis",

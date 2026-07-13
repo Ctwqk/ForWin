@@ -36,6 +36,7 @@ from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
 from tests.http_runtime_harness import HttpRuntimeHarness
+from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness

@@ -53,7 +53,7 @@ def browser_test_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     env = os.environ.copy()
     env.update(
         {
-            "FORWIN_DATABASE_URL": postgres_test_url("browser_e2e"),
+            "FORWIN_DATABASE_URL": postgres_test_url("browser_e2e", keep_until_exit=True),
             "FORWIN_ARTIFACT_ROOT": str(run_root / "artifacts"),
             "FORWIN_RUNTIME_SETTINGS_PATH": str(run_root / "runtime_settings.json"),
             "FORWIN_RETRIEVAL_ROOT": str(run_root / "retrieval"),

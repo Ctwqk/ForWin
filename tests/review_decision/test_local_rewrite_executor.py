@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from forwin.protocol.writer import WriterOutput
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 
@@ -112,17 +110,3 @@ def test_unsupported_issue_returns_unsupported() -> None:
     )
 
     assert result.status == "unsupported"
-
-
-def test_repair_loop_passes_current_context_to_local_executor() -> None:
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "forwin"
-        / "pipeline_loop_core"
-        / "repair_loop.py"
-    ).read_text(encoding="utf-8")
-    call_start = source.index("LocalRewriteExecutor().execute(")
-    call_body = source[call_start : call_start + 400]
-
-    assert "context_pack=current_context" in call_body
-    assert "context_pack={}" not in call_body

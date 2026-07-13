@@ -10,6 +10,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
 from forwin.observability.service import ObservabilityService
+from tests.postgres import postgres_test_url
 
 
 class _FakeCloser:
@@ -54,7 +55,7 @@ def test_execute_pipeline_task_records_operation_and_cleanup_spans() -> None:
         fake_engine = _FakeRuntimeEngine()
         pipeline = SimpleNamespace(
             _SessionFactory=Session,
-            services=SimpleNamespace(observability=obs),
+            observability=obs,
             llm_client=fake_llm,
             engine=fake_engine,
         )
@@ -121,7 +122,7 @@ def test_execute_pipeline_task_records_worker_component_when_requested() -> None
         fake_engine = _FakeRuntimeEngine()
         pipeline = SimpleNamespace(
             _SessionFactory=Session,
-            services=SimpleNamespace(observability=obs),
+            observability=obs,
             llm_client=fake_llm,
             engine=fake_engine,
         )

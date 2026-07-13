@@ -28,6 +28,7 @@ from forwin.protocol.book_state import (
     WorldNode,
 )
 from forwin.protocol.world_v4 import DeltaKind, DeltaSource, DeltaSourceType, ExtractedWorldChangeSet, WorldDelta
+from tests.postgres import postgres_test_url
 
 
 def _session():

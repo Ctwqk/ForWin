@@ -8,6 +8,7 @@ from forwin.canon_quality.signals import CanonQualitySignal, CountdownLedgerEntr
 from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, ChapterReview, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from tests.postgres import postgres_test_url
 
 
 def test_repository_persists_signals_and_admission_runs() -> None:

@@ -75,7 +75,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
         )
 
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("seed-state")
             pipeline = _build_pipeline(db_path)
             try:
@@ -158,7 +158,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
         self.assertEqual([plan.chapter_number for plan in plans], list(range(1, 21)))
 
     def test_new_project_run_executes_only_first_active_arc(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("run-scope")
             pipeline = _build_pipeline(db_path)
             captured: dict[str, object] = {}
@@ -234,7 +234,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
         self.assertEqual(len(plans), 4)
 
     def test_continue_project_only_runs_active_arc_pending_chapters(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("continue-scope")
             engine = get_engine(db_path)
             init_db(engine)
@@ -314,7 +314,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
         self.assertEqual(resolving_payload["pending_chapter_count"], 2)
 
     def test_arc_resolution_activates_target_arc_and_uses_project_total(self) -> None:
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory():
             db_path = postgres_test_url("arc-resolution")
             engine = get_engine(db_path)
             init_db(engine)

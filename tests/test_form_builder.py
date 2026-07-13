@@ -236,7 +236,7 @@ def test_builder_keeps_active_countdown_before_consistent_under_pressure() -> No
     assert [item.key for item in form.countdowns] == ["z-active"]
 
 
-def test_review_form_emits_budget_warning_and_proceeds_when_protected_items_exceed_budget() -> None:
+def test_review_form_emits_budget_warning_and_blocks_when_required_answer_missing() -> None:
     writer_output = WriterOutput(
         project_id="p1",
         chapter_number=7,
@@ -265,12 +265,17 @@ def test_review_form_emits_budget_warning_and_proceeds_when_protected_items_exce
         token_budget_chars=1000,
     )
 
-    assert result.blocking is False
+    assert result.blocking is True
     assert result.form is not None
     assert [item.key for item in result.form.countdowns] == ["main"]
-    assert [signal.signal_type for signal in result.signals] == ["form_budget_exceeded"]
+    assert [signal.signal_type for signal in result.signals] == [
+        "form_budget_exceeded",
+        "form_schema_invalid",
+    ]
     assert result.signals[0].severity == "warning"
-    assert result.raw_analyzer_results[0]["verdict"] == "warn"
+    assert result.signals[1].severity == "error"
+    assert result.summary == "Missing countdowns answers: main"
+    assert result.raw_analyzer_results[0]["verdict"] == "fail"
 
 
 class _EmptyAnswersClient:

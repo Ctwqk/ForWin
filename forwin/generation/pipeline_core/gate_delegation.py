@@ -80,6 +80,8 @@ class GateDelegationStage:
         gate_kind: str,
         chapter_number: int = 0,
     ) -> bool:
+        if str(getattr(checkpoint, "status", "") or "") in {"fail", "error"}:
+            return False
         try:
             issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))
         except (json.JSONDecodeError, TypeError):

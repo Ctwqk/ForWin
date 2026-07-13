@@ -52,6 +52,18 @@ class CanonPreparationContext:
     artifact_store: ArtifactStore
     _record_decision_event: Callable[..., DecisionEvent]
     _record_rule_decision_event: Callable[..., DecisionEvent]
+    save_prompt_trace: Callable[..., str] | None = None
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        if not callable(drain):
+            return []
+        events = drain()
+        return (
+            [dict(item) for item in events if isinstance(item, dict)]
+            if isinstance(events, list)
+            else []
+        )
 
 
 class BookStateCanonPreparer:

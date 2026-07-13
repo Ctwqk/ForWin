@@ -6,6 +6,7 @@ from forwin.book_state.extraction.contract import BookStateExtractionRequest
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
+from forwin.canon.preparation import CanonPreparationContext
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.book_state.extraction.graph_delta import (
@@ -388,13 +389,8 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
     class Policy:
         canon = canon_policy
 
-    sentinel_llm_client = object()
-
-    class Pipeline:
-        policy = Policy()
-        llm_client = sentinel_llm_client
-
-        def _drain_llm_attempt_events(self):
+    class AttemptClient:
+        def drain_llm_attempt_events(self):
             captured["drained"] = True
             return [
                 {
@@ -404,11 +400,21 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
                 }
             ]
 
-        def _save_prompt_trace_payload(self, **kwargs):  # noqa: ANN003
-            captured["prompt_trace"] = kwargs["prompt_trace"]
-            return "canon-gate-trace"
-
     captured: dict[str, object | None] = {}
+    sentinel_llm_client = AttemptClient()
+
+    def save_prompt_trace(**kwargs):  # noqa: ANN003
+        captured["prompt_trace"] = kwargs["prompt_trace"]
+        return "canon-gate-trace"
+
+    context = CanonPreparationContext(
+        policy=Policy(),  # type: ignore[arg-type]
+        llm_client=sentinel_llm_client,  # type: ignore[arg-type]
+        artifact_store=object(),  # type: ignore[arg-type]
+        _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+        _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+        save_prompt_trace=save_prompt_trace,
+    )
 
     def fake_analyze_writer_output_quality(**kwargs):  # noqa: ANN003
         captured["llm_client"] = kwargs.get("llm_client")
@@ -428,7 +434,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
     with pytest.raises(StopAfterAnalysis):
         quality_gates._apply_canon_quality_gate(
-            Pipeline(),
+            context,
             session=None,
             repo=None,
             updater=None,

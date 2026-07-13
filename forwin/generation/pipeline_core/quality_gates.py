@@ -193,12 +193,13 @@ def _persist_canon_quality_attempt_trace(
     candidate_id: str,
     error: BaseException | None = None,
 ) -> str:
-    attempts = self._drain_llm_attempt_events()
-    if not attempts:
+    attempts = self.drain_llm_attempt_events()
+    save_prompt_trace = self.save_prompt_trace
+    if not attempts or not callable(save_prompt_trace):
         return ""
     safe_attempts = safe_prompt_trace_attempts(attempts, exc=error)
     try:
-        return self._save_prompt_trace_payload(
+        return save_prompt_trace(
             session=session,
             updater=updater,
             project_id=project_id,

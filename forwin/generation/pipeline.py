@@ -135,6 +135,7 @@ class ChapterPipeline(
             artifact_store=self.artifact_store,
             _record_decision_event=self._record_decision_event,
             _record_rule_decision_event=self._record_rule_decision_event,
+            save_prompt_trace=self._save_prompt_trace_payload,
         )
         self.repair_execution = RepairExecution(
             policy=self.policy,

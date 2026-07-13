@@ -18,14 +18,20 @@ from tests.postgres import postgres_test_url
 
 
 def _application_service(Session, database_url: str, execute):
+    def execute_claimed(
+        task,
+        *,
+        resume_from_chapter: int,
+        worker_id: str,
+        claim_kind: str,
+    ) -> None:
+        _ = claim_kind
+        execute(task, resume_from_chapter, worker_id)
+
     return SimpleNamespace(
         session_factory=Session,
         infrastructure=InfrastructureConfig(database_url=database_url),
-        execute_claimed=lambda task, *, resume_from_chapter, worker_id: execute(
-            task,
-            resume_from_chapter,
-            worker_id,
-        ),
+        execute_claimed=execute_claimed,
     )
 
 

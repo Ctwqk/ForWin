@@ -205,7 +205,7 @@ def test_prepare_from_approved_persists_only_precanon_candidate_state() -> None:
         entity_plan = EntityAdmissionPlan(
             project_id=project.id,
             chapter_number=1,
-            candidate_fingerprint=candidate.body_hash,
+            candidate_fingerprint=writer_output_admission_fingerprint(output),
         )
 
         outcome = CanonPreparationService().prepare_from_approved(
@@ -354,7 +354,9 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
         assert calls == ["quality", "book_state"]
         assert outcome.plan is not None
         assert session.scalar(select(func.count(GraphDeltaRow.id))) == 0
-        assert recorded_events[0]["event_type"] == DecisionEventType.CANON_COMMIT_STARTED
+        assert (
+            recorded_events[0]["event_type"] == DecisionEventType.CANON_COMMIT_STARTED
+        )
         gate_outcome = parse_gate_outcome(recorded_events[0]["payload"])
         assert gate_outcome is not None
         assert gate_outcome.gate_id == "canon_quality"

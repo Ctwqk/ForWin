@@ -24,6 +24,7 @@ LEGAL_CANDIDATE_TRANSITIONS: dict[str, frozenset[str]] = {
     "failed": frozenset(),
     "accepted": frozenset(),
 }
+WRITER_OUTPUT_ADMISSION_FINGERPRINT_KEY = "writer_output_admission_fingerprint"
 
 
 class CandidateTransitionError(ValueError):
@@ -54,6 +55,18 @@ def candidate_plan_revision(chapter_plan: ChapterPlan) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def candidate_writer_output_admission_fingerprint(
+    candidate: CandidateDraftRecord,
+) -> str:
+    try:
+        metadata = json.loads(str(candidate.metadata_json or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get(WRITER_OUTPUT_ADMISSION_FINGERPRINT_KEY) or "").strip()
+
+
 def _dump_json(value: Any, *, fallback: Any) -> str:
     payload = fallback if value is None else value
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -81,7 +94,9 @@ class CandidateDraftRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get(self, candidate_id: str, *, for_update: bool = False) -> CandidateDraftRecord | None:
+    def get(
+        self, candidate_id: str, *, for_update: bool = False
+    ) -> CandidateDraftRecord | None:
         statement = select(CandidateDraftRecord).where(
             CandidateDraftRecord.id == str(candidate_id or "")
         )
@@ -147,7 +162,9 @@ class CandidateDraftRepository:
                 max(1, int(policy_version or 1)),
             )
             if immutable != requested:
-                raise ValueError("candidate draft already belongs to a different immutable version")
+                raise ValueError(
+                    "candidate draft already belongs to a different immutable version"
+                )
             return existing
 
         chapter_number = int(
@@ -168,6 +185,11 @@ class CandidateDraftRepository:
         metadata.setdefault(
             "char_count",
             int(writer_output.char_count or len(writer_output.body or "")),
+        )
+        from forwin.naming import writer_output_admission_fingerprint
+
+        metadata[WRITER_OUTPUT_ADMISSION_FINGERPRINT_KEY] = (
+            writer_output_admission_fingerprint(writer_output)
         )
         row = CandidateDraftRecord(
             project_id=project_id,
@@ -219,7 +241,9 @@ class CandidateDraftRepository:
         current = str(row.status or "drafted")
         target = str(next_status or "").strip()
         if target not in LEGAL_CANDIDATE_TRANSITIONS.get(current, frozenset()):
-            raise CandidateTransitionError(f"illegal candidate transition: {current} -> {target}")
+            raise CandidateTransitionError(
+                f"illegal candidate transition: {current} -> {target}"
+            )
         row.status = target
         row.canon_status = "canon" if target == "accepted" else "candidate"
         if target == "accepted":
@@ -270,10 +294,12 @@ class CandidateDraftRepository:
         self.session.flush()
         return row
 
+
 __all__ = [
     "CandidateDraftRepository",
     "CandidateTransitionError",
     "LEGAL_CANDIDATE_TRANSITIONS",
     "candidate_body_hash",
     "candidate_plan_revision",
+    "candidate_writer_output_admission_fingerprint",
 ]

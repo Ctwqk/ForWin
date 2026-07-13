@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -28,7 +29,11 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan
-from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
+from forwin.naming import (
+    EntityAdmissionDecision,
+    EntityAdmissionPlan,
+    writer_output_admission_fingerprint,
+)
 import forwin.outbox.store as outbox_store
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NodePatch
 from forwin.protocol.writer import WriterOutput
@@ -135,7 +140,7 @@ def prepared_canon() -> PreparedCanon:
         entity_plan = EntityAdmissionPlan(
             project_id=project.id,
             chapter_number=1,
-            candidate_fingerprint=candidate.body_hash,
+            candidate_fingerprint=writer_output_admission_fingerprint(output),
             decisions=[
                 EntityAdmissionDecision(
                     mention_name="Shen Linchuan",
@@ -354,16 +359,17 @@ def test_outbox_internal_failure_rolls_back_every_authoritative_write(
         assert message in candidate.failure_reason
 
 
-def test_candidate_change_after_entity_plan_preparation_is_stale(
+def test_entity_admission_fingerprint_change_after_preparation_is_stale(
     prepared_canon: PreparedCanon,
 ) -> None:
     with prepared_canon.Session.begin() as session:
         candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
         assert candidate is not None
-        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
-        assert draft is not None
-        draft.body_text += " The candidate changed after entity admission."
-        session.add(draft)
+        metadata = json.loads(candidate.metadata_json)
+        assert metadata["writer_output_admission_fingerprint"]
+        metadata["writer_output_admission_fingerprint"] = "changed-after-prepare"
+        candidate.metadata_json = json.dumps(metadata, sort_keys=True)
+        session.add(candidate)
     before = _authoritative_snapshot(prepared_canon)
 
     outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
@@ -373,7 +379,7 @@ def test_candidate_change_after_entity_plan_preparation_is_stale(
     assert outcome.blocked is True
     assert outcome.stale is True
     assert outcome.block_kind == "stale_canon_plan"
-    assert "candidate body changed" in outcome.failure_reason
+    assert "entity admission candidate fingerprint changed" in outcome.failure_reason
     assert _authoritative_snapshot(prepared_canon) == before
 
 
@@ -405,6 +411,11 @@ def test_alias_conflict_created_after_entity_plan_preparation_rolls_back(
     )
 
     assert outcome.blocked is True
-    assert outcome.block_kind == "canon_write_failed"
+    assert outcome.block_kind == "stale_canon_plan"
+    assert outcome.stale is True
     assert "belongs to another entity" in outcome.failure_reason
     assert _authoritative_snapshot(prepared_canon) == before
+    with prepared_canon.Session() as session:
+        candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
+        assert candidate is not None
+        assert candidate.status == "ready_for_canon"

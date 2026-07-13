@@ -219,6 +219,9 @@ def execute_pipeline_task(
                 task_id,
                 status=result.status,
                 project_id=result.project_id,
+                completed_chapters=list(
+                    getattr(result, "completed_chapters", []) or []
+                ),
                 failed_chapters=result.failed_chapters,
                 paused_chapters=result.paused_chapters,
                 frozen_artifacts=result.frozen_artifacts,

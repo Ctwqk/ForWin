@@ -14,6 +14,7 @@ from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_body_hash,
     candidate_plan_revision,
+    candidate_writer_output_admission_fingerprint,
 )
 from forwin.models.base import new_id
 from forwin.models.book_state import GraphDeltaRow
@@ -122,10 +123,13 @@ class CanonAdmissionService:
                 session.flush()
                 inject("book_state")
 
-                EntityAdmissionCommitter(session).apply(
-                    project_id=plan.project_id,
-                    plan=plan.entity_admission_plan,
-                )
+                try:
+                    EntityAdmissionCommitter(session).apply(
+                        project_id=plan.project_id,
+                        plan=plan.entity_admission_plan,
+                    )
+                except ValueError as exc:
+                    raise CanonStaleVersion(str(exc)) from exc
                 session.flush()
                 inject("entity")
 
@@ -274,6 +278,13 @@ class CanonAdmissionService:
             raise CanonStaleVersion("candidate Canon plan is invalid") from exc
         if persisted_plan != plan:
             raise CanonStaleVersion("candidate Canon plan changed")
+        if (
+            candidate_writer_output_admission_fingerprint(candidate)
+            != plan.entity_admission_plan.candidate_fingerprint
+        ):
+            raise CanonStaleVersion(
+                "entity admission candidate fingerprint changed after preparation"
+            )
 
         draft = session.execute(
             select(ChapterDraft)

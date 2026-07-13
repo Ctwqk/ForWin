@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.plan import CanonCommitPlan
 from sqlalchemy.exc import IntegrityError
 
 from forwin.application.errors import (
@@ -27,7 +31,7 @@ from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
 )
-from forwin.models.project import Project
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
@@ -146,7 +150,26 @@ class GenerationApplicationService:
         *,
         resume_from_chapter: int,
         worker_id: str,
+        claim_kind: str = "queued",
     ) -> None:
+        if str(claim_kind or "") == "expired_running":
+            resume_from_chapter = self._recover_committed_chapter(
+                task,
+                resume_from_chapter=max(0, int(resume_from_chapter or 0)),
+            )
+        completed_chapters = _task_chapter_numbers(task.completed_chapters_json)
+        if int(task.requested_chapters or 0) > 0 and len(completed_chapters) >= int(
+            task.requested_chapters or 0
+        ):
+            self._task_updater()(
+                task.id,
+                status="completed",
+                current_stage="completed",
+                current_chapter=max(completed_chapters, default=0),
+                completed_chapters=completed_chapters,
+                message="已从 Canon 提交恢复任务进度。",
+            )
+            return
         payload = payload_from_json(task.execution_payload_json)
         context = build_execution_context(
             self.infrastructure,
@@ -182,7 +205,7 @@ class GenerationApplicationService:
             logging.getLogger(__name__),
             should_abort=self._task_flag(task.id, "cancel_requested"),
             should_pause=self._task_flag(task.id, "pause_requested"),
-            max_chapters=int(task.max_chapters or payload.max_chapters or 0) or None,
+            max_chapters=self._remaining_max_chapters(task, payload),
             resume_from_chapter=resume_from_chapter,
             completion_handler=self._completion_handler(task.id, payload),
             component="worker",
@@ -191,9 +214,102 @@ class GenerationApplicationService:
     def _task_updater(self):
         def update(task_id: str, **changes: object) -> None:
             with self.session_factory.begin() as session:
-                GenerationTaskRepository(session).update(task_id, changes)
+                normalized = dict(changes)
+                if "completed_chapters" in normalized:
+                    task = session.get(GenerationTask, task_id)
+                    existing = _task_chapter_numbers(
+                        task.completed_chapters_json if task is not None else "[]"
+                    )
+                    incoming = [
+                        int(chapter)
+                        for chapter in normalized.get("completed_chapters", []) or []
+                    ]
+                    normalized["completed_chapters"] = list(
+                        dict.fromkeys([*existing, *incoming])
+                    )
+                GenerationTaskRepository(session).update(task_id, normalized)
 
         return update
+
+    def _recover_committed_chapter(
+        self,
+        task: GenerationTask,
+        *,
+        resume_from_chapter: int,
+    ) -> int:
+        chapter_number = max(0, int(resume_from_chapter or 0))
+        if chapter_number < 1:
+            return chapter_number
+        completed = _task_chapter_numbers(task.completed_chapters_json)
+        if chapter_number in completed:
+            return chapter_number + 1
+        with self.session_factory() as session:
+            chapter = (
+                session.query(ChapterPlan)
+                .filter(
+                    ChapterPlan.project_id == task.project_id,
+                    ChapterPlan.chapter_number == chapter_number,
+                )
+                .first()
+            )
+            if chapter is None or str(chapter.status or "") != "accepted":
+                return chapter_number
+            candidate = CandidateDraftRepository(session).latest_for_chapter(
+                project_id=str(task.project_id or ""),
+                chapter_number=chapter_number,
+            )
+            if candidate is None or str(candidate.status or "") != "accepted":
+                raise PermanentConfigurationError(
+                    "accepted chapter has no accepted v5 candidate"
+                )
+            try:
+                plan = CanonCommitPlan.model_validate_json(
+                    candidate.canon_commit_plan_json
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise PermanentConfigurationError(
+                    "accepted candidate has no valid Canon commit plan"
+                ) from exc
+
+        outcome = CanonAdmissionService(
+            session_factory=self.session_factory
+        ).commit_plan(plan)
+        if outcome.blocked or not outcome.idempotent:
+            raise PermanentConfigurationError(
+                "accepted chapter Canon commit could not be replayed idempotently"
+            )
+        completed = list(dict.fromkeys([*completed, chapter_number]))
+        failed = [
+            number
+            for number in _task_chapter_numbers(task.failed_chapters_json)
+            if number != chapter_number
+        ]
+        paused = [
+            number
+            for number in _task_chapter_numbers(task.paused_chapters_json)
+            if number != chapter_number
+        ]
+        self._task_updater()(
+            task.id,
+            current_chapter=chapter_number,
+            completed_chapters=completed,
+            failed_chapters=failed,
+            paused_chapters=paused,
+            message=f"已从 Canon 提交恢复第{chapter_number}章进度。",
+        )
+        task.completed_chapters_json = json.dumps(completed, ensure_ascii=False)
+        task.failed_chapters_json = json.dumps(failed, ensure_ascii=False)
+        task.paused_chapters_json = json.dumps(paused, ensure_ascii=False)
+        task.current_chapter = chapter_number
+        return chapter_number + 1
+
+    @staticmethod
+    def _remaining_max_chapters(task: GenerationTask, payload) -> int | None:
+        configured = int(task.max_chapters or payload.max_chapters or 0)
+        if configured <= 0:
+            return None
+        completed = len(_task_chapter_numbers(task.completed_chapters_json))
+        return max(1, configured - completed)
 
     def _task_flag(self, task_id: str, attribute: str):
         def read() -> bool:
@@ -247,3 +363,21 @@ __all__ = [
     "GenerationRunner",
     "GenerationTaskHandle",
 ]
+
+
+def _task_chapter_numbers(raw: str) -> list[int]:
+    try:
+        payload = json.loads(str(raw or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    result: list[int] = []
+    for item in payload:
+        try:
+            number = int(item)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in result:
+            result.append(number)
+    return result

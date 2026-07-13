@@ -109,6 +109,7 @@ def run_one_generation_task(
                     task,
                     resume_from_chapter=resume_from_chapter,
                     worker_id=worker_id,
+                    claim_kind=claim.claim_kind,
                 )
             finally:
                 stop_periodic_heartbeat()
@@ -181,7 +182,9 @@ def _start_periodic_heartbeat(
                         lease_seconds=lease_seconds,
                     )
             except Exception:
-                logger.exception("Periodic heartbeat failed for generation task %s", task_id)
+                logger.exception(
+                    "Periodic heartbeat failed for generation task %s", task_id
+                )
                 continue
             if not heartbeat_ok:
                 record_worker_heartbeat_failed(

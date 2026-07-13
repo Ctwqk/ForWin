@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.candidate_drafts import candidate_body_hash
+from forwin.candidate_drafts import candidate_writer_output_admission_fingerprint
 from forwin.book_state.extraction.contract import BookStateExtractionRequest
 from forwin.book_state.extraction.contract import BookStateExtractionResult
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
@@ -332,6 +333,20 @@ class CanonPreparationService:
             raise ValueError("BookState project mismatch")
         if int(approved_book_state_changes.chapter_number or 0) != chapter_number:
             raise ValueError("BookState chapter mismatch")
+        admission_fingerprint = candidate_writer_output_admission_fingerprint(candidate)
+        if (
+            not admission_fingerprint
+            or entity_admission_plan.candidate_fingerprint != admission_fingerprint
+        ):
+            _mark_candidate_needs_review(
+                repository,
+                candidate.id,
+                reason="entity admission candidate fingerprint mismatch",
+            )
+            return CanonPreparationOutcome(
+                block_kind="entity_admission",
+                blocked_path="entity admission candidate fingerprint mismatch",
+            )
         if entity_admission_plan.blocked:
             _mark_candidate_needs_review(
                 repository,

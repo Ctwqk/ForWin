@@ -26,8 +26,14 @@ from tests.postgres import postgres_test_url
 
 
 def _application_service(Session, database_url: str, execute):
-    def execute_claimed(task, *, resume_from_chapter: int, worker_id: str) -> None:
-        _ = worker_id
+    def execute_claimed(
+        task,
+        *,
+        resume_from_chapter: int,
+        worker_id: str,
+        claim_kind: str,
+    ) -> None:
+        _ = worker_id, claim_kind
         execute(task, resume_from_chapter)
 
     return SimpleNamespace(

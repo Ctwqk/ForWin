@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -40,6 +41,12 @@ class TelemetryMixin:
         duration_ms: int = 0,
         input_chars: int | None = None,
         output_chars: int = 0,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        total_tokens: int | None = None,
+        usage_source: Literal[
+            "provider", "codex_bridge", "estimated", "missing"
+        ] = "missing",
         retry_after: float | None = None,
         sleep_ms: int = 0,
         error_class: str = "",
@@ -62,7 +69,9 @@ class TelemetryMixin:
         preferred_model: str = "",
     ) -> None:
         base_url = str(profile.get("base_url") or "")
-        request_text = json.dumps(request_payload or {}, ensure_ascii=False, sort_keys=True)
+        request_text = json.dumps(
+            request_payload or {}, ensure_ascii=False, sort_keys=True
+        )
         response_text = str(response_text or "")
         self.llm_attempt_events.append(
             {
@@ -70,6 +79,10 @@ class TelemetryMixin:
                 "profile_id": str(profile.get("id") or ""),
                 "profile_name": str(profile.get("name") or ""),
                 "model": str(profile.get("model") or ""),
+                "provider": str(
+                    profile.get("provider_kind")
+                    or getattr(self, "provider", "openai_compatible")
+                ),
                 "base_url_host": urlparse(base_url).netloc or base_url,
                 "temperature": temperature,
                 "requested_temperature": (
@@ -94,6 +107,16 @@ class TelemetryMixin:
                     else len(json.dumps(messages, ensure_ascii=False))
                 ),
                 "output_chars": int(output_chars or 0),
+                "prompt_tokens": (
+                    int(prompt_tokens) if prompt_tokens is not None else None
+                ),
+                "completion_tokens": (
+                    int(completion_tokens) if completion_tokens is not None else None
+                ),
+                "total_tokens": (
+                    int(total_tokens) if total_tokens is not None else None
+                ),
+                "usage_source": usage_source,
                 "response_format": response_format or {},
                 "task_family": str(task_family or ""),
                 "stage_key": str(stage_key or ""),
@@ -112,9 +135,15 @@ class TelemetryMixin:
                 "route_policy_version": _LLM_ROUTE_POLICY_VERSION,
                 "candidate_chain": list(candidate_chain or []),
                 "skipped_profiles": list(skipped_profiles or []),
-                "request_hash": self._hash_text(request_text) if request_payload else "",
-                "response_hash": self._hash_text(response_text) if response_text else "",
-                "response_preview": self._redact_error_preview(response_text, profile) if response_text else "",
+                "request_hash": self._hash_text(request_text)
+                if request_payload
+                else "",
+                "response_hash": self._hash_text(response_text)
+                if response_text
+                else "",
+                "response_preview": self._redact_error_preview(response_text, profile)
+                if response_text
+                else "",
                 "_raw_request_payload": request_payload or {},
                 "_raw_response_text": response_text,
             }
@@ -122,5 +151,5 @@ class TelemetryMixin:
 
 
 __all__ = [
-    'TelemetryMixin',
+    "TelemetryMixin",
 ]

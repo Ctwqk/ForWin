@@ -41,6 +41,10 @@ _SAFE_KEY_EXACT = {
     "raw_output_preview",
     "input_chars",
     "output_chars",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "usage_source",
 }
 
 
@@ -68,7 +72,9 @@ def redact_payload(value: Any) -> Any:
 
 def stack_hash(exc: BaseException) -> str:
     frames = traceback.extract_tb(exc.__traceback__)
-    signature = "|".join(f"{frame.filename}:{frame.name}:{frame.lineno}" for frame in frames)
+    signature = "|".join(
+        f"{frame.filename}:{frame.name}:{frame.lineno}" for frame in frames
+    )
     if not signature:
         signature = exc.__class__.__name__
     return hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]

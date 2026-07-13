@@ -112,11 +112,12 @@ def _canon_quality_gate_outcome(
         issue_keys=issue_keys,
         issue_groups=list(
             dict.fromkeys(
-                issue_group_for_issue(issue_type=issue_key)
-                for issue_key in issue_keys
+                issue_group_for_issue(issue_type=issue_key) for issue_key in issue_keys
             )
         ),
-        evidence_refs=list(dict.fromkeys(str(ref) for ref in evidence_refs if str(ref))),
+        evidence_refs=list(
+            dict.fromkeys(str(ref) for ref in evidence_refs if str(ref))
+        ),
     )
 
 
@@ -191,6 +192,7 @@ def _safe_prompt_trace_attempts(
         "profile_id",
         "profile_name",
         "model",
+        "provider",
         "preferred_provider_kind",
         "preferred_model",
         "base_url_host",
@@ -203,6 +205,10 @@ def _safe_prompt_trace_attempts(
         "duration_ms",
         "input_chars",
         "output_chars",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "usage_source",
         "task_family",
         "stage_key",
         "llm_task_route",
@@ -417,9 +423,7 @@ def _apply_canon_quality_gate(
         candidate_id=candidate_id,
         policy_version=policy_version,
         signal_types=[signal.signal_type for signal in gate_signals],
-        evidence_refs=[
-            ref for signal in gate_signals for ref in signal.evidence_refs
-        ],
+        evidence_refs=[ref for signal in gate_signals for ref in signal.evidence_refs],
     )
     self._record_decision_event(
         updater=updater,

@@ -1,11 +1,74 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
 
 from .router import LLMCallIntent
+
+
+def _token_count(usage: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _normalized_usage(payload: dict[str, Any]) -> dict[str, int | None] | None:
+    candidates: list[dict[str, Any]] = []
+    direct = payload.get("usage")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    for event in reversed(list(payload.get("raw_events") or [])):
+        if not isinstance(event, dict):
+            continue
+        for container in (event, event.get("payload")):
+            if not isinstance(container, dict):
+                continue
+            for key in ("usage", "token_usage"):
+                value = container.get(key)
+                if isinstance(value, dict):
+                    candidates.append(value)
+    for usage in candidates:
+        prompt_tokens = _token_count(
+            usage, "prompt_tokens", "input_tokens", "input_token_count"
+        )
+        completion_tokens = _token_count(
+            usage, "completion_tokens", "output_tokens", "output_token_count"
+        )
+        total_tokens = _token_count(usage, "total_tokens", "total_token_count")
+        if (
+            total_tokens is None
+            and prompt_tokens is not None
+            and completion_tokens is not None
+        ):
+            total_tokens = prompt_tokens + completion_tokens
+        if any(
+            value is not None
+            for value in (prompt_tokens, completion_tokens, total_tokens)
+        ):
+            return {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+    return None
+
+
+def _estimate_tokens(text: str) -> int:
+    value = str(text or "")
+    if not value:
+        return 0
+    non_ascii = sum(1 for character in value if ord(character) > 127)
+    ascii_chars = len(value) - non_ascii
+    return max(1, int(non_ascii * 0.5 + ascii_chars * 0.25))
 
 
 class CodexBridgeClient:
@@ -19,7 +82,11 @@ class CodexBridgeClient:
         self.bridge_url = bridge_url.rstrip("/")
         self.token = token
         self.timeout_seconds = max(5.0, float(timeout_seconds))
-        self.client = httpx.Client(timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds)))
+        self.client = httpx.Client(
+            timeout=httpx.Timeout(
+                self.timeout_seconds, connect=min(10.0, self.timeout_seconds)
+            )
+        )
         self.last_call_trace: dict[str, Any] = {}
 
     def health(self) -> dict[str, Any]:
@@ -40,7 +107,9 @@ class CodexBridgeClient:
         **_: object,
     ) -> str:
         raw_output_schema = intent.output_schema
-        json_mode = bool(response_format and response_format.get("type") == "json_object")
+        json_mode = bool(
+            response_format and response_format.get("type") == "json_object"
+        )
         output_schema = self._structured_output_schema(raw_output_schema)
         prompt = self._prompt_from_messages(
             messages,
@@ -64,7 +133,9 @@ class CodexBridgeClient:
             "model": request_payload["model"],
             "requested_model": request_payload["model"],
             "request": request_payload,
+            "input_chars": len(prompt),
         }
+        started_at = time.perf_counter()
         try:
             response = self.client.post(
                 f"{self.bridge_url}/v1/codex/chat",
@@ -76,6 +147,9 @@ class CodexBridgeClient:
                 {
                     "response": None,
                     "error": f"{exc.__class__.__name__}: {exc}",
+                    "duration_ms": max(
+                        0, int((time.perf_counter() - started_at) * 1000)
+                    ),
                 }
             )
             raise
@@ -86,6 +160,18 @@ class CodexBridgeClient:
         evidence = payload.get("detail") if isinstance(payload, dict) else None
         if not isinstance(evidence, dict):
             evidence = payload if isinstance(payload, dict) else {}
+        content = str(evidence.get("content", "") or "")
+        usage = _normalized_usage(evidence)
+        usage_source = "codex_bridge"
+        if usage is None:
+            prompt_tokens = _estimate_tokens(prompt)
+            completion_tokens = _estimate_tokens(content)
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+            usage_source = "estimated"
         self.last_call_trace.update(
             {
                 "response": payload,
@@ -95,12 +181,17 @@ class CodexBridgeClient:
                 "returncode": int(evidence.get("returncode") or 0),
                 "actual_model": str(evidence.get("actual_model") or "").strip(),
                 "thread_id": str(evidence.get("thread_id") or "").strip(),
+                "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
+                "output_chars": len(content),
+                **usage,
+                "usage": usage,
+                "usage_source": usage_source,
             }
         )
         response.raise_for_status()
         if not evidence.get("ok", False):
             raise RuntimeError(str(evidence.get("error") or "Codex bridge call failed"))
-        return str(evidence.get("content", "") or "")
+        return content
 
     def submit_job(
         self,
@@ -148,7 +239,9 @@ class CodexBridgeClient:
             "If the user requests JSON, return a single JSON object.",
         ]
         if json_mode:
-            instructions.append("This invocation is in JSON mode: return only valid JSON, with no markdown or prose.")
+            instructions.append(
+                "This invocation is in JSON mode: return only valid JSON, with no markdown or prose."
+            )
         return "\n\n".join(
             [
                 "# ForWin Codex Invocation",
@@ -165,7 +258,9 @@ class CodexBridgeClient:
         )
 
     @staticmethod
-    def _structured_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _structured_output_schema(
+        schema: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
         if not isinstance(schema, dict):
             return None
         schema_type = str(schema.get("type", "") or "").strip()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -88,6 +90,7 @@ class LLMCallRouter:
         self._fallback_events: list[dict[str, str]] = []
         self.last_call_result: LLMCallResult | None = None
         self._last_codex_trace: dict[str, Any] = {}
+        self._codex_attempt_events: list[dict[str, object]] = []
 
     def chat(
         self,
@@ -113,7 +116,9 @@ class LLMCallRouter:
         codex_policy = self._codex_policy(resolved_intent)
         if codex_policy == "codex_primary":
             try:
-                content = self._chat_with_codex(messages, intent=resolved_intent, **kwargs)
+                content = self._chat_with_codex(
+                    messages, intent=resolved_intent, **kwargs
+                )
                 result = LLMCallResult(
                     content=content,
                     backend="codex_bridge",
@@ -156,7 +161,9 @@ class LLMCallRouter:
                 raise
             ordinary_reason = str(ordinary_exc)
             try:
-                content = self._chat_with_codex(messages, intent=resolved_intent, **kwargs)
+                content = self._chat_with_codex(
+                    messages, intent=resolved_intent, **kwargs
+                )
             except Exception as codex_exc:
                 self.last_call_result = self._failed_result(
                     resolved_intent,
@@ -244,8 +251,13 @@ class LLMCallRouter:
         self._last_codex_trace = {"model": model, "requested_model": model}
         if isinstance(getattr(self.codex_client, "last_call_trace", None), dict):
             self.codex_client.last_call_trace = {}
+        content = ""
+        failure: Exception | None = None
         try:
             content = self.codex_client.chat(messages, intent=intent, **codex_kwargs)
+        except Exception as exc:
+            failure = exc
+            raise
         finally:
             client_trace = getattr(self.codex_client, "last_call_trace", None)
             if isinstance(client_trace, dict):
@@ -256,9 +268,148 @@ class LLMCallRouter:
                         or client_trace.get("model")
                         or model
                     ),
-                    "requested_model": str(client_trace.get("requested_model") or model),
+                    "requested_model": str(
+                        client_trace.get("requested_model") or model
+                    ),
                 }
+            self._codex_attempt_events.append(
+                self._codex_attempt(
+                    messages=messages,
+                    intent=intent,
+                    kwargs=codex_kwargs,
+                    content=content,
+                    trace=self._last_codex_trace,
+                    failure=failure,
+                )
+            )
         return content
+
+    @staticmethod
+    def _codex_attempt(
+        *,
+        messages: list[dict],
+        intent: LLMCallIntent,
+        kwargs: dict[str, Any],
+        content: str,
+        trace: dict[str, Any],
+        failure: Exception | None,
+    ) -> dict[str, object]:
+        input_chars = int(
+            trace.get("input_chars") or len(json.dumps(messages, ensure_ascii=False))
+        )
+        output_chars = int(trace.get("output_chars") or len(content))
+        prompt_tokens = LLMCallRouter._optional_token_count(trace.get("prompt_tokens"))
+        completion_tokens = LLMCallRouter._optional_token_count(
+            trace.get("completion_tokens")
+        )
+        total_tokens = LLMCallRouter._optional_token_count(trace.get("total_tokens"))
+        usage_source = str(trace.get("usage_source") or "").strip()
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            raw_usage = LLMCallRouter._usage_from_raw_events(trace)
+            prompt_tokens = raw_usage.get("prompt_tokens")
+            completion_tokens = raw_usage.get("completion_tokens")
+            total_tokens = raw_usage.get("total_tokens")
+            if raw_usage:
+                usage_source = "codex_bridge"
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            prompt_tokens = LLMCallRouter._estimate_tokens_from_chars(input_chars)
+            completion_tokens = LLMCallRouter._estimate_tokens_from_chars(output_chars)
+            total_tokens = prompt_tokens + completion_tokens
+            usage_source = "estimated"
+        elif (
+            total_tokens is None
+            and prompt_tokens is not None
+            and completion_tokens is not None
+        ):
+            total_tokens = prompt_tokens + completion_tokens
+        if not usage_source:
+            usage_source = "codex_bridge"
+        http_status = int(trace.get("http_status") or 0)
+        if not http_status and failure is None:
+            http_status = 200
+        raw_response = trace.get("raw_response_text")
+        if not raw_response and trace.get("response") is not None:
+            raw_response = json.dumps(
+                trace["response"], ensure_ascii=False, sort_keys=True
+            )
+        return {
+            "attempt_group_id": uuid.uuid4().hex,
+            "attempt_no": 1,
+            "profile_id": "codex_bridge",
+            "profile_name": "Codex Bridge",
+            "provider": "codex_bridge",
+            "model": str(trace.get("actual_model") or trace.get("model") or ""),
+            "base_url_host": "codex_bridge",
+            "http_status": http_status,
+            "provider_request_id": str(trace.get("thread_id") or ""),
+            "duration_ms": int(trace.get("duration_ms") or 0),
+            "input_chars": input_chars,
+            "output_chars": output_chars,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "usage_source": usage_source,
+            "task_family": intent.task_family,
+            "stage_key": intent.stage_key,
+            "llm_task_route": "codex_bridge",
+            "requested_temperature": float(kwargs.get("temperature") or 0.85),
+            "requested_max_tokens": int(kwargs.get("max_tokens") or 16384),
+            "error_class": failure.__class__.__name__ if failure else "",
+            "error_message": str(failure or ""),
+            "error_category": "codex_bridge" if failure else "",
+            "retryable": False,
+            "fallback_eligible": failure is not None,
+            "final_failure": failure is not None,
+            "_raw_request_payload": trace.get("request") or {"messages": messages},
+            "_raw_response_text": str(raw_response or content or ""),
+        }
+
+    @staticmethod
+    def _usage_from_raw_events(trace: dict[str, Any]) -> dict[str, int | None]:
+        for event in reversed(list(trace.get("raw_events") or [])):
+            if not isinstance(event, dict):
+                continue
+            usage = event.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            prompt_tokens = LLMCallRouter._optional_token_count(
+                usage.get("prompt_tokens", usage.get("input_tokens"))
+            )
+            completion_tokens = LLMCallRouter._optional_token_count(
+                usage.get("completion_tokens", usage.get("output_tokens"))
+            )
+            total_tokens = LLMCallRouter._optional_token_count(
+                usage.get("total_tokens")
+            )
+            if (
+                total_tokens is None
+                and prompt_tokens is not None
+                and completion_tokens is not None
+            ):
+                total_tokens = prompt_tokens + completion_tokens
+            if any(
+                value is not None
+                for value in (prompt_tokens, completion_tokens, total_tokens)
+            ):
+                return {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                }
+        return {}
+
+    @staticmethod
+    def _optional_token_count(value: object) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _estimate_tokens_from_chars(chars: int) -> int:
+        return max(0, int(max(0, chars) * 0.25))
 
     def _should_use_codex(self, intent: LLMCallIntent) -> bool:
         return self._codex_policy(intent) == "codex_primary"
@@ -278,7 +429,8 @@ class LLMCallRouter:
             return "codex_primary"
         if family in WRITER_FAMILIES:
             if stage in CODEX_PRIMARY_WRITER_STAGES or any(
-                token in stage for token in ("state_event", "thread_time", "lore_timeline")
+                token in stage
+                for token in ("state_event", "thread_time", "lore_timeline")
             ):
                 return "codex_primary"
             if stage in ORDINARY_PRIMARY_WRITER_STAGES or any(
@@ -293,16 +445,22 @@ class LLMCallRouter:
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
         events = list(self._fallback_events)
         self._fallback_events.clear()
-        ordinary_drain = getattr(self.ordinary_adapter, "drain_model_fallback_events", None)
+        ordinary_drain = getattr(
+            self.ordinary_adapter, "drain_model_fallback_events", None
+        )
         if callable(ordinary_drain):
             events.extend(list(ordinary_drain() or []))
         return events
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:
-        ordinary_drain = getattr(self.ordinary_adapter, "drain_llm_attempt_events", None)
+        events = list(self._codex_attempt_events)
+        self._codex_attempt_events.clear()
+        ordinary_drain = getattr(
+            self.ordinary_adapter, "drain_llm_attempt_events", None
+        )
         if callable(ordinary_drain):
-            return list(ordinary_drain() or [])
-        return []
+            events.extend(list(ordinary_drain() or []))
+        return events
 
     def close(self) -> None:
         close_codex = getattr(self.codex_client, "close", None)
@@ -325,7 +483,9 @@ class RoutedModelAdapter:
         self.api_key = getattr(self.ordinary_adapter, "api_key", "")
         self.profile_id = getattr(self.ordinary_adapter, "profile_id", "")
         self.profile_name = getattr(self.ordinary_adapter, "profile_name", "")
-        self.capabilities: ModelCapabilities = adapter_capabilities(self.ordinary_adapter)
+        self.capabilities: ModelCapabilities = adapter_capabilities(
+            self.ordinary_adapter
+        )
         self.last_call_result: LLMCallResult | None = None
 
     def chat(
@@ -362,9 +522,17 @@ class RoutedModelAdapter:
                     stage_key=stage_key,
                     latency_class=latency_class,
                     output_schema=output_schema,
-                    codex_allowed=bool(codex_allowed and (not deterministic_route_requested or preferred_codex_requested)),
+                    codex_allowed=bool(
+                        codex_allowed
+                        and (
+                            not deterministic_route_requested
+                            or preferred_codex_requested
+                        )
+                    ),
                     permission_profile=permission_profile,
-                    codex_model=preferred_model_text if preferred_codex_requested else "",
+                    codex_model=preferred_model_text
+                    if preferred_codex_requested
+                    else "",
                 ),
                 temperature=temperature,
                 max_tokens=max_tokens,

@@ -22,6 +22,44 @@ _LLM_ROUTE_POLICY_VERSION = "v3.8-stage-aware-hard-replacement"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
+def _provider_token_usage(
+    data: object,
+) -> tuple[int | None, int | None, int | None, str]:
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return None, None, None, "missing"
+
+    def token_count(*keys: str) -> int | None:
+        for key in keys:
+            value = usage.get(key)
+            if isinstance(value, bool) or value is None:
+                continue
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    prompt_tokens = token_count("prompt_tokens", "input_tokens")
+    completion_tokens = token_count("completion_tokens", "output_tokens")
+    total_tokens = token_count("total_tokens")
+    if (
+        total_tokens is None
+        and prompt_tokens is not None
+        and completion_tokens is not None
+    ):
+        total_tokens = prompt_tokens + completion_tokens
+    source = (
+        "provider"
+        if any(
+            value is not None
+            for value in (prompt_tokens, completion_tokens, total_tokens)
+        )
+        else "missing"
+    )
+    return prompt_tokens, completion_tokens, total_tokens, source
+
+
 class OpenAICompatibleAdapter(
     TransportMixin,
     TelemetryMixin,
@@ -90,10 +128,24 @@ class OpenAICompatibleAdapter(
         - Any other HTTP error: raise immediately.
         """
         request_timeout = httpx.Timeout(
-            max(5.0, float(timeout_seconds if timeout_seconds is not None else self.timeout_seconds)),
+            max(
+                5.0,
+                float(
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else self.timeout_seconds
+                ),
+            ),
             connect=min(
                 10.0,
-                max(5.0, float(timeout_seconds if timeout_seconds is not None else self.timeout_seconds)),
+                max(
+                    5.0,
+                    float(
+                        timeout_seconds
+                        if timeout_seconds is not None
+                        else self.timeout_seconds
+                    ),
+                ),
             ),
         )
 
@@ -165,7 +217,8 @@ class OpenAICompatibleAdapter(
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
                     explicit_timeout=timeout_seconds is not None,
-                    fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
+                    fallback_eligible_on_profile_failure=profile_index
+                    < len(profiles) - 1,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
                     preferred_provider_kind=preferred_provider_kind,
@@ -173,9 +226,14 @@ class OpenAICompatibleAdapter(
                 )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException)) and not retry_on_timeout:
+                if (
+                    isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException))
+                    and not retry_on_timeout
+                ):
                     raise
-                if profile_index >= len(profiles) - 1 or not self._is_fallback_retryable(exc):
+                if profile_index >= len(
+                    profiles
+                ) - 1 or not self._is_fallback_retryable(exc):
                     raise
                 next_profile = profiles[profile_index + 1]
                 event = {
@@ -252,7 +310,9 @@ class OpenAICompatibleAdapter(
             "model": profile["model"],
             "messages": effective_messages,
         }
-        payload[self._max_tokens_payload_key_for_profile(profile)] = effective_max_tokens
+        payload[self._max_tokens_payload_key_for_profile(profile)] = (
+            effective_max_tokens
+        )
         if send_temperature:
             payload["temperature"] = effective_temperature
         thinking = self._thinking_payload_for_profile(profile)
@@ -298,16 +358,24 @@ class OpenAICompatibleAdapter(
                         attempt_no=attempt_no,
                         http_status=response.status_code,
                         provider_request_id=self._provider_request_id(response),
-                        duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                        duration_ms=max(
+                            0, int((time.perf_counter() - attempt_started_at) * 1000)
+                        ),
                         retry_after=retry_delay,
-                        sleep_ms=int(retry_delay * 1000) if attempt < self.retry_attempts - 1 else 0,
-                        error_class="HTTPStatusError" if attempt >= self.retry_attempts - 1 else "",
+                        sleep_ms=int(retry_delay * 1000)
+                        if attempt < self.retry_attempts - 1
+                        else 0,
+                        error_class="HTTPStatusError"
+                        if attempt >= self.retry_attempts - 1
+                        else "",
                         error_message=(
                             self._http_error_message_from_response(response, profile)
                             if attempt >= self.retry_attempts - 1
                             else ""
                         ),
-                        error_category=self._error_category_for_status(response.status_code),
+                        error_category=self._error_category_for_status(
+                            response.status_code
+                        ),
                         retryable=True,
                         fallback_eligible=(
                             fallback_eligible_on_profile_failure
@@ -357,7 +425,9 @@ class OpenAICompatibleAdapter(
                         attempt_no=attempt_no,
                         http_status=response.status_code,
                         provider_request_id=self._provider_request_id(response),
-                        duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                        duration_ms=max(
+                            0, int((time.perf_counter() - attempt_started_at) * 1000)
+                        ),
                         error_class=exc.__class__.__name__,
                         error_message=str(exc),
                         error_category="parse_error",
@@ -378,6 +448,12 @@ class OpenAICompatibleAdapter(
                     )
                     setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
                     raise
+                (
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    usage_source,
+                ) = _provider_token_usage(data)
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
@@ -389,8 +465,14 @@ class OpenAICompatibleAdapter(
                     attempt_no=attempt_no,
                     http_status=response.status_code,
                     provider_request_id=self._provider_request_id(response),
-                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    duration_ms=max(
+                        0, int((time.perf_counter() - attempt_started_at) * 1000)
+                    ),
                     output_chars=len(content),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    usage_source=usage_source,
                     requested_temperature=requested_temperature,
                     requested_max_tokens=requested_max_tokens,
                     task_family=task_family,
@@ -411,7 +493,9 @@ class OpenAICompatibleAdapter(
                 return content
 
             except (httpx.ReadTimeout, httpx.TimeoutException) as exc:
-                final_failure = not (retry_on_timeout and attempt < self.retry_attempts - 1)
+                final_failure = not (
+                    retry_on_timeout and attempt < self.retry_attempts - 1
+                )
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
@@ -421,13 +505,17 @@ class OpenAICompatibleAdapter(
                     response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
-                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    duration_ms=max(
+                        0, int((time.perf_counter() - attempt_started_at) * 1000)
+                    ),
                     error_class=exc.__class__.__name__,
                     error_message=str(exc),
                     error_category="timeout",
                     timeout_kind=self._timeout_kind(exc),
                     retryable=bool(retry_on_timeout),
-                    fallback_eligible=fallback_eligible_on_profile_failure if final_failure else False,
+                    fallback_eligible=fallback_eligible_on_profile_failure
+                    if final_failure
+                    else False,
                     final_failure=final_failure,
                     requested_temperature=requested_temperature,
                     requested_max_tokens=requested_max_tokens,
@@ -476,7 +564,9 @@ class OpenAICompatibleAdapter(
                         if isinstance(response, httpx.Response)
                         else ""
                     ),
-                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    duration_ms=max(
+                        0, int((time.perf_counter() - attempt_started_at) * 1000)
+                    ),
                     error_class=exc.__class__.__name__,
                     error_message=self._http_error_message(exc, profile),
                     error_category=(
@@ -509,7 +599,9 @@ class OpenAICompatibleAdapter(
                 raise
 
         # Should never reach here, but make the type-checker happy.
-        raise RuntimeError("OpenAICompatibleAdapter.chat: unexpected exit from retry loop")
+        raise RuntimeError(
+            "OpenAICompatibleAdapter.chat: unexpected exit from retry loop"
+        )
 
 
 class LLMClient(OpenAICompatibleAdapter):

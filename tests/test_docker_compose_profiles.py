@@ -29,11 +29,26 @@ def test_generation_worker_is_compose_managed_with_current_image() -> None:
     assert worker["healthcheck"] == {"disable": True}
 
 
+def test_outbox_worker_is_compose_managed_with_current_image() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+
+    worker = compose["services"]["outbox-worker"]
+
+    assert worker["build"] == "."
+    assert worker["container_name"] == "forwin-outbox-worker"
+    assert worker["command"][:3] == ["python", "-m", "forwin.cli"]
+    assert "outbox-worker" in worker["command"]
+    assert "forwin-data:/app/data" in worker["volumes"]
+    assert worker["environment"] == compose["services"]["forwin"]["environment"]
+    assert worker["healthcheck"] == {"disable": True}
+
+
 def test_publisher_browser_uses_browser_image_target() -> None:
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
 
     assert compose["services"]["forwin"]["build"] == "."
     assert compose["services"]["generation-worker"]["build"] == "."
+    assert compose["services"]["outbox-worker"]["build"] == "."
     assert compose["services"]["forwin-mcp"]["build"] == "."
     browser_build = compose["services"]["publisher-browser"]["build"]
     assert browser_build["context"] == "."

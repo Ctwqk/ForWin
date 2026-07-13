@@ -83,6 +83,57 @@ services:
       disable: true
     restart: unless-stopped
 
+  outbox-worker:
+    build: .
+    container_name: forwin-outbox-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command:
+      [
+        "python",
+        "-m",
+        "forwin.cli",
+        "-v",
+        "outbox-worker",
+        "--worker-id",
+        "${FORWIN_OUTBOX_WORKER_ID:-forwin-outbox-worker}",
+        "--poll-interval",
+        "${FORWIN_OUTBOX_WORKER_POLL_INTERVAL:-2}",
+        "--max-attempts",
+        "${FORWIN_OUTBOX_WORKER_MAX_ATTEMPTS:-3}",
+        "--retry-delay-seconds",
+        "${FORWIN_OUTBOX_WORKER_RETRY_DELAY_SECONDS:-30}",
+      ]
+    env_file:
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
+    environment:
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
+      - FORWIN_HTTP_BIND=${FORWIN_HTTP_BIND:-127.0.0.1}
+      - FORWIN_ALLOW_BIND_ALL_INTERFACES=${FORWIN_ALLOW_BIND_ALL_INTERFACES:-false}
+      - FORWIN_ALLOW_UNAUTHENTICATED_LAN=${FORWIN_ALLOW_UNAUTHENTICATED_LAN:-false}
+      - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
+      - FORWIN_EMBEDDING_BACKEND=${FORWIN_EMBEDDING_BACKEND:-gateway}
+      - FORWIN_EMBEDDING_BASE_URL=${FORWIN_EMBEDDING_BASE_URL:-http://10.0.0.150:8080}
+      - FORWIN_EMBEDDING_MODEL=${FORWIN_EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - FORWIN_EMBEDDING_DIMS=${FORWIN_EMBEDDING_DIMS:-384}
+      - FORWIN_EMBEDDING_REQUIRED=${FORWIN_EMBEDDING_REQUIRED:-true}
+      - FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS=${FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS:-20}
+      - FORWIN_CHAPTER_REVIEW_FORM_TIMEOUT_SECONDS=${FORWIN_CHAPTER_REVIEW_FORM_TIMEOUT_SECONDS:-90}
+      - FORWIN_WEBNOVEL_REVIEW_TIMEOUT_SECONDS=${FORWIN_WEBNOVEL_REVIEW_TIMEOUT_SECONDS:-75}
+    volumes:
+      - forwin-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     container_name: forwin-postgres

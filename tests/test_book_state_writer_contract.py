@@ -694,7 +694,12 @@ def test_event_contract_ignores_generic_and_non_character_participants() -> None
                     "name": "季澈",
                     "canonical_name": "季澈",
                     "role_hint": "复核员",
-                }
+                },
+                {
+                    "decision": "background_generic",
+                    "name": "系统",
+                    "reason": "project classifier decision",
+                },
             ]
 
     engine, session = _session()

@@ -335,6 +335,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "project_decision_events",
                     "gate_ledger_report",
                     "cost_report",
+                    "rule_provenance_report",
                     "project_extend_generation",
                     "task_list",
                     "task_get",
@@ -431,6 +432,21 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             self._call_tool("cost_report", {"format": "markdown"})
         )
         self.assertIn("# Cost And Intervention Ledger", markdown_payload["result"])
+
+    def test_rule_provenance_report_via_mcp_returns_json_and_markdown(self) -> None:
+        report_payload = self._result_payload(
+            self._call_tool("rule_provenance_report")
+        )
+        report = report_payload["result"]
+
+        self.assertGreater(len(report["global_code_backed_rules"]), 0)
+        self.assertIn("project_rules", report)
+        self.assertIn("recommendations", report)
+
+        markdown_payload = self._result_payload(
+            self._call_tool("rule_provenance_report", {"format": "markdown"})
+        )
+        self.assertIn("# Rule Provenance Report", markdown_payload["result"])
 
     def test_project_set_gate_delegate_via_mcp_updates_runtime_policy(self) -> None:
         with self.session_factory() as session:

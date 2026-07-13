@@ -75,11 +75,12 @@ def test_bookstate_query_interface_projects_active_rules_to_invariants() -> None
     with Session.begin() as session:
         CanonQualityActiveRuleStore(session).register_rule(
             project_id="p1",
-            rule=ActiveRule(
-                rule_key="city_renovation_deadline",
-                summary="城市改造期限强状态",
-                valid_from_chapter=5,
-                payload={
+                rule=ActiveRule(
+                    rule_key="city_renovation_deadline",
+                    summary="城市改造期限强状态",
+                    valid_from_chapter=5,
+                    status="active",
+                    payload={
                     "invariant": {
                         "kind": "deadline",
                         "subject_key": "city_renovation",

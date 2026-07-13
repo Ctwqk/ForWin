@@ -149,6 +149,7 @@ from .observability import (
     AuditInsightsResponse,
     GateLedgerReportResponse,
     CostLedgerReportResponse,
+    RuleProvenanceReportResponse,
 )
 
 from .project_control import (
@@ -312,6 +313,7 @@ __all__ = [
     "AuditInsightsResponse",
     "GateLedgerReportResponse",
     "CostLedgerReportResponse",
+    "RuleProvenanceReportResponse",
     "ManualCheckpointRequest",
     "BandCheckpointApproveRequest",
     "NarrativeConstraintCreateRequest",

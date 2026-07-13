@@ -21,6 +21,7 @@ from forwin.api_schema import (
     AuditInsightsResponse,
     GateLedgerReportResponse,
     CostLedgerReportResponse,
+    RuleProvenanceReportResponse,
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
@@ -37,6 +38,10 @@ from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_ledger import GateLedgerService
 from forwin.audit.gate_ledger_report import render_gate_ledger_markdown
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
+from forwin.canon_quality.rule_provenance import (
+    RuleProvenanceService,
+    render_rule_provenance_markdown,
+)
 from forwin.observability.cost_ledger import (
     CostLedgerService,
     render_cost_ledger_markdown,
@@ -809,6 +814,22 @@ def get_cost_report(
         return CostLedgerReportResponse(
             report=report,
             markdown=render_cost_ledger_markdown(report),
+        )
+    finally:
+        session.close()
+
+
+def get_rule_provenance_report(
+    *,
+    get_session,
+    project_id: str = "",
+) -> RuleProvenanceReportResponse:
+    session = get_session()
+    try:
+        report = RuleProvenanceService(session).report(project_id=project_id)
+        return RuleProvenanceReportResponse(
+            report=report,
+            markdown=render_rule_provenance_markdown(report),
         )
     finally:
         session.close()

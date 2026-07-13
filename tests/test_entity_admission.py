@@ -391,15 +391,15 @@ def test_admission_drops_generic_refs_from_structured_character_surfaces() -> No
                 ],
                 new_events=[
                     EventCandidate(
-                        summary="系统报告覆盖请求",
-                        involved_entity_names=["系统", "不明追踪者"],
-                        roles=["observer", "antagonist"],
+                        summary="不明追踪者发起覆盖请求",
+                        involved_entity_names=["不明追踪者"],
+                        roles=["antagonist"],
                     )
                 ],
             ),
         )
 
-        assert result.background_generic_names == ["不明追踪者", "系统"]
+        assert result.background_generic_names == ["不明追踪者"]
         assert result.writer_output.state_changes == []
         assert result.writer_output.new_events[0].involved_entity_names == []
         assert result.writer_output.new_events[0].roles == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -280,6 +281,18 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 for event in events
             )
         )
+        start_event = next(
+            event
+            for event in events
+            if event.event_type == DecisionEventType.START_WRITING_REQUESTED
+        )
+        handoff = json.loads(start_event.payload_json)["rule_provenance_handoff"]
+        self.assertIn(
+            "reference.language_generic_exact",
+            handoff["global_code_backed_rules"],
+        )
+        self.assertEqual(handoff["project_active_rules"], [])
+        self.assertIn("external_project_rules", handoff)
         self.assertTrue(
             any(
                 event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED

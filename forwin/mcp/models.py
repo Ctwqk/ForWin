@@ -157,6 +157,49 @@ class CostLedgerReportView(BaseModel):
     manual_actions: list[ManualActionMetricView] = Field(default_factory=list)
 
 
+class RuleProvenanceEntryView(BaseModel):
+    rule_key: str
+    summary: str = ""
+    scope: Literal["global", "genre_candidate", "project"]
+    status: Literal["observing", "active", "suspended", "retired"]
+    origin_project_id: str = ""
+    origin_event_id: str = ""
+    valid_from_chapter: int = 0
+    valid_until_chapter: int | None = None
+    promotion_evidence: list[str] = Field(default_factory=list)
+    code_owner: str = ""
+
+
+class RuleRecommendationView(BaseModel):
+    rule_key: str
+    action: Literal[
+        "activate",
+        "suspend",
+        "retire",
+        "global_promotion_recommended",
+    ]
+    project_ids: list[str] = Field(default_factory=list)
+    current_status: Literal["observing", "active", "suspended", "retired"] | None = None
+    recommended_status: Literal["observing", "active", "suspended", "retired"] | None = None
+    reason: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+    required_actions: list[str] = Field(default_factory=list)
+
+
+class RuleProvenanceReportView(BaseModel):
+    schema_version: Literal[1] = 1
+    project_id: str = ""
+    project_count: int = 0
+    global_code_backed_rules: list[RuleProvenanceEntryView] = Field(
+        default_factory=list
+    )
+    genre_rule_candidates: list[RuleProvenanceEntryView] = Field(
+        default_factory=list
+    )
+    project_rules: list[RuleProvenanceEntryView] = Field(default_factory=list)
+    recommendations: list[RuleRecommendationView] = Field(default_factory=list)
+
+
 class GenerationControlView(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"

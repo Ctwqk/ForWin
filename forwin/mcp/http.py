@@ -15,6 +15,7 @@ from .models import (
     ChapterListView,
     ChapterReviewApproveView,
     CostLedgerReportView,
+    RuleProvenanceReportView,
     GateLedgerReportView,
     MutationResult,
     ProjectDecisionEventsView,
@@ -136,6 +137,19 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             chapter_number=chapter_number,
             band_id=band_id,
             candidate_id=candidate_id,
+            format=format,
+        )
+
+    @register_read_tool(
+        "rule_provenance_report",
+        "Report global code-backed linguistic rules, non-blocking genre candidates, project rule origins and statuses, and evidence-based lifecycle or global-promotion recommendations. Use this when auditing rule origin or cross-project promotion evidence; this tool never promotes rules automatically.",
+    )
+    async def rule_provenance_report(
+        project_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> RuleProvenanceReportView | str:
+        return await client.rule_provenance_report(
+            project_id=project_id,
             format=format,
         )
 

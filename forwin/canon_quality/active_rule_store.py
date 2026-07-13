@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.models.canon_quality import CanonQualitySignalRow
+
+ActiveRuleStatus = Literal["observing", "active", "suspended", "retired"]
+_ALLOWED_STATUS_TRANSITIONS: dict[ActiveRuleStatus, frozenset[ActiveRuleStatus]] = {
+    "observing": frozenset({"active"}),
+    "active": frozenset({"suspended"}),
+    "suspended": frozenset({"active", "retired"}),
+    "retired": frozenset(),
+}
 
 
 class TriggerQuote(BaseModel):
@@ -23,6 +31,10 @@ class ActiveRule(BaseModel):
     valid_from_chapter: int = 0
     valid_until_chapter: int | None = None
     payload: dict = Field(default_factory=dict)
+    origin_event_id: str = ""
+    origin_project_id: str = ""
+    status: ActiveRuleStatus = "observing"
+    promotion_evidence: list[str] = Field(default_factory=list)
 
 
 class ActiveRulePatch(BaseModel):
@@ -36,9 +48,11 @@ class RegistrationResult(BaseModel):
     reason: str = ""
 
 
-class RevocationResult(BaseModel):
+class StatusTransitionResult(BaseModel):
     applied: bool = False
     rule_key: str = ""
+    from_status: ActiveRuleStatus | None = None
+    to_status: ActiveRuleStatus | None = None
     reason: str = ""
 
 
@@ -58,21 +72,32 @@ class ActiveRuleStore(Protocol):
         chapter_number: int,
     ) -> list[ActiveRule]: ...
 
-    def revoke_rule(
+    def query_rules_as_of(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[ActiveRule]: ...
+
+    def list_rules(self, *, project_id: str) -> list[ActiveRule]: ...
+
+    def transition_status(
         self,
         *,
         project_id: str,
         rule_key: str,
-        revoke_chapter: int,
+        chapter_number: int,
+        status: ActiveRuleStatus,
         reason: str,
-    ) -> RevocationResult: ...
+        evidence_refs: list[str] | None = None,
+    ) -> StatusTransitionResult: ...
 
 
 class CanonQualityActiveRuleStore:
-    """Persist active-rule events through the canon-quality signal ledger."""
+    """Project-scoped runtime rules persisted in the canon-quality signal ledger."""
 
     REGISTERED = "active_rule_registered"
-    REVOKED = "active_rule_revoked"
+    STATUS_CHANGED = "active_rule_status_changed"
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -87,39 +112,77 @@ class CanonQualityActiveRuleStore:
         key = str(rule.rule_key or "").strip()
         if not key:
             return RegistrationResult(applied=False, reason="missing_rule_key")
-        if self._has_overlapping_active_interval(project_id=project_id, rule=rule, trigger_quote=trigger_quote):
-            return RegistrationResult(applied=False, rule_key=key, reason="active_rule_conflict")
-        signal = CanonQualitySignal(
-            signal_id=f"active_rule:{project_id}:{key}",
+        origin_project_id = str(rule.origin_project_id or "").strip()
+        if origin_project_id and origin_project_id != project_id:
+            return RegistrationResult(
+                applied=False,
+                rule_key=key,
+                reason="origin_project_mismatch",
+            )
+        normalized = rule.model_copy(
+            update={
+                "rule_key": key,
+                "origin_project_id": project_id,
+                "origin_event_id": str(
+                    rule.origin_event_id or trigger_quote.source_ref or ""
+                ).strip(),
+                "promotion_evidence": _dedupe(rule.promotion_evidence),
+            }
+        )
+        event_chapter = int(
+            normalized.valid_from_chapter or trigger_quote.chapter_number or 0
+        )
+        latest_event_chapter = self._latest_event_chapter(
             project_id=project_id,
-            chapter_number=int(rule.valid_from_chapter or trigger_quote.chapter_number or 0),
+            rule_key=key,
+        )
+        if (
+            latest_event_chapter is not None
+            and event_chapter < latest_event_chapter
+        ):
+            return RegistrationResult(
+                applied=False,
+                rule_key=key,
+                reason="out_of_order_rule_event",
+            )
+        if self._has_overlapping_rule(
+            project_id=project_id,
+            rule=normalized,
+            trigger_quote=trigger_quote,
+        ):
+            return RegistrationResult(
+                applied=False,
+                rule_key=key,
+                reason="active_rule_conflict",
+            )
+        status_sequence = self._next_status_sequence(
+            project_id=project_id,
+            rule_key=key,
+        )
+        signal = CanonQualitySignal(
+            signal_id=(
+                f"active_rule:{project_id}:{key}:"
+                f"{event_chapter}:{status_sequence}"
+            ),
+            project_id=project_id,
+            chapter_number=event_chapter,
             signal_type=self.REGISTERED,
             severity="info",
             target_scope="book",
             subject_key=key,
-            description=rule.summary or key,
-            evidence_refs=[trigger_quote.source_ref] if trigger_quote.source_ref else [],
+            description=normalized.summary or key,
+            evidence_refs=[trigger_quote.source_ref]
+            if trigger_quote.source_ref
+            else [],
             payload={
-                "active_rule": rule.model_dump(mode="json"),
+                "active_rule": normalized.model_dump(mode="json"),
                 "trigger_quote": trigger_quote.model_dump(mode="json"),
+                "status_sequence": status_sequence,
                 "source": "ActiveRuleStore",
             },
-            status="open",
+            status="resolved",
         )
-        row = CanonQualitySignalRow(
-            project_id=project_id,
-            signal_id=signal.signal_id,
-            chapter_number=signal.chapter_number,
-            signal_type=signal.signal_type,
-            severity=signal.severity,
-            target_scope=signal.target_scope,
-            subject_key=signal.subject_key,
-            description=signal.description,
-            evidence_refs_json=json.dumps(signal.evidence_refs, ensure_ascii=False),
-            payload_json=json.dumps(signal.payload, ensure_ascii=False),
-            status=signal.status,
-        )
-        self.session.add(row)
+        self.session.add(_signal_row(signal))
         self.session.flush()
         return RegistrationResult(applied=True, rule_key=key)
 
@@ -129,118 +192,256 @@ class CanonQualityActiveRuleStore:
         project_id: str,
         chapter_number: int,
     ) -> list[ActiveRule]:
-        as_of = int(chapter_number or 0)
-        rows = self.session.execute(
-            select(CanonQualitySignalRow).where(
-                CanonQualitySignalRow.project_id == project_id,
-                CanonQualitySignalRow.signal_type.in_((self.REGISTERED, self.REVOKED)),
-                CanonQualitySignalRow.chapter_number <= as_of,
+        return [
+            rule
+            for rule in self.query_rules_as_of(
+                project_id=project_id,
+                chapter_number=chapter_number,
             )
-            .order_by(CanonQualitySignalRow.chapter_number.asc(), CanonQualitySignalRow.created_at.asc())
-        ).scalars().all()
-        revokes_by_key = _revokes_by_key(rows)
-        result: list[ActiveRule] = []
-        for row in rows:
-            if row.signal_type != self.REGISTERED:
-                continue
-            rule = _rule_from_row(row)
-            if rule is not None and _rule_active_at(rule, row=row, as_of=as_of, revokes_by_key=revokes_by_key):
-                result.append(rule)
-        return result
+            if rule.status == "active"
+        ]
 
-    def revoke_rule(
+    def query_rules_as_of(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[ActiveRule]:
+        as_of = int(chapter_number or 0)
+        rows = list(
+            self.session.scalars(
+                select(CanonQualitySignalRow)
+                .where(
+                    CanonQualitySignalRow.project_id == project_id,
+                    CanonQualitySignalRow.signal_type.in_(
+                        (self.REGISTERED, self.STATUS_CHANGED)
+                    ),
+                    CanonQualitySignalRow.chapter_number <= as_of,
+                )
+                .order_by(
+                    CanonQualitySignalRow.chapter_number.asc(),
+                    CanonQualitySignalRow.created_at.asc(),
+                    CanonQualitySignalRow.id.asc(),
+                )
+            ).all()
+        )
+        rows.sort(key=_rule_row_order)
+        states = _materialize_rules(rows)
+        return sorted(
+            (
+                rule
+                for rule in states.values()
+                if int(rule.valid_from_chapter or 0) <= as_of
+                and (
+                    rule.valid_until_chapter is None
+                    or int(rule.valid_until_chapter) >= as_of
+                )
+            ),
+            key=lambda item: item.rule_key,
+        )
+
+    def list_rules(self, *, project_id: str) -> list[ActiveRule]:
+        rows = list(
+            self.session.scalars(
+                select(CanonQualitySignalRow)
+                .where(
+                    CanonQualitySignalRow.project_id == project_id,
+                    CanonQualitySignalRow.signal_type.in_(
+                        (self.REGISTERED, self.STATUS_CHANGED)
+                    ),
+                )
+                .order_by(
+                    CanonQualitySignalRow.chapter_number.asc(),
+                    CanonQualitySignalRow.created_at.asc(),
+                    CanonQualitySignalRow.id.asc(),
+                )
+            ).all()
+        )
+        rows.sort(key=_rule_row_order)
+        return sorted(_materialize_rules(rows).values(), key=lambda item: item.rule_key)
+
+    def transition_status(
         self,
         *,
         project_id: str,
         rule_key: str,
-        revoke_chapter: int,
+        chapter_number: int,
+        status: ActiveRuleStatus,
         reason: str,
-    ) -> RevocationResult:
+        evidence_refs: list[str] | None = None,
+    ) -> StatusTransitionResult:
         key = str(rule_key or "").strip()
-        row = self._active_row(project_id=project_id, rule_key=key, chapter_number=int(revoke_chapter or 0))
-        if row is None:
-            return RevocationResult(applied=False, rule_key=key, reason="active_rule_not_found")
-        chapter = int(revoke_chapter or 0)
-        signal = CanonQualitySignalRow(
+        chapter = int(chapter_number or 0)
+        latest_event_chapter = self._latest_event_chapter(
             project_id=project_id,
-            signal_id=f"active_rule_revoked:{project_id}:{key}:{chapter}",
-            chapter_number=chapter,
-            signal_type=self.REVOKED,
-            severity="info",
-            target_scope="book",
-            subject_key=key,
-            description=str(reason or "active rule revoked"),
-            evidence_refs_json="[]",
-            payload_json=json.dumps(
-                {
-                    "rule_key": key,
-                    "revoke_chapter": chapter,
-                    "reason": str(reason or ""),
-                    "source": "ActiveRuleStore",
-                },
-                ensure_ascii=False,
-            ),
-            status="resolved",
+            rule_key=key,
         )
-        self.session.add(signal)
-        self.session.flush()
-        return RevocationResult(applied=True, rule_key=key)
-
-    def _active_row(self, *, project_id: str, rule_key: str, chapter_number: int) -> CanonQualitySignalRow | None:
-        rows = self.session.execute(
-            select(CanonQualitySignalRow).where(
-                CanonQualitySignalRow.project_id == project_id,
-                CanonQualitySignalRow.signal_type.in_((self.REGISTERED, self.REVOKED)),
-                CanonQualitySignalRow.chapter_number <= int(chapter_number or 0),
+        if latest_event_chapter is not None and chapter < latest_event_chapter:
+            return StatusTransitionResult(
+                applied=False,
+                rule_key=key,
+                to_status=status,
+                reason="out_of_order_rule_event",
             )
-            .order_by(CanonQualitySignalRow.chapter_number.asc(), CanonQualitySignalRow.created_at.asc())
-        ).scalars().all()
-        revokes_by_key = _revokes_by_key(rows)
-        for row in rows:
-            if row.signal_type != self.REGISTERED or row.subject_key != rule_key:
-                continue
-            rule = _rule_from_row(row)
-            if rule is not None and _rule_active_at(
-                rule,
-                row=row,
-                as_of=int(chapter_number or 0),
-                revokes_by_key=revokes_by_key,
-            ):
-                return row
-        return None
+        current = next(
+            (
+                rule
+                for rule in self.query_rules_as_of(
+                    project_id=project_id,
+                    chapter_number=chapter,
+                )
+                if rule.rule_key == key
+            ),
+            None,
+        )
+        if current is None:
+            return StatusTransitionResult(
+                applied=False,
+                rule_key=key,
+                to_status=status,
+                reason="active_rule_not_found",
+            )
+        if status not in _ALLOWED_STATUS_TRANSITIONS[current.status]:
+            return StatusTransitionResult(
+                applied=False,
+                rule_key=key,
+                from_status=current.status,
+                to_status=status,
+                reason="invalid_status_transition",
+            )
+        evidence = _dedupe([*current.promotion_evidence, *(evidence_refs or [])])
+        status_sequence = self._next_status_sequence(
+            project_id=project_id,
+            rule_key=key,
+        )
+        updated = current.model_copy(
+            update={"status": status, "promotion_evidence": evidence}
+        )
+        self.session.add(
+            CanonQualitySignalRow(
+                project_id=project_id,
+                signal_id=(
+                    f"active_rule_status:{project_id}:{key}:"
+                    f"{chapter}:{status}:{status_sequence}"
+                ),
+                chapter_number=chapter,
+                signal_type=self.STATUS_CHANGED,
+                severity="info",
+                target_scope="book",
+                subject_key=key,
+                description=str(reason or f"active rule status changed to {status}"),
+                evidence_refs_json=json.dumps(evidence_refs or [], ensure_ascii=False),
+                payload_json=json.dumps(
+                    {
+                        "active_rule": updated.model_dump(mode="json"),
+                        "from_status": current.status,
+                        "to_status": status,
+                        "status_sequence": status_sequence,
+                        "reason": str(reason or ""),
+                        "source": "ActiveRuleStore",
+                    },
+                    ensure_ascii=False,
+                ),
+                status="resolved",
+            )
+        )
+        self.session.flush()
+        return StatusTransitionResult(
+            applied=True,
+            rule_key=key,
+            from_status=current.status,
+            to_status=status,
+        )
 
-    def _has_overlapping_active_interval(
+    def _next_status_sequence(self, *, project_id: str, rule_key: str) -> int:
+        rows = list(
+            self.session.scalars(
+                select(CanonQualitySignalRow).where(
+                    CanonQualitySignalRow.project_id == project_id,
+                    CanonQualitySignalRow.subject_key == rule_key,
+                    CanonQualitySignalRow.signal_type.in_(
+                        (self.REGISTERED, self.STATUS_CHANGED)
+                    ),
+                )
+            ).all()
+        )
+        return max(
+            (
+                int(_json_object(row.payload_json).get("status_sequence") or 0)
+                for row in rows
+            ),
+            default=-1,
+        ) + 1
+
+    def _latest_event_chapter(
+        self,
+        *,
+        project_id: str,
+        rule_key: str,
+    ) -> int | None:
+        value = self.session.scalar(
+            select(func.max(CanonQualitySignalRow.chapter_number)).where(
+                CanonQualitySignalRow.project_id == project_id,
+                CanonQualitySignalRow.subject_key == rule_key,
+                CanonQualitySignalRow.signal_type.in_(
+                    (self.REGISTERED, self.STATUS_CHANGED)
+                ),
+            )
+        )
+        return int(value) if value is not None else None
+
+    def _has_overlapping_rule(
         self,
         *,
         project_id: str,
         rule: ActiveRule,
         trigger_quote: TriggerQuote,
     ) -> bool:
-        key = str(rule.rule_key or "").strip()
-        if not key:
+        candidate_start = int(
+            rule.valid_from_chapter or trigger_quote.chapter_number or 0
+        )
+        current = next(
+            (
+                item
+                for item in self.query_rules_as_of(
+                    project_id=project_id,
+                    chapter_number=candidate_start,
+                )
+                if item.rule_key == rule.rule_key
+            ),
+            None,
+        )
+        if current is None or current.status == "retired":
             return False
-        rows = self.session.execute(
-            select(CanonQualitySignalRow).where(
-                CanonQualitySignalRow.project_id == project_id,
-                CanonQualitySignalRow.signal_type.in_((self.REGISTERED, self.REVOKED)),
-                CanonQualitySignalRow.subject_key == key,
-            )
-            .order_by(CanonQualitySignalRow.chapter_number.asc(), CanonQualitySignalRow.created_at.asc())
-        ).scalars().all()
-        revokes_by_key = _revokes_by_key(rows)
-        candidate_start = int(rule.valid_from_chapter or trigger_quote.chapter_number or 0)
-        candidate_end = _interval_end_exclusive(rule.valid_until_chapter, None)
-        for row in rows:
-            if row.signal_type != self.REGISTERED:
-                continue
-            existing = _rule_from_row(row)
-            if existing is None:
-                continue
-            existing_start = _rule_start(existing, row)
-            existing_end = _interval_end_exclusive(existing.valid_until_chapter, _first_revoke_at_or_after(existing.rule_key, existing_start, revokes_by_key))
-            if _intervals_overlap(candidate_start, candidate_end, existing_start, existing_end):
-                return True
-        return False
+        current_end = (
+            int(current.valid_until_chapter)
+            if current.valid_until_chapter is not None
+            else 1_000_000_000
+        )
+        candidate_end = (
+            int(rule.valid_until_chapter)
+            if rule.valid_until_chapter is not None
+            else 1_000_000_000
+        )
+        return candidate_start <= current_end and int(
+            current.valid_from_chapter or 0
+        ) <= candidate_end
+
+
+def _signal_row(signal: CanonQualitySignal) -> CanonQualitySignalRow:
+    return CanonQualitySignalRow(
+        project_id=signal.project_id,
+        signal_id=signal.signal_id,
+        chapter_number=signal.chapter_number,
+        signal_type=signal.signal_type,
+        severity=signal.severity,
+        target_scope=signal.target_scope,
+        subject_key=signal.subject_key,
+        description=signal.description,
+        evidence_refs_json=json.dumps(signal.evidence_refs, ensure_ascii=False),
+        payload_json=json.dumps(signal.payload, ensure_ascii=False),
+        status=signal.status,
+    )
 
 
 def _json_object(raw: str) -> dict:
@@ -252,82 +453,46 @@ def _json_object(raw: str) -> dict:
 
 
 def _rule_from_row(row: CanonQualitySignalRow) -> ActiveRule | None:
-    payload = _json_object(row.payload_json)
-    raw_rule = payload.get("active_rule") if isinstance(payload, dict) else {}
+    raw_rule = _json_object(row.payload_json).get("active_rule")
     if not isinstance(raw_rule, dict):
         return None
-    return ActiveRule.model_validate(raw_rule)
+    try:
+        return ActiveRule.model_validate(raw_rule)
+    except ValueError:
+        return None
 
 
-def _revokes_by_key(rows: list[CanonQualitySignalRow]) -> dict[str, list[int]]:
-    result: dict[str, list[int]] = {}
+def _materialize_rules(
+    rows: list[CanonQualitySignalRow],
+) -> dict[str, ActiveRule]:
+    states: dict[str, ActiveRule] = {}
     for row in rows:
-        payload = _json_object(row.payload_json)
-        if row.signal_type == CanonQualityActiveRuleStore.REVOKED:
-            key = str(payload.get("rule_key") or row.subject_key or "").strip()
-            chapter = int(payload.get("revoke_chapter") or row.chapter_number or 0)
-        elif row.signal_type == CanonQualityActiveRuleStore.REGISTERED:
-            key = str(row.subject_key or "").strip()
-            chapter = int(payload.get("revoked_at_chapter") or 0)
-        else:
-            continue
-        if key and chapter > 0:
-            result.setdefault(key, []).append(chapter)
-    for chapters in result.values():
-        chapters.sort()
-    return result
+        rule = _rule_from_row(row)
+        if rule is not None:
+            states[rule.rule_key] = rule
+    return states
 
 
-def _rule_active_at(
-    rule: ActiveRule,
-    *,
-    row: CanonQualitySignalRow,
-    as_of: int,
-    revokes_by_key: dict[str, list[int]],
-) -> bool:
-    start = _rule_start(rule, row)
-    if start > as_of:
-        return False
-    if rule.valid_until_chapter is not None and int(rule.valid_until_chapter) < as_of:
-        return False
-    revoke_chapter = _first_revoke_at_or_after(rule.rule_key, start, revokes_by_key)
-    return revoke_chapter is None or revoke_chapter > as_of
+def _rule_row_order(row: CanonQualitySignalRow) -> tuple[int, int, str]:
+    payload = _json_object(row.payload_json)
+    return (
+        int(row.chapter_number or 0),
+        int(payload.get("status_sequence") or 0),
+        str(row.id or ""),
+    )
 
 
-def _rule_start(rule: ActiveRule, row: CanonQualitySignalRow) -> int:
-    return int(rule.valid_from_chapter or row.chapter_number or 0)
-
-
-def _first_revoke_at_or_after(
-    rule_key: str,
-    start: int,
-    revokes_by_key: dict[str, list[int]],
-) -> int | None:
-    for chapter in revokes_by_key.get(str(rule_key or "").strip(), []):
-        if chapter >= start:
-            return chapter
-    return None
-
-
-def _interval_end_exclusive(valid_until_chapter: int | None, revoke_chapter: int | None) -> int:
-    ends: list[int] = []
-    if valid_until_chapter is not None:
-        ends.append(int(valid_until_chapter) + 1)
-    if revoke_chapter is not None:
-        ends.append(int(revoke_chapter))
-    return min(ends) if ends else 1_000_000_000
-
-
-def _intervals_overlap(left_start: int, left_end: int, right_start: int, right_end: int) -> bool:
-    return max(left_start, right_start) < min(left_end, right_end)
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
 
 __all__ = [
     "ActiveRule",
     "ActiveRulePatch",
+    "ActiveRuleStatus",
     "ActiveRuleStore",
     "CanonQualityActiveRuleStore",
     "RegistrationResult",
-    "RevocationResult",
+    "StatusTransitionResult",
     "TriggerQuote",
 ]

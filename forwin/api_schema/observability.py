@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from forwin.audit.events import DecisionEventInfo
 from forwin.audit.gate_ledger import GateLedgerReport
+from forwin.canon_quality.rule_provenance import RuleProvenanceReport
 from forwin.observability.cost_ledger import CostLedgerReport
 from .genesis import PromptTraceInfo
 
@@ -150,6 +151,11 @@ class CostLedgerReportResponse(BaseModel):
     markdown: str = ""
 
 
+class RuleProvenanceReportResponse(BaseModel):
+    report: RuleProvenanceReport
+    markdown: str = ""
+
+
 __all__ = [
     "DecisionEventsResponse",
     "StageDurationAggregate",
@@ -165,4 +171,5 @@ __all__ = [
     "AuditInsightsResponse",
     "GateLedgerReportResponse",
     "CostLedgerReportResponse",
+    "RuleProvenanceReportResponse",
 ]

@@ -27,14 +27,22 @@ def apply_pre_write_active_rules(
             report.rejected += 1
             report.rejection_reasons.append(reason)
             continue
+        rule = patch.rule.model_copy(
+            update={
+                "origin_project_id": project_id,
+                "origin_event_id": str(
+                    patch.rule.origin_event_id or patch.trigger_quote.source_ref or ""
+                ).strip(),
+            }
+        )
         result = store.register_rule(
             project_id=project_id,
-            rule=patch.rule,
+            rule=rule,
             trigger_quote=patch.trigger_quote,
         )
         if result.applied:
             report.applied += 1
-            report.applied_rule_keys.append(patch.rule.rule_key)
+            report.applied_rule_keys.append(rule.rule_key)
         else:
             report.rejected += 1
             report.rejection_reasons.append(result.reason or "active_rule_registration_failed")
@@ -44,6 +52,8 @@ def apply_pre_write_active_rules(
 def _patch_rejection_reason(patch: ActiveRulePatch, *, chapter_number: int) -> str:
     if not patch.rule.rule_key.strip():
         return "missing_rule_key"
+    if patch.rule.status != "observing":
+        return "runtime_rule_must_start_observing"
     if not patch.trigger_quote.quote.strip():
         return "missing_trigger_quote"
     if int(patch.trigger_quote.chapter_number or 0) >= int(chapter_number or 0):

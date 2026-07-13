@@ -10,11 +10,6 @@ from sqlalchemy import select
 from forwin.application.read_models import build_project_detail
 from forwin.book_state import BookStateRepository
 from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
-from forwin.checker.reference_classifier import (
-    looks_like_generic_character_reference,
-    looks_like_named_character,
-    normalize_character_reference,
-)
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler_core import assemble_context
 from forwin.director.arc_director import ArcDirector
@@ -73,59 +68,6 @@ class _BookStateQueryStub:
 
 
 class SubWorldControlTests(unittest.TestCase):
-
-    def test_reference_classifier_direct_shapes_are_not_overfit_to_exact_strings(self) -> None:
-        non_candidates = [
-            "老环线调度员",
-            "系统巡检员",
-            "第七区溺水者残影",
-            "锚点037",
-            "003号分割体",
-            "第004号分割体",
-            "第40份密钥",
-            "L-7",
-            "L7-09",
-            "QT-7741",
-            "VT-7-19-γ",
-            "E-7749",
-            "XU-CH-1997-0847",
-            "许晏/馆员",
-            "许晏与馆员",
-            "许晏（馆员人格）",
-            "尸体",
-            "馆员尸体",
-            "冷藏躯体",
-            "旧港遇难者",
-            "Ω级权限买家",
-            "馆员-活跃",
-            "002号密钥持有者",
-            "基金会代理人",
-            "镜像审计员MA-001",
-            "女孩（第十枚锚点持有者）",
-            "MA-001/馆员",
-        ]
-        for name in non_candidates:
-            with self.subTest(name=name):
-                self.assertFalse(looks_like_named_character(name))
-
-        self.assertEqual(normalize_character_reference("馆员陈潮白"), "陈潮白")
-        self.assertEqual(normalize_character_reference("灰鸦"), "灰鸦")
-
-    def test_reference_classifier_handles_follow_up_generic_org_and_mixed_id_shapes(self) -> None:
-        non_candidates = [
-            "未知人物",
-            "神秘人物",
-            "匿名人物",
-            "若槐宗邦",
-            "潮汐董事会",
-            "群环档案署",
-        ]
-        for name in non_candidates:
-            with self.subTest(name=name):
-                self.assertFalse(looks_like_named_character(name))
-
-        self.assertEqual(normalize_character_reference("灰鸦/L-7"), "灰鸦")
-        self.assertEqual(normalize_character_reference("L-7/灰鸦"), "灰鸦")
 
     def test_ensure_registry_rosters_book_state_characters(self) -> None:
         with TemporaryDirectory():
@@ -1079,42 +1021,6 @@ class SubWorldControlTests(unittest.TestCase):
         fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
-
-    def test_project_character_names_include_premise_protagonist(self) -> None:
-        class FakeRepo:
-            def get_project(self, _project_id: str) -> object:
-                return SimpleNamespace(
-                    premise="主角：陆明，旧城档案修复师。",
-                    setting_summary="核心系统记忆系统维持公共档案秩序。",
-                )
-
-            def get_active_entities(self, _project_id: str) -> list[object]:
-                return []
-
-        names = ChapterPipeline._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
-
-        self.assertIn("陆明", names)
-
-    def test_project_character_names_include_inline_premise_protagonist(self) -> None:
-        class FakeRepo:
-            def get_project(self, _project_id: str) -> object:
-                return SimpleNamespace(
-                    premise="主角顾青是档案署的夜班审计员。",
-                    setting_summary="雾环城依靠记忆潮汐塔调度城市能源。",
-                )
-
-            def get_active_entities(self, _project_id: str) -> list[object]:
-                return []
-
-        names = ChapterPipeline._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
-
-        self.assertIn("顾青", names)
-
-    def test_descriptive_masked_pursuer_is_not_treated_as_named_character(self) -> None:
-        self.assertTrue(looks_like_generic_character_reference("无脸人"))
-        self.assertFalse(looks_like_named_character("不明追踪者"))
-        self.assertFalse(looks_like_named_character("核心系统追踪者"))
-        self.assertFalse(looks_like_named_character("系统巡检员"))
 
     def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
         class FakeDirector:

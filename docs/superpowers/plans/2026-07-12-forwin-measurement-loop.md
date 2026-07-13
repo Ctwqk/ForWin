@@ -109,34 +109,35 @@ class GateOutcome(BaseModel):
 
 **设计：**
 
-1. 扩展 `ActiveRule`（`canon_quality/active_rule_store.py`）。**实施注意（已核实）**：ActiveRule 的持久化载体是 `CanonQualitySignalRow`（store 查询该表），新字段落在该行的 payload/列上；消费收口点只有 `query_active_as_of` + `apply_pre_write_active_rules` 两处，status/scope 过滤在收口点实现即全局生效：
+1. 扩展 `ActiveRule`（`canon_quality/active_rule_store.py`）。ActiveRule 的持久化载体是 `CanonQualitySignalRow`，新字段落在 payload；ActiveRule 审计行不得进入通用 open-signal 查询，运行时消费只认 `query_active_as_of` 返回的 `active` 规则：
 
 ```python
 class ActiveRule(BaseModel):
     ...
     origin_event_id: str = ""        # 因哪次事故而生
     origin_project_id: str = ""
-    rule_scope: Literal["project", "genre", "global"] = "project"
     status: Literal["observing", "active", "suspended", "retired"] = "observing"
     promotion_evidence: list[str] = []  # 跨书真阳性 event ids
 ```
 
-2. **词表迁移**：`reference_classifier.py` 的 `GENERIC_CHARACTER_REFERENCES` 等硬编码内容拆为两部分——语言学上通用的（"路人/守卫/众人"类）保留为 global 常量；带故事色彩的（"馆员/基金会代理人"类，即 100 章伤疤）迁入该项目的 project-scoped 规则行。判据：是否只能由某本书的设定推出。
+所有 runtime `ActiveRule` 永远 project-scoped，不提供 global runtime 存储。
+
+2. **词表迁移**：`reference_classifier.py` 的全局确定性集合只保留语言学上无歧义的泛称（"路人/守卫/众人"类）；技术 ID、职业/组织和状态形态仅产出 `genre_candidate` 特征，不得直接丢弃实体；带故事色彩的词条完全退出生产 classifier，交给项目内 Entity admission。确需保留的项目例外必须写入该项目的 observing rule，而不是另建全局词表。
 3. **事故响应阶梯**写入 `Design-docs/DESIGN_STATUS.md` 作为治理条款：修成因（prompt/抽取契约）＞ 冻结 fixture 回归测试 ＞ 运行时规则（observing 起步）。
 4. **换书体检**：`start-writing` handoff 时自动记录一条 DecisionEvent，列出全部非 global 规则及其状态（继承 global、其余 observing）；MCP 工具 `rule_provenance_report` 可随时列出"哪些规则是哪本书的伤疤"。
 
 **生命周期政策（与 S1 账本联动，数字为初值可调）：**
 - observing → active：≥1 次真阳性且 override_rate < 50%
-- project → global：≥2 本书各有真阳性
+- project → global recommendation：≥2 本书各有真阳性；真正 global 仍需静态代码修改、逐书 frozen fixture、owner review 与 full suite
 - 连续 300 章零真阳性 或 override_rate > 70%：→ suspended，报表提示
 - suspended 满一本书未复活：→ retired（删除，教训转 fixture）
 
 **任务：**
-- [ ] ActiveRule 扩展字段 + 迁移（新库无旧数据，直接改 schema）
-- [ ] reference_classifier 词表拆分与迁移
-- [ ] handoff 换书体检事件 + MCP `rule_provenance_report`
-- [ ] 生命周期状态机 + 基于 S1 账本的自动降级建议（建议而非自动执行）
-- [ ] DESIGN_STATUS 治理条款
+- [x] ActiveRule 扩展字段（JSON payload；不增加 global runtime schema）
+- [x] reference_classifier 词表拆分与迁移
+- [x] handoff 换书体检事件 + MCP `rule_provenance_report`
+- [x] 生命周期状态机 + 基于 S1 账本的自动降级建议（建议而非自动执行）
+- [x] DESIGN_STATUS 治理条款
 
 **验收：** 新书开跑时，一条命令列出"上一本书的伤疤规则，本书仅观察不阻断"；100 章项目的故事专有词条不再出现在 global 路径。
 

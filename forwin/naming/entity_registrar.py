@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
 from forwin.checker.reference_classifier import (
+    classify_reference,
     looks_like_generic_character_reference,
     looks_like_non_character_reference,
 )
@@ -84,6 +85,18 @@ class LLMEntityAdmissionClassifier:
                         "project_id": project_id,
                         "chapter_number": chapter_number,
                         "unknown_names": names,
+                        "reference_candidates": [
+                            {
+                                "name": name,
+                                "scope": classification.scope,
+                                "features": list(classification.features),
+                            }
+                            for name in names
+                            if (
+                                classification := classify_reference(name)
+                            ).scope
+                            == "genre_candidate"
+                        ],
                         "title": writer_output.title,
                         "body_excerpt": str(writer_output.body or "")[:2400],
                         "summary": writer_output.end_of_chapter_summary,

@@ -243,6 +243,12 @@ def _build_operations(
             candidate_id=candidate_id,
         )
 
+    def get_rule_provenance_report(project_id: str = ""):
+        return operations.get_rule_provenance_report(
+            get_session=get_session,
+            project_id=project_id,
+        )
+
     def get_latest_scenario_rehearsal(project_id: str):
         return operations.get_latest_scenario_rehearsal(
             project_id,
@@ -313,6 +319,7 @@ def _build_operations(
         "get_project_audit_insights": get_project_audit_insights,
         "get_gate_ledger_report": get_gate_ledger_report,
         "get_cost_report": get_cost_report,
+        "get_rule_provenance_report": get_rule_provenance_report,
         "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
         "rerun_scenario_rehearsal": rerun_scenario_rehearsal,
         "approve_scenario_plan_patch": approve_scenario_plan_patch,

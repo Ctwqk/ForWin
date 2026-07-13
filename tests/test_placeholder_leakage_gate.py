@@ -167,5 +167,6 @@ def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias(
 
 def test_subworld_generic_autofix_helper_is_removed_from_pipeline_boundary() -> None:
     assert not hasattr(ChapterPipeline, "_generic_subworld_reference")
-    assert looks_like_generic_character_reference("馆员") is True
-    assert looks_like_generic_character_reference("档案区旧书摊主") is True
+    assert looks_like_generic_character_reference("路人") is True
+    assert looks_like_generic_character_reference("馆员") is False
+    assert looks_like_generic_character_reference("档案区旧书摊主") is False

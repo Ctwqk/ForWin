@@ -53,7 +53,7 @@
 
 ## 2026-07 V5 Final Roadmap Execution Status
 
-状态：R0-R2 complete；旧长跑已安全退出，current-HEAD 测试债已清零，Provisional Band Preview 家族已物理删除，下一阶段为 R3 低风险归位。
+状态：R0-R4 implementation complete；旧长跑已安全退出，current-HEAD 测试债已清零，Track A 与发布前 B0 仪表已落地，下一阶段为 R5 发布验证。
 
 - 旧项目 `a06cf00db3ba4cbe8b9862e20e9d6248` 的生成任务已于 2026-07-12 安全暂停，权威 active task count 为 0。
 - 该运行固定归类为 `pre-roadmap-soak`，`release_evidence=false`；路线图变更从快照之后开始，因此它不得作为最终 V6 发布证明。
@@ -64,7 +64,19 @@
 - R1 最终证据：`1602 tests collected`；全量 `1601 passed, 1 skipped, 112 warnings, 33 subtests passed in 175.31s`；`ruff check forwin tests`、`compileall -q forwin` 和 R1 聚焦门均通过。
 - R2 删除 policy 开关、第二 writer、preview service、execution/fallback/repair callback、两张表、事件、HTTP/read-model/task/UI/probe 全链，生产禁止符号零命中；保留 Arc sizing window、promotion/projection 与普通 writer preview fallback。
 - R2 最终证据：`1601 tests collected`；全量 `1599 passed, 1 skipped, 110 warnings, 33 subtests passed in 169.70s`，新增 band repair 无 preview callback 回归通过；Ruff、compileall、rendered page 测试、源码扫描和 `git diff --check` 通过。
+- R3 完成 BookState extraction、future-plan pre-audit 与 application read model 的 owner 归位；旧 package、wrapper 和 re-export 壳均已删除。
+- R4 完成 S1 GateOutcome/GateLedger、S3 成本/人工动作账本与 S2 规则出身制度；对应 MCP 为 `gate_ledger_report`、`cost_report`、`rule_provenance_report`。
+- R4 最终证据：全量 `1656 passed, 1 skipped, 110 warnings`；S2 聚焦回归 `179 passed`；`ruff check forwin tests`、`compileall -q forwin tests` 与 `git diff --check` 均通过。
 - 最终 200 章 gate 必须等待 A2/A4 数据决策落地与 R9 Release Candidate 冻结后，使用全新项目从第 1 章开始。
+
+## 规则出身与事故响应治理
+
+- 事故响应顺序固定为：修复成因（prompt、抽取或准入契约）→ 冻结 fixture 回归测试 → 仅在仍有必要时创建项目运行规则；禁止用新增全局词条代替成因修复。
+- 全局确定性 reference classifier 只保留无歧义语言泛称。技术 ID、职业/组织形态与状态标签只能作为 `genre_candidate` 特征；故事专有名称必须进入项目内 Entity admission，不得静默降级或跨书短路。
+- Runtime 生成的 `ActiveRule` 永远 project-scoped，必须从 `observing` 起步；只有显式进入 `active` 的规则可被 BookState invariant 查询消费。规则审计行不进入通用 open-signal 路径。
+- 生命周期只能显式执行 `observing -> active -> suspended -> retired`；`suspended -> active` 允许在新证据下恢复。S1 证据只能产生建议，不能自动改状态。
+- 跨书证据只产出 `global_promotion_recommended`。真正 global promotion 必须同时具备至少两本书的真阳性、每本书 frozen fixture、静态代码 registry 修改、owner review 与全量测试；不存在 global runtime rule database。
+- `start-writing` 的 `START_WRITING_REQUESTED` 事件保存规则体检快照：全局代码规则、本项目规则状态，以及其他项目规则在目标项目中的 `observing_for_target_project` 隔离状态。
 
 ## 兼容 / 弃用矩阵
 

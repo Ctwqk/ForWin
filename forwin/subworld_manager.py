@@ -37,11 +37,6 @@ _NAME_SURNAMES = (
 _NAME_GIVEN = (
     "临川", "知遥", "明序", "清和", "宴秋", "昭宁", "星野", "景川", "怀瑾", "时雨", "砚书", "听澜",
 )
-_GENERIC_CHARACTER_TOKENS = {
-    "路人", "守卫", "老板", "店小二", "师兄", "师姐", "弟子", "同学", "众人", "人群", "伙计", "旁人",
-}
-
-
 def _load_json(raw: str, default):
     try:
         return json.loads(raw or "")
@@ -801,12 +796,3 @@ class SubWorldManager:
             new_subworlds=[],
             initial_active_subworld_ids=[],
         )
-
-    @staticmethod
-    def looks_like_named_character(name: str) -> bool:
-        text = str(name or "").strip()
-        if not text:
-            return False
-        if text in _GENERIC_CHARACTER_TOKENS:
-            return False
-        return len(text) <= 12

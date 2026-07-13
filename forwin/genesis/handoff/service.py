@@ -7,6 +7,7 @@ from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
+from forwin.canon_quality.rule_provenance import build_rule_handoff_summary
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.observability.payloads import event_error_payload
 from forwin.state.updater import StateUpdater
@@ -58,6 +59,12 @@ class GenesisHandoffService:
                     event_type=DecisionEventType.START_WRITING_REQUESTED,
                     actor_type="manual_ui",
                     summary="Genesis 已交接到写作流程。",
+                    payload={
+                        "rule_provenance_handoff": build_rule_handoff_summary(
+                            session,
+                            project_id=project.id,
+                        )
+                    },
                     related_object_type="book_genesis_revision",
                     related_object_id=revision.id,
                 )

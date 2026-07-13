@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from forwin.book_state.query import BookStateQuery
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
-from forwin.checker.reference_classifier import normalize_character_reference
 from forwin.protocol.writer import WriterOutput
 from typing import Any
 from forwin.models.project import ChapterPlan, Project
@@ -29,7 +27,6 @@ from forwin.protocol.review import (
     RepairInstruction,
 )
 from forwin.audit.events import DecisionEventType
-from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_names import is_plausible_person_name
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
@@ -114,46 +111,6 @@ def _apply_placeholder_leakage_autofix(
     generation_meta["placeholder_leakage_autofix"] = autofix_meta
     payload["generation_meta"] = generation_meta
     return WriterOutput.model_validate(payload)
-
-
-def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
-    names: set[str] = set()
-    try:
-        project = repo.get_project(project_id)
-    except Exception:  # noqa: BLE001
-        project = None
-    if project is not None:
-        names.update(
-            extract_expected_protagonist_names(
-                str(getattr(project, "premise", "") or ""),
-                str(getattr(project, "setting_summary", "") or ""),
-            )
-        )
-    try:
-        session = getattr(repo, "session", None)
-        entities = (
-            BookStateQuery(session).active_entities(
-                project_id,
-                as_of_chapter=10**9,
-                kinds={"character"},
-            )
-            if session is not None
-            else []
-        )
-    except Exception:  # noqa: BLE001
-        return names
-    for entity in entities or []:
-        if str(getattr(entity, "kind", "") or "") != "character":
-            continue
-        raw_names = [
-            getattr(entity, "name", "") or "",
-            *(getattr(entity, "aliases", []) or []),
-        ]
-        for raw_name in raw_names:
-            name = normalize_character_reference(str(raw_name or ""))
-            if name:
-                names.add(name)
-    return names
 
 
 def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
@@ -604,10 +561,6 @@ class ReviewWorkflowStage:
         writer_output: WriterOutput, review: ReviewVerdict
     ) -> WriterOutput | None:
         return _apply_placeholder_leakage_autofix(writer_output, review)
-
-    @staticmethod
-    def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
-        return _project_character_names(repo, project_id)
 
     @staticmethod
     def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:

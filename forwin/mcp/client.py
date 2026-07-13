@@ -15,6 +15,7 @@ from .models import (
     GenesisView,
     GateLedgerReportView,
     CostLedgerReportView,
+    RuleProvenanceReportView,
     MutationResult,
     DecisionEventView,
     ProjectDecisionEventsView,
@@ -142,6 +143,33 @@ class ForWinAPIClient:
         if not isinstance(report, dict):
             raise RuntimeError("ForWin API cost ledger payload omitted report JSON.")
         return CostLedgerReportView.model_validate(report)
+
+    async def rule_provenance_report(
+        self,
+        *,
+        project_id: str = "",
+        format: Literal["json", "markdown"] = "json",
+    ) -> RuleProvenanceReportView | str:
+        payload = await self._request_json(
+            "GET",
+            "/api/rule-provenance",
+            params={"project_id": project_id},
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected rule provenance payload from ForWin API.")
+        if format == "markdown":
+            markdown = payload.get("markdown")
+            if not isinstance(markdown, str):
+                raise RuntimeError(
+                    "ForWin API rule provenance payload omitted markdown."
+                )
+            return markdown
+        report = payload.get("report")
+        if not isinstance(report, dict):
+            raise RuntimeError(
+                "ForWin API rule provenance payload omitted report JSON."
+            )
+        return RuleProvenanceReportView.model_validate(report)
 
     async def project_create(
         self,

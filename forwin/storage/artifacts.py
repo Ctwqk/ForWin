@@ -51,6 +51,7 @@ class MinioObjectStore(ObjectStore):
         secure: bool = False,
     ) -> None:
         from minio import Minio
+        from minio.error import S3Error
 
         self.bucket = bucket
         self.prefix = prefix.strip("/")
@@ -61,7 +62,16 @@ class MinioObjectStore(ObjectStore):
             secure=secure,
         )
         if not self.client.bucket_exists(bucket):
-            self.client.make_bucket(bucket)
+            try:
+                self.client.make_bucket(bucket)
+            except S3Error as exc:
+                race_codes = {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}
+                if exc.code not in race_codes or not self.client.bucket_exists(bucket):
+                    raise
+                logger.info(
+                    "MinIO bucket %s was created by another process.",
+                    bucket,
+                )
 
     def _key(self, relative_path: str) -> str:
         if self.prefix:

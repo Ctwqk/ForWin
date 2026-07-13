@@ -229,14 +229,33 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         self.client = client or _create_qdrant_client(url)
         self.embedder = embedder or HashTextEmbedder()
         self.collection_name = self._resolve_collection_name(collection_name)
+        self._ensure_collection()
+
+    def _ensure_collection(self) -> None:
         collections = {item.name for item in self.client.get_collections().collections}
-        if self.collection_name not in collections:
+        if self.collection_name in collections:
+            return
+        try:
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=self._rest.VectorParams(
                     size=self.embedder.dims,
                     distance=self._rest.Distance.COSINE,
                 ),
+            )
+        except Exception as exc:
+            collections = {item.name for item in self.client.get_collections().collections}
+            if self.collection_name not in collections:
+                raise
+            existing_size = self._collection_vector_size(self.collection_name)
+            if existing_size != self.embedder.dims:
+                raise ValueError(
+                    f"Qdrant collection {self.collection_name!r} has vector size "
+                    f"{existing_size}, expected {self.embedder.dims}."
+                ) from exc
+            logger.info(
+                "Qdrant collection %s was created by another process.",
+                self.collection_name,
             )
 
     def _resolve_collection_name(self, collection_name: str) -> str:

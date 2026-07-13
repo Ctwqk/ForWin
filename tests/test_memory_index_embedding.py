@@ -79,6 +79,55 @@ def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None
     )
 
 
+def test_create_memory_index_accepts_collection_created_by_a_competing_role() -> None:
+    class RacingQdrantClient(FakeQdrantClient):
+        def create_collection(self, *, collection_name: str, vectors_config) -> None:
+            super().create_collection(
+                collection_name=collection_name,
+                vectors_config=vectors_config,
+            )
+            raise RuntimeError("collection already exists")
+
+    qdrant_client = RacingQdrantClient()
+
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_race",
+        qdrant_client=qdrant_client,
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="hash",
+        embedding_dims=64,
+    )
+
+    assert index.collection_name == "chapter_memories_race"
+    assert qdrant_client.collections["chapter_memories_race"]["vectors_config"].size == 64
+
+
+def test_create_memory_index_rejects_raced_collection_with_wrong_dimension() -> None:
+    class WrongDimensionRacingClient(FakeQdrantClient):
+        def create_collection(self, *, collection_name: str, vectors_config) -> None:
+            super().create_collection(
+                collection_name=collection_name,
+                vectors_config=FakeQdrantModels.VectorParams(
+                    size=vectors_config.size + 1,
+                    distance=vectors_config.distance,
+                ),
+            )
+            raise RuntimeError("collection already exists")
+
+    with pytest.raises(ValueError, match="vector size 65, expected 64"):
+        create_memory_index(
+            backend="qdrant",
+            qdrant_url="http://qdrant.test:6333",
+            qdrant_collection="chapter_memories_wrong_race",
+            qdrant_client=WrongDimensionRacingClient(),
+            qdrant_models=FakeQdrantModels,
+            embedding_backend="hash",
+            embedding_dims=64,
+        )
+
+
 def test_create_memory_index_required_gateway_raises_when_unavailable() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"status": "down"})

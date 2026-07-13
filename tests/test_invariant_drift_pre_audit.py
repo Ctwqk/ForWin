@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from forwin.planning.ledger_state_drift_pre_audit import select_ledger_state_drift_targets
+from forwin.planning.future_plan_audit.ledger_state_drift_pre_audit import (
+    select_ledger_state_drift_targets,
+)
 
 
 def test_form_invariant_drift_creates_ledger_state_target() -> None:

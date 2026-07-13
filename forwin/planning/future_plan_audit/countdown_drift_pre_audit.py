@@ -1,6 +1,8 @@
 from typing import Any
 
-from forwin.planning.ledger_state_drift_pre_audit import select_countdown_compat_drift_targets
+from forwin.planning.future_plan_audit.ledger_state_drift_pre_audit import (
+    select_countdown_compat_drift_targets,
+)
 
 
 def select_countdown_drift_targets(

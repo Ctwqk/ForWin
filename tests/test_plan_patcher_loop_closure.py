@@ -128,7 +128,9 @@ def test_form_signals_are_plan_patchable() -> None:
 
 
 def test_countdown_drift_signal_creates_next_chapter_plan_patch() -> None:
-    from forwin.planning.countdown_drift_pre_audit import select_countdown_drift_targets
+    from forwin.planning.future_plan_audit.countdown_drift_pre_audit import (
+        select_countdown_drift_targets,
+    )
 
     targets = select_countdown_drift_targets(
         [

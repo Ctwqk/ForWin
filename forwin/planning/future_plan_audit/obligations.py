@@ -9,10 +9,18 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.countdown_drift_pre_audit import select_countdown_drift_targets
-from forwin.planning.ledger_state_drift_pre_audit import select_ledger_state_drift_targets
-from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
-from forwin.planning.signal_pre_audit import select_stale_signal_targets
+from forwin.planning.future_plan_audit.countdown_drift_pre_audit import (
+    select_countdown_drift_targets,
+)
+from forwin.planning.future_plan_audit.ledger_state_drift_pre_audit import (
+    select_ledger_state_drift_targets,
+)
+from forwin.planning.future_plan_audit.obligation_pre_audit import (
+    select_urgent_obligation_targets,
+)
+from forwin.planning.future_plan_audit.signal_pre_audit import (
+    select_stale_signal_targets,
+)
 
 from .helpers import (
     _chapter_plan_contract,

@@ -176,6 +176,24 @@ class EvidenceRepairingClient:
         }
 
 
+class AttemptRepairingClient(RepairingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.llm_attempt_events: list[dict[str, object]] = []
+
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        self.llm_attempt_events.append(
+            {
+                "attempt_group_id": f"schema-call-{len(self.calls) + 1}",
+                "attempt_no": 1,
+                "stage_key": "chapter_review_form",
+                "http_status": 200,
+                "output_chars": 20,
+            }
+        )
+        return super().complete_json(**kwargs)
+
+
 def test_call_form_uses_single_structured_json_call() -> None:
     client = FakeClient()
     form = ChapterReviewForm(
@@ -256,6 +274,41 @@ def test_call_form_repairs_schema_invalid_payload_once() -> None:
     assert answers.characters[0].appears_in_chapter is True
     assert len(client.calls) == 2
     assert "previous JSON did not satisfy" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_call_form_marks_schema_failure_and_cross_call_workflow_retry() -> None:
+    client = AttemptRepairingClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=7,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[
+            CharacterReviewAsk(
+                name="林青",
+                prior_life_state="alive",
+                prior_custody_state="free",
+                last_seen_chapter=6,
+            )
+        ],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    call_form(
+        form=form,
+        chapter_text="林青站在门口。",
+        prior_canon_summary="",
+        llm_client=client,
+    )
+
+    first, second = client.llm_attempt_events
+    assert first["workflow_attempt_no"] == 1
+    assert first["workflow_retry"] is False
+    assert first["parse_error"]
+    assert second["workflow_attempt_no"] == 2
+    assert second["workflow_retry"] is True
+    assert not second.get("parse_error")
 
 
 def test_call_form_accepts_flat_form_answer_shapes() -> None:

@@ -22,6 +22,7 @@ from forwin.observability.payloads import (
     audit_payload,
     safe_error_summary,
 )
+from forwin.observability.llm_trace import safe_prompt_trace_attempts
 from forwin.models.phase import BandExperiencePlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
@@ -84,6 +85,7 @@ def _canon_quality_gate_outcome(
     policy_version: int,
     signal_types: list[str],
     evidence_refs: list[str],
+    trace_ids: list[str] | None = None,
 ) -> GateOutcome:
     issue_keys = list(
         dict.fromkeys(
@@ -118,6 +120,7 @@ def _canon_quality_gate_outcome(
         evidence_refs=list(
             dict.fromkeys(str(ref) for ref in evidence_refs if str(ref))
         ),
+        trace_ids=list(dict.fromkeys(str(value) for value in trace_ids or [] if str(value))),
     )
 
 
@@ -180,72 +183,57 @@ def _transient_retry_delay(attempt: int) -> float:
     return min(20.0, 3.0 * (2 ** max(0, attempt - 1)))
 
 
-def _safe_prompt_trace_attempts(
-    attempts: list[dict[str, object]],
+def _persist_canon_quality_attempt_trace(
+    self,
     *,
-    fallback_attempt_no: int = 0,
-    exc: BaseException | None = None,
-    duration_ms: int = 0,
-) -> list[dict[str, object]]:
-    allowed_keys = {
-        "attempt_group_id",
-        "profile_id",
-        "profile_name",
-        "model",
-        "provider",
-        "preferred_provider_kind",
-        "preferred_model",
-        "base_url_host",
-        "requested_temperature",
-        "requested_max_tokens",
-        "timeout_seconds",
-        "attempt_no",
-        "http_status",
-        "provider_request_id",
-        "duration_ms",
-        "input_chars",
-        "output_chars",
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-        "usage_source",
-        "task_family",
-        "stage_key",
-        "llm_task_route",
-        "retry_after",
-        "sleep_ms",
-        "error_class",
-        "error_message",
-        "error_category",
-        "timeout_kind",
-        "retryable",
-        "fallback_eligible",
-        "final_failure",
-    }
-    safe_attempts: list[dict[str, object]] = []
-    for attempt in attempts:
-        safe: dict[str, object] = {
-            key: value
-            for key, value in attempt.items()
-            if key in allowed_keys and value is not None
-        }
-        if "error_message" in safe:
-            safe["error_message"] = safe_error_summary(
-                str(safe.get("error_message") or "")
-            )
-        safe_attempts.append(safe)
-    if not safe_attempts and exc is not None:
-        safe_attempts.append(
-            {
-                "attempt_no": int(fallback_attempt_no or 0),
-                "duration_ms": max(0, int(duration_ms or 0)),
-                "error_class": exc.__class__.__name__,
-                "error_message": safe_error_summary(exc),
-                "error_category": "unknown",
-                "final_failure": True,
-            }
+    session: Session,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    candidate_id: str,
+    error: BaseException | None = None,
+) -> str:
+    attempts = self._drain_llm_attempt_events()
+    if not attempts:
+        return ""
+    safe_attempts = safe_prompt_trace_attempts(attempts, exc=error)
+    try:
+        return self._save_prompt_trace_payload(
+            session=session,
+            updater=updater,
+            project_id=project_id,
+            prompt_trace={
+                "trace_scope": "canon_quality",
+                "stage_key": "chapter_review_form",
+                "template_id": "canon_quality:chapter_review_form",
+                "template_version": "v1",
+                "effective_system_prompt": "",
+                "prompt_layers": [],
+                "input_snapshot": {
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "candidate_id": candidate_id,
+                    "gate_id": "canon_quality",
+                },
+                "attempts": safe_attempts,
+                "output_summary": {
+                    "status": "failed" if error is not None else "completed",
+                    "chapter_number": chapter_number,
+                    "candidate_id": candidate_id,
+                    "gate_id": "canon_quality",
+                    "error_class": error.__class__.__name__
+                    if error is not None
+                    else "",
+                },
+            },
         )
-    return safe_attempts
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Failed to persist canon-quality LLM attempt trace for chapter %d.",
+            chapter_number,
+            exc_info=True,
+        )
+        return ""
 
 
 def _error_category_from_attempts(
@@ -308,17 +296,34 @@ def _apply_canon_quality_gate(
     deterministic_gate_mode = gate_mode in {"off", "fatal_only"}
     gate_llm_client = None if deterministic_gate_mode else self.llm_client
     analysis_mode = "off" if deterministic_gate_mode else "primary"
-    analysis = analyze_writer_output_quality(
-        session=session,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        writer_output=writer_output,
-        draft_id=draft_id,
-        persist=True,
-        mode=analysis_mode,
-        llm_client=gate_llm_client,
-        return_raw_analyzer_results=True,
-    )
+    gate_trace_id = ""
+    analysis_error: BaseException | None = None
+    try:
+        analysis = analyze_writer_output_quality(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+            draft_id=draft_id,
+            persist=True,
+            mode=analysis_mode,
+            llm_client=gate_llm_client,
+            return_raw_analyzer_results=True,
+        )
+    except BaseException as exc:
+        analysis_error = exc
+        raise
+    finally:
+        if gate_llm_client is not None:
+            gate_trace_id = _persist_canon_quality_attempt_trace(
+                self,
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                candidate_id=candidate_id,
+                error=analysis_error,
+            )
     continuity_signals = signals_from_continuity_issues(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -365,6 +370,7 @@ def _apply_canon_quality_gate(
                     blocked=True,
                     issue_keys=list(deferred_acceptance_errors),
                     issue_groups=["fact_conflict"],
+                    trace_ids=[gate_trace_id] if gate_trace_id else [],
                 ),
             ),
         )
@@ -424,6 +430,7 @@ def _apply_canon_quality_gate(
         policy_version=policy_version,
         signal_types=[signal.signal_type for signal in gate_signals],
         evidence_refs=[ref for signal in gate_signals for ref in signal.evidence_refs],
+        trace_ids=[gate_trace_id] if gate_trace_id else [],
     )
     self._record_decision_event(
         updater=updater,
@@ -1060,7 +1067,7 @@ class QualityDiagnosticsStage:
         exc: BaseException | None = None,
         duration_ms: int = 0,
     ) -> list[dict[str, object]]:
-        return _safe_prompt_trace_attempts(
+        return safe_prompt_trace_attempts(
             attempts,
             fallback_attempt_no=fallback_attempt_no,
             exc=exc,

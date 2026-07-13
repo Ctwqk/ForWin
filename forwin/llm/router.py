@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -91,6 +92,8 @@ class LLMCallRouter:
         self.last_call_result: LLMCallResult | None = None
         self._last_codex_trace: dict[str, Any] = {}
         self._attempt_events: list[dict[str, object]] = []
+        self._call_lock = threading.RLock()
+        self._thread_state = threading.local()
 
     def chat(
         self,
@@ -108,10 +111,25 @@ class LLMCallRouter:
         intent: LLMCallIntent | None = None,
         **kwargs: Any,
     ) -> LLMCallResult:
+        with self._call_lock:
+            return self._chat_with_result_unlocked(
+                messages,
+                intent=intent,
+                **kwargs,
+            )
+
+    def _chat_with_result_unlocked(
+        self,
+        messages: list[dict],
+        *,
+        intent: LLMCallIntent | None = None,
+        **kwargs: Any,
+    ) -> LLMCallResult:
         self.last_call_result = None
         self._last_codex_trace = {}
         resolved_intent = intent or LLMCallIntent(codex_allowed=False)
         route_call_id = uuid.uuid4().hex
+        self._thread_state.last_attempt_group_id = route_call_id
         fallback_used = False
         failed_codex_trace: dict[str, Any] = {}
         codex_policy = self._codex_policy(resolved_intent)
@@ -458,24 +476,31 @@ class LLMCallRouter:
         return "codex_primary"
 
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
-        events = list(self._fallback_events)
-        self._fallback_events.clear()
-        ordinary_drain = getattr(
-            self.ordinary_adapter, "drain_model_fallback_events", None
-        )
-        if callable(ordinary_drain):
-            events.extend(list(ordinary_drain() or []))
-        return events
+        with self._call_lock:
+            events = list(self._fallback_events)
+            self._fallback_events.clear()
+            ordinary_drain = getattr(
+                self.ordinary_adapter, "drain_model_fallback_events", None
+            )
+            if callable(ordinary_drain):
+                events.extend(list(ordinary_drain() or []))
+            return events
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:
-        self._capture_ordinary_attempts()
-        events = list(self._attempt_events)
-        self._attempt_events.clear()
-        return events
+        with self._call_lock:
+            self._capture_ordinary_attempts()
+            events = list(self._attempt_events)
+            self._attempt_events.clear()
+            return events
 
     def peek_llm_attempt_events(self) -> list[dict[str, object]]:
-        self._capture_ordinary_attempts()
-        return [dict(event) for event in self._attempt_events]
+        with self._call_lock:
+            self._capture_ordinary_attempts()
+            return list(self._attempt_events)
+
+    @property
+    def llm_attempt_group_id(self) -> str:
+        return str(getattr(self._thread_state, "last_attempt_group_id", "") or "")
 
     def _capture_ordinary_attempts(self, *, attempt_group_id: str = "") -> None:
         ordinary_drain = getattr(
@@ -584,6 +609,10 @@ class RoutedModelAdapter:
     @property
     def llm_attempt_events(self) -> list[dict[str, object]]:
         return self.router.peek_llm_attempt_events()
+
+    @property
+    def llm_attempt_group_id(self) -> str:
+        return self.router.llm_attempt_group_id
 
     def close(self) -> None:
         self.router.close()

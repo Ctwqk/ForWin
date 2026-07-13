@@ -92,11 +92,15 @@ def test_estimate_tokens_for_chinese_text_uses_half_char_ratio() -> None:
     assert estimate_tokens_for_text("主倒计时还有五十九分钟。") >= 6
 
 
-def test_usage_from_llm_client_uses_last_successful_attempt() -> None:
+def test_usage_from_llm_client_counts_successful_and_failed_attempts() -> None:
     usage = usage_from_llm_client(ClientWithAttempts())
 
-    assert usage.input_tokens == estimate_tokens_for_text("ASCII prompt with 主倒计时")
-    assert usage.output_tokens == estimate_tokens_for_text("JSON answer with 主倒计时")
+    assert usage.input_tokens == (
+        estimate_tokens_for_text("ASCII prompt with 主倒计时") + int(9999 * 0.5)
+    )
+    assert usage.output_tokens == (
+        estimate_tokens_for_text("JSON answer with 主倒计时") + int(9999 * 0.5)
+    )
     assert usage.estimated is True
 
 
@@ -114,7 +118,7 @@ def test_usage_from_llm_client_prefers_raw_payload_over_char_count() -> None:
 def test_usage_from_llm_client_reads_canonical_attempt_usage() -> None:
     usage = usage_from_llm_client(ClientWithCanonicalUsageAttempts())
 
-    assert usage.input_tokens == 23
+    assert usage.input_tokens == 27
     assert usage.output_tokens == 7
     assert usage.estimated is False
 

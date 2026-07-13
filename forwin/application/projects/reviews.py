@@ -767,10 +767,18 @@ def approve_chapter_review(
 
     try:
         accept_review_parameters = inspect.signature(pipeline.accept_review).parameters
+        accept_kwargs = {}
         if "reason" in accept_review_parameters:
-            result = pipeline.accept_review(project_id, chapter_number, reason=reason)
-        else:
-            result = pipeline.accept_review(project_id, chapter_number)
+            accept_kwargs["reason"] = reason
+        if "actor_type" in accept_review_parameters:
+            accept_kwargs["actor_type"] = "api"
+        if "source" in accept_review_parameters:
+            accept_kwargs["source"] = "chapter_review_approve_api"
+        result = pipeline.accept_review(
+            project_id,
+            chapter_number,
+            **accept_kwargs,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except FileNotFoundError as exc:

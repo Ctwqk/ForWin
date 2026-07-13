@@ -86,54 +86,42 @@ def estimate_run(
 
 def usage_from_llm_client(llm_client: object) -> ReplayTokenUsage:
     attempts = list(getattr(llm_client, "llm_attempt_events", []) or [])
-    successes = [item for item in attempts if _attempt_succeeded(item)]
-    if not successes:
+    dict_attempts = [item for item in attempts if isinstance(item, dict)]
+    if not dict_attempts:
         return ReplayTokenUsage(estimated=True)
-    last = successes[-1]
-    raw_input_tokens = last.get("prompt_tokens")
-    if raw_input_tokens is None:
-        raw_input_tokens = last.get("input_tokens")
-    raw_output_tokens = last.get("completion_tokens")
-    if raw_output_tokens is None:
-        raw_output_tokens = last.get("output_tokens")
-    input_tokens = raw_input_tokens
-    output_tokens = raw_output_tokens
-    if input_tokens is None:
-        input_tokens = _estimate_attempt_tokens(
-            last,
-            text_key="input_text",
-            raw_key="_raw_request_payload",
-            chars_key="input_chars",
-        )
-    if output_tokens is None:
-        output_tokens = _estimate_attempt_tokens(
-            last,
-            text_key="output_text",
-            raw_key="_raw_response_text",
-            chars_key="output_chars",
-        )
+    input_tokens = 0
+    output_tokens = 0
+    estimated = False
+    for attempt in dict_attempts:
+        raw_input_tokens = attempt.get("prompt_tokens")
+        if raw_input_tokens is None:
+            raw_input_tokens = attempt.get("input_tokens")
+        raw_output_tokens = attempt.get("completion_tokens")
+        if raw_output_tokens is None:
+            raw_output_tokens = attempt.get("output_tokens")
+        if raw_input_tokens is None:
+            estimated = True
+            raw_input_tokens = _estimate_attempt_tokens(
+                attempt,
+                text_key="input_text",
+                raw_key="_raw_request_payload",
+                chars_key="input_chars",
+            )
+        if raw_output_tokens is None:
+            estimated = True
+            raw_output_tokens = _estimate_attempt_tokens(
+                attempt,
+                text_key="output_text",
+                raw_key="_raw_response_text",
+                chars_key="output_chars",
+            )
+        input_tokens += max(0, int(raw_input_tokens or 0))
+        output_tokens += max(0, int(raw_output_tokens or 0))
     return ReplayTokenUsage(
-        input_tokens=max(0, int(input_tokens or 0)),
-        output_tokens=max(0, int(output_tokens or 0)),
-        estimated=raw_input_tokens is None or raw_output_tokens is None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        estimated=estimated,
     )
-
-
-def _attempt_succeeded(attempt: dict) -> bool:
-    status = str(attempt.get("status") or "").strip().lower()
-    if status in {"failed", "error"}:
-        return False
-    if status in {"succeeded", "success", "ok"}:
-        return True
-    if attempt.get("error_class") or attempt.get("final_failure") or attempt.get("parse_error"):
-        return False
-    try:
-        http_status = int(attempt.get("http_status") or 0)
-    except (TypeError, ValueError):
-        http_status = 0
-    if http_status >= 400:
-        return False
-    return bool(int(attempt.get("output_chars") or 0) > 0 or 200 <= http_status < 300)
 
 
 def _estimate_attempt_tokens(

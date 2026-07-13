@@ -7,6 +7,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from forwin.llm.compat import call_chat_compat
+from forwin.observability.llm_trace import (
+    mark_latest_attempt_parse_failure,
+    mark_latest_attempt_workflow,
+)
 from forwin.utils.json_repair import parse_llm_json
 
 from .evidence_validator import validate_answers
@@ -103,6 +107,11 @@ def call_form(
                 max_tokens=max_tokens,
                 timeout_seconds=effective_timeout_seconds,
             )
+            mark_latest_attempt_workflow(
+                llm_client,
+                attempt_no=attempt_index + 1,
+                stage_key="chapter_review_form",
+            )
         except ChapterReviewFormUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -114,8 +123,22 @@ def call_form(
             answers = ChapterReviewAnswers.model_validate(raw)
         except ChapterReviewFormSchemaInvalid as exc:
             last_error = str(exc)
+            _mark_form_attempt_failure(
+                llm_client,
+                raw_result=raw_result,
+                error=last_error,
+                parser_name="ChapterReviewAnswers",
+                schema_name="chapter_review_answers",
+            )
         except ValidationError as exc:
             last_error = str(exc)
+            _mark_form_attempt_failure(
+                llm_client,
+                raw_result=raw_result,
+                error=last_error,
+                parser_name="ChapterReviewAnswers",
+                schema_name="chapter_review_answers",
+            )
         else:
             evidence_report = validate_answers(
                 form=form,
@@ -124,10 +147,35 @@ def call_form(
             )
             if evidence_report.rejected and attempt_index + 1 < max_attempts:
                 last_error = _evidence_validation_error(evidence_report.rejected)
+                _mark_form_attempt_failure(
+                    llm_client,
+                    raw_result=raw_result,
+                    error=last_error,
+                    parser_name="ChapterReviewEvidenceValidator",
+                    schema_name="chapter_review_evidence",
+                )
                 continue
             return answers
 
     raise ChapterReviewFormSchemaInvalid(last_error or "LLM response did not match ChapterReviewAnswers schema.")
+
+
+def _mark_form_attempt_failure(
+    llm_client: object,
+    *,
+    raw_result: dict[str, Any],
+    error: str,
+    parser_name: str,
+    schema_name: str,
+) -> None:
+    mark_latest_attempt_parse_failure(
+        llm_client,
+        parser_name=parser_name,
+        stage_key="chapter_review_form",
+        schema_name=schema_name,
+        raw_output=json.dumps(raw_result, ensure_ascii=False, sort_keys=True),
+        error=error,
+    )
 
 
 def _complete_json(

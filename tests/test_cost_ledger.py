@@ -23,14 +23,18 @@ def _dimension(report, dimension: str, value: str):
     )
 
 
-def test_manual_acceptance_producer_uses_manual_actor_taxonomy() -> None:
+def test_review_acceptance_propagates_transport_actor_taxonomy() -> None:
     source = (
         Path(__file__).parents[1] / "forwin/generation/pipeline_core/acceptance.py"
+    ).read_text(encoding="utf-8")
+    application_source = (
+        Path(__file__).parents[1] / "forwin/application/projects/reviews.py"
     ).read_text(encoding="utf-8")
     marker = "event_type=DecisionEventType.REVIEW_APPROVED"
     call_site = source[source.index(marker) : source.index(marker) + 500]
 
-    assert 'actor_type="manual_ui"' in call_site
+    assert "actor_type=actor_type" in call_site
+    assert 'actor_type="api"' in application_source
 
 
 class TestCostLedger:
@@ -350,6 +354,40 @@ class TestCostLedger:
         assert destination.retries == 1
         assert destination.fallbacks == 1
 
+    def test_parse_retry_counts_across_distinct_route_groups(self) -> None:
+        from forwin.observability.cost_ledger import CostLedgerService
+
+        project = self._project()
+        self.session.add(
+            PromptTrace(
+                project_id=project.id,
+                trace_scope="canon_quality",
+                stage_key="chapter_review_form",
+                attempts_json=json.dumps(
+                    [
+                        {
+                            "attempt_group_id": "schema-call-1",
+                            "parse_error": "invalid schema",
+                            "http_status": 200,
+                            "output_chars": 20,
+                        },
+                        {
+                            "attempt_group_id": "schema-call-2",
+                            "http_status": 200,
+                            "output_chars": 30,
+                        },
+                    ]
+                ),
+            )
+        )
+        self.session.commit()
+
+        report = CostLedgerService(self.session).report(project_id=project.id)
+
+        assert report.totals.attempts == 2
+        assert report.totals.successes == 1
+        assert report.totals.retries == 1
+
     def test_report_exposes_missing_usage_without_estimating_provider_tokens(
         self,
     ) -> None:
@@ -605,3 +643,123 @@ class TestCostLedger:
         report = CostLedgerService(self.session).report(project_id=project.id)
 
         assert _dimension(report, "candidate", candidate.id).metrics.attempts == 1
+
+    def test_review_child_propagates_candidate_to_unique_writer_parent(self) -> None:
+        from forwin.observability.cost_ledger import CostLedgerService
+
+        project = self._project()
+        arc = ArcPlanVersion(project_id=project.id, arc_synopsis="arc")
+        self.session.add(arc)
+        self.session.flush()
+        plan = ChapterPlan(
+            project_id=project.id,
+            arc_plan_id=arc.id,
+            chapter_number=2,
+        )
+        self.session.add(plan)
+        self.session.flush()
+        draft = ChapterDraft(chapter_plan_id=plan.id, body_text="draft")
+        self.session.add(draft)
+        self.session.flush()
+        review = ChapterReview(draft_id=draft.id, verdict="warn")
+        self.session.add(review)
+        self.session.flush()
+        candidate = CandidateDraftRecord(
+            project_id=project.id,
+            chapter_plan_id=plan.id,
+            chapter_number=2,
+            candidate_draft_id=draft.id,
+            review_id=review.id,
+        )
+        event = DecisionEvent(
+            project_id=project.id,
+            chapter_number=2,
+            scope="chapter",
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.REVIEW_VERDICT_RECORDED,
+            actor_type="system",
+            related_object_type="chapter_review",
+            related_object_id=review.id,
+            payload_json="{}",
+        )
+        writer_trace = PromptTrace(
+            project_id=project.id,
+            trace_scope="writer",
+            stage_key="chapter_draft",
+            attempts_json=json.dumps(
+                [{"attempt_group_id": "writer", "http_status": 200}]
+            ),
+        )
+        self.session.add_all([candidate, event, writer_trace])
+        self.session.flush()
+        review_trace = PromptTrace(
+            project_id=project.id,
+            parent_trace_id=writer_trace.id,
+            decision_event_id=event.id,
+            trace_scope="review",
+            stage_key="chapter_review",
+            attempts_json=json.dumps(
+                [{"attempt_group_id": "review", "http_status": 200}]
+            ),
+        )
+        self.session.add(review_trace)
+        self.session.commit()
+
+        report = CostLedgerService(self.session).report(
+            project_id=project.id,
+            candidate_id=candidate.id,
+        )
+
+        assert report.trace_count == 2
+        assert report.totals.attempts == 2
+
+    def test_band_derivation_uses_the_chapter_plan_arc_after_replan(self) -> None:
+        from forwin.observability.cost_ledger import CostLedgerService
+
+        project = self._project()
+        old_arc = ArcPlanVersion(project_id=project.id, arc_synopsis="old")
+        active_arc = ArcPlanVersion(project_id=project.id, arc_synopsis="active")
+        self.session.add_all([old_arc, active_arc])
+        self.session.flush()
+        self.session.add_all(
+            [
+                BandExperiencePlan(
+                    project_id=project.id,
+                    arc_id=old_arc.id,
+                    band_id="old-band",
+                    chapter_start=1,
+                    chapter_end=5,
+                ),
+                BandExperiencePlan(
+                    project_id=project.id,
+                    arc_id=active_arc.id,
+                    band_id="active-band",
+                    chapter_start=1,
+                    chapter_end=5,
+                ),
+                ChapterPlan(
+                    project_id=project.id,
+                    arc_plan_id=active_arc.id,
+                    chapter_number=3,
+                    status="accepted",
+                ),
+                PromptTrace(
+                    project_id=project.id,
+                    trace_scope="writer",
+                    stage_key="chapter_draft",
+                    input_snapshot_json=json.dumps({"chapter_number": 3}),
+                    attempts_json=json.dumps(
+                        [{"attempt_group_id": "writer", "http_status": 200}]
+                    ),
+                ),
+            ]
+        )
+        self.session.commit()
+
+        report = CostLedgerService(self.session).report(project_id=project.id)
+
+        assert _dimension(report, "band", "active-band").metrics.attempts == 1
+        assert not any(
+            item.dimension == "band" and item.value == "old-band"
+            for item in report.dimensions
+        )

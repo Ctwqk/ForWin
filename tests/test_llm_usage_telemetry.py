@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from forwin.llm.codex_client import CodexBridgeClient
-from forwin.llm.router import LLMCallIntent, LLMCallRouter
+from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.writer.llm import LLMClient
 
 
@@ -38,6 +42,33 @@ class _FailingOrdinaryAdapter(_OrdinaryAdapter):
             }
         )
         raise RuntimeError("ordinary failed")
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        attempts = list(self._attempts)
+        self._attempts.clear()
+        return attempts
+
+
+class _SlowOrdinaryAdapter(_OrdinaryAdapter):
+    def __init__(self) -> None:
+        self._attempts: list[dict[str, object]] = []
+
+    def chat(self, messages, **kwargs) -> str:  # noqa: ANN001
+        label = str(messages[0]["content"])
+        self._attempts.append(
+            {
+                "attempt_group_id": f"backend-{label}",
+                "attempt_no": 1,
+                "provider": "openai_compatible",
+                "model": "ordinary-model",
+                "task_family": str(kwargs.get("task_family") or ""),
+                "stage_key": str(kwargs.get("stage_key") or ""),
+                "http_status": 200,
+                "output_chars": len(label),
+            }
+        )
+        time.sleep(0.05)
+        return label
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:
         attempts = list(self._attempts)
@@ -245,3 +276,102 @@ def test_ordinary_to_codex_fallback_preserves_attempt_order() -> None:
         "codex_bridge",
     ]
     assert len({str(item["attempt_group_id"]) for item in attempts}) == 1
+
+
+def test_routed_parse_failure_marker_mutates_the_drained_attempt() -> None:
+    adapter = RoutedModelAdapter(
+        LLMCallRouter(ordinary_adapter=_SlowOrdinaryAdapter(), codex_enabled=False)
+    )
+    adapter.chat(
+        [{"role": "user", "content": "parse"}],
+        task_family="chapter_review_form",
+        stage_key="chapter_review_form",
+    )
+
+    mark_latest_attempt_parse_failure(
+        adapter,
+        parser_name="ChapterReviewAnswers",
+        stage_key="chapter_review_form",
+        schema_name="review_json",
+        error="invalid schema",
+    )
+
+    attempt = adapter.drain_llm_attempt_events()[0]
+    assert attempt["parse_error"] == "invalid schema"
+    assert attempt["schema_ok"] is False
+
+
+def test_router_serializes_shared_ordinary_attempt_capture() -> None:
+    router = LLMCallRouter(
+        ordinary_adapter=_SlowOrdinaryAdapter(),
+        codex_enabled=False,
+    )
+
+    def invoke(label: str) -> str:
+        return router.chat(
+            [{"role": "user", "content": label}],
+            intent=LLMCallIntent(task_family="review", stage_key="chapter_review"),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outputs = list(executor.map(invoke, ["first", "second"]))
+    attempts = router.drain_llm_attempt_events()
+
+    assert outputs == ["first", "second"]
+    assert len(attempts) == 2
+    assert len({str(item["attempt_group_id"]) for item in attempts}) == 2
+    assert {str(item["backend_attempt_group_id"]) for item in attempts} == {
+        "backend-first",
+        "backend-second",
+    }
+
+
+def test_parse_failure_marker_targets_calling_threads_route_group() -> None:
+    adapter = RoutedModelAdapter(
+        LLMCallRouter(ordinary_adapter=_SlowOrdinaryAdapter(), codex_enabled=False)
+    )
+    first_returned = Event()
+    second_marked = Event()
+
+    def first_call() -> None:
+        adapter.chat(
+            [{"role": "user", "content": "first"}],
+            task_family="chapter_review_form",
+            stage_key="chapter_review_form",
+        )
+        first_returned.set()
+        assert second_marked.wait(timeout=2)
+        mark_latest_attempt_parse_failure(
+            adapter,
+            parser_name="review",
+            stage_key="chapter_review_form",
+            error="first-error",
+        )
+
+    def second_call() -> None:
+        assert first_returned.wait(timeout=2)
+        adapter.chat(
+            [{"role": "user", "content": "second"}],
+            task_family="chapter_review_form",
+            stage_key="chapter_review_form",
+        )
+        mark_latest_attempt_parse_failure(
+            adapter,
+            parser_name="review",
+            stage_key="chapter_review_form",
+            error="second-error",
+        )
+        second_marked.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(lambda fn: fn(), [first_call, second_call]))
+
+    attempts = adapter.drain_llm_attempt_events()
+    errors_by_backend_group = {
+        str(item["backend_attempt_group_id"]): str(item.get("parse_error") or "")
+        for item in attempts
+    }
+    assert errors_by_backend_group == {
+        "backend-first": "first-error",
+        "backend-second": "second-error",
+    }

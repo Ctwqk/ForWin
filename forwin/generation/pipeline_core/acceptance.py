@@ -6,7 +6,7 @@ from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.generation.pipeline_core.obligation_resolution import (
     _verify_obligations_after_acceptance,
 )
-from forwin.audit.events import DecisionEventType
+from forwin.audit.events import DecisionActorType, DecisionEventType
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
@@ -24,6 +24,9 @@ class AcceptanceStage:
         chapter_number: int,
         *,
         reason: str = "",
+        actor_type: DecisionActorType = "manual_ui",
+        actor_id: str = "",
+        source: str = "direct",
     ) -> dict[str, str]:
         session: Session = self._SessionFactory()
         try:
@@ -128,7 +131,8 @@ class AcceptanceStage:
                 chapter_number=chapter_number,
                 event_family="audit_action",
                 event_type=DecisionEventType.REVIEW_APPROVED,
-                actor_type="manual_ui",
+                actor_type=actor_type,
+                actor_id=str(actor_id or ""),
                 scope="chapter",
                 summary=f"第{chapter_number}章 review 已人工接受并写入 Canon。",
                 reason=str(reason or "").strip(),
@@ -158,6 +162,7 @@ class AcceptanceStage:
                     ],
                     "verdict": verdict.verdict,
                     "canon_commit_id": canon_outcome.commit_id,
+                    "source": str(source or ""),
                 },
             )
             session.commit()

@@ -13,7 +13,7 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-def test_retention_cleanup_preserves_cost_traces_and_prunes_ephemeral_rows() -> None:
+def test_retention_cleanup_preserves_cost_and_candidate_history() -> None:
     from forwin.maintenance.retention import RetentionPolicy, run_retention_cleanup
 
     engine = get_engine(postgres_test_url("retention-cleanup"))
@@ -82,7 +82,6 @@ def test_retention_cleanup_preserves_cost_traces_and_prunes_ephemeral_rows() -> 
                 session,
                 RetentionPolicy(
                     performance_span_days=30,
-                    candidate_drafts_keep_per_chapter=2,
                 ),
                 now=now,
             )
@@ -95,9 +94,9 @@ def test_retention_cleanup_preserves_cost_traces_and_prunes_ephemeral_rows() -> 
 
         assert result.performance_spans_deleted == 1
         assert not hasattr(result, "prompt_traces_deleted")
-        assert result.candidate_drafts_deleted == 3
+        assert not hasattr(result, "candidate_drafts_deleted")
         assert span_names == ["new"]
         assert set(trace_stages) == {"old", "new"}
-        assert draft_versions == [4, 5]
+        assert draft_versions == [1, 2, 3, 4, 5]
     finally:
         engine.dispose()

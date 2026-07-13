@@ -15,7 +15,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.genesis import PromptTrace
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import Project
+from forwin.models.project import ChapterPlan, Project
 
 
 CostDimension = Literal[
@@ -82,6 +82,7 @@ _ATTEMPT_SIGNAL_KEYS = frozenset(
         "total_tokens",
         "http_status",
         "error_class",
+        "workflow_attempt_no",
     }
 )
 
@@ -372,6 +373,14 @@ class CostLedgerService:
         trace_by_id = {str(row.id or ""): row for row in traces}
         explicit_trace_event = self._explicit_trace_events(events)
         band_ranges = self._band_ranges(project_id=project_id)
+        chapter_arc_ids = self._chapter_arc_ids(project_id=project_id)
+        descendant_candidates = self._descendant_candidates(
+            traces,
+            event_by_id=event_by_id,
+            trace_event=trace_event,
+            explicit_trace_event=explicit_trace_event,
+            candidate_by_review=candidate_by_review,
+        )
         context_cache: dict[str, _TraceContext] = {}
 
         def resolve_context(
@@ -394,12 +403,14 @@ class CostLedgerService:
                 explicit_trace_event=explicit_trace_event.get(trace_id),
                 parent_context=parent_context,
                 candidate_by_review=candidate_by_review,
+                descendant_candidate=descendant_candidates.get(trace_id, ""),
             )
             if not context.band_id and context.chapter_number:
                 context.band_id = self._band_for_chapter(
                     project_id=context.project_id,
                     chapter_number=context.chapter_number,
                     band_ranges=band_ranges,
+                    chapter_arc_ids=chapter_arc_ids,
                 )
             context_cache[trace_id] = context
             return context
@@ -445,6 +456,7 @@ class CostLedgerService:
                 candidate_filter=candidate_id,
                 candidate_by_review=candidate_by_review,
                 band_ranges=band_ranges,
+                chapter_arc_ids=chapter_arc_ids,
             )
         ]
         manual_actions = self._manual_actions(matched_events)
@@ -516,13 +528,16 @@ class CostLedgerService:
             if str(row.review_id or "").strip()
         }
 
-    def _band_ranges(self, *, project_id: str) -> list[tuple[str, str, int, int]]:
+    def _band_ranges(
+        self, *, project_id: str
+    ) -> list[tuple[str, str, str, int, int]]:
         statement = select(BandExperiencePlan)
         if project_id:
             statement = statement.where(BandExperiencePlan.project_id == project_id)
         return [
             (
                 str(row.project_id or ""),
+                str(row.arc_id or ""),
                 str(row.band_id or ""),
                 int(row.chapter_start or 0),
                 int(row.chapter_end or 0),
@@ -531,20 +546,50 @@ class CostLedgerService:
             if str(row.band_id or "").strip()
         ]
 
+    def _chapter_arc_ids(self, *, project_id: str) -> dict[tuple[str, int], str]:
+        statement = select(ChapterPlan)
+        if project_id:
+            statement = statement.where(ChapterPlan.project_id == project_id)
+        selected: dict[tuple[str, int], tuple[tuple[int, datetime, str], str]] = {}
+        for row in self.session.scalars(statement).all():
+            key = (str(row.project_id or ""), int(row.chapter_number or 0))
+            rank = (
+                int(str(row.status or "") == "accepted"),
+                row.created_at or datetime.min,
+                str(row.id or ""),
+            )
+            current = selected.get(key)
+            if current is None or rank > current[0]:
+                selected[key] = (rank, str(row.arc_plan_id or ""))
+        return {key: value[1] for key, value in selected.items() if value[1]}
+
     @staticmethod
     def _band_for_chapter(
         *,
         project_id: str,
         chapter_number: int,
-        band_ranges: list[tuple[str, str, int, int]],
+        band_ranges: list[tuple[str, str, str, int, int]],
+        chapter_arc_ids: dict[tuple[str, int], str],
     ) -> str:
-        matches = {
-            band_id
-            for row_project_id, band_id, chapter_start, chapter_end in band_ranges
+        matching_rows = [
+            (arc_id, band_id)
+            for (
+                row_project_id,
+                arc_id,
+                band_id,
+                chapter_start,
+                chapter_end,
+            ) in band_ranges
             if row_project_id == project_id
             and chapter_start > 0
             and chapter_start <= chapter_number <= chapter_end
-        }
+        ]
+        chapter_arc_id = chapter_arc_ids.get((project_id, chapter_number), "")
+        if chapter_arc_id:
+            matching_rows = [
+                row for row in matching_rows if row[0] == chapter_arc_id
+            ]
+        matches = {band_id for _arc_id, band_id in matching_rows}
         return next(iter(matches)) if len(matches) == 1 else ""
 
     @staticmethod
@@ -570,6 +615,45 @@ class CostLedgerService:
                 if normalized and normalized not in result:
                     result[normalized] = row
         return result
+
+    @classmethod
+    def _descendant_candidates(
+        cls,
+        traces: list[PromptTrace],
+        *,
+        event_by_id: dict[str, DecisionEvent],
+        trace_event: dict[str, DecisionEvent],
+        explicit_trace_event: dict[str, DecisionEvent],
+        candidate_by_review: dict[str, str],
+    ) -> dict[str, str]:
+        trace_by_id = {str(row.id or ""): row for row in traces}
+        candidates_by_ancestor: dict[str, set[str]] = defaultdict(set)
+        for trace in traces:
+            trace_id = str(trace.id or "")
+            direct = cls._trace_context(
+                trace,
+                event_by_id=event_by_id,
+                related_trace_event=trace_event.get(trace_id),
+                explicit_trace_event=explicit_trace_event.get(trace_id),
+                parent_context=None,
+                candidate_by_review=candidate_by_review,
+            ).candidate_id
+            if not direct:
+                continue
+            parent_id = str(trace.parent_trace_id or "")
+            visited: set[str] = set()
+            while parent_id and parent_id not in visited:
+                visited.add(parent_id)
+                parent = trace_by_id.get(parent_id)
+                if parent is None:
+                    break
+                candidates_by_ancestor[parent_id].add(direct)
+                parent_id = str(parent.parent_trace_id or "")
+        return {
+            trace_id: next(iter(candidate_ids))
+            for trace_id, candidate_ids in candidates_by_ancestor.items()
+            if len(candidate_ids) == 1
+        }
 
     @staticmethod
     def _matches(
@@ -600,7 +684,8 @@ class CostLedgerService:
         band_filter: str,
         candidate_filter: str,
         candidate_by_review: dict[str, str],
-        band_ranges: list[tuple[str, str, int, int]],
+        band_ranges: list[tuple[str, str, str, int, int]],
+        chapter_arc_ids: dict[tuple[str, int], str],
     ) -> bool:
         payload = _json_object(row.payload_json)
         row_project_id = str(row.project_id or "")
@@ -611,6 +696,7 @@ class CostLedgerService:
                 project_id=row_project_id,
                 chapter_number=row_chapter_number,
                 band_ranges=band_ranges,
+                chapter_arc_ids=chapter_arc_ids,
             )
         return cls._matches(
             project_id=row_project_id,
@@ -634,6 +720,7 @@ class CostLedgerService:
         explicit_trace_event: DecisionEvent | None,
         parent_context: _TraceContext | None,
         candidate_by_review: dict[str, str],
+        descendant_candidate: str = "",
     ) -> _TraceContext:
         input_snapshot = _json_object(trace.input_snapshot_json)
         output_summary = _json_object(trace.output_summary_json)
@@ -643,7 +730,7 @@ class CostLedgerService:
         candidate_id = _snapshot_value(
             input_snapshot, output_summary, key="candidate_id"
         )
-        gate_id = ""
+        gate_id = _snapshot_value(input_snapshot, output_summary, key="gate_id")
         current = event_by_id.get(str(trace.decision_event_id or ""))
         if current is None:
             current = explicit_trace_event
@@ -676,6 +763,7 @@ class CostLedgerService:
             band_id = band_id or parent_context.band_id
             candidate_id = candidate_id or parent_context.candidate_id
             gate_id = gate_id or parent_context.gate_id
+        candidate_id = candidate_id or str(descendant_candidate or "")
         return _TraceContext(
             project_id=str(trace.project_id or ""),
             chapter_number=chapter_number,
@@ -706,6 +794,7 @@ class CostLedgerService:
         records: list[_CostRecord] = []
         seen_by_group: dict[str, int] = defaultdict(int)
         identity_by_group: dict[str, tuple[str, str, str]] = {}
+        workflow_retry_pending: set[tuple[str, str]] = set()
         fallback_count = 0
         for index, attempt in enumerate(attempts):
             group_id = str(attempt.get("attempt_group_id") or f"ungrouped-{index}")
@@ -721,7 +810,17 @@ class CostLedgerService:
                 model,
                 str(attempt.get("profile_id") or ""),
             )
-            retry = seen_by_group[group_id] > 0
+            task_family = str(attempt.get("task_family") or "")
+            stage_key = str(
+                attempt.get("stage_key") or context.default_stage_key or ""
+            )
+            workflow_key = (task_family, stage_key)
+            retry = bool(
+                attempt.get("workflow_retry")
+                or _nonnegative_int(attempt.get("workflow_attempt_no")) > 1
+                or workflow_key in workflow_retry_pending
+                or seen_by_group[group_id] > 0
+            )
             fallback = bool(
                 retry
                 and identity_by_group.get(group_id)
@@ -752,6 +851,7 @@ class CostLedgerService:
             usage_source = str(attempt.get("usage_source") or "").strip()
             if not usage_source:
                 usage_source = "provider" if known_component else "missing"
+            success = cls._attempt_succeeded(attempt)
             records.append(
                 _CostRecord(
                     project_id=context.project_id,
@@ -759,13 +859,11 @@ class CostLedgerService:
                     band_id=context.band_id,
                     candidate_id=context.candidate_id,
                     gate_id=context.gate_id,
-                    task_family=str(attempt.get("task_family") or ""),
-                    stage_key=str(
-                        attempt.get("stage_key") or context.default_stage_key or ""
-                    ),
+                    task_family=task_family,
+                    stage_key=stage_key,
                     model=model,
                     provider=provider,
-                    success=cls._attempt_succeeded(attempt),
+                    success=success,
                     retry=retry,
                     fallback=fallback,
                     input_chars=_nonnegative_int(attempt.get("input_chars")),
@@ -777,6 +875,15 @@ class CostLedgerService:
                     usage_source=usage_source,
                 )
             )
+            if bool(
+                attempt.get("parse_error")
+                or attempt.get("final_failure")
+                or str(attempt.get("status") or "").strip().lower()
+                in {"failed", "error"}
+            ):
+                workflow_retry_pending.add(workflow_key)
+            elif retry and success:
+                workflow_retry_pending.discard(workflow_key)
         if trace.fallback_used and records and fallback_count == 0:
             records[-1].fallback = True
             if len(records) > 1:

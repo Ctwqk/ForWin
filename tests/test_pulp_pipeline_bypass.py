@@ -394,6 +394,20 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         policy = Policy()
         llm_client = sentinel_llm_client
 
+        def _drain_llm_attempt_events(self):
+            captured["drained"] = True
+            return [
+                {
+                    "attempt_group_id": "canon-gate",
+                    "stage_key": "chapter_review_form",
+                    "http_status": 200,
+                }
+            ]
+
+        def _save_prompt_trace_payload(self, **kwargs):  # noqa: ANN003
+            captured["prompt_trace"] = kwargs["prompt_trace"]
+            return "canon-gate-trace"
+
     captured: dict[str, object | None] = {}
 
     def fake_analyze_writer_output_quality(**kwargs):  # noqa: ANN003
@@ -426,6 +440,17 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
     assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)
     assert captured["mode"] == expected_analysis_mode
+    if passes_none:
+        assert "drained" not in captured
+        assert "prompt_trace" not in captured
+    else:
+        assert captured["drained"] is True
+        assert captured["prompt_trace"]["input_snapshot"] == {
+            "project_id": "project-1",
+            "chapter_number": 1,
+            "candidate_id": "",
+            "gate_id": "canon_quality",
+        }
 
 
 def test_world_only_layer_filter_removes_non_world_patches() -> None:

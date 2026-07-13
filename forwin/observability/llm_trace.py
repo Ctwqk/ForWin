@@ -7,12 +7,91 @@ from typing import Any
 
 from forwin.audit.events import DecisionEventType
 
+from .payloads import safe_error_summary
 from .redaction import redact_payload
 
 
 RAW_REQUEST_KEY = "_raw_request_payload"
 RAW_RESPONSE_KEY = "_raw_response_text"
 PARSE_FAILURE_OUTPUT_KEY = "_parse_failure_output"
+_SAFE_PROMPT_ATTEMPT_KEYS = frozenset(
+    {
+        "attempt_group_id",
+        "profile_id",
+        "profile_name",
+        "model",
+        "provider",
+        "preferred_provider_kind",
+        "preferred_model",
+        "base_url_host",
+        "requested_temperature",
+        "requested_max_tokens",
+        "timeout_seconds",
+        "attempt_no",
+        "http_status",
+        "provider_request_id",
+        "duration_ms",
+        "input_chars",
+        "output_chars",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "usage_source",
+        "task_family",
+        "stage_key",
+        "llm_task_route",
+        "retry_after",
+        "sleep_ms",
+        "error_class",
+        "error_message",
+        "error_category",
+        "timeout_kind",
+        "retryable",
+        "fallback_eligible",
+        "final_failure",
+        "backend_attempt_group_id",
+        "parse_ok",
+        "schema_ok",
+        "parse_error",
+        "parser_name",
+        "schema_name",
+        "workflow_attempt_no",
+        "workflow_retry",
+    }
+)
+
+
+def safe_prompt_trace_attempts(
+    attempts: list[dict[str, object]],
+    *,
+    fallback_attempt_no: int = 0,
+    exc: BaseException | None = None,
+    duration_ms: int = 0,
+) -> list[dict[str, object]]:
+    safe_attempts: list[dict[str, object]] = []
+    for attempt in attempts:
+        safe = {
+            key: value
+            for key, value in attempt.items()
+            if key in _SAFE_PROMPT_ATTEMPT_KEYS and value is not None
+        }
+        if "error_message" in safe:
+            safe["error_message"] = safe_error_summary(
+                str(safe.get("error_message") or "")
+            )
+        safe_attempts.append(safe)
+    if not safe_attempts and exc is not None:
+        safe_attempts.append(
+            {
+                "attempt_no": int(fallback_attempt_no or 0),
+                "duration_ms": max(0, int(duration_ms or 0)),
+                "error_class": exc.__class__.__name__,
+                "error_message": safe_error_summary(exc),
+                "error_category": "unknown",
+                "final_failure": True,
+            }
+        )
+    return safe_attempts
 
 
 def mark_latest_attempt_parse_failure(
@@ -27,8 +106,13 @@ def mark_latest_attempt_parse_failure(
     attempts = getattr(llm_client, "llm_attempt_events", None)
     if not isinstance(attempts, list):
         return
+    target_group_id = str(
+        getattr(llm_client, "llm_attempt_group_id", "") or ""
+    )
     for item in reversed(attempts):
         if not isinstance(item, dict):
+            continue
+        if target_group_id and str(item.get("attempt_group_id") or "") != target_group_id:
             continue
         if stage_key and str(item.get("stage_key") or "") != str(stage_key):
             continue
@@ -39,6 +123,31 @@ def mark_latest_attempt_parse_failure(
         item["schema_name"] = str(schema_name or "")
         item[PARSE_FAILURE_OUTPUT_KEY] = str(raw_output or "")
         item["error_category"] = str(item.get("error_category") or "parse_error")
+        return
+
+
+def mark_latest_attempt_workflow(
+    llm_client: object,
+    *,
+    attempt_no: int,
+    stage_key: str = "",
+) -> None:
+    attempts = getattr(llm_client, "llm_attempt_events", None)
+    if not isinstance(attempts, list):
+        return
+    target_group_id = str(
+        getattr(llm_client, "llm_attempt_group_id", "") or ""
+    )
+    for item in reversed(attempts):
+        if not isinstance(item, dict):
+            continue
+        if target_group_id and str(item.get("attempt_group_id") or "") != target_group_id:
+            continue
+        if stage_key and str(item.get("stage_key") or "") != str(stage_key):
+            continue
+        normalized_attempt = max(1, int(attempt_no or 1))
+        item["workflow_attempt_no"] = normalized_attempt
+        item["workflow_retry"] = normalized_attempt > 1
         return
 
 
@@ -90,7 +199,9 @@ def build_llm_decision_event_payloads(
         model = str(attempt.get("model") or "")
         has_parse_error = bool(attempt.get("parse_error"))
         if (
-            int(attempt.get("sleep_ms") or 0) > 0
+            bool(attempt.get("workflow_retry"))
+            or int(attempt.get("workflow_attempt_no") or 0) > 1
+            or int(attempt.get("sleep_ms") or 0) > 0
             or attempt.get("retry_after") is not None
         ):
             events.append(
@@ -284,6 +395,8 @@ def _event_attempt_payload(
     keys = {
         "attempt_group_id",
         "attempt_no",
+        "workflow_attempt_no",
+        "workflow_retry",
         "profile_id",
         "profile_name",
         "model",

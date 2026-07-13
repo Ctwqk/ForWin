@@ -142,6 +142,23 @@ forwin      http://127.0.0.1:8898/mcp   enabled
     assert not codex_mcp_has_forwin(output.replace("forwin", "not-forwin"))
 
 
+def test_main_defaults_to_swarm_manager_lan_endpoints(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_build_results(**kwargs):
+        captured.update(kwargs)
+        return [CheckResult("ready", True, "ok")]
+
+    monkeypatch.setattr("scripts.check_codex_operator_ready.build_results", fake_build_results)
+
+    assert main([]) == 0
+    assert captured == {
+        "api_health_url": "http://10.0.0.150:8899/health",
+        "mcp_health_url": "http://10.0.0.150:8896/health",
+        "mcp_url": "http://10.0.0.150:8896/mcp",
+    }
+
+
 def test_main_returns_failure_when_any_required_check_fails(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "scripts.check_codex_operator_ready.build_results",

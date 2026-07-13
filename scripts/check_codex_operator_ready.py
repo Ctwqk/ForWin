@@ -249,9 +249,9 @@ def build_results(*, api_health_url: str, mcp_health_url: str, mcp_url: str) -> 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only readiness check for Codex operating ForWin through MCP.")
-    parser.add_argument("--api-health-url", default="http://127.0.0.1:8899/health")
-    parser.add_argument("--mcp-health-url", default="http://127.0.0.1:8896/health")
-    parser.add_argument("--mcp-url", default="http://127.0.0.1:8896/mcp")
+    parser.add_argument("--api-health-url", default="http://10.0.0.150:8899/health")
+    parser.add_argument("--mcp-health-url", default="http://10.0.0.150:8896/health")
+    parser.add_argument("--mcp-url", default="http://10.0.0.150:8896/mcp")
     parser.add_argument(
         "--strict",
         action="store_true",

@@ -14,10 +14,12 @@ This skill teaches Codex how to operate ForWin as a workflow system. Use the `fo
 Before operating a running backend from the ForWin server, confirm the operator path is available:
 
 1. `python3 scripts/check_codex_operator_ready.py`
-2. If API or MCP health fails, run `docker compose up -d forwin forwin-mcp`.
+2. If API or MCP health fails, inspect `docker --context swarm-manager-150 service ls --filter name=forwin` and recover through the approved 150 deploy sync path.
 3. Global `codex mcp list` registration is optional when the repo-local plugin supplies the MCP definition.
 
 If the readiness check says the ForWin API or MCP endpoint is unavailable, report that setup problem and stop. Do not compensate by reading SQLite directly or by calling raw ForWin HTTP routes when an equivalent MCP tool exists.
+
+The repository defaults to the Swarm manager LAN endpoints at `10.0.0.150`. Use the readiness command's explicit URL flags only when intentionally operating a separate local development stack.
 
 ## When To Use The MCP Server
 

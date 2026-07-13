@@ -5,7 +5,7 @@ import json
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import (
+from forwin.application.read_models import (
     build_project_detail,
     build_project_summaries,
     normalize_project_automation,

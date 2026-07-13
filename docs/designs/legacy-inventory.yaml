@@ -190,15 +190,14 @@ entries:
     paths:
       - forwin/api_governance_support.py
       - forwin/governance.py
-      - forwin/project_payloads/arc_snapshot.py
-      - forwin/project_payloads/common.py
-      - forwin/project_payloads/generation.py
-      - forwin/project_payloads/genesis.py
-      - forwin/project_payloads/project_detail.py
-      - forwin/project_payloads/project_summary.py
-      - forwin/project_payloads/provisional.py
-      - forwin/project_payloads/runtime_maps.py
-      - forwin/project_payloads/scenario.py
+      - forwin/application/read_models/arc_snapshot.py
+      - forwin/application/read_models/common.py
+      - forwin/application/read_models/generation.py
+      - forwin/application/read_models/genesis.py
+      - forwin/application/read_models/project_detail.py
+      - forwin/application/read_models/project_summary.py
+      - forwin/application/read_models/runtime_maps.py
+      - forwin/application/read_models/scenario.py
     allow_patterns:
       - checkpoint_reason_with_legacy_status
       - _record_legacy_checkpoint_status_compatibility
@@ -245,8 +244,8 @@ entries:
       - forwin/mcp/models.py
       - forwin/models/project.py
       - forwin/project_ops/genesis.py
-      - forwin/project_payloads/project_detail.py
-      - forwin/project_payloads/project_summary.py
+      - forwin/application/read_models/project_detail.py
+      - forwin/application/read_models/project_summary.py
       - forwin/state/updater.py
     allow_patterns:
       - project.creation_status_legacy

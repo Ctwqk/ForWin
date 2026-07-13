@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from forwin.application.errors import ActiveGenerationTaskError
 from forwin.application.generation import GenerationTaskHandle
-from forwin.project_payloads import normalize_project_automation
+from forwin.application.read_models import normalize_project_automation
 from forwin.models.project import Project
 from forwin.production.executor import ProductionExecutor
 from forwin.production.planner import ProductionPlan

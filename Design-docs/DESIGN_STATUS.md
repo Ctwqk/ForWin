@@ -96,6 +96,7 @@
 | `api_runtime.py` generic project creation runner | removed | `application.generation_execution.execute_continuation` | 已删除 | worker 只执行 project-backed claimed task；无项目 `pipeline.run()` 分支已删除。 |
 | `api_project_control_ops/support` | removed | `forwin.application.project_control` | 已删除 | project-control HTTP adapter 只绑定 `ProjectControlApplicationService`。 |
 | `api_project_ops` / `api_project_policy` / root `project_ops` | removed | `forwin.application.projects.ProjectApplicationService` | 已删除 | 项目、Genesis、章节和 review 路由只绑定 application service。 |
+| `forwin.project_payloads` | removed | `forwin.application.read_models` | 已删除 | project summary/detail、Genesis、generation、runtime map 与 scenario 读模型归 application owner；无旧包或 re-export 壳。 |
 | `api_publisher_ops` | removed | `forwin.application.publisher.PublisherApplicationService` | 已删除 | extension auth、publisher jobs、cover 与 comment sync 共享一个应用边界。 |
 | `forwin.reviewer` | removed | `forwin.review` | 已删除 | 草稿评审、decision rules 与 repair 归入一个 bounded package，不留旧导入 alias。 |
 | `forwin.review_engine` | removed | `forwin.review.decision` | 已删除 | 决策规则不再作为与 review 平级的第二套域。 |

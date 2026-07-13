@@ -7,7 +7,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import build_generation_control, _recent_rows_by_project
+from forwin.application.read_models import build_generation_control, _recent_rows_by_project
 from forwin.api_schema import TaskCenterItemResponse
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent

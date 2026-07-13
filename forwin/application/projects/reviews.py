@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import build_project_detail
+from forwin.application.read_models import build_project_detail
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.api_schema import (
     CandidateDraftDetail,

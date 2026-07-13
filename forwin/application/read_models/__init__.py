@@ -1,3 +1,5 @@
+"""Application-owned project and runtime read models."""
+
 from __future__ import annotations
 
 from .common import (

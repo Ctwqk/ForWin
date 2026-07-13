@@ -26,7 +26,7 @@ NEW_MODULE_MAX_LINES = 1100
 
 
 def test_giant_module_public_imports_remain_available() -> None:
-    from forwin.project_payloads import build_project_detail, build_project_summaries
+    from forwin.application.read_models import build_project_detail, build_project_summaries
     from forwin.api_schema import ProjectDetail, ProjectSummary
     from forwin.genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
     from forwin.context.assembler_core import ChapterContextAssembler, assemble_context
@@ -85,7 +85,7 @@ def test_new_decomposition_modules_stay_context_sized() -> None:
         REPO_ROOT / "forwin" / "planning" / "future_plan_audit",
         REPO_ROOT / "forwin" / "canon_quality" / "countdown",
         REPO_ROOT / "forwin" / "api_schema",
-        REPO_ROOT / "forwin" / "project_payloads",
+        REPO_ROOT / "forwin" / "application" / "read_models",
         REPO_ROOT / "forwin" / "writer" / "prompt_core",
         REPO_ROOT / "forwin" / "writer" / "llm",
         REPO_ROOT / "forwin" / "context" / "assembler_core",

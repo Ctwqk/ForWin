@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.project_payloads import build_project_detail
+from forwin.application.read_models import build_project_detail
 from forwin.book_state import BookStateRepository
 from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
 from forwin.checker.reference_classifier import (

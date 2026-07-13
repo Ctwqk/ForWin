@@ -814,3 +814,28 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "World" + "DeltaExtractor",
     ):
         assert removed_type not in production
+
+
+def test_application_read_models_have_one_current_owner() -> None:
+    assert not list((ROOT / "forwin/project_payloads").glob("*.py"))
+
+    owner = ROOT / "forwin/application/read_models"
+    for module_name in (
+        "__init__.py",
+        "arc_snapshot.py",
+        "common.py",
+        "generation.py",
+        "genesis.py",
+        "project_detail.py",
+        "project_summary.py",
+        "runtime_maps.py",
+        "scenario.py",
+    ):
+        assert (owner / module_name).is_file()
+
+    removed_import = "forwin." + "project_payloads"
+    offenders = []
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        if removed_import in path.read_text(encoding="utf-8"):
+            offenders.append(path.relative_to(ROOT).as_posix())
+    assert offenders == []

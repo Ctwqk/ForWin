@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from forwin.project_payloads import build_project_detail, normalize_project_automation
+from forwin.application.read_models import build_project_detail, normalize_project_automation
 from forwin.api_schema import (
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,

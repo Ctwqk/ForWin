@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import (
+from forwin.application.read_models import (
     build_scenario_rehearsal_detail,
     latest_scenario_rehearsal_run,
 )

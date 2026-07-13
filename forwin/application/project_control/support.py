@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.project_payloads import normalize_project_automation
+from forwin.application.read_models import normalize_project_automation
 from forwin.api_schema import (
     BandCheckpointDetail,
     CausalReplayResponse,

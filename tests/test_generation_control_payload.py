@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from forwin.application.projects.common import _overlay_active_generation_task
-from forwin.project_payloads import build_generation_control
+from forwin.application.read_models import build_generation_control
 from forwin.api_schema import GenerationControlInfo, ProjectDetail
 from forwin.audit.events import DecisionEventInfo
 from forwin.models.planning_control import BandCheckpoint

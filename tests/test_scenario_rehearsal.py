@@ -43,7 +43,7 @@ def _build_pipeline() -> ChapterPipeline:
 
 
 def test_project_arc_snapshot_payload_exposes_scenario_rehearsal_fields() -> None:
-    from forwin.project_payloads import project_arc_snapshot_payload
+    from forwin.application.read_models import project_arc_snapshot_payload
 
     payload = project_arc_snapshot_payload(
         None,

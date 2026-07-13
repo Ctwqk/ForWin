@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from forwin.api_schema import ProjectAutomationUpdateRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
-from forwin.project_payloads import normalize_project_automation
+from forwin.application.read_models import normalize_project_automation
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 from tests.http_runtime_harness import HttpRuntimeHarness

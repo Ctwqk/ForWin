@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.project_payloads import normalize_project_automation
+from forwin.application.read_models import normalize_project_automation
 from forwin.production.policy import policy_from_automation
 
 

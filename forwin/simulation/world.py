@@ -9,6 +9,11 @@ from typing import Any, Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from forwin.audience.feedback import (
+    classify_signal_level,
+    keyword_dominant_sentiment,
+    keyword_feedback_summary,
+)
 from forwin.models import (
     CommentSignalCandidate,
     Project,
@@ -36,10 +41,6 @@ def _read_optional_phase4_llm_timeout_seconds(
 
 
 _OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS = _read_optional_phase4_llm_timeout_seconds()
-
-_POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
-_NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")
-_QUESTION_COMMENT_KEYWORDS = ("为什么", "怎么", "是不是", "会不会", "求", "能不能")
 
 _VALID_SIGNAL_TYPES = frozenset(
     {
@@ -123,62 +124,6 @@ def _keyword_fallback(body: str) -> list[SignalDraft]:
             )
         )
     return signals
-
-
-def classify_signal_level(
-    *,
-    unique_users: int,
-    spans_chapters: int,
-    severity: int,
-    signal_type: str,
-) -> str:
-    if signal_type == "risk" and severity >= 3:
-        return "watchlist" if unique_users < 2 else "confirmed"
-    if unique_users < 2:
-        return "noise"
-    if spans_chapters < 2 and signal_type in (
-        "character_heat",
-        "relationship_interest",
-        "prediction",
-    ):
-        return "noise"
-    if unique_users >= 3 and spans_chapters >= 2:
-        return "confirmed"
-    return "candidate"
-
-
-def _keyword_dominant_sentiment(comments: Sequence[PublisherRawComment]) -> str:
-    positive = 0
-    negative = 0
-    curious = 0
-    for comment in comments:
-        text = str(comment.body_text or "")
-        if any(keyword in text for keyword in _POSITIVE_COMMENT_KEYWORDS):
-            positive += 1
-        if any(keyword in text for keyword in _NEGATIVE_COMMENT_KEYWORDS):
-            negative += 1
-        if any(keyword in text for keyword in _QUESTION_COMMENT_KEYWORDS):
-            curious += 1
-    if negative > max(positive, curious):
-        return "negative"
-    if positive > max(negative, curious):
-        return "positive"
-    if curious:
-        return "curious"
-    return "neutral"
-
-
-def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> str:
-    summary_parts = [f"最近 {comment_count} 条评论"]
-    if dominant_sentiment == "negative":
-        summary_parts.append("整体情绪偏担忧")
-    elif dominant_sentiment == "positive":
-        summary_parts.append("整体情绪偏积极")
-    elif dominant_sentiment == "curious":
-        summary_parts.append("读者对悬念追问较多")
-    else:
-        summary_parts.append("暂无明确结构化信号")
-    return "，".join(summary_parts) + "。"
 
 
 def _signal_rank(signal: dict[str, Any]) -> tuple[int, int, int, int, str]:
@@ -659,7 +604,7 @@ def build_reader_feedback_snapshot(
     highlight_rows = _load_highlight_comments(
         session, rows, signal_rows, limit=min(limit, 4)
     )
-    keyword_dominant = _keyword_dominant_sentiment(highlight_rows or rows)
+    keyword_dominant = keyword_dominant_sentiment(highlight_rows or rows)
 
     highlighted_topics: list[str] = []
     confirmed_signals: list[dict[str, Any]] = []
@@ -688,7 +633,7 @@ def build_reader_feedback_snapshot(
         feedback_summary = _build_structured_feedback_summary(len(rows), sorted_signals)
     else:
         dominant_sentiment = keyword_dominant
-        feedback_summary = _keyword_feedback_summary(len(rows), dominant_sentiment)
+        feedback_summary = keyword_feedback_summary(len(rows), dominant_sentiment)
 
     return {
         "comment_count": len(rows),

@@ -8,6 +8,7 @@ from .prompt_layer import (
     inject_skill_layers,
     serialize_prompt_layers,
     summarize_selected_skills,
+    summarize_skill_layers,
 )
 from .registry import SkillRegistry
 from .router import SkillRouter
@@ -44,4 +45,5 @@ __all__ = [
     "inject_skill_layers",
     "serialize_prompt_layers",
     "summarize_selected_skills",
+    "summarize_skill_layers",
 ]

@@ -40,7 +40,6 @@ from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.state.query_helpers import load_latest_rewrite_attempts_by_chapter
 from .common import _load_json_object
 
 
@@ -54,14 +53,6 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
-
-def latest_rewrite_attempts_by_chapter(
-    session,
-    project_id: str,
-    chapter_numbers: list[int] | None = None,
-) -> dict[int, ChapterRewriteAttempt]:
-    return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
-
 
 def _decision_refs_for_types(
     decision_refs: list[Any],
@@ -1048,7 +1039,6 @@ def retry_chapter_review(
 
 
 __all__ = [
-    "latest_rewrite_attempts_by_chapter",
     "get_chapter_review",
     "get_candidate_draft",
     "approve_chapter_review",

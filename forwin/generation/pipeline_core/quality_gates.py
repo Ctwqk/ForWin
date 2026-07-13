@@ -30,7 +30,7 @@ from forwin.models.draft import (
     ChapterDraft,
     ChapterReview,
 )
-from forwin.writer.chapter_writer import ChapterWriter
+from forwin.skills import summarize_skill_layers
 from forwin.audit.events import DecisionEventType
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.canon_quality.gate import evaluate_canon_admission
@@ -825,7 +825,7 @@ class QualityDiagnosticsStage:
             duration_ms=duration_ms,
         )
         error_category = self._error_category_from_attempts(safe_attempts, exc)
-        selected_skills = ChapterWriter._selected_skills_from_layers(skill_layers)
+        selected_skills = summarize_skill_layers(skill_layers)
         operation_id = self._audit_operation_id()
         model_profile_id, model_name = self._current_model_identity()
         trace_payload = {

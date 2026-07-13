@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.audience_metrics import derive_audience_trends
+from forwin.audience.feedback import derive_audience_trends
 from forwin.models.publisher import SignalWindowAggregate
 
 

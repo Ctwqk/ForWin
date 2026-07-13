@@ -20,13 +20,15 @@ from forwin.models import (
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.audience.feedback import (
+    classify_signal_level,
+    derive_audience_trends,
     run_feedback_aggregation_pass,
     score_signal_aggregate_v1,
 )
 from forwin.arc_sizing import policy_for_total_chapters
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.stage_analysis import PacingStrategist
-from forwin.simulation.world import CommentAnalyzer, classify_signal_level
+from forwin.simulation.world import CommentAnalyzer
 from forwin.publishers import PublisherManager
 from forwin.state.repo import StateRepository
 
@@ -1194,11 +1196,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
         self.assertGreater(score_signal_aggregate_v1(newer), score_signal_aggregate_v1(older))
 
-        trends = StateRepository(self.session).get_audience_trends(
-            project.id,
-            before_chapter=13,
-            window_type="long",
-        )
+        trends = derive_audience_trends([older, newer], window_type="long")
 
         self.assertEqual(len(trends), 1)
         self.assertEqual(trends[0].signal_type, "relationship_interest")

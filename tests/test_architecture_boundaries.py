@@ -242,6 +242,10 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
 
 def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
     for removed_path in (
+        "forwin/api_artifacts.py",
+        "forwin/api_task_history.py",
+        "forwin/audience/analysis.py",
+        "forwin/audience_metrics.py",
         "forwin/orchestration",
         "forwin/orchestrator",
         "forwin/orchestrator_loop_core",
@@ -274,6 +278,8 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         "__class__ =",
         "__module__ =",
         "from types import ModuleType",
+        "forwin.audience.analysis",
+        "forwin.audience_metrics",
     ):
         assert removed not in production_source
     assert all(
@@ -316,6 +322,12 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         "get_entities_by_names",
         "get_thread_by_name",
         "get_chapter_summaries",
+        "get_audience_trends",
+        "get_recent_review_notes",
+        "list_chapter_rewrite_attempts_for_phase",
+        "list_decision_events",
+        "list_narrative_constraints",
+        "list_prompt_traces",
     ):
         assert f"def {removed_reader}(" not in state_repository
 

@@ -8,7 +8,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import ArcPolicyTier
-from forwin.audience_metrics import derive_audience_trends
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcEnvelope,
@@ -17,10 +16,12 @@ from forwin.models import (
     ChapterPlan,
     Project,
     ProvisionalPromotionRecord,
-    SignalWindowAggregate,
     new_id,
 )
-from forwin.experience.service import load_long_window_audience_trends
+from forwin.experience.service import (
+    AudienceCalibrationProfile,
+    load_long_window_audience_trends,
+)
 from forwin.experience.types import ArcExperienceBundle
 from forwin.planning.arc_envelope_resolver import BaseEnvelopeContext
 from forwin.planning.arc_structure_service import (
@@ -42,85 +43,6 @@ from forwin.subworld_manager import SubWorldManager
 
 def _clamp_int(value: float | int, lower: int, upper: int) -> int:
     return max(lower, min(int(round(value)), upper))
-
-
-def _coerce_unit_float(value: object, *, default: float) -> float:
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"high", "strong", "certain", "confident"}:
-            return 0.85
-        if normalized in {"medium", "moderate", "managed"}:
-            return 0.65
-        if normalized in {"low", "weak", "uncertain"}:
-            return 0.35
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-def _load_long_window_audience_trends(
-    session: Session,
-    project_id: str,
-    *,
-    limit: int = 3,
-) -> list[str]:
-    rows = session.execute(
-        select(SignalWindowAggregate)
-        .where(
-            SignalWindowAggregate.project_id == project_id,
-            SignalWindowAggregate.window_type == "long",
-            SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist")),
-        )
-        .order_by(
-            SignalWindowAggregate.window_chapter_end.desc(),
-            SignalWindowAggregate.unique_user_count.desc(),
-            SignalWindowAggregate.max_severity.desc(),
-        )
-        .limit(limit)
-    ).scalars().all()
-    if not rows:
-        return []
-    trend_views = derive_audience_trends(rows, window_type="long", limit=limit)
-    if trend_views:
-        return [
-            f"{row.target_name or '整体'}:{row.signal_type}:{row.current_level}"
-            for row in trend_views
-        ]
-    return [
-        f"{row.target_name or '整体'}:{row.signal_type}:{row.signal_level}"
-        for row in rows
-    ]
-
-
-@dataclass(slots=True)
-class AudienceCalibrationProfile:
-    boost_reward_density: bool = False
-    clarify_rule_legibility: bool = False
-    protect_character_heat: bool = False
-    hold_managed_ambiguity: bool = False
-
-
-def _load_long_window_audience_trend_views(
-    session: Session,
-    project_id: str,
-    *,
-    limit: int = 6,
-):
-    rows = session.execute(
-        select(SignalWindowAggregate)
-        .where(
-            SignalWindowAggregate.project_id == project_id,
-            SignalWindowAggregate.window_type == "long",
-            SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist", "candidate")),
-        )
-        .order_by(
-            SignalWindowAggregate.window_chapter_end.desc(),
-            SignalWindowAggregate.unique_user_count.desc(),
-            SignalWindowAggregate.max_severity.desc(),
-        )
-    ).scalars().all()
-    return derive_audience_trends(rows, window_type="long", limit=limit)
 
 
 @dataclass(slots=True)

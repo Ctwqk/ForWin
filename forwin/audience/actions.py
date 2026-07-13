@@ -11,9 +11,8 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
-from forwin.audience_metrics import score_signal_aggregate_v1
 from forwin.models import SignalWindowAggregate
-from forwin.audience.feedback import FeedbackCooldown
+from forwin.audience.feedback import FeedbackCooldown, score_signal_aggregate_v1
 
 logger = logging.getLogger(__name__)
 

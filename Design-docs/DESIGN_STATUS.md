@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-07-10
+更新时间：2026-07-12
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -98,7 +98,7 @@
 
 ## 2026-07 V5 Slice 1 Status
 
-状态：implementation-complete，尚未部署，30 章生产 gate 未执行。
+状态：implementation-complete，已部署；200 章 no-hotfix gate 运行中。
 
 - `InfrastructureConfig` 仅负责基础设施、凭据和环境模型目录；不存在 `Config` 兼容名。
 - 项目运行行为只来自版本化 `RuntimePolicy`，质量 profile 仅有 `standard/pulp`，gate delegate 仅有 `human/spark`。
@@ -109,11 +109,11 @@
 
 实现提交：`a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`、`307b0dd`。
 
-验证口径：前序聚焦 policy/store/API/snapshot/application/worker/MCP/browser 测试已通过；completion gate 的 architecture/config 为 24 passed，策略分支补充为 3 passed，`compileall` 成功，全仓 1598 tests collect 成功且无收集错误。全量执行按用户要求由独立测试任务承担，本收敛任务不重复启动；部署和 30 章 no-hotfix gate 仍是后续显式步骤。
+验证口径：前序聚焦 policy/store/API/snapshot/application/worker/MCP/browser 测试已通过；completion gate 的 architecture/config 为 24 passed，策略分支补充为 3 passed，`compileall` 成功，全仓 1598 tests collect 成功且无收集错误。全量执行按用户要求由独立测试任务承担，本收敛任务不重复启动；当前只保留 200 章 no-hotfix 运行门禁作为最终长跑验收。
 
 ## 2026-07 V5 Slice 2 Status
 
-状态：implementation-complete，未部署，长跑 gate 未执行。
+状态：implementation-complete，已部署；200 章 no-hotfix gate 运行中。
 
 - 已删除零调用 `forwin.orchestration` ports 和恒成功 `_compile_world_model_after_acceptance` 空壳。
 - BookState canon 旧路径已被 `CanonPreparationService` + `CanonAdmissionService.commit_plan` 取代，旧 direct commit 服务与端口均删除。
@@ -134,7 +134,7 @@
 
 ## 2026-07 V5 Slice 4 Status
 
-状态：implementation-complete，未部署，长跑 gate 未执行。
+状态：implementation-complete，已部署；200 章 no-hotfix gate 运行中。
 
 - WriterOutput 的实体准入、状态变化、事件、剧情线 beat 与时间推进统一翻译为 GraphDelta；未知角色/事件引用与 stale old-value 均 fail-closed。
 - `BookStateQuery` 已接管 context、review、checker、autofix、finalization 和 EntityRegistrar 的 accepted-state 读取；`ReviewQuery` 接管已接受摘要与 review notes。
@@ -151,7 +151,7 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 
 ## 2026-07 V5 Slice 5 Status
 
-状态：implementation-complete，local verification complete；deploy / 200-chapter no-hotfix gate 待执行。
+状态：implementation-complete，local verification complete，已部署；200-chapter no-hotfix gate 运行中。
 
 - `WritingOrchestrator`、`forwin.orchestrator` 与 `orchestrator_loop_core` 已删除；`ChapterPipeline` 静态组合 12 个 typed stage owner，显式接收具体类型协作者，类体跨模块函数赋值为零。
 - Genesis 已收口为 `forwin.genesis/{workspace,handoff}`；旧四个包/门面和 workspace 对 `book_genesis` 的延迟查询全部删除。
@@ -164,7 +164,17 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 - D25 命名与所有权切换完成：audit event、planning control、review rule、Codex action、HTTP project-control 和 UI project-control 各有唯一 owner；生产 Python/JS/HTML 对 `governance` 零命中。
 - 全仓生产代码不再使用星号导入、类/模块身份篡改或 `common/constants` 借道 re-export；机械删除 2,336 个未使用 import，并修复因此暴露的 8 个隐性依赖和 `llm_eval` 未定义配置。
 
-当前验收证据：`ruff check forwin` 与 `compileall -q forwin` 通过；factory/architecture 39 项、durable task/application/worker 39 项、project operation 28 项、五层 Review 与页面渲染 14 项、Canon repair 32 项、MCP 代表路径 6 项通过；rendered inline JavaScript 通过 Node syntax check，Review 模态窗 Playwright 交互 1 项通过。内置 Browser 不可用，按批准的 fallback 使用仓库 Playwright。全仓 1565 tests collect 成功且无收集错误。release smoke、部署与真实 200 章 no-hotfix gate 尚未执行，完成前不得宣称 Phase E/F 完成。
+当前验收证据：`ruff check forwin` 与 `compileall -q forwin` 通过；factory/architecture 39 项、durable task/application/worker 39 项、project operation 28 项、五层 Review 与页面渲染 14 项、Canon repair 32 项、MCP 代表路径 6 项通过；rendered inline JavaScript 通过 Node syntax check，Review 模态窗 Playwright 交互 1 项通过。内置 Browser 不可用，按批准的 fallback 使用仓库 Playwright。全仓 1565 tests collect 成功且无收集错误。代码已部署并通过生产探针；真实 200 章 no-hotfix gate 仍在运行，完成前不得宣称 Phase E/F 完成。
+
+## 2026-07 V5 Post-Convergence Cleanup Status
+
+状态：implementation-complete，待部署。
+
+- 删除零调用根模块 `api_artifacts.py`、`api_task_history.py`，不保留 facade。
+- 删除 audience 的 `analysis` 兼容 shim 与根级 `audience_metrics` 副本；信号分级、趋势、关键词情绪统一归 `forwin.audience.feedback`。
+- `StateRepository` 删除 6 个零调用查询：prompt trace、repair phase、review note、全量 narrative constraint、decision event、audience trend；领域查询继续由各自 owner 提供。
+- planning 删除已由 experience service 接管的 audience 查询副本和重复 calibration DTO；Writer、Review、quality gate 共享唯一 skill-layer trace 序列化函数。
+- 本 Slice 生产与测试净减 746 行；`ruff check forwin`、`compileall -q forwin`、architecture boundary 27 项通过。按用户要求未重复运行全量测试。
 
 ## 2026-07 Integrated Roadmap Status
 

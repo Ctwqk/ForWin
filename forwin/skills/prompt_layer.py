@@ -102,3 +102,20 @@ def summarize_selected_skills(selections: list[SkillSelection]) -> list[dict[str
         }
         for selection in selections
     ]
+
+
+def summarize_skill_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
+    payload = [
+        {
+            "id": str(getattr(item, "skill_id", getattr(item, "name", "")) or ""),
+            "version": str(
+                getattr(item, "skill_version", getattr(item, "version", "")) or ""
+            ),
+            "hash": str(getattr(item, "skill_hash", "") or ""),
+            "path": str(getattr(item, "path", "") or ""),
+            "activation_reason": str(getattr(item, "activation_reason", "") or ""),
+            "mode": str(getattr(item, "mode", "") or ""),
+        }
+        for item in skill_layers or []
+    ]
+    return [item for item in payload if item["id"]]

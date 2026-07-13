@@ -16,7 +16,7 @@ from forwin.protocol.state_change import (
     TimeAdvance,
 )
 from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
-from forwin.skills import serialize_prompt_layers
+from forwin.skills import serialize_prompt_layers, summarize_skill_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
@@ -1200,7 +1200,7 @@ class ChapterWriter:
         input_snapshot: dict[str, object],
         output_summary: dict[str, object],
     ) -> dict[str, object]:
-        selected_skills = self._selected_skills_from_layers(skill_layers)
+        selected_skills = summarize_skill_layers(skill_layers)
         drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
         attempts = drain_attempts() if callable(drain_attempts) else []
         business_retry_events = list(self._business_retry_events)
@@ -1242,22 +1242,6 @@ class ChapterWriter:
                 "business_retry_events": business_retry_events,
             },
         }
-
-    @staticmethod
-    def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
-        payload: list[dict[str, str]] = []
-        for item in skill_layers or []:
-            payload.append(
-                {
-                    "id": str(getattr(item, "skill_id", getattr(item, "name", "")) or ""),
-                    "version": str(getattr(item, "skill_version", getattr(item, "version", "")) or ""),
-                    "hash": str(getattr(item, "skill_hash", "") or ""),
-                    "path": str(getattr(item, "path", "") or ""),
-                    "activation_reason": str(getattr(item, "activation_reason", "") or ""),
-                    "mode": str(getattr(item, "mode", "") or ""),
-                }
-            )
-        return [item for item in payload if item["id"]]
 
     @staticmethod
     def _parse_jsonish_text_payload(raw: str) -> dict[str, object]:

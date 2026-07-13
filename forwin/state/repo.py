@@ -7,8 +7,10 @@ from typing import Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from forwin.audience_metrics import derive_audience_trends
-from forwin.audit.events import DecisionEventInfo
+from forwin.audience.feedback import (
+    keyword_dominant_sentiment,
+    keyword_feedback_summary,
+)
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.contracts import (
@@ -22,16 +24,12 @@ from forwin.models import (
     BandCheckpoint,
     BandExperiencePlan,
     BookGenesisRevision,
-    ChapterDraft,
     ChapterPlan,
-    ChapterReview,
     ChapterRewriteAttempt,
-    DecisionEvent,
     FeedbackActionRecord,
     MapRegionRow,
     NarrativeConstraint,
     Project,
-    PromptTrace,
     PublisherRawComment,
     ReaderScaleSnapshot,
     SignalWindowAggregate,
@@ -42,13 +40,11 @@ from forwin.models import (
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.protocol import (
     ArcPayoffMap,
-    AudienceTrendView,
     BandDelightSchedule,
     ChapterExperiencePlan,
     ReaderPromise,
     ReaderCommentView,
     ReaderFeedbackView,
-    ReviewNote,
     SignalSummaryView,
     SubWorldSummary,
     WorldPressureView,
@@ -75,10 +71,6 @@ _READER_FEEDBACK_WINDOW_PRIORITY = {
     "medium": 1,
     "long": 2,
 }
-_POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
-_NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")
-_QUESTION_COMMENT_KEYWORDS = ("为什么", "怎么", "是不是", "会不会", "求", "能不能")
-
 
 def _load_json_object(raw: str, default):
     try:
@@ -104,40 +96,6 @@ def _reader_feedback_sort_key(
         int(row.hit_comment_count or 0),
         _reader_feedback_target_label(str(row.target_name or "")),
     )
-
-
-def _keyword_dominant_sentiment(comments: list[PublisherRawComment]) -> str:
-    positive = 0
-    negative = 0
-    curious = 0
-    for comment in comments:
-        text = str(comment.body_text or "")
-        if any(keyword in text for keyword in _POSITIVE_COMMENT_KEYWORDS):
-            positive += 1
-        if any(keyword in text for keyword in _NEGATIVE_COMMENT_KEYWORDS):
-            negative += 1
-        if any(keyword in text for keyword in _QUESTION_COMMENT_KEYWORDS):
-            curious += 1
-    if negative > max(positive, curious):
-        return "negative"
-    if positive > max(negative, curious):
-        return "positive"
-    if curious:
-        return "curious"
-    return "neutral"
-
-
-def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> str:
-    summary_parts = [f"最近 {comment_count} 条评论"]
-    if dominant_sentiment == "negative":
-        summary_parts.append("整体情绪偏担忧")
-    elif dominant_sentiment == "positive":
-        summary_parts.append("整体情绪偏积极")
-    elif dominant_sentiment == "curious":
-        summary_parts.append("读者对悬念追问较多")
-    else:
-        summary_parts.append("暂无明确结构化信号")
-    return "，".join(summary_parts) + "。"
 
 
 class _AudienceHintData:
@@ -199,23 +157,6 @@ class StateRepository:
             .limit(1)
         )
         return self.session.execute(stmt).scalar_one_or_none()
-
-    def list_prompt_traces(
-        self,
-        project_id: str,
-        *,
-        stage_key: str = "",
-        limit: int = 40,
-    ) -> list[PromptTrace]:
-        stmt = (
-            select(PromptTrace)
-            .where(PromptTrace.project_id == project_id)
-            .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
-            .limit(max(1, int(limit or 40)))
-        )
-        if str(stage_key or "").strip():
-            stmt = stmt.where(PromptTrace.stage_key == str(stage_key or "").strip())
-        return list(self.session.execute(stmt).scalars().all())
 
     def get_active_arc_plan(self, project_id: str) -> Optional[ArcPlanVersion]:
         """Get the currently active arc plan version."""
@@ -467,101 +408,6 @@ class StateRepository:
             .all()
         )
 
-    def list_chapter_rewrite_attempts_for_phase(
-        self,
-        project_id: str,
-        chapter_number: int,
-        repair_phase: str,
-    ) -> list[ChapterRewriteAttempt]:
-        return (
-            self.session.execute(
-                select(ChapterRewriteAttempt)
-                .where(
-                    ChapterRewriteAttempt.project_id == project_id,
-                    ChapterRewriteAttempt.chapter_number == chapter_number,
-                    ChapterRewriteAttempt.repair_phase
-                    == str(repair_phase or "review_repair"),
-                )
-                .order_by(
-                    ChapterRewriteAttempt.phase_attempt_no.asc(),
-                    ChapterRewriteAttempt.created_at.asc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    def get_recent_review_notes(
-        self,
-        project_id: str,
-        *,
-        before_chapter: int,
-        band_start: int | None = None,
-        band_end: int | None = None,
-        limit: int = 5,
-    ) -> list[ReviewNote]:
-        rows = self.session.execute(
-            select(ChapterReview, ChapterDraft, ChapterPlan)
-            .join(ChapterDraft, ChapterDraft.id == ChapterReview.draft_id)
-            .join(ChapterPlan, ChapterPlan.id == ChapterDraft.chapter_plan_id)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number < before_chapter,
-            )
-            .order_by(
-                ChapterPlan.chapter_number.desc(), ChapterReview.created_at.desc()
-            )
-        ).all()
-        notes: list[ReviewNote] = []
-        seen_chapters: set[int] = set()
-        for review, draft, plan in rows:
-            chapter_number = int(plan.chapter_number)
-            if chapter_number in seen_chapters:
-                continue
-            if band_start is not None and chapter_number < band_start:
-                continue
-            if band_end is not None and chapter_number > band_end:
-                continue
-            meta = _load_json_object(review.review_meta_json, {})
-            if not isinstance(meta, dict):
-                meta = {}
-            notes.append(
-                ReviewNote(
-                    chapter_number=chapter_number,
-                    verdict=str(review.verdict or ""),
-                    summary=str(meta.get("review_summary") or draft.summary or ""),
-                    issue_types=[
-                        str(item.get("issue_type") or item.get("rule_name") or "")
-                        for item in _load_json_object(review.issues_json, [])
-                        if isinstance(item, dict)
-                    ],
-                    planned_reward_tags=[
-                        str(item)
-                        for item in (meta.get("planned_reward_tags") or [])
-                        if str(item).strip()
-                    ],
-                    delivered_reward_tags=[
-                        str(item)
-                        for item in (meta.get("delivered_reward_tags") or [])
-                        if str(item).strip()
-                    ],
-                    review_notes=[
-                        str(item)
-                        for item in (meta.get("review_notes") or [])
-                        if str(item).strip()
-                    ],
-                    evidence_refs=[
-                        str(item)
-                        for item in (meta.get("evidence_refs") or [])
-                        if str(item).strip()
-                    ],
-                )
-            )
-            seen_chapters.add(chapter_number)
-            if len(notes) >= limit:
-                break
-        return notes
-
     def list_subworlds(self, project_id: str) -> list[SubWorld]:
         return list(
             self.session.execute(
@@ -671,20 +517,21 @@ class StateRepository:
         }
         for region in map_region_rows:
             metadata = _load_json_object(region.metadata_json or "{}", {})
-            payload = {
-                "id": region.id,
-                "name": region.name,
-                "kind": region.region_type,
-                "level": metadata.get("level", ""),
-                "summary": region.description,
-                "terrain": region.terrain,
-                "culture_traits": region.culture_tag,
-                "subworld_id": region.subworld_id,
-                "subworld_name": subworld_names.get(region.subworld_id, ""),
-                "region_source": metadata.get("region_source", "map_regions"),
-                "region_promotion_state": "promoted",
-            }
-            drafts.append(payload)
+            drafts.append(
+                {
+                    "id": region.id,
+                    "name": region.name,
+                    "kind": region.region_type,
+                    "level": metadata.get("level", ""),
+                    "summary": region.description,
+                    "terrain": region.terrain,
+                    "culture_traits": region.culture_tag,
+                    "subworld_id": region.subworld_id,
+                    "subworld_name": subworld_names.get(region.subworld_id, ""),
+                    "region_source": metadata.get("region_source", "map_regions"),
+                    "region_promotion_state": "promoted",
+                }
+            )
             seen_names.add((region.subworld_id, region.name))
         for row in self.list_subworlds(project_id):
             if row.id not in active_set:
@@ -769,86 +616,6 @@ class StateRepository:
             .load(project)
             .policy.planning.future_constraints
         )
-
-    def list_narrative_constraints(
-        self,
-        project_id: str,
-    ) -> list[NarrativeConstraint]:
-        return list(
-            self.session.execute(
-                select(NarrativeConstraint)
-                .where(NarrativeConstraint.project_id == project_id)
-                .order_by(
-                    NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc()
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-    def list_decision_events(
-        self,
-        project_id: str,
-        *,
-        scope: str = "",
-        band_id: str = "",
-        chapter_number: int = 0,
-        task_id: str = "",
-        event_family: str = "",
-        related_object_type: str = "",
-        related_object_id: str = "",
-        causal_root_id: str = "",
-        limit: int = 50,
-    ) -> list[DecisionEventInfo]:
-        stmt = select(DecisionEvent).where(DecisionEvent.project_id == project_id)
-        if scope:
-            stmt = stmt.where(DecisionEvent.scope == scope)
-        if band_id:
-            stmt = stmt.where(DecisionEvent.band_id == band_id)
-        if chapter_number > 0:
-            stmt = stmt.where(DecisionEvent.chapter_number == chapter_number)
-        if task_id:
-            stmt = stmt.where(DecisionEvent.task_id == task_id)
-        if event_family:
-            stmt = stmt.where(DecisionEvent.event_family == event_family)
-        if related_object_type:
-            stmt = stmt.where(DecisionEvent.related_object_type == related_object_type)
-        if related_object_id:
-            stmt = stmt.where(DecisionEvent.related_object_id == related_object_id)
-        if causal_root_id:
-            stmt = stmt.where(DecisionEvent.causal_root_id == causal_root_id)
-        rows = (
-            self.session.execute(
-                stmt.order_by(
-                    DecisionEvent.created_at.desc(), DecisionEvent.id.desc()
-                ).limit(max(1, limit))
-            )
-            .scalars()
-            .all()
-        )
-        return [
-            DecisionEventInfo(
-                id=row.id,
-                project_id=row.project_id,
-                task_id=row.task_id,
-                band_id=row.band_id,
-                chapter_number=row.chapter_number,
-                scope=row.scope,
-                event_family=row.event_family,
-                event_type=row.event_type,
-                actor_type=row.actor_type,
-                actor_id=row.actor_id,
-                summary=row.summary,
-                reason=row.reason,
-                payload=_load_json_object(row.payload_json, {}),
-                related_object_type=row.related_object_type,
-                related_object_id=row.related_object_id,
-                parent_event_id=str(getattr(row, "parent_event_id", "") or ""),
-                causal_root_id=str(getattr(row, "causal_root_id", "") or ""),
-                created_at=row.created_at.isoformat() if row.created_at else "",
-            )
-            for row in rows
-        ]
 
     def get_latest_world_pressure(
         self,
@@ -1049,10 +816,10 @@ class StateRepository:
                 )
             feedback_summary = "，".join(summary_parts) + "。"
         else:
-            dominant_sentiment = _keyword_dominant_sentiment(recent_comments)
+            dominant_sentiment = keyword_dominant_sentiment(recent_comments)
             highlighted_topics = []
             confirmed_signals = []
-            feedback_summary = _keyword_feedback_summary(
+            feedback_summary = keyword_feedback_summary(
                 comment_count, dominant_sentiment
             )
 
@@ -1075,37 +842,6 @@ class StateRepository:
             highlighted_topics=highlighted_topics,
             confirmed_signals=confirmed_signals,
             reader_tier=reader_tier,
-        )
-
-    def get_audience_trends(
-        self,
-        project_id: str,
-        before_chapter: int,
-        *,
-        window_type: str = "long",
-        limit: int = 6,
-    ) -> list[AudienceTrendView]:
-        rows = (
-            self.session.execute(
-                select(SignalWindowAggregate)
-                .where(
-                    SignalWindowAggregate.project_id == project_id,
-                    SignalWindowAggregate.window_chapter_end < before_chapter,
-                )
-                .order_by(
-                    SignalWindowAggregate.window_chapter_end.desc(),
-                    SignalWindowAggregate.created_at.desc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        if not rows:
-            return []
-        return derive_audience_trends(
-            rows,
-            window_type=window_type,
-            limit=limit,
         )
 
     # ------------------------------------------------------------------

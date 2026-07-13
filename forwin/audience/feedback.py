@@ -21,7 +21,6 @@ from forwin.models import (
     SignalWindowAggregate,
     new_id,
 )
-from forwin.audience.analysis import classify_signal_level
 from forwin.protocol import AudienceTrendView
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,9 @@ _SCORE_LEVEL_WEIGHT = {
     "watchlist": 0.7,
     "confirmed": 1.0,
 }
+_POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
+_NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")
+_QUESTION_COMMENT_KEYWORDS = ("为什么", "怎么", "是不是", "会不会", "求", "能不能")
 
 # ── Reader-scale tiers (v2.6 spec §9.2) ─────────────────────────────
 
@@ -96,6 +98,62 @@ _PLATFORM_METRIC_FIELDS: dict[str, tuple[str, float]] = {
     "chase_count": ("chase_count", 0.72),
     "interaction_count": ("interaction_count", 0.58),
 }
+
+
+def classify_signal_level(
+    *,
+    unique_users: int,
+    spans_chapters: int,
+    severity: int,
+    signal_type: str,
+) -> str:
+    if signal_type == "risk" and severity >= 3:
+        return "watchlist" if unique_users < 2 else "confirmed"
+    if unique_users < 2:
+        return "noise"
+    if spans_chapters < 2 and signal_type in (
+        "character_heat",
+        "relationship_interest",
+        "prediction",
+    ):
+        return "noise"
+    if unique_users >= 3 and spans_chapters >= 2:
+        return "confirmed"
+    return "candidate"
+
+
+def keyword_dominant_sentiment(comments: Sequence[PublisherRawComment]) -> str:
+    positive = 0
+    negative = 0
+    curious = 0
+    for comment in comments:
+        text = str(comment.body_text or "")
+        if any(keyword in text for keyword in _POSITIVE_COMMENT_KEYWORDS):
+            positive += 1
+        if any(keyword in text for keyword in _NEGATIVE_COMMENT_KEYWORDS):
+            negative += 1
+        if any(keyword in text for keyword in _QUESTION_COMMENT_KEYWORDS):
+            curious += 1
+    if negative > max(positive, curious):
+        return "negative"
+    if positive > max(negative, curious):
+        return "positive"
+    if curious:
+        return "curious"
+    return "neutral"
+
+
+def keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> str:
+    summary_parts = [f"最近 {comment_count} 条评论"]
+    if dominant_sentiment == "negative":
+        summary_parts.append("整体情绪偏担忧")
+    elif dominant_sentiment == "positive":
+        summary_parts.append("整体情绪偏积极")
+    elif dominant_sentiment == "curious":
+        summary_parts.append("读者对悬念追问较多")
+    else:
+        summary_parts.append("暂无明确结构化信号")
+    return "，".join(summary_parts) + "。"
 
 
 def score_signal_aggregate_v1(aggregate: SignalWindowAggregate) -> float:

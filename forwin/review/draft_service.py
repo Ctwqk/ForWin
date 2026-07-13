@@ -16,7 +16,7 @@ from forwin.protocol.review import (
 from forwin.protocol.writer import WriterOutput
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.service import analyze_writer_output_quality
-from forwin.skills import serialize_prompt_layers
+from forwin.skills import serialize_prompt_layers, summarize_skill_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
 from .plan_reviewer import PlanContractReviewer
@@ -357,7 +357,7 @@ class DraftReviewService:
         context: ChapterContextPack,
         writer_output: WriterOutput,
     ) -> ReviewVerdict:
-        selected_skills = DraftReviewService._selected_skills_from_layers(skill_layers)
+        selected_skills = summarize_skill_layers(skill_layers)
         if not selected_skills:
             return verdict
         review_notes = list(verdict.review_notes)
@@ -431,31 +431,6 @@ class DraftReviewService:
             key: value for key, value in kwargs.items() if key in parameters
         }
         return callable_obj(*args, **filtered_kwargs)
-
-    @staticmethod
-    def _selected_skills_from_layers(
-        skill_layers: list[object] | None,
-    ) -> list[dict[str, str]]:
-        payload: list[dict[str, str]] = []
-        for item in skill_layers or []:
-            payload.append(
-                {
-                    "id": str(
-                        getattr(item, "skill_id", getattr(item, "name", "")) or ""
-                    ),
-                    "version": str(
-                        getattr(item, "skill_version", getattr(item, "version", ""))
-                        or ""
-                    ),
-                    "hash": str(getattr(item, "skill_hash", "") or ""),
-                    "path": str(getattr(item, "path", "") or ""),
-                    "activation_reason": str(
-                        getattr(item, "activation_reason", "") or ""
-                    ),
-                    "mode": str(getattr(item, "mode", "") or ""),
-                }
-            )
-        return [item for item in payload if item["id"]]
 
     def choose_repair_escalation(
         self,

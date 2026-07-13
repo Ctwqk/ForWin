@@ -31,13 +31,6 @@ class StateContextProvider:
             entity_names=allowed_entities,
         )
 
-        world_pressure_getter = getattr(repo, "get_latest_world_pressure", None)
-        active_subworld_summary_getter = getattr(
-            repo, "get_active_subworld_summary", None
-        )
-        active_subworld_region_drafts_getter = getattr(
-            repo, "get_active_subworld_region_drafts", None
-        )
         draft.data.update(
             {
                 "project": project,
@@ -56,26 +49,14 @@ class StateContextProvider:
                     project_id,
                     as_of_chapter=as_of_chapter,
                 ),
-                "world_pressure": (
-                    world_pressure_getter(
-                        project_id, before_chapter=chapter_plan.chapter_number
-                    )
-                    if callable(world_pressure_getter)
-                    else None
+                "world_pressure": repo.get_latest_world_pressure(
+                    project_id, before_chapter=chapter_plan.chapter_number
                 ),
-                "active_subworlds": (
-                    active_subworld_summary_getter(
-                        project_id, chapter_plan.chapter_number
-                    )
-                    if callable(active_subworld_summary_getter)
-                    else []
+                "active_subworlds": repo.get_active_subworld_summary(
+                    project_id, chapter_plan.chapter_number
                 ),
-                "runtime_region_drafts": (
-                    active_subworld_region_drafts_getter(
-                        project_id, chapter_plan.chapter_number
-                    )
-                    if callable(active_subworld_region_drafts_getter)
-                    else []
+                "runtime_region_drafts": repo.get_active_subworld_region_drafts(
+                    project_id, chapter_plan.chapter_number
                 ),
             }
         )

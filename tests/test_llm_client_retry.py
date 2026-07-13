@@ -8,7 +8,7 @@ from unittest.mock import patch
 import httpx
 
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise, RevelationLayer
-from forwin.planning.arc_envelope import _coerce_unit_float
+from forwin.planning.arc_envelope_resolver import _coerce_unit_float
 from forwin.writer.llm import LLMClient
 
 

@@ -31,7 +31,6 @@ from forwin.models.draft import ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.audit import DecisionEvent
 from forwin.observability.payloads import audit_payload
-from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
@@ -101,14 +100,6 @@ def _latest_active_generation_task(session, project_id: str) -> GenerationTask |
         .order_by(GenerationTask.updated_at.desc(), GenerationTask.id.desc())
         .limit(1)
     ).scalar_one_or_none()
-
-
-def latest_rewrite_attempts_by_chapter(
-    session,
-    project_id: str,
-    chapter_numbers: list[int] | None = None,
-) -> dict[int, ChapterRewriteAttempt]:
-    return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
 
 
 def _overlay_active_generation_task(
@@ -535,7 +526,7 @@ def _chapter_infos_for_plans(
         if draft_map
         else set()
     )
-    latest_attempt_map = latest_rewrite_attempts_by_chapter(
+    latest_attempt_map = load_latest_rewrite_attempts_by_chapter(
         session,
         project_id,
         [int(plan.chapter_number or 0) for plan in plans],

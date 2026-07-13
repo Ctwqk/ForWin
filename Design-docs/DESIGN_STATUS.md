@@ -19,8 +19,10 @@
 |---|---|---|
 | `CURRENT_ARCHITECTURE.md` | active-current | 当前唯一架构入口，固定 RuntimePolicy / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
-| `../forwin_architecture_consolidation_audit.md` | active-current | v5 架构收敛决策、删除清单和 Phase A-F 路线。 |
+| `../forwin_architecture_consolidation_audit.md` | historical-plan | 2026-07-09 架构收敛审计（历史论证记录）。其 Phase A-D 已由 v5 hard-cut 完成并替代，Phase A-F 不再作为待办；source-of-truth 思维与测试/风险框架由后续计划继承。 |
 | `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；旧项目和旧设置不迁移。 |
+| `../docs/superpowers/plans/2026-07-12-forwin-v5-final-roadmap.md` | active-current | v5 收尾最终路线：测试债清偿 → 必做删除 → 度量仪表 → 发布验证（V1-V6）→ 200 章 no-hotfix → 部署。 |
+| `../docs/superpowers/plans/2026-07-12-forwin-measurement-loop.md` | active-current | Measurement Loop（S1-S8）：门禁效力账本、规则出身制度、成本/人时、读者回路、多样性遥测、体验校准。 |
 | `V4.5_markstone.md` | active-current | 当前代码与设计差距统一入口，旧 `world_model_v4` 已降级。 |
 | `V4.5.1_markstone.md` | active-current | V4.5 后端闭环后的残余 contract / 文档 / 测试收束。 |
 | `V4_final_book_state_runtime.md` | active-current | BookState 最终 runtime 规格。 |

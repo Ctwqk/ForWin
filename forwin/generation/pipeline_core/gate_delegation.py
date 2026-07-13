@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from forwin.generation.gate_delegation import (
+    GateAuditWriter,
     GateDelegationRequest,
     GateResolution,
 )
@@ -49,22 +50,20 @@ class GateDelegationStage:
             return self.gate_delegation.resolve(
                 request,
                 policy=self.policy,
-                updater=updater,
             )
 
-        savepoint = None
         try:
-            savepoint = updater.session.begin_nested()
-            outcome = self.gate_delegation.resolve(
-                request,
-                policy=self.policy,
-                updater=updater,
-            )
-            savepoint.commit()
-            return outcome
+            with self._SessionFactory.begin() as audit_session:
+                audit_updater = StateUpdater(audit_session)
+                return self.gate_delegation.resolve(
+                    request,
+                    policy=self.policy,
+                    audit_writer=GateAuditWriter(
+                        save_decision_event=audit_updater.save_decision_event,
+                        save_prompt_trace=audit_updater.save_prompt_trace,
+                    ),
+                )
         except Exception as exc:  # noqa: BLE001
-            if savepoint is not None and savepoint.is_active:
-                savepoint.rollback()
             logger.exception("Gate delegation transaction failed for %s.", gate_kind)
             return GateResolution(
                 delegate="spark",
@@ -80,7 +79,7 @@ class GateDelegationStage:
         gate_kind: str,
         chapter_number: int = 0,
     ) -> bool:
-        if str(getattr(checkpoint, "status", "") or "") in {"fail", "error"}:
+        if str(getattr(checkpoint, "status", "") or "") not in {"pass", "warn"}:
             return False
         try:
             issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))

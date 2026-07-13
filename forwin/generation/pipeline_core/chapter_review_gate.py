@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.generation.gate_delegation import GateResolution
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.runtime.policy import RuntimePolicy
@@ -20,10 +21,9 @@ def evaluate_candidate_gate(
     *,
     policy: RuntimePolicy,
     verdict,
-    eligible: bool,
     delegate: Callable[[], GateResolution],
 ) -> ChapterReviewGateOutcome:
-    if not eligible or verdict.verdict not in {"pass", "warn"}:
+    if candidate_ineligibility_reason(verdict):
         return ChapterReviewGateOutcome(
             should_apply_canon=False,
             pause_required=True,
@@ -65,7 +65,7 @@ def handle_chapter_review_gate(
     failed_chapters: list[int],
     paused_chapters: list[int],
 ) -> ChapterReviewGateOutcome:
-    eligible = verdict.verdict in {"pass", "warn"}
+    eligible = not candidate_ineligibility_reason(verdict)
     review_interval = max(0, int(self.policy.pause.review_interval_chapters))
     gate_kind, gate_reason = _review_gate_details(
         verdict=str(verdict.verdict or ""),
@@ -80,7 +80,6 @@ def handle_chapter_review_gate(
     evaluation = evaluate_candidate_gate(
         policy=self.policy,
         verdict=verdict,
-        eligible=eligible,
         delegate=lambda: _delegate_chapter_gate(
             self,
             session=session,

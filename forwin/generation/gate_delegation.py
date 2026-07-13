@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,7 +12,6 @@ from forwin.audit.events import (
 )
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.runtime.policy import GateDelegate, RuntimePolicy
-from forwin.state.updater import StateUpdater
 
 
 SPARK_GATE_MODEL = "gpt-5.3-codex-spark"
@@ -81,9 +81,9 @@ class SparkGateDecision(BaseModel):
 
     decision: Literal["approve", "reject"]
     reason: str = Field(min_length=1)
-    risk_level: Literal["low", "medium", "high"] = "medium"
-    findings: list[str] = Field(default_factory=list)
-    evidence: list[str] = Field(default_factory=list)
+    risk_level: Literal["low", "medium", "high"]
+    findings: list[str]
+    evidence: list[str]
 
 
 class GateResolution(BaseModel):
@@ -101,6 +101,27 @@ class GateResolution(BaseModel):
     backend: str = ""
     trace_id: str = ""
     decision_event_id: str = ""
+
+
+class GateAuditWriter:
+    """The only persistence capability available to delegated gate code."""
+
+    __slots__ = ("_save_decision_event", "_save_prompt_trace")
+
+    def __init__(
+        self,
+        *,
+        save_decision_event: Callable[[DecisionEventInfo], Any],
+        save_prompt_trace: Callable[..., Any],
+    ) -> None:
+        self._save_decision_event = save_decision_event
+        self._save_prompt_trace = save_prompt_trace
+
+    def save_decision_event(self, event: DecisionEventInfo) -> Any:
+        return self._save_decision_event(event)
+
+    def save_prompt_trace(self, **payload: Any) -> Any:
+        return self._save_prompt_trace(**payload)
 
 
 def _sanitize_complete_log(value: Any) -> Any:
@@ -167,10 +188,10 @@ class SparkGateDelegate:
     def resolve(
         self,
         *,
-        updater: StateUpdater,
+        audit_writer: GateAuditWriter,
         request: GateDelegationRequest,
     ) -> GateResolution:
-        requested_event = updater.save_decision_event(
+        requested_event = audit_writer.save_decision_event(
             DecisionEventInfo(
                 project_id=request.project_id,
                 task_id=request.task_id,
@@ -298,7 +319,7 @@ class SparkGateDelegate:
             "actual_model": actual_model,
             "backend": backend,
         }
-        trace = updater.save_prompt_trace(
+        trace = audit_writer.save_prompt_trace(
             project_id=request.project_id,
             decision_event_id=requested_event.id,
             trace_scope="gate_delegation",
@@ -326,7 +347,7 @@ class SparkGateDelegate:
             permission_profile=SPARK_GATE_PERMISSION_PROFILE,
             fallback_used=fallback_used,
         )
-        trace_event = updater.save_decision_event(
+        trace_event = audit_writer.save_decision_event(
             DecisionEventInfo(
                 project_id=request.project_id,
                 task_id=request.task_id,
@@ -372,7 +393,7 @@ class SparkGateDelegate:
             evidence_refs=parsed.evidence if parsed is not None else [],
             trace_id=trace.id,
         )
-        final_event = updater.save_decision_event(
+        final_event = audit_writer.save_decision_event(
             DecisionEventInfo(
                 project_id=request.project_id,
                 task_id=request.task_id,
@@ -414,7 +435,7 @@ class SparkGateDelegate:
             )
         )
         if approved:
-            updater.save_decision_event(
+            audit_writer.save_decision_event(
                 DecisionEventInfo(
                     project_id=request.project_id,
                     task_id=request.task_id,
@@ -492,19 +513,25 @@ class GateDelegationService:
         request: GateDelegationRequest,
         *,
         policy: RuntimePolicy,
-        updater: StateUpdater,
+        audit_writer: GateAuditWriter | None = None,
     ) -> GateResolution:
         if policy.pause.gate_delegate == "human":
             return GateResolution(
                 delegate="human",
                 reason="human_pause_required",
             )
-        return self.spark_delegate.resolve(updater=updater, request=request)
+        if audit_writer is None:
+            raise ValueError("Spark gate delegation requires an audit writer")
+        return self.spark_delegate.resolve(
+            audit_writer=audit_writer,
+            request=request,
+        )
 
 
 __all__ = [
     "GateDelegationRequest",
     "GateDelegationService",
+    "GateAuditWriter",
     "GateResolution",
     "SPARK_GATE_MODEL",
     "SPARK_GATE_PERMISSION_PROFILE",

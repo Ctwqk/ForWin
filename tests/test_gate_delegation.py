@@ -11,6 +11,7 @@ from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.generation.gate_delegation import (
     GateDelegationRequest,
     GateDelegationService,
+    GateAuditWriter,
     GateResolution,
     SPARK_GATE_MODEL,
     SparkGateDelegate,
@@ -18,6 +19,7 @@ from forwin.generation.gate_delegation import (
 from forwin.generation.pipeline_core.gate_delegation import GateDelegationStage
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.genesis import PromptTrace
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
@@ -27,8 +29,8 @@ class SpySparkDelegate:
     def __init__(self) -> None:
         self.calls: list[tuple[object, GateDelegationRequest]] = []
 
-    def resolve(self, *, updater, request):
-        self.calls.append((updater, request))
+    def resolve(self, *, audit_writer, request):
+        self.calls.append((audit_writer, request))
         return GateResolution(
             resolved=True,
             approved=True,
@@ -52,7 +54,6 @@ def test_human_gate_policy_never_calls_spark() -> None:
     outcome = service.resolve(
         request,
         policy=RuntimePolicy.for_profile("standard"),
-        updater=SimpleNamespace(),
     )
 
     assert outcome.delegate == "human"
@@ -67,7 +68,10 @@ def test_spark_gate_policy_calls_exact_delegate() -> None:
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
         gate_delegate="spark"
     )
-    updater = SimpleNamespace()
+    audit_writer = GateAuditWriter(
+        save_decision_event=lambda _event: None,
+        save_prompt_trace=lambda **_payload: None,
+    )
     request = GateDelegationRequest(
         project_id="project-1",
         task_id="task-1",
@@ -76,10 +80,16 @@ def test_spark_gate_policy_calls_exact_delegate() -> None:
         chapter_number=3,
     )
 
-    outcome = service.resolve(request, policy=policy, updater=updater)
+    outcome = service.resolve(
+        request,
+        policy=policy,
+        audit_writer=audit_writer,
+    )
 
     assert outcome.approved is True
-    assert spark.calls == [(updater, request)]
+    assert spark.calls == [(audit_writer, request)]
+    assert not hasattr(audit_writer, "session")
+    assert not hasattr(audit_writer, "mark_chapter_status")
 
 
 class RecordingUpdater:
@@ -97,6 +107,13 @@ class RecordingUpdater:
     def save_prompt_trace(self, **payload):
         self.traces.append(payload)
         return SimpleNamespace(id=f"trace-{len(self.traces)}")
+
+
+def _recording_writer(updater: RecordingUpdater) -> GateAuditWriter:
+    return GateAuditWriter(
+        save_decision_event=updater.save_decision_event,
+        save_prompt_trace=updater.save_prompt_trace,
+    )
 
 
 class FakeSparkLLM:
@@ -184,7 +201,7 @@ def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> 
     llm = FakeSparkLLM(_approval_json())
 
     outcome = SparkGateDelegate(llm_client=llm).resolve(
-        updater=updater,
+        audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
@@ -231,7 +248,7 @@ def test_spark_delegate_uses_configured_codex_model() -> None:
         llm_client=llm,
         requested_model=configured_model,
     ).resolve(
-        updater=updater,
+        audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
@@ -248,7 +265,7 @@ def test_unproven_actual_model_fails_closed() -> None:
     llm = FakeSparkLLM(_approval_json(), prove_actual_model=False)
 
     outcome = SparkGateDelegate(llm_client=llm).resolve(
-        updater=updater,
+        audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
@@ -266,7 +283,7 @@ def test_failed_route_persists_complete_bridge_trace() -> None:
     )
 
     outcome = SparkGateDelegate(llm_client=llm).resolve(
-        updater=updater,
+        audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
@@ -282,6 +299,12 @@ def test_failed_route_persists_complete_bridge_trace() -> None:
     [
         ("not-json", SPARK_GATE_MODEL, None, "parse_or_schema"),
         ('{"decision":"approve"}', SPARK_GATE_MODEL, None, "parse_or_schema"),
+        (
+            '{"decision":"approve","reason":"looks fine"}',
+            SPARK_GATE_MODEL,
+            None,
+            "parse_or_schema",
+        ),
         (_approval_json(), "gpt-5.6-sol", None, "model_mismatch"),
         (
             "partial response",
@@ -301,7 +324,7 @@ def test_spark_failure_modes_reject_with_trace_and_failure_event(
     llm = FakeSparkLLM(content, actual_model=actual_model, error=error)
 
     outcome = SparkGateDelegate(llm_client=llm).resolve(
-        updater=updater,
+        audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
@@ -328,8 +351,8 @@ def test_spark_failure_modes_reject_with_trace_and_failure_event(
     assert gate_outcome.trace_ids == ["trace-1"]
 
 
-@pytest.mark.parametrize("status", ["fail", "error"])
-def test_blocking_checkpoint_never_reaches_spark(status: str) -> None:
+@pytest.mark.parametrize("status", ["pending", "fail", "error", "overridden"])
+def test_noneligible_checkpoint_never_reaches_spark(status: str) -> None:
     calls: list[dict[str, object]] = []
 
     def resolve_gate(**kwargs):
@@ -383,7 +406,7 @@ def test_blocking_checkpoint_never_reaches_spark(status: str) -> None:
     assert calls == []
 
 
-def test_nested_delegation_failure_rolls_back_savepoint() -> None:
+def test_delegation_audit_failure_rolls_back_dedicated_transaction() -> None:
     database_url = postgres_test_url("gate-delegation-savepoint")
     engine = get_engine(database_url)
     init_db(engine)
@@ -400,16 +423,29 @@ def test_nested_delegation_failure_rolls_back_savepoint() -> None:
 
         class FailingDelegation:
             @staticmethod
-            def resolve(request, *, policy, updater):
+            def resolve(request, *, policy, audit_writer):
                 del policy
-                updater.session.add(
-                    DecisionEvent(
+                audit_writer.save_decision_event(
+                    SimpleNamespace(
                         project_id=request.project_id,
                         event_type="injected_inside_savepoint",
                         summary="must roll back",
+                        id="",
+                        task_id="",
+                        band_id="",
+                        chapter_number=0,
+                        scope="project",
+                        event_family="runtime_observation",
+                        actor_type="system",
+                        actor_id="",
+                        reason="",
+                        payload={},
+                        related_object_type="",
+                        related_object_id="",
+                        parent_event_id="",
+                        causal_root_id="",
                     )
                 )
-                updater.session.flush()
                 raise RuntimeError("savepoint failure")
 
         stage = SimpleNamespace(
@@ -419,6 +455,7 @@ def test_nested_delegation_failure_rolls_back_savepoint() -> None:
                 gate_delegate="spark"
             ),
             gate_delegation=FailingDelegation(),
+            _SessionFactory=Session,
         )
         with Session.begin() as session:
             outcome = GateDelegationStage._resolve_gate_delegation(
@@ -445,6 +482,73 @@ def test_nested_delegation_failure_rolls_back_savepoint() -> None:
         engine.dispose()
 
 
+def test_successful_spark_audit_survives_outer_transaction_rollback() -> None:
+    database_url = postgres_test_url("gate-delegation-durable-audit")
+    engine = get_engine(database_url)
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            project = StateUpdater(session).create_project(
+                title="Durable delegation audit",
+                premise="Spark evidence must survive chapter rollback.",
+                genre="test",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
+            project_id = project.id
+        stage = SimpleNamespace(
+            _audit_task_id="task-1",
+            _audit_root_event_id="root-1",
+            policy=RuntimePolicy.for_profile("standard").with_user_settings(
+                gate_delegate="spark"
+            ),
+            gate_delegation=GateDelegationService(
+                spark_delegate=SparkGateDelegate(
+                    llm_client=FakeSparkLLM(_approval_json())
+                )
+            ),
+            _SessionFactory=Session,
+        )
+        session = Session()
+        try:
+            outcome = GateDelegationStage._resolve_gate_delegation(
+                stage,
+                updater=StateUpdater(session),
+                project_id=project_id,
+                gate_kind="chapter_review_interval",
+                input_snapshot={"review": "eligible"},
+                scope="chapter",
+                chapter_number=1,
+            )
+            assert outcome.approved is True
+            session.rollback()
+        finally:
+            session.close()
+
+        with Session() as session:
+            assert session.scalar(
+                select(func.count(PromptTrace.id)).where(
+                    PromptTrace.project_id == project_id,
+                    PromptTrace.trace_scope == "gate_delegation",
+                )
+            ) == 1
+            event_types = set(
+                session.scalars(
+                    select(DecisionEvent.event_type).where(
+                        DecisionEvent.project_id == project_id
+                    )
+                )
+            )
+        assert event_types == {
+            "gate_delegation_requested",
+            "prompt_trace_recorded",
+            "gate_delegation_decided",
+            "gate_delegation_approved",
+        }
+    finally:
+        engine.dispose()
+
+
 def test_spark_delegate_module_has_no_authoritative_canon_write_surface() -> None:
     source = Path("forwin/generation/gate_delegation.py").read_text()
 
@@ -456,5 +560,7 @@ def test_spark_delegate_module_has_no_authoritative_canon_write_surface() -> Non
         "EntityAdmissionCommitter",
         ".commit_plan(",
         ".mark_chapter_status(",
+        "StateUpdater",
+        ".session",
     ):
         assert forbidden not in source

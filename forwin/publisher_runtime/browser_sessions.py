@@ -14,6 +14,7 @@ from forwin.models.publisher import (
     PublisherBrowserSessionEntry,
     PublisherConnectionState,
 )
+from forwin.storage.db_errors import is_retryable_database_error
 from .login_evidence import payload_value, platform_login_evidence
 from forwin.secret_store import (
     SecretStoreError,
@@ -82,27 +83,6 @@ def status_payload_page_login_evidence(platform_id: str, payload: dict[str, Any]
     ):
         return True
     return False
-
-
-def is_retryable_db_error(exc: OperationalError) -> bool:
-    orig = getattr(exc, "orig", None)
-    sqlstate = str(
-        getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or ""
-    ).strip()
-    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
-        return True
-    message = str(exc).lower()
-    return (
-        "database is locked" in message
-        or "database table is locked" in message
-        or "deadlock detected" in message
-        or "could not serialize access" in message
-        or "lock timeout" in message
-        or "connection refused" in message
-        or "connection not open" in message
-        or "server closed the connection" in message
-        or "terminating connection" in message
-    )
 
 
 def browser_session_sort_key(row) -> tuple[datetime, datetime, datetime]:
@@ -544,7 +524,7 @@ class BrowserSessionService:
                     )
                 session.commit()
         except OperationalError as exc:
-            if not is_retryable_db_error(exc):
+            if not is_retryable_database_error(exc):
                 raise
             logger.warning(
                 "Publisher browser session sync skipped because database is busy: %s",

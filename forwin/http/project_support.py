@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -215,20 +214,6 @@ def _running_task_lease_seconds(task: dict[str, Any]) -> int:
     return 300
 
 
-def _task_should_abort(runtime: HttpRuntime, task_id: str) -> bool:
-    task = _load_generation_task(runtime, task_id)
-    if task is None or task.get("deleted"):
-        return True
-    return bool(task.get("cancel_requested"))
-
-
-def _task_should_pause(runtime: HttpRuntime, task_id: str) -> bool:
-    task = _load_generation_task(runtime, task_id)
-    if task is None or task.get("deleted"):
-        return False
-    return bool(task.get("pause_requested")) and not bool(task.get("cancel_requested"))
-
-
 def _get_generation_task_or_404(
     runtime: HttpRuntime,
     task_id: str,
@@ -293,22 +278,12 @@ def _serialize_decision_event(row: DecisionEvent) -> DecisionEventInfo:
     return project_control_support.serialize_decision_event(row)
 
 
-def _decision_event_stmt(**kwargs):
-    return project_control_support.decision_event_stmt(**kwargs)
-
-
 def _list_decision_event_rows(session, **kwargs) -> list[DecisionEvent]:
     return project_control_support.list_decision_event_rows(session, **kwargs)
 
 
 def _latest_related_decision_event(session, **kwargs) -> DecisionEvent | None:
     return project_control_support.latest_related_decision_event(session, **kwargs)
-
-
-def _decision_refs_for_checkpoint(
-    session, row: BandCheckpoint
-) -> list[DecisionEventInfo]:
-    return project_control_support.decision_refs_for_checkpoint(session, row)
 
 
 def _decision_refs_for_chapter_review(
@@ -324,10 +299,6 @@ def _decision_refs_for_chapter_review(
         chapter_number=chapter_number,
         review_id=review_id,
     )
-
-
-def _counter_rows(counter: Counter[str], *, limit: int = 5) -> list[dict[str, Any]]:
-    return project_control_support.counter_rows(counter, limit=limit)
 
 
 def _build_causal_replay(

@@ -27,8 +27,4 @@ SIGNAL_PRODUCERS: dict[str, str] = {
 }
 
 
-def producer_for_signal(signal_type: str) -> str:
-    return SIGNAL_PRODUCERS.get(str(signal_type or "").strip(), "")
-
-
-__all__ = ["SIGNAL_PRODUCERS", "producer_for_signal"]
+__all__ = ["SIGNAL_PRODUCERS"]

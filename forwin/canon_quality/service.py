@@ -20,7 +20,7 @@ from .cache import (
     result_for_caller,
 )
 from .repository import CanonQualityRepository
-from .signals import CanonQualitySignal
+from .signals import CanonQualitySignal, dedupe_signals
 from .types import CanonQualityAnalysisResult, QualityAnalysisCachePayload
 
 
@@ -102,7 +102,7 @@ def analyze_writer_output_quality(
                     rebound_payload.analysis,
                     return_raw_analyzer_results=return_raw_analyzer_results,
                 )
-    deterministic_signals = _dedupe_signals(
+    deterministic_signals = dedupe_signals(
         [
             *analyze_placeholder_leakage(
                 project_id=project_id,
@@ -188,7 +188,7 @@ def analyze_writer_output_quality(
     result_signals = (
         list(form_result.signals)
         if resolved_mode == DRY_RUN_RESULT_MODE
-        else _dedupe_signals([*deterministic_signals, *form_result.signals])
+        else dedupe_signals([*deterministic_signals, *form_result.signals])
     )
     report = _quality_report(
         signals=result_signals,
@@ -328,14 +328,3 @@ def _load_protagonist_names(*, session: Session, project_id: str) -> set[str]:
             if name:
                 names.add(name)
     return names
-
-
-def _dedupe_signals(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
-    seen: set[str] = set()
-    deduped: list[CanonQualitySignal] = []
-    for signal in signals:
-        if signal.signal_id in seen:
-            continue
-        seen.add(signal.signal_id)
-        deduped.append(signal)
-    return deduped

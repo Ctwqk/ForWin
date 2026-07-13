@@ -851,7 +851,6 @@ class UploadJobService:
                 session.commit()
                 session.refresh(job)
                 return self.serialize_upload_job(job)
-            return None
 
     def requeue_interrupted_upload_jobs(self) -> list[str]:
         now = utc_now()

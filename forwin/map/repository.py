@@ -7,7 +7,6 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.cognition import CognitionView
 from forwin.models.subworld import SubWorld
 from forwin.protocol.book_state import CognitionOverlay, MapEdge, MapNode
 
@@ -501,10 +500,3 @@ def _created_at_chapter(metadata: dict[str, Any]) -> int:
         return max(0, int(metadata.get("created_at_chapter") or 0))
     except (TypeError, ValueError):
         return 0
-
-
-def cognition_views_from_overlays(overlays: list[CognitionOverlay]) -> dict[tuple[str, str], CognitionView]:
-    return {
-        (str(overlay.observer_type), overlay.observer_id): CognitionView(overlay)
-        for overlay in overlays
-    }

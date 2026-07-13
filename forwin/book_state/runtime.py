@@ -6,6 +6,7 @@ from typing import Any
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import NarrativeControlGraph
+from forwin.book_state.path_patch import apply_path_patch
 from forwin.protocol.book_state import (
     EdgePatch,
     FactNode,
@@ -123,12 +124,17 @@ class ObjectiveWorldGraph:
 
         if patch.field_path.startswith("state."):
             state = dict(self.states_by_node_id.get(patch.node_id, {}))
-            _set_path(state, patch.field_path.removeprefix("state."), patch.new_value, op=op)
+            apply_path_patch(
+                state,
+                patch.field_path.removeprefix("state."),
+                patch.new_value,
+                op=op,
+            )
             self.states_by_node_id[patch.node_id] = state
             return
 
         payload = node.model_dump(mode="json")
-        _set_path(payload, patch.field_path, patch.new_value, op=op)
+        apply_path_patch(payload, patch.field_path, patch.new_value, op=op)
         updated = WorldNode.model_validate(payload)
         self.nodes_by_id[patch.node_id] = updated
         if "state" in payload:
@@ -157,7 +163,7 @@ class ObjectiveWorldGraph:
             self.edges_by_id[patch.edge_id] = edge.model_copy(update={"is_active": False})
             return
         payload = edge.model_dump(mode="json")
-        _set_path(payload, patch.field_path, patch.new_value, op=op)
+        apply_path_patch(payload, patch.field_path, patch.new_value, op=op)
         self.edges_by_id[patch.edge_id] = WorldEdge.model_validate(payload)
 
     def apply_fact_patch(self, patch: FactPatch) -> None:
@@ -181,7 +187,7 @@ class ObjectiveWorldGraph:
         payload = fact.model_dump(mode="json")
         field_path = patch.field_path if hasattr(patch, "field_path") else ""
         if field_path:
-            _set_path(payload, field_path, patch.new_value, op=op)
+            apply_path_patch(payload, field_path, patch.new_value, op=op)
         elif patch.new_value is not None:
             payload["state"] = patch.new_value
         self.facts_by_id[patch.fact_id] = FactNode.model_validate(payload)
@@ -233,8 +239,8 @@ def distance_between_world_nodes(
     metric: str = "travel_time",
     observer: tuple[str, str] | None = None,
 ) -> PathResult:
-    source_location = _resolve_location(world, source_node_id)
-    target_location = _resolve_location(world, target_node_id)
+    source_location = resolve_world_node_location_id(world, source_node_id)
+    target_location = resolve_world_node_location_id(world, target_node_id)
     if not source_location:
         return PathResult(
             reachable=False,
@@ -261,7 +267,7 @@ def distance_between_world_nodes(
     )
 
 
-def _resolve_location(
+def resolve_world_node_location_id(
     world: ObjectiveWorldGraph,
     node_id: str,
 ) -> str:
@@ -285,37 +291,3 @@ def _resolve_location(
         if map_node_id:
             return map_node_id
     return ""
-
-
-def _set_path(payload: dict[str, Any], field_path: str, value: Any, *, op: str) -> None:
-    parts = [part for part in field_path.split(".") if part]
-    if not parts:
-        return
-    cursor = payload
-    for part in parts[:-1]:
-        nested = cursor.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    key = parts[-1]
-    if op == "append":
-        current = cursor.setdefault(key, [])
-        if isinstance(current, list):
-            current.append(value)
-        else:
-            cursor[key] = [current, value]
-    elif op == "remove":
-        current = cursor.get(key)
-        if isinstance(current, list):
-            cursor[key] = [item for item in current if item != value]
-        else:
-            cursor.pop(key, None)
-    elif op == "merge" and isinstance(value, dict):
-        current = cursor.get(key)
-        if isinstance(current, dict):
-            current.update(value)
-        else:
-            cursor[key] = dict(value)
-    else:
-        cursor[key] = value

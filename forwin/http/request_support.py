@@ -33,6 +33,13 @@ def _get_session(runtime: HttpRuntime) -> Session:
     return runtime.get_session()
 
 
+def require_project(session: Session, project_id: str) -> Project:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return project
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 

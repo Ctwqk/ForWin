@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from forwin.canon_quality.signals import CanonQualitySignal
-from forwin.narrative_obligations.types import ReviewOutcome
 from forwin.protocol.review import ReviewVerdict
 
 from ..types import Decision, DecisionInput, DecisionRule
@@ -202,20 +201,6 @@ def decide_review_outcome(input: DecisionInput) -> Decision:
         action="commit_clean",
         reason="review passed",
         minimum_scope="draft",
-    )
-
-
-def decision_from_review_outcome(outcome: ReviewOutcome) -> Decision:
-    return _decision(
-        action=outcome.action,
-        reason=outcome.reason,
-        primary_issue_class=outcome.primary_issue_class,
-        minimum_scope=outcome.minimum_scope,
-        blocking_signal_ids=list(outcome.blocking_signal_ids),
-        obligation_ids=list(outcome.obligation_ids),
-        plan_patch_ids=list(outcome.plan_patch_ids),
-        deadline_chapter=outcome.deadline_chapter,
-        payoff_test=outcome.payoff_test,
     )
 
 

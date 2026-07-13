@@ -8,13 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
+from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.models.book_state import CognitionOverlayRow
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, MapNode, PathResult, WorldEdge, WorldNode
 
 from .generator import generate_subworld_map
-from .pathfinding import MapGraph
 from .protocol import (
     BookMapGenerationResult,
     BookMapRuntime,
@@ -286,29 +285,6 @@ def compute_known_distance(
         allow_hidden=allow_hidden,
         allow_blocked=allow_blocked,
     )
-
-
-def resolve_world_node_location_id(world: ObjectiveWorldGraph, node_id: str) -> str:
-    state = world.get_state(node_id)
-    location_id = str(state.get("location_id", "") or "").strip()
-    if location_id:
-        return location_id
-    current_activity_id = str(state.get("current_activity_id", "") or "").strip()
-    if current_activity_id:
-        activity_state = world.get_state(current_activity_id)
-        activity_location = str(activity_state.get("current_location_id", "") or "").strip()
-        if activity_location:
-            return activity_location
-    node = world.get_node(node_id)
-    if node is not None and node.node_type == "faction":
-        headquarters = str(state.get("headquarters_location_id", "") or "").strip()
-        if headquarters:
-            return headquarters
-    if node is not None and node.node_type == "site_state":
-        map_node_id = str(node.profile.get("map_node_id", "") or "").strip()
-        if map_node_id:
-            return map_node_id
-    return ""
 
 
 def _ensure_site_state_map_bindings(session: Session, project_id: str) -> list[dict[str, str]]:

@@ -11,7 +11,6 @@ from forwin import (
 )
 from forwin.api_schema import (
     ChapterReviewApproveRequest,
-    ProjectAutomationSettings,
 )
 import forwin.models.phase  # noqa: F401
 from forwin.application.generation import GenerationApplicationService
@@ -28,22 +27,6 @@ from forwin.http.tasks import _get_task_center_service, _prune_tasks
 
 
 logger = logging.getLogger(__name__)
-
-
-def _automation_daily_start_minutes(automation: ProjectAutomationSettings) -> int:
-    return api_automation.automation_daily_start_minutes(automation)
-
-
-def _load_automation_scheduler_metrics(
-    runtime: HttpRuntime,
-    session,
-    project_ids: list[str],
-) -> tuple[dict[str, int], dict[str, int], dict[str, list[int]], set[str]]:
-    return api_automation.load_automation_scheduler_metrics(
-        session,
-        project_ids,
-        terminal_statuses=GENERATION_TERMINAL_STATUSES,
-    )
 
 
 def _run_scheduled_review_action(

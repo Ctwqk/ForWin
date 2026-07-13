@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from forwin.map.generator import generate_subworld_map
-from forwin.map.pathfinding import MapGraph
+from forwin.book_state.map_graph import MapGraph
 from forwin.map.protocol import SCHEME_C_NAME, MapAnchorNodeSpec, SubWorldMapSpec
 
 

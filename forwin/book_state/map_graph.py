@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from forwin.book_state.cognition import CognitionView
+from forwin.book_state.path_patch import apply_path_patch
 from forwin.protocol.book_state import MapEdge, MapNode, MapPatch, PathMetric, PathResult
 
 
@@ -455,42 +456,8 @@ def _apply_model_patch(model: MapNode | MapEdge, field_path: str, op: str, new_v
         if op in {"replace", "set"} and isinstance(new_value, dict):
             payload.update(new_value)
     else:
-        _set_path(payload, field_path, new_value, op=op)
+        apply_path_patch(payload, field_path, new_value, op=op)
     return type(model).model_validate(payload)
-
-
-def _set_path(payload: dict[str, Any], field_path: str, value: Any, *, op: str) -> None:
-    parts = [part for part in field_path.split(".") if part]
-    if not parts:
-        return
-    cursor = payload
-    for part in parts[:-1]:
-        nested = cursor.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    key = parts[-1]
-    if op == "append":
-        current = cursor.setdefault(key, [])
-        if isinstance(current, list):
-            current.append(value)
-        else:
-            cursor[key] = [current, value]
-    elif op == "remove":
-        current = cursor.get(key)
-        if isinstance(current, list):
-            cursor[key] = [item for item in current if item != value]
-        else:
-            cursor.pop(key, None)
-    elif op == "merge" and isinstance(value, dict):
-        current = cursor.get(key)
-        if isinstance(current, dict):
-            current.update(value)
-        else:
-            cursor[key] = dict(value)
-    else:
-        cursor[key] = value
 
 
 def _coordinate_pair(node: MapNode | None) -> tuple[float, float] | None:

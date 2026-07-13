@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from forwin.book_state.cognition import CognitionView
-from forwin.map.pathfinding import MapGraph
+from forwin.book_state.map_graph import MapGraph
 from forwin.protocol.book_state import CognitionOverlay, MapEdge, MapNode
 from forwin.protocol.context import ChapterContextPack, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict

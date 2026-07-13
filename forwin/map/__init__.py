@@ -24,13 +24,15 @@ from .protocol import (
 
 class MapGraph:  # type: ignore[no-redef]
     def __new__(cls, *args: Any, **kwargs: Any) -> Any:
-        from .pathfinding import MapGraph as _MapGraph
+        from forwin.book_state.map_graph import MapGraph as _MapGraph
 
         return _MapGraph(*args, **kwargs)
 
 
 def distance_between_world_nodes(*args: Any, **kwargs: Any) -> Any:
-    from .pathfinding import distance_between_world_nodes as _distance_between_world_nodes
+    from forwin.book_state.runtime import (
+        distance_between_world_nodes as _distance_between_world_nodes,
+    )
 
     return _distance_between_world_nodes(*args, **kwargs)
 
@@ -97,7 +99,9 @@ def get_subworld_map(*args: Any, **kwargs: Any) -> Any:
 
 
 def resolve_world_node_location_id(*args: Any, **kwargs: Any) -> Any:
-    from .service import resolve_world_node_location_id as _resolve_world_node_location_id
+    from forwin.book_state.runtime import (
+        resolve_world_node_location_id as _resolve_world_node_location_id,
+    )
 
     return _resolve_world_node_location_id(*args, **kwargs)
 

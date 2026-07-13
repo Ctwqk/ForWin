@@ -4,7 +4,7 @@ import re
 
 from forwin.protocol.writer import WriterOutput
 
-from .signals import CanonQualitySignal, make_signal_id
+from .signals import CanonQualitySignal, dedupe_signals, make_signal_id
 
 
 COMMON_APPELLATIONS = (
@@ -102,7 +102,7 @@ def analyze_writer_output_readability(
                 payload=_payload(draft_id=draft_id),
             )
         )
-    return _dedupe_signals(signals)
+    return dedupe_signals(signals)
 
 
 def _appellation_referent_conflict_signals(
@@ -295,15 +295,6 @@ def _payload(*, draft_id: str) -> dict[str, object]:
     }
 
 
-def _dedupe_signals(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
-    seen: set[str] = set()
-    deduped: list[CanonQualitySignal] = []
-    for signal in signals:
-        if signal.signal_id in seen:
-            continue
-        seen.add(signal.signal_id)
-        deduped.append(signal)
-    return deduped
 
 
 __all__ = ["analyze_writer_output_readability"]

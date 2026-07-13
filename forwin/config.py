@@ -128,10 +128,6 @@ def _resolved_env() -> dict[str, str]:
     return values
 
 
-def _merged_env_values() -> dict[str, str]:
-    return _resolved_env()
-
-
 def _env_str(env: dict[str, str], key: str, default: str = "") -> str:
     value = env.get(key)
     if value is None:

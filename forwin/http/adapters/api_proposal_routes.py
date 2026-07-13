@@ -12,7 +12,7 @@ from forwin.api_schema import (
     WorldEditProposalInfo,
     WorldEditProposalReviewRequest,
 )
-from forwin.models.project import Project
+from forwin.http.request_support import require_project
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.obsidian.proposal_review import approve_world_edit_proposal
 from forwin.knowledge_system.store import load_json
@@ -24,7 +24,7 @@ def build_handlers(
 ) -> dict[str, Callable[..., Any]]:
     def list_project_proposals(project_id: str) -> list[WorldEditProposalInfo]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             rows = (
                 session.execute(
                     select(KnowledgeEditProposalRow)
@@ -43,7 +43,7 @@ def build_handlers(
         project_id: str, proposal_id: str
     ) -> WorldEditProposalInfo:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             return _proposal_info(_get_proposal(session, project_id, proposal_id))
 
     def create_project_proposal(
@@ -51,7 +51,7 @@ def build_handlers(
         req: WorldEditProposalCreateRequest,
     ) -> WorldEditProposalInfo:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source=req.source or "world_studio",
@@ -79,7 +79,7 @@ def build_handlers(
     ) -> WorldEditProposalInfo:
         request = req or WorldEditProposalReviewRequest(status="accepted", reason="")
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             try:
                 result = approve_world_edit_proposal(
                     session,
@@ -104,7 +104,7 @@ def build_handlers(
     ) -> WorldEditProposalInfo:
         request = req or WorldEditProposalReviewRequest(status="rejected", reason="")
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             row = _get_proposal(session, project_id, proposal_id)
             if row.status not in {"pending", "proposed"}:
                 raise HTTPException(
@@ -125,13 +125,6 @@ def build_handlers(
         "approve_project_proposal": approve_project_proposal,
         "reject_project_proposal": reject_project_proposal,
     }
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
 
 
 def _get_proposal(

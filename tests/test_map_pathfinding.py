@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.map.pathfinding import MapGraph
+from forwin.book_state.map_graph import MapGraph
 from forwin.map.protocol import MapEdge, MapNode
 
 

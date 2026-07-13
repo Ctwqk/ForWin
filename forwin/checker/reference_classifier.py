@@ -252,18 +252,6 @@ PARENTHETICAL_REFERENCE_LABEL_KEYWORDS = (
 )
 
 
-def has_malformed_parenthetical_annotation(name: str) -> bool:
-    text = str(name or "").strip()
-    if not text:
-        return False
-    for opener, closer in (("（", "）"), ("(", ")")):
-        if text.count(opener) != text.count(closer):
-            return True
-        if opener in text and closer in text and text.rfind(opener) > text.rfind(closer):
-            return True
-    return False
-
-
 def looks_like_parenthetical_reference_label(label: str) -> bool:
     text = str(label or "").strip()
     if text in PARENTHETICAL_REFERENCE_LABELS:
@@ -427,11 +415,3 @@ def looks_like_named_character(name: str) -> bool:
     if looks_like_non_character_reference(text):
         return False
     return len(text) <= 12
-
-
-def candidate_character_name(name: str) -> str:
-    raw_text = str(name or "").strip()
-    if has_malformed_parenthetical_annotation(raw_text):
-        return ""
-    text = normalize_character_reference(raw_text)
-    return text if looks_like_named_character(text) else ""

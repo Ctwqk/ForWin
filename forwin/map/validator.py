@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 
 from forwin.protocol.book_state import MapEdge, MapNode
 
-from .protocol import MapGenerationResult, MapValidationReport, RegionEdge, RegionNode, SubWorldMapSpec
+from .protocol import MapValidationReport, RegionEdge, RegionNode, SubWorldMapSpec
 
 
 _BLOCKED_STATUSES = {"blocked", "destroyed", "sealed"}
@@ -110,32 +110,6 @@ def validate_subworld_map(
             "target_edge_count": target_edges,
         },
     )
-
-
-def validate_connectivity(map_nodes: list[MapNode], map_edges: list[MapEdge]) -> bool:
-    return len(_reachable_nodes(map_nodes, map_edges, include_hidden=True)) == len(map_nodes)
-
-
-def validate_edge_weights(map_edges: list[MapEdge]) -> bool:
-    return all(
-        float(getattr(edge, field_name) or 0.0) >= 0
-        for edge in map_edges
-        for field_name in ("distance", "travel_time", "travel_cost", "risk_level", "narrative_cost")
-    )
-
-
-def validate_required_anchors(result: MapGenerationResult, spec: SubWorldMapSpec) -> bool:
-    names = {node.name for node in result.map_nodes}
-    return all(not anchor.required or anchor.name in names for anchor in spec.required_anchor_nodes)
-
-
-def validate_region_coverage(regions: list[RegionNode], map_nodes: list[MapNode]) -> bool:
-    region_ids = {region.id for region in regions}
-    return bool(region_ids) and all(node.region_id in region_ids for node in map_nodes)
-
-
-def validate_inter_subworld_edges(map_edges: list[MapEdge], node_ids: set[str]) -> bool:
-    return all(edge.from_node_id in node_ids and edge.to_node_id in node_ids for edge in map_edges)
 
 
 def _reachable_nodes(

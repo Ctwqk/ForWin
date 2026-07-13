@@ -201,3 +201,14 @@ def make_signal_id(
 ) -> str:
     safe_subject = str(subject_key or "subject").replace(" ", "_")
     return f"{project_id}:{chapter_number}:{signal_type}:{safe_subject}:{index}"
+
+
+def dedupe_signals(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
+    seen: set[str] = set()
+    deduped: list[CanonQualitySignal] = []
+    for signal in signals:
+        if signal.signal_id in seen:
+            continue
+        seen.add(signal.signal_id)
+        deduped.append(signal)
+    return deduped

@@ -13,7 +13,7 @@ from forwin.knowledge_system.projection_jobs import (
     refresh_projection_now,
 )
 from forwin.knowledge_system.store import load_json
-from forwin.models.project import Project
+from forwin.http.request_support import require_project
 from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.api_schema import WorldModelPageInfo
 
@@ -47,7 +47,7 @@ def build_handlers(
     ) -> dict[str, Any]:
         _ = (observer_type, observer_id, role_scope, force)
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             try:
                 kind = normalize_projection_kind(projection_kind)
                 if defer:
@@ -91,7 +91,7 @@ def build_handlers(
         project_id: str, projection_kind: str = ""
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             rows = _page_rows(session, project_id, projection_kind=projection_kind)
             latest = max(
                 (row.updated_at for row in rows if row.updated_at is not None),
@@ -116,7 +116,7 @@ def build_handlers(
         as_of_chapter: int = 0,
     ) -> list[Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             rows = _page_rows(
                 session,
                 project_id,
@@ -130,7 +130,7 @@ def build_handlers(
         project_id: str, page_key: str, projection_kind: str = ""
     ) -> Any:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             query = select(KnowledgeProjectionPageRow).where(
                 KnowledgeProjectionPageRow.project_id == project_id,
                 KnowledgeProjectionPageRow.page_key == page_key,
@@ -155,13 +155,6 @@ def build_handlers(
         "list_projection_pages": list_projection_pages,
         "get_projection_page": get_projection_page,
     }
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
 
 
 def _page_rows(

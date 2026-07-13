@@ -899,13 +899,13 @@ class MockForWinBackend:
             )
             return
         export = re.fullmatch(
-            r"/api/projects/([^/]+)/world-model/(export-obsidian|import-obsidian)", path
+            r"/api/projects/([^/]+)/obsidian/(export|import)", path
         )
         if export and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
             action = export.group(2)
-            if action == "export-obsidian":
+            if action == "export":
                 json_reply(
                     route,
                     {
@@ -926,28 +926,6 @@ class MockForWinBackend:
                         "message": "已导入 proposal。",
                     },
                 )
-            return
-        proposal_review = re.fullmatch(
-            r"/api/projects/([^/]+)/world-model/proposals/([^/]+)/review", path
-        )
-        if proposal_review and method == "POST":
-            payload = read_json(route)
-            self.capture(route, payload)
-            proposal_id = proposal_review.group(2)
-            for proposal in self.world_proposals:
-                if proposal["id"] == proposal_id:
-                    proposal["status"] = payload.get("status") or "accepted"
-            json_reply(
-                route,
-                next(
-                    (
-                        item
-                        for item in self.world_proposals
-                        if item["id"] == proposal_id
-                    ),
-                    sample_world_proposals()[0],
-                ),
-            )
             return
         api_error(route, f"Unhandled mock API route: {method} {path}", 501)
 

@@ -525,7 +525,7 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const result = await apiJson<ExportResponse>(`/api/projects/${projectId}/world-model/export-obsidian`, {
+      const result = await apiJson<ExportResponse>(`/api/projects/${projectId}/obsidian/export`, {
         method: "POST",
         body: JSON.stringify({ vault_root: vaultRoot })
       });
@@ -544,7 +544,7 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
-      const result = await apiJson<ImportResponse>(`/api/projects/${projectId}/world-model/import-obsidian`, {
+      const result = await apiJson<ImportResponse>(`/api/projects/${projectId}/obsidian/import`, {
         method: "POST",
         body: JSON.stringify({ vault_root: vaultRoot })
       });

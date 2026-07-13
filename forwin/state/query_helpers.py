@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import func, select
@@ -305,9 +305,3 @@ def load_latest_provisional_band_execution_by_project(
             ProvisionalBandExecution.id.desc(),
         ),
     )
-
-
-def chunked(values: Sequence[str], size: int = 200) -> list[list[str]]:
-    if size <= 0:
-        return [list(values)]
-    return [list(values[index : index + size]) for index in range(0, len(values), size)]

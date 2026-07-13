@@ -19,12 +19,12 @@ from forwin.models.publisher import (
 from .browser_sessions import (
     BrowserCookieCodec,
     as_utc,
-    is_retryable_db_error,
     isoformat,
     pick_browser_sessions_by_platform,
     status_payload_unverified_cookie_signal,
     utc_now,
 )
+from forwin.storage.db_errors import is_retryable_database_error
 from .login_evidence import LOGIN_REQUIRED_ERRORS, payload_value, platform_login_evidence
 from .platform_catalog import PlatformCatalog
 
@@ -554,7 +554,7 @@ class ExtensionConnectionService:
 
                 session.commit()
         except OperationalError as exc:
-            if not is_retryable_db_error(exc):
+            if not is_retryable_database_error(exc):
                 raise
             logger.warning(
                 "Publisher extension heartbeat skipped because database is busy: %s",

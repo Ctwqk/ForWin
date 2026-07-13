@@ -156,10 +156,6 @@ def _embed_text(text: str, dims: int = 64) -> list[float]:
     return [value / norm for value in vector]
 
 
-def _cosine_similarity(left: list[float], right: list[float]) -> float:
-    return sum(a * b for a, b in zip(left, right))
-
-
 def _point_id(project_id: str, chapter_number: int) -> str:
     digest = sha1(f"{project_id}:{chapter_number}".encode("utf-8")).hexdigest()[:32]
     return str(UUID(digest))

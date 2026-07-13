@@ -7,21 +7,17 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 
-from forwin.http.adapters import api_obsidian_routes
 from forwin.api_pages_shared import join_page_assets
 from forwin.http.adapters.api_projection_routes import _page_info
+from forwin.http.request_support import require_project
 from forwin.api_schema import (
-    WorldEditProposalReviewRequest,
     WorldModelConflictInfo,
-    WorldModelExportRequest,
-    WorldModelImportRequest,
     WorldModelSnapshotInfo,
 )
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
 from forwin.models.book_state import WorldSnapshotRow
 from forwin.models.canon_quality import CanonQualitySignalRow
-from forwin.models.project import Project
 
 
 _WORLD_STUDIO_TOPBAR_ASSET_ID = "forwin-world-studio-shared-topbar"
@@ -34,13 +30,6 @@ def build_handlers(
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
 ) -> dict[str, Callable[..., Any]]:
-    obsidian_handlers = api_obsidian_routes.build_handlers(
-        get_session=get_session,
-        get_config=get_config,
-        qdrant_client=qdrant_client,
-        qdrant_models=qdrant_models,
-    )
-
     def world_studio_page():
         return HTMLResponse(_world_studio_html())
 
@@ -50,7 +39,7 @@ def build_handlers(
 
     def list_project_world_model_snapshots(project_id: str):
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             rows = (
                 session.execute(
                     select(WorldSnapshotRow)
@@ -69,7 +58,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int | None = None
     ):
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             query = select(WorldSnapshotRow).where(
                 WorldSnapshotRow.project_id == project_id
             )
@@ -89,7 +78,7 @@ def build_handlers(
 
     def list_project_world_model_pages(project_id: str):
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             return [
                 _page_info(row)
                 for row in KnowledgePageRepository(session).list_canonical_rows(
@@ -99,7 +88,7 @@ def build_handlers(
 
     def get_project_world_model_page(project_id: str, page_key: str):
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             row = KnowledgePageRepository(session).resolve_page_key(
                 project_id,
                 page_key,
@@ -110,7 +99,7 @@ def build_handlers(
 
     def list_project_world_model_conflicts(project_id: str):
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             rows = (
                 session.execute(
                     select(CanonQualitySignalRow)
@@ -125,27 +114,6 @@ def build_handlers(
             )
             return [_conflict_info(row) for row in rows]
 
-    def export_project_world_model(project_id: str, req: WorldModelExportRequest):
-        return obsidian_handlers["export_obsidian"](project_id, req)
-
-    def import_project_world_model(project_id: str, req: WorldModelImportRequest):
-        return obsidian_handlers["import_obsidian"](project_id, req)
-
-    def list_project_world_model_proposals(project_id: str):
-        return obsidian_handlers["list_obsidian_proposals"](project_id)
-
-    def review_project_world_model_proposal(
-        project_id: str,
-        proposal_id: str,
-        req: WorldEditProposalReviewRequest,
-    ):
-        handler_key = (
-            "approve_obsidian_proposal"
-            if req.status in {"accepted", "approved"}
-            else "reject_obsidian_proposal"
-        )
-        return obsidian_handlers[handler_key](project_id, proposal_id, req)
-
     def search_project_world_studio(
         project_id: str,
         query: str,
@@ -158,7 +126,7 @@ def build_handlers(
         from forwin.world_studio.search_service import WorldStudioSearchService
 
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             config = get_config() if get_config is not None else None
             return WorldStudioSearchService(
                 skill_root=Path(
@@ -188,18 +156,7 @@ def build_handlers(
         "list_project_world_model_pages": list_project_world_model_pages,
         "get_project_world_model_page": get_project_world_model_page,
         "list_project_world_model_conflicts": list_project_world_model_conflicts,
-        "export_project_world_model": export_project_world_model,
-        "import_project_world_model": import_project_world_model,
-        "list_project_world_model_proposals": list_project_world_model_proposals,
-        "review_project_world_model_proposal": review_project_world_model_proposal,
     }
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "project not found")
-    return project
 
 
 def _snapshot_info(row: WorldSnapshotRow) -> WorldModelSnapshotInfo:

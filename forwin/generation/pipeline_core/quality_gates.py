@@ -6,7 +6,7 @@ import logging
 from forwin.canon.types import CanonQualityGateOutcome
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
-from forwin.generation.pipeline_core.quality_signal_utils import dedupe_quality_signals
+from forwin.canon_quality.signals import dedupe_signals
 from forwin.generation.pipeline_core.common import (
     _payoff_test_for_deferred_issue,
     _priority_for_deferred_issue,
@@ -272,7 +272,7 @@ def _apply_canon_quality_gate(
         draft_id=draft_id,
         issues=list(getattr(verdict, "issues", []) or []),
     )
-    gate_signals = dedupe_quality_signals([*analysis.signals, *continuity_signals])
+    gate_signals = dedupe_signals([*analysis.signals, *continuity_signals])
     if continuity_signals:
         CanonQualityRepository(session).save_signals(continuity_signals)
     project = session.get(Project, project_id)

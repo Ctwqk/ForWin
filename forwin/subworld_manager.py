@@ -49,10 +49,6 @@ def _load_json(raw: str, default):
         return default
 
 
-def _clean_token(text: str) -> str:
-    return "".join(ch for ch in str(text or "").strip() if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
-
-
 def _metadata_character_ids(metadata: dict | None) -> list[str]:
     if not isinstance(metadata, dict):
         return []

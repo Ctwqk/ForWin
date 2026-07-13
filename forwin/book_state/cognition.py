@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from forwin.book_state.path_patch import apply_path_patch
+
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, WorldEdge, WorldNode
 
 
@@ -58,7 +60,7 @@ class CognitionView:
             if not ref.startswith(prefix):
                 continue
             field_path = ref.removeprefix(prefix)
-            _set_path(visible, field_path, value)
+            apply_path_patch(visible, field_path, value)
         return visible
 
     def apply_cognition_patch(self, field_path: str, op: str, value: Any) -> None:
@@ -92,17 +94,3 @@ class CognitionView:
             "false_edges": sorted(self.false_edges),
             "false_facts": sorted(self.false_facts),
         }
-
-
-def _set_path(payload: dict[str, Any], field_path: str, value: Any) -> None:
-    parts = [part for part in field_path.split(".") if part]
-    if not parts:
-        return
-    cursor = payload
-    for part in parts[:-1]:
-        nested = cursor.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    cursor[parts[-1]] = value

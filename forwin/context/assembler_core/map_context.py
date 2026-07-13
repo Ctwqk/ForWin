@@ -174,7 +174,7 @@ def _review_graph_edges(visible_edges: list, selected_node_ids: set[str], *, ava
 
 
 def _build_map_context(repo_session, project_id: str, entities: list, genesis_story_engine: dict | None = None) -> dict:
-    from forwin.map.pathfinding import MapGraph
+    from forwin.book_state.map_graph import MapGraph
     from forwin.map.repository import MapRepository
 
     if repo_session is None:

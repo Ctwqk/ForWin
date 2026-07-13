@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.protocol.review import ContinuityIssue
 
-from .signals import CanonQualitySignal, make_signal_id
+from .signals import CanonQualitySignal, dedupe_signals, make_signal_id
 
 
 CONTINUITY_ISSUE_TO_SIGNAL_TYPE: dict[str, str] = {
@@ -51,7 +51,7 @@ def signals_from_continuity_issues(
                 },
             )
         )
-    return _dedupe(signals)
+    return dedupe_signals(signals)
 
 
 def _signal_type_for_issue(issue: ContinuityIssue) -> str:
@@ -81,17 +81,6 @@ def _target_scope_for_issue(issue: ContinuityIssue) -> str:
     if target_scope == "scene":
         return "chapter"
     return "chapter"
-
-
-def _dedupe(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
-    seen: set[str] = set()
-    deduped: list[CanonQualitySignal] = []
-    for signal in signals:
-        if signal.signal_id in seen:
-            continue
-        seen.add(signal.signal_id)
-        deduped.append(signal)
-    return deduped
 
 
 __all__ = ["CONTINUITY_ISSUE_TO_SIGNAL_TYPE", "signals_from_continuity_issues"]

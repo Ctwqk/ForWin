@@ -12,13 +12,13 @@ from forwin.api_schema import (
     PersonalityLoadoutUpdateRequest,
 )
 from forwin.book_state import BookStateProjection, BookStateRepository
+from forwin.http.request_support import require_project
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
 from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
-from forwin.models.project import Project
 from forwin.observability.payloads import audit_payload
 from forwin.personality.assignment import PersonalityLoadoutAssigner
 from forwin.personality.context import build_active_personality_context
@@ -33,13 +33,6 @@ from forwin.personality.models import (
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
 from forwin.personality.reports import PersonalityAssignmentReportStore
 from forwin.state.updater import StateUpdater
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
 
 
 def build_handlers(
@@ -61,7 +54,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int | None = None
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             resolved_chapter = (
                 BookStateRepository(session).latest_available_chapter(project_id)
                 if as_of_chapter is None
@@ -96,7 +89,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             repo = BookStateRepository(session)
             snapshot = repo.latest_world_snapshot(project_id, as_of)
@@ -134,7 +127,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             repo = BookStateRepository(session)
             nodes = repo.list_world_nodes(project_id, as_of_chapter=as_of)
@@ -150,7 +143,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             repo = BookStateRepository(session)
             return {
@@ -166,7 +159,7 @@ def build_handlers(
         project_id: str, through_chapter: int = 0, after_chapter: int = -1
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             through = _resolve_as_of_chapter(session, project_id, through_chapter)
             repo = BookStateRepository(session)
             deltas = repo.list_graph_deltas(
@@ -183,7 +176,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             repo = BookStateRepository(session)
             return {
@@ -201,7 +194,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             repo = BookStateRepository(session)
             return {
@@ -239,7 +232,7 @@ def build_handlers(
         allow_blocked: bool = False,
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             observer = (
                 (observer_type, observer_id) if observer_type and observer_id else None
@@ -271,7 +264,7 @@ def build_handlers(
         project_id: str, req: CharacterCreateRequest
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             try:
                 result = CharacterCreationHelper(
                     session, personality_library=_personality_library()
@@ -292,7 +285,7 @@ def build_handlers(
         project_id: str, req: CharacterPersonalityPreviewRequest
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             policy = CharacterPersonalityPolicyResolver(session).resolve_for_project(
                 project_id
             )
@@ -314,7 +307,7 @@ def build_handlers(
         req: CharacterPersonalityActiveContextPreviewRequest,
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
         loadout = PersonalityLoadout.model_validate(req.personality_loadout or {})
         validation = PersonalityLoadoutAssigner(_personality_library()).validate(
             loadout.model_dump(mode="json", exclude_none=True)
@@ -345,7 +338,7 @@ def build_handlers(
             payload.get("reason") or "manual relationship personality enrichment"
         )
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             result = RelationshipPersonalityEnricher(
                 session,
                 personality_library=_personality_library(),
@@ -360,7 +353,7 @@ def build_handlers(
         project_id: str, filter: str = ""
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             repo = BookStateRepository(session)
             nodes = [
                 node
@@ -465,7 +458,7 @@ def build_handlers(
 
     def get_character_personality_metrics(project_id: str) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             return build_character_personality_metrics(session, project_id)
 
     def backfill_character_personalities(
@@ -482,7 +475,7 @@ def build_handlers(
         blocked = 0
         needs_review = 0
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             repo = BookStateRepository(session)
             assigner = PersonalityLoadoutAssigner(_personality_library())
             policy = CharacterPersonalityPolicyResolver(session).resolve_for_project(
@@ -617,7 +610,7 @@ def build_handlers(
         req: CharacterPersonalityReassignRequest,
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             repo = BookStateRepository(session)
             node = _get_character_node(
                 repo, project_id, character_id, as_of_chapter=None
@@ -726,7 +719,7 @@ def build_handlers(
         project_id: str, character_id: str
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             node = _get_character_node(
                 BookStateRepository(session),
                 project_id,
@@ -749,7 +742,7 @@ def build_handlers(
         project_id: str, assignment_id: str
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             report = PersonalityAssignmentReportStore(session).explain(
                 project_id, assignment_id
             )
@@ -767,7 +760,7 @@ def build_handlers(
         project_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             characters = [
                 _character_personality_payload(node)
@@ -787,7 +780,7 @@ def build_handlers(
         project_id: str, character_id: str, as_of_chapter: int = 0
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
             node = _get_character_node(
                 BookStateRepository(session),
@@ -816,7 +809,7 @@ def build_handlers(
                 detail=f"unknown personality skills: {', '.join(missing)}",
             )
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             repo = BookStateRepository(session)
             node = _get_character_node(
                 repo, project_id, character_id, as_of_chapter=None

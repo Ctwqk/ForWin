@@ -500,7 +500,7 @@ class ForWinAPIClient:
     ) -> WorldModelExportView:
         payload = await self._request_json(
             "POST",
-            f"/api/projects/{project_id}/world-model/export-obsidian",
+            f"/api/projects/{project_id}/obsidian/export",
             json={"vault_root": vault_root},
         )
         if not isinstance(payload, dict):

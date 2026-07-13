@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from forwin.narrative_obligations.types import (
     NarrativeObligation,
     NarrativePlanPatch,
@@ -152,45 +150,3 @@ def _normalize_form_mode(value: str | None) -> str:
     if normalized in {"off", "primary", "chapter_review_form"}:
         return "chapter_review_form" if normalized == "primary" else normalized
     return "chapter_review_form"
-
-
-def _locked_constraints_payload(
-    *,
-    obligations: list[NarrativeObligation],
-    current_chapter: int,
-    target_total_chapters: int,
-    accepted_chapters: list[int] | None,
-    unresolved_obligation_ids: list[str] | None,
-    band_plan_bounds: dict[str, tuple[int, int]] | None,
-    minimum_scope_by_obligation: dict[str, str] | None,
-) -> list[dict[str, Any]]:
-    constraints: list[dict[str, Any]] = [
-        {
-            "constraint_type": "current_chapter",
-            "value": int(current_chapter or 0),
-        },
-        {
-            "constraint_type": "target_total_chapters",
-            "value": int(target_total_chapters or 0),
-        },
-    ]
-    for chapter in accepted_chapters or []:
-        constraints.append({"constraint_type": "accepted_chapter", "value": int(chapter)})
-    for obligation_id in unresolved_obligation_ids or []:
-        if str(obligation_id).strip():
-            constraints.append({"constraint_type": "unresolved_obligation", "value": str(obligation_id)})
-    for band_id, bounds in (band_plan_bounds or {}).items():
-        constraints.append(
-            {
-                "constraint_type": "band_bounds",
-                "band_id": str(band_id),
-                "chapter_start": int(bounds[0]),
-                "chapter_end": int(bounds[1]),
-            }
-        )
-    minimum_scopes = minimum_scope_by_obligation or {}
-    for obligation in obligations:
-        item = obligation.model_dump(mode="json")
-        item["minimum_scope"] = str(minimum_scopes.get(obligation.id) or "")
-        constraints.append({"constraint_type": "obligation", "value": item})
-    return constraints

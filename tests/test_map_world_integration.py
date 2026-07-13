@@ -7,16 +7,16 @@ from sqlalchemy import select
 
 from forwin.book_state.runtime import ObjectiveWorldGraph, distance_between_world_nodes
 from forwin.context.assembler_core import _build_map_context, assemble_context
+from forwin.map import resolve_world_node_location_id
 from forwin.map.generator import generate_subworld_map
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
-from forwin.map.pathfinding import MapGraph
+from forwin.book_state.map_graph import MapGraph
 from forwin.map.protocol import MapAnchorNodeSpec, MapGenerationResult, MapValidationReport, SubWorldMapSpec
 from forwin.map.service import (
     create_or_update_book_map,
     create_or_update_subworld_map,
     ensure_book_map_from_genesis_atlas,
     get_book_map_runtime,
-    resolve_world_node_location_id,
 )
 from forwin.models import (
     ArcPlanVersion,
@@ -38,6 +38,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.review.webnovel import WebNovelExperienceReviewer
 from forwin.state.repo import StateRepository
 from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from tests.postgres import postgres_test_url
 
 
 def _spec() -> SubWorldMapSpec:

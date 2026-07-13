@@ -589,20 +589,6 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
     return BookStateSchemaReport(tuple(issues))
 
 
-def validate_runtime(world_nodes: Iterable[WorldNode], world_edges: Iterable[WorldEdge]) -> BookStateSchemaReport:
-    issues: list[BookStateSchemaIssue] = []
-    node_ids = {node.id for node in world_nodes}
-    for node in world_nodes:
-        issues.extend(validate_world_node(node).issues)
-    for edge in world_edges:
-        issues.extend(validate_world_edge(edge).issues)
-        if edge.source_id not in node_ids:
-            issues.append(_issue("warning", "world_edge_unknown_source", f"edge:{edge.id}", f"unknown source_id: {edge.source_id}"))
-        if edge.target_id not in node_ids:
-            issues.append(_issue("warning", "world_edge_unknown_target", f"edge:{edge.id}", f"unknown target_id: {edge.target_id}"))
-    return BookStateSchemaReport(tuple(issues))
-
-
 def _validate_node_patch_field(
     node_id: str,
     node_type: str,
@@ -671,7 +657,6 @@ __all__ = [
     "COGNITION_REF_PREFIXES",
     "WORLD_NODE_FIELDS",
     "validate_graph_delta",
-    "validate_runtime",
     "validate_world_edge",
     "validate_world_node",
 ]

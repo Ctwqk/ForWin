@@ -8,6 +8,7 @@ import pytest
 from forwin.http.adapters.api_book_state_routes import build_handlers as build_book_state_handlers
 from forwin.http.adapters.api_llm_kb_routes import build_handlers as build_llm_kb_handlers
 from forwin.http.adapters.api_obsidian_routes import build_handlers as build_obsidian_handlers
+from forwin.http.adapters.api_proposal_routes import build_handlers as build_proposal_handlers
 from forwin.api_schema import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
 from forwin.http.adapters.api_world_model_routes import build_handlers as build_world_model_handlers
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateRepository
@@ -297,12 +298,13 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
             approve_id = proposals[0].id
             reject_id = proposals[1].id
 
-        approved = handlers["approve_obsidian_proposal"](
+        proposal_handlers = build_proposal_handlers(get_session=Session)
+        approved = proposal_handlers["approve_project_proposal"](
             project_id,
             approve_id,
             WorldEditProposalReviewRequest(status="accepted", reason="human reviewed"),
         )
-        rejected = handlers["reject_obsidian_proposal"](
+        rejected = proposal_handlers["reject_project_proposal"](
             project_id,
             reject_id,
             WorldEditProposalReviewRequest(status="rejected", reason="needs rewrite"),
@@ -358,8 +360,8 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
             session.flush()
             structured_id = row.id
 
-        world_model_handlers = build_world_model_handlers(get_session=Session)
-        structured = world_model_handlers["review_project_world_model_proposal"](
+        proposal_handlers = build_proposal_handlers(get_session=Session)
+        structured = proposal_handlers["approve_project_proposal"](
             project_id,
             structured_id,
             WorldEditProposalReviewRequest(status="accepted", reason="structured patch reviewed"),
@@ -545,11 +547,9 @@ def test_structured_patch_sets_personality_loadout_via_proposal(tmp_path: Path) 
             session.flush()
             proposal_id = row.id
 
-        reviewed = build_world_model_handlers(
-            get_session=Session,
-            qdrant_client=FakeQdrantClient(),
-            qdrant_models=FakeQdrantModels,
-        )["review_project_world_model_proposal"](
+        reviewed = build_proposal_handlers(get_session=Session)[
+            "approve_project_proposal"
+        ](
             project_id,
             proposal_id,
             WorldEditProposalReviewRequest(status="accepted", reason="reviewed loadout"),
@@ -611,7 +611,9 @@ def test_structured_patch_old_value_mismatch_blocks_without_forced_accept(tmp_pa
             proposal_id = row.id
 
         with pytest.raises(HTTPException) as exc:
-            build_world_model_handlers(get_session=Session)["review_project_world_model_proposal"](
+            build_proposal_handlers(get_session=Session)[
+                "approve_project_proposal"
+            ](
                 project_id,
                 proposal_id,
                 WorldEditProposalReviewRequest(status="accepted", reason="normal approval"),
@@ -698,7 +700,9 @@ def test_structured_patch_cognition_ops_commit_through_proposal(tmp_path: Path) 
             session.flush()
             proposal_id = row.id
 
-        reviewed = build_world_model_handlers(get_session=Session)["review_project_world_model_proposal"](
+        reviewed = build_proposal_handlers(get_session=Session)[
+            "approve_project_proposal"
+        ](
             project_id,
             proposal_id,
             WorldEditProposalReviewRequest(status="accepted", reason="reviewed cognition patch"),
@@ -746,7 +750,7 @@ def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Pa
                 session.flush()
                 return row.id
 
-        handlers = build_world_model_handlers(get_session=Session)
+        handlers = build_proposal_handlers(get_session=Session)
         create_id = add_patch_proposal(
             [
                 {
@@ -764,7 +768,7 @@ def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Pa
             ],
             1,
         )
-        created = handlers["review_project_world_model_proposal"](
+        created = handlers["approve_project_proposal"](
             project_id,
             create_id,
             WorldEditProposalReviewRequest(status="accepted", reason="create promise"),
@@ -790,7 +794,7 @@ def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Pa
             ],
             2,
         )
-        updated = handlers["review_project_world_model_proposal"](
+        updated = handlers["approve_project_proposal"](
             project_id,
             set_id,
             WorldEditProposalReviewRequest(status="accepted", reason="set promise summary"),
@@ -813,7 +817,7 @@ def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Pa
             ],
             3,
         )
-        resolved = handlers["review_project_world_model_proposal"](
+        resolved = handlers["approve_project_proposal"](
             project_id,
             resolve_id,
             WorldEditProposalReviewRequest(status="accepted", reason="resolve promise"),
@@ -914,7 +918,6 @@ def test_reader_promise_old_value_mismatch_requires_forced_accept(tmp_path: Path
 
 
 def test_unified_proposal_api_creates_reviews_and_updates_loadout(tmp_path: Path) -> None:
-    from forwin.http.adapters.api_proposal_routes import build_handlers as build_proposal_handlers
     from forwin.api_schema import WorldEditProposalCreateRequest
 
     Session, engine = _session_factory()
@@ -1014,7 +1017,9 @@ def test_unified_proposal_api_creates_reviews_and_updates_loadout(tmp_path: Path
         assert rejected_info.status == "rejected"
         assert after_count == before_count
 
-        world_model_proposals = build_world_model_handlers(get_session=Session)["list_project_world_model_proposals"](
+        world_model_proposals = build_proposal_handlers(get_session=Session)[
+            "list_project_proposals"
+        ](
             project_id
         )
         assert {item.id for item in world_model_proposals} >= {created.id, rejected.id}

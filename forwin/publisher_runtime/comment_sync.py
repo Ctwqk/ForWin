@@ -212,7 +212,6 @@ class CommentSyncService:
                 session.commit()
                 session.refresh(job)
                 return self.serialize_comment_sync_job(job)
-            return None
 
     def update_comment_sync_job_result(
         self,

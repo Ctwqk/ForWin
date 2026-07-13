@@ -10,15 +10,9 @@ from forwin.map.service import (
     ensure_book_map_from_genesis_atlas,
     get_book_map_runtime,
 )
+from forwin.http.request_support import require_project
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
 
 
 def _active_revision(session, project: Project) -> BookGenesisRevision | None:
@@ -42,7 +36,7 @@ def _map_atlas_from_revision(revision: BookGenesisRevision) -> dict[str, Any]:
 def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[..., Any]]:
     def get_project_map_runtime(project_id: str) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             runtime = get_book_map_runtime(session, project_id)
             return {
                 "schema_version": "map.runtime.v1",
@@ -64,7 +58,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
         allow_blocked: bool = False,
     ) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             result = compute_distance(
                 session,
                 project_id,
@@ -82,7 +76,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
 
     def ensure_project_map_from_genesis(project_id: str) -> dict[str, Any]:
         with get_session() as session:
-            project = _require_project(session, project_id)
+            project = require_project(session, project_id)
             revision = _active_revision(session, project)
             if revision is None:
                 raise HTTPException(status_code=409, detail="active genesis revision not found")

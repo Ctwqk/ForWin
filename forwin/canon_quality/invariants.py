@@ -120,10 +120,6 @@ def invariant_from_active_rule(rule: Any) -> CanonInvariant:
     )
 
 
-def countdown_key_for_invariant(invariant_key: str) -> str:
-    return str(invariant_key or "").strip().removeprefix("countdown:")
-
-
 def _normalize_kind(value: Any) -> InvariantKind:
     normalized = str(value or "").strip()
     allowed = {
@@ -158,5 +154,4 @@ __all__ = [
     "InvariantStatus",
     "invariant_from_active_rule",
     "invariant_from_countdown_state",
-    "countdown_key_for_invariant",
 ]

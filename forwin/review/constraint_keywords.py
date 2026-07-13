@@ -45,15 +45,6 @@ def constraint_keywords() -> ConstraintKeywordRegistry:
     return ConstraintKeywordRegistry()
 
 
-def keyword_is_prefix_negated(text: str, keyword: str, *, window: int = 12) -> bool:
-    local = str(text or "")
-    occurrences = _keyword_occurrences(local, keyword)
-    return bool(occurrences) and all(
-        _occurrence_is_prefix_negated(local, keyword, index, window=window)
-        for index in occurrences
-    )
-
-
 def text_has_unnegated_keyword(text: str, keywords: tuple[str, ...]) -> bool:
     local = str(text or "")
     for keyword in keywords:

@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable
 from forwin.book_state.runtime import BookStateRuntime
@@ -253,7 +254,7 @@ class BookStateCompiler:
                     }
                 ).model_dump(mode="json")
             elif payload is not None:
-                _set_path(payload, field_path, patch.get("new_value"))
+                apply_path_patch(payload, field_path, patch.get("new_value"))
         return values
 
     def _persist_delta_side_effects(self, runtime: BookStateRuntime, delta: GraphDelta) -> None:
@@ -383,7 +384,11 @@ class BookStateCompiler:
                 payload = dict(promises.get(promise_id, {}))
                 if not payload:
                     continue
-                _set_path(payload, str(patch.get("field_path") or ""), patch.get("new_value"))
+                apply_path_patch(
+                    payload,
+                    str(patch.get("field_path") or ""),
+                    patch.get("new_value"),
+                )
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
             evidence_refs = list(payload.get("source_refs", []))
             for ref in patch.get("evidence_refs") or []:
@@ -519,21 +524,6 @@ def _get_path(payload: dict[str, Any], field_path: str) -> Any:
             return None
         cursor = cursor[part]
     return cursor
-
-
-def _set_path(payload: dict[str, Any], field_path: str, value: Any) -> None:
-    if not field_path:
-        return
-    cursor: Any = payload
-    parts = [part for part in field_path.split(".") if part]
-    for part in parts[:-1]:
-        nested = cursor.get(part) if isinstance(cursor, dict) else None
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    if parts and isinstance(cursor, dict):
-        cursor[parts[-1]] = value
 
 
 def _json_equal(left: Any, right: Any) -> bool:

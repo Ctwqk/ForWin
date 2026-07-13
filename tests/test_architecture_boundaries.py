@@ -246,10 +246,19 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         "forwin/api_task_history.py",
         "forwin/audience/analysis.py",
         "forwin/audience_metrics.py",
+        "forwin/context/ports.py",
+        "forwin/generation/ports.py",
+        "forwin/generation/pipeline_core/quality_signal_utils.py",
+        "forwin/map/pathfinding.py",
         "forwin/orchestration",
         "forwin/orchestrator",
         "forwin/orchestrator_loop_core",
+        "forwin/personality/validation.py",
         "forwin/pipeline_loop_core",
+        "forwin/review/decision/interval.py",
+        "forwin/review/repair_handlers/__init__.py",
+        "forwin/review/repair_handlers/active_rules.py",
+        "forwin/runtime/ports.py",
     ):
         assert not (ROOT / removed_path).exists()
 
@@ -340,6 +349,42 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
     assert "self.repair.review_candidate(" in project_chapters
     assert "self.repair.repair_canon_block(" in project_chapters
     assert "class RepairService" in _read("forwin/review/repair/service.py")
+
+
+def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> None:
+    routes = _read("forwin/http/routes.py")
+    for removed_route in (
+        "/world-model/export-obsidian",
+        "/world-model/import-obsidian",
+        "/world-model/proposals",
+        "/obsidian/proposals",
+    ):
+        assert removed_route not in routes
+    assert "/obsidian/export" in routes
+    assert "/obsidian/import" in routes
+    assert '"/api/projects/{project_id}/proposals"' in routes
+
+    obsidian = _read("forwin/http/adapters/api_obsidian_routes.py")
+    world_model = _read("forwin/http/adapters/api_world_model_routes.py")
+    assert "KnowledgeEditProposalRow" not in obsidian
+    assert "approve_world_edit_proposal" not in obsidian
+    assert "api_obsidian_routes" not in world_model
+
+    world_studio = _read("frontend/world-studio/src/App.tsx")
+    mcp_client = _read("forwin/mcp/client.py")
+    assert "/obsidian/export" in world_studio
+    assert "/obsidian/import" in world_studio
+    assert "/obsidian/export" in mcp_client
+    assert "/world-model/export-obsidian" not in world_studio
+    assert "/world-model/import-obsidian" not in world_studio
+    assert "/world-model/export-obsidian" not in mcp_client
+
+    adapter_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin/http/adapters").glob("*.py"))
+    )
+    assert "def _require_project(" not in adapter_sources
+    assert "def require_project(" in _read("forwin/http/request_support.py")
 
 
 def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> None:

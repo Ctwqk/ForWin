@@ -638,30 +638,6 @@ def register_api_routes(
             {"response_model": list[WorldModelConflictInfo]},
         ),
         (
-            "/api/projects/{project_id}/world-model/export-obsidian",
-            ["POST"],
-            handlers["export_project_world_model"],
-            {"response_model": WorldModelExportResponse},
-        ),
-        (
-            "/api/projects/{project_id}/world-model/import-obsidian",
-            ["POST"],
-            handlers["import_project_world_model"],
-            {"response_model": WorldModelImportResponse},
-        ),
-        (
-            "/api/projects/{project_id}/world-model/proposals",
-            ["GET"],
-            handlers["list_project_world_model_proposals"],
-            {"response_model": list[WorldEditProposalInfo]},
-        ),
-        (
-            "/api/projects/{project_id}/world-model/proposals/{proposal_id}/review",
-            ["POST"],
-            handlers["review_project_world_model_proposal"],
-            {"response_model": WorldEditProposalInfo},
-        ),
-        (
             "/api/projects/{project_id}/proposals",
             ["GET"],
             handlers["list_project_proposals"],
@@ -973,24 +949,6 @@ def register_api_routes(
             ["POST"],
             handlers["import_obsidian"],
             {"response_model": WorldModelImportResponse},
-        ),
-        (
-            "/api/projects/{project_id}/obsidian/proposals",
-            ["GET"],
-            handlers["list_obsidian_proposals"],
-            {"response_model": list[WorldEditProposalInfo]},
-        ),
-        (
-            "/api/projects/{project_id}/obsidian/proposals/{proposal_id}/approve",
-            ["POST"],
-            handlers["approve_obsidian_proposal"],
-            {"response_model": WorldEditProposalInfo},
-        ),
-        (
-            "/api/projects/{project_id}/obsidian/proposals/{proposal_id}/reject",
-            ["POST"],
-            handlers["reject_obsidian_proposal"],
-            {"response_model": WorldEditProposalInfo},
         ),
         (
             "/api/projects/{project_id}/llm-kb/rebuild",

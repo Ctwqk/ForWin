@@ -33,6 +33,7 @@ from forwin.http.runtime import (
     GENERATION_TERMINAL_STATUSES,
     HttpRuntime,
 )
+from forwin.storage.db_errors import is_retryable_database_error
 
 
 logger = logging.getLogger(__name__)
@@ -264,44 +265,6 @@ class GenerationTaskPersistenceError(RuntimeError):
     pass
 
 
-def _is_sqlite_locked_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
-
-
-def _is_retryable_generation_task_db_error(exc: Exception) -> bool:
-    if _is_sqlite_locked_error(exc):
-        return True
-    orig = getattr(exc, "orig", None)
-    sqlstate = str(
-        getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or ""
-    ).strip()
-    if sqlstate in {
-        "40001",
-        "40P01",
-        "55P03",
-        "57014",
-        "08000",
-        "08003",
-        "08006",
-        "08001",
-    }:
-        return True
-    message = str(exc).lower()
-    retryable_fragments = (
-        "deadlock detected",
-        "could not serialize access",
-        "canceling statement due to lock timeout",
-        "lock not available",
-        "lock timeout",
-        "connection refused",
-        "connection not open",
-        "server closed the connection",
-        "terminating connection",
-    )
-    return any(fragment in message for fragment in retryable_fragments)
-
-
 def _run_generation_task_db_write(
     operation,
     *,
@@ -316,7 +279,7 @@ def _run_generation_task_db_write(
             operation()
             return True
         except DBAPIError as exc:
-            if not _is_retryable_generation_task_db_error(exc):
+            if not is_retryable_database_error(exc):
                 raise
             final_exc = exc
             if attempt == attempts:
@@ -460,7 +423,7 @@ def _load_generation_task(
             include_deleted=include_deleted,
         )
     except OperationalError as exc:
-        if not _is_retryable_generation_task_db_error(exc):
+        if not is_retryable_database_error(exc):
             raise
         logger.warning(
             "Generation task read fell back to cache due to DB retryable error for %s",

@@ -36,16 +36,3 @@ class WriterProfile(BaseModel):
                 "prompt_budget_chars": max(1000, int(profile.prompt_budget_chars)),
             }
         )
-
-
-def writer_profile_from_config(config: object) -> WriterProfile:
-    return WriterProfile.from_values(
-        temperature=getattr(config, "temperature", 0.85),
-        max_tokens=getattr(config, "max_tokens", 16384),
-        default_scene_count=getattr(config, "default_scene_count", 3),
-        max_scene_count=getattr(config, "max_scene_count", 4),
-        min_chapter_chars=getattr(config, "min_chapter_chars", 2500),
-        target_chapter_chars=getattr(config, "target_chapter_chars", 2800),
-        max_chapter_chars=getattr(config, "max_chapter_chars", 3200),
-        prompt_budget_chars=getattr(config, "prompt_budget_chars", 12000),
-    )

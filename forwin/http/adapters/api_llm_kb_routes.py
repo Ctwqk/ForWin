@@ -5,8 +5,8 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from forwin.http.request_support import require_project
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever, LLMKnowledgeBaseStore
-from forwin.models.project import Project
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
 
@@ -17,13 +17,6 @@ ROLE_PACK_KIND = {
     "planner": "planning",
     "compiler": "compiler",
 }
-
-
-def _require_project(session, project_id: str) -> Project:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
 
 
 def build_handlers(
@@ -50,7 +43,7 @@ def build_handlers(
 
     def rebuild_llm_kb(project_id: str, as_of_chapter: int = 0) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             result = LLMKnowledgeBaseCompiler(
                 session,
                 root=llm_kb_root,
@@ -72,12 +65,12 @@ def build_handlers(
 
     def list_llm_kb_files(project_id: str) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             return {"project_id": project_id, "files": LLMKnowledgeBaseStore(root=llm_kb_root).list_files(project_id)}
 
     def get_llm_kb_file(project_id: str, file_key: str) -> dict[str, Any]:
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             try:
                 content = LLMKnowledgeBaseStore(root=llm_kb_root).read_file(project_id, file_key)
             except ValueError as exc:
@@ -98,7 +91,7 @@ def build_handlers(
         if role_key not in ROLE_PACK_KIND:
             raise HTTPException(status_code=404, detail="search role must be writer, reviewer, planner, or compiler")
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             results = LLMKnowledgeBaseRetriever(
                 root=llm_kb_root,
                 qdrant_url=_qdrant_url(),
@@ -120,7 +113,7 @@ def build_handlers(
         if role_key not in ROLE_PACK_KIND:
             raise HTTPException(status_code=404, detail="context pack role must be writer, reviewer, planner, or compiler")
         with get_session() as session:
-            _require_project(session, project_id)
+            require_project(session, project_id)
             pack_kind = ROLE_PACK_KIND[role_key]
             pack = RetrievalBroker(
                 llm_kb_root=llm_kb_root,

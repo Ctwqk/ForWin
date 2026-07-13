@@ -14,6 +14,7 @@ from forwin.book_state.extraction.contract import BookStateExtractionResult
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
 from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.audit import DecisionEvent
@@ -140,6 +141,32 @@ class CanonPreparationService:
             raise ValueError("candidate chapter mismatch")
         if candidate.body_hash != candidate_body_hash(writer_output.body):
             raise ValueError("candidate body changed after review")
+        context._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.CANON_COMMIT_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 candidate 开始 Canon 准入评估。",
+            related_object_type="candidate_draft",
+            related_object_id=candidate.id,
+            payload=attach_gate_outcome(
+                {},
+                GateOutcome(
+                    gate_id="canon_quality",
+                    responsibility_domain="canon_admission",
+                    scope="chapter",
+                    candidate_id=candidate.id,
+                    chapter_number=chapter_number,
+                    policy_version=int(candidate.policy_version or 0),
+                    evaluated=False,
+                    fired=False,
+                    decision="pass",
+                    blocked=False,
+                ),
+            ),
+        )
         ineligible_reason = _candidate_ineligibility_reason(verdict)
         if ineligible_reason:
             _mark_candidate_needs_review(
@@ -162,8 +189,38 @@ class CanonPreparationService:
                 chapter_number=chapter_number,
                 writer_output=writer_output,
                 verdict=verdict,
+                candidate_id=candidate.id,
+                policy_version=int(candidate.policy_version or 0),
             )
         except Exception as exc:  # noqa: BLE001
+            context._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="evaluation_verdict",
+                event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 Canon 准入评估异常。",
+                reason=str(exc),
+                related_object_type="candidate_draft",
+                related_object_id=candidate.id,
+                payload=attach_gate_outcome(
+                    {"error": str(exc)},
+                    GateOutcome(
+                        gate_id="canon_quality",
+                        responsibility_domain="canon_admission",
+                        scope="chapter",
+                        candidate_id=candidate.id,
+                        chapter_number=chapter_number,
+                        policy_version=int(candidate.policy_version or 0),
+                        fired=True,
+                        decision="error",
+                        blocked=True,
+                        issue_keys=[exc.__class__.__name__],
+                        issue_groups=["runtime_observation"],
+                    ),
+                ),
+            )
             _mark_candidate_failed(
                 CandidateDraftRepository(session),
                 candidate.id,

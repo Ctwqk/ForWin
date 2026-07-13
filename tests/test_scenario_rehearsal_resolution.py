@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
@@ -121,6 +122,16 @@ def test_patch_resolution_adds_reveal_ladder_and_rehearses_again() -> None:
             .scalars()
             .all()
         )
+        evaluation_event = session.execute(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == project.id,
+                DecisionEvent.event_type
+                == DecisionEventType.SCENARIO_REHEARSAL_EVALUATED,
+            )
+        ).scalar_one()
+        gate_outcome = parse_gate_outcome(
+            json.loads(evaluation_event.payload_json or "{}")
+        )
 
         assert outcome.status == "patched_passed"
         assert outcome.report.recommendation == ScenarioRehearsalRecommendation.PASS
@@ -128,6 +139,12 @@ def test_patch_resolution_adds_reveal_ladder_and_rehearses_again() -> None:
         assert updated_contract.reveal_ladder
         assert json.loads(rows[-1].report_json)["resolution_status"] == "patched_passed"
         assert json.loads(rows[-1].report_json)["patch_attempt_count"] == 1
+        assert gate_outcome is not None
+        assert gate_outcome.gate_id == "scenario_rehearsal"
+        assert gate_outcome.candidate_id == evaluation_event.related_object_id
+        assert gate_outcome.fired is True
+        assert gate_outcome.decision == "warn"
+        assert gate_outcome.blocked is False
 
 
 def test_subworld_without_roster_is_a_patchable_rehearsal_risk() -> None:

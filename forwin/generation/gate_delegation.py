@@ -9,6 +9,7 @@ from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
 )
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.runtime.policy import GateDelegate, RuntimePolicy
 from forwin.state.updater import StateUpdater
 
@@ -123,6 +124,36 @@ def _json_dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _delegation_gate_outcome(
+    request: GateDelegationRequest,
+    *,
+    evaluated: bool,
+    decision: str,
+    blocked: bool,
+    overridden_by: str = "",
+    issue_keys: list[str] | None = None,
+    evidence_refs: list[str] | None = None,
+    trace_id: str = "",
+) -> GateOutcome:
+    scope = request.scope if request.scope in {"chapter", "band", "arc"} else "project"
+    return GateOutcome(
+        gate_id="delegation",
+        responsibility_domain=str(request.gate_kind or "delegated_gate_resolution"),
+        scope=scope,
+        candidate_id=str(request.related_object_id or ""),
+        chapter_number=int(request.chapter_number or 0),
+        band_id=str(request.band_id or ""),
+        evaluated=evaluated,
+        fired=True,
+        decision=decision,
+        blocked=blocked,
+        overridden_by=overridden_by,
+        issue_keys=[str(item) for item in issue_keys or [] if str(item)],
+        evidence_refs=[str(item) for item in evidence_refs or [] if str(item)],
+        trace_ids=[trace_id] if trace_id else [],
+    )
+
+
 class SparkGateDelegate:
     def __init__(
         self,
@@ -150,12 +181,20 @@ class SparkGateDelegate:
                 event_type=DecisionEventType.GATE_DELEGATION_REQUESTED,
                 actor_type="system",
                 summary=f"Gate delegation requested for {request.gate_kind}.",
-                payload={
-                    "gate_kind": request.gate_kind,
-                    "requested_model": self.requested_model,
-                    "related_object_type": request.related_object_type,
-                    "related_object_id": request.related_object_id,
-                },
+                payload=attach_gate_outcome(
+                    {
+                        "gate_kind": request.gate_kind,
+                        "requested_model": self.requested_model,
+                        "related_object_type": request.related_object_type,
+                        "related_object_id": request.related_object_id,
+                    },
+                    _delegation_gate_outcome(
+                        request,
+                        evaluated=False,
+                        decision="reject",
+                        blocked=False,
+                    ),
+                ),
                 related_object_type=request.related_object_type,
                 related_object_id=request.related_object_id,
                 parent_event_id=request.parent_event_id,
@@ -319,6 +358,20 @@ class SparkGateDelegate:
         )
         decision_text = parsed.decision if parsed is not None else "reject"
         reason = parsed.reason if parsed is not None else failure_detail
+        approved = not bool(failure_reason) and decision_text == "approve"
+        final_gate_outcome = _delegation_gate_outcome(
+            request,
+            evaluated=True,
+            decision=("error" if failure_reason else decision_text),
+            blocked=not approved,
+            overridden_by="spark" if approved else "",
+            issue_keys=[
+                *([failure_reason] if failure_reason else []),
+                *(parsed.findings if parsed is not None else []),
+            ],
+            evidence_refs=parsed.evidence if parsed is not None else [],
+            trace_id=trace.id,
+        )
         final_event = updater.save_decision_event(
             DecisionEventInfo(
                 project_id=request.project_id,
@@ -337,27 +390,29 @@ class SparkGateDelegate:
                     f"{request.gate_kind}."
                 ),
                 reason=reason,
-                payload={
-                    "gate_kind": request.gate_kind,
-                    "decision": decision_text,
-                    "failure_reason": failure_reason,
-                    "trace_id": trace.id,
-                    "requested_model": self.requested_model,
-                    "actual_model": actual_model,
-                    "backend": backend,
-                    "risk_level": parsed.risk_level if parsed is not None else "",
-                    "findings": parsed.findings if parsed is not None else [],
-                    "evidence": parsed.evidence if parsed is not None else [],
-                    "gate_related_object_type": request.related_object_type,
-                    "gate_related_object_id": request.related_object_id,
-                },
+                payload=attach_gate_outcome(
+                    {
+                        "gate_kind": request.gate_kind,
+                        "decision": decision_text,
+                        "failure_reason": failure_reason,
+                        "trace_id": trace.id,
+                        "requested_model": self.requested_model,
+                        "actual_model": actual_model,
+                        "backend": backend,
+                        "risk_level": parsed.risk_level if parsed is not None else "",
+                        "findings": parsed.findings if parsed is not None else [],
+                        "evidence": parsed.evidence if parsed is not None else [],
+                        "gate_related_object_type": request.related_object_type,
+                        "gate_related_object_id": request.related_object_id,
+                    },
+                    final_gate_outcome,
+                ),
                 related_object_type="prompt_trace",
                 related_object_id=trace.id,
                 parent_event_id=trace_event.id,
                 causal_root_id=causal_root_id,
             )
         )
-        approved = not bool(failure_reason) and decision_text == "approve"
         if approved:
             updater.save_decision_event(
                 DecisionEventInfo(
@@ -372,13 +427,16 @@ class SparkGateDelegate:
                     actor_id=actual_model,
                     summary=f"Gate delegation approved {request.gate_kind}.",
                     reason=reason,
-                    payload={
-                        "gate_kind": request.gate_kind,
-                        "trace_id": trace.id,
-                        "requested_model": self.requested_model,
-                        "actual_model": actual_model,
-                        "backend": backend,
-                    },
+                    payload=attach_gate_outcome(
+                        {
+                            "gate_kind": request.gate_kind,
+                            "trace_id": trace.id,
+                            "requested_model": self.requested_model,
+                            "actual_model": actual_model,
+                            "backend": backend,
+                        },
+                        final_gate_outcome,
+                    ),
                     related_object_type=request.related_object_type,
                     related_object_id=request.related_object_id,
                     parent_event_id=final_event.id,

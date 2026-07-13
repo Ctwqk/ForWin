@@ -6,7 +6,7 @@ import logging
 from forwin.canon.types import CanonQualityGateOutcome
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
-from forwin.canon_quality.signals import dedupe_signals
+from forwin.canon_quality.signals import CanonAdmissionGateResult, dedupe_signals
 from forwin.generation.pipeline_core.common import (
     _payoff_test_for_deferred_issue,
     _priority_for_deferred_issue,
@@ -32,6 +32,7 @@ from forwin.models.draft import (
 )
 from forwin.skills import summarize_skill_layers
 from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -58,6 +59,7 @@ from forwin.generation.pipeline_core.structural_patches import (
     _persist_structural_patch_outcome,
 )
 from forwin.state.updater import StateUpdater
+from forwin.review.issue_groups import issue_group_for_issue
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,49 @@ _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "manual_review": "manual_review",
     "system_block": "block",
 }
+
+
+def _canon_quality_gate_outcome(
+    gate_result: CanonAdmissionGateResult,
+    *,
+    candidate_id: str,
+    policy_version: int,
+    signal_types: list[str],
+    evidence_refs: list[str],
+) -> GateOutcome:
+    issue_keys = list(
+        dict.fromkeys(
+            str(item)
+            for item in [*signal_types, *gate_result.blocking_reasons]
+            if str(item)
+        )
+    )
+    decision = (
+        "block"
+        if not gate_result.commit_allowed
+        else "warn"
+        if gate_result.verdict == "warn" or issue_keys
+        else "pass"
+    )
+    return GateOutcome(
+        gate_id="canon_quality",
+        responsibility_domain="canon_admission",
+        scope="chapter",
+        candidate_id=candidate_id,
+        chapter_number=int(gate_result.chapter_number or 0),
+        policy_version=policy_version,
+        fired=bool(issue_keys or gate_result.verdict != "pass"),
+        decision=decision,
+        blocked=not gate_result.commit_allowed,
+        issue_keys=issue_keys,
+        issue_groups=list(
+            dict.fromkeys(
+                issue_group_for_issue(issue_type=issue_key)
+                for issue_key in issue_keys
+            )
+        ),
+        evidence_refs=list(dict.fromkeys(str(ref) for ref in evidence_refs if str(ref))),
+    )
 
 
 def _review_action_for_engine_decision(decision: Decision) -> str:
@@ -241,6 +286,8 @@ def _apply_canon_quality_gate(
     chapter_number: int,
     writer_output: WriterOutput,
     verdict: ReviewVerdict,
+    candidate_id: str = "",
+    policy_version: int = 0,
 ) -> CanonQualityGateOutcome:
     latest_draft, latest_review = _latest_draft_and_review_for_chapter(
         session=session,
@@ -298,7 +345,22 @@ def _apply_canon_quality_gate(
             scope="chapter",
             summary=f"第{chapter_number}章 deferred acceptance 计划补丁失败。",
             reason=";".join(deferred_acceptance_errors),
-            payload={"deferred_acceptance_errors": deferred_acceptance_errors},
+            payload=attach_gate_outcome(
+                {"deferred_acceptance_errors": deferred_acceptance_errors},
+                GateOutcome(
+                    gate_id="canon_quality",
+                    responsibility_domain="canon_admission",
+                    scope="chapter",
+                    candidate_id=candidate_id,
+                    chapter_number=chapter_number,
+                    policy_version=policy_version,
+                    fired=True,
+                    decision="error",
+                    blocked=True,
+                    issue_keys=list(deferred_acceptance_errors),
+                    issue_groups=["fact_conflict"],
+                ),
+            ),
         )
         return CanonQualityGateOutcome(blocked_path="deferred-acceptance-blocked")
     obligation_repo = NarrativeObligationRepository(session)
@@ -350,6 +412,15 @@ def _apply_canon_quality_gate(
     CanonQualityRepository(session).save_admission_run(
         gate_result, signals=gate_signals
     )
+    gate_outcome = _canon_quality_gate_outcome(
+        gate_result,
+        candidate_id=candidate_id,
+        policy_version=policy_version,
+        signal_types=[signal.signal_type for signal in gate_signals],
+        evidence_refs=[
+            ref for signal in gate_signals for ref in signal.evidence_refs
+        ],
+    )
     self._record_decision_event(
         updater=updater,
         project_id=project_id,
@@ -359,7 +430,10 @@ def _apply_canon_quality_gate(
         scope="chapter",
         summary=f"第{chapter_number}章 canon quality gate: {gate_result.verdict}",
         related_object_type="canon_admission_run",
-        payload=gate_result.model_dump(mode="json"),
+        payload=attach_gate_outcome(
+            gate_result.model_dump(mode="json"),
+            gate_outcome,
+        ),
     )
     if gate_result.commit_allowed:
         return CanonQualityGateOutcome(gate_result=gate_result)
@@ -389,7 +463,10 @@ def _apply_canon_quality_gate(
         scope="chapter",
         summary=f"第{chapter_number}章 canon quality gate 阻止 canon 写入。",
         reason=gate_result.gate_summary,
-        payload=gate_result.model_dump(mode="json"),
+        payload=attach_gate_outcome(
+            gate_result.model_dump(mode="json"),
+            gate_outcome,
+        ),
     )
     return CanonQualityGateOutcome(
         blocked_path=frozen_path or "canon-quality-gate-blocked",

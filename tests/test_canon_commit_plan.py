@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.canon.plan import (
     CanonAuditEvent,
     CanonCommitPlan,
@@ -233,6 +237,11 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     calls: list[str] = []
+    recorded_events: list[dict[str, object]] = []
+
+    def record_decision_event(**payload):
+        recorded_events.append(payload)
+        return SimpleNamespace(id=f"event-{len(recorded_events)}")
 
     with Session.begin() as session:
         updater = StateUpdater(session)
@@ -325,7 +334,7 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
                 policy=RuntimePolicy.for_profile("standard"),
                 llm_client=object(),  # type: ignore[arg-type]
                 artifact_store=object(),  # type: ignore[arg-type]
-                _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
                 _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
             ),
             session=session,
@@ -345,3 +354,10 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
         assert calls == ["quality", "book_state"]
         assert outcome.plan is not None
         assert session.scalar(select(func.count(GraphDeltaRow.id))) == 0
+        assert recorded_events[0]["event_type"] == DecisionEventType.CANON_COMMIT_STARTED
+        gate_outcome = parse_gate_outcome(recorded_events[0]["payload"])
+        assert gate_outcome is not None
+        assert gate_outcome.gate_id == "canon_quality"
+        assert gate_outcome.candidate_id == candidate.id
+        assert gate_outcome.policy_version == 1
+        assert gate_outcome.evaluated is False

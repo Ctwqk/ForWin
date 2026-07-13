@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.generation.gate_delegation import (
     GateDelegationRequest,
     GateDelegationService,
@@ -197,6 +198,23 @@ def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> 
         "gate_delegation_decided",
         "gate_delegation_approved",
     }
+    events_by_type = {event.event_type: event for event in updater.events}
+    requested = parse_gate_outcome(
+        events_by_type["gate_delegation_requested"].payload
+    )
+    decided = parse_gate_outcome(events_by_type["gate_delegation_decided"].payload)
+    approved = parse_gate_outcome(
+        events_by_type["gate_delegation_approved"].payload
+    )
+    assert requested is not None
+    assert requested.gate_id == "delegation"
+    assert requested.responsibility_domain == "chapter_review_interval"
+    assert requested.evaluated is False
+    assert decided is not None
+    assert decided.decision == "approve"
+    assert decided.overridden_by == "spark"
+    assert decided.trace_ids == ["trace-1"]
+    assert approved == decided
 
 
 def test_spark_delegate_uses_configured_codex_model() -> None:

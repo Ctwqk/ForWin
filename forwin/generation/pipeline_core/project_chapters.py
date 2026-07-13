@@ -21,6 +21,7 @@ from forwin.generation.pipeline_core.obligation_resolution import (
 from forwin.generation.pipeline_core.result import RunResult
 from forwin.planning.checkpoints import BandCheckpointDetail
 from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.planning.checkpoints import BandCheckpointIssueInfo
 from forwin.review.issue_groups import issue_group_for_issue
 import json
@@ -44,6 +45,101 @@ _STRUCTURED_EXTRACTION_PARTS = (
 )
 
 
+def _hard_floor_gate_outcome(
+    hard_floor,
+    *,
+    candidate_id: str,
+    chapter_number: int,
+    policy_version: int,
+) -> GateOutcome:
+    fail_reasons = [str(item) for item in hard_floor.fail_reasons if str(item)]
+    warning_reasons = [
+        str(item) for item in hard_floor.warning_reasons if str(item)
+    ]
+    issue_keys = list(dict.fromkeys([*fail_reasons, *warning_reasons]))
+    if not hard_floor.passed:
+        decision = "block"
+    elif warning_reasons:
+        decision = "warn"
+    else:
+        decision = "pass"
+    return GateOutcome(
+        gate_id="hard_floor",
+        responsibility_domain="draft_quality",
+        scope="chapter",
+        candidate_id=candidate_id,
+        chapter_number=chapter_number,
+        policy_version=policy_version,
+        fired=bool(issue_keys),
+        decision=decision,
+        blocked=not bool(hard_floor.passed),
+        issue_keys=issue_keys,
+        issue_groups=list(
+            dict.fromkeys(
+                issue_group_for_issue(code=issue_key) for issue_key in issue_keys
+            )
+        ),
+        evidence_refs=[f"hard_floor:{issue_key}" for issue_key in issue_keys],
+    )
+
+
+def _checkpoint_event_gate_outcome(
+    checkpoint,
+    *,
+    chapter_number: int,
+    policy_version: int,
+    decision: str,
+    blocked: bool,
+) -> GateOutcome:
+    try:
+        issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        issues = []
+    if not isinstance(issues, list):
+        issues = []
+    issue_rows = [item for item in issues if isinstance(item, dict)]
+    is_manual = str(getattr(checkpoint, "trigger_source", "") or "") == "manual_boundary"
+    scope = (
+        "band"
+        if str(getattr(checkpoint, "boundary_kind", "") or "") == "band_end"
+        else "chapter"
+    )
+    return GateOutcome(
+        gate_id="manual_checkpoint" if is_manual else "band_checkpoint",
+        responsibility_domain="operator_control" if is_manual else "band_integrity",
+        scope=scope,
+        candidate_id=str(getattr(checkpoint, "id", "") or ""),
+        chapter_number=chapter_number,
+        band_id=str(getattr(checkpoint, "band_id", "") or ""),
+        policy_version=policy_version,
+        fired=True,
+        decision=decision,
+        blocked=blocked,
+        issue_keys=list(
+            dict.fromkeys(
+                str(item.get("code") or "")
+                for item in issue_rows
+                if str(item.get("code") or "")
+            )
+        ),
+        issue_groups=list(
+            dict.fromkeys(
+                str(item.get("issue_group") or "")
+                or issue_group_for_issue(code=str(item.get("code") or ""))
+                for item in issue_rows
+                if str(item.get("code") or "")
+            )
+        ),
+        evidence_refs=list(
+            dict.fromkeys(
+                str(item.get("detail") or "")
+                for item in issue_rows
+                if str(item.get("detail") or "")
+            )
+        ),
+    )
+
+
 def _record_pulp_beat_evaluation(
     self,
     *,
@@ -51,6 +147,7 @@ def _record_pulp_beat_evaluation(
     project_id: str,
     chapter_number: int,
     hard_floor,
+    gate_outcome: GateOutcome,
 ) -> None:
     metadata = getattr(hard_floor, "metadata", {}) or {}
     pulp_beat = metadata.get("pulp_beat") if isinstance(metadata, dict) else None
@@ -64,11 +161,16 @@ def _record_pulp_beat_evaluation(
         event_type=DecisionEventType.PULP_BEAT_EVALUATED,
         scope="chapter",
         summary=f"第{chapter_number}章 pulp beat 已评估。",
-        payload={
-            "passed": bool(getattr(hard_floor, "passed", False)),
-            "warning_reasons": list(getattr(hard_floor, "warning_reasons", []) or []),
-            "pulp_beat": pulp_beat,
-        },
+        payload=attach_gate_outcome(
+            {
+                "passed": bool(getattr(hard_floor, "passed", False)),
+                "warning_reasons": list(
+                    getattr(hard_floor, "warning_reasons", []) or []
+                ),
+                "pulp_beat": pulp_beat,
+            },
+            gate_outcome,
+        ),
     )
 
 
@@ -222,6 +324,18 @@ class ChapterExecutionStage:
                     summary="命中 chapter_start manual checkpoint，运行已暂停。",
                     related_object_type="band_checkpoint",
                     related_object_id=manual_start_checkpoint.id,
+                    payload=attach_gate_outcome(
+                        {},
+                        _checkpoint_event_gate_outcome(
+                            manual_start_checkpoint,
+                            chapter_number=chapter_num,
+                            policy_version=int(
+                                getattr(project, "runtime_policy_version", 0) or 0
+                            ),
+                            decision="pause",
+                            blocked=False,
+                        ),
+                    ),
                 )
                 session.commit()
                 paused_chapters.append(chapter_num)
@@ -404,13 +518,6 @@ class ChapterExecutionStage:
                         chapter_number=chapter_num,
                         policy=self.policy,
                     )
-                    _record_pulp_beat_evaluation(
-                        self,
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=chapter_num,
-                        hard_floor=hard_floor,
-                    )
                     pulp_policy = evaluate_pulp_beat_policy(
                         session=session,
                         project_id=project_id,
@@ -436,6 +543,30 @@ class ChapterExecutionStage:
                                 },
                             }
                         )
+                    evaluated_candidate = CandidateDraftRepository(
+                        session
+                    ).latest_for_chapter(
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                    )
+                    hard_floor_gate_outcome = _hard_floor_gate_outcome(
+                        hard_floor,
+                        candidate_id=str(
+                            getattr(evaluated_candidate, "id", "") or ""
+                        ),
+                        chapter_number=chapter_num,
+                        policy_version=int(
+                            getattr(evaluated_candidate, "policy_version", 0) or 0
+                        ),
+                    )
+                    _record_pulp_beat_evaluation(
+                        self,
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        hard_floor=hard_floor,
+                        gate_outcome=hard_floor_gate_outcome,
+                    )
                     if not hard_floor.passed:
                         hard_floor_issues = [
                             {
@@ -470,7 +601,10 @@ class ChapterExecutionStage:
                             scope="chapter",
                             summary=summary,
                             reason=hard_floor_reason,
-                            payload=hard_floor.model_dump(mode="json"),
+                            payload=attach_gate_outcome(
+                                hard_floor.model_dump(mode="json"),
+                                hard_floor_gate_outcome,
+                            ),
                         )
                         session.commit()
                         failed_chapters.append(chapter_num)
@@ -831,11 +965,23 @@ class ChapterExecutionStage:
                             reason=str(exc),
                             related_object_type="band_checkpoint",
                             related_object_id=checkpoint_row.id,
-                            payload={
-                                "status": "error",
-                                "error_class": exc.__class__.__name__,
-                                "error_summary": str(exc),
-                            },
+                            payload=attach_gate_outcome(
+                                {
+                                    "status": "error",
+                                    "error_class": exc.__class__.__name__,
+                                    "error_summary": str(exc),
+                                },
+                                _checkpoint_event_gate_outcome(
+                                    checkpoint_row,
+                                    chapter_number=chapter_num,
+                                    policy_version=int(
+                                        getattr(project, "runtime_policy_version", 0)
+                                        or 0
+                                    ),
+                                    decision="error",
+                                    blocked=True,
+                                ),
+                            ),
                         )
                     if checkpoint_row is not None and checkpoint_row.status in {
                         "fail",
@@ -909,7 +1055,19 @@ class ChapterExecutionStage:
                             summary="band checkpoint 命中阻断，运行已暂停。",
                             related_object_type="band_checkpoint",
                             related_object_id=checkpoint_row.id,
-                            payload={"status": checkpoint_row.status},
+                            payload=attach_gate_outcome(
+                                {"status": checkpoint_row.status},
+                                _checkpoint_event_gate_outcome(
+                                    checkpoint_row,
+                                    chapter_number=chapter_num,
+                                    policy_version=int(
+                                        getattr(project, "runtime_policy_version", 0)
+                                        or 0
+                                    ),
+                                    decision="pause",
+                                    blocked=False,
+                                ),
+                            ),
                         )
                     if manual_after_accept is not None:
                         self._record_decision_event(
@@ -923,6 +1081,19 @@ class ChapterExecutionStage:
                             summary="命中 chapter_accepted manual checkpoint，运行已暂停。",
                             related_object_type="band_checkpoint",
                             related_object_id=manual_after_accept.id,
+                            payload=attach_gate_outcome(
+                                {},
+                                _checkpoint_event_gate_outcome(
+                                    manual_after_accept,
+                                    chapter_number=chapter_num,
+                                    policy_version=int(
+                                        getattr(project, "runtime_policy_version", 0)
+                                        or 0
+                                    ),
+                                    decision="pause",
+                                    blocked=False,
+                                ),
+                            ),
                         )
                     if manual_band_end is not None:
                         self._record_decision_event(
@@ -936,6 +1107,19 @@ class ChapterExecutionStage:
                             summary="命中 band_end manual checkpoint，运行已暂停。",
                             related_object_type="band_checkpoint",
                             related_object_id=manual_band_end.id,
+                            payload=attach_gate_outcome(
+                                {},
+                                _checkpoint_event_gate_outcome(
+                                    manual_band_end,
+                                    chapter_number=chapter_num,
+                                    policy_version=int(
+                                        getattr(project, "runtime_policy_version", 0)
+                                        or 0
+                                    ),
+                                    decision="pause",
+                                    blocked=False,
+                                ),
+                            ),
                         )
                     if (
                         future_plan_audit_blocked

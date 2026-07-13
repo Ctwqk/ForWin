@@ -31,6 +31,7 @@ from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
 )
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.models.planning_control import BandCheckpoint
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.models.phase import BandExperiencePlan
@@ -58,6 +59,115 @@ def _positive_int(value: object) -> int:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _future_plan_gate_outcome(
+    result: FuturePlanAuditRun,
+    *,
+    plan_health,
+) -> GateOutcome:
+    issue_keys = list(
+        dict.fromkeys(
+            str(issue.issue_type)
+            for issue in result.issues
+            if str(issue.issue_type)
+        )
+    )
+    issue_groups = list(
+        dict.fromkeys(
+            str(issue.metadata.get("issue_group") or "")
+            or issue_group_for_issue(issue_type=str(issue.issue_type))
+            for issue in result.issues
+            if str(issue.issue_type)
+        )
+    )
+    if plan_health.blocking:
+        decision = "block"
+    elif plan_health.severity == "warn" or result.issues:
+        decision = "warn"
+    else:
+        decision = "pass"
+    return GateOutcome(
+        gate_id="future_plan_audit",
+        responsibility_domain="future_plan_integrity",
+        scope="project",
+        candidate_id=str(result.id or ""),
+        chapter_number=int(result.current_chapter or 0),
+        fired=bool(result.issues or result.blocking_reasons),
+        decision=decision,
+        blocked=bool(plan_health.blocking),
+        issue_keys=issue_keys,
+        issue_groups=[group for group in issue_groups if group],
+        evidence_refs=list(plan_health.evidence),
+    )
+
+
+def _generation_audit_gate_outcome(
+    *,
+    project_id: str,
+    chapter_number: int,
+    interval: int,
+    will_pause: bool,
+) -> GateOutcome:
+    return GateOutcome(
+        gate_id="generation_audit",
+        responsibility_domain="generation_operations",
+        scope="chapter",
+        candidate_id=f"{project_id}:{chapter_number}:interval:{interval}",
+        chapter_number=chapter_number,
+        fired=True,
+        decision="pause" if will_pause else "pass",
+        blocked=False,
+    )
+
+
+def _band_checkpoint_gate_outcome(
+    *,
+    project_id: str,
+    checkpoint_id: str,
+    band_id: str,
+    chapter_number: int,
+    status: str,
+    issues: list[BandCheckpointIssueInfo],
+    policy_version: int = 0,
+) -> GateOutcome:
+    normalized_status = str(status or "error")
+    decision = {
+        "pass": "pass",
+        "warn": "warn",
+        "pending": "warn",
+        "fail": "block",
+        "error": "error",
+        "overridden": "approve",
+    }.get(normalized_status, "error")
+    issue_keys = list(
+        dict.fromkeys(str(issue.code) for issue in issues if str(issue.code))
+    )
+    issue_groups = list(
+        dict.fromkeys(
+            str(issue.issue_group or "")
+            or issue_group_for_issue(code=str(issue.code or ""))
+            for issue in issues
+            if str(issue.code or "")
+        )
+    )
+    return GateOutcome(
+        gate_id="band_checkpoint",
+        responsibility_domain="band_integrity",
+        scope="band",
+        candidate_id=checkpoint_id,
+        chapter_number=chapter_number,
+        band_id=band_id,
+        policy_version=policy_version,
+        fired=normalized_status != "pass",
+        decision=decision,
+        blocked=normalized_status in {"fail", "error"},
+        issue_keys=issue_keys,
+        issue_groups=[group for group in issue_groups if group],
+        evidence_refs=list(
+            dict.fromkeys(str(issue.detail) for issue in issues if str(issue.detail))
+        ),
+    )
 
 
 class AuditControlStage:
@@ -279,6 +389,7 @@ class AuditControlStage:
     ) -> None:
         if not result.inspected_chapters:
             return
+        plan_health = PlanHealthService.from_future_audit(result)
         event = self._record_decision_event(
             updater=updater,
             project_id=project_id,
@@ -289,12 +400,13 @@ class AuditControlStage:
             summary=f"future plan audit: {result.status}",
             related_object_type="future_plan_audit_run",
             related_object_id=result.id,
-            payload={
-                **result.model_dump(mode="json", exclude={"plan_patches"}),
-                "plan_health": PlanHealthService.from_future_audit(result).model_dump(
-                    mode="json"
-                ),
-            },
+            payload=attach_gate_outcome(
+                {
+                    **result.model_dump(mode="json", exclude={"plan_patches"}),
+                    "plan_health": plan_health.model_dump(mode="json"),
+                },
+                _future_plan_gate_outcome(result, plan_health=plan_health),
+            ),
         )
         if result.applied_plan_patch_ids:
             self._record_decision_event(
@@ -367,7 +479,15 @@ class AuditControlStage:
             summary=summary,
             related_object_type="generation_audit_checkpoint",
             related_object_id=f"{project_id}:{chapter_number}",
-            payload=payload,
+            payload=attach_gate_outcome(
+                payload,
+                _generation_audit_gate_outcome(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    interval=interval,
+                    will_pause=will_pause,
+                ),
+            ),
         )
         return will_pause
 
@@ -937,11 +1057,21 @@ class AuditControlStage:
             summary=summary,
             related_object_type="band_checkpoint",
             related_object_id=row.id,
-            payload={
-                "status": status,
-                "chapter_review_form_result": {},
-                "band_checkpoint_mode": "chapter_review_form",
-            },
+            payload=attach_gate_outcome(
+                {
+                    "status": status,
+                    "chapter_review_form_result": {},
+                    "band_checkpoint_mode": "chapter_review_form",
+                },
+                _band_checkpoint_gate_outcome(
+                    project_id=project_id,
+                    checkpoint_id=str(row.id or ""),
+                    band_id=str(band_row.band_id or ""),
+                    chapter_number=chapter_number,
+                    status=status,
+                    issues=issues,
+                ),
+            ),
         )
         return row
 

@@ -32,6 +32,7 @@ from forwin.api_schema import (
     TropeTemplateValidationResponse,
 )
 from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.planning.contracts import (
     load_plan_task_contract,
     plan_task_contract_to_json,
@@ -57,6 +58,66 @@ from forwin.protocol.trope_library import (
 )
 from forwin.state.repo import StateRepository
 from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
+
+
+def _checkpoint_action_gate_outcome(
+    checkpoint,
+    *,
+    policy_version: int,
+    evaluated: bool,
+    fired: bool,
+    decision: str,
+    blocked: bool = False,
+    overridden_by: str = "",
+) -> GateOutcome:
+    is_manual = str(getattr(checkpoint, "trigger_source", "") or "") == "manual_boundary"
+    scope = (
+        "band"
+        if str(getattr(checkpoint, "boundary_kind", "") or "") == "band_end"
+        else "chapter"
+    )
+    try:
+        issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        issues = []
+    if not isinstance(issues, list):
+        issues = []
+    issue_rows = [item for item in issues if isinstance(item, dict)]
+    return GateOutcome(
+        gate_id="manual_checkpoint" if is_manual else "band_checkpoint",
+        responsibility_domain="operator_control" if is_manual else "band_integrity",
+        scope=scope,
+        candidate_id=str(getattr(checkpoint, "id", "") or ""),
+        chapter_number=int(getattr(checkpoint, "boundary_chapter", 0) or 0),
+        band_id=str(getattr(checkpoint, "band_id", "") or ""),
+        policy_version=policy_version,
+        evaluated=evaluated,
+        fired=fired,
+        decision=decision,
+        blocked=blocked,
+        overridden_by=overridden_by,
+        issue_keys=list(
+            dict.fromkeys(
+                str(item.get("code") or "")
+                for item in issue_rows
+                if str(item.get("code") or "")
+            )
+        ),
+        issue_groups=list(
+            dict.fromkeys(
+                str(item.get("issue_group") or "")
+                for item in issue_rows
+                if str(item.get("issue_group") or "")
+            )
+        ),
+        evidence_refs=list(
+            dict.fromkeys(
+                str(item.get("detail") or "")
+                for item in issue_rows
+                if str(item.get("detail") or "")
+            )
+        ),
+    )
 
 
 def create_manual_checkpoint(
@@ -152,6 +213,16 @@ def create_manual_checkpoint(
             scope="band",
             summary="已插入人工 checkpoint。",
             reason=reason,
+            payload=attach_gate_outcome(
+                {},
+                _checkpoint_action_gate_outcome(
+                    row,
+                    policy_version=int(project.runtime_policy_version or 0),
+                    evaluated=False,
+                    fired=False,
+                    decision="pause",
+                ),
+            ),
             related_object_type="band_checkpoint",
             related_object_id=row.id,
         )
@@ -220,6 +291,7 @@ def approve_band_checkpoint(
             row.resolved_at = datetime.now(timezone.utc)
         session.add(row)
         session.flush()
+        project = session.get(Project, project_id)
         log_decision_event(
             session,
             project_id=project_id,
@@ -233,6 +305,19 @@ def approve_band_checkpoint(
             scope="band",
             summary="band checkpoint 已人工放行。",
             reason=reason,
+            payload=attach_gate_outcome(
+                {},
+                _checkpoint_action_gate_outcome(
+                    row,
+                    policy_version=int(
+                        getattr(project, "runtime_policy_version", 0) or 0
+                    ),
+                    evaluated=True,
+                    fired=True,
+                    decision="approve",
+                    overridden_by="manual" if next_status == "overridden" else "",
+                ),
+            ),
             related_object_type="band_checkpoint",
             related_object_id=row.id,
             parent_event_id=str(parent.id if parent is not None else ""),

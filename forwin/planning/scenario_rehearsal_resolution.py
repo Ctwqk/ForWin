@@ -14,6 +14,7 @@ from forwin.audit.events import (
     DecisionEventType,
     ensure_decision_event_type,
 )
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.base import new_id
 from forwin.models.audit import DecisionEvent
@@ -57,6 +58,73 @@ AUTO_PATCH_TYPES = {
     "add_subworld_anchor",
     "align_subworld_culture_profile",
 }
+
+
+def _scenario_gate_outcome(
+    report: ScenarioRehearsalReport,
+    *,
+    candidate_id: str,
+) -> GateOutcome:
+    recommendation = str(
+        report.recommendation.value
+        if hasattr(report.recommendation, "value")
+        else report.recommendation
+    )
+    resolution_status = str(report.resolution_status or "")
+    blocked = (
+        resolution_status in TERMINAL_BLOCKING_RESOLUTION_STATUSES
+        or recommendation == "block"
+    )
+    fired = bool(
+        recommendation != "pass"
+        or report.patch_attempt_count
+        or report.applied_patches
+        or resolution_status in {"patched_passed", "replanned_passed"}
+    )
+    if resolution_status in {"manual_patch_required", "replan_required"}:
+        decision = "pause"
+    elif blocked:
+        decision = "block"
+    elif fired:
+        decision = "warn"
+    else:
+        decision = "pass"
+    issue_keys = list(
+        dict.fromkeys(
+            str(finding.risk_type)
+            for finding in report.risk_findings
+            if str(finding.risk_type)
+        )
+    )
+    issue_groups = list(
+        dict.fromkeys(
+            issue_group_for_issue(issue_type=issue_key)
+            for issue_key in issue_keys
+            if issue_group_for_issue(issue_type=issue_key)
+        )
+    )
+    evidence_refs = list(
+        dict.fromkeys(
+            str(ref)
+            for finding in report.risk_findings
+            for ref in finding.evidence_refs
+            if str(ref)
+        )
+    )
+    return GateOutcome(
+        gate_id="scenario_rehearsal",
+        responsibility_domain="plan_feasibility",
+        scope=report.rehearsal_scope,
+        candidate_id=candidate_id,
+        chapter_number=min(report.chapter_numbers or [0]),
+        band_id=str(report.band_id or ""),
+        fired=fired,
+        decision=decision,
+        blocked=blocked,
+        issue_keys=issue_keys,
+        issue_groups=issue_groups,
+        evidence_refs=evidence_refs,
+    )
 
 
 @dataclass(slots=True)
@@ -366,6 +434,14 @@ class ScenarioRehearsalCoordinator:
             "trigger_reasons": list(report.trigger_reasons),
             **(payload or {}),
         }
+        if event_type == DecisionEventType.SCENARIO_REHEARSAL_EVALUATED:
+            event_payload = attach_gate_outcome(
+                event_payload,
+                _scenario_gate_outcome(
+                    report,
+                    candidate_id=related_object_id,
+                ),
+            )
         row = DecisionEvent(
             id=new_id(),
             project_id=report.project_id,

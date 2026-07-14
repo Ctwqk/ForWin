@@ -72,3 +72,15 @@ def test_publisher_browser_launcher_gates_session_restore() -> None:
 
     assert 'RESTORE_BACKEND_SESSIONS="${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"' in launcher
     assert 'is_truthy "$RESTORE_BACKEND_SESSIONS"' in launcher
+
+
+def test_mcp_timeout_default_covers_long_genesis_operations() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["forwin-mcp"]["environment"]
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+
+    assert (
+        "FORWIN_MCP_API_TIMEOUT_SECONDS=${FORWIN_MCP_API_TIMEOUT_SECONDS:-900}"
+        in environment
+    )
+    assert "FORWIN_MCP_API_TIMEOUT_SECONDS=900" in env_example.splitlines()

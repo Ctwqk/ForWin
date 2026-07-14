@@ -39,7 +39,7 @@ class ForWinAPIClient:
         self,
         *,
         base_url: str,
-        timeout: float = 300.0,
+        timeout: float = 900.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = str(base_url).rstrip("/")

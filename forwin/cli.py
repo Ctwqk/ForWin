@@ -262,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-timeout",
         type=float,
-        default=300.0,
+        default=900.0,
         help="HTTP timeout 秒数",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="启用详细日志")

@@ -458,11 +458,11 @@ def _env_port() -> int:
 
 
 def _env_api_timeout_seconds() -> float:
-    raw = os.environ.get("FORWIN_MCP_API_TIMEOUT_SECONDS", "300")
+    raw = os.environ.get("FORWIN_MCP_API_TIMEOUT_SECONDS", "900")
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return 300.0
+        return 900.0
     return max(30.0, value)
 
 

@@ -13,13 +13,18 @@ from fastmcp.exceptions import ToolError
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
+from forwin.cli import build_parser
 from forwin.config import InfrastructureConfig
 from forwin.planning.checkpoints import (
     BandCheckpointDetail,
     BandCheckpointIssueInfo,
 )
 from forwin.mcp.client import ForWinAPIClient
-from forwin.mcp.http import build_asgi_app, build_mcp_server
+from forwin.mcp.http import (
+    _env_api_timeout_seconds,
+    build_asgi_app,
+    build_mcp_server,
+)
 from forwin.mcp.models import (
     BandCheckpointView,
     ChapterDetailView,
@@ -90,7 +95,16 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
     def test_default_timeout_covers_long_genesis_operations(self) -> None:
         client = ForWinAPIClient(base_url="http://forwin.invalid")
 
-        self.assertGreaterEqual(client.timeout, 300.0)
+        self.assertEqual(client.timeout, 900.0)
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_mcp_server_default_timeout_covers_long_genesis_operations(self) -> None:
+        self.assertEqual(_env_api_timeout_seconds(), 900.0)
+
+    def test_cli_default_timeout_covers_long_genesis_operations(self) -> None:
+        args = build_parser().parse_args([])
+
+        self.assertEqual(args.api_timeout, 900.0)
 
     def test_project_view_preserves_total_and_materialized_chapter_counts(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field
 
 
@@ -29,7 +31,16 @@ class PulpBeatProfile(BaseModel):
 
 PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
     "urban": PulpBeatProfile(
-        pressure_words=("嘲笑", "看不起", "羞辱", "威胁", "逼迫", "驱赶", "扣钱", "没资格"),
+        pressure_words=(
+            "嘲笑",
+            "看不起",
+            "羞辱",
+            "威胁",
+            "逼迫",
+            "驱赶",
+            "扣钱",
+            "没资格",
+        ),
         action_words=("当场", "出手", "拿出", "开口", "反击", "证明", "亮出"),
         payoff_words=("到账", "赔偿", "合同", "资格", "名额", "升职", "奖励"),
         audience_words=("众人", "全场", "同事", "邻居", "直播间", "村里", "当众"),
@@ -167,6 +178,377 @@ MYSTERY_PAYOFF_EVIDENCE_WORDS = (
     "时间戳",
     "名单",
 )
+_REWARD_SENTENCE_RE = re.compile(r"[。！？!?；;\n]+")
+_REWARD_SUBCLAUSE_RE = re.compile(r"[，,]+")
+_MARKER_CONTEXT_BEFORE = 18
+_MARKER_CONTEXT_AFTER = 12
+_MARKER_NEGATION_PREFIXES = (
+    "没有",
+    "没能",
+    "不具备",
+    "不符合",
+    "不满足",
+    "尚无",
+    "并无",
+    "未能",
+    "不能",
+    "无法",
+    "不可",
+    "不曾",
+    "未曾",
+    "并未",
+    "并非",
+    "不予",
+    "未予",
+    "不再",
+    "未再",
+    "不得",
+    "不准",
+    "不许",
+    "缺乏",
+    "没",
+    "无",
+    "不",
+    "未",
+)
+_MARKER_NEGATION_RE = re.compile(
+    r"(?:不|未|没|无|尚无|并无|尚未|仍未|从未|并未|并非)"
+    r"(?:被(?:认定|视为|判定|确认|证明))?"
+    r"(?:获|得|有|能|予|具备|符合|满足|拥有|获得|取得|得到|拿到|达到|达成)?$"
+)
+_MARKER_POST_NEGATION_RE = re.compile(
+    r"^(?:状态|身份|结果)?"
+    r"(?:尚未|仍未|并未|并非|不予|未予|未|不|没|无)"
+    r"(?:被|获|获得|得到|取得|拿到)?"
+    r"(?:认定|视为|判定|确认|证明|认可|批准|通过)"
+)
+_POST_MARKER_STATE_LABELS = ("状态", "身份", "结果")
+_MARKER_FAILURE_SUFFIXES = (
+    "没有成功",
+    "没成功",
+    "未成功",
+    "失败",
+    "未果",
+    "无果",
+    "落空",
+    "作废",
+    "失效",
+    "无效",
+    "泡汤",
+    "被拒",
+    "遭拒",
+)
+_DELIVERED_GAIN_ACTIONS = (
+    "开放",
+    "解锁",
+    "授予",
+    "发放",
+    "获得",
+    "取得",
+    "拥有",
+    "有权限",
+    "获准",
+    "批准",
+    "晋升",
+    "升级",
+    "提升",
+    "到手",
+    "生效",
+    "可以执行",
+)
+_POWER_GAIN_TARGETS = (
+    "权限",
+    "功能",
+    "资格",
+    "职位",
+    "封存操作",
+    "复核操作",
+    "查验操作",
+    "处置权",
+)
+_SOCIAL_GAIN_ACTIONS = (
+    "更新",
+    "变更",
+    "改为",
+    "转为",
+    "改口",
+    "承认",
+    "背书",
+    "晋升",
+    "提升",
+)
+_SOCIAL_GAIN_TARGETS = (
+    "身份标签",
+    "角色标签",
+    "职位",
+    "称呼",
+    "评价",
+    "地位",
+    "权力排序",
+)
+_SOCIAL_POSITIVE_RESULTS = (
+    "正式",
+    "晋升",
+    "升任",
+    "提升",
+    "认可",
+    "清白",
+    "合格",
+    "优先",
+    "核心",
+    "负责人",
+    "管理者",
+    "承运者",
+    "合作方",
+    "成员",
+    "代表",
+)
+_SOCIAL_NEGATIVE_RESULTS = (
+    "失信",
+    "待审查",
+    "待复核",
+    "嫌疑",
+    "违规",
+    "处罚",
+    "黑名单",
+    "降级",
+    "撤职",
+    "剥夺",
+)
+_SOCIAL_NEGATED_RESULT_PREFIXES = (
+    "不",
+    "未",
+    "无",
+    "非",
+    "不是",
+    "并非",
+    "不再",
+    "不被",
+    "未被",
+    "不予",
+    "未予",
+)
+_SOCIAL_NEGATED_POSITIVE_RESULTS = tuple(
+    f"{prefix}{result}"
+    for prefix in _SOCIAL_NEGATED_RESULT_PREFIXES
+    for result in _SOCIAL_POSITIVE_RESULTS
+)
+_SOCIAL_BLOCKING_RESULTS = (
+    *_SOCIAL_NEGATIVE_RESULTS,
+    *_SOCIAL_NEGATED_POSITIVE_RESULTS,
+)
+_DENIED_OUTCOME_ACTIONS = (
+    "驳回",
+    "否决",
+    "拒批",
+    "退回",
+    "不通过",
+    "未通过",
+)
+_LOSS_DIRECTION_ACTIONS = (
+    "撤销",
+    "取消",
+    "剥夺",
+    "失去",
+    "收回",
+    "没收",
+    "降低",
+    "降级",
+    "撤职",
+    "丧失",
+    "吊销",
+    "废除",
+    "废止",
+    "作废",
+    "失效",
+    *_DENIED_OUTCOME_ACTIONS,
+)
+_DIRECTION_RESET_MARKERS = (
+    "随后",
+    "然后",
+    "继而",
+    "转而",
+    "重新",
+    "现已",
+    "现在",
+    "最终",
+    "反而",
+    "并",
+    "又",
+    "却",
+    "但",
+    "后",
+)
+_NEGATION_RESET_MARKERS = (
+    "但",
+    "却",
+    "随后",
+    "然后",
+    "继而",
+    "转而",
+    "反而",
+    "后",
+)
+_DIRECTION_BLOCKED_PREFIXES = (
+    "续",
+    "非",
+    "不",
+    "未",
+    "没有",
+    "可能",
+    "计划",
+    "准备",
+    "等待",
+    "申请",
+    "待",
+    "拒绝",
+    "禁止",
+)
+_RELIEF_ACTIONS = ("撤销", "解除", "取消", "洗脱", "移除")
+_NEGATED_DELIVERY_PREFIXES = (
+    "不",
+    "未",
+    "尚未",
+    "仍未",
+    "从未",
+    "没有",
+    "并未",
+    "并非",
+    "不予",
+    "未予",
+    "不再",
+    "未曾",
+    "不得",
+    "不可",
+    "不准",
+    "不许",
+    "不允许",
+    "未允许",
+    "没有允许",
+    "未获批准",
+    "未获准",
+    "未经批准",
+    "未经允许",
+    "未得到批准",
+    "未取得批准",
+    "不同意",
+    "未同意",
+    "没有同意",
+    "不会",
+    "不能",
+    "无法",
+)
+_ALL_DELIVERY_ACTIONS = tuple(
+    dict.fromkeys((*_DELIVERED_GAIN_ACTIONS, *_SOCIAL_GAIN_ACTIONS, *_RELIEF_ACTIONS))
+)
+_NEGATED_DELIVERY_ACTION_MARKERS = tuple(
+    f"{prefix}{passive}{action}"
+    for prefix in _NEGATED_DELIVERY_PREFIXES
+    for passive in ("", "被")
+    for action in _ALL_DELIVERY_ACTIONS
+)
+_SHORT_NEGATED_DELIVERY_PREFIXES = ("不", "未", "没", "无")
+_BOUNDED_NEGATED_DELIVERY_PREFIXES = tuple(
+    sorted(
+        {
+            *_NEGATED_DELIVERY_PREFIXES,
+            *(f"{prefix}被" for prefix in _NEGATED_DELIVERY_PREFIXES),
+            *_SHORT_NEGATED_DELIVERY_PREFIXES,
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_NEGATED_DELIVERY_BETWEEN_LEADS = (
+    "向",
+    "为",
+    "给",
+    "对",
+    "由",
+    "替",
+    "被",
+    "获准",
+    "获批",
+    "获得",
+    "得到",
+    "取得",
+    "拿到",
+)
+_POWER_RELIEF_TARGETS = ("限制", "封禁", "禁令", "处罚")
+_SOCIAL_RELIEF_TARGETS = (
+    "责任标记",
+    "处罚",
+    "追责",
+    "指控",
+    "嫌疑",
+)
+_NON_DELIVERY_MARKERS = (
+    "未开放",
+    "未解锁",
+    "未授予",
+    "未发放",
+    "未获得",
+    "未取得",
+    "未拥有",
+    "未获准",
+    "未批准",
+    "未晋升",
+    "未升级",
+    "未提升",
+    "未生效",
+    "没有权限",
+    "没有资格",
+    "没有获得",
+    "没有取得",
+    "没有开放",
+    "没有解锁",
+    "没有获准",
+    "没有批准",
+    "不曾获得",
+    "不曾取得",
+    "不曾开放",
+    "尚未",
+    "仍未",
+    "从未",
+    "未能",
+    "并非",
+    "不是",
+    "并没有",
+    "未撤销",
+    "未解除",
+    "未取消",
+    "未洗脱",
+    "未移除",
+    "申请撤销",
+    "申请解除",
+    "申请取消",
+    "申请洗脱",
+    "申请移除",
+    "不可执行",
+    "不能执行",
+    "无法执行",
+    "无权",
+    "拒绝",
+    "禁止",
+    "询问",
+    "是否",
+    "能否",
+    "如果",
+    "若是",
+    "可能",
+    "计划",
+    "准备",
+    "等待",
+    "申请已提交",
+    "提交申请",
+    "申请中",
+    "待审批",
+    "待批准",
+    "即将",
+    "将会",
+    "尚待",
+    "待定",
+)
 SETUP_WORDS = ("想起", "回忆", "前情", "沉默", "走在路上", "夜色")
 CORE_FIELDS = (
     "pressure_present",
@@ -181,6 +563,69 @@ CORE_FIELDS = (
 
 def _has_any(body: str, words: tuple[str, ...]) -> bool:
     return any(word in body for word in words)
+
+
+def _non_delivery_present(body: str) -> bool:
+    return (
+        _has_any(body, _NON_DELIVERY_MARKERS)
+        or _has_any(body, _NEGATED_DELIVERY_ACTION_MARKERS)
+        or _bounded_negated_delivery_action_present(body)
+    )
+
+
+def _bounded_negated_delivery_action_present(body: str) -> bool:
+    text = str(body or "")
+    for action in _ALL_DELIVERY_ACTIONS:
+        action_at = text.find(action)
+        while action_at >= 0:
+            before = text[max(0, action_at - 18) : action_at]
+            for prefix in _BOUNDED_NEGATED_DELIVERY_PREFIXES:
+                prefix_at = before.rfind(prefix)
+                if prefix_at < 0:
+                    continue
+                between = before[prefix_at + len(prefix) :]
+                if len(between) > 8:
+                    continue
+                approval_carrier = action == "批准" and between in {
+                    "获",
+                    "获得",
+                    "得到",
+                    "取得",
+                    "拿到",
+                }
+                if (
+                    prefix in _SHORT_NEGATED_DELIVERY_PREFIXES
+                    and between
+                    and not between.startswith(_NEGATED_DELIVERY_BETWEEN_LEADS)
+                    and not approval_carrier
+                ):
+                    continue
+                if _valid_direction_reset_suffix_present(
+                    between,
+                    reset_markers=_NEGATION_RESET_MARKERS,
+                ):
+                    continue
+                return True
+            action_at = text.find(action, action_at + len(action))
+    return False
+
+
+def _valid_direction_reset_suffix_present(
+    text: str,
+    *,
+    reset_markers: tuple[str, ...] = _DIRECTION_RESET_MARKERS,
+) -> bool:
+    for reset_marker in reset_markers:
+        reset_at = text.find(reset_marker)
+        while reset_at >= 0:
+            suffix = text[reset_at + len(reset_marker) :]
+            if len(suffix) <= 8 and not _has_any(
+                suffix,
+                _DIRECTION_BLOCKED_PREFIXES,
+            ):
+                return True
+            reset_at = text.find(reset_marker, reset_at + len(reset_marker))
+    return False
 
 
 def _boring_setup_ratio(body: str) -> float:
@@ -204,7 +649,7 @@ def verify_pulp_beats(
         pressure_present=_has_any(text, profile.pressure_words),
         protagonist_action_present=_has_any(text, profile.action_words),
         visible_payoff_present=(
-            _has_any(text, profile.payoff_words)
+            _profile_payoff_present(text, profile.payoff_words, reward_tags)
             or _planned_reward_payoff_present(text, reward_tags)
         ),
         audience_reaction_present=_has_any(text, profile.audience_words),
@@ -217,17 +662,248 @@ def verify_pulp_beats(
     return result.model_copy(update={"missing_fields": missing})
 
 
+def _profile_payoff_present(
+    body: str,
+    markers: tuple[str, ...],
+    reward_tags: tuple[str, ...],
+) -> bool:
+    guarded_tags = tuple(
+        str(tag) for tag in reward_tags if str(tag) in {"power", "social"}
+    )
+    if guarded_tags:
+        return any(
+            _delivered_reward_marker_present(body, markers, reward_tag=tag)
+            for tag in guarded_tags
+        )
+    return _has_any(body, markers)
+
+
 def _planned_reward_payoff_present(body: str, reward_tags: tuple[str, ...]) -> bool:
     for tag in reward_tags:
         normalized = str(tag)
-        if _has_any(body, REWARD_PAYOFF_MARKERS.get(normalized, ())):
+        if normalized in {"power", "social"}:
+            if _delivered_reward_transition_present(body, reward_tag=normalized):
+                return True
+        markers = REWARD_PAYOFF_MARKERS.get(normalized, ())
+        marker_present = (
+            _delivered_reward_marker_present(
+                body,
+                markers,
+                reward_tag=normalized,
+            )
+            if normalized in {"power", "social"}
+            else _has_any(body, markers)
+        )
+        if marker_present:
             return True
         if normalized == "mystery":
-            evidence_count = sum(
-                word in body for word in MYSTERY_PAYOFF_EVIDENCE_WORDS
-            )
+            evidence_count = sum(word in body for word in MYSTERY_PAYOFF_EVIDENCE_WORDS)
             if evidence_count >= 2:
                 return True
+    return False
+
+
+def _delivered_reward_transition_present(body: str, *, reward_tag: str) -> bool:
+    gain_targets = (
+        _POWER_GAIN_TARGETS if reward_tag == "power" else _SOCIAL_GAIN_TARGETS
+    )
+    relief_targets = (
+        _POWER_RELIEF_TARGETS if reward_tag == "power" else _SOCIAL_RELIEF_TARGETS
+    )
+    for span in _reward_transition_spans(
+        body,
+        include_adjacent=reward_tag == "social",
+    ):
+        if _non_delivery_present(span):
+            continue
+        if reward_tag == "power":
+            delivered_gain = _delivered_transition_after_loss_present(
+                span,
+                _DELIVERED_GAIN_ACTIONS,
+                gain_targets,
+            ) and not _last_reward_marker_failed(
+                span,
+                (*_DELIVERED_GAIN_ACTIONS, *gain_targets),
+            )
+        else:
+            delivered_gain = (
+                _delivered_transition_after_loss_present(
+                    span,
+                    _SOCIAL_GAIN_ACTIONS,
+                    gain_targets,
+                )
+                and _has_any(span, _SOCIAL_POSITIVE_RESULTS)
+                and not _has_any(span, _SOCIAL_BLOCKING_RESULTS)
+                and not _last_reward_marker_failed(
+                    span,
+                    (
+                        *_SOCIAL_GAIN_ACTIONS,
+                        *gain_targets,
+                        *_SOCIAL_POSITIVE_RESULTS,
+                    ),
+                )
+            )
+        delivered_relief = _delivered_transition_after_loss_present(
+            span,
+            _RELIEF_ACTIONS,
+            relief_targets,
+            blocking_loss_actions=_DENIED_OUTCOME_ACTIONS,
+        ) and not _last_reward_marker_failed(
+            span,
+            (*_RELIEF_ACTIONS, *relief_targets),
+        )
+        if delivered_gain or delivered_relief:
+            return True
+    return False
+
+
+def _delivered_transition_after_loss_present(
+    span: str,
+    gain_actions: tuple[str, ...],
+    gain_targets: tuple[str, ...],
+    *,
+    blocking_loss_actions: tuple[str, ...] = _LOSS_DIRECTION_ACTIONS,
+) -> bool:
+    if not (_has_any(span, gain_actions) and _has_any(span, gain_targets)):
+        return False
+    loss_ends = [
+        index + len(action)
+        for action in blocking_loss_actions
+        if (index := span.rfind(action)) >= 0
+    ]
+    if not loss_ends:
+        return True
+    tail = span[max(loss_ends) :]
+    for reset_marker in _DIRECTION_RESET_MARKERS:
+        reset_at = tail.find(reset_marker)
+        while reset_at >= 0:
+            reset_tail = tail[reset_at + len(reset_marker) :]
+            action_matches = [
+                (index, action)
+                for action in gain_actions
+                if (index := reset_tail.find(action)) >= 0
+            ]
+            if action_matches:
+                action_at, action = min(action_matches)
+                prefix = reset_tail[:action_at]
+                blocked_prefix = _has_any(prefix, _DIRECTION_BLOCKED_PREFIXES)
+                if action_at <= 8 and not blocked_prefix:
+                    after_action = reset_tail[action_at + len(action) :]
+                    if _has_any(after_action, gain_targets):
+                        return True
+            reset_at = tail.find(reset_marker, reset_at + len(reset_marker))
+    return False
+
+
+def _reward_transition_spans(
+    body: str,
+    *,
+    include_adjacent: bool = False,
+) -> list[str]:
+    spans: list[str] = []
+    for sentence in _REWARD_SENTENCE_RE.split(str(body or "")):
+        clauses = [
+            clause.strip()
+            for clause in _REWARD_SUBCLAUSE_RE.split(sentence)
+            if clause.strip()
+        ]
+        spans.extend(clauses)
+        if include_adjacent:
+            spans.extend(
+                f"{left}，{right}" for left, right in zip(clauses, clauses[1:])
+            )
+    return spans
+
+
+def _marker_has_negative_direction(clause: str, start: int, end: int) -> bool:
+    before = clause[max(0, start - _MARKER_CONTEXT_BEFORE) : start]
+    after = clause[end : end + _MARKER_CONTEXT_AFTER]
+    direct_negation = any(
+        before.rstrip().endswith(prefix) for prefix in _MARKER_NEGATION_PREFIXES
+    ) or bool(_MARKER_NEGATION_RE.search(before.rstrip()))
+    post_negation = bool(
+        _MARKER_POST_NEGATION_RE.search(_normalize_post_marker_context(after))
+    )
+    direct_failure = _failure_suffix_present(after)
+    unresolved_loss_before = _has_any(
+        before,
+        _LOSS_DIRECTION_ACTIONS,
+    ) and not _direction_reset_before_outcome_present(before)
+    return (
+        direct_negation
+        or post_negation
+        or direct_failure
+        or unresolved_loss_before
+        or _has_any(after, _LOSS_DIRECTION_ACTIONS)
+    )
+
+
+def _direction_reset_before_outcome_present(before: str) -> bool:
+    loss_ends = [
+        index + len(action)
+        for action in _LOSS_DIRECTION_ACTIONS
+        if (index := before.rfind(action)) >= 0
+    ]
+    if not loss_ends:
+        return False
+    tail = before[max(loss_ends) :]
+    return _valid_direction_reset_suffix_present(tail)
+
+
+def _failure_suffix_present(after: str) -> bool:
+    normalized = _normalize_post_marker_context(after)
+    return any(normalized.startswith(suffix) for suffix in _MARKER_FAILURE_SUFFIXES)
+
+
+def _normalize_post_marker_context(after: str) -> str:
+    normalized = after.lstrip("的了仍然最终却但 ")
+    for label in _POST_MARKER_STATE_LABELS:
+        if normalized.startswith(label):
+            return normalized[len(label) :].lstrip("的了仍然最终却但 ")
+    return normalized
+
+
+def _last_reward_marker_failed(span: str, markers: tuple[str, ...]) -> bool:
+    latest_end = max(
+        (
+            index + len(marker)
+            for marker in markers
+            if (index := span.rfind(marker)) >= 0
+        ),
+        default=-1,
+    )
+    if latest_end < 0:
+        return False
+    return _failure_suffix_present(
+        span[latest_end : latest_end + _MARKER_CONTEXT_AFTER]
+    )
+
+
+def _delivered_reward_marker_present(
+    body: str,
+    markers: tuple[str, ...],
+    *,
+    reward_tag: str,
+) -> bool:
+    for clause in _reward_transition_spans(body):
+        for marker in markers:
+            start = clause.find(marker)
+            while marker and start >= 0:
+                end = start + len(marker)
+                context = clause[
+                    max(0, start - _MARKER_CONTEXT_BEFORE) : end + _MARKER_CONTEXT_AFTER
+                ]
+                blocked_social_result = reward_tag == "social" and _has_any(
+                    context,
+                    _SOCIAL_BLOCKING_RESULTS,
+                )
+                if (
+                    not _non_delivery_present(context)
+                    and not blocked_social_result
+                    and not _marker_has_negative_direction(clause, start, end)
+                ):
+                    return True
+                start = clause.find(marker, start + len(marker))
     return False
 
 

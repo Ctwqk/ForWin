@@ -16,6 +16,11 @@ from .pulp_beat import pulp_track_for_genre, verify_pulp_beats
 _GARBAGE_BLOCK_RE = re.compile(
     r"[^\u4e00-\u9fff，。！？；：、“”‘’（）《》…—\sA-Za-z0-9_-]{12,}"
 )
+_MASKED_IDENTIFIER_RE = re.compile(
+    r"(?P<label>身份证号码|身份证号|身份证|证件号码|证件号|手机号码|手机号|"
+    r"电话号码|银行卡号码|银行卡号|账号|工号|编号)"
+    r"(?P<separator>\s*[:：]?\s*)(?P<mask>\*{4,20})(?=\d{2,6}(?:\D|$))"
+)
 
 
 class HardFloorResult(BaseModel):
@@ -118,7 +123,13 @@ def _no_garbage(body: str) -> bool:
     lowered = _artifact_scan_text(body)
     if any(marker.lower() in lowered for marker in MODEL_ARTIFACT_MARKERS):
         return False
-    return _GARBAGE_BLOCK_RE.search(body) is None
+    scan_body = _MASKED_IDENTIFIER_RE.sub(_replace_masked_identifier, body)
+    return _GARBAGE_BLOCK_RE.search(scan_body) is None
+
+
+def _replace_masked_identifier(match: re.Match[str]) -> str:
+    mask = match.group("mask")
+    return f"{match.group('label')}{match.group('separator')}{'0' * len(mask)}"
 
 
 def _artifact_scan_text(body: str) -> str:

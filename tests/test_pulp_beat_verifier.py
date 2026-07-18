@@ -50,6 +50,26 @@ def test_verify_pulp_beats_uses_planned_mystery_reward_contract() -> None:
     assert "visible_payoff_present" not in result.missing_fields
 
 
+def test_verify_pulp_beats_uses_delivered_power_permission_change() -> None:
+    result = verify_pulp_beats(
+        "系统结算完成，权限变更：开放【异常收件人复核】功能。",
+        track="urban",
+        reward_tags=("power", "social"),
+    )
+
+    assert result.visible_payoff_present is True
+
+
+def test_planned_power_does_not_count_an_undelivered_permission() -> None:
+    result = verify_pulp_beats(
+        "他反复询问权限是否会变更，但系统确认功能仍未开放。",
+        track="urban",
+        reward_tags=("power",),
+    )
+
+    assert result.visible_payoff_present is False
+
+
 def test_planned_mystery_reward_still_requires_concrete_evidence() -> None:
     result = verify_pulp_beats(
         "他翻看了一遍记录，觉得事情不太对，却暂时没有找到任何突破口。",

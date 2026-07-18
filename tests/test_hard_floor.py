@@ -85,6 +85,22 @@ def test_model_artifact_fails() -> None:
     assert "no_garbage" in result.fail_reasons
 
 
+def test_masked_identifier_is_not_treated_as_garbage() -> None:
+    result = _run(
+        "系统显示姓名张伟，身份证号************0012。角色A核验记录后继续行动。"
+    )
+
+    assert result.passed is True
+    assert result.checks["no_garbage"] is True
+
+
+def test_unsupported_symbol_run_still_fails_as_garbage() -> None:
+    result = _run("角色A核验记录后看到@#$%^&*+=<>|/，随后继续行动。")
+
+    assert result.passed is False
+    assert "no_garbage" in result.fail_reasons
+
+
 def test_must_not_reveal_and_missing_event_fail() -> None:
     body = "角色A终于发现父亲被围的真相，众人沉默片刻后继续行动。"
     result = run_hard_floor(
@@ -165,5 +181,30 @@ def test_pulp_hard_floor_uses_planned_mystery_reward_contract() -> None:
 
     assert result.metadata["pulp_beat_track"] == "urban"
     assert result.metadata["planned_reward_tags"] == ["mystery"]
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+    assert "pulp_visible_payoff" not in result.warning_reasons
+
+
+def test_pulp_hard_floor_uses_explicit_planned_power_delivery() -> None:
+    body = (
+        "系统结算完成，权限变更：开放【异常收件人复核】功能。"
+        "沈川立刻调出完整面单，门外忽然响起新的催单声？"
+    )
+
+    result = run_hard_floor(
+        writer_output=_writer(body),
+        context_pack=_context(
+            genre="都市爽文",
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["power", "social"]
+            ),
+        ),
+        repo=None,
+        project_id="project-1",
+        chapter_number=3,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["planned_reward_tags"] == ["power", "social"]
     assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
     assert "pulp_visible_payoff" not in result.warning_reasons

@@ -402,7 +402,7 @@ class RuntimeContainer:
             retry_attempts=infrastructure.llm_retry_attempts,
             retry_initial_delay_seconds=infrastructure.llm_retry_initial_delay_seconds,
             retry_max_delay_seconds=infrastructure.llm_retry_max_delay_seconds,
-            fallback_profiles=infrastructure.llm_fallback_profiles,
+            fallback_profiles=infrastructure.llm_env_profiles,
         )
         llm_client.profile_id = profile.id
         llm_client.profile_name = profile.name

@@ -486,7 +486,6 @@ class LLMReliabilityRunner:
             ],
             llm_timeout_seconds=profile.timeout_seconds,
             llm_retry_attempts=1,
-            llm_fallback_profiles=[],
         )
         policy = RuntimePolicy.for_profile(
             "standard",

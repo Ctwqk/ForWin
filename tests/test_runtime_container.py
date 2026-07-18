@@ -29,6 +29,48 @@ def test_runtime_container_imports_in_fresh_process() -> None:
     assert result.stdout.strip() == "RuntimeContainer"
 
 
+def test_runtime_container_routes_environment_profiles_after_default_minimax() -> None:
+    from forwin.runtime.container import RuntimeContainer
+
+    infrastructure = InfrastructureConfig(
+        minimax_api_key="minimax-secret",
+        llm_env_profiles=[
+            {
+                "id": "env-kimi",
+                "name": "Kimi",
+                "api_key": "kimi-secret",
+                "base_url": "https://api.moonshot.cn/v1",
+                "model": "kimi-k2.5",
+            },
+            {
+                "id": "env-deepseek",
+                "name": "DeepSeek",
+                "api_key": "deepseek-secret",
+                "base_url": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat",
+            },
+        ],
+    )
+    client = RuntimeContainer._build_llm_client(
+        infrastructure,
+        RuntimePolicy.for_profile("standard"),
+    )
+
+    try:
+        route = client._route_profiles_with_metadata(
+            client._request_profiles(),
+            task_family="writer",
+            stage_key="chapter_draft",
+        )
+    finally:
+        client.close()
+
+    assert [profile["id"] for profile in route["profiles"]] == [
+        "env-kimi",
+        "env-deepseek",
+    ]
+
+
 def test_runtime_container_requires_explicit_policy_and_records_role() -> None:
     from forwin.runtime.container import RuntimeContainer
 

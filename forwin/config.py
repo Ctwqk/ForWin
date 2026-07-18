@@ -408,7 +408,6 @@ class _InfrastructureFields:
     llm_retry_initial_delay_seconds: float = 2.0
     llm_retry_max_delay_seconds: float = 15.0
     scene_call_timeout_seconds: float = 90.0
-    llm_fallback_profiles: list[dict[str, str]] = Field(default_factory=list)
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"

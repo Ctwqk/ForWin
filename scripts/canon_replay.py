@@ -58,20 +58,19 @@ def _merge_config_fallback_profiles(client, config) -> None:  # noqa: ANN001
         )
         for profile in existing
     }
-    for attr_name in ("llm_fallback_profiles", "llm_env_profiles"):
-        for profile in list(getattr(config, attr_name, []) or []):
-            normalized = {
-                "id": str(profile.get("id", "")).strip(),
-                "name": str(profile.get("name", "")).strip(),
-                "api_key": str(profile.get("api_key", "")).strip(),
-                "base_url": str(profile.get("base_url", "")).strip().rstrip("/"),
-                "model": str(profile.get("model", "")).strip(),
-            }
-            key = (normalized["api_key"], normalized["base_url"], normalized["model"])
-            if not all(key) or key in seen:
-                continue
-            seen.add(key)
-            merged.append(normalized)
+    for profile in list(getattr(config, "llm_env_profiles", []) or []):
+        normalized = {
+            "id": str(profile.get("id", "")).strip(),
+            "name": str(profile.get("name", "")).strip(),
+            "api_key": str(profile.get("api_key", "")).strip(),
+            "base_url": str(profile.get("base_url", "")).strip().rstrip("/"),
+            "model": str(profile.get("model", "")).strip(),
+        }
+        key = (normalized["api_key"], normalized["base_url"], normalized["model"])
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
     if merged != existing or hasattr(client, "fallback_profiles"):
         client.fallback_profiles = merged
 

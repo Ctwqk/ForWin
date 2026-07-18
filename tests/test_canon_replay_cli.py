@@ -42,7 +42,6 @@ class FakeConfigWithProfiles:
             "model": "deepseek-chat",
         }
     ]
-    llm_fallback_profiles = []
 
 
 def test_parse_args_defaults_to_dry_run() -> None:

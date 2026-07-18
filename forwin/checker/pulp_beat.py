@@ -79,6 +79,13 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         inference_words=("古玉", "施针", "鉴定", "药方", "病人", "掌柜"),
     ),
 }
+PULP_GENRE_TRACKS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("treasure_medicine", ("神医", "鉴宝", "古玩", "古董", "中医", "医术")),
+    ("rural", ("乡村", "种田", "农村")),
+    ("rebirth_period", ("年代", "重生", "知青")),
+    ("xuanhuan", ("玄幻", "仙侠", "修仙", "武道")),
+    ("urban", ("都市", "职场", "商战", "现代")),
+)
 SETUP_WORDS = ("想起", "回忆", "前情", "沉默", "走在路上", "夜色")
 CORE_FIELDS = (
     "pressure_present",
@@ -119,6 +126,14 @@ def verify_pulp_beats(body: str, *, track: str | None = None) -> PulpBeatResult:
     )
     missing = [field for field in CORE_FIELDS if not getattr(result, field)]
     return result.model_copy(update={"missing_fields": missing})
+
+
+def pulp_track_for_genre(genre: str) -> str | None:
+    normalized = str(genre or "").strip().lower()
+    for track, markers in PULP_GENRE_TRACKS:
+        if any(marker.lower() in normalized for marker in markers):
+            return track
+    return None
 
 
 def _profile_for(body: str, *, track: str | None) -> PulpBeatProfile:

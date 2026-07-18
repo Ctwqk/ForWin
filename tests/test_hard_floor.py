@@ -120,3 +120,23 @@ def test_pulp_missing_visible_payoff_is_warning_only() -> None:
 
     assert result.passed is True
     assert "pulp_visible_payoff" in result.warning_reasons
+
+
+def test_pulp_track_prefers_project_genre_over_incidental_body_terms() -> None:
+    body = (
+        "沈川检查包裹里的一枚灵石后，当场拿出赔偿单，确认赔偿金已经到账。"
+        "门外忽然传来新的催单声？"
+    )
+
+    result = run_hard_floor(
+        writer_output=_writer(body),
+        context_pack=_context(genre="都市爽文"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat_track"] == "urban"
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+    assert "pulp_visible_payoff" not in result.warning_reasons

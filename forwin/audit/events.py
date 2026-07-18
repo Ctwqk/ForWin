@@ -112,7 +112,6 @@ class DecisionEventType:
     BOOK_STATE_COMPILE_FAILED = "book_state_compile_failed"
     CHARACTER_CREATED = "character_created"
     CHARACTER_MERGED_EXISTING = "character_merged_existing"
-    CHARACTER_ROSTER_MATERIALIZED = "character_roster_materialized"
     PERSONALITY_LOADOUT_UPDATED = "personality_loadout_updated"
     PERSONALITY_LOADOUT_AUTO_ASSIGNED = "personality_loadout_auto_assigned"
     PERSONALITY_LOADOUT_REASSIGNED = "personality_loadout_reassigned"

@@ -3,12 +3,10 @@ from __future__ import annotations
 import json
 import logging
 from typing import TYPE_CHECKING
-from hashlib import md5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.query import BookStateQuery
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.planning.checkpoints import BandCheckpointDetail
 from forwin.audit.events import DecisionEventInfo
@@ -40,13 +38,11 @@ from forwin.models import (
 from forwin.protocol import (
     BandDelightSchedule,
     ChapterExperiencePlan,
-    EntitySnapshot,
     ReviewVerdict,
     WriterOutput,
 )
 
 if TYPE_CHECKING:
-    from forwin.characters.models import CharacterCreationResult
     from forwin.runtime.policy import RuntimePolicy
 
 from forwin.protocol.review import normalize_repair_scope
@@ -54,46 +50,6 @@ from forwin.protocol.review import normalize_repair_scope
 from .repo import StateRepository
 
 logger = logging.getLogger(__name__)
-
-_SUBWORLD_NAME_SURNAMES = (
-    "沈",
-    "顾",
-    "林",
-    "陆",
-    "苏",
-    "许",
-    "周",
-    "谢",
-    "秦",
-    "江",
-    "宋",
-    "裴",
-    "陈",
-    "白",
-)
-_SUBWORLD_NAME_GIVEN = (
-    "临川",
-    "知遥",
-    "明序",
-    "清和",
-    "宴秋",
-    "昭宁",
-    "星野",
-    "景川",
-    "怀瑾",
-    "时雨",
-    "砚书",
-    "听澜",
-)
-
-
-def _json_dict(raw: str | None) -> dict:
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
 
 def _json_list(raw: str | None) -> list[str]:
     try:
@@ -376,125 +332,6 @@ class StateUpdater:
         self.session.add(row)
         self.session.flush()
         return row
-
-    def materialize_roster_item(
-        self,
-        *,
-        roster_item_id: str,
-        chapter: int,
-    ) -> CharacterCreationResult:
-        roster_item = self.session.get(SubWorldRosterItem, roster_item_id)
-        if roster_item is None:
-            raise ValueError(f"Roster item {roster_item_id} not found.")
-        if roster_item.entity_kind != "character":
-            raise ValueError("Only character roster items can be materialized in v1.")
-
-        metadata = _json_dict(roster_item.metadata_json)
-        canonical_character_id = str(
-            metadata.get("character_id")
-            or metadata.get("book_state_node_id")
-            or (
-                metadata.get("character_identity", {}).get("canonical_character_id")
-                if isinstance(metadata.get("character_identity"), dict)
-                else ""
-            )
-            or (
-                metadata.get("character_identity", {}).get("book_state_node_id")
-                if isinstance(metadata.get("character_identity"), dict)
-                else ""
-            )
-            or ""
-        ).strip()
-        display_name = str(
-            roster_item.display_name or ""
-        ).strip() or self._fallback_slot_name(
-            project_id=roster_item.project_id,
-            subworld_id=roster_item.subworld_id,
-            slot_key=roster_item.slot_key,
-            role_hint=roster_item.role_hint,
-        )
-        book_state = BookStateQuery(self.session)
-        as_of_chapter = max(int(chapter or 0), 0)
-        entity: EntitySnapshot | None = None
-        if roster_item.entity_id and not canonical_character_id:
-            entity = next(
-                (
-                    item
-                    for item in book_state.active_entities(
-                        roster_item.project_id,
-                        as_of_chapter=as_of_chapter,
-                        kinds={"character"},
-                    )
-                    if item.entity_id == roster_item.entity_id
-                ),
-                None,
-            )
-        if entity is None and not canonical_character_id:
-            entity = book_state.entities_by_names(
-                roster_item.project_id,
-                [display_name],
-                as_of_chapter=as_of_chapter,
-            ).get(display_name)
-            if entity is not None and entity.kind != "character":
-                entity = None
-
-        from forwin.characters.creation import CharacterCreationHelper
-        from forwin.characters.models import CharacterCreationRequest
-
-        result = CharacterCreationHelper(self.session).materialize_roster_character(
-            CharacterCreationRequest(
-                project_id=roster_item.project_id,
-                source="subworld_planned_slot_materialization",
-                source_ref=roster_item.id,
-                character_id=canonical_character_id,
-                roster_item_id=roster_item.id,
-                name=entity.name if entity is not None else display_name,
-                aliases=list(entity.aliases) if entity is not None else [],
-                description=roster_item.description
-                or (entity.description if entity is not None else "")
-                or roster_item.role_hint
-                or "",
-                importance=7
-                if roster_item.is_core
-                else int((entity.importance if entity is not None else 5) or 5),
-                created_at_chapter=int(chapter or 0),
-                profile={
-                    "role_hint": roster_item.role_hint or "",
-                    "role_archetype": roster_item.role_hint or "",
-                },
-                audit_reason="planned roster slot materialization",
-            )
-        )
-        roster_item.entity_id = None
-        roster_item.display_name = result.character_name
-        roster_item.status = (
-            "activated_named" if not roster_item.is_core else "seeded_named"
-        )
-        if not roster_item.activation_chapter:
-            roster_item.activation_chapter = int(chapter or 0)
-        metadata["character_id"] = result.character_id
-        metadata["book_state_node_id"] = result.character_id
-        metadata["canon_source"] = "book_state"
-        roster_item.metadata_json = json.dumps(metadata, ensure_ascii=False)
-        self.session.add(roster_item)
-        self.session.flush()
-        return result
-
-    @staticmethod
-    def _fallback_slot_name(
-        *,
-        project_id: str,
-        subworld_id: str,
-        slot_key: str,
-        role_hint: str,
-    ) -> str:
-        payload = f"{project_id}:{subworld_id}:{slot_key}:{role_hint}".encode("utf-8")
-        digest = md5(payload).hexdigest()
-        surname = _SUBWORLD_NAME_SURNAMES[
-            int(digest[:2], 16) % len(_SUBWORLD_NAME_SURNAMES)
-        ]
-        given = _SUBWORLD_NAME_GIVEN[int(digest[2:4], 16) % len(_SUBWORLD_NAME_GIVEN)]
-        return f"{surname}{given}"
 
     # ------------------------------------------------------------------
     # Draft / Review

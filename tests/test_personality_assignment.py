@@ -255,7 +255,7 @@ def test_missing_fallback_policy_uses_builtin_minimal_fallback(tmp_path: Path) -
             project_id="proj",
             character_id="char_missing_policy",
             character_name="临时角色",
-            source="subworld_planned_slot_materialization",
+            source="api_manual",
             description="短暂出现的线索提供者。",
             policy=CharacterPersonalityPolicy(),
         )

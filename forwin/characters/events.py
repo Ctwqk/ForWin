@@ -3,7 +3,6 @@ from __future__ import annotations
 
 CHARACTER_CREATED = "character_created"
 CHARACTER_MERGED_EXISTING = "character_merged_existing"
-CHARACTER_ROSTER_MATERIALIZED = "character_roster_materialized"
 PERSONALITY_LOADOUT_AUTO_ASSIGNED = "personality_loadout_auto_assigned"
 PERSONALITY_LOADOUT_REASSIGNED = "personality_loadout_reassigned"
 PERSONALITY_LOADOUT_MANUAL_OVERRIDE = "personality_loadout_manual_override"

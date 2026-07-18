@@ -45,7 +45,3 @@ class CharacterCreationResult(BaseModel):
     integrity_report: Any = None
     decision_event_ids: list[str] = Field(default_factory=list)
     warnings: list[dict[str, Any]] = Field(default_factory=list)
-
-
-RosterMaterializationRequest = CharacterCreationRequest
-BookStateCharacterPatchRequest = CharacterCreationRequest

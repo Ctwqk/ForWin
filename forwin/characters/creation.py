@@ -19,7 +19,6 @@ from forwin.state.updater import StateUpdater
 from .events import (
     CHARACTER_CREATED,
     CHARACTER_MERGED_EXISTING,
-    CHARACTER_ROSTER_MATERIALIZED,
     PERSONALITY_LOADOUT_AUTO_ASSIGNED,
 )
 from .integrity import (
@@ -158,7 +157,7 @@ class CharacterCreationHelper:
         decision_ids = [
             self._save_event(
                 request,
-                self._creation_event_type(request),
+                CHARACTER_CREATED,
                 node.id,
                 f"创建角色 {node.name or node.id}。",
                 {
@@ -205,11 +204,6 @@ class CharacterCreationHelper:
             ],
         )
 
-    def _creation_event_type(self, request: CharacterCreationRequest) -> str:
-        if request.source == "subworld_planned_slot_materialization":
-            return CHARACTER_ROSTER_MATERIALIZED
-        return CHARACTER_CREATED
-
     def _dedupe_resolution(
         self,
         request: CharacterCreationRequest,
@@ -248,17 +242,6 @@ class CharacterCreationHelper:
     ) -> CharacterCreationResult:
         request = request.model_copy(update={"existing_resolution": "get_or_create"})
         return self.create_character(request)
-
-    def materialize_roster_character(
-        self, request: CharacterCreationRequest
-    ) -> CharacterCreationResult:
-        return self.create_character(
-            request.model_copy(
-                update={
-                    "source": request.source or "subworld_planned_slot_materialization"
-                }
-            )
-        )
 
     def apply_book_state_character_patch(
         self, request: CharacterCreationRequest

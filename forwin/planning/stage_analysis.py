@@ -21,7 +21,6 @@ from forwin.models import (
 from forwin.planning.goals import load_goals_json
 from forwin.book_state.thread_sampling import sample_active_threads
 from forwin.protocol import SubWorldPlanDelta
-from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
 
 
@@ -499,7 +498,6 @@ class ReplanGovernor:
             )
             self.subworld_manager.apply_arc_delta(
                 session=session,
-                updater=StateUpdater(session),
                 project_id=project_id,
                 arc_id=new_arc.id,
                 delta=SubWorldPlanDelta.model_validate(delta_payload),

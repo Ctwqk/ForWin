@@ -11,6 +11,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
 from forwin.models.audit import DecisionEvent
+from forwin.models.subworld import SubWorldRosterItem
 from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
 
 
@@ -66,6 +67,11 @@ class EntityAdmissionCommitter:
                         alias=alias,
                         chapter_number=plan.chapter_number,
                     )
+            self._bind_matching_roster_items(
+                project_id=project_id,
+                entity=entity,
+                decision=decision,
+            )
 
     def _register_character(
         self,
@@ -203,6 +209,54 @@ class EntityAdmissionCommitter:
         )
         self.session.add(entity)
 
+    def _bind_matching_roster_items(
+        self,
+        *,
+        project_id: str,
+        entity: Entity,
+        decision: EntityAdmissionDecision,
+    ) -> None:
+        names = _dedupe(
+            [
+                entity.name,
+                decision.canonical_name,
+                decision.mention_name,
+                *decision.aliases,
+                *_json_list(entity.aliases_json),
+            ]
+        )
+        if not names:
+            return
+        rows = self.session.execute(
+            select(SubWorldRosterItem).where(
+                SubWorldRosterItem.project_id == project_id,
+                SubWorldRosterItem.entity_kind == "character",
+                SubWorldRosterItem.display_name.in_(names),
+            )
+        ).scalars()
+        for row in rows:
+            metadata = _json_object(row.metadata_json)
+            bound_ids = {
+                str(metadata.get(key) or "").strip()
+                for key in ("character_id", "book_state_node_id")
+                if str(metadata.get(key) or "").strip()
+            }
+            if bound_ids and bound_ids != {entity.id}:
+                raise ValueError(
+                    f"Entity admission roster binding conflict: {row.id}"
+                )
+            metadata.update(
+                {
+                    "character_id": entity.id,
+                    "book_state_node_id": entity.id,
+                    "canon_source": "book_state",
+                }
+            )
+            metadata.pop("pending_entity_admission", None)
+            row.metadata_json = json.dumps(metadata, ensure_ascii=False)
+            row.status = "seeded_named" if row.is_core else "activated_named"
+            self.session.add(row)
+
     def _record_event(
         self,
         *,
@@ -238,6 +292,14 @@ def _json_list(raw: str) -> list[str]:
     if not isinstance(payload, list):
         return []
     return [str(item or "").strip() for item in payload if str(item or "").strip()]
+
+
+def _json_object(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _dedupe(items: list[str]) -> list[str]:

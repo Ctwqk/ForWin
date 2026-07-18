@@ -18,7 +18,6 @@ from forwin.planning.band_window import BandWindowResolver
 from forwin.planning.progression_rules import active_progression_rules_for_chapter
 from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.protocol.subworld import ChapterEntryTarget
-from forwin.state.updater import StateUpdater
 
 
 @dataclass(slots=True)
@@ -159,7 +158,6 @@ class BandPlanService:
         )
         activation_plan = self.subworld_manager.plan_band_activation(
             session=session,
-            updater=StateUpdater(session),
             project_id=request.project_id,
             chapter_start=window.chapter_start,
             chapter_end=window.chapter_end,

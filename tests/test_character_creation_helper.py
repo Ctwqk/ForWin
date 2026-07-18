@@ -97,7 +97,7 @@ def test_create_character_persists_identity_map_for_book_state_legacy_and_roster
         ).create_character(
             CharacterCreationRequest(
                 project_id=project.id,
-                source="subworld_planned_slot_materialization",
+                source="api_manual",
                 source_ref="roster_a",
                 roster_item_id="roster_a",
                 name="周怀瑾",

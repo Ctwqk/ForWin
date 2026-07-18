@@ -282,6 +282,7 @@ class BookStateCompiler:
                             created_at_chapter=delta.chapter_number,
                             profile=profile,
                             state=runtime.world.get_state(patch.node_id),
+                            existing_resolution="create_new",
                             audit_reason=patch.reason or "BookState GraphDelta create character",
                         )
                     )

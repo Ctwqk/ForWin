@@ -409,7 +409,6 @@ class FinalizationStage:
 
         self.subworld_manager.apply_initial_arc_plan(
             session=updater.session,
-            updater=updater,
             project_id=project_id,
             arc_id=first_arc.id if first_arc is not None else "",
             arc_plan=arc_plan,

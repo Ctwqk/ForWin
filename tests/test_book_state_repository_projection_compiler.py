@@ -389,6 +389,56 @@ def test_compiler_create_character_patch_assigns_personality_loadout() -> None:
     assert state_count == 2
 
 
+def test_compiler_preserves_explicit_character_id_when_future_name_duplicate_exists() -> None:
+    engine = get_engine(postgres_test_url("compiler-character-explicit-id"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="char_planning_leak",
+                project_id=project_id,
+                node_type="character",
+                name="舟七",
+                created_at_chapter=5,
+            )
+        )
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=5,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta_admit_zhou_qi",
+                        project_id=project_id,
+                        chapter_number=5,
+                        node_patches=[
+                            NodePatch(
+                                node_id="char_canon_zhou_qi",
+                                node_type="character",
+                                op="create",
+                                new_value={
+                                    "project_id": project_id,
+                                    "name": "舟七",
+                                    "created_at_chapter": 5,
+                                },
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+        admitted = repo.get_world_node("char_canon_zhou_qi")
+
+    assert result.committed is True
+    assert admitted is not None
+    assert admitted.id == "char_canon_zhou_qi"
+    assert admitted.name == "舟七"
+
+
 def test_compiler_rejects_graph_delta_id_owned_by_another_project() -> None:
     engine = get_engine(postgres_test_url("compiler-cross-project-delta-id"))
     init_db(engine)

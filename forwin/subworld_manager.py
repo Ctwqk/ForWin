@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
+from forwin.book_state.query import BookStateQuery
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcPlanVersion,
@@ -28,7 +29,6 @@ from forwin.protocol import (
     SubWorldPlanItem,
     SubWorldSummary,
 )
-from forwin.state.updater import StateUpdater
 
 
 _NAME_SURNAMES = (
@@ -286,10 +286,8 @@ class SubWorldManager:
             existing_subworlds=self.summarize_registry(session, project_id),
             focus_threads=[],
         )
-        updater = StateUpdater(session)
         self.apply_arc_delta(
             session=session,
-            updater=updater,
             project_id=project_id,
             arc_id=active_arc.id,
             delta=SubWorldPlanDelta.model_validate(delta),
@@ -301,7 +299,6 @@ class SubWorldManager:
         self,
         *,
         session: Session,
-        updater: StateUpdater,
         project_id: str,
         arc_id: str,
         arc_plan: dict,
@@ -314,7 +311,6 @@ class SubWorldManager:
         )
         self.apply_arc_delta(
             session=session,
-            updater=updater,
             project_id=project_id,
             arc_id=arc_id,
             delta=delta,
@@ -326,7 +322,6 @@ class SubWorldManager:
         self,
         *,
         session: Session,
-        updater: StateUpdater,
         project_id: str,
         arc_id: str,
         delta: SubWorldPlanDelta,
@@ -415,30 +410,44 @@ class SubWorldManager:
 
             for seed in item.core_named_characters:
                 character_id = entity_map.get(seed.name) or ""
-                from forwin.characters.creation import CharacterCreationHelper
-                from forwin.characters.models import CharacterCreationRequest
+                roster_metadata: dict[str, object]
+                if int(chapter_number or 0) <= 0:
+                    from forwin.characters.creation import CharacterCreationHelper
+                    from forwin.characters.models import CharacterCreationRequest
 
-                result = CharacterCreationHelper(session).create_character(
-                    CharacterCreationRequest(
-                        project_id=project_id,
-                        source="subworld_core_named_character",
-                        source_ref=f"{target_row.id}:{seed.name}",
-                        character_id=character_id,
-                        roster_item_id="",
-                        name=seed.name,
-                        aliases=list(seed.aliases),
-                        description=seed.description,
-                        importance=max(1, int(seed.importance or 5)),
-                        created_at_chapter=max(0, int(chapter_number or 0)),
-                        profile={
-                            "role_hint": seed.role_hint,
-                            "role_archetype": seed.role_hint,
-                        },
-                        state=dict(seed.initial_state or {}),
-                        audit_reason="subworld core named character",
+                    result = CharacterCreationHelper(session).create_character(
+                        CharacterCreationRequest(
+                            project_id=project_id,
+                            source="subworld_core_named_character",
+                            source_ref=f"{target_row.id}:{seed.name}",
+                            character_id=character_id,
+                            roster_item_id="",
+                            name=seed.name,
+                            aliases=list(seed.aliases),
+                            description=seed.description,
+                            importance=max(1, int(seed.importance or 5)),
+                            created_at_chapter=0,
+                            profile={
+                                "role_hint": seed.role_hint,
+                                "role_archetype": seed.role_hint,
+                            },
+                            state=dict(seed.initial_state or {}),
+                            audit_reason="subworld core named character",
+                        )
                     )
-                )
-                entity_map[result.character_name] = result.character_id
+                    character_id = result.character_id
+                    entity_map[result.character_name] = result.character_id
+                    roster_metadata = {
+                        "character_id": result.character_id,
+                        "book_state_node_id": result.character_id,
+                        "canon_source": "book_state",
+                    }
+                else:
+                    character_id = ""
+                    roster_metadata = {
+                        "pending_entity_admission": True,
+                        "planned_at_chapter": int(chapter_number),
+                    }
                 self._ensure_roster_item(
                     session=session,
                     project_id=project_id,
@@ -452,11 +461,7 @@ class SubWorldManager:
                     is_core=True,
                     status="seeded_named",
                     activation_chapter=max(0, int(chapter_number or 0)),
-                    metadata={
-                        "character_id": result.character_id,
-                        "book_state_node_id": result.character_id,
-                        "canon_source": "book_state",
-                    },
+                    metadata=roster_metadata,
                 )
 
             for slot in item.planned_slots:
@@ -544,7 +549,6 @@ class SubWorldManager:
         self,
         *,
         session: Session,
-        updater: StateUpdater,
         project_id: str,
         chapter_start: int,
         chapter_end: int,
@@ -584,64 +588,135 @@ class SubWorldManager:
         arc_local_candidates.sort(key=lambda item: (-item[0], item[1].created_at, item[1].id))
         active_ids.extend(row.id for _, row in arc_local_candidates[:2])
 
-        for subworld_id in active_ids:
-            roster_items = session.execute(
-                select(SubWorldRosterItem)
-                .where(SubWorldRosterItem.subworld_id == subworld_id)
-                .order_by(SubWorldRosterItem.is_core.desc(), SubWorldRosterItem.created_at.asc())
-            ).scalars().all()
-            for item in roster_items:
-                if item.entity_kind != "character" or not item.is_core:
-                    continue
-                updater.materialize_roster_item(
-                    roster_item_id=item.id,
-                    chapter=chapter_start,
-                )
-
         chapter_numbers = list(range(chapter_start, chapter_end + 1))
         entry_targets: list[ChapterEntryTarget] = []
         used_chapters: set[int] = set()
+        canon_characters = BookStateQuery(session).active_entities(
+            project_id,
+            as_of_chapter=max(int(chapter_start) - 1, 0),
+            kinds={"character"},
+        )
+        canon_by_id = {item.entity_id: item for item in canon_characters}
+        canon_by_name = {
+            name: item
+            for item in canon_characters
+            for name in (item.name, *item.aliases)
+            if str(name or "").strip()
+        }
         for subworld_id in active_ids:
-            if subworld_id == global_core_id:
-                continue
             if len(entry_targets) >= 2:
                 break
-            planned_slots = session.execute(
+            roster_items = session.execute(
                 select(SubWorldRosterItem)
                 .where(
                     SubWorldRosterItem.subworld_id == subworld_id,
-                    SubWorldRosterItem.status == "planned_slot",
                     SubWorldRosterItem.entity_kind == "character",
                 )
-                .order_by(SubWorldRosterItem.created_at.asc(), SubWorldRosterItem.id.asc())
+                .order_by(
+                    SubWorldRosterItem.is_core.desc(),
+                    SubWorldRosterItem.created_at.asc(),
+                    SubWorldRosterItem.id.asc(),
+                )
             ).scalars().all()
-            for slot in planned_slots:
-                chapter_hint = next(
-                    (number for number in chapter_numbers if number not in used_chapters),
-                    0,
+            for roster_item in roster_items:
+                if len(entry_targets) >= 2:
+                    break
+                if self._bind_existing_roster_character(
+                    session=session,
+                    roster_item=roster_item,
+                    canon_by_id=canon_by_id,
+                    canon_by_name=canon_by_name,
+                ):
+                    continue
+                if not roster_item.is_core and roster_item.status not in {
+                    "planned_slot",
+                    "activated_named",
+                }:
+                    continue
+                if subworld_id == global_core_id and not roster_item.is_core:
+                    continue
+                metadata = _load_json(roster_item.metadata_json, {})
+                requested_hint = int(metadata.get("entry_target_chapter") or 0)
+                chapter_hint = (
+                    requested_hint
+                    if requested_hint in chapter_numbers
+                    and requested_hint not in used_chapters
+                    else next(
+                        (
+                            number
+                            for number in chapter_numbers
+                            if number not in used_chapters
+                        ),
+                        0,
+                    )
                 )
                 if chapter_hint <= 0:
                     break
-                result = updater.materialize_roster_item(
-                    roster_item_id=slot.id,
-                    chapter=chapter_hint,
-                )
+                entity_name = str(roster_item.display_name or "").strip()
+                if not entity_name:
+                    entity_name = self.fallback_slot_name(
+                        project_id=roster_item.project_id,
+                        subworld_id=roster_item.subworld_id,
+                        slot_key=roster_item.slot_key,
+                        role_hint=roster_item.role_hint,
+                    )
+                roster_item.display_name = entity_name
+                roster_item.status = "activated_named"
+                if not roster_item.activation_chapter:
+                    roster_item.activation_chapter = chapter_hint
+                metadata["pending_entity_admission"] = True
+                metadata["entry_target_chapter"] = chapter_hint
+                roster_item.metadata_json = json.dumps(metadata, ensure_ascii=False)
+                session.add(roster_item)
                 entry_targets.append(
                     ChapterEntryTarget(
                         chapter_hint=chapter_hint,
-                        entity_name=result.character_name,
+                        entity_name=entity_name,
                         subworld_id=subworld_id,
-                        role_hint=slot.role_hint,
+                        role_hint=roster_item.role_hint,
                     )
                 )
                 used_chapters.add(chapter_hint)
-                if len(entry_targets) >= 2:
-                    break
 
         return BandActivationPlan(
             active_subworld_ids=list(dict.fromkeys(active_ids)),
             chapter_entry_targets=entry_targets,
         )
+
+    @staticmethod
+    def _bind_existing_roster_character(
+        *,
+        session: Session,
+        roster_item: SubWorldRosterItem,
+        canon_by_id: dict[str, object],
+        canon_by_name: dict[str, object],
+    ) -> bool:
+        metadata = _load_json(roster_item.metadata_json, {})
+        character = next(
+            (
+                canon_by_id[character_id]
+                for character_id in _metadata_character_ids(metadata)
+                if character_id in canon_by_id
+            ),
+            None,
+        )
+        if character is None:
+            display_name = str(roster_item.display_name or "").strip()
+            character = canon_by_name.get(display_name)
+        if character is None:
+            return False
+        character_id = str(getattr(character, "entity_id", "") or "")
+        metadata.update(
+            {
+                "character_id": character_id,
+                "book_state_node_id": character_id,
+                "canon_source": "book_state",
+            }
+        )
+        metadata.pop("pending_entity_admission", None)
+        roster_item.metadata_json = json.dumps(metadata, ensure_ascii=False)
+        session.add(roster_item)
+        return True
 
     def _score_subworld_for_band(
         self,
@@ -706,6 +781,9 @@ class SubWorldManager:
             slot_key = str(item.slot_key or "").strip()
             if slot_key:
                 mapping[(item.subworld_id, "slot", slot_key)] = item.id
+            display_name = str(item.display_name or "").strip()
+            if display_name:
+                mapping[(item.subworld_id, "name", display_name)] = item.id
         return mapping
 
     def _ensure_roster_item(
@@ -733,6 +811,10 @@ class SubWorldManager:
             lookup_keys.append((subworld_id, "entity", str(entity_id or "").strip()))
         if str(slot_key or "").strip():
             lookup_keys.append((subworld_id, "slot", str(slot_key or "").strip()))
+        if str(display_name or "").strip():
+            lookup_keys.append(
+                (subworld_id, "name", str(display_name or "").strip())
+            )
         existing_id = next((roster_lookup[key] for key in lookup_keys if key in roster_lookup), None)
         if existing_id:
             row = session.get(SubWorldRosterItem, existing_id)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.state_change import EventCandidate
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
@@ -138,5 +139,31 @@ def test_pulp_track_prefers_project_genre_over_incidental_body_terms() -> None:
     )
 
     assert result.metadata["pulp_beat_track"] == "urban"
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+    assert "pulp_visible_payoff" not in result.warning_reasons
+
+
+def test_pulp_hard_floor_uses_planned_mystery_reward_contract() -> None:
+    body = (
+        "三份记录叠好，边缘刚好卡进环形刻痕的缺口，缺口共同指向检测台底部的插孔。"
+        "终端随后弹出提示：未登记工号，当前在线。"
+    )
+
+    result = run_hard_floor(
+        writer_output=_writer(body),
+        context_pack=_context(
+            genre="都市爽文",
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["mystery"]
+            ),
+        ),
+        repo=None,
+        project_id="project-1",
+        chapter_number=4,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat_track"] == "urban"
+    assert result.metadata["planned_reward_tags"] == ["mystery"]
     assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
     assert "pulp_visible_payoff" not in result.warning_reasons

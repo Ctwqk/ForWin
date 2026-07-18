@@ -86,6 +86,82 @@ PULP_GENRE_TRACKS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("xuanhuan", ("玄幻", "仙侠", "修仙", "武道")),
     ("urban", ("都市", "职场", "商战", "现代")),
 )
+REWARD_PAYOFF_MARKERS: dict[str, tuple[str, ...]] = {
+    "power": (
+        "能力提升",
+        "资源到账",
+        "权限打开",
+        "权限解锁",
+        "权限已发放",
+        "获得权限",
+        "取得权限",
+        "突破",
+        "晋升",
+        "到手",
+        "入袋",
+        "战局逆转",
+    ),
+    "social": (
+        "改口",
+        "当场签约",
+        "合同到手",
+        "资格到手",
+        "获得资格",
+        "公开背书",
+        "态度转变",
+        "站队",
+    ),
+    "justice": (
+        "押走",
+        "罚没",
+        "除名",
+        "赔偿到账",
+        "公开道歉",
+        "被开除",
+        "落网",
+        "认罪",
+        "收回利益",
+    ),
+    "mystery": (
+        "线索到手",
+        "锁定",
+        "识破",
+        "查明",
+        "证实",
+        "记录显示",
+        "证据表明",
+        "真相浮出",
+        "工号在线",
+        "刻痕指向",
+        "编号对应",
+    ),
+    "emotion": (
+        "主动靠近",
+        "承担风险",
+        "挡在",
+        "护住",
+        "关系缓和",
+        "建立信任",
+        "拥抱",
+        "牵手",
+    ),
+}
+MYSTERY_PAYOFF_EVIDENCE_WORDS = (
+    "线索",
+    "名字",
+    "地点",
+    "记录",
+    "符号",
+    "矛盾",
+    "证据",
+    "工号",
+    "刻痕",
+    "编号",
+    "回执",
+    "插孔",
+    "时间戳",
+    "名单",
+)
 SETUP_WORDS = ("想起", "回忆", "前情", "沉默", "走在路上", "夜色")
 CORE_FIELDS = (
     "pressure_present",
@@ -111,13 +187,21 @@ def _boring_setup_ratio(body: str) -> float:
     return round(min(1.0, setup_hits / sentence_count), 3)
 
 
-def verify_pulp_beats(body: str, *, track: str | None = None) -> PulpBeatResult:
+def verify_pulp_beats(
+    body: str,
+    *,
+    track: str | None = None,
+    reward_tags: tuple[str, ...] = (),
+) -> PulpBeatResult:
     text = str(body or "")
     profile = _profile_for(text, track=track)
     result = PulpBeatResult(
         pressure_present=_has_any(text, profile.pressure_words),
         protagonist_action_present=_has_any(text, profile.action_words),
-        visible_payoff_present=_has_any(text, profile.payoff_words),
+        visible_payoff_present=(
+            _has_any(text, profile.payoff_words)
+            or _planned_reward_payoff_present(text, reward_tags)
+        ),
         audience_reaction_present=_has_any(text, profile.audience_words),
         enemy_or_obstacle_damage_present=_has_any(text, profile.damage_words),
         new_gain_or_status_shift_present=_has_any(text, profile.gain_words),
@@ -126,6 +210,20 @@ def verify_pulp_beats(body: str, *, track: str | None = None) -> PulpBeatResult:
     )
     missing = [field for field in CORE_FIELDS if not getattr(result, field)]
     return result.model_copy(update={"missing_fields": missing})
+
+
+def _planned_reward_payoff_present(body: str, reward_tags: tuple[str, ...]) -> bool:
+    for tag in reward_tags:
+        normalized = str(tag)
+        if _has_any(body, REWARD_PAYOFF_MARKERS.get(normalized, ())):
+            return True
+        if normalized == "mystery":
+            evidence_count = sum(
+                word in body for word in MYSTERY_PAYOFF_EVIDENCE_WORDS
+            )
+            if evidence_count >= 2:
+                return True
+    return False
 
 
 def pulp_track_for_genre(genre: str) -> str | None:

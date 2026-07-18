@@ -34,6 +34,32 @@ def test_verify_pulp_beats_flags_missing_payoff() -> None:
     assert "visible_payoff_present" in result.missing_fields
 
 
+def test_verify_pulp_beats_uses_planned_mystery_reward_contract() -> None:
+    body = (
+        "三份记录叠好，边缘刚好卡进环形刻痕的缺口，缺口共同指向检测台底部的插孔。"
+        "终端随后弹出提示：未登记工号，当前在线。"
+    )
+
+    result = verify_pulp_beats(
+        body,
+        track="urban",
+        reward_tags=("mystery",),
+    )
+
+    assert result.visible_payoff_present is True
+    assert "visible_payoff_present" not in result.missing_fields
+
+
+def test_planned_mystery_reward_still_requires_concrete_evidence() -> None:
+    result = verify_pulp_beats(
+        "他翻看了一遍记录，觉得事情不太对，却暂时没有找到任何突破口。",
+        track="urban",
+        reward_tags=("mystery",),
+    )
+
+    assert result.visible_payoff_present is False
+
+
 def test_verify_pulp_beats_detects_xuanhuan_payoff_without_urban_words() -> None:
     body = (
         "宗门长老当众威胁逐他出山。林远当场运转灵诀突破境界，擂台全场震动，"

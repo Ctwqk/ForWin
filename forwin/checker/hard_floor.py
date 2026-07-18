@@ -74,7 +74,18 @@ def run_hard_floor(
         warning_reasons.append("ending_hook")
 
     pulp_beat_track = pulp_track_for_genre(context_pack.genre)
-    pulp_beats = verify_pulp_beats(body, track=pulp_beat_track)
+    experience_plan = context_pack.chapter_experience_plan
+    planned_reward_tags = tuple(
+        str(tag)
+        for tag in (
+            experience_plan.planned_reward_tags if experience_plan is not None else ()
+        )
+    )
+    pulp_beats = verify_pulp_beats(
+        body,
+        track=pulp_beat_track,
+        reward_tags=planned_reward_tags,
+    )
     checks["pulp_visible_payoff"] = pulp_beats.visible_payoff_present
     if (
         policy.quality_profile == "pulp"
@@ -95,6 +106,7 @@ def run_hard_floor(
             "min_chapter_chars": min_chapter_chars,
             "must_not_reveal_hits": hidden_hits,
             "pulp_beat_track": pulp_beat_track or "body_inferred",
+            "planned_reward_tags": list(planned_reward_tags),
             "pulp_beat": pulp_beats.model_dump(mode="json"),
         },
     )

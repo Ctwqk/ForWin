@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 import pytest
@@ -102,6 +103,42 @@ def test_create_memory_index_accepts_collection_created_by_a_competing_role() ->
 
     assert index.collection_name == "chapter_memories_race"
     assert qdrant_client.collections["chapter_memories_race"]["vectors_config"].size == 64
+
+
+def test_create_memory_index_retries_transient_inspection_after_competing_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EventuallyVisibleRacingClient(FakeQdrantClient):
+        inspection_attempts = 0
+
+        def create_collection(self, *, collection_name: str, vectors_config) -> None:
+            super().create_collection(
+                collection_name=collection_name,
+                vectors_config=vectors_config,
+            )
+            raise RuntimeError("collection already exists")
+
+        def get_collection(self, collection_name: str):
+            self.inspection_attempts += 1
+            if self.inspection_attempts == 1:
+                raise RuntimeError("collection metadata is not visible yet")
+            return super().get_collection(collection_name)
+
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    qdrant_client = EventuallyVisibleRacingClient()
+
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_eventual_race",
+        qdrant_client=qdrant_client,
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="hash",
+        embedding_dims=64,
+    )
+
+    assert index.collection_name == "chapter_memories_eventual_race"
+    assert qdrant_client.inspection_attempts == 2
 
 
 def test_create_memory_index_rejects_raced_collection_with_wrong_dimension() -> None:

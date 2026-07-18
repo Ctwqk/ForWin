@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from hashlib import sha1
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,8 @@ from forwin.protocol.context import MemorySnippet
 logger = logging.getLogger(__name__)
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
+_COLLECTION_RACE_INSPECTION_ATTEMPTS = 5
+_COLLECTION_RACE_INSPECTION_DELAY_SECONDS = 0.1
 
 
 class TextEmbedder:
@@ -247,7 +250,9 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             collections = {item.name for item in self.client.get_collections().collections}
             if self.collection_name not in collections:
                 raise
-            existing_size = self._collection_vector_size(self.collection_name)
+            existing_size = self._collection_vector_size_after_create_race(
+                self.collection_name
+            )
             if existing_size != self.embedder.dims:
                 raise ValueError(
                     f"Qdrant collection {self.collection_name!r} has vector size "
@@ -257,6 +262,17 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
                 "Qdrant collection %s was created by another process.",
                 self.collection_name,
             )
+
+    def _collection_vector_size_after_create_race(
+        self, collection_name: str
+    ) -> int | None:
+        for attempt in range(_COLLECTION_RACE_INSPECTION_ATTEMPTS):
+            existing_size = self._collection_vector_size(collection_name)
+            if existing_size is not None:
+                return existing_size
+            if attempt + 1 < _COLLECTION_RACE_INSPECTION_ATTEMPTS:
+                time.sleep(_COLLECTION_RACE_INSPECTION_DELAY_SECONDS)
+        return None
 
     def _resolve_collection_name(self, collection_name: str) -> str:
         collections = {item.name for item in self.client.get_collections().collections}

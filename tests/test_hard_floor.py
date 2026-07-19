@@ -94,6 +94,15 @@ def test_masked_identifier_is_not_treated_as_garbage() -> None:
     assert result.checks["no_garbage"] is True
 
 
+def test_fully_masked_identifier_is_not_treated_as_garbage() -> None:
+    result = _run(
+        "系统显示实际住户刘国栋，身份证号：************。角色A核验记录后继续行动。"
+    )
+
+    assert result.passed is True
+    assert result.checks["no_garbage"] is True
+
+
 def test_unsupported_symbol_run_still_fails_as_garbage() -> None:
     result = _run("角色A核验记录后看到@#$%^&*+=<>|/，随后继续行动。")
 

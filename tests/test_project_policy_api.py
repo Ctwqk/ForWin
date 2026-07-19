@@ -57,8 +57,6 @@ def test_project_policy_update_requires_expected_version_and_reason(
         review_interval_chapters=0,
         manual_checkpoints=True,
         band_checkpoint_action="pause_on_warn",
-        generation_audit_interval=6,
-        generation_audit_pauses=False,
         gate_delegate="spark",
         reason="delegate optional pauses",
     )

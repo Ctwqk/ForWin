@@ -369,12 +369,6 @@ class ForWinAPIClient:
                 "band_checkpoint_action": str(
                     pause.get("band_checkpoint_action", "pause_on_warn")
                 ),
-                "generation_audit_interval": int(
-                    pause.get("generation_audit_interval", 0) or 0
-                ),
-                "generation_audit_pauses": bool(
-                    pause.get("generation_audit_pauses", False)
-                ),
                 "gate_delegate": delegate,
                 "reason": normalized_reason,
             },

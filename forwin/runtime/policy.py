@@ -29,8 +29,6 @@ class PausePolicy(FrozenPolicyModel):
     review_interval_chapters: int = Field(default=0, ge=0, le=500)
     manual_checkpoints: bool = True
     band_checkpoint_action: BandCheckpointAction = "pause_on_warn"
-    generation_audit_interval: int = Field(default=6, ge=0, le=500)
-    generation_audit_pauses: bool = False
     gate_delegate: GateDelegate = "human"
 
 
@@ -61,7 +59,7 @@ class CanonPolicy(FrozenPolicyModel):
 
 
 class RuntimePolicy(FrozenPolicyModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     quality_profile: QualityProfile = "standard"
     model_profile_id: str = ""
     chapter_length: ChapterLengthPolicy
@@ -78,7 +76,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 quality_profile="pulp",
                 model_profile_id=model_profile_id,
                 chapter_length=ChapterLengthPolicy(min_chars=1800, target_chars=2400, max_chars=3000),
-                pause=PausePolicy(manual_checkpoints=False, band_checkpoint_action="continue", generation_audit_interval=0),
+                pause=PausePolicy(manual_checkpoints=False, band_checkpoint_action="continue"),
                 review=ReviewPolicy(signals=("lint", "publisher"), repair_scopes=(), max_rewrites=0, repair_models=()),
                 planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
                 canon=CanonPolicy(quality_gate="pulp_fatal", book_state_layers=("world",)),
@@ -111,8 +109,6 @@ class RuntimePolicy(FrozenPolicyModel):
         review_interval_chapters: int | None = None,
         manual_checkpoints: bool | None = None,
         band_checkpoint_action: BandCheckpointAction | None = None,
-        generation_audit_interval: int | None = None,
-        generation_audit_pauses: bool | None = None,
         gate_delegate: GateDelegate | None = None,
     ) -> Self:
         selected_profile = quality_profile or self.quality_profile
@@ -137,8 +133,6 @@ class RuntimePolicy(FrozenPolicyModel):
                 "review_interval_chapters": review_interval_chapters,
                 "manual_checkpoints": manual_checkpoints,
                 "band_checkpoint_action": band_checkpoint_action,
-                "generation_audit_interval": generation_audit_interval,
-                "generation_audit_pauses": generation_audit_pauses,
                 "gate_delegate": gate_delegate,
             }.items()
             if value is not None

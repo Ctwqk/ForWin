@@ -69,8 +69,6 @@ def update_project_policy(
                 review_interval_chapters=request.review_interval_chapters,
                 manual_checkpoints=request.manual_checkpoints,
                 band_checkpoint_action=request.band_checkpoint_action,
-                generation_audit_interval=request.generation_audit_interval,
-                generation_audit_pauses=request.generation_audit_pauses,
                 gate_delegate=request.gate_delegate,
             )
             try:

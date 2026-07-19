@@ -37,7 +37,6 @@ The current writing path is:
 
 ```text
 Arc/ChapterPlan
--> Scenario Rehearsal
 -> Writer
 -> immutable CandidateDraftRecord
 -> Candidate Draft Review / Repair
@@ -46,6 +45,8 @@ Arc/ChapterPlan
 -> BookState
 ```
 
-Scenario Rehearsal owns pre-writing plan feasibility. Candidate Draft Review
-and Canon admission own post-writing acceptance. No preview artifact can block
-or authorize canon writing.
+Arc/ChapterPlan planning services own pre-writing plan construction. The Writer
+produces an immutable candidate; Candidate Draft Review / Repair and
+`CanonPreparationService` establish post-writing eligibility before
+`CanonAdmissionService.commit_plan` performs the only accepted-state commit to
+BookState. No preview artifact can block or authorize canon writing.

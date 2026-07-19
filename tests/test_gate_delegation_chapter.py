@@ -174,7 +174,6 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
         review_interval_chapters=1,
         manual_checkpoints=False,
         band_checkpoint_action="continue",
-        generation_audit_interval=0,
     )
     policy = policy.model_copy(
         update={"canon": policy.canon.model_copy(update={"hard_floor": False})}
@@ -326,7 +325,7 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             _emit_progress=lambda *_args, **_kwargs: None,
             _run_phase3_pass=lambda **_kwargs: None,
             _audit_future_plans_after_acceptance=lambda **_kwargs: None,
-            _record_generation_audit_checkpoint_if_due=lambda **_kwargs: False,
+            _record_generation_audit_report_if_due=lambda **_kwargs: None,
             _cancelled_result=lambda project_id, requested, **kwargs: RunResult(
                 project_id=project_id,
                 requested_chapters=requested,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from forwin.config import InfrastructureConfig, ModelProfileConfig
 from forwin.runtime.policy import (
@@ -14,6 +14,8 @@ from .llm import ModelProfile
 
 
 class RuntimePolicyUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     expected_version: int = Field(ge=1)
     quality_profile: QualityProfile
     model_profile_id: str = ""
@@ -23,8 +25,6 @@ class RuntimePolicyUpdateRequest(BaseModel):
     review_interval_chapters: int = Field(ge=0, le=500)
     manual_checkpoints: bool
     band_checkpoint_action: BandCheckpointAction
-    generation_audit_interval: int = Field(ge=0, le=500)
-    generation_audit_pauses: bool
     gate_delegate: GateDelegate
     reason: str = Field(min_length=1)
 

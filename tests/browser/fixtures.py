@@ -522,8 +522,6 @@ class MockForWinBackend:
                     "review_interval_chapters": payload["review_interval_chapters"],
                     "manual_checkpoints": payload["manual_checkpoints"],
                     "band_checkpoint_action": payload["band_checkpoint_action"],
-                    "generation_audit_interval": payload["generation_audit_interval"],
-                    "generation_audit_pauses": payload["generation_audit_pauses"],
                     "gate_delegate": payload["gate_delegate"],
                 }
                 json_reply(
@@ -1018,7 +1016,7 @@ def sample_platforms() -> list[dict[str, Any]]:
 
 def sample_runtime_policy() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "quality_profile": "standard",
         "model_profile_id": "env-minimax",
         "chapter_length": {"min_chars": 2500, "target_chars": 2800, "max_chars": 3200},
@@ -1026,8 +1024,6 @@ def sample_runtime_policy() -> dict[str, Any]:
             "review_interval_chapters": 2,
             "manual_checkpoints": True,
             "band_checkpoint_action": "pause_on_warn",
-            "generation_audit_interval": 6,
-            "generation_audit_pauses": False,
             "gate_delegate": "human",
         },
         "review": {

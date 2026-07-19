@@ -9,6 +9,7 @@ from typing import Any
 from forwin.planning.checkpoints import BandCheckpointIssueInfo
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.models.project import ChapterPlan
+from forwin.models.audit import DecisionEvent
 from forwin.planning.future_plan_audit import FuturePlanAuditRun
 import json
 from forwin.review.plan_checks import (
@@ -54,13 +55,6 @@ from forwin.review.decision.types import Decision, DecisionInput
 from forwin.state.repo import StateRepository
 
 
-def _positive_int(value: object) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _future_plan_gate_outcome(
     result: FuturePlanAuditRun,
     *,
@@ -99,25 +93,6 @@ def _future_plan_gate_outcome(
         issue_keys=issue_keys,
         issue_groups=[group for group in issue_groups if group],
         evidence_refs=list(plan_health.evidence),
-    )
-
-
-def _generation_audit_gate_outcome(
-    *,
-    project_id: str,
-    chapter_number: int,
-    interval: int,
-    will_pause: bool,
-) -> GateOutcome:
-    return GateOutcome(
-        gate_id="generation_audit",
-        responsibility_domain="generation_operations",
-        scope="chapter",
-        candidate_id=f"{project_id}:{chapter_number}:interval:{interval}",
-        chapter_number=chapter_number,
-        fired=True,
-        decision="pause" if will_pause else "pass",
-        blocked=False,
     )
 
 
@@ -426,91 +401,108 @@ class AuditControlStage:
                 },
             )
 
-    def _record_generation_audit_checkpoint_if_due(
+    def _record_generation_audit_report_if_due(
         self,
         *,
         session: Session,
         updater: StateUpdater,
         project_id: str,
         chapter_number: int,
-        requested_chapters: int,
-        last_requested_chapter: int,
-        completed_chapters: list[int],
-        failed_chapters: list[int],
-        paused_chapters: list[int],
         future_plan_audit_result: FuturePlanAuditRun | None,
-        policy,
-    ) -> bool:
-        interval = _positive_int(policy.pause.generation_audit_interval)
-        if interval <= 0:
-            return False
-        chapter_number = int(chapter_number or 0)
-        if chapter_number <= 0 or chapter_number % interval != 0:
-            return False
-        pause_enabled = policy.pause.generation_audit_pauses
-        has_next_requested = chapter_number != int(last_requested_chapter or 0)
-        will_pause = bool(pause_enabled and has_next_requested)
-        payload = self._generation_audit_checkpoint_payload(
-            session=session,
-            project_id=project_id,
-            checkpoint_chapter=chapter_number,
-            interval=interval,
-            requested_chapters=requested_chapters,
-            completed_chapters=[*completed_chapters, chapter_number],
-            failed_chapters=failed_chapters,
-            paused_chapters=paused_chapters,
-            future_plan_audit_result=future_plan_audit_result,
-            will_pause=will_pause,
-            pause_enabled=pause_enabled,
-            next_chapter=(chapter_number + 1 if has_next_requested else 0),
-        )
-        summary = (
-            f"第{chapter_number}章命中 {interval} 章生成审计检查点，运行将暂停。"
-            if will_pause
-            else f"第{chapter_number}章命中 {interval} 章生成审计检查点，已记录摘要。"
-        )
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="evaluation_verdict",
-            event_type=DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
-            scope="project",
-            summary=summary,
-            related_object_type="generation_audit_checkpoint",
-            related_object_id=f"{project_id}:{chapter_number}",
-            payload=attach_gate_outcome(
-                payload,
-                _generation_audit_gate_outcome(
+    ) -> None:
+        session.flush()
+        try:
+            with session.begin_nested():
+                cadence = 6
+                accepted_count = (
+                    session.query(ChapterPlan)
+                    .filter(
+                        ChapterPlan.project_id == project_id,
+                        ChapterPlan.status == "accepted",
+                    )
+                    .count()
+                )
+                if accepted_count <= 0 or accepted_count % cadence != 0:
+                    return
+
+                report_identity = f"{project_id}:accepted:{accepted_count}"
+                existing = (
+                    session.query(DecisionEvent)
+                    .filter(
+                        DecisionEvent.project_id == project_id,
+                        DecisionEvent.event_type
+                        == DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+                        DecisionEvent.related_object_type
+                        == "generation_audit_checkpoint",
+                        DecisionEvent.related_object_id == report_identity,
+                    )
+                    .first()
+                )
+                if existing is not None:
+                    return
+                payload = self._generation_audit_report_payload(
+                    session=session,
+                    project_id=project_id,
+                    accepted_count=accepted_count,
+                    cadence=cadence,
+                    future_plan_audit_result=future_plan_audit_result,
+                )
+                self._record_decision_event(
+                    updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
-                    interval=interval,
-                    will_pause=will_pause,
-                ),
-            ),
-        )
-        return will_pause
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+                    scope="project",
+                    summary=(
+                        f"已记录第 {accepted_count} 个已接受章节的生成审计摘要。"
+                    ),
+                    related_object_type="generation_audit_checkpoint",
+                    related_object_id=report_identity,
+                    payload=attach_gate_outcome(
+                        payload,
+                        GateOutcome(
+                            gate_id="generation_audit",
+                            gate_version="report-only-v1",
+                            responsibility_domain="generation_operations",
+                            scope="project",
+                            candidate_id=f"generation-audit:{report_identity}",
+                            chapter_number=chapter_number,
+                            evaluated=False,
+                            fired=False,
+                            decision="pass",
+                            blocked=False,
+                        ),
+                    ),
+                )
+        except Exception:
+            logger.exception("generation audit report failed for project %s", project_id)
 
-    def _generation_audit_checkpoint_payload(
+    def _generation_audit_report_payload(
         self,
         *,
         session: Session,
         project_id: str,
-        checkpoint_chapter: int,
-        interval: int,
-        requested_chapters: int,
-        completed_chapters: list[int],
-        failed_chapters: list[int],
-        paused_chapters: list[int],
+        accepted_count: int,
+        cadence: int,
         future_plan_audit_result: FuturePlanAuditRun | None,
-        will_pause: bool,
-        pause_enabled: bool,
-        next_chapter: int,
     ) -> dict[str, Any]:
-        window_start = max(
-            1, int(checkpoint_chapter or 0) - max(1, int(interval or 1)) + 1
+        accepted_window = (
+            session.query(ChapterPlan)
+            .filter(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.status == "accepted",
+            )
+            .order_by(ChapterPlan.chapter_number.desc())
+            .limit(cadence)
+            .all()
         )
-        window_end = int(checkpoint_chapter or 0)
+        accepted_window.reverse()
+        accepted_chapter_window = [
+            int(plan.chapter_number or 0) for plan in accepted_window
+        ]
+        window_start = min(accepted_chapter_window, default=0)
+        window_end = max(accepted_chapter_window, default=0)
         plans = (
             session.query(ChapterPlan)
             .filter(
@@ -560,41 +552,22 @@ class AuditControlStage:
                 residual_issue_count_by_chapter[str(int(plan.chapter_number or 0))] = (
                     len(parsed_issues)
                 )
-        obligation_repo = NarrativeObligationRepository(session)
-        active_obligations = obligation_repo.list_active_for_context(
-            project_id,
-            chapter_number=window_end + 1,
-        )
         return {
-            "checkpoint_chapter": window_end,
-            "checkpoint_interval": int(interval or 0),
+            "accepted_count": accepted_count,
+            "cadence": cadence,
+            "accepted_chapter_window": accepted_chapter_window,
             "window_start": window_start,
             "window_end": window_end,
-            "requested_chapters": int(requested_chapters or 0),
-            "completed_chapters": sorted({int(item) for item in completed_chapters}),
-            "failed_chapters": sorted(
-                {int(item) for item in [*failed_chapters, *failed_window_chapters]}
-            ),
-            "paused_chapters": sorted({int(item) for item in paused_chapters}),
+            "failed_chapters": sorted({int(item) for item in failed_window_chapters}),
             "accepted_chapters": accepted_chapters,
             "needs_review_chapters": needs_review_chapters,
             "status_by_chapter": status_by_chapter,
             "high_risk_chapters": high_risk_chapters,
             "repair_attempts_by_chapter": repair_attempts_by_chapter,
             "residual_issue_count_by_chapter": residual_issue_count_by_chapter,
-            "open_obligation_ids": [item.id for item in active_obligations],
-            "p0_p1_open_obligation_ids": [
-                item.id for item in active_obligations if item.priority in {"P0", "P1"}
-            ],
             "future_plan_audit": _future_plan_audit_checkpoint_payload(
                 future_plan_audit_result
             ),
-            "pause": {
-                "enabled": pause_enabled,
-                "will_pause": will_pause,
-                "reason": "generation_audit_checkpoint" if will_pause else "",
-            },
-            "next_chapter": int(next_chapter or 0),
         }
 
     def _previous_band_row(

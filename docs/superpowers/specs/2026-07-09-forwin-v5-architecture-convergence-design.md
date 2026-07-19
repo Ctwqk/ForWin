@@ -242,6 +242,7 @@ API schemas are transport DTOs, not a configuration source. `RuntimeSettingsStor
 The user-visible policy contains:
 
 ```text
+schema_version: 2
 quality_profile: standard | pulp
 model_profile_id: string
 chapter_length: bounded integer range
@@ -249,10 +250,16 @@ pause_policy:
   review_interval_chapters: non-negative integer
   manual_checkpoints: boolean
   band_checkpoint_action: continue | pause_on_warn | pause_always
-  generation_audit_interval: non-negative integer
-  generation_audit_pauses: boolean
   gate_delegate: human | spark
 ```
+
+Current contract: `RuntimePolicy.schema_version=2`; Generation Audit is
+`report-only`, records after every six accepted database chapters using
+`cadence=6` over `ChapterPlan.status="accepted"` rows for `all profiles`, emits
+`generation_audit_checkpoint_reached` with
+`event_family="runtime_observation"`, and has
+`no pause/delegation/block` behavior. It is not a user-visible policy setting
+and cannot change the generation `RunResult`.
 
 There is no `operation_mode`. Generation is always the strict blackbox pipeline. There is no `premium`, `writer_mode`, `progression_mode`, hybrid mode family, or public review-engine feature flag.
 

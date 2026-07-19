@@ -653,9 +653,6 @@
       bandCheckpointAction.value = pausePolicy.band_checkpoint_action || 'pause_on_warn';
       form.appendChild(createLabeledField('Band Checkpoint', bandCheckpointAction));
 
-      const auditInterval = policyNumberInput('runtime_policy_generation_audit_interval', pausePolicy.generation_audit_interval, 0, 500);
-      form.appendChild(createLabeledField('生成审计间隔', auditInterval));
-
       const manualCheckpoint = document.createElement('input');
       manualCheckpoint.id = 'runtime_policy_manual_checkpoints';
       manualCheckpoint.type = 'checkbox';
@@ -665,16 +662,6 @@
       manualCheckpointWrap.appendChild(manualCheckpoint);
       manualCheckpointWrap.appendChild(document.createTextNode('允许 Manual Checkpoint'));
       form.appendChild(manualCheckpointWrap);
-
-      const auditPauses = document.createElement('input');
-      auditPauses.id = 'runtime_policy_generation_audit_pauses';
-      auditPauses.type = 'checkbox';
-      auditPauses.checked = Boolean(pausePolicy.generation_audit_pauses);
-      const auditPausesWrap = document.createElement('label');
-      auditPausesWrap.className = 'checkbox';
-      auditPausesWrap.appendChild(auditPauses);
-      auditPausesWrap.appendChild(document.createTextNode('生成审计后暂停'));
-      form.appendChild(auditPausesWrap);
 
       let gateDelegate = pausePolicy.gate_delegate === 'spark' ? 'spark' : 'human';
       const gateControl = createNode('div', '', 'pill-switch');
@@ -726,8 +713,6 @@
           review_interval_chapters: normalizeReviewInterval(reviewInterval.value),
           manual_checkpoints: manualCheckpoint.checked,
           band_checkpoint_action: bandCheckpointAction.value,
-          generation_audit_interval: Number(auditInterval.value),
-          generation_audit_pauses: auditPauses.checked,
           gate_delegate: gateDelegate,
         });
       }, 'primary'));

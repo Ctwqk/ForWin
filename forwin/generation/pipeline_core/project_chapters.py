@@ -8,7 +8,6 @@ from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
 from forwin.maintenance import deferred as deferred_maintenance
-from forwin.models.audit import DecisionEvent
 from forwin.generation.pipeline_core.chapter_review_gate import (
     handle_chapter_review_gate,
 )
@@ -21,7 +20,6 @@ from forwin.planning.checkpoints import BandCheckpointDetail, BandCheckpointIssu
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.review.issue_groups import issue_group_for_issue
-import json
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
 from forwin.checker.rules import ContinuityChecker
 from sqlalchemy.orm import Session
@@ -685,61 +683,13 @@ class ChapterExecutionStage:
                     future_plan_audit_result is not None
                     and future_plan_audit_result.blocking_reasons
                 )
-                generation_audit_pause = (
-                    self._record_generation_audit_checkpoint_if_due(
-                        session=session,
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=chapter_num,
-                        requested_chapters=requested_chapters,
-                        last_requested_chapter=last_requested_chapter,
-                        completed_chapters=completed_chapters,
-                        failed_chapters=failed_chapters,
-                        paused_chapters=paused_chapters,
-                        future_plan_audit_result=future_plan_audit_result,
-                        policy=policy,
-                    )
+                self._record_generation_audit_report_if_due(
+                    session=session,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    future_plan_audit_result=future_plan_audit_result,
                 )
-                if generation_audit_pause:
-                    audit_event = (
-                        session.query(DecisionEvent)
-                        .filter(
-                            DecisionEvent.project_id == project_id,
-                            DecisionEvent.chapter_number == chapter_num,
-                            DecisionEvent.event_type
-                            == DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
-                        )
-                        .order_by(
-                            DecisionEvent.created_at.desc(), DecisionEvent.id.desc()
-                        )
-                        .first()
-                    )
-                    try:
-                        audit_payload = json.loads(
-                            str(getattr(audit_event, "payload_json", "{}") or "{}")
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        audit_payload = {}
-                    audit_outcome = self._resolve_gate_delegation(
-                        updater=updater,
-                        project_id=project_id,
-                        gate_kind="generation_audit_pause",
-                        scope="project",
-                        chapter_number=chapter_num,
-                        related_object_type="decision_event",
-                        related_object_id=str(getattr(audit_event, "id", "") or ""),
-                        parent_event_id=str(getattr(audit_event, "id", "") or ""),
-                        input_snapshot={
-                            "generation_audit": audit_payload,
-                            "chapter_number": chapter_num,
-                            "completed_chapters": [*completed_chapters, chapter_num],
-                            "failed_chapters": failed_chapters,
-                            "paused_chapters": paused_chapters,
-                            "runtime_policy": policy.model_dump(mode="json"),
-                        },
-                    )
-                    if audit_outcome.approved:
-                        generation_audit_pause = False
                 checkpoint_row = None
                 checkpoint_pause = False
                 checkpoint_warn_pause = False
@@ -871,7 +821,6 @@ class ChapterExecutionStage:
                     or manual_after_accept is not None
                     or manual_band_end is not None
                     or future_plan_audit_blocked
-                    or generation_audit_pause
                 ):
                     if should_pause_for_checkpoint and checkpoint_row is not None:
                         self._record_decision_event(

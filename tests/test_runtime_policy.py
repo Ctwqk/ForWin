@@ -6,6 +6,7 @@ from forwin.runtime.policy import RuntimePolicy
 
 def test_standard_policy_is_strict_and_complete() -> None:
     policy = RuntimePolicy.for_profile("standard", model_profile_id="env-kimi")
+    assert policy.schema_version == 2
     assert policy.quality_profile == "standard"
     assert policy.model_profile_id == "env-kimi"
     assert policy.chapter_length.model_dump() == {
@@ -14,6 +15,8 @@ def test_standard_policy_is_strict_and_complete() -> None:
         "max_chars": 3200,
     }
     assert policy.pause.gate_delegate == "human"
+    assert "generation_audit_" + "interval" not in policy.pause.model_dump()
+    assert "generation_audit_" + "pauses" not in policy.pause.model_dump()
     assert policy.canon.hard_floor is True
     assert policy.canon.book_state_layers == ("world", "map", "cognition", "narrative")
     assert policy.review.allows_signal("canon_quality")

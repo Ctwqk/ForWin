@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
+from forwin.checker.hard_floor import run_hard_floor
+from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.state_change import (
     DeliveredPayoffCandidate,
     EventCandidate,
     StateChangeCandidate,
 )
+from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.chapter_writer import ChapterWriter
 
 
@@ -255,3 +261,155 @@ def test_writer_output_rebases_generic_numeric_title_to_context_chapter() -> Non
     )
 
     assert output.title == "第29章"
+
+
+def test_writer_output_restores_flattened_payoff_quote_to_verbatim_body() -> None:
+    writer = ChapterWriter(
+        llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}")
+    )
+    context = ChapterContextPack(
+        project_id="project-1",
+        project_title="测试项目",
+        premise="测试前提",
+        genre="都市玄幻",
+        setting_summary="测试设定",
+        chapter_number=1,
+        chapter_plan_title="第一章",
+        chapter_plan_one_line="周行签收续命丹。",
+        chapter_goals=["完成签收"],
+        must_not_reveal=[],
+    )
+    payoff_paragraph = (
+        "周行走到二楼拐角的时候，手机忽然自动播报了一条消息，声音不大，"
+        "但在安静的楼道里格外清晰：\n\n"
+        "“续命丹已签收。见习路权临时开启。”"
+    )
+    body = f"{payoff_paragraph}\n\n周行抬头看向新出现的通道。"
+
+    output = writer._writer_output_from_dict(
+        context,
+        {
+            "title": "第一章",
+            "body": body,
+            "end_of_chapter_summary": "周行签收续命丹并开启见习路权。",
+            "new_events": [
+                {
+                    "summary": "周行开启见习路权。",
+                    "significance": "major",
+                    "involved_entity_names": ["周行"],
+                    "roles": ["protagonist"],
+                }
+            ],
+            "delivered_payoffs": [
+                {
+                    "entity_name": "周行",
+                    "category": "power",
+                    "direction": "gain",
+                    "before_state": "没有见习路权",
+                    "after_state": "见习路权临时开启",
+                    "evidence_quote": (
+                        "周行走到二楼拐角的时候，手机忽然自动播报了一条消息，"
+                        "声音不大，但在安静的楼道里格外清晰："
+                        "“续命丹已签收。见习路权临时开启。”"
+                    ),
+                }
+            ],
+        },
+    )
+
+    assert output.delivered_payoffs[0].evidence_quote == payoff_paragraph
+    assert output.delivered_payoffs[0].evidence_quote in body
+
+    result = run_hard_floor(
+        writer_output=output,
+        context_pack=context,
+        repo=None,
+        project_id=context.project_id,
+        chapter_number=context.chapter_number,
+        policy=RuntimePolicy.for_profile("pulp"),
+    )
+
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+
+
+def test_payoff_quote_restoration_requires_one_exact_non_whitespace_match() -> None:
+    paragraph = "周行收到提示：\n\n“见习路权临时开启。”"
+    flattened = "周行收到提示：“见习路权临时开启。”"
+
+    assert (
+        ChapterWriter._unique_whitespace_equivalent_body_slice(
+            f"{paragraph}\n{paragraph}",
+            flattened,
+        )
+        == flattened
+    )
+    assert (
+        ChapterWriter._unique_whitespace_equivalent_body_slice(
+            paragraph,
+            "周行收到提示：“见习路权永久开启。”",
+        )
+        == "周行收到提示：“见习路权永久开启。”"
+    )
+
+
+def test_payoff_quote_length_ignores_restored_body_whitespace() -> None:
+    writer = ChapterWriter(
+        llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}")
+    )
+    flattened = "周行" + ("甲" * 220) + "见习路权临时开启"
+    formatted = "\n".join(
+        flattened[offset : offset + 10] for offset in range(0, len(flattened), 10)
+    )
+    assert len(flattened) <= 240 < len(formatted)
+
+    output = writer._writer_output_from_dict(
+        SimpleNamespace(project_id="project-1", chapter_number=1),
+        {
+            "title": "第一章",
+            "body": formatted,
+            "delivered_payoffs": [
+                {
+                    "entity_name": "周行",
+                    "category": "power",
+                    "direction": "gain",
+                    "before_state": "见习路权未开启",
+                    "after_state": "见习路权临时开启",
+                    "evidence_quote": flattened,
+                }
+            ],
+        },
+    )
+
+    assert output.delivered_payoffs[0].evidence_quote == formatted
+
+
+def test_payoff_quote_still_rejects_more_than_240_content_characters() -> None:
+    payload = {
+        "entity_name": "周行",
+        "category": "power",
+        "direction": "gain",
+        "before_state": "见习路权未开启",
+        "after_state": "见习路权临时开启",
+        "evidence_quote": "周行" + ("甲" * 239),
+    }
+
+    with pytest.raises(ValidationError, match="at most 240 non-whitespace"):
+        DeliveredPayoffCandidate(**payload)
+
+    quote_schema = DeliveredPayoffCandidate.model_json_schema()["properties"][
+        "evidence_quote"
+    ]
+    assert quote_schema["minLength"] == 4
+    assert quote_schema["maxLength"] == 240
+
+
+def test_writer_output_rejects_non_string_body() -> None:
+    writer = ChapterWriter(
+        llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}")
+    )
+
+    with pytest.raises(ValidationError):
+        writer._writer_output_from_dict(
+            SimpleNamespace(project_id="project-1", chapter_number=1),
+            {"title": "第一章", "body": {"text": "正文"}},
+        )

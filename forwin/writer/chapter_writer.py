@@ -528,10 +528,16 @@ class ChapterWriter:
         data: dict,
         scene_outputs: list[SceneOutput] | None = None,
     ) -> WriterOutput:
+        body = data.get("body", "")
         state_changes = self._build_list(data, "state_changes", StateChangeCandidate)
         new_events = self._build_list(data, "new_events", EventCandidate)
+        payoff_data = (
+            self._restore_payoff_evidence_quotes(data, body)
+            if isinstance(body, str)
+            else data
+        )
         delivered_payoffs = self._build_list(
-            data,
+            payoff_data,
             "delivered_payoffs",
             DeliveredPayoffCandidate,
         )
@@ -551,7 +557,6 @@ class ChapterWriter:
                     exc,
                 )
 
-        body: str = data.get("body", "")
         resolved_scene_outputs = scene_outputs or []
         output = WriterOutput(
             project_id=getattr(context, "project_id", ""),
@@ -561,7 +566,7 @@ class ChapterWriter:
                 context.chapter_number,
             ),
             body=body,
-            char_count=len(body),
+            char_count=len(body) if isinstance(body, str) else 0,
             end_of_chapter_summary=data.get("end_of_chapter_summary", ""),
             scene_outputs=resolved_scene_outputs,
             state_changes=state_changes,
@@ -999,6 +1004,65 @@ class ChapterWriter:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _restore_payoff_evidence_quotes(cls, data: dict, body: str) -> dict:
+        raw_payoffs = data.get("delivered_payoffs")
+        if not isinstance(raw_payoffs, list):
+            return data
+
+        restored_payoffs: list[object] = []
+        changed = False
+        for item in raw_payoffs:
+            if not isinstance(item, dict):
+                restored_payoffs.append(item)
+                continue
+            quote = item.get("evidence_quote")
+            if not isinstance(quote, str):
+                restored_payoffs.append(item)
+                continue
+            restored_quote = cls._unique_whitespace_equivalent_body_slice(body, quote)
+            if restored_quote == quote:
+                restored_payoffs.append(item)
+                continue
+            restored_item = dict(item)
+            restored_item["evidence_quote"] = restored_quote
+            restored_payoffs.append(restored_item)
+            changed = True
+
+        if not changed:
+            return data
+        restored_data = dict(data)
+        restored_data["delivered_payoffs"] = restored_payoffs
+        return restored_data
+
+    @staticmethod
+    def _unique_whitespace_equivalent_body_slice(body: str, quote: str) -> str:
+        stripped_quote = quote.strip()
+        if not stripped_quote or stripped_quote in body:
+            return stripped_quote
+
+        compact_quote = "".join(stripped_quote.split())
+        if not compact_quote:
+            return stripped_quote
+
+        compact_body_chars: list[str] = []
+        body_offsets: list[int] = []
+        for offset, character in enumerate(body):
+            if character.isspace():
+                continue
+            compact_body_chars.append(character)
+            body_offsets.append(offset)
+        compact_body = "".join(compact_body_chars)
+
+        match_start = compact_body.find(compact_quote)
+        if match_start < 0:
+            return stripped_quote
+        if compact_body.find(compact_quote, match_start + 1) >= 0:
+            return stripped_quote
+
+        match_end = match_start + len(compact_quote) - 1
+        return body[body_offsets[match_start] : body_offsets[match_end] + 1]
 
     @staticmethod
     def _build_list(data: dict, key: str, model_cls) -> list:  # type: ignore[type-arg]

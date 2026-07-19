@@ -37,7 +37,7 @@ class DeliveredPayoffCandidate(BaseModel):
     direction: Literal["gain", "relief", "reversal"]
     before_state: str = Field(min_length=1)
     after_state: str = Field(min_length=1)
-    evidence_quote: str = Field(min_length=4, max_length=240)
+    evidence_quote: str = Field(json_schema_extra={"minLength": 4, "maxLength": 240})
 
     @field_validator(
         "entity_name",
@@ -49,6 +49,20 @@ class DeliveredPayoffCandidate(BaseModel):
     @classmethod
     def _strip_required_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("evidence_quote")
+    @classmethod
+    def _validate_evidence_quote_length(cls, value: str) -> str:
+        content_length = sum(not character.isspace() for character in value)
+        if content_length < 4:
+            raise ValueError(
+                "evidence_quote must contain at least 4 non-whitespace characters"
+            )
+        if content_length > 240:
+            raise ValueError(
+                "evidence_quote must contain at most 240 non-whitespace characters"
+            )
+        return value
 
 
 class ThreadBeatCandidate(BaseModel):

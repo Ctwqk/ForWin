@@ -166,6 +166,7 @@ class GenerationApplicationService:
             task.lease_epoch if lease_epoch is None else lease_epoch
         )
         if task.cancel_requested:
+            acknowledged_at = datetime.now(timezone.utc)
             self._task_updater(
                 worker_id=normalized_worker_id,
                 lease_epoch=normalized_lease_epoch,
@@ -175,9 +176,11 @@ class GenerationApplicationService:
                 current_stage="cancelled",
                 message="生成 worker 已确认终止请求，任务已取消。",
                 error=None,
+                finished_at=acknowledged_at,
             )
             return
         if task.pause_requested:
+            acknowledged_at = datetime.now(timezone.utc)
             self._task_updater(
                 worker_id=normalized_worker_id,
                 lease_epoch=normalized_lease_epoch,
@@ -187,6 +190,8 @@ class GenerationApplicationService:
                 current_stage="paused",
                 message="生成 worker 已确认暂停请求，任务已安全暂停。",
                 error=None,
+                finished_at=acknowledged_at,
+                paused_at=acknowledged_at,
             )
             return
         if str(claim_kind or "") == "expired_running":

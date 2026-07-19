@@ -36,6 +36,7 @@ from forwin.http.project_support import (
     _latest_related_decision_event,
     _list_decision_event_rows,
     _log_decision_event,
+    _mutate_generation_task,
     _persist_project_automation,
     _require_reason,
     _serialize_band_checkpoint,
@@ -73,10 +74,7 @@ from forwin.http.tasks import (
     _serialize_generation_task_center_item,
     _serialize_task,
     _serialize_upload_task_center_item,
-    _task_is_deletable,
-    _task_is_pausable,
     _task_is_terminal,
-    _task_is_terminable,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,7 +87,6 @@ def _display_for(runtime: HttpRuntime, value) -> str:
 def _build_task_application(runtime: HttpRuntime) -> TaskApplicationService:
     return TaskApplicationService(
         TaskApplicationDeps(
-            get_session=lambda: _get_session(runtime),
             get_publisher_manager=lambda: runtime.publisher_manager,
             list_generation_tasks=lambda limit: _list_generation_tasks(
                 runtime, limit
@@ -112,13 +109,8 @@ def _build_task_application(runtime: HttpRuntime) -> TaskApplicationService:
                 _get_project_backed_task_item_or_404(runtime, task_id)
             ),
             task_is_terminal=_task_is_terminal,
-            task_is_terminable=_task_is_terminable,
-            task_is_pausable=_task_is_pausable,
-            task_is_deletable=_task_is_deletable,
-            latest_related_decision_event=_latest_related_decision_event,
-            log_decision_event=_log_decision_event,
-            update_task=lambda task_id, **changes: _update_task(
-                runtime, task_id, **changes
+            mutate_generation_task=lambda task_id, action: (
+                _mutate_generation_task(runtime, task_id, action)
             ),
             active_generation_task_ids=lambda project_id="": (
                 _active_generation_task_ids(runtime, project_id)

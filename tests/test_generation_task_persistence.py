@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from sqlalchemy import delete
 
 from forwin.config import InfrastructureConfig
+from forwin.generation.task_repository import GenerationTaskRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -39,6 +41,39 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.engine.dispose()
         self.tmpdir.cleanup()
+
+    def _replace_task_before_row_lock(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        current_stage: str,
+    ):
+        original = GenerationTaskRepository.get_for_update
+        replaced = False
+
+        def get_for_update(repository, requested_task_id):
+            nonlocal replaced
+            if requested_task_id == task_id and not replaced:
+                replaced = True
+                with self.session_factory.begin() as session:
+                    row = session.get(GenerationTask, task_id)
+                    self.assertIsNotNone(row)
+                    assert row is not None
+                    row.status = status
+                    row.current_stage = current_stage
+                    row.finished_at = (
+                        datetime.now(timezone.utc)
+                        if status == "completed"
+                        else None
+                    )
+            return original(repository, requested_task_id)
+
+        return patch.object(
+            GenerationTaskRepository,
+            "get_for_update",
+            get_for_update,
+        )
 
     def test_persisted_generation_task_is_listed_from_database(self) -> None:
         task = api_module._create_task_record(
@@ -266,6 +301,127 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(cancelled["current_stage"], "cancelled")
         self.assertTrue(cancelled["cancel_requested"])
+
+    def test_pause_rejects_task_completed_before_locked_mutation(self) -> None:
+        task = api_module._create_task_record(
+            title="pause lock race",
+            requested_chapters=1,
+        )
+        task["status"] = "running"
+        task["current_stage"] = "writing_chapter"
+        api_module._persist_generation_task("task-pause-lock-race", task)
+
+        with self._replace_task_before_row_lock(
+            task_id="task-pause-lock-race",
+            status="completed",
+            current_stage="completed",
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api_module.pause_task("task-pause-lock-race")
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "当前任务状态不支持安全暂停")
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-pause-lock-race")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, "completed")
+            self.assertEqual(row.current_stage, "completed")
+            self.assertFalse(row.pause_requested)
+
+    def test_terminate_rejects_task_completed_before_locked_mutation(self) -> None:
+        task = api_module._create_task_record(
+            title="terminate lock race",
+            requested_chapters=1,
+        )
+        task["status"] = "running"
+        task["current_stage"] = "writing_chapter"
+        api_module._persist_generation_task("task-terminate-lock-race", task)
+
+        with self._replace_task_before_row_lock(
+            task_id="task-terminate-lock-race",
+            status="completed",
+            current_stage="completed",
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api_module.terminate_task("task-terminate-lock-race")
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "当前任务状态不支持终止")
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-terminate-lock-race")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, "completed")
+            self.assertEqual(row.current_stage, "completed")
+            self.assertFalse(row.cancel_requested)
+
+    def test_delete_validates_terminal_status_from_locked_row(self) -> None:
+        task = api_module._create_task_record(
+            title="delete lock race",
+            requested_chapters=1,
+        )
+        task["status"] = "completed"
+        task["current_stage"] = "completed"
+        api_module._persist_generation_task("task-delete-lock-race", task)
+
+        with self._replace_task_before_row_lock(
+            task_id="task-delete-lock-race",
+            status="running",
+            current_stage="writing_chapter",
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api_module.delete_task("task-delete-lock-race")
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail, "只有终态任务可以删除")
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-delete-lock-race")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, "running")
+            self.assertIsNone(row.deleted_at)
+
+    def test_pause_audit_failure_rolls_back_task_mutation(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory.begin() as session:
+            session.add(
+                Project(
+                    id="project-pause-audit-rollback",
+                    title="pause audit rollback",
+                    premise="test",
+                    genre="test",
+                    creation_status="writing",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                GenerationTask(
+                    id="task-pause-audit-rollback",
+                    project_id="project-pause-audit-rollback",
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        with patch(
+            "forwin.application.project_control.support.log_decision_event",
+            side_effect=RuntimeError("audit write failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "audit write failed"):
+                api_module.pause_task("task-pause-audit-rollback")
+
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-pause-audit-rollback")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row.status, "running")
+            self.assertEqual(row.current_stage, "writing_chapter")
+            self.assertFalse(row.pause_requested)
 
     def test_progress_update_cannot_expand_requested_chapters_contract(self) -> None:
         task = api_module._create_task_record(title="继续生成计数契约", requested_chapters=2)

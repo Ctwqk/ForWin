@@ -97,6 +97,8 @@ class GenerationTaskRepository:
             "message": "message",
             "error": "error_message",
             "current_chapter": "current_chapter",
+            "finished_at": "finished_at",
+            "paused_at": "paused_at",
         }
         list_fields = {
             "completed_chapters": "completed_chapters_json",

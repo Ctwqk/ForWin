@@ -342,6 +342,11 @@ def _assert_expired_control_request_is_acknowledged(
         assert task is not None
         assert task.status == expected_status
         assert task.current_stage == expected_status
+        assert task.finished_at is not None
+        if expected_status == "paused":
+            assert task.paused_at is not None
+        else:
+            assert task.paused_at is None
 
 
 def test_expired_running_pause_request_is_acknowledged_without_pipeline_work(

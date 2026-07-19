@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
 from typing import Any, Callable
 
 from fastapi import HTTPException
-from sqlalchemy.exc import OperationalError
 
 from forwin.api_schema import (
     ActiveGenerationTaskCheckResponse,
@@ -13,15 +11,10 @@ from forwin.api_schema import (
     TaskBulkDeleteRequest,
     TaskMutationResponse,
 )
-from forwin.audit.events import DecisionEventType
-from forwin.storage.db_errors import is_retryable_database_error
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class TaskApplicationDeps:
-    get_session: Callable[[], Any]
     get_publisher_manager: Callable[[], Any]
     list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
     serialize_task: Callable[[str, dict[str, Any]], Any]
@@ -32,12 +25,7 @@ class TaskApplicationDeps:
     parse_project_task_id: Callable[[str], str | None]
     get_project_backed_task_item_or_404: Callable[[str], Any]
     task_is_terminal: Callable[[str], bool]
-    task_is_terminable: Callable[[dict[str, Any]], bool]
-    task_is_pausable: Callable[[dict[str, Any]], bool]
-    task_is_deletable: Callable[[dict[str, Any]], bool]
-    latest_related_decision_event: Callable[..., Any]
-    log_decision_event: Callable[..., Any]
-    update_task: Callable[..., None]
+    mutate_generation_task: Callable[[str, str], TaskMutationResponse]
     active_generation_task_ids: Callable[[str], list[str]] | None = None
 
 
@@ -125,137 +113,13 @@ def _build_operations(
         raise HTTPException(404, "任务类型不存在")
 
     def terminate_task(task_id: str) -> TaskMutationResponse:
-        task = deps.get_generation_task_or_404(task_id)
-        if not deps.task_is_terminable(task):
-            raise HTTPException(400, "当前任务状态不支持终止")
-        project_id = str(task.get("project_id", "") or "").strip()
-        queued = str(task.get("status", "") or "").strip() == "queued"
-        deps.update_task(
-            task_id,
-            cancel_requested=True,
-            status="cancelled" if queued else "terminating",
-            current_stage="cancelled" if queued else "terminating",
-            message=(
-                "任务尚未开始，已取消。"
-                if queued
-                else "已请求终止生成任务，系统会在下一个安全检查点停止。"
-            ),
-        )
-        if project_id:
-            try:
-                with deps.get_session() as session:
-                    parent = deps.latest_related_decision_event(
-                        session,
-                        project_id=project_id,
-                        related_object_type="generation_task",
-                        related_object_id=task_id,
-                    )
-                    deps.log_decision_event(
-                        session,
-                        project_id=project_id,
-                        task_id=task_id,
-                        scope="task",
-                        event_family="audit_action",
-                        event_type=DecisionEventType.TERMINATE_REQUESTED,
-                        actor_type="manual_ui",
-                        summary="已请求终止生成任务。",
-                        related_object_type="generation_task",
-                        related_object_id=task_id,
-                        parent_event_id=str(parent.id if parent is not None else ""),
-                        causal_root_id=str(
-                            parent.causal_root_id if parent is not None else ""
-                        ),
-                    )
-                    session.commit()
-            except OperationalError as exc:
-                if not is_retryable_database_error(exc):
-                    raise
-                logger.warning(
-                    "Terminate audit event skipped because database is busy: %s", exc
-                )
-        updated = deps.get_generation_task_or_404(task_id)
-        return TaskMutationResponse(
-            ok=True,
-            task_kind="generation",
-            task_id=task_id,
-            status=str(updated.get("status", "")),
-            message=str(updated.get("message", "")),
-        )
+        return deps.mutate_generation_task(task_id, "terminate")
 
     def pause_task(task_id: str) -> TaskMutationResponse:
-        task = deps.get_generation_task_or_404(task_id)
-        if not deps.task_is_pausable(task):
-            raise HTTPException(400, "当前任务状态不支持安全暂停")
-        project_id = str(task.get("project_id", "") or "").strip()
-        queued = str(task.get("status", "") or "").strip() == "queued"
-        deps.update_task(
-            task_id,
-            pause_requested=True,
-            status="paused" if queued else str(task.get("status", "") or ""),
-            current_stage=(
-                "paused"
-                if queued
-                else str(task.get("current_stage", "") or "")
-            ),
-            message=(
-                "任务尚未开始，已安全暂停。"
-                if queued
-                else "已请求安全暂停，系统会在下一个安全检查点保存进度并暂停。"
-            ),
-        )
-        if project_id:
-            try:
-                with deps.get_session() as session:
-                    parent = deps.latest_related_decision_event(
-                        session,
-                        project_id=project_id,
-                        related_object_type="generation_task",
-                        related_object_id=task_id,
-                    )
-                    deps.log_decision_event(
-                        session,
-                        project_id=project_id,
-                        task_id=task_id,
-                        scope="task",
-                        event_family="audit_action",
-                        event_type=DecisionEventType.PAUSE_REQUESTED,
-                        actor_type="manual_ui",
-                        summary="已请求安全暂停生成任务。",
-                        related_object_type="generation_task",
-                        related_object_id=task_id,
-                        parent_event_id=str(parent.id if parent is not None else ""),
-                        causal_root_id=str(
-                            parent.causal_root_id if parent is not None else ""
-                        ),
-                    )
-                    session.commit()
-            except OperationalError as exc:
-                if not is_retryable_database_error(exc):
-                    raise
-                logger.warning(
-                    "Pause audit event skipped because database is busy: %s", exc
-                )
-        updated = deps.get_generation_task_or_404(task_id)
-        return TaskMutationResponse(
-            ok=True,
-            task_kind="generation",
-            task_id=task_id,
-            status=str(updated.get("status", "")),
-            message=str(updated.get("message", "")),
-        )
+        return deps.mutate_generation_task(task_id, "pause")
 
     def delete_task(task_id: str) -> TaskMutationResponse:
-        task = deps.get_generation_task_or_404(task_id)
-        if not deps.task_is_deletable(task):
-            raise HTTPException(400, "只有终态任务可以删除")
-        deps.update_task(task_id, deleted=True, message="任务已删除。")
-        return TaskMutationResponse(
-            ok=True,
-            task_kind="generation",
-            task_id=task_id,
-            status=str(task.get("status", "")),
-            message="任务已删除。",
-        )
+        return deps.mutate_generation_task(task_id, "delete")
 
     def bulk_delete_tasks(req: TaskBulkDeleteRequest) -> BulkDeleteResponse:
         deleted_ids: list[str] = []
@@ -272,14 +136,10 @@ def _build_operations(
             seen.add(key)
             if task_kind == "generation":
                 try:
-                    task = deps.get_generation_task_or_404(task_id)
+                    deps.mutate_generation_task(task_id, "delete")
                 except HTTPException:
                     skipped_ids.append(key)
                     continue
-                if not deps.task_is_deletable(task):
-                    skipped_ids.append(key)
-                    continue
-                deps.update_task(task_id, deleted=True, message="任务已删除。")
                 deleted_ids.append(key)
                 continue
             if task_kind == "upload":

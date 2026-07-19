@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from forwin.models.task import GenerationTask
 from forwin.http import HttpRuntime, create_app
-from forwin.http.automation import _list_generation_tasks
 from forwin.http.generation import (
     _create_continue_generation_task,
     _project_has_active_generation_task,
@@ -14,11 +13,10 @@ from forwin.http.project_support import (
 from forwin.http.tasks import (
     _apply_generation_task_to_row,
     _coerce_task_datetime,
+    _list_generation_tasks,
     _new_stage_history_entry,
     _serialize_generation_task_center_item,
-    _sync_task_cache,
     _task_is_pausable,
-    recover_interrupted_generation_tasks,
 )
 from forwin.http.request_support import _utcnow
 
@@ -30,8 +28,6 @@ class HttpRuntimeHarness:
         "_engine": "engine",
         "_runtime_container": "container",
         "_pipeline": "pipeline",
-        "_tasks": "tasks",
-        "_tasks_lock": "tasks_lock",
     }
 
     def __init__(
@@ -131,7 +127,6 @@ class HttpRuntimeHarness:
         }
 
     def _persist_generation_task(self, task_id, task) -> None:
-        _sync_task_cache(self.runtime, task_id, task)
         with self.runtime.get_session() as session:
             row = session.get(GenerationTask, task_id) or GenerationTask(id=task_id)
             _apply_generation_task_to_row(row, task)
@@ -146,9 +141,6 @@ class HttpRuntimeHarness:
 
     def _create_continue_generation_task(self, **kwargs):
         return _create_continue_generation_task(self.runtime, **kwargs)
-
-    def _recover_interrupted_generation_tasks(self):
-        return recover_interrupted_generation_tasks(self.runtime)
 
     @staticmethod
     def _serialize_generation_task_center_item(task_id, task):
@@ -171,9 +163,6 @@ class HttpRuntimeHarness:
             project_id,
             session=session,
         )
-
-    def _sync_task_cache(self, task_id, task) -> None:
-        _sync_task_cache(self.runtime, task_id, task)
 
     @staticmethod
     def _utcnow():

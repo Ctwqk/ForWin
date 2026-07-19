@@ -18,17 +18,8 @@ from forwin.models.task import GenerationTask
 @dataclass(slots=True)
 class TaskCenterService:
     get_session: Callable[[], Any]
-    has_db_session: Callable[[], bool]
-    prune_task_cache: Callable[[], None]
-    utcnow: Callable[[], datetime]
     display_datetime: Callable[[Any], str]
-    coerce_task_datetime: Callable[[Any], datetime]
     new_stage_history_entry: Callable[..., dict[str, Any]]
-    cached_generation_task: Callable[[str], dict[str, Any] | None]
-    iter_cached_generation_tasks: Callable[[], list[tuple[str, dict[str, Any]]]]
-    prefer_cached_generation_task: Callable[
-        [dict[str, Any] | None, dict[str, Any] | None], dict[str, Any] | None
-    ]
     generation_task_from_row: Callable[[Any], dict[str, Any]]
     config_provider: Callable[[], Any]
     terminal_statuses: set[str]
@@ -90,35 +81,15 @@ class TaskCenterService:
         *,
         include_deleted: bool = False,
     ) -> dict[str, Any] | None:
-        if not self.has_db_session():
-            return self.apply_task_visibility_rules(
-                self.cached_generation_task(task_id),
-                include_deleted=include_deleted,
-            )
-
         with self.get_session() as session:
-            cached = self.cached_generation_task(task_id)
             row = session.get(GenerationTask, task_id)
-            persisted = self.generation_task_from_row(row) if row is not None else None
-            task = self.prefer_cached_generation_task(persisted, cached)
+            task = self.generation_task_from_row(row) if row is not None else None
             return self.apply_task_visibility_rules(
                 task, include_deleted=include_deleted
             )
 
     def list_generation_tasks(self, limit: int) -> list[tuple[str, dict[str, Any]]]:
-        self.prune_task_cache()
         normalized_limit = max(1, min(int(limit or 30), 100))
-        if not self.has_db_session():
-            return [
-                (task_id, dict(task))
-                for task_id, task in sorted(
-                    self.iter_cached_generation_tasks(),
-                    key=lambda item: item[1].get("updated_at", self.utcnow()),
-                    reverse=True,
-                )
-                if not task.get("deleted")
-            ][:normalized_limit]
-
         with self.get_session() as session:
             rows = (
                 session.execute(
@@ -130,56 +101,34 @@ class TaskCenterService:
                 .scalars()
                 .all()
             )
-            merged: dict[str, dict[str, Any]] = {}
-            persisted_tasks: list[tuple[str, dict[str, Any]]] = []
+            tasks: list[tuple[str, dict[str, Any]]] = []
             for row in rows:
-                persisted = self.generation_task_from_row(row)
-                cached = self.cached_generation_task(row.id)
-                task = self.prefer_cached_generation_task(persisted, cached)
-                if task is not None:
-                    persisted_tasks.append((row.id, task))
-            for task_id, task in persisted_tasks:
+                task = self.generation_task_from_row(row)
                 visible = self.apply_task_visibility_rules(
                     task,
                     include_deleted=False,
                 )
                 if visible is not None:
-                    merged[task_id] = visible
-            for task_id, cached in self.iter_cached_generation_tasks():
-                visible = self.apply_task_visibility_rules(
-                    cached, include_deleted=False
-                )
-                if visible is None:
-                    continue
-                current = merged.get(task_id)
-                merged[task_id] = (
-                    self.prefer_cached_generation_task(current, visible) or visible
-                )
-            return sorted(
-                merged.items(),
-                key=lambda item: self.coerce_task_datetime(item[1].get("updated_at")),
-                reverse=True,
-            )[:normalized_limit]
+                    tasks.append((row.id, visible))
+            return tasks
 
     def list_project_backed_task_items(
         self, limit: int
     ) -> list[TaskCenterItemResponse]:
-        live_project_ids: set[str] = set()
-        if self.has_db_session():
-            with self.get_session() as session:
-                live_project_ids = {
-                    str(project_id).strip()
-                    for project_id in session.execute(
-                        select(GenerationTask.project_id).where(
-                            GenerationTask.deleted_at.is_(None),
-                            GenerationTask.project_id != "",
-                            GenerationTask.status.notin_(tuple(self.terminal_statuses)),
-                        )
+        with self.get_session() as session:
+            live_project_ids = {
+                str(project_id).strip()
+                for project_id in session.execute(
+                    select(GenerationTask.project_id).where(
+                        GenerationTask.deleted_at.is_(None),
+                        GenerationTask.project_id != "",
+                        GenerationTask.status.notin_(tuple(self.terminal_statuses)),
                     )
-                    .scalars()
-                    .all()
-                    if str(project_id).strip()
-                }
+                )
+                .scalars()
+                .all()
+                if str(project_id).strip()
+            }
         session = self.get_session()
         try:
             projects = (

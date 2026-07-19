@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import select
 
 from forwin.application.generation import (
@@ -20,10 +18,10 @@ import forwin.models.phase  # noqa: F401
 from forwin.http.request_support import (
     _get_session,
 )
-from forwin.http.runtime import HttpRuntime, UPLOAD_TERMINAL_STATUSES
-from forwin.http.tasks import (
-    _cached_generation_task,
-    _task_is_terminal,
+from forwin.http.runtime import (
+    GENERATION_TERMINAL_STATUSES,
+    UPLOAD_TERMINAL_STATUSES,
+    HttpRuntime,
 )
 
 
@@ -35,82 +33,26 @@ def _active_generation_task_ids(
 ) -> list[str]:
     normalized_project_id = str(project_id or "").strip()
 
-    def _task_status_is_active(status: str) -> bool:
-        return not _task_is_terminal(str(status or "").strip())
-
-    if runtime.session_factory is None:
-        active_ids: list[str] = []
-        with runtime.tasks_lock:
-            for task_id, task in runtime.tasks.items():
-                if task.get("deleted"):
-                    continue
-                if str(task.get("task_kind", "generation")) != "generation":
-                    continue
-                if (
-                    normalized_project_id
-                    and str(task.get("project_id", "")).strip() != normalized_project_id
-                ):
-                    continue
-                if not _task_status_is_active(str(task.get("status", "")).strip()):
-                    continue
-                active_ids.append(task_id)
-        return active_ids
-
-    def _cached_task_is_active(task: dict[str, Any] | None) -> bool | None:
-        if task is None:
-            return None
-        if task.get("deleted"):
-            return False
-        if str(task.get("task_kind", "generation")) != "generation":
-            return False
-        if (
-            normalized_project_id
-            and str(task.get("project_id", "") or "").strip() != normalized_project_id
-        ):
-            return False
-        return _task_status_is_active(str(task.get("status", "")).strip())
-
     def _query_active_ids(active_session) -> list[str]:
         criteria = [
             GenerationTask.deleted_at.is_(None),
             GenerationTask.task_kind == "generation",
+            GenerationTask.status.notin_(tuple(GENERATION_TERMINAL_STATUSES)),
         ]
         if normalized_project_id:
             criteria.append(GenerationTask.project_id == normalized_project_id)
-        rows = active_session.execute(
-            select(
-                GenerationTask.id,
-                GenerationTask.status,
+        return list(
+            active_session.execute(
+                select(GenerationTask.id)
+                .where(*criteria)
+                .order_by(
+                    GenerationTask.updated_at.desc(),
+                    GenerationTask.id.desc(),
+                )
             )
-            .where(*criteria)
-            .order_by(
-                GenerationTask.updated_at.desc(),
-                GenerationTask.id.desc(),
-            )
-        ).all()
-        active_ids: list[str] = []
-        db_known_ids: set[str] = set()
-        for task_id, status in rows:
-            normalized_task_id = str(task_id)
-            db_known_ids.add(normalized_task_id)
-            if not _task_status_is_active(str(status or "").strip()):
-                continue
-            cached_active = _cached_task_is_active(
-                _cached_generation_task(runtime, normalized_task_id)
-            )
-            if cached_active is False:
-                continue
-            active_ids.append(normalized_task_id)
-        with runtime.tasks_lock:
-            cached_items = [
-                (task_id, dict(task)) for task_id, task in runtime.tasks.items()
-            ]
-        for task_id, task in cached_items:
-            if task_id in db_known_ids:
-                continue
-            if _cached_task_is_active(task):
-                active_ids.append(task_id)
-        return active_ids
+            .scalars()
+            .all()
+        )
 
     if session is not None:
         return _query_active_ids(session)

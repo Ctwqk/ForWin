@@ -306,6 +306,64 @@ def _assert_single_committed_state(fixture: RecoveryFixture) -> None:
         assert len(deferred) == 1
 
 
+def _assert_expired_control_request_is_acknowledged(
+    recovery_fixture: RecoveryFixture,
+    *,
+    request_attribute: str,
+    expected_status: str,
+) -> None:
+    _claim(recovery_fixture)
+    _expire_lease(recovery_fixture)
+    with recovery_fixture.Session.begin() as session:
+        task = session.get(GenerationTask, recovery_fixture.task_id)
+        assert task is not None
+        setattr(task, request_attribute, True)
+
+    def forbidden_runner(*_args, **_kwargs) -> None:
+        raise AssertionError("control acknowledgement must not run the pipeline")
+
+    application = GenerationApplicationService(
+        session_factory=recovery_fixture.Session,
+        infrastructure=InfrastructureConfig(
+            database_url=recovery_fixture.database_url
+        ),
+        runner=forbidden_runner,
+    )
+
+    result = run_one_generation_task(
+        application_service=application,
+        worker_id="control-recovery-worker",
+        lease_seconds=30,
+    )
+
+    assert result.claimed is True
+    with recovery_fixture.Session() as session:
+        task = session.get(GenerationTask, recovery_fixture.task_id)
+        assert task is not None
+        assert task.status == expected_status
+        assert task.current_stage == expected_status
+
+
+def test_expired_running_pause_request_is_acknowledged_without_pipeline_work(
+    recovery_fixture: RecoveryFixture,
+) -> None:
+    _assert_expired_control_request_is_acknowledged(
+        recovery_fixture,
+        request_attribute="pause_requested",
+        expected_status="paused",
+    )
+
+
+def test_expired_running_cancel_request_is_acknowledged_without_pipeline_work(
+    recovery_fixture: RecoveryFixture,
+) -> None:
+    _assert_expired_control_request_is_acknowledged(
+        recovery_fixture,
+        request_attribute="cancel_requested",
+        expected_status="cancelled",
+    )
+
+
 def test_reclaim_after_precommit_crash_commits_candidate_once(
     recovery_fixture: RecoveryFixture,
     monkeypatch: pytest.MonkeyPatch,

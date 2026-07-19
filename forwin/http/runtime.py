@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -78,14 +77,8 @@ class HttpRuntime:
     task_application: TaskApplicationService | None = None
     project_control_application: ProjectControlApplicationService | None = None
     project_application: ProjectApplicationService | None = None
-    tasks: dict[str, dict] = field(default_factory=dict)
-    tasks_lock: threading.Lock = field(default_factory=threading.Lock)
     automation_thread: threading.Thread | None = None
     automation_stop: threading.Event = field(default_factory=threading.Event)
-    last_generation_task_db_prune_at: datetime | None = None
-    task_retention_seconds: int = 6 * 60 * 60
-    max_tasks: int = 256
-    task_db_prune_interval_seconds: int = 60
     display_timezone: ZoneInfo = field(
         default_factory=lambda: ZoneInfo("America/Los_Angeles")
     )
@@ -107,7 +100,6 @@ class HttpRuntime:
 
     def startup(self) -> None:
         from forwin.http.automation import start_automation_scheduler
-        from forwin.http.tasks import recover_interrupted_generation_tasks
 
         if self.config is None:
             self.config = InfrastructureConfig.from_env()
@@ -139,9 +131,6 @@ class HttpRuntime:
                     logger.info("Backfilled %d active arc envelopes.", created)
                 else:
                     session.rollback()
-        recovered = recover_interrupted_generation_tasks(self)
-        if recovered:
-            logger.info("Recovered %d interrupted generation tasks.", len(recovered))
         if self.publisher_manager is None:
             self.publisher_manager = PublisherManager(
                 self.session_factory,
@@ -190,9 +179,6 @@ class HttpRuntime:
         self.task_center_service = None
         self.session_factory = None
         self.engine = None
-        self.last_generation_task_db_prune_at = None
-        with self.tasks_lock:
-            self.tasks.clear()
 
 
 __all__ = [

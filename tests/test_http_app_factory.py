@@ -26,8 +26,6 @@ def test_create_app_owns_isolated_runtime_state() -> None:
     assert first.state.forwin_runtime is first_runtime
     assert second.state.forwin_runtime is second_runtime
     assert first_runtime is not second_runtime
-    assert first_runtime.tasks is not second_runtime.tasks
-    assert first_runtime.tasks_lock is not second_runtime.tasks_lock
     assert first_runtime.automation_stop is not second_runtime.automation_stop
     assert _route_contract(first) == _route_contract(second)
 

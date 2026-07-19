@@ -165,6 +165,30 @@ class GenerationApplicationService:
         normalized_lease_epoch = int(
             task.lease_epoch if lease_epoch is None else lease_epoch
         )
+        if task.cancel_requested:
+            self._task_updater(
+                worker_id=normalized_worker_id,
+                lease_epoch=normalized_lease_epoch,
+            )(
+                task.id,
+                status="cancelled",
+                current_stage="cancelled",
+                message="生成 worker 已确认终止请求，任务已取消。",
+                error=None,
+            )
+            return
+        if task.pause_requested:
+            self._task_updater(
+                worker_id=normalized_worker_id,
+                lease_epoch=normalized_lease_epoch,
+            )(
+                task.id,
+                status="paused",
+                current_stage="paused",
+                message="生成 worker 已确认暂停请求，任务已安全暂停。",
+                error=None,
+            )
+            return
         if str(claim_kind or "") == "expired_running":
             resume_from_chapter = self._recover_committed_chapter(
                 task,

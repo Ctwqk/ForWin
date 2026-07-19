@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.models.task import GenerationTask
@@ -38,16 +38,18 @@ def claim_generation_task(
             .where(
                 GenerationTask.deleted_at.is_(None),
                 GenerationTask.task_kind == "generation",
-                GenerationTask.cancel_requested.is_(False),
-                GenerationTask.pause_requested.is_(False),
                 or_(
-                    GenerationTask.status == "queued",
-                    (
-                        (GenerationTask.status == "running")
-                        & (
-                            GenerationTask.lease_expires_at.is_(None)
-                            | (GenerationTask.lease_expires_at < now)
-                        )
+                    and_(
+                        GenerationTask.status == "queued",
+                        GenerationTask.cancel_requested.is_(False),
+                        GenerationTask.pause_requested.is_(False),
+                    ),
+                    and_(
+                        GenerationTask.status == "running",
+                        or_(
+                            GenerationTask.lease_expires_at.is_(None),
+                            GenerationTask.lease_expires_at < now,
+                        ),
                     ),
                 ),
             )

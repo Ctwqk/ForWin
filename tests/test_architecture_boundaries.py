@@ -713,6 +713,26 @@ def test_generation_task_producers_use_application_service() -> None:
         assert "GenerationApplicationService" in _read(rel_path)
 
 
+def test_generation_task_runtime_has_no_split_truth_or_automatic_pruning() -> None:
+    removed_symbols = {
+        "_cached_generation_task",
+        "_sync_task_cache",
+        "_prefer_cached_generation_task",
+        "_prune_generation_tasks_db",
+        "task_retention_seconds",
+        "tasks_lock",
+    }
+    offenders: list[tuple[str, str]] = []
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        relative = path.relative_to(ROOT).as_posix()
+        offenders.extend(
+            (relative, symbol) for symbol in removed_symbols if symbol in source
+        )
+
+    assert offenders == []
+
+
 def test_runtime_container_is_the_only_pipeline_constructor() -> None:
     offenders: list[str] = []
     for root in (ROOT / "forwin", ROOT / "scripts"):

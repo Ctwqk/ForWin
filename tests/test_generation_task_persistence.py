@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from sqlalchemy import delete
+
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
@@ -35,8 +37,6 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
-        with api_module._tasks_lock:
-            api_module._tasks.clear()
         self.engine.dispose()
         self.tmpdir.cleanup()
 
@@ -60,6 +60,30 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded["project_id"], "project-1")
         self.assertEqual(loaded["current_stage"], "writing_chapter")
         self.assertEqual([item[0] for item in listed], ["task-db-1"])
+
+    def test_old_terminal_task_survives_repeated_list_polling(self) -> None:
+        old = datetime.now(timezone.utc) - timedelta(days=2)
+        with self.session_factory.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-old-terminal",
+                    task_kind="generation",
+                    status="completed",
+                    current_stage="completed",
+                    title="durable task history",
+                    created_at=old,
+                    updated_at=old,
+                )
+            )
+
+        for _ in range(3):
+            listed = api_module._list_generation_tasks(10)
+            self.assertIn("task-old-terminal", [task_id for task_id, _ in listed])
+
+        loaded = api_module._get_generation_task_or_404("task-old-terminal")
+        self.assertEqual(loaded["status"], "completed")
+        with self.session_factory() as session:
+            self.assertIsNotNone(session.get(GenerationTask, "task-old-terminal"))
 
     def test_task_record_defaults_to_queued_for_worker_cutover(self) -> None:
         task = api_module._create_task_record(title="Queue 默认", requested_chapters=1)
@@ -126,53 +150,6 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertFalse(task["execution_payload"]["auto_continue"])
         self.assertEqual(task["execution_payload"]["run_until_chapter"], 8)
         self.assertEqual(task["execution_payload"]["max_chapters"], 3)
-
-    def test_recover_interrupted_generation_tasks_requeues_resumable_running_tasks(self) -> None:
-        task = api_module._create_task_record(
-            message="正在写作。",
-            title="重启恢复测试",
-            requested_chapters=2,
-        )
-        task["status"] = "running"
-        task["current_stage"] = "writing_chapter"
-        task["current_chapter"] = 1
-
-        api_module._persist_generation_task("task-recover-1", task)
-
-        recovered_ids = api_module._recover_interrupted_generation_tasks()
-        recovered = api_module._get_generation_task_or_404("task-recover-1")
-
-        self.assertEqual(recovered_ids, ["task-recover-1"])
-        self.assertEqual(recovered["status"], "queued")
-        self.assertEqual(recovered["current_stage"], "queued")
-        self.assertIsNone(recovered["error"])
-        self.assertEqual(recovered["lease_owner"], "")
-        self.assertIsNotNone(recovered["lease_expires_at"])
-        serialized = api_module._serialize_generation_task_center_item("task-recover-1", recovered)
-        self.assertFalse(serialized.interrupted_by_restart)
-        self.assertEqual(recovered["stage_history"][-1]["stage"], "queued")
-
-    def test_recover_interrupted_pause_requested_task_marks_paused(self) -> None:
-        task = api_module._create_task_record(
-            message="等待安全暂停。",
-            title="暂停恢复测试",
-            requested_chapters=2,
-        )
-        task["status"] = "running"
-        task["current_stage"] = "writing_chapter"
-        task["current_chapter"] = 1
-        task["pause_requested"] = True
-
-        api_module._persist_generation_task("task-recover-pause-1", task)
-
-        recovered_ids = api_module._recover_interrupted_generation_tasks()
-        recovered = api_module._get_generation_task_or_404("task-recover-pause-1")
-
-        self.assertEqual(recovered_ids, ["task-recover-pause-1"])
-        self.assertEqual(recovered["status"], "paused")
-        self.assertEqual(recovered["current_stage"], "paused")
-        self.assertTrue(recovered["pause_requested"])
-        self.assertEqual(recovered["stage_history"][-1]["stage"], "paused")
 
     def test_pause_request_blocks_stale_running_progress_updates(self) -> None:
         task = api_module._create_task_record(title="暂停竞态测试", requested_chapters=1)
@@ -430,6 +407,37 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
 
         self.assertFalse(api_module._project_has_active_generation_task("project-2"))
 
+    def test_active_generation_check_reports_only_persisted_nonterminal_rows(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory.begin() as session:
+            session.add_all(
+                [
+                    GenerationTask(
+                        id="task-active-persisted",
+                        project_id="project-db-authority",
+                        task_kind="generation",
+                        status="running",
+                        current_stage="writing_chapter",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    GenerationTask(
+                        id="task-terminal-persisted",
+                        project_id="project-db-authority",
+                        task_kind="generation",
+                        status="completed",
+                        current_stage="completed",
+                        created_at=now - timedelta(minutes=1),
+                        updated_at=now - timedelta(minutes=1),
+                    ),
+                ]
+            )
+
+        response = api_module.active_generation_task_check("project-db-authority")
+
+        self.assertTrue(response.has_active_generation_task)
+        self.assertEqual(response.active_task_ids, ["task-active-persisted"])
+
     def test_active_generation_check_reports_restart_safety(self) -> None:
         running = api_module._create_task_record(title="进行中", requested_chapters=1)
         running["project_id"] = "project-active-check"
@@ -503,20 +511,20 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertFalse(response.safe_to_restart)
         self.assertEqual(response.active_task_ids, ["task-old-running"])
 
-    def test_active_generation_check_does_not_resurrect_terminal_db_task_from_cache(self) -> None:
-        running = api_module._create_task_record(title="缓存旧状态", requested_chapters=1)
-        running["project_id"] = "project-stale-cache"
+    def test_active_generation_check_does_not_report_terminal_db_task(self) -> None:
+        running = api_module._create_task_record(title="终态任务", requested_chapters=1)
+        running["project_id"] = "project-terminal-task"
         running["status"] = "running"
         running["current_stage"] = "repair_review"
-        api_module._persist_generation_task("task-stale-cache-1", running)
+        api_module._persist_generation_task("task-terminal-db-1", running)
 
         with self.session_factory.begin() as session:
-            row = session.get(GenerationTask, "task-stale-cache-1")
+            row = session.get(GenerationTask, "task-terminal-db-1")
             self.assertIsNotNone(row)
             row.status = "needs_review"
             row.current_stage = "paused_for_review"
 
-        response = api_module.active_generation_task_check("project-stale-cache")
+        response = api_module.active_generation_task_check("project-terminal-task")
 
         self.assertFalse(response.has_active_generation_task)
         self.assertTrue(response.safe_to_restart)
@@ -552,67 +560,34 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 session.commit()
 
-    def test_update_task_keeps_cache_when_db_write_is_locked(self) -> None:
-        task = api_module._create_task_record(title="锁冲突测试", requested_chapters=1)
-        api_module._persist_generation_task("task-lock-1", task)
+    def test_update_task_does_not_recreate_row_deleted_before_locked_write(self) -> None:
+        task = api_module._create_task_record(title="missing update", requested_chapters=1)
+        api_module._persist_generation_task("task-deleted-before-update", task)
+
+        from forwin.http.project_support import _run_generation_task_db_write
+
+        def delete_before_write(operation, **kwargs):
+            with self.session_factory.begin() as session:
+                session.execute(
+                    delete(GenerationTask).where(
+                        GenerationTask.id == "task-deleted-before-update"
+                    )
+                )
+            return _run_generation_task_db_write(operation, **kwargs)
 
         with patch(
             "forwin.http.project_support._run_generation_task_db_write",
-            return_value=False,
+            side_effect=delete_before_write,
         ):
             api_module._update_task(
-                "task-lock-1",
+                "task-deleted-before-update",
                 status="running",
                 current_stage="writing_chapter",
-                current_chapter=1,
-                message="继续推进中",
             )
 
-        with api_module._tasks_lock:
-            cached = dict(api_module._tasks["task-lock-1"])
-        self.assertEqual(cached["status"], "running")
-        self.assertEqual(cached["current_stage"], "writing_chapter")
-        self.assertEqual(cached["current_chapter"], 1)
-
-        loaded = api_module._get_generation_task_or_404("task-lock-1")
-        self.assertEqual(loaded["status"], "running")
-        self.assertEqual(loaded["current_stage"], "writing_chapter")
-        self.assertEqual(loaded["current_chapter"], 1)
-
-    def test_task_read_paths_do_not_trigger_db_prune_writes(self) -> None:
-        task = api_module._create_task_record(title="轮询读路径测试", requested_chapters=1)
-        task["status"] = "running"
-        task["current_stage"] = "resolving_arc_envelope"
-        api_module._persist_generation_task("task-read-no-prune-1", task)
-
-        with patch(
-            "forwin.http.tasks._prune_generation_tasks_db",
-            side_effect=AssertionError("read path pruned db"),
-        ):
-            loaded = api_module._get_generation_task_or_404("task-read-no-prune-1")
-            listed = api_module._list_generation_tasks(10)
-
-        self.assertEqual(loaded["current_stage"], "resolving_arc_envelope")
-        self.assertIn("task-read-no-prune-1", [task_id for task_id, _ in listed])
-
-    def test_project_active_generation_detection_prefers_terminal_cache_over_stale_db_row(self) -> None:
-        task = api_module._create_task_record(title="缓存终态测试", requested_chapters=1)
-        task["project_id"] = "project-stale-active"
-        task["status"] = "running"
-        task["current_stage"] = "writing_chapter"
-        api_module._persist_generation_task("task-stale-active-1", task)
-
-        cached = dict(task)
-        cached["status"] = "failed"
-        cached["current_stage"] = "failed"
-        api_module._sync_task_cache("task-stale-active-1", cached)
-
         with self.session_factory() as session:
-            self.assertFalse(
-                api_module._project_has_active_generation_task(
-                    "project-stale-active",
-                    session=session,
-                )
+            self.assertIsNone(
+                session.get(GenerationTask, "task-deleted-before-update")
             )
 
     def test_terminal_status_forces_terminal_stage(self) -> None:

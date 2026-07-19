@@ -166,8 +166,6 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.mcp_app = build_asgi_app(api_client=self.api_client, mcp_server=self.mcp)
 
     def tearDown(self) -> None:
-        with api_module._tasks_lock:
-            api_module._tasks.clear()
         self.engine.dispose()
         self.tmpdir.cleanup()
 

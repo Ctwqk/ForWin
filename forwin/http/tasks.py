@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from forwin.application.task_center import TaskCenterService
 from forwin.api_schema import (
@@ -158,27 +157,6 @@ def _apply_generation_task_to_row(
         row.finished_at = None
 
 
-def _sync_task_cache(
-    runtime: HttpRuntime,
-    task_id: str,
-    task: dict[str, Any] | None,
-) -> None:
-    with runtime.tasks_lock:
-        if task is None or task.get("deleted"):
-            runtime.tasks.pop(task_id, None)
-        else:
-            runtime.tasks[task_id] = dict(task)
-
-
-def _cached_generation_task(
-    runtime: HttpRuntime,
-    task_id: str,
-) -> dict[str, Any] | None:
-    with runtime.tasks_lock:
-        task = runtime.tasks.get(task_id)
-        return dict(task) if task is not None else None
-
-
 def _coerce_task_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         timestamp = value
@@ -198,67 +176,16 @@ def _get_task_center_service(runtime: HttpRuntime) -> TaskCenterService:
     if runtime.task_center_service is not None:
         return runtime.task_center_service
 
-    def _iter_cached_generation_tasks() -> list[tuple[str, dict[str, Any]]]:
-        with runtime.tasks_lock:
-            return [(task_id, dict(task)) for task_id, task in runtime.tasks.items()]
-
     runtime.task_center_service = TaskCenterService(
         get_session=lambda: _get_session(runtime),
-        has_db_session=lambda: runtime.session_factory is not None,
-        prune_task_cache=lambda: _prune_tasks(runtime, include_db=False),
-        utcnow=_utcnow,
         display_datetime=_display_datetime,
-        coerce_task_datetime=_coerce_task_datetime,
         new_stage_history_entry=_new_stage_history_entry,
-        cached_generation_task=lambda task_id: _cached_generation_task(
-            runtime, task_id
-        ),
-        iter_cached_generation_tasks=_iter_cached_generation_tasks,
-        prefer_cached_generation_task=_prefer_cached_generation_task,
         generation_task_from_row=_generation_task_from_row,
         config_provider=lambda: runtime.config,
         terminal_statuses=GENERATION_TERMINAL_STATUSES,
         terminal_stage_by_status=GENERATION_TERMINAL_STAGE_BY_STATUS,
     )
     return runtime.task_center_service
-
-
-def _task_history_len(task: dict[str, Any] | None) -> int:
-    if task is None:
-        return 0
-    history = task.get("stage_history", [])
-    return len(history) if isinstance(history, list) else 0
-
-
-def _prefer_cached_generation_task(
-    persisted: dict[str, Any] | None,
-    cached: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if cached is None:
-        return persisted
-    if persisted is None:
-        return cached
-    cached_updated = _coerce_task_datetime(cached.get("updated_at"))
-    persisted_updated = _coerce_task_datetime(persisted.get("updated_at"))
-    if cached_updated > persisted_updated:
-        return cached
-    if cached_updated == persisted_updated and _task_history_len(
-        cached
-    ) > _task_history_len(persisted):
-        return cached
-    return persisted
-
-
-def _apply_task_visibility_rules(
-    runtime: HttpRuntime,
-    task: dict[str, Any] | None,
-    *,
-    include_deleted: bool,
-) -> dict[str, Any] | None:
-    return _get_task_center_service(runtime).apply_task_visibility_rules(
-        task,
-        include_deleted=include_deleted,
-    )
 
 
 class GenerationTaskPersistenceError(RuntimeError):
@@ -296,215 +223,23 @@ def _run_generation_task_db_write(
     return False
 
 
-def _mark_task_persistence_degraded(
-    runtime: HttpRuntime,
-    task_id: str,
-    task: dict[str, Any],
-    exc: Exception,
-) -> None:
-    task["persistence_degraded"] = True
-    task["persistence_error"] = str(exc)
-    task["updated_at"] = _utcnow()
-    _sync_task_cache(runtime, task_id, task)
-
-
-def _clear_task_persistence_degraded(
-    runtime: HttpRuntime,
-    task_id: str,
-    task: dict[str, Any],
-) -> None:
-    if task.get("persistence_degraded") or task.get("persistence_error"):
-        task["persistence_degraded"] = False
-        task["persistence_error"] = None
-        _sync_task_cache(runtime, task_id, task)
-
-
-def _prune_generation_tasks_db(
-    runtime: HttpRuntime,
-    now: datetime | None = None,
-) -> None:
-    if runtime.session_factory is None:
-        return
-
-    current = now or _utcnow()
-    if runtime.last_generation_task_db_prune_at is not None:
-        elapsed = (
-            current - runtime.last_generation_task_db_prune_at
-        ).total_seconds()
-        if elapsed < runtime.task_db_prune_interval_seconds:
-            return
-
-    runtime.last_generation_task_db_prune_at = current
-    cutoff = current - timedelta(seconds=runtime.task_retention_seconds)
-
-    def _operation() -> None:
-        with _get_session(runtime) as session:
-            session.execute(
-                delete(GenerationTask).where(
-                    or_(
-                        GenerationTask.deleted_at.is_not(None),
-                        (
-                            GenerationTask.status.in_(
-                                tuple(GENERATION_TERMINAL_STATUSES)
-                            )
-                            & (GenerationTask.updated_at < cutoff)
-                        ),
-                    )
-                )
-            )
-            total_rows = session.execute(
-                select(func.count(GenerationTask.id)).where(
-                    GenerationTask.deleted_at.is_(None)
-                )
-            ).scalar_one()
-            overflow = max(0, int(total_rows or 0) - runtime.max_tasks)
-            if overflow:
-                overflow_ids = (
-                    session.execute(
-                        select(GenerationTask.id)
-                        .where(
-                            GenerationTask.deleted_at.is_(None),
-                            GenerationTask.status.in_(
-                                tuple(GENERATION_TERMINAL_STATUSES)
-                            ),
-                        )
-                        .order_by(GenerationTask.updated_at.asc())
-                        .limit(overflow)
-                    )
-                    .scalars()
-                    .all()
-                )
-                if overflow_ids:
-                    session.execute(
-                        delete(GenerationTask).where(
-                            GenerationTask.id.in_(overflow_ids)
-                        )
-                    )
-            session.commit()
-
-    _run_generation_task_db_write(
-        _operation,
-        context="generation_task_prune",
-        attempts=2,
-        delay=0.15,
-        raise_on_failure=False,
-    )
-
-
-def _prune_tasks(runtime: HttpRuntime, *, include_db: bool = True) -> None:
-    now = _utcnow()
-    with runtime.tasks_lock:
-        stale_ids = [
-            task_id
-            for task_id, task in runtime.tasks.items()
-            if task.get("deleted")
-            or (
-                task.get("status") in GENERATION_TERMINAL_STATUSES
-                and (now - task.get("updated_at", now)).total_seconds()
-                > runtime.task_retention_seconds
-            )
-        ]
-        for task_id in stale_ids:
-            runtime.tasks.pop(task_id, None)
-
-    if include_db:
-        _prune_generation_tasks_db(runtime, now)
-
-
 def _load_generation_task(
     runtime: HttpRuntime,
     task_id: str,
     *,
     include_deleted: bool = False,
 ) -> dict[str, Any] | None:
-    try:
-        return _get_task_center_service(runtime).load_generation_task(
-            task_id,
-            include_deleted=include_deleted,
-        )
-    except OperationalError as exc:
-        if not is_retryable_database_error(exc):
-            raise
-        logger.warning(
-            "Generation task read fell back to cache due to DB retryable error for %s",
-            task_id,
-        )
-        return _apply_task_visibility_rules(
-            runtime,
-            _cached_generation_task(runtime, task_id),
-            include_deleted=include_deleted,
-        )
+    return _get_task_center_service(runtime).load_generation_task(
+        task_id,
+        include_deleted=include_deleted,
+    )
 
 
-def recover_interrupted_generation_tasks(runtime: HttpRuntime) -> list[str]:
-    if runtime.session_factory is None:
-        return []
-
-    now = _utcnow()
-    recovered_ids: list[str] = []
-    with _get_session(runtime) as session:
-        rows = (
-            session.execute(
-                select(GenerationTask).where(
-                    GenerationTask.deleted_at.is_(None),
-                    GenerationTask.status.notin_(
-                        tuple(GENERATION_TERMINAL_STATUSES)
-                    ),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for row in rows:
-            task = _generation_task_from_row(row)
-            if task.get("cancel_requested"):
-                task["status"] = "cancelled"
-                task["current_stage"] = "cancelled"
-                task["message"] = "服务重启时检测到终止请求，生成任务已取消。"
-                task["error"] = None
-            elif task.get("pause_requested"):
-                task["status"] = "paused"
-                task["current_stage"] = "paused"
-                task["message"] = "服务重启时检测到暂停请求，生成任务已安全暂停。"
-                task["error"] = None
-                task["paused_at"] = now
-            elif task.get("failed_chapters"):
-                task["status"] = "failed"
-                task["current_stage"] = "failed"
-                task["message"] = "服务重启前生成任务已有失败章节，需修复后再继续。"
-                task["error"] = "generation_failed_chapter_blocker_after_restart"
-                task["finished_at"] = now
-            else:
-                task["status"] = "queued"
-                task["current_stage"] = "queued"
-                task["message"] = (
-                    "服务重启后生成任务已重新排队，等待 durable worker 接管。"
-                )
-                task["error"] = None
-                task["lease_owner"] = ""
-                task["lease_expires_at"] = now
-                task["finished_at"] = None
-            task["updated_at"] = now
-            if (
-                str(task.get("current_stage", "")).strip()
-                != str(row.current_stage or "").strip()
-            ):
-                history = list(task.get("stage_history", []))
-                history.append(
-                    _new_stage_history_entry(
-                        str(task.get("current_stage", "")).strip(),
-                        now=now,
-                        current_chapter=int(task.get("current_chapter", 0) or 0),
-                        message=str(task.get("message", "")).strip(),
-                    )
-                )
-                task["stage_history"] = history
-            if task.get("status") in GENERATION_TERMINAL_STATUSES:
-                task["finished_at"] = now
-            _apply_generation_task_to_row(row, task, now=now)
-            recovered_ids.append(row.id)
-        session.commit()
-    return recovered_ids
+def _list_generation_tasks(
+    runtime: HttpRuntime,
+    limit: int,
+) -> list[tuple[str, dict[str, Any]]]:
+    return _get_task_center_service(runtime).list_generation_tasks(limit)
 
 
 def _new_stage_history_entry(

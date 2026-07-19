@@ -18,7 +18,6 @@ from forwin.application.project_control import (
     ProjectControlApplicationService,
 )
 from forwin.application.tasks import TaskApplicationDeps, TaskApplicationService
-from forwin.http.automation import _list_generation_tasks
 from forwin.http.adapters import api_observability_routes
 from forwin.http.generation import (
     _active_generation_task_ids,
@@ -68,6 +67,7 @@ from forwin.http.runtime import HttpRuntime
 from forwin.http.tasks import (
     _generation_task_conflict_message,
     _get_project_backed_task_item_or_404,
+    _list_generation_tasks,
     _list_project_backed_task_items,
     _parse_project_task_id,
     _serialize_generation_task_center_item,

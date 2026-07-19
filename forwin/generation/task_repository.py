@@ -48,6 +48,13 @@ class GenerationTaskRepository:
             is not None
         )
 
+    def get_for_update(self, task_id: str) -> GenerationTask | None:
+        return self.session.execute(
+            select(GenerationTask)
+            .where(GenerationTask.id == task_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+
     def create(
         self,
         *,

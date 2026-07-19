@@ -23,7 +23,6 @@ from forwin.http.project_support import (
     _persist_project_automation,
 )
 from forwin.http.runtime import GENERATION_TERMINAL_STATUSES, HttpRuntime
-from forwin.http.tasks import _get_task_center_service, _prune_tasks
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,6 @@ def _run_scheduled_review_action(
 
 
 def _run_automation_scheduler_pass(runtime: HttpRuntime) -> None:
-    _prune_tasks(runtime)
     production_scheduler_factory = None
     runtime_services = None
     if runtime.container is not None:
@@ -115,13 +113,6 @@ def stop_automation_scheduler(runtime: HttpRuntime) -> None:
     runtime.automation_thread = None
     if thread is not None and thread.is_alive():
         thread.join(timeout=2.0)
-
-
-def _list_generation_tasks(
-    runtime: HttpRuntime,
-    limit: int,
-) -> list[tuple[str, dict[str, Any]]]:
-    return _get_task_center_service(runtime).list_generation_tasks(limit)
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

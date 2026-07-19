@@ -9,7 +9,6 @@ from forwin.api_schema import (
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
-    ScenarioPlanPatchApproveRequest,
     TaskContractUpdateRequest,
     TropeTemplateValidationRequest,
 )
@@ -21,7 +20,6 @@ from . import operations
 class ProjectControlApplicationDeps:
     get_session: Callable[[], Any]
     get_pipeline: Callable[[], Any]
-    display_datetime: Callable[[Any], str]
     require_reason: Callable[..., str]
     validate_constraint_payload: Callable[..., tuple[str, str, str]]
     serialize_band_checkpoint: Callable[..., Any]
@@ -41,7 +39,6 @@ def _build_operations(
 ) -> dict[str, Callable[..., Any]]:
     get_session = deps.get_session
     get_pipeline = deps.get_pipeline
-    display_datetime = deps.display_datetime
     require_reason = deps.require_reason
     validate_constraint_payload = deps.validate_constraint_payload
     serialize_band_checkpoint = deps.serialize_band_checkpoint
@@ -249,34 +246,6 @@ def _build_operations(
             project_id=project_id,
         )
 
-    def get_latest_scenario_rehearsal(project_id: str):
-        return operations.get_latest_scenario_rehearsal(
-            project_id,
-            get_session=get_session,
-            display_datetime=display_datetime,
-        )
-
-    def rerun_scenario_rehearsal(project_id: str, run_id: str):
-        return operations.rerun_scenario_rehearsal(
-            project_id,
-            run_id,
-            get_session=get_session,
-            display_datetime=display_datetime,
-        )
-
-    def approve_scenario_plan_patch(
-        project_id: str,
-        patch_id: str,
-        req: ScenarioPlanPatchApproveRequest,
-    ):
-        return operations.approve_scenario_plan_patch(
-            project_id,
-            patch_id,
-            reason=req.reason,
-            get_session=get_session,
-            display_datetime=display_datetime,
-        )
-
     def get_trope_templates(category: str = "", q: str = "", limit: int = 0):
         return operations.get_trope_templates(
             category=category,
@@ -320,9 +289,6 @@ def _build_operations(
         "get_gate_ledger_report": get_gate_ledger_report,
         "get_cost_report": get_cost_report,
         "get_rule_provenance_report": get_rule_provenance_report,
-        "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
-        "rerun_scenario_rehearsal": rerun_scenario_rehearsal,
-        "approve_scenario_plan_patch": approve_scenario_plan_patch,
         "get_trope_templates": get_trope_templates,
         "get_trope_template_summary": get_trope_template_summary,
         "validate_trope_templates": validate_trope_templates,

@@ -223,7 +223,6 @@ def build_project_detail(
     latest_world = runtime_maps["latest_world_map"].get(project_id)
     latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project_id)
     latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project_id)
-    latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(project_id)
     latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
     replan_events = runtime_maps["recent_replans_map"].get(project_id, [])
@@ -330,7 +329,6 @@ def build_project_detail(
             latest_arc_analysis,
             latest_arc_structure,
             latest_band_experience,
-            latest_scenario_rehearsal,
         ),
         generation_control=generation_control,
         latest_band_checkpoint=generation_control.latest_band_checkpoint,

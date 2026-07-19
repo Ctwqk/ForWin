@@ -105,7 +105,7 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("下载 Firefox 扩展包", html)
         self.assertIn('href="/api/publishers/extension-package"', html)
         self.assertIn('href="/api/publishers/extension-package/firefox"', html)
-        self.assertIn("Scenario Rehearsal", html)
+        self.assertNotIn("Scenario Rehearsal", html)
         self.assertNotIn("Provisional Preview", html)
         self.assertIn("Candidate Draft Review", html)
         self.assertNotIn("loadWorldModelV4Debug", html)

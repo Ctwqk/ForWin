@@ -5,7 +5,6 @@ import logging
 from forwin.generation.pipeline_core.result import RunResult
 from typing import Any
 from forwin.models.project import ChapterPlan
-import json
 from forwin.models.project import (
     ArcPlanVersion,
     Project,
@@ -18,9 +17,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
 import time
-from forwin.planning.scenario_rehearsal_resolution import (
-    latest_blocking_scenario_rehearsal,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +63,6 @@ def _pending_chapter_numbers_for_active_arc(
 
 class RunControlStage:
     """Owns the run control stage behavior."""
-
-    def _bind_pipeline_runtime_hooks(self) -> None:
-        self.arc_envelope_manager.bind_runtime_hooks(
-            scenario_progress_callback=(
-                lambda **payload: self._emit_progress("stage_changed", **payload)
-            ),
-        )
 
     def run(
         self,
@@ -173,13 +162,6 @@ class RunControlStage:
                 activation_chapter=1,
             )
             session.commit()
-            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
-            if blocking_scenario is not None:
-                return self._block_on_scenario_rehearsal(
-                    project_id=project_id,
-                    requested_chapters=num_chapters,
-                    row=blocking_scenario,
-                )
             chapter_numbers = self._pending_chapter_numbers_for_active_arc(
                 session=session,
                 project_id=project_id,
@@ -332,13 +314,6 @@ class RunControlStage:
                 activation_chapter=1,
             )
             session.commit()
-            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
-            if blocking_scenario is not None:
-                return self._block_on_scenario_rehearsal(
-                    project_id=project_id,
-                    requested_chapters=num_chapters,
-                    row=blocking_scenario,
-                )
             chapter_numbers = self._pending_chapter_numbers_for_active_arc(
                 session=session,
                 project_id=project_id,
@@ -525,47 +500,6 @@ class RunControlStage:
                 chapter_number=chapter_number,
             )
 
-    def _block_on_scenario_rehearsal(
-        self,
-        *,
-        project_id: str,
-        requested_chapters: int,
-        row,
-    ) -> RunResult:
-        try:
-            payload = json.loads(row.report_json or "{}") or {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-        chapter_numbers = [
-            int(item)
-            for item in (payload.get("chapter_numbers") or [])
-            if str(item).strip().lstrip("-").isdigit()
-        ]
-        paused_chapters = chapter_numbers or [1]
-        status = str(payload.get("resolution_status") or "manual_patch_required")
-        self._emit_progress(
-            "stage_changed",
-            stage="paused_for_review",
-            project_id=project_id,
-            requested_chapters=requested_chapters,
-            current_chapter=paused_chapters[0],
-            completed_chapters=[],
-            failed_chapters=[],
-            paused_chapters=paused_chapters,
-        )
-        logger.warning(
-            "Scenario rehearsal paused canon writing for project=%s status=%s band=%s",
-            project_id,
-            status,
-            getattr(row, "band_id", ""),
-        )
-        return RunResult(
-            project_id=project_id,
-            requested_chapters=requested_chapters,
-            paused_chapters=paused_chapters,
-            paused=True,
-        )
-
     def _materialize_next_genesis_arc_if_needed(
         self,
         *,
@@ -710,13 +644,6 @@ class RunControlStage:
                 activation_chapter=min(pending_chapter_numbers),
             )
             session.commit()
-            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
-            if blocking_scenario is not None:
-                return self._block_on_scenario_rehearsal(
-                    project_id=project_id,
-                    requested_chapters=len(pending_chapter_numbers),
-                    row=blocking_scenario,
-                )
             workset = build_continue_generation_workset(
                 session,
                 project_id,

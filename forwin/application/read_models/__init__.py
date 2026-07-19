@@ -33,7 +33,6 @@ from .runtime_maps import (
     _load_latest_band_experience_by_project,
     normalize_project_automation,
     load_project_upload_stats,
-    load_latest_scenario_rehearsal_by_project,
     load_project_runtime_maps,
 )
 
@@ -51,11 +50,6 @@ from .project_summary import (
 
 from .project_detail import (
     build_project_detail,
-)
-
-from .scenario import (
-    latest_scenario_rehearsal_run,
-    build_scenario_rehearsal_detail,
 )
 
 __all__ = [
@@ -80,7 +74,6 @@ __all__ = [
     '_load_latest_band_experience_by_project',
     'normalize_project_automation',
     'load_project_upload_stats',
-    'load_latest_scenario_rehearsal_by_project',
     'load_project_runtime_maps',
     '_normalize_genesis_pack',
     '_load_latest_genesis_revision_by_project',
@@ -89,6 +82,4 @@ __all__ = [
     '_prompt_trace_infos',
     'build_project_summaries',
     'build_project_detail',
-    'latest_scenario_rehearsal_run',
-    'build_scenario_rehearsal_detail',
 ]

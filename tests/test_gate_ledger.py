@@ -136,7 +136,7 @@ class TestGateLedger:
 
         hard_floor = _metric(report, "hard_floor")
         assert report.event_count == 1002
-        assert len(report.metrics) == 8
+        assert len(report.metrics) == 7
         assert hard_floor.opportunities == 1
         assert hard_floor.evaluations == 1
         assert hard_floor.fires == 0

@@ -76,7 +76,6 @@ from forwin.api_schema import (
     RuntimePolicyResponse,
     ProjectSummary,
     PromptTraceDetailResponse,
-    ScenarioRehearsalDetail,
     PublisherCommentSyncJobResponse,
     PublisherLoginQrOneShotResponse,
     PublisherPlatformInfo,
@@ -788,24 +787,6 @@ def register_api_routes(
             ["GET"],
             handlers["get_rule_provenance_report"],
             {"response_model": RuleProvenanceReportResponse},
-        ),
-        (
-            "/api/projects/{project_id}/scenario-rehearsal/latest",
-            ["GET"],
-            handlers["get_latest_scenario_rehearsal"],
-            {"response_model": ScenarioRehearsalDetail},
-        ),
-        (
-            "/api/projects/{project_id}/scenario-rehearsal/{run_id}/rerun",
-            ["POST"],
-            handlers["rerun_scenario_rehearsal"],
-            {"response_model": ScenarioRehearsalDetail},
-        ),
-        (
-            "/api/projects/{project_id}/scenario-rehearsal/patches/{patch_id}/approve",
-            ["POST"],
-            handlers["approve_scenario_plan_patch"],
-            {"response_model": ScenarioRehearsalDetail},
         ),
         ("/api/personality-skills", ["GET"], handlers["list_personality_skills"], {}),
         (

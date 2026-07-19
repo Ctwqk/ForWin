@@ -202,7 +202,6 @@ def project_arc_snapshot_payload(
     latest_arc_analysis,
     latest_arc_structure=None,
     latest_band_experience=None,
-    latest_scenario_rehearsal=None,
 ) -> dict[str, Any]:
     payload = {
         "active_arc_id": "",
@@ -218,16 +217,6 @@ def project_arc_snapshot_payload(
         "active_arc_evidence": [],
         "active_arc_expansion_signals": [],
         "active_arc_compression_signals": [],
-        "scenario_rehearsal_band_id": "",
-        "scenario_rehearsal_recommendation": "",
-        "scenario_rehearsal_risk_count": 0,
-        "scenario_rehearsal_blocker_count": 0,
-        "scenario_rehearsal_required_patch_count": 0,
-        "scenario_rehearsal_resolution_status": "",
-        "scenario_rehearsal_trigger_reasons": [],
-        "scenario_rehearsal_patch_attempt_count": 0,
-        "scenario_rehearsal_checkpoint_id": "",
-        "scenario_rehearsal_replan_event_id": "",
         "active_reader_promise": {},
         "active_band_reward_mix": [],
         "active_band_stall_guard": 0,
@@ -261,36 +250,6 @@ def project_arc_snapshot_payload(
                 ),
                 "active_arc_compression_signals": _json_list_strings(
                     latest_arc_analysis.compression_signals_json
-                ),
-            }
-        )
-    if latest_scenario_rehearsal is not None:
-        rehearsal_report = _json_object(
-            getattr(latest_scenario_rehearsal, "report_json", "{}")
-        )
-        payload.update(
-            {
-                "scenario_rehearsal_band_id": latest_scenario_rehearsal.band_id,
-                "scenario_rehearsal_recommendation": latest_scenario_rehearsal.recommendation,
-                "scenario_rehearsal_risk_count": latest_scenario_rehearsal.risk_count,
-                "scenario_rehearsal_blocker_count": latest_scenario_rehearsal.blocker_count,
-                "scenario_rehearsal_required_patch_count": latest_scenario_rehearsal.required_patch_count,
-                "scenario_rehearsal_resolution_status": str(
-                    rehearsal_report.get("resolution_status") or ""
-                ),
-                "scenario_rehearsal_trigger_reasons": [
-                    str(item)
-                    for item in (rehearsal_report.get("trigger_reasons") or [])
-                    if str(item).strip()
-                ],
-                "scenario_rehearsal_patch_attempt_count": int(
-                    rehearsal_report.get("patch_attempt_count") or 0
-                ),
-                "scenario_rehearsal_checkpoint_id": str(
-                    rehearsal_report.get("checkpoint_id") or ""
-                ),
-                "scenario_rehearsal_replan_event_id": str(
-                    rehearsal_report.get("replan_event_id") or ""
                 ),
             }
         )

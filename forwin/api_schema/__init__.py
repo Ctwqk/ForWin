@@ -182,8 +182,6 @@ from .review import (
     TropeTemplateValidationResponse,
     BandExperienceOverrideRequest,
     BandExperienceOverrideResponse,
-    ScenarioRehearsalDetail,
-    ScenarioPlanPatchApproveRequest,
     CandidateDraftDetail,
 )
 
@@ -340,7 +338,5 @@ __all__ = [
     "TropeTemplateValidationResponse",
     "BandExperienceOverrideRequest",
     "BandExperienceOverrideResponse",
-    "ScenarioRehearsalDetail",
-    "ScenarioPlanPatchApproveRequest",
     "CandidateDraftDetail",
 ]

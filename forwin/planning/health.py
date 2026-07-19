@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from forwin.protocol.scenario_rehearsal import ScenarioRehearsalReport
-
     from .future_plan_audit import FuturePlanAuditRun
 
 
@@ -76,41 +74,6 @@ class PlanHealthService:
             evidence=_dedupe(evidence or []),
             reasons=_dedupe(errors),
             blocking=not passed,
-        )
-
-    @staticmethod
-    def from_scenario_rehearsal(report: ScenarioRehearsalReport) -> PlanHealth:
-        from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation
-
-        recommendation = report.recommendation
-        blocking = recommendation in {
-            ScenarioRehearsalRecommendation.REPLAN,
-            ScenarioRehearsalRecommendation.BLOCK,
-        } or any(finding.severity == "fail" for finding in report.risk_findings)
-        severity: PlanHealthSeverity = (
-            "fail"
-            if blocking
-            else "warn"
-            if recommendation == ScenarioRehearsalRecommendation.PATCH
-            else "pass"
-        )
-        evidence = [
-            ref
-            for finding in report.risk_findings
-            for ref in finding.evidence_refs
-            if str(ref or "").strip()
-        ]
-        reasons = [
-            finding.message
-            for finding in report.risk_findings
-            if finding.message
-        ]
-        return PlanHealth(
-            severity=severity,
-            scope=report.rehearsal_scope,
-            evidence=_dedupe(evidence),
-            reasons=_dedupe(reasons),
-            blocking=blocking,
         )
 
     @staticmethod

@@ -48,7 +48,6 @@
 | `V2_9_2.md` | baseline-with-overrides | Genesis / Writer / Review / Governance 主链基线；SubWorld / world model 语义以 V4.5、BookState 和 Scheme C 覆盖。 |
 | `V2_9_3_skill_runtime.md` | baseline-with-overrides | ForWin-native instruction-only Skill Runtime；API/UI/script/tool-backed 属 future。 |
 | `V3_8.md` | baseline-with-overrides | backend observability / audit / PromptTrace 规格；dashboard/SLO 属 future。 |
-| `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除记录；当前判断路径是 Scenario Rehearsal、Candidate Draft Review 和 BookState gate。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
 ## 2026-07 V5 Final Roadmap Execution Status
@@ -90,9 +89,6 @@
 | `forwin.reviewer_v4` | removed | `forwin.book_state.extraction` | 已删除 | 旧导入 alias 包已物理删除。 |
 | `forwin.world_v4_review_gate` + `forwin.extractor` | removed | `forwin.book_state.extraction` | 已删除 | extraction contract、evidence rules、deterministic gate 与 GraphDelta converter 归同一 owner；`V4Review*` / `WorldDeltaExtractor` 旧类型无 alias。 |
 | `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。 |
-| `forwin.planning.scenario_rehearsal` | removed | `forwin.planning.scenario_rehearsal_service` | 已删除 | runner/repository 实现迁入 `scenario_rehearsal_engine`；生产编排只经 service。 |
-| `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
-| `forwin.planning.scenario_rehearsal_engine` | active-internal | service / resolution owner | 无 | 确定性 runner 与 repository，不作为应用入口。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | 项目运行设置只由版本化 RuntimePolicy 持有。 |
 | `forwin.governance*` / `models.governance` / `review.governance` | removed | `forwin.audit` + `forwin.planning` + `forwin.review` | 已删除 | 决策事件、计划控制和草稿规则分别归真实 owner，不保留兼容 facade。 |
@@ -125,8 +121,7 @@
 | duplicate canon quality analysis | removed | `QualityAnalysisRunRow` | 已删除 | draft review/canon gate 共享有效 primary 结果；content/plan/analyzer 指纹变化自动失效，replay/dry-run/失败结果不复用。 |
 | `book_genesis_core.workflow` unreachable implementation | removed | typed `BookGenesisService` -> `GenesisWorkspaceService` methods | 已删除 | 588 行文件整段删除；handoff 锁 active revision，四个 workspace mutation 入口 fail-closed。 |
 | SubWorld entity admission policy/patch/repair | removed | `EntityRegistrar` -> `EntityAdmissionPlan` -> Canon `EntityAdmissionCommitter` | 已删除 | 草稿期不写 Entity/EntityAlias；旧 canon checker、repair scope、nonblocking 例外和 summary 名字桥全部删除。 |
-| `planning.future_plan_auditor` re-export + `phase24.PlanningServices` bag | removed | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 已删除 | planning 包不再动态转发旧符号；future audit、patch validation、scenario rehearsal 共享 typed health contract。 |
-| Provisional Band Preview runtime | removed | `ScenarioRehearsalService` + Candidate Draft Review + writer fallback | 已删除 | 不存在 policy 开关、第二 writer、preview service、execution/ledger 表、事件、HTTP/UI 或 repair callback；同名 planning window、promotion/projection 语义不属于该功能。 |
+| `planning.future_plan_auditor` re-export + `phase24.PlanningServices` bag | removed | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 已删除 | planning 包不再动态转发旧符号；future audit 与 patch validation 共享 typed health contract。 |
 
 ## 2026-07 V5 Slice 1 Status
 

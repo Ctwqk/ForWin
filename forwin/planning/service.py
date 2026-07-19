@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .query import PlanningQuery
 
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from .arc_envelope_resolver import ArcEnvelopeResolver
     from .arc_structure_service import ArcStructurePlanningService
     from .band_plan_service import BandPlanService
-    from .scenario_rehearsal_service import ScenarioRehearsalService
     from .world_contract_service import WorldContractPlanningService
 
 
@@ -37,7 +36,6 @@ class PlanningService:
     chapter_planner: ChapterExperiencePlanner
     band_plan: BandPlanService
     world_contracts: WorldContractPlanningService
-    scenario_rehearsal: ScenarioRehearsalService
 
     @classmethod
     def build_default(
@@ -45,7 +43,6 @@ class PlanningService:
         *,
         director: ArcDirector | None = None,
         subworld_manager: SubWorldManager | None = None,
-        scenario_progress_callback: Any | None = None,
         trope_cost_ceiling: int = 3,
     ) -> "PlanningService":
         from forwin.experience.arc_experience_planner import ArcExperiencePlanningService
@@ -59,7 +56,6 @@ class PlanningService:
         from .arc_envelope_resolver import ArcEnvelopeResolver
         from .arc_structure_service import ArcStructurePlanningService
         from .band_plan_service import BandPlanService
-        from .scenario_rehearsal_service import ScenarioRehearsalService
         from .world_contract_service import WorldContractPlanningService
 
         resolved_subworld_manager = subworld_manager or SubWorldManager(
@@ -90,10 +86,6 @@ class PlanningService:
                 trope_cost_ceiling=trope_cost_ceiling,
             ),
             world_contracts=world_contracts,
-            scenario_rehearsal=ScenarioRehearsalService(
-                director=director,
-                progress_callback=scenario_progress_callback,
-            ),
         )
 
 

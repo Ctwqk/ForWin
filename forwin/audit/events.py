@@ -79,10 +79,6 @@ class DecisionEventType:
     STAGE_ENTERED = "stage_entered"
     STAGE_EXITED = "stage_exited"
     STAGE_DURATION_SUMMARY = "stage_duration_summary"
-    SCENARIO_REHEARSAL_EVALUATED = "scenario_rehearsal_evaluated"
-    SCENARIO_REHEARSAL_PATCH_APPLIED = "scenario_rehearsal_patch_applied"
-    SCENARIO_REHEARSAL_REPLAN_REQUIRED = "scenario_rehearsal_replan_required"
-    SCENARIO_REHEARSAL_BLOCKED = "scenario_rehearsal_blocked"
     LLM_REQUEST_STARTED = "llm_request_started"
     LLM_REQUEST_SUCCEEDED = "llm_request_succeeded"
     LLM_REQUEST_FAILED = "llm_request_failed"
@@ -228,10 +224,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.STAGE_ENTERED,
     DecisionEventType.STAGE_EXITED,
     DecisionEventType.STAGE_DURATION_SUMMARY,
-    DecisionEventType.SCENARIO_REHEARSAL_EVALUATED,
-    DecisionEventType.SCENARIO_REHEARSAL_PATCH_APPLIED,
-    DecisionEventType.SCENARIO_REHEARSAL_REPLAN_REQUIRED,
-    DecisionEventType.SCENARIO_REHEARSAL_BLOCKED,
     DecisionEventType.LLM_REQUEST_STARTED,
     DecisionEventType.LLM_REQUEST_SUCCEEDED,
     DecisionEventType.LLM_REQUEST_FAILED,

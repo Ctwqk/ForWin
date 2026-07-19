@@ -12,6 +12,7 @@ import forwin.book_state as book_state
 import forwin.map as book_map
 import forwin.review as review
 import forwin.book_state.extraction as book_state_extraction
+from forwin.application.project_control import ProjectControlApplicationDeps
 from forwin.http.routes import (
     ApiRouteDeps,
     CoreDeps,
@@ -145,6 +146,12 @@ def test_api_route_deps_are_grouped_by_domain() -> None:
     assert "render_publishers_page" in PublisherDeps.__annotations__
 
 
+def test_project_control_deps_do_not_keep_removed_display_callback() -> None:
+    assert "display_datetime" not in {
+        field.name for field in fields(ProjectControlApplicationDeps)
+    }
+
+
 def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
     with pytest.raises(TypeError):
         ApiRouteDeps(get_session=lambda: None)
@@ -158,12 +165,68 @@ def test_design_status_contains_deprecation_matrix() -> None:
     assert (
         "`forwin.reviewer_v4` | removed | `forwin.book_state.extraction`" in status_doc
     )
-    assert "`forwin.planning.scenario_rehearsal` | removed" in status_doc
+    assert "scenario_rehearsal" not in status_doc
 
 
 def test_v5_legacy_alias_modules_stay_removed() -> None:
     assert not (ROOT / "forwin/reviewer_v4").exists()
     assert not (ROOT / "forwin/planning/scenario_rehearsal.py").exists()
+
+
+def test_runtime_scenario_rehearsal_feature_family_stays_removed() -> None:
+    removed_paths = (
+        "forwin/application/read_models/scenario.py",
+        "forwin/models/scenario_rehearsal.py",
+        "forwin/planning/scenario_rehearsal_engine.py",
+        "forwin/planning/scenario_rehearsal_resolution.py",
+        "forwin/planning/scenario_rehearsal_service.py",
+        "forwin/planning/scenario_triggers.py",
+        "forwin/protocol/scenario_rehearsal.py",
+    )
+    assert all(not (ROOT / path).exists() for path in removed_paths)
+
+    forbidden = (
+        "Scenario Rehearsal",
+        "ScenarioRehearsal",
+        "scenario_rehearsal",
+        "scenario-rehearsal",
+        "scenarioRehearsal",
+        "scenario_plan_patch",
+        "scenarioPlanPatch",
+        "rehearse_scenario",
+        "ScenarioTriggerContext",
+        "ScenarioTriggerEvaluator",
+    )
+    current_source_paths = [
+        path
+        for source_root in (
+            ROOT / "forwin",
+            ROOT / "frontend",
+            ROOT / "browser_extension",
+        )
+        for path in sorted(source_root.rglob("*"))
+        if path.suffix in {".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+        and "migrations/versions" not in path.as_posix()
+    ]
+    offenders = [
+        (path.relative_to(ROOT).as_posix(), token)
+        for path in current_source_paths
+        for token in forbidden
+        if token in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+    assert "scenario_rehearsal_runs" not in baseline
+    assert "scenario_plan_patches" not in baseline
+
+    arc_envelope_source = _read("forwin/planning/arc_envelope.py")
+    world_contracts = arc_envelope_source.index("world_contracts.ensure_for_arc_band")
+    resolution = arc_envelope_source.index("arc_envelope_resolver.ensure_resolution")
+    band_plan = arc_envelope_source.index(
+        "self._ensure_current_band_plan_for_state(", resolution
+    )
+    assert world_contracts < resolution < band_plan
 
 
 def test_planning_runtime_has_one_explicit_composition_service() -> None:
@@ -173,7 +236,7 @@ def test_planning_runtime_has_one_explicit_composition_service() -> None:
     assert "PlanningService.build_default" in container_source
     assert "arc_envelope_manager.services" not in container_source
     assert "arc_envelope_manager.services" not in run_control_source
-    assert "bind_runtime_hooks" in run_control_source
+    assert "bind_runtime_hooks" not in run_control_source
 
 
 def test_removed_world_v4_projection_modules_stay_removed() -> None:
@@ -875,7 +938,6 @@ def test_application_read_models_have_one_current_owner() -> None:
         "project_detail.py",
         "project_summary.py",
         "runtime_maps.py",
-        "scenario.py",
     ):
         assert (owner / module_name).is_file()
 

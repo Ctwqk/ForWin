@@ -289,7 +289,6 @@ def _event_candidate(
         "candidate_draft",
         "band_checkpoint",
         "future_plan_audit_run",
-        "scenario_rehearsal_run",
         "generation_audit_checkpoint",
     }:
         return str(row.related_object_id or "").strip()

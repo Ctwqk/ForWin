@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -36,7 +35,6 @@ from forwin.protocol.experience import (
     ChapterExperiencePlan,
     ReaderPromise,
 )
-from forwin.protocol.scenario_rehearsal import ScenarioRehearsalReport
 from forwin.subworld_manager import SubWorldManager
 
 
@@ -124,41 +122,13 @@ class ArcEnvelopeManager:
         *,
         director: ArcDirector | None = None,
         subworld_manager: SubWorldManager | None = None,
-        scenario_progress_callback: Any | None = None,
         planning_service: PlanningService | None = None,
     ) -> None:
         self.director = director
         self.subworld_manager = subworld_manager or SubWorldManager(director=director)
-        self.scenario_progress_callback = scenario_progress_callback
         self.planning = planning_service or PlanningService.build_default(
             director=director,
             subworld_manager=self.subworld_manager,
-            scenario_progress_callback=scenario_progress_callback,
-        )
-
-    def bind_runtime_hooks(
-        self,
-        *,
-        scenario_progress_callback: Any,
-    ) -> None:
-        self.scenario_progress_callback = scenario_progress_callback
-        self.planning.scenario_rehearsal.progress_callback = scenario_progress_callback
-
-    def _emit_scenario_progress(
-        self,
-        *,
-        stage: str,
-        project_id: str,
-        chapter_number: int = 0,
-        message: str = "",
-    ) -> None:
-        if self.scenario_progress_callback is None:
-            return
-        self.scenario_progress_callback(
-            stage=stage,
-            project_id=project_id,
-            current_chapter=chapter_number,
-            message=message,
         )
 
     def _build_arc_resolution_state(
@@ -210,29 +180,6 @@ class ArcEnvelopeManager:
             audience_trends=audience_trends,
         )
 
-    def _refresh_state_after_rehearsal_replan(
-        self,
-        *,
-        session: Session,
-        project: Project,
-        state: ArcResolutionPlanningState,
-        rehearsal: ScenarioRehearsalReport,
-        activation_chapter: int,
-    ) -> ArcResolutionPlanningState:
-        if not rehearsal.arc_id or rehearsal.arc_id == state.active_arc.id:
-            return state
-        replanned_arc = session.get(ArcPlanVersion, rehearsal.arc_id)
-        if replanned_arc is None:
-            return state
-        chapter_plans = self.planning.query.arc_chapters(session, replanned_arc.id)
-        return self._build_arc_resolution_state(
-            session=session,
-            project=project,
-            active_arc=replanned_arc,
-            chapter_plans=chapter_plans,
-            activation_chapter=activation_chapter,
-        )
-
     def _ensure_current_band_plan_for_state(
         self,
         *,
@@ -272,20 +219,6 @@ class ArcEnvelopeManager:
             activation_chapter=activation_chapter,
             detailed_band_size=state.base_context.provisional_band_size,
         )
-        rehearsal = self.planning.scenario_rehearsal.run_for_band(
-            session=session,
-            project_id=project_id,
-            arc_id=state.active_arc.id,
-            band_id=state.base_context.provisional_window.band_id,
-            chapter_plans=state.base_context.provisional_window.active_band,
-        ).report
-        state = self._refresh_state_after_rehearsal_replan(
-            session=session,
-            project=project,
-            state=state,
-            rehearsal=rehearsal,
-            activation_chapter=activation_chapter,
-        )
         envelope = self.planning.arc_envelope_resolver.ensure_resolution(
             session=session,
             project=project,
@@ -293,7 +226,6 @@ class ArcEnvelopeManager:
             chapter_plans=state.chapter_plans,
             activation_chapter=activation_chapter,
             structure=state.structure_result.structure,
-            rehearsal_report=rehearsal,
             base_context=state.base_context,
         )
         self._ensure_current_band_plan_for_state(
@@ -639,31 +571,4 @@ class ArcEnvelopeManager:
             schedule=schedule,
             chapter_plan=chapter_plan,
             calibration=calibration,
-        )
-
-    def _resolve_envelope(
-        self,
-        *,
-        chapter_plans: list[ChapterPlan],
-        total_chapters: int,
-        policy: ArcPolicyTier,
-        base_target_size: int,
-        base_soft_min: int,
-        base_soft_max: int,
-        structure: ArcStructureDraftData,
-        provisional_band: list[ChapterPlan],
-        band_id: str,
-        rehearsal: ScenarioRehearsalReport | None = None,
-    ) -> ArcEnvelopeResolution:
-        return self.planning.arc_envelope_resolver._resolve_envelope(
-            chapter_plans=chapter_plans,
-            total_chapters=total_chapters,
-            policy=policy,
-            base_target_size=base_target_size,
-            base_soft_min=base_soft_min,
-            base_soft_max=base_soft_max,
-            structure=_to_core_structure(structure),
-            provisional_band=provisional_band,
-            band_id=band_id,
-            rehearsal=rehearsal,
         )

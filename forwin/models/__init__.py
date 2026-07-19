@@ -75,10 +75,6 @@ from .world_contract import (
     BandWorldContractRow,
     ChapterWorldDeltaIntentRow,
 )
-from .scenario_rehearsal import (
-    ScenarioRehearsalRunRow,
-    ScenarioPlanPatchRow,
-)
 from .book_state import (
     BookCognitionSnapshotRow,
     CharacterIdentityMapRow,
@@ -169,8 +165,6 @@ __all__ = [
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
     # planning state
-    "ScenarioRehearsalRunRow",
-    "ScenarioPlanPatchRow",
     "ArcWorldContractRow",
     "BandWorldContractRow",
     "ChapterWorldDeltaIntentRow",

@@ -169,7 +169,6 @@ def _build_project_control_application(
         ProjectControlApplicationDeps(
             get_session=lambda: _get_session(runtime),
             get_pipeline=lambda: runtime.pipeline,
-            display_datetime=lambda value: _display_for(runtime, value),
             require_reason=_require_reason,
             validate_constraint_payload=_validate_constraint_payload,
             serialize_band_checkpoint=_serialize_band_checkpoint,

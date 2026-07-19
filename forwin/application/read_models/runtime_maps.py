@@ -16,7 +16,6 @@ from forwin.models.phase import (
     BandExperiencePlan,
     ProjectReplanEvent,
 )
-from forwin.models.scenario_rehearsal import ScenarioRehearsalRunRow
 from forwin.models.publisher import PublisherUploadJob
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -311,31 +310,6 @@ def load_project_upload_stats(
     return stats
 
 
-def load_latest_scenario_rehearsal_by_project(
-    session: Session,
-    project_ids: list[str],
-) -> dict[str, ScenarioRehearsalRunRow]:
-    if not project_ids:
-        return {}
-    rows = list(
-        session.execute(
-            select(ScenarioRehearsalRunRow)
-            .where(ScenarioRehearsalRunRow.project_id.in_(project_ids))
-            .order_by(
-                ScenarioRehearsalRunRow.project_id.asc(),
-                ScenarioRehearsalRunRow.created_at.desc(),
-                ScenarioRehearsalRunRow.id.desc(),
-            )
-        )
-        .scalars()
-        .all()
-    )
-    latest: dict[str, ScenarioRehearsalRunRow] = {}
-    for row in rows:
-        latest.setdefault(row.project_id, row)
-    return latest
-
-
 def load_project_runtime_maps(
     session: Session,
     project_ids: list[str],
@@ -347,9 +321,6 @@ def load_project_runtime_maps(
         session, project_ids
     )
     latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(
-        session, project_ids
-    )
-    scenario_rehearsal_map = load_latest_scenario_rehearsal_by_project(
         session, project_ids
     )
     latest_arc_structure_map = _load_latest_arc_structure_by_project(
@@ -367,7 +338,6 @@ def load_project_runtime_maps(
         "latest_world_map": latest_world_map,
         "latest_arc_envelope_map": latest_arc_envelope_map,
         "latest_arc_analysis_map": latest_arc_analysis_map,
-        "scenario_rehearsal_map": scenario_rehearsal_map,
         "latest_arc_structure_map": latest_arc_structure_map,
         "latest_band_experience_map": latest_band_experience_map,
         "recent_replans_map": recent_replans_map,
@@ -380,6 +350,5 @@ __all__ = [
     "_load_latest_band_experience_by_project",
     "normalize_project_automation",
     "load_project_upload_stats",
-    "load_latest_scenario_rehearsal_by_project",
     "load_project_runtime_maps",
 ]

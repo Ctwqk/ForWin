@@ -209,29 +209,6 @@ class BandExperienceOverrideResponse(BaseModel):
     message: str
 
 
-class ScenarioRehearsalDetail(BaseModel):
-    project_id: str
-    arc_id: str = ""
-    band_id: str = ""
-    rehearsal_scope: str = "band"
-    chapter_numbers: list[int] = Field(default_factory=list)
-    trigger_reasons: list[str] = Field(default_factory=list)
-    recommendation: str = "pass"
-    risk_count: int = 0
-    blocker_count: int = 0
-    required_patch_count: int = 0
-    resolution_status: str = ""
-    patch_attempt_count: int = 0
-    checkpoint_id: str = ""
-    replan_event_id: str = ""
-    report: dict[str, Any] = Field(default_factory=dict)
-    created_at: str = ""
-
-
-class ScenarioPlanPatchApproveRequest(BaseModel):
-    reason: str = ""
-
-
 class CandidateDraftDetail(BaseModel):
     project_id: str
     chapter_number: int
@@ -275,7 +252,5 @@ __all__ = [
     "TropeTemplateValidationResponse",
     "BandExperienceOverrideRequest",
     "BandExperienceOverrideResponse",
-    "ScenarioRehearsalDetail",
-    "ScenarioPlanPatchApproveRequest",
     "CandidateDraftDetail",
 ]

@@ -32,16 +32,6 @@ class ProjectArcSnapshotFields(BaseModel):
     active_arc_evidence: list[str] = Field(default_factory=list)
     active_arc_expansion_signals: list[str] = Field(default_factory=list)
     active_arc_compression_signals: list[str] = Field(default_factory=list)
-    scenario_rehearsal_band_id: str = ""
-    scenario_rehearsal_recommendation: str = ""
-    scenario_rehearsal_risk_count: int = 0
-    scenario_rehearsal_blocker_count: int = 0
-    scenario_rehearsal_required_patch_count: int = 0
-    scenario_rehearsal_resolution_status: str = ""
-    scenario_rehearsal_trigger_reasons: list[str] = Field(default_factory=list)
-    scenario_rehearsal_patch_attempt_count: int = 0
-    scenario_rehearsal_checkpoint_id: str = ""
-    scenario_rehearsal_replan_event_id: str = ""
     active_reader_promise: dict[str, Any] = Field(default_factory=dict)
     active_band_reward_mix: list[str] = Field(default_factory=list)
     active_band_stall_guard: int = 0

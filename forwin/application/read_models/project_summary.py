@@ -160,9 +160,6 @@ def build_project_summaries(
         latest_world = runtime_maps["latest_world_map"].get(project.id)
         latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
         latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
-        latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(
-            project.id
-        )
         latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
         latest_band_experience = runtime_maps["latest_band_experience_map"].get(
             project.id
@@ -256,7 +253,6 @@ def build_project_summaries(
                     latest_arc_analysis,
                     latest_arc_structure,
                     latest_band_experience,
-                    latest_scenario_rehearsal,
                 ),
             )
         )

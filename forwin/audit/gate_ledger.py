@@ -26,7 +26,6 @@ GATE_ORDER: tuple[str, ...] = (
     "hard_floor",
     "canon_quality",
     "future_plan_audit",
-    "scenario_rehearsal",
     "band_checkpoint",
     "manual_checkpoint",
     "generation_audit",
@@ -37,7 +36,6 @@ _DEFAULT_RESPONSIBILITY_DOMAINS: dict[str, str] = {
     "hard_floor": "draft_quality",
     "canon_quality": "canon_admission",
     "future_plan_audit": "future_plan_integrity",
-    "scenario_rehearsal": "plan_feasibility",
     "band_checkpoint": "band_integrity",
     "manual_checkpoint": "operator_control",
     "generation_audit": "generation_operations",
@@ -48,7 +46,6 @@ _PRIMARY_DENOMINATOR_EVENTS: dict[str, set[str]] = {
     "hard_floor": {DecisionEventType.PULP_BEAT_EVALUATED},
     "canon_quality": {DecisionEventType.CANON_COMMIT_STARTED},
     "future_plan_audit": {DecisionEventType.FUTURE_PLAN_AUDIT_RUN},
-    "scenario_rehearsal": {DecisionEventType.SCENARIO_REHEARSAL_EVALUATED},
     "band_checkpoint": {DecisionEventType.BAND_CHECKPOINT_CREATED},
     "manual_checkpoint": {DecisionEventType.MANUAL_CHECKPOINT_CREATED},
     "generation_audit": {
@@ -62,7 +59,6 @@ _LEGACY_EVENT_GATES: dict[str, str] = {
     DecisionEventType.CANON_COMMIT_STARTED: "canon_quality",
     DecisionEventType.CANON_COMMIT_BLOCKED: "canon_quality",
     DecisionEventType.FUTURE_PLAN_AUDIT_RUN: "future_plan_audit",
-    DecisionEventType.SCENARIO_REHEARSAL_EVALUATED: "scenario_rehearsal",
     DecisionEventType.BAND_CHECKPOINT_CREATED: "band_checkpoint",
     DecisionEventType.BAND_CHECKPOINT_HIT: "band_checkpoint",
     DecisionEventType.CHECKPOINT_EVALUATOR_ERROR: "band_checkpoint",
@@ -249,7 +245,6 @@ def _candidate_id(
         "band_checkpoint",
         "candidate_draft",
         "future_plan_audit_run",
-        "scenario_rehearsal_run",
         "generation_audit_checkpoint",
     }:
         return str(row.related_object_id or "").strip()

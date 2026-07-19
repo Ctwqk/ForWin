@@ -2081,39 +2081,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "scenario_rehearsal_runs",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("arc_id", sa.String(), nullable=False),
-        sa.Column("band_id", sa.String(), nullable=False),
-        sa.Column("rehearsal_scope", sa.String(), nullable=False),
-        sa.Column("chapter_numbers_json", sa.Text(), nullable=False),
-        sa.Column("trigger_reasons_json", sa.Text(), nullable=False),
-        sa.Column("recommendation", sa.String(), nullable=False),
-        sa.Column("risk_count", sa.Integer(), nullable=False),
-        sa.Column("blocker_count", sa.Integer(), nullable=False),
-        sa.Column("required_patch_count", sa.Integer(), nullable=False),
-        sa.Column("report_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_scenario_rehearsal_project_arc_band",
-        "scenario_rehearsal_runs",
-        ["project_id", "arc_id", "band_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_scenario_rehearsal_project_created",
-        "scenario_rehearsal_runs",
-        ["project_id", "created_at"],
-        unique=False,
-    )
-    op.create_table(
         "signal_window_aggregates",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -2876,45 +2843,6 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_table(
-        "scenario_plan_patches",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("run_id", sa.String(), nullable=False),
-        sa.Column("arc_id", sa.String(), nullable=False),
-        sa.Column("band_id", sa.String(), nullable=False),
-        sa.Column("patch_type", sa.String(), nullable=False),
-        sa.Column("target", sa.Text(), nullable=False),
-        sa.Column("message", sa.Text(), nullable=False),
-        sa.Column("evidence_refs_json", sa.Text(), nullable=False),
-        sa.Column("patch_json", sa.Text(), nullable=False),
-        sa.Column("status", sa.String(), nullable=False),
-        sa.Column("approval_reason", sa.Text(), nullable=False),
-        sa.Column("applied_at", sa.DateTime(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["run_id"],
-            ["scenario_rehearsal_runs.id"],
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_scenario_plan_patches_project_run",
-        "scenario_plan_patches",
-        ["project_id", "run_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_scenario_plan_patches_project_status",
-        "scenario_plan_patches",
-        ["project_id", "status"],
-        unique=False,
-    )
-    op.create_table(
         "sub_world_roster_items",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("project_id", sa.String(), nullable=False),
@@ -3232,13 +3160,6 @@ def downgrade() -> None:
     )
     op.drop_table("sub_world_roster_items")
     op.drop_index(
-        "ix_scenario_plan_patches_project_status", table_name="scenario_plan_patches"
-    )
-    op.drop_index(
-        "ix_scenario_plan_patches_project_run", table_name="scenario_plan_patches"
-    )
-    op.drop_table("scenario_plan_patches")
-    op.drop_index(
         "ix_provisional_promotions_project_arc_band",
         table_name="provisional_promotion_records",
     )
@@ -3330,13 +3251,6 @@ def downgrade() -> None:
         "ix_signal_window_agg_project_key_window", table_name="signal_window_aggregates"
     )
     op.drop_table("signal_window_aggregates")
-    op.drop_index(
-        "ix_scenario_rehearsal_project_created", table_name="scenario_rehearsal_runs"
-    )
-    op.drop_index(
-        "ix_scenario_rehearsal_project_arc_band", table_name="scenario_rehearsal_runs"
-    )
-    op.drop_table("scenario_rehearsal_runs")
     op.drop_index(
         "ix_reveal_registry_project_status", table_name="reveal_registry_entries"
     )

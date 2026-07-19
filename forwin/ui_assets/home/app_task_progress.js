@@ -88,7 +88,7 @@
 
     function stageFailureInspectable(item, chapter, stage, state, entry, status) {
       if (state === 'failed' || state === 'paused') return true;
-      if (entry?.message && ['chapter_failed', 'paused_for_review', 'scenario_rehearsal_blocked', 'failed'].includes(stage)) return true;
+      if (entry?.message && ['chapter_failed', 'paused_for_review', 'failed'].includes(stage)) return true;
       if (stage === 'chapter_failed' && Array.isArray(item.failed_chapters) && item.failed_chapters.includes(Number(chapter?.chapter_number || 0))) return true;
       if (status === 'failed' && stage === 'chapter_failed') return true;
       if (status === 'needs_review' && stage === 'paused_for_review') return true;
@@ -134,9 +134,6 @@
       const requested = Number(item.requested_chapters || 0);
       const hasChapterWork = history.some((entry) => CHAPTER_RUNTIME_STAGES.has(entry.stage));
       const hasTerminal = ['completed', 'failed', 'partial_failed', 'needs_review', 'cancelled', 'paused'].includes(item.status);
-      const scenarioEntry = latestHistoryEntry(history, 'running_scenario_rehearsal');
-      const scenarioPatch = latestHistoryEntry(history, 'scenario_rehearsal_patch_required');
-      const scenarioBlocked = latestHistoryEntry(history, 'scenario_rehearsal_blocked');
       const currentIsChapterWork = CHAPTER_RUNTIME_STAGES.has(item.current_stage);
       const nodes = [
         {
@@ -156,16 +153,6 @@
           label: 'Arc',
           state: latestHistoryEntry(history, 'resolving_arc_envelope') ? 'completed' : 'upcoming',
           note: formatStageNote(latestHistoryEntry(history, 'resolving_arc_envelope'), '未解析'),
-        },
-        {
-          key: 'scenario_rehearsal',
-          label: 'Scenario Rehearsal',
-          state: scenarioBlocked ? 'failed' : (scenarioPatch ? 'paused' : (scenarioEntry ? 'completed' : 'upcoming')),
-          note: scenarioBlocked
-            ? formatStageNote(scenarioBlocked, '推演阻断')
-            : (scenarioPatch
-              ? formatStageNote(scenarioPatch, '等待 patch approve / rerun')
-              : formatStageNote(scenarioEntry, '低风险跳过或已通过')),
         },
         {
           key: 'chapter_loop',

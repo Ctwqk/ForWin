@@ -299,7 +299,7 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
         pipeline._record_stage_transition(
             {
                 "project_id": project_id,
-                "stage": "running_scenario_rehearsal",
+                "stage": "assembling_context",
                 "current_chapter": 29,
             }
         )

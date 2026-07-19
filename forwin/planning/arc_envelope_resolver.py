@@ -11,7 +11,6 @@ from forwin.arc_sizing import ArcPolicyTier, policy_for_total_chapters
 from forwin.models import ArcEnvelope, ArcEnvelopeAnalysis, ArcPlanVersion, ChapterPlan, Project, new_id
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindow, BandWindowResolver
-from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation, ScenarioRehearsalReport
 
 
 def _clamp_int(value: float | int, lower: int, upper: int) -> int:
@@ -158,7 +157,6 @@ class ArcEnvelopeResolver:
         chapter_plans: list[ChapterPlan],
         activation_chapter: int,
         structure: ArcStructureDraftData,
-        rehearsal_report: ScenarioRehearsalReport | None,
         base_context: BaseEnvelopeContext | None = None,
     ) -> ArcEnvelope:
         existing = self.get_existing_envelope(
@@ -185,7 +183,6 @@ class ArcEnvelopeResolver:
             structure=structure,
             provisional_band=context.provisional_window.active_band,
             band_id=context.provisional_window.band_id,
-            rehearsal=rehearsal_report,
         )
         envelope = ArcEnvelope(
             id=new_id(),
@@ -238,9 +235,8 @@ class ArcEnvelopeResolver:
         structure: ArcStructureDraftData,
         provisional_band: list[ChapterPlan],
         band_id: str,
-        rehearsal: ScenarioRehearsalReport | None = None,
     ) -> ArcEnvelopeResolution:
-        evidence = [f"policy={policy.name}", f"base_target={base_target_size}", f"scenario_band={len(provisional_band)}"]
+        evidence = [f"policy={policy.name}", f"base_target={base_target_size}", f"band_chapter_count={len(provisional_band)}"]
         expansion_signals: list[str] = []
         compression_signals: list[str] = []
         if len(structure.hotspot_candidates) >= 3:
@@ -250,27 +246,7 @@ class ArcEnvelopeResolver:
         if len(structure.compression_candidates) >= 2:
             compression_signals.append("中段存在可压缩片段")
         if len(provisional_band) <= max(4, base_target_size // 3):
-            compression_signals.append("近端 rehearsal band 较短")
-        if rehearsal is not None:
-            evidence.extend(
-                [
-                    f"scenario_rehearsal={rehearsal.recommendation.value}",
-                    f"scenario_risk_count={len(rehearsal.risk_findings)}",
-                    f"scenario_patch_count={len(rehearsal.required_plan_patches)}",
-                ]
-            )
-            if rehearsal.recommendation == ScenarioRehearsalRecommendation.PASS:
-                expansion_signals.append("scenario rehearsal 通过")
-            elif rehearsal.recommendation == ScenarioRehearsalRecommendation.PATCH:
-                evidence.append("scenario rehearsal 要求 plan patch")
-            elif rehearsal.recommendation in {
-                ScenarioRehearsalRecommendation.REPLAN,
-                ScenarioRehearsalRecommendation.BLOCK,
-            }:
-                compression_signals.append("scenario rehearsal 暴露高风险结构问题")
-            for finding in rehearsal.risk_findings:
-                if finding.severity == "fail":
-                    compression_signals.append(f"scenario blocker: {finding.risk_type}")
+            compression_signals.append("近端规划窗口较短")
         recommendation = "keep"
         resolved_target_size = base_target_size
         if len(expansion_signals) > len(compression_signals):

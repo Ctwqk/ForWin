@@ -1,7 +1,13 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
 from .scene import SceneContinuation, SceneOutput
-from .state_change import StateChangeCandidate, EventCandidate, ThreadBeatCandidate, TimeAdvance
+from .state_change import (
+    DeliveredPayoffCandidate,
+    EventCandidate,
+    StateChangeCandidate,
+    ThreadBeatCandidate,
+    TimeAdvance,
+)
 from .subworld import EntityMention
 from .world_v4 import (
     Belief,
@@ -37,16 +43,18 @@ class WriterNote(BaseModel):
 
 class WriterOutput(BaseModel):
     """Structured output from the Chapter Writer."""
+
     project_id: str = ""
     chapter_number: int
     title: str
-    body: str                                         # The actual Chinese chapter text
-    char_count: int = 0                               # len(body), computed after parse
-    end_of_chapter_summary: str                       # 1-2 sentence recap in Chinese
+    body: str  # The actual Chinese chapter text
+    char_count: int = 0  # len(body), computed after parse
+    end_of_chapter_summary: str  # 1-2 sentence recap in Chinese
     draft_blob_path: str = ""
     scene_outputs: list[SceneOutput] = Field(default_factory=list)
     state_changes: list[StateChangeCandidate] = Field(default_factory=list)
     new_events: list[EventCandidate] = Field(default_factory=list)
+    delivered_payoffs: list[DeliveredPayoffCandidate] = Field(default_factory=list)
     thread_beats: list[ThreadBeatCandidate] = Field(default_factory=list)
     time_advance: TimeAdvance | None = None
     scene_continuation: list[SceneContinuation] = Field(default_factory=list)

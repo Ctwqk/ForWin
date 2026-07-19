@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
+
+from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
 
 
 class PulpBeatResult(BaseModel):
@@ -15,6 +18,7 @@ class PulpBeatResult(BaseModel):
     next_hook_present: bool = False
     boring_setup_ratio: float = 0.0
     payoff_delay_chapters: int | None = None
+    visible_payoff_evidence: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
 
 
@@ -178,8 +182,9 @@ MYSTERY_PAYOFF_EVIDENCE_WORDS = (
     "时间戳",
     "名单",
 )
-_REWARD_SENTENCE_RE = re.compile(r"[。！？!?；;\n]+")
+_REWARD_SENTENCE_RE = re.compile(r"[。！？!?；;…\n]+")
 _REWARD_SUBCLAUSE_RE = re.compile(r"[，,]+")
+_REWARD_DIRECTION_RESET_RE = re.compile(r"(?:但|却|随后|然后|继而|转而|反而)")
 _MARKER_CONTEXT_BEFORE = 18
 _MARKER_CONTEXT_AFTER = 12
 _MARKER_NEGATION_PREFIXES = (
@@ -642,24 +647,67 @@ def verify_pulp_beats(
     *,
     track: str | None = None,
     reward_tags: tuple[str, ...] = (),
+    delivered_payoffs: Sequence[DeliveredPayoffCandidate] = (),
+    new_events: Sequence[EventCandidate] = (),
 ) -> PulpBeatResult:
     text = str(body or "")
     profile = _profile_for(text, track=track)
+    structured_payoff_evidence = _structured_payoff_evidence(
+        text,
+        delivered_payoffs=delivered_payoffs,
+        new_events=new_events,
+    )
     result = PulpBeatResult(
         pressure_present=_has_any(text, profile.pressure_words),
         protagonist_action_present=_has_any(text, profile.action_words),
         visible_payoff_present=(
             _profile_payoff_present(text, profile.payoff_words, reward_tags)
             or _planned_reward_payoff_present(text, reward_tags)
+            or bool(structured_payoff_evidence)
         ),
         audience_reaction_present=_has_any(text, profile.audience_words),
         enemy_or_obstacle_damage_present=_has_any(text, profile.damage_words),
         new_gain_or_status_shift_present=_has_any(text, profile.gain_words),
         next_hook_present=_has_any(text[-240:], profile.hook_words),
         boring_setup_ratio=_boring_setup_ratio(text),
+        visible_payoff_evidence=structured_payoff_evidence,
     )
     missing = [field for field in CORE_FIELDS if not getattr(result, field)]
     return result.model_copy(update={"missing_fields": missing})
+
+
+def _structured_payoff_evidence(
+    body: str,
+    *,
+    delivered_payoffs: Sequence[DeliveredPayoffCandidate],
+    new_events: Sequence[EventCandidate],
+) -> list[str]:
+    protagonist_names = {
+        name
+        for event in new_events
+        for name, role in zip(event.involved_entity_names, event.roles)
+        if role == "protagonist" and name
+    }
+    evidence: list[str] = []
+    for payoff in delivered_payoffs:
+        entity_name = payoff.entity_name.strip()
+        before_state = payoff.before_state.strip()
+        after_state = payoff.after_state.strip()
+        quote = payoff.evidence_quote.strip()
+        if entity_name not in protagonist_names:
+            continue
+        if not entity_name or not before_state or not after_state or not quote:
+            continue
+        if before_state == after_state:
+            continue
+        if quote not in body:
+            continue
+        if entity_name not in quote or after_state not in quote:
+            continue
+        evidence.append(
+            f"delivered_payoff:{entity_name}:{payoff.category}:{after_state}"
+        )
+    return evidence
 
 
 def _profile_payoff_present(
@@ -675,7 +723,11 @@ def _profile_payoff_present(
             _delivered_reward_marker_present(body, markers, reward_tag=tag)
             for tag in guarded_tags
         )
-    return _has_any(body, markers)
+    return _delivered_reward_marker_present(
+        body,
+        markers,
+        reward_tag="generic",
+    )
 
 
 def _planned_reward_payoff_present(body: str, reward_tags: tuple[str, ...]) -> bool:
@@ -802,10 +854,16 @@ def _reward_transition_spans(
 ) -> list[str]:
     spans: list[str] = []
     for sentence in _REWARD_SENTENCE_RE.split(str(body or "")):
-        clauses = [
+        comma_clauses = [
             clause.strip()
             for clause in _REWARD_SUBCLAUSE_RE.split(sentence)
             if clause.strip()
+        ]
+        clauses = [
+            part.strip()
+            for clause in comma_clauses
+            for part in _REWARD_DIRECTION_RESET_RE.split(clause)
+            if part.strip()
         ]
         spans.extend(clauses)
         if include_adjacent:

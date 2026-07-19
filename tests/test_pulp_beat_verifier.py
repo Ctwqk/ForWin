@@ -36,6 +36,18 @@ def test_verify_pulp_beats_flags_missing_payoff() -> None:
     assert "visible_payoff_present" in result.missing_fields
 
 
+def test_unplanned_profile_payoff_respects_negation() -> None:
+    result = verify_pulp_beats("角色A没有资格，只能继续等待。", track="urban")
+
+    assert result.visible_payoff_present is False
+
+
+def test_unplanned_profile_payoff_accepts_delivery_after_contrast() -> None:
+    result = verify_pulp_beats("他虽没有资格但合同已经生效。", track="urban")
+
+    assert result.visible_payoff_present is True
+
+
 def test_verify_pulp_beats_uses_planned_mystery_reward_contract() -> None:
     body = (
         "三份记录叠好，边缘刚好卡进环形刻痕的缺口，缺口共同指向检测台底部的插孔。"

@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from forwin.llm_eval.profiles import load_eval_profiles, profile_requires_api_key, redact_profile
+from forwin.llm_eval.profiles import (
+    load_eval_profiles,
+    profile_requires_api_key,
+    redact_profile,
+)
 from forwin.llm_eval.reporting import summarize_attempts
 from forwin.llm_eval.schemas import EvalAttemptResult
 from forwin.llm_eval.validators import validate_output
@@ -37,7 +41,9 @@ def test_manifest_profiles_resolve_api_key_from_env_and_redact_secret() -> None:
         old_value = os.environ.get("KIMI_TEST_KEY")
         os.environ["KIMI_TEST_KEY"] = "secret-kimi-key"
         try:
-            profiles = load_eval_profiles(manifest_path=str(manifest), selected_ids=["kimi"])
+            profiles = load_eval_profiles(
+                manifest_path=str(manifest), selected_ids=["kimi"]
+            )
         finally:
             if old_value is None:
                 os.environ.pop("KIMI_TEST_KEY", None)
@@ -81,7 +87,7 @@ def test_selected_codex_spark_alias_uses_cli_subscription_not_api_key() -> None:
 
 def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None:
     valid = validate_output(
-        "```json\n{\"scenes\":[{\"scene_no\":1}]}\n```",
+        '```json\n{"scenes":[{"scene_no":1}]}\n```',
         expected_output_kind="json",
         schema_name="scene_breakdown",
     )
@@ -90,7 +96,7 @@ def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None
     assert valid.required_keys_missing == []
 
     with_reasoning = validate_output(
-        "<think>internal draft</think>\n{\"scenes\":[{\"scene_no\":1}]}",
+        '<think>internal draft</think>\n{"scenes":[{"scene_no":1}]}',
         expected_output_kind="json",
         schema_name="scene_breakdown",
     )
@@ -98,13 +104,22 @@ def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None
     assert with_reasoning.schema_ok is True
 
     missing = validate_output(
-        "{\"not_scenes\":[]}",
+        '{"not_scenes":[]}',
         expected_output_kind="json",
         schema_name="scene_breakdown",
     )
     assert missing.parse_ok is True
     assert missing.schema_ok is False
     assert missing.required_keys_missing == ["scenes"]
+
+    old_state_event_shape = validate_output(
+        '{"state_changes":[],"new_events":[]}',
+        expected_output_kind="json",
+        schema_name="state_event_extraction",
+    )
+    assert old_state_event_shape.parse_ok is True
+    assert old_state_event_shape.schema_ok is False
+    assert old_state_event_shape.required_keys_missing == ["delivered_payoffs"]
 
     prose = validate_output(
         "<<FORWIN_BODY>>\n潮声压过码头。\n<<FORWIN_SUMMARY>>\n主角抵达雾港。",

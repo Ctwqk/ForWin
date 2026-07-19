@@ -7,14 +7,91 @@ import httpx
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import ScenePlan, SceneOutput
 from forwin.writer.chapter_writer import ChapterWriter
+from forwin.writer.prompt_core.extraction import build_state_event_extraction_prompt
 
 
 class SplitWriterPipelineTests(unittest.TestCase):
+    def test_state_event_prompt_requires_verbatim_delivered_payoff(self) -> None:
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=3,
+            chapter_plan_title="第三章",
+            chapter_plan_one_line="主角继续追查",
+            chapter_goals=["确认异响来源"],
+        )
+
+        prompt = build_state_event_extraction_prompt(
+            context,
+            "雨夜旧站",
+            "林夜确认异常报站。",
+        )[-1]["content"]
+
+        self.assertIn('"delivered_payoffs"', prompt)
+        self.assertIn("只记录主角在本章已经兑现的直接收益", prompt)
+        self.assertIn("同时包含 entity_name 和 after_state", prompt)
+        self.assertIn('同一位置的 roles 必须为 "protagonist"', prompt)
+
+    def test_structured_extraction_retries_required_payoff_schema(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.responses = [
+                    '{"state_changes":[],"new_events":[]}',
+                    (
+                        '{"state_changes":[],"new_events":[],"delivered_payoffs":['
+                        '{"entity_name":"林夜","category":"mystery","direction":"gain",'
+                        '"before_state":"未知","after_state":" ",'
+                        '"evidence_quote":"林夜确认了异常报站"}]}'
+                    ),
+                    '{"state_changes":[],"new_events":[],"delivered_payoffs":[]}',
+                    '{"thread_beats":[],"time_advance":null}',
+                    (
+                        '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[],'
+                        '"entity_mentions":[]}'
+                    ),
+                ]
+                self.calls = 0
+
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
+                self.calls += 1
+                return self.responses.pop(0)
+
+        client = FakeClient()
+        writer = ChapterWriter(client, writer_mode="single")
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=3,
+            chapter_plan_title="第三章",
+            chapter_plan_one_line="主角继续追查",
+            chapter_goals=["确认异响来源"],
+        )
+
+        metadata = writer._extract_structured(context, "雨夜旧站", "林夜确认异常报站。")
+
+        self.assertEqual(metadata["delivered_payoffs"], [])
+        self.assertEqual(client.calls, 5)
+        self.assertEqual(client.responses, [])
+
     def test_preview_generation_rejects_removed_json_preview_fallback(self) -> None:
         class FakeClient:
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 body = "林夜沿着旧站台继续追查异常报站声" * 40
-                return '{"title":"雨夜旧站","body":"' + body + '","micro_summary":"主角继续追查"}'
+                return (
+                    '{"title":"雨夜旧站","body":"'
+                    + body
+                    + '","micro_summary":"主角继续追查"}'
+                )
 
         writer = ChapterWriter(
             FakeClient(),
@@ -49,7 +126,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(plan.reward_beat_tag, "mystery")
         self.assertEqual(output.reward_beat_tag, "social")
 
-    def test_single_writer_uses_tagged_body_and_defers_structured_extraction(self) -> None:
+    def test_single_writer_uses_tagged_body_and_defers_structured_extraction(
+        self,
+    ) -> None:
         class FakeClient:
             def __init__(self) -> None:
                 self.responses = [
@@ -57,7 +136,8 @@ class SplitWriterPipelineTests(unittest.TestCase):
                         "<<FORWIN_TITLE>>\n"
                         "雨夜旧站\n"
                         "<<FORWIN_BODY>>\n"
-                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。"
+                        * 20
                         + "\n<<FORWIN_SUMMARY>>\n"
                         "林夜确认旧站台里还藏着第二条线索。"
                     ),
@@ -83,7 +163,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     ),
                 ]
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 return self.responses.pop(0)
 
         writer = ChapterWriter(
@@ -119,7 +201,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(output.generation_meta["structured_extraction_calls"], 0)
         self.assertEqual(output.generation_meta["state_event_extraction"], "deferred")
         self.assertEqual(output.generation_meta["thread_time_extraction"], "deferred")
-        self.assertEqual(output.generation_meta["lore_timeline_notes_extraction"], "deferred")
+        self.assertEqual(
+            output.generation_meta["lore_timeline_notes_extraction"], "deferred"
+        )
 
     def test_scene_fallback_completes_structured_extraction(self) -> None:
         class FakeClient:
@@ -129,7 +213,8 @@ class SplitWriterPipelineTests(unittest.TestCase):
                         "<<FORWIN_TITLE>>\n"
                         "雨夜旧站\n"
                         "<<FORWIN_BODY>>\n"
-                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。"
+                        * 20
                         + "\n<<FORWIN_SUMMARY>>\n"
                         "林夜确认旧站台里还藏着第二条线索。"
                     ),
@@ -137,7 +222,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
                         '{"state_changes":[{"entity_name":"林夜","entity_kind":"character",'
                         '"field":"location","old_value":"街口","new_value":"旧站台","reason":"进入调查现场"}],'
                         '"new_events":[{"summary":"林夜进入旧站台调查","significance":"major",'
-                        '"involved_entity_names":["林夜"],"roles":["protagonist"]}]}'
+                        '"involved_entity_names":["林夜"],"roles":["protagonist"]}],'
+                        '"delivered_payoffs":[{"entity_name":"林夜","category":"mystery",'
+                        '"direction":"gain","before_state":"尚未发现异常报站",'
+                        '"after_state":"听见广播里多出了一段不属于这个时代的报站声",'
+                        '"evidence_quote":"林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声"}]}'
                     ),
                     (
                         '{"thread_beats":[{"thread_name":"旧站疑云","beat_type":"escalation",'
@@ -155,7 +244,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     ),
                 ]
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 return self.responses.pop(0)
 
         class FallbackWriter(ChapterWriter):
@@ -182,11 +273,14 @@ class SplitWriterPipelineTests(unittest.TestCase):
         output = writer.write_chapter(context)
 
         self.assertTrue(output.generation_meta["fallback_from_scene"])
-        self.assertEqual(output.generation_meta["fallback_structured_extraction"], "performed")
+        self.assertEqual(
+            output.generation_meta["fallback_structured_extraction"], "performed"
+        )
         self.assertEqual(output.generation_meta["structured_extraction"], "completed")
         self.assertEqual(output.generation_meta["structured_extraction_calls"], 3)
         self.assertEqual(output.generation_meta["call_count"], 4)
         self.assertEqual(output.state_changes[0].entity_name, "林夜")
+        self.assertEqual(output.delivered_payoffs[0].category, "mystery")
         self.assertEqual(output.thread_beats[0].thread_name, "旧站疑云")
         self.assertEqual(output.lore_candidates[0].subject_name, "旧站台")
 
@@ -199,7 +293,8 @@ class SplitWriterPipelineTests(unittest.TestCase):
                         "<<FORWIN_TITLE>>\n"
                         "雨夜旧站\n"
                         "<<FORWIN_BODY>>\n"
-                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。"
+                        * 20
                         + "\n<<FORWIN_SUMMARY>>\n"
                         "林夜确认旧站台里还藏着第二条线索。"
                     ),
@@ -208,7 +303,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
                 ]
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 return self.responses.pop(0)
 
         writer = ChapterWriter(
@@ -236,7 +333,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(retry_events[0]["attempt_no"], 1)
         self.assertIn("preview response body is empty", retry_events[0]["reason"])
 
-    def test_preview_text_retries_incomplete_body_without_shrinking_budget(self) -> None:
+    def test_preview_text_retries_incomplete_body_without_shrinking_budget(
+        self,
+    ) -> None:
         class FakeClient:
             def __init__(self) -> None:
                 self.max_tokens: list[int] = []
@@ -245,7 +344,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     "<<FORWIN_TITLE>>\n完整章\n<<FORWIN_BODY>>\n林夜抬头看见门后站着另一个自己。",
                 ]
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 self.max_tokens.append(max_tokens)
                 return self.responses.pop(0)
 
@@ -294,7 +395,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.max_tokens: list[int] = []
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 self.max_tokens.append(max_tokens)
                 return (
                     "<<FORWIN_TITLE>>\n旧站来声\n"
@@ -326,7 +429,11 @@ class SplitWriterPipelineTests(unittest.TestCase):
 
         writer._stitch_scenes(
             context,
-            [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+            [
+                SceneOutput(
+                    scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。"
+                )
+            ],
         )
 
         self.assertGreaterEqual(client.max_tokens[0], 5000)
@@ -366,14 +473,20 @@ class SplitWriterPipelineTests(unittest.TestCase):
 
         writer._stitch_scenes(
             context,
-            [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+            [
+                SceneOutput(
+                    scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。"
+                )
+            ],
         )
 
         prompt = client.messages[0][1]["content"]
         self.assertIn("目标正文长度 350 到 400 中文字", prompt)
         self.assertIn("不得低于 300 中文字", prompt)
 
-    def test_scene_stitch_timeout_uses_single_attempt_before_outer_fallback(self) -> None:
+    def test_scene_stitch_timeout_uses_single_attempt_before_outer_fallback(
+        self,
+    ) -> None:
         class FakeClient:
             def __init__(self) -> None:
                 self.calls = 0
@@ -399,12 +512,18 @@ class SplitWriterPipelineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             writer._stitch_scenes(
                 context,
-                [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+                [
+                    SceneOutput(
+                        scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。"
+                    )
+                ],
             )
 
         self.assertEqual(client.calls, 1)
 
-    def test_scene_generation_timeout_uses_single_attempt_before_outer_fallback(self) -> None:
+    def test_scene_generation_timeout_uses_single_attempt_before_outer_fallback(
+        self,
+    ) -> None:
         class FakeClient:
             def __init__(self) -> None:
                 self.scene_generation_calls = 0
@@ -429,7 +548,8 @@ class SplitWriterPipelineTests(unittest.TestCase):
                         "<<FORWIN_TITLE>>\n"
                         "单章回退\n"
                         "<<FORWIN_BODY>>\n"
-                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。"
+                        * 20
                         + "\n<<FORWIN_SUMMARY>>\n"
                         "林夜确认旧站台里还藏着第二条线索。"
                     )
@@ -476,7 +596,8 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     ),
                     (
                         "<<FORWIN_BODY>>\n"
-                        + "林夜走进旧站台，雨水沿着檐角落下，广播忽然响起陌生报站。" * 12
+                        + "林夜走进旧站台，雨水沿着檐角落下，广播忽然响起陌生报站。"
+                        * 12
                         + "\n<<FORWIN_SUMMARY>>\n林夜发现旧站广播异常。"
                         "\n<<FORWIN_TIME>>\n夜里"
                         "\n<<FORWIN_LOCATION>>\n旧站台"
@@ -501,7 +622,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
                     '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
                 ]
 
-            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+            def chat(
+                self, _messages, temperature: float, max_tokens: int, **_kwargs
+            ) -> str:
                 return self.responses.pop(0)
 
         writer = ChapterWriter(
@@ -525,7 +648,9 @@ class SplitWriterPipelineTests(unittest.TestCase):
 
         self.assertEqual(output.generation_meta["mode"], "scene")
         self.assertEqual(output.generation_meta["call_count"], 6)
-        self.assertEqual(output.scene_outputs[0].continuation.continuity_anchor, "陌生报站声还在继续")
+        self.assertEqual(
+            output.scene_outputs[0].continuation.continuity_anchor, "陌生报站声还在继续"
+        )
         self.assertEqual(output.scene_continuation[0].next_scene_bridge, "追查广播室")
 
 

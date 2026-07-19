@@ -90,12 +90,11 @@ def run_hard_floor(
         body,
         track=pulp_beat_track,
         reward_tags=planned_reward_tags,
+        delivered_payoffs=writer_output.delivered_payoffs,
+        new_events=writer_output.new_events,
     )
     checks["pulp_visible_payoff"] = pulp_beats.visible_payoff_present
-    if (
-        policy.quality_profile == "pulp"
-        and not pulp_beats.visible_payoff_present
-    ):
+    if policy.quality_profile == "pulp" and not pulp_beats.visible_payoff_present:
         warning_reasons.append("pulp_visible_payoff")
 
     return HardFloorResult(

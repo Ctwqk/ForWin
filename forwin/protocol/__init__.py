@@ -1,5 +1,6 @@
 from .state_change import (
     EntityKind,
+    DeliveredPayoffCandidate,
     StateChangeCandidate,
     EventCandidate,
     ThreadBeatCandidate,
@@ -62,6 +63,7 @@ from .review import ContinuityIssue, RepairInstruction, ReviewVerdict
 __all__ = [
     # state_change
     "EntityKind",
+    "DeliveredPayoffCandidate",
     "StateChangeCandidate",
     "EventCandidate",
     "ThreadBeatCandidate",

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
-from forwin.protocol.state_change import EventCandidate
+from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
 
@@ -217,3 +219,197 @@ def test_pulp_hard_floor_uses_explicit_planned_power_delivery() -> None:
     assert result.metadata["planned_reward_tags"] == ["power", "social"]
     assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
     assert "pulp_visible_payoff" not in result.warning_reasons
+
+
+def test_pulp_hard_floor_uses_declared_delivered_payoff() -> None:
+    body = "系统回执写明：陈默的临时追件视野已解锁，他立刻看见了目标的因果线。"
+    result = run_hard_floor(
+        writer_output=_writer(
+            body,
+            delivered_payoffs=[
+                {
+                    "entity_name": "陈默",
+                    "category": "power",
+                    "direction": "gain",
+                    "before_state": "只能感知货物余效",
+                    "after_state": "临时追件视野已解锁",
+                    "evidence_quote": "陈默的临时追件视野已解锁",
+                }
+            ],
+            new_events=[
+                EventCandidate(
+                    summary="陈默解锁追件视野。",
+                    significance="major",
+                    involved_entity_names=["陈默"],
+                    roles=["protagonist"],
+                )
+            ],
+        ),
+        context_pack=_context(genre="都市玄幻"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=2,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["planned_reward_tags"] == []
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+    assert result.metadata["pulp_beat"]["visible_payoff_evidence"] == [
+        "delivered_payoff:陈默:power:临时追件视野已解锁"
+    ]
+
+
+def test_pulp_hard_floor_uses_frozen_chapter_one_payoff_excerpt() -> None:
+    body = "承运人陈默，当前体力与轻度伤势已按签收单余效比例修复。"
+    result = run_hard_floor(
+        writer_output=_writer(
+            body,
+            delivered_payoffs=[
+                {
+                    "entity_name": "陈默",
+                    "category": "power",
+                    "direction": "gain",
+                    "before_state": "肩膝酸胀且虎口受伤",
+                    "after_state": "当前体力与轻度伤势已按签收单余效比例修复",
+                    "evidence_quote": "承运人陈默，当前体力与轻度伤势已按签收单余效比例修复",
+                }
+            ],
+            new_events=[
+                EventCandidate(
+                    summary="陈默获得货物余效修复。",
+                    significance="major",
+                    involved_entity_names=["陈默"],
+                    roles=["protagonist"],
+                )
+            ],
+        ),
+        context_pack=_context(genre="都市玄幻"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=2,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+
+
+@pytest.mark.parametrize(
+    ("body", "payoff"),
+    [
+        (
+            "反派的临时追件视野已解锁，陈默只能后退。",
+            {
+                "entity_name": "反派",
+                "category": "power",
+                "direction": "gain",
+                "before_state": "无追件视野",
+                "after_state": "临时追件视野已解锁",
+                "evidence_quote": "反派的临时追件视野已解锁",
+            },
+        ),
+        (
+            "陈默的临时追件视野已解锁。",
+            {
+                "entity_name": "陈默",
+                "category": "power",
+                "direction": "gain",
+                "before_state": "临时追件视野已解锁",
+                "after_state": "临时追件视野已解锁",
+                "evidence_quote": "陈默的临时追件视野已解锁",
+            },
+        ),
+        (
+            "陈默的临时追件视野仍未解锁。",
+            {
+                "entity_name": "陈默",
+                "category": "power",
+                "direction": "gain",
+                "before_state": "无追件视野",
+                "after_state": "临时追件视野已解锁",
+                "evidence_quote": "陈默的临时追件视野已解锁",
+            },
+        ),
+        (
+            "陈默看到系统提示：临时追件视野已解锁。",
+            {
+                "entity_name": "陈默",
+                "category": "power",
+                "direction": "gain",
+                "before_state": "无追件视野",
+                "after_state": "临时追件视野已解锁",
+                "evidence_quote": "临时追件视野已解锁",
+            },
+        ),
+        (
+            "陈默获得新的追件能力。",
+            {
+                "entity_name": "陈默",
+                "category": "power",
+                "direction": "gain",
+                "before_state": "无追件能力",
+                "after_state": "临时追件视野已解锁",
+                "evidence_quote": "陈默获得新的追件能力",
+            },
+        ),
+    ],
+)
+def test_pulp_hard_floor_rejects_unverifiable_delivered_payoff(
+    body: str,
+    payoff: dict[str, str],
+) -> None:
+    result = run_hard_floor(
+        writer_output=_writer(
+            body,
+            delivered_payoffs=[payoff],
+            new_events=[
+                EventCandidate(
+                    summary="陈默继续追查。",
+                    significance="major",
+                    involved_entity_names=["陈默"],
+                    roles=["protagonist"],
+                )
+            ],
+        ),
+        context_pack=_context(genre="都市玄幻"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=2,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is False
+    assert result.metadata["pulp_beat"]["visible_payoff_evidence"] == []
+
+
+def test_pulp_hard_floor_rejects_blank_normalized_after_state() -> None:
+    body = "陈默获得临时追件视野。"
+    malformed = DeliveredPayoffCandidate.model_construct(
+        entity_name="陈默",
+        category="power",
+        direction="gain",
+        before_state="无追件视野",
+        after_state=" ",
+        evidence_quote="陈默获得临时追件视野",
+    )
+    result = run_hard_floor(
+        writer_output=_writer(
+            body,
+            delivered_payoffs=[malformed],
+            new_events=[
+                EventCandidate(
+                    summary="陈默获得追件视野。",
+                    significance="major",
+                    involved_entity_names=["陈默"],
+                    roles=["protagonist"],
+                )
+            ],
+        ),
+        context_pack=_context(genre="都市玄幻"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=2,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is False
+    assert result.metadata["pulp_beat"]["visible_payoff_evidence"] == []

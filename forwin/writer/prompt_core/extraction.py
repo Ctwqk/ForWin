@@ -3,6 +3,7 @@
 All user-facing text in the prompts is written in Chinese so that the LLM
 produces fluent Chinese web-novel prose and metadata without code-switching.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,6 +36,16 @@ def build_state_event_extraction_prompt(
                     "roles": ["protagonist"],
                 }
             ],
+            "delivered_payoffs": [
+                {
+                    "entity_name": "主角实体名称",
+                    "category": "power",
+                    "direction": "gain",
+                    "before_state": "收益兑现前的状态",
+                    "after_state": "收益兑现后的状态原文",
+                    "evidence_quote": "包含主角名称和兑现后状态的正文连续原文",
+                }
+            ],
         },
         ensure_ascii=False,
         indent=2,
@@ -47,15 +58,23 @@ def build_state_event_extraction_prompt(
         "3. new_events.significance 只能是 major、minor、background 之一。\n"
         "4. state_changes 最多 8 条，只保留会影响后续章节连续性的变化。\n"
         "5. new_events 最多 4 条，只保留本章关键事件。\n"
-        "6. character 的 field 必须优先使用英文白名单：location、status、goal、power_level、mood、role_state、knowledge_state、possession_state、life_state、custody_state、injury_state、participation_state。\n"
-        "7. location 的 field 优先使用 status、controlled_by；faction 的 field 优先使用 status、location、goal、power_level。\n"
-        "8. 字段值必须短句，不要展开分析。\n"
-        "9. 没有对应内容就返回空数组。\n"
-        "10. 只输出 JSON。\n\n"
+        "6. delivered_payoffs 最多 4 条，只记录主角在本章已经兑现的直接收益；敌方收益、申请中、计划中、被否定、失败或尚未兑现的结果一律不记录。\n"
+        "7. delivered_payoffs.category 只能是 power、social、justice、mystery、emotion；direction 只能是 gain、relief、reversal。\n"
+        "8. delivered_payoffs.before_state 与 after_state 必须不同；after_state 必须逐字出现在 evidence_quote 中。\n"
+        "9. delivered_payoffs.evidence_quote 必须是正文中 4 到 240 字的连续原文，且同时包含 entity_name 和 after_state，不得改写或拼接。\n"
+        '10. 每条 delivered_payoffs.entity_name 必须与 new_events.involved_entity_names 中的名称逐字相同，且同一位置的 roles 必须为 "protagonist"；否则不要记录该收益。\n'
+        "11. character 的 field 必须优先使用英文白名单：location、status、goal、power_level、mood、role_state、knowledge_state、possession_state、life_state、custody_state、injury_state、participation_state。\n"
+        "12. location 的 field 优先使用 status、controlled_by；faction 的 field 优先使用 status、location、goal、power_level。\n"
+        "13. 字段值必须短句，不要展开分析。\n"
+        "14. 三个顶层字段必须始终存在；没有对应内容就返回空数组。\n"
+        "15. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
-        {"role": "system", "content": "你是结构化提取器，只负责从正文抽取状态变化和事件。"},
+        {
+            "role": "system",
+            "content": "你是结构化提取器，只负责从正文抽取状态变化、事件和已兑现的主角收益。",
+        },
         {"role": "user", "content": user_content},
     ]
 
@@ -93,7 +112,10 @@ def build_thread_time_extraction_prompt(
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
-        {"role": "system", "content": "你是结构化提取器，只负责从正文抽取剧情线推进和时间推进。"},
+        {
+            "role": "system",
+            "content": "你是结构化提取器，只负责从正文抽取剧情线推进和时间推进。",
+        },
         {"role": "user", "content": user_content},
     ]
 
@@ -174,8 +196,8 @@ def build_structured_extraction_prompt(
 
 
 __all__ = [
-    'build_state_event_extraction_prompt',
-    'build_thread_time_extraction_prompt',
-    'build_lore_timeline_notes_extraction_prompt',
-    'build_structured_extraction_prompt',
+    "build_state_event_extraction_prompt",
+    "build_thread_time_extraction_prompt",
+    "build_lore_timeline_notes_extraction_prompt",
+    "build_structured_extraction_prompt",
 ]

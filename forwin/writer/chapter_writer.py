@@ -10,12 +10,19 @@ from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
 from forwin.protocol.state_change import (
+    DeliveredPayoffCandidate,
     EventCandidate,
     StateChangeCandidate,
     ThreadBeatCandidate,
     TimeAdvance,
 )
-from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
+from forwin.protocol.writer import (
+    EntityMention,
+    LoreCandidate,
+    TimelineHint,
+    WriterNote,
+    WriterOutput,
+)
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.observability.context import OperationContext
@@ -38,6 +45,11 @@ logger = logging.getLogger(__name__)
 _VALID_REWARD_TAGS = {"power", "social", "justice", "mystery", "emotion"}
 _BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
 _BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
+_STRUCTURED_LIST_LIMITS = {
+    "state_changes": 8,
+    "new_events": 4,
+    "delivered_payoffs": 4,
+}
 
 
 class ChapterWriter:
@@ -248,7 +260,8 @@ class ChapterWriter:
         )
         draft_data = self._parse_preview_text(
             preview_text,
-            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
+            fallback_title=context.chapter_plan_title
+            or f"第{context.chapter_number}章",
         )
         title = draft_data.get(
             "title",
@@ -345,7 +358,8 @@ class ChapterWriter:
         )
         draft_data = self._parse_preview_text(
             raw_draft,
-            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
+            fallback_title=context.chapter_plan_title
+            or f"第{context.chapter_number}章",
         )
         merged = dict(draft_data)
         merged["_generation_meta"] = {
@@ -404,9 +418,14 @@ class ChapterWriter:
                 self._generate_scene(context, scene_plan, skill_layers=skill_layers)
                 for scene_plan in scene_plans
             ]
-            stitched = self._stitch_scenes(context, scene_outputs, skill_layers=skill_layers)
+            stitched = self._stitch_scenes(
+                context, scene_outputs, skill_layers=skill_layers
+            )
             chapter_title = rebase_generic_numeric_chapter_title(
-                stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
+                stitched.get(
+                    "title",
+                    context.chapter_plan_title or f"第{context.chapter_number}章",
+                ),
                 context.chapter_number,
             )
             extracted = self._extract_structured(
@@ -417,7 +436,9 @@ class ChapterWriter:
 
             merged = dict(stitched)
             merged.update(extracted)
-            output = self._writer_output_from_dict(context, merged, scene_outputs=scene_outputs)
+            output = self._writer_output_from_dict(
+                context, merged, scene_outputs=scene_outputs
+            )
             output.generation_meta.update(
                 {
                     "mode": "scene",
@@ -457,7 +478,9 @@ class ChapterWriter:
                 max_attempts=2,
                 retry_on_timeout=True,
             )
-            output = self._complete_scene_fallback_structured_extraction(context, output)
+            output = self._complete_scene_fallback_structured_extraction(
+                context, output
+            )
             output.generation_meta.update(
                 {
                     "fallback_from_scene": True,
@@ -507,6 +530,11 @@ class ChapterWriter:
     ) -> WriterOutput:
         state_changes = self._build_list(data, "state_changes", StateChangeCandidate)
         new_events = self._build_list(data, "new_events", EventCandidate)
+        delivered_payoffs = self._build_list(
+            data,
+            "delivered_payoffs",
+            DeliveredPayoffCandidate,
+        )
         thread_beats = self._build_list(data, "thread_beats", ThreadBeatCandidate)
         lore_candidates = self._build_list(data, "lore_candidates", LoreCandidate)
         timeline_hints = self._build_list(data, "timeline_hints", TimelineHint)
@@ -538,6 +566,7 @@ class ChapterWriter:
             scene_outputs=resolved_scene_outputs,
             state_changes=state_changes,
             new_events=new_events,
+            delivered_payoffs=delivered_payoffs,
             thread_beats=thread_beats,
             time_advance=time_advance,
             scene_continuation=[
@@ -554,11 +583,12 @@ class ChapterWriter:
         self._attach_llm_fallback_events(output)
         logger.info(
             "write_chapter: done – chapter=%d char_count=%d "
-            "state_changes=%d new_events=%d thread_beats=%d",
+            "state_changes=%d new_events=%d delivered_payoffs=%d thread_beats=%d",
             output.chapter_number,
             output.char_count,
             len(output.state_changes),
             len(output.new_events),
+            len(output.delivered_payoffs),
             len(output.thread_beats),
         )
         return output
@@ -597,7 +627,9 @@ class ChapterWriter:
             )
 
         fallback_count = min(max(self.default_scene_count, 2), self.max_scene_count)
-        goals = context.chapter_goals or [context.chapter_plan_one_line or "推进本章主线"]
+        goals = context.chapter_goals or [
+            context.chapter_plan_one_line or "推进本章主线"
+        ]
         base_target = max(
             700,
             min(self.target_chapter_chars, self.max_chapter_chars) // fallback_count,
@@ -627,7 +659,9 @@ class ChapterWriter:
             max(1400, int(max(scene_plan.target_chars, 600) * 1.8)),
         )
         raw_scene = self._chat_preview_text(
-            build_scene_generation_prompt(context, scene_plan, skill_layers=skill_layers),
+            build_scene_generation_prompt(
+                context, scene_plan, skill_layers=skill_layers
+            ),
             temperature=self.temperature,
             max_tokens=max_output_tokens,
             timeout_seconds=self.scene_call_timeout_seconds,
@@ -683,9 +717,7 @@ class ChapterWriter:
                     or ""
                 ).strip(),
                 unresolved_micro_hook=str(
-                    data.get("unresolved_micro_hook")
-                    or scene_plan.micro_hook
-                    or ""
+                    data.get("unresolved_micro_hook") or scene_plan.micro_hook or ""
                 ).strip(),
                 next_scene_bridge=str(data.get("next_scene_bridge") or "").strip(),
                 time_continuity=str(
@@ -736,7 +768,8 @@ class ChapterWriter:
         )
         return self._parse_preview_text(
             raw_stitched,
-            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
+            fallback_title=context.chapter_plan_title
+            or f"第{context.chapter_number}章",
         )
 
     def _extract_structured(
@@ -748,6 +781,7 @@ class ChapterWriter:
         metadata: dict[str, object] = {
             "new_events": [],
             "state_changes": [],
+            "delivered_payoffs": [],
             "thread_beats": [],
             "time_advance": None,
             "lore_candidates": [],
@@ -769,6 +803,11 @@ class ChapterWriter:
             primary_max_tokens=min(self.max_tokens, 2200),
             retry_temperature=0.2,
             retry_max_tokens=min(self.max_tokens, 1400),
+            required_list_models={
+                "state_changes": StateChangeCandidate,
+                "new_events": EventCandidate,
+                "delivered_payoffs": DeliveredPayoffCandidate,
+            },
         )
         thread_time = self._extract_structured_part(
             label="thread_time_extraction",
@@ -796,17 +835,11 @@ class ChapterWriter:
         metadata.update(state_event)
         metadata.update(thread_time)
         metadata.update(lore_timeline_notes)
-        for key, value in (
-            state_event.get("_generation_meta") or {}
-        ).items():
+        for key, value in (state_event.get("_generation_meta") or {}).items():
             meta_notes[key] = value
-        for key, value in (
-            thread_time.get("_generation_meta") or {}
-        ).items():
+        for key, value in (thread_time.get("_generation_meta") or {}).items():
             meta_notes[key] = value
-        for key, value in (
-            lore_timeline_notes.get("_generation_meta") or {}
-        ).items():
+        for key, value in (lore_timeline_notes.get("_generation_meta") or {}).items():
             meta_notes[key] = value
 
         degraded_parts = [
@@ -839,6 +872,7 @@ class ChapterWriter:
         primary_max_tokens: int,
         retry_temperature: float,
         retry_max_tokens: int,
+        required_list_models: dict[str, type] | None = None,
     ) -> dict[str, object]:
         try:
             return self._chat_json(
@@ -849,13 +883,17 @@ class ChapterWriter:
                 max_attempts=2,
                 retry_on_timeout=False,
                 stage_key=label,
+                required_list_models=required_list_models,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("%s primary pass failed, retrying with reduced body: %s", label, exc)
+            logger.warning(
+                "%s primary pass failed, retrying with reduced body: %s", label, exc
+            )
             last_error: Exception = exc
+            valid_windows: list[dict[str, object]] = []
             for shortened_body in self._structured_fallback_windows(chapter_body):
                 try:
-                    return self._chat_json(
+                    window_result = self._chat_json(
                         prompt_builder(context, chapter_title, shortened_body),
                         temperature=retry_temperature,
                         max_tokens=retry_max_tokens,
@@ -863,10 +901,22 @@ class ChapterWriter:
                         max_attempts=1,
                         retry_on_timeout=False,
                         stage_key=label,
+                        required_list_models=required_list_models,
                     )
+                    if required_list_models:
+                        valid_windows.append(window_result)
+                    else:
+                        return window_result
                 except Exception as repair_exc:  # noqa: BLE001
                     last_error = repair_exc
-            logger.warning("%s degraded to empty metadata after retry: %s", label, last_error)
+            if valid_windows and required_list_models:
+                return self._merge_required_model_lists(
+                    valid_windows,
+                    required_list_models,
+                )
+            logger.warning(
+                "%s degraded to empty metadata after retry: %s", label, last_error
+            )
             return {
                 "_generation_meta": {
                     label: "degraded",
@@ -978,6 +1028,126 @@ class ChapterWriter:
                 )
         return result
 
+    @staticmethod
+    def _validate_required_model_lists(
+        data: object,
+        required_list_models: dict[str, type] | None,
+    ) -> None:
+        if not required_list_models:
+            return
+        if not isinstance(data, dict):
+            raise ValueError("structured extraction must return a JSON object")
+        for key, model_cls in required_list_models.items():
+            raw_list = data.get(key)
+            if not isinstance(raw_list, list):
+                raise ValueError(f"structured extraction requires list field {key!r}")
+            for index, item in enumerate(raw_list):
+                try:
+                    model_cls.model_validate(item)
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(
+                        f"structured extraction field {key!r}[{index}] is invalid: {exc}"
+                    ) from exc
+
+    @staticmethod
+    def _merge_required_model_lists(
+        payloads: list[dict[str, object]],
+        required_list_models: dict[str, type],
+    ) -> dict[str, object]:
+        merged: dict[str, object] = {}
+        for key, model_cls in required_list_models.items():
+            items_by_identity: dict[tuple[object, ...], object] = {}
+            for payload in payloads:
+                raw_items = payload.get(key)
+                if not isinstance(raw_items, list):
+                    continue
+                for raw_item in raw_items:
+                    item = model_cls.model_validate(raw_item)
+                    identity = ChapterWriter._structured_list_identity(key, item)
+                    existing = items_by_identity.get(identity)
+                    if isinstance(existing, EventCandidate) and isinstance(
+                        item, EventCandidate
+                    ):
+                        item = ChapterWriter._merge_event_candidates(existing, item)
+                    items_by_identity[identity] = item
+            limit = _STRUCTURED_LIST_LIMITS.get(key, len(items_by_identity))
+            merged[key] = [
+                item.model_dump(mode="json")
+                for item in list(items_by_identity.values())[:limit]
+            ]
+        return merged
+
+    @staticmethod
+    def _structured_list_identity(key: str, item: object) -> tuple[object, ...]:
+        if isinstance(item, StateChangeCandidate):
+            return (
+                key,
+                item.entity_name.strip(),
+                item.entity_kind,
+                item.field.strip(),
+            )
+        if isinstance(item, EventCandidate):
+            proposition = re.sub(r"[\W_]+", "", item.summary).casefold()
+            if proposition:
+                return (key, "summary", proposition)
+            participants = tuple(
+                sorted(
+                    (
+                        str(name).strip(),
+                        str(item.roles[index]).strip()
+                        if index < len(item.roles)
+                        else "",
+                    )
+                    for index, name in enumerate(item.involved_entity_names)
+                    if str(name).strip()
+                )
+            )
+            if participants:
+                return (key, participants)
+            return (key, "empty")
+        if isinstance(item, DeliveredPayoffCandidate):
+            return (
+                key,
+                item.entity_name,
+                item.category,
+                item.after_state,
+            )
+        return (key, item.model_dump_json())  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _merge_event_candidates(
+        earlier: EventCandidate,
+        later: EventCandidate,
+    ) -> EventCandidate:
+        names: list[str] = []
+        roles_by_name: dict[str, str] = {}
+        for event in (earlier, later):
+            for index, raw_name in enumerate(event.involved_entity_names):
+                name = str(raw_name).strip()
+                if not name:
+                    continue
+                role = (
+                    str(event.roles[index]).strip() if index < len(event.roles) else ""
+                )
+                if name not in roles_by_name:
+                    names.append(name)
+                    roles_by_name[name] = role
+                    continue
+                if role == "protagonist" or not roles_by_name[name]:
+                    roles_by_name[name] = role
+
+        significance_rank = {"background": 0, "minor": 1, "major": 2}
+        significance = max(
+            (earlier.significance, later.significance),
+            key=significance_rank.__getitem__,
+        )
+        return EventCandidate(
+            summary=later.summary or earlier.summary,
+            significance=significance,
+            involved_entity_names=names,
+            roles=[roles_by_name[name] for name in names],
+        )
+
     def _chat_json(
         self,
         messages: list[dict],
@@ -988,6 +1158,7 @@ class ChapterWriter:
         max_attempts: int = 3,
         retry_on_timeout: bool = True,
         stage_key: str = "writer_json",
+        required_list_models: dict[str, type] | None = None,
     ) -> dict:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -1011,7 +1182,12 @@ class ChapterWriter:
                     stage_key=stage_key,
                 )
                 try:
-                    return parse_llm_json(raw, error_prefix="ChapterWriter JSON parser")
+                    data = parse_llm_json(
+                        raw,
+                        error_prefix="ChapterWriter JSON parser",
+                    )
+                    self._validate_required_model_lists(data, required_list_models)
+                    return data
                 except Exception as exc:  # noqa: BLE001
                     mark_latest_attempt_parse_failure(
                         self.llm_client,
@@ -1036,7 +1212,9 @@ class ChapterWriter:
                     len(attempts),
                     exc,
                 )
-        raise ValueError(f"ChapterWriter JSON generation failed after retries: {last_error}")
+        raise ValueError(
+            f"ChapterWriter JSON generation failed after retries: {last_error}"
+        )
 
     def _chat_preview_text(
         self,
@@ -1106,7 +1284,9 @@ class ChapterWriter:
                     len(attempts),
                     exc,
                 )
-        raise ValueError(f"ChapterWriter preview generation failed after retries: {last_error}")
+        raise ValueError(
+            f"ChapterWriter preview generation failed after retries: {last_error}"
+        )
 
     @staticmethod
     def _body_looks_complete(body: str) -> bool:
@@ -1135,7 +1315,9 @@ class ChapterWriter:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        route_override = self._llm_route_overrides[-1] if self._llm_route_overrides else {}
+        route_override = (
+            self._llm_route_overrides[-1] if self._llm_route_overrides else {}
+        )
         if response_format is not None and "response_format" in parameters:
             kwargs["response_format"] = response_format
         if timeout_seconds is not None and "timeout_seconds" in parameters:
@@ -1185,7 +1367,9 @@ class ChapterWriter:
             output.generation_meta["model_fallbacks"] = events
 
     @staticmethod
-    def _attach_prompt_revision(output: WriterOutput, messages: list[dict[str, object]]) -> None:
+    def _attach_prompt_revision(
+        output: WriterOutput, messages: list[dict[str, object]]
+    ) -> None:
         revision_hash = prompt_revision_hash(messages)
         output.prompt_revision_hash = revision_hash
         output.generation_meta["prompt_revision_hash"] = revision_hash
@@ -1212,14 +1396,24 @@ class ChapterWriter:
             if str(item.get("role", "")).strip() == "system"
         )
         last_call_result = getattr(self.llm_client, "last_call_result", None)
-        trace = getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
+        trace = (
+            getattr(last_call_result, "trace", {})
+            if last_call_result is not None
+            else {}
+        )
         return {
             "trace_scope": "writer",
             "stage_key": stage_key,
-            "backend": str(trace.get("backend", "") or getattr(last_call_result, "backend", "") or ""),
+            "backend": str(
+                trace.get("backend", "")
+                or getattr(last_call_result, "backend", "")
+                or ""
+            ),
             "codex_job_id": str(trace.get("codex_job_id", "") or ""),
             "permission_profile": str(trace.get("permission_profile", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)) if last_call_result is not None else False,
+            "fallback_used": bool(getattr(last_call_result, "fallback_used", False))
+            if last_call_result is not None
+            else False,
             "template_id": template_id,
             "template_version": "v1",
             "effective_system_prompt": effective_system_prompt,
@@ -1276,16 +1470,24 @@ class ChapterWriter:
                 normalized[key] = str(data.get(key) or "").strip()
         if isinstance(data.get("involved_entities"), list):
             normalized["involved_entities"] = [
-                str(item).strip() for item in data["involved_entities"] if str(item).strip()
+                str(item).strip()
+                for item in data["involved_entities"]
+                if str(item).strip()
             ]
         elif data.get("involved_entities") is not None:
-            normalized["involved_entities"] = str(data.get("involved_entities") or "").strip()
+            normalized["involved_entities"] = str(
+                data.get("involved_entities") or ""
+            ).strip()
         if isinstance(data.get("character_focus"), list):
             normalized["character_focus"] = [
-                str(item).strip() for item in data["character_focus"] if str(item).strip()
+                str(item).strip()
+                for item in data["character_focus"]
+                if str(item).strip()
             ]
         elif data.get("character_focus") is not None:
-            normalized["character_focus"] = str(data.get("character_focus") or "").strip()
+            normalized["character_focus"] = str(
+                data.get("character_focus") or ""
+            ).strip()
         if isinstance(data.get("continuation"), dict):
             continuation = data["continuation"]
             for source_key, target_key in (
@@ -1295,9 +1497,17 @@ class ChapterWriter:
                 ("time_continuity", "time_continuity"),
                 ("location_continuity", "location_continuity"),
             ):
-                if continuation.get(source_key) is not None and target_key not in normalized:
-                    normalized[target_key] = str(continuation.get(source_key) or "").strip()
-            if isinstance(continuation.get("character_focus"), list) and "character_focus" not in normalized:
+                if (
+                    continuation.get(source_key) is not None
+                    and target_key not in normalized
+                ):
+                    normalized[target_key] = str(
+                        continuation.get(source_key) or ""
+                    ).strip()
+            if (
+                isinstance(continuation.get("character_focus"), list)
+                and "character_focus" not in normalized
+            ):
                 normalized["character_focus"] = [
                     str(item).strip()
                     for item in continuation["character_focus"]
@@ -1305,7 +1515,9 @@ class ChapterWriter:
                 ]
         if not normalized.get("body") and normalized.get("text"):
             normalized["body"] = normalized["text"]
-        if not normalized.get("end_of_chapter_summary") and normalized.get("micro_summary"):
+        if not normalized.get("end_of_chapter_summary") and normalized.get(
+            "micro_summary"
+        ):
             normalized["end_of_chapter_summary"] = normalized["micro_summary"]
         return normalized
 
@@ -1347,7 +1559,11 @@ class ChapterWriter:
             for index, match in enumerate(matches):
                 field_name = marker_map[match.group(0)]
                 start = match.end()
-                end = matches[index + 1].start() if index + 1 < len(matches) else len(cleaned)
+                end = (
+                    matches[index + 1].start()
+                    if index + 1 < len(matches)
+                    else len(cleaned)
+                )
                 value = cleaned[start:end].strip()
                 if value:
                     fields[field_name] = value
@@ -1377,7 +1593,9 @@ class ChapterWriter:
                 candidate = line.strip()
                 if not candidate:
                     continue
-                if candidate.startswith(("<<FORWIN_", "【标题】", "【正文】", "【摘要】")):
+                if candidate.startswith(
+                    ("<<FORWIN_", "【标题】", "【正文】", "【摘要】")
+                ):
                     continue
                 if re.match(r"^[0-9]+\.\s", candidate):
                     continue

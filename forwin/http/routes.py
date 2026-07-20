@@ -95,7 +95,6 @@ from forwin.api_schema import (
     WorldEditProposalInfo,
     WorldModelConflictInfo,
     WorldModelExportResponse,
-    WorldModelImportResponse,
     WorldModelPageInfo,
     WorldModelSnapshotInfo,
 )
@@ -938,12 +937,6 @@ def register_api_routes(
             ["POST"],
             handlers["export_obsidian"],
             {"response_model": WorldModelExportResponse},
-        ),
-        (
-            "/api/projects/{project_id}/obsidian/import",
-            ["POST"],
-            handlers["import_obsidian"],
-            {"response_model": WorldModelImportResponse},
         ),
         (
             "/api/projects/{project_id}/llm-kb/rebuild",

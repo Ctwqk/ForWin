@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
-  Upload,
   UserRound,
   X
 } from "lucide-react";
@@ -35,7 +34,6 @@ const TRANSLATIONS = {
   vaultPath: { cn: "Vault path", en: "Vault path" },
   vaultPlaceholder: { cn: "默认 data/world_vaults/{project_id}", en: "Default data/world_vaults/{project_id}" },
   export: { cn: "导出", en: "Export" },
-  importProposal: { cn: "导入 proposal", en: "Import proposal" },
   tabPages: { cn: "页面", en: "Pages" },
   tabGraph: { cn: "图谱", en: "Graph" },
   tabSearch: { cn: "搜索", en: "Search" },
@@ -247,14 +245,6 @@ type ExportResponse = {
   ok: boolean;
   vault_root: string;
   exported_count: number;
-  message: string;
-};
-
-type ImportResponse = {
-  ok: boolean;
-  vault_root: string;
-  proposal_count: number;
-  changed_paths: string[];
   message: string;
 };
 
@@ -534,26 +524,6 @@ export default function App() {
       await refreshWorldModel(projectId, { updateMessage: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Obsidian 导出失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function importVault() {
-    if (!projectId) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await apiJson<ImportResponse>(`/api/projects/${projectId}/obsidian/import`, {
-        method: "POST",
-        body: JSON.stringify({ vault_root: vaultRoot })
-      });
-      setVaultRoot(result.vault_root);
-      setMessage(result.message || `已生成 ${result.proposal_count} 个 proposal。`);
-      await refreshWorldModel(projectId, { updateMessage: false });
-      setTab("proposals");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Obsidian 导入失败");
     } finally {
       setBusy(false);
     }
@@ -877,10 +847,6 @@ export default function App() {
           <button type="submit" disabled={busy || !projectId}>
             <Download size={16} />
             {t("export")}
-          </button>
-          <button type="button" onClick={importVault} disabled={busy || !projectId}>
-            <Upload size={16} />
-            {t("importProposal")}
           </button>
         </form>
       </section>
@@ -1538,7 +1504,7 @@ function ProposalList({
   onReview: (proposalId: string, status: "accepted" | "rejected") => void;
   busy: boolean;
 }) {
-  if (proposals.length === 0) return <EmptyState title="没有 proposal" text="导入后生成待审记录。" compact />;
+  if (proposals.length === 0) return <EmptyState title="没有 proposal" text="创建 proposal 后会出现在这里。" compact />;
   return (
     <div className="list-scroll">
       {proposals.map((proposal) => (
@@ -1563,13 +1529,13 @@ function ProposalList({
 
 function ProposalDetail({ proposals }: { proposals: WorldEditProposalInfo[] }) {
   if (proposals.length === 0) {
-    return <EmptyState title="没有 proposal" text="先导入 proposal，再人工 accept 或 reject。" />;
+    return <EmptyState title="没有 proposal" text="先创建 proposal，再人工 accept 或 reject。" />;
   }
   return (
     <>
       <div className="panel-head">
         <div>
-          <p className="eyebrow">Obsidian Import</p>
+          <p className="eyebrow">Proposal Queue</p>
           <h2>Proposal Review</h2>
         </div>
       </div>

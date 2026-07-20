@@ -204,7 +204,7 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 - planning 删除已由 experience service 接管的 audience 查询副本和重复 calibration DTO；Writer、Review、quality gate 共享唯一 skill-layer trace 序列化函数。
 - 本 Slice 生产与测试净减 734 行；`ruff check forwin`、`compileall -q forwin`、architecture boundary 27 项通过。按用户要求未重复运行全量测试。
 - 第二轮残留清理删除零调用的 context/runtime/generation ports、personality validation、review interval/repair handler 与 map pathfinding facade；Genesis handoff 已接管的项目地图初始化副本及其级联 helper 同步物理删除。
-- Proposal HTTP 只保留通用 `/proposals` owner，Obsidian 只保留 import/export；world-model/obsidian proposal 兼容入口和 world-model Obsidian 转发入口均删除，World Studio 与 MCP 已切换到 canonical route。
+- Proposal HTTP 只保留通用 `/proposals` owner，Obsidian 只保留单向 export；world-model/obsidian proposal 兼容入口、Obsidian reverse import 和 world-model Obsidian 转发入口均删除，World Studio 与 MCP 已切换到 canonical route。
 - BookState path patch、quality signal 去重与数据库 retry 分类各收敛为一个实现；HTTP adapter 的 project 404 判定统一由 request support 持有。
 - 第二轮生产、前端与测试净减 1,211 行；`ruff`、`compileall`、World Studio build 通过，architecture/map/proposal/DB retry/readability-continuity/HTTP factory 聚焦验证 50+ 项通过。另有 3 个 `canon_quality_service` 旧 fixture 在 `159baf8` 加入 unasked-answer fail-closed 后仍未同步，失败位于表单 schema 校验而非本轮去重路径。
 

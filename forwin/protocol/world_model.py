@@ -102,12 +102,3 @@ class WorldModelExportResult(BaseModel):
     vault_root: str = ""
     exported_count: int = 0
     message: str = ""
-
-
-class WorldModelImportResult(BaseModel):
-    ok: bool = True
-    project_id: str = ""
-    vault_root: str = ""
-    proposal_count: int = 0
-    changed_paths: list[str] = Field(default_factory=list)
-    message: str = ""

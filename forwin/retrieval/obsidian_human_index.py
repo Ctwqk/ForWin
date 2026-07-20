@@ -233,8 +233,6 @@ def _collect_human_sections(project_id: str, vault_root: Path) -> list[dict[str,
 
 
 def _canon_status(section_name: str) -> str:
-    if section_name == "Proposed Correction":
-        return "proposal_pending"
     return "human_unreviewed"
 
 

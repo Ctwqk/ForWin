@@ -14,8 +14,8 @@ from forwin.api_schema import (
 )
 from forwin.http.request_support import require_project
 from forwin.models.knowledge import KnowledgeEditProposalRow
-from forwin.obsidian.proposal_review import approve_world_edit_proposal
 from forwin.knowledge_system.store import load_json
+from forwin.proposals.proposal_review import approve_world_edit_proposal
 
 
 def build_handlers(

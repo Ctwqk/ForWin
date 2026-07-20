@@ -12,7 +12,7 @@ from forwin.canon import (
     CanonWriteFailure,
 )
 from forwin.models.knowledge import KnowledgeEditProposalRow
-from forwin.obsidian.structured_patch import proposal_to_graph_delta
+from forwin.proposals.structured_patch import proposal_to_graph_delta
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 
 
@@ -44,7 +44,7 @@ def approve_world_edit_proposal(
     proposal_id: str,
     reason: str = "",
     forced_accept_reason: str = "",
-    trigger: str = "obsidian_proposal_approve",
+    trigger: str = "proposal_approve",
 ) -> ProposalReviewResult:
     row = _load_pending_proposal(session, project_id, proposal_id)
     try:
@@ -57,7 +57,7 @@ def approve_world_edit_proposal(
         chapter_number=proposal_chapter(row),
         graph_deltas=[delta],
         approved_by=[f"{trigger}_approval"],
-        review_verdict_id=f"obsidian_proposal_review_{proposal_id}",
+        review_verdict_id=f"proposal_review_{proposal_id}",
         forced_accept_reason=forced_accept_reason,
     )
     verdict = BookStateReviewGate(session).review(changes)

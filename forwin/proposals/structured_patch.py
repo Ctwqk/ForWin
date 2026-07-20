@@ -109,26 +109,26 @@ def proposal_to_graph_delta(
             raise ValueError(f"unsupported forwin-patch op: {op}")
 
     return GraphDelta(
-        id=f"obsidian_delta_{row.id}_{new_id()}",
+        id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
         chapter_number=_proposal_chapter(row),
         delta_type=GraphDeltaType.REPAIR,
         operation="structured_proposal_patch",
-        target_type="obsidian_proposal",
+        target_type="proposal",
         target_id=row.id,
-        source_type="obsidian_proposal",
+        source_type="proposal",
         source_id=row.id,
-        summary=f"Approved structured Obsidian proposal {row.id}",
+        summary=f"Approved structured proposal {row.id}",
         node_patches=node_patches,
         edge_patches=edge_patches,
         fact_patches=fact_patches,
         map_patches=map_patches,
         cognition_patches=cognition_patches,
         evidence_refs=source_refs,
-        review_verdict_id=f"obsidian_proposal_review_{row.id}",
+        review_verdict_id=f"proposal_review_{row.id}",
         allowed_for_canon=True,
         metadata={
-            "source": "obsidian",
+            "source": row.source,
             "proposal_id": row.id,
             "proposal_type": getattr(row, "proposal_type", "") or "",
             "target_page_key": row.target_page_key,
@@ -153,14 +153,14 @@ def audit_delta_from_proposal(
     )
     source_refs = _source_refs(row)
     return GraphDelta(
-        id=f"obsidian_delta_{row.id}_{new_id()}",
+        id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
         chapter_number=_proposal_chapter(row),
         delta_type=GraphDeltaType.REPAIR,
         operation="create_fact",
         target_type="proposal",
         target_id=row.id,
-        source_type="obsidian_proposal",
+        source_type="proposal",
         source_id=row.id,
         summary=proposition,
         fact_patches=[
@@ -195,10 +195,10 @@ def audit_delta_from_proposal(
             )
         ],
         evidence_refs=source_refs,
-        review_verdict_id=f"obsidian_proposal_review_{row.id}",
+        review_verdict_id=f"proposal_review_{row.id}",
         allowed_for_canon=True,
         metadata={
-            "source": "obsidian",
+            "source": row.source,
             "proposal_id": row.id,
             "proposal_type": proposal_type,
             "target_page_key": row.target_page_key,
@@ -720,7 +720,7 @@ def _proposal_chapter(row: KnowledgeEditProposalRow) -> int:
 
 
 def _source_refs(row: KnowledgeEditProposalRow) -> list[str]:
-    refs = [f"obsidian_proposal:{row.id}", f"obsidian_page:{row.target_page_key}"]
+    refs = [f"proposal:{row.id}", f"proposal_page:{row.target_page_key}"]
     target_node_id = getattr(row, "target_node_id", "") or ""
     if target_node_id:
         refs.append(f"node:{target_node_id}")

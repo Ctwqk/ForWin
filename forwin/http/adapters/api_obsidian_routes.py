@@ -6,11 +6,9 @@ from typing import Any, Callable
 from forwin.api_schema import (
     WorldModelExportRequest,
     WorldModelExportResponse,
-    WorldModelImportRequest,
-    WorldModelImportResponse,
 )
 from forwin.http.request_support import require_project
-from forwin.obsidian import ObsidianExporter, ObsidianImporter
+from forwin.obsidian import ObsidianExporter
 from forwin.retrieval.obsidian_human_index import ObsidianHumanVectorIndex
 
 
@@ -50,29 +48,6 @@ def build_handlers(
                 message=f"exported BookState-backed Obsidian vault as of chapter {result.as_of_chapter}",
             )
 
-    def import_obsidian(
-        project_id: str, req: WorldModelImportRequest
-    ) -> WorldModelImportResponse:
-        with get_session() as session:
-            require_project(session, project_id)
-            vault_root = (
-                Path(req.vault_root) if str(req.vault_root or "").strip() else None
-            )
-            with session.begin_nested():
-                result = ObsidianImporter(session).import_project(
-                    project_id, vault_root=vault_root
-                )
-            session.commit()
-            _rebuild_human_index(project_id, Path(result.vault_root))
-            return WorldModelImportResponse(
-                ok=True,
-                project_id=project_id,
-                vault_root=result.vault_root,
-                proposal_count=result.proposal_count,
-                changed_paths=result.changed_paths,
-                message=f"created {result.proposal_count} Obsidian proposal(s)",
-            )
-
     def _rebuild_human_index(project_id: str, vault_root: Path) -> None:
         try:
             ObsidianHumanVectorIndex(
@@ -85,5 +60,4 @@ def build_handlers(
 
     return {
         "export_obsidian": export_obsidian,
-        "import_obsidian": import_obsidian,
     }

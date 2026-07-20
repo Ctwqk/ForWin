@@ -58,8 +58,6 @@ from .world import (
     WorldEditProposalCreateRequest,
     WorldModelExportRequest,
     WorldModelExportResponse,
-    WorldModelImportRequest,
-    WorldModelImportResponse,
     WorldEditProposalReviewRequest,
 )
 
@@ -232,8 +230,6 @@ __all__ = [
     "WorldEditProposalCreateRequest",
     "WorldModelExportRequest",
     "WorldModelExportResponse",
-    "WorldModelImportRequest",
-    "WorldModelImportResponse",
     "WorldEditProposalReviewRequest",
     "PublisherPlatformInfo",
     "PublisherBookMetaRequest",

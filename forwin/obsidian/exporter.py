@@ -36,7 +36,7 @@ class ObsidianExporter:
     """BookState-backed Obsidian vault projection.
 
     The vault is a projection only: all generated canon sections come from
-    BookState, while editable sections are preserved for import as proposals.
+    BookState, while editable sections are preserved and human-indexed.
     """
 
     def __init__(self, session: Session) -> None:
@@ -172,7 +172,8 @@ class ObsidianExporter:
                     "DB / BookState canon is the only source of truth.",
                     "Generated canon sections are locked.",
                     "Manual Notes, Human Questions, and Proposed Correction are editable.",
-                    "Import creates proposals only; it never writes canon directly.",
+                    "Editable sections are preserved and human-indexed.",
+                    "Canon changes require an explicit generic proposal; the vault has no reverse sync.",
                     "",
                 ]
             ),

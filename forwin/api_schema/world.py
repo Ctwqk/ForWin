@@ -290,19 +290,6 @@ class WorldModelExportResponse(BaseModel):
     message: str = ""
 
 
-class WorldModelImportRequest(BaseModel):
-    vault_root: str = ""
-
-
-class WorldModelImportResponse(BaseModel):
-    ok: bool = True
-    project_id: str = ""
-    vault_root: str = ""
-    proposal_count: int = 0
-    changed_paths: list[str] = Field(default_factory=list)
-    message: str = ""
-
-
 class WorldEditProposalReviewRequest(BaseModel):
     status: str
     reason: str = ""
@@ -332,7 +319,5 @@ __all__ = [
     'WorldEditProposalCreateRequest',
     'WorldModelExportRequest',
     'WorldModelExportResponse',
-    'WorldModelImportRequest',
-    'WorldModelImportResponse',
     'WorldEditProposalReviewRequest',
 ]

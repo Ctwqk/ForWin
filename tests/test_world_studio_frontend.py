@@ -131,6 +131,14 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn(".page-editor", css_source)
         self.assertIn(".context-panel", css_source)
 
+    def test_world_studio_proposals_are_not_labeled_as_obsidian_imports(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("Proposal Queue", app_source)
+        self.assertNotIn("Obsidian Import", app_source)
+        self.assertNotIn("导入后生成待审记录。", app_source)
+        self.assertNotIn("先导入 proposal", app_source)
+
 
 if __name__ == "__main__":
     unittest.main()

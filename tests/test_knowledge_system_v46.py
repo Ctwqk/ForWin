@@ -9,7 +9,11 @@ from forwin.http.adapters.api_book_state_routes import build_handlers as build_b
 from forwin.http.adapters.api_llm_kb_routes import build_handlers as build_llm_kb_handlers
 from forwin.http.adapters.api_obsidian_routes import build_handlers as build_obsidian_handlers
 from forwin.http.adapters.api_proposal_routes import build_handlers as build_proposal_handlers
-from forwin.api_schema import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
+from forwin.api_schema import (
+    WorldEditProposalCreateRequest,
+    WorldEditProposalReviewRequest,
+    WorldModelExportRequest,
+)
 from forwin.http.adapters.api_world_model_routes import build_handlers as build_world_model_handlers
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
@@ -211,7 +215,7 @@ def test_reader_experience_syncs_into_book_state_native_tables() -> None:
         engine.dispose()
 
 
-def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
+def test_obsidian_export_human_index_and_generic_proposal_review(tmp_path: Path) -> None:
     Session, engine = _session_factory()
     qdrant_client = FakeQdrantClient()
     try:
@@ -275,10 +279,13 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
         text = text.replace("## Proposed Correction\n_empty_", "## Proposed Correction\n关系：林烬应与旧档案室建立 located_in/route_to 关联。")
         page_path.write_text(text, encoding="utf-8")
 
-        imported = handlers["import_obsidian"](project_id, WorldModelImportRequest(vault_root=str(vault_root)))
-        assert imported.proposal_count == 2
+        from forwin.retrieval.obsidian_human_index import ObsidianHumanVectorIndex
         from forwin.world_studio.search_service import WorldStudioSearchService
 
+        ObsidianHumanVectorIndex(
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).rebuild_project(project_id, vault_root=vault_root)
         human_results = WorldStudioSearchService(
             qdrant_client=qdrant_client,
             qdrant_models=FakeQdrantModels,
@@ -292,21 +299,44 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
         assert human_results
         assert human_results[0]["canon_status"] == "human_unreviewed"
 
-        with Session() as session:
-            proposals = session.query(KnowledgeEditProposalRow).filter_by(project_id=project_id).order_by(KnowledgeEditProposalRow.created_at.asc()).all()
-            assert {row.proposal_type for row in proposals} == {"NoteOnlyProposal", "RelationshipCorrectionProposal"}
-            approve_id = proposals[0].id
-            reject_id = proposals[1].id
-
         proposal_handlers = build_proposal_handlers(get_session=Session)
+        note = proposal_handlers["create_project_proposal"](
+            project_id,
+            WorldEditProposalCreateRequest(
+                source="obsidian",
+                target_page_key="03_Actors/Characters/林烬_char_lin.md",
+                target_node_id="char_lin",
+                target_field="Manual Notes",
+                proposal_type="NoteOnlyProposal",
+                proposed_patch={"new_value": "需要补充他对旧档案室的怀疑。"},
+                human_notes="需要补充他对旧档案室的怀疑。",
+                reason="explicit generic proposal",
+                created_by="test",
+            ),
+        )
+        correction = proposal_handlers["create_project_proposal"](
+            project_id,
+            WorldEditProposalCreateRequest(
+                source="obsidian",
+                target_page_key="03_Actors/Characters/林烬_char_lin.md",
+                target_node_id="char_lin",
+                target_field="Proposed Correction",
+                proposal_type="RelationshipCorrectionProposal",
+                proposed_patch={"new_value": "关系：林烬应与旧档案室建立 located_in/route_to 关联。"},
+                reason="explicit generic proposal",
+                created_by="test",
+            ),
+        )
+        listed = proposal_handlers["list_project_proposals"](project_id)
+        assert {item.id for item in listed} >= {note.id, correction.id}
         approved = proposal_handlers["approve_project_proposal"](
             project_id,
-            approve_id,
+            note.id,
             WorldEditProposalReviewRequest(status="accepted", reason="human reviewed"),
         )
         rejected = proposal_handlers["reject_project_proposal"](
             project_id,
-            reject_id,
+            correction.id,
             WorldEditProposalReviewRequest(status="rejected", reason="needs rewrite"),
         )
 
@@ -559,6 +589,87 @@ def test_structured_patch_sets_personality_loadout_via_proposal(tmp_path: Path) 
             node = BookStateRepository(session).list_world_nodes(project_id, as_of_chapter=0)[0]
             assert node.profile["personality_loadout"]["dominant"]["skill"] == "trait-suspicious-survivor"
             assert node.profile["personality_loadout"]["dominant"]["weight"] == 0.75
+    finally:
+        engine.dispose()
+
+
+def test_generic_proposal_deltas_preserve_row_source_without_obsidian_identities(
+    tmp_path: Path,
+) -> None:
+    from forwin.proposals.structured_patch import proposal_to_graph_delta
+
+    Session, engine = _session_factory()
+    try:
+        with Session.begin() as session:
+            project_id = _create_project(session)
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="char_lin",
+                    project_id=project_id,
+                    node_type="character",
+                    name="林烬",
+                    summary="旧城线主角。",
+                )
+            )
+            obsidian_row = KnowledgeEditProposalRow(
+                project_id=project_id,
+                source="obsidian",
+                target_page_key="character:char_lin",
+                target_node_id="char_lin",
+                target_field="Manual Notes",
+                proposal_type="NoteOnlyProposal",
+                proposed_patch_json=json.dumps({"new_value": "人类备注"}),
+                status="pending",
+                created_by="test",
+            )
+            world_studio_row = KnowledgeEditProposalRow(
+                project_id=project_id,
+                source="world_studio",
+                target_page_key="character:char_lin",
+                target_node_id="char_lin",
+                target_field="Proposed Correction",
+                proposal_type="CanonCorrectionProposal",
+                proposed_patch_json=json.dumps(
+                    {
+                        "new_value": "```forwin-patch\n"
+                        + json.dumps(
+                            [
+                                {
+                                    "op": "set_node_field",
+                                    "node_id": "char_lin",
+                                    "field_path": "summary",
+                                    "old_value": "旧城线主角。",
+                                    "new_value": "世界档案修正。",
+                                }
+                            ],
+                            ensure_ascii=False,
+                        )
+                        + "\n```"
+                    },
+                    ensure_ascii=False,
+                ),
+                status="pending",
+                created_by="test",
+            )
+            session.add_all([obsidian_row, world_studio_row])
+            session.flush()
+
+            obsidian_delta = proposal_to_graph_delta(session, obsidian_row)
+            world_studio_delta = proposal_to_graph_delta(session, world_studio_row)
+
+        for row, delta in (
+            (obsidian_row, obsidian_delta),
+            (world_studio_row, world_studio_delta),
+        ):
+            assert delta.id.startswith(f"proposal_delta_{row.id}_")
+            assert delta.target_type == "proposal"
+            assert delta.source_type == "proposal"
+            assert delta.source_id == row.id
+            assert delta.review_verdict_id == f"proposal_review_{row.id}"
+            assert delta.metadata["source"] == row.source
+            assert f"proposal:{row.id}" in delta.evidence_refs
+            assert f"proposal_page:{row.target_page_key}" in delta.evidence_refs
+            assert all("obsidian_" not in reference for reference in delta.evidence_refs)
     finally:
         engine.dispose()
 
@@ -1263,15 +1374,12 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
         page_path = tmp_path / "vault" / "03_Actors" / "Characters" / "林烬_char_lin.md"
         page_text = page_path.read_text(encoding="utf-8")
         page_path.write_text(
-            page_text.replace("## Manual Notes\n_empty_", "## Manual Notes\n只给编辑看的伏笔线索。"),
+            page_text.replace("## Manual Notes\n_empty_", "## Manual Notes\n只给编辑看的伏笔线索。").replace(
+                "## Proposed Correction\n_empty_",
+                "## Proposed Correction\n独特校正索引词。",
+            ),
             encoding="utf-8",
         )
-        with Session.begin() as session:
-            from forwin.obsidian import ObsidianImporter
-
-            imported = ObsidianImporter(session).import_project(project_id, vault_root=tmp_path / "vault")
-            assert imported.proposal_count == 1
-
         ObsidianHumanVectorIndex(
             qdrant_client=qdrant_client,
             qdrant_models=FakeQdrantModels,
@@ -1281,7 +1389,7 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
             qdrant_models=FakeQdrantModels,
         ).rebuild_project(project_id, vault_root=tmp_path / "vault")
         assert second_rebuild["upserted_section_count"] == 0
-        assert second_rebuild["skipped_section_count"] == 1
+        assert second_rebuild["skipped_section_count"] == 2
 
         service_results = WorldStudioSearchService(
             llm_kb_root=tmp_path / "kb",
@@ -1313,6 +1421,21 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
         )
         assert api_results["results"][0]["index_kind"] == "obsidian_human"
         assert api_results["results"][0]["canon_status"] == "human_unreviewed"
+
+        correction_results = WorldStudioSearchService(
+            llm_kb_root=tmp_path / "kb",
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).search(
+            project_id,
+            query="独特校正索引词",
+            index_kind="obsidian_human",
+            role="human",
+            limit=5,
+        )["results"]
+        assert correction_results
+        assert correction_results[0]["section_name"] == "Proposed Correction"
+        assert correction_results[0]["canon_status"] == "human_unreviewed"
 
         writer_all_results = WorldStudioSearchService(
             llm_kb_root=tmp_path / "kb",

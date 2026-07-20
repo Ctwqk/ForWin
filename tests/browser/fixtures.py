@@ -896,34 +896,19 @@ class MockForWinBackend:
                 },
             )
             return
-        export = re.fullmatch(
-            r"/api/projects/([^/]+)/obsidian/(export|import)", path
-        )
+        export = re.fullmatch(r"/api/projects/([^/]+)/obsidian/export", path)
         if export and method == "POST":
             payload = read_json(route)
             self.capture(route, payload)
-            action = export.group(2)
-            if action == "export":
-                json_reply(
-                    route,
-                    {
-                        "ok": True,
-                        "vault_root": payload.get("vault_root") or "/tmp/forwin-vault",
-                        "exported_count": len(self.world_pages),
-                        "message": "已导出 WorldModel。",
-                    },
-                )
-            else:
-                json_reply(
-                    route,
-                    {
-                        "ok": True,
-                        "vault_root": payload.get("vault_root") or "/tmp/forwin-vault",
-                        "proposal_count": len(self.world_proposals),
-                        "changed_paths": ["world.md"],
-                        "message": "已导入 proposal。",
-                    },
-                )
+            json_reply(
+                route,
+                {
+                    "ok": True,
+                    "vault_root": payload.get("vault_root") or "/tmp/forwin-vault",
+                    "exported_count": len(self.world_pages),
+                    "message": "已导出 WorldModel。",
+                },
+            )
             return
         api_error(route, f"Unhandled mock API route: {method} {path}", 501)
 

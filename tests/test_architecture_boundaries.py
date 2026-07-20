@@ -450,7 +450,6 @@ def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> No
     ):
         assert removed_route not in routes
     assert "/obsidian/export" in routes
-    assert "/obsidian/import" in routes
     assert '"/api/projects/{project_id}/proposals"' in routes
 
     obsidian = _read("forwin/http/adapters/api_obsidian_routes.py")
@@ -462,7 +461,6 @@ def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> No
     world_studio = _read("frontend/world-studio/src/App.tsx")
     mcp_client = _read("forwin/mcp/client.py")
     assert "/obsidian/export" in world_studio
-    assert "/obsidian/import" in world_studio
     assert "/obsidian/export" in mcp_client
     assert "/world-model/export-obsidian" not in world_studio
     assert "/world-model/import-obsidian" not in world_studio
@@ -474,6 +472,79 @@ def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> No
     )
     assert "def _require_project(" not in adapter_sources
     assert "def require_project(" in _read("forwin/http/request_support.py")
+
+
+def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership() -> None:
+    removed_paths = (
+        "forwin/obsidian/importer.py",
+        "forwin/obsidian/proposal_classifier.py",
+        "forwin/obsidian/proposal_review.py",
+        "forwin/obsidian/structured_patch.py",
+    )
+    assert all(not (ROOT / path).exists() for path in removed_paths)
+
+    routes = _read("forwin/http/routes.py")
+    obsidian_api = _read("forwin/http/adapters/api_obsidian_routes.py")
+    schema = _read("forwin/api_schema/world.py")
+    schema_exports = _read("forwin/api_schema/__init__.py")
+    protocol = _read("forwin/protocol/world_model.py")
+    world_studio = _read("frontend/world-studio/src/App.tsx")
+    browser_fixtures = _read("tests/browser/fixtures.py")
+    proposal_api = _read("forwin/http/adapters/api_proposal_routes.py")
+    proposal_review = _read("forwin/proposals/proposal_review.py")
+    structured_patch = _read("forwin/proposals/structured_patch.py")
+    exporter = _read("forwin/obsidian/exporter.py")
+    design_status = _read("Design-docs/DESIGN_STATUS.md")
+    knowledge_design = _read("Design-docs/V4.6_knowledge_system.md")
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+
+    forbidden = (
+        "ObsidianImporter",
+        "ObsidianImportResult",
+        "WorldModelImportRequest",
+        "WorldModelImportResponse",
+        "import_obsidian",
+        "/obsidian/import",
+        "proposal_classifier",
+        "forwin.obsidian.proposal_review",
+        "forwin.obsidian.structured_patch",
+    )
+    current_sources = (
+        routes,
+        obsidian_api,
+        schema,
+        schema_exports,
+        protocol,
+        world_studio,
+        browser_fixtures,
+        proposal_api,
+        proposal_review,
+        structured_patch,
+    )
+    assert all(token not in source for source in current_sources for token in forbidden)
+
+    for obsolete in (
+        "obsidian_delta_",
+        "obsidian_proposal",
+        "obsidian_page:",
+        "obsidian_proposal_review",
+    ):
+        assert obsolete not in proposal_review
+        assert obsolete not in structured_patch
+
+    for current_surface in (exporter, design_status, knowledge_design):
+        assert "/obsidian/import" not in current_surface
+        assert "Import creates proposals" not in current_surface
+
+    assert "/obsidian/export" in routes
+    assert '"export_obsidian"' in obsidian_api
+    assert "world_export_obsidian" in _read("forwin/mcp/client.py")
+    assert "from forwin.proposals.proposal_review import approve_world_edit_proposal" in proposal_api
+    assert "from forwin.proposals.structured_patch import proposal_to_graph_delta" in proposal_review
+    assert 'trigger: str = "proposal_approve"' in proposal_review
+    assert '"source": row.source' in structured_patch
+    assert "human-indexed" in exporter
+    assert '"knowledge_edit_proposals"' in baseline
 
 
 def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> None:

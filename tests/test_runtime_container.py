@@ -165,7 +165,8 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
         role="generation_worker",
     )
 
-    services = container.services()
+    core_services = container.core_services()
+    generation_services = container.generation_services()
     generation_application = container.build_generation_application_service()
     pipeline = container.build_chapter_pipeline(
         progress_callback=lambda *_args: None,
@@ -173,55 +174,28 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
         root_event_id="root-1",
     )
 
-    assert container.services() is services
-    assert services.infrastructure is infrastructure
-    assert services.policy is policy
-    assert services.llm_client.api_key == "selected-secret"
-    assert services.llm_client.model == "kimi-k2.5"
-    assert services.engine is fake_engine
-    assert services.session_factory is fake_session_factory
-    assert services.generation_application is generation_application
+    assert container.core_services() is core_services
+    assert container.generation_services() is generation_services
+    assert core_services.infrastructure is infrastructure
+    assert core_services.policy is policy
+    assert generation_services.llm_client.api_key == "selected-secret"
+    assert generation_services.llm_client.model == "kimi-k2.5"
+    assert core_services.engine is fake_engine
+    assert core_services.session_factory is fake_session_factory
+    assert core_services.generation_application is generation_application
     assert generation_application.session_factory is fake_session_factory
     assert generation_application.infrastructure is infrastructure
     assert schema_calls == [fake_engine]
     assert not hasattr(pipeline, "services")
     assert not hasattr(pipeline, "infrastructure")
     assert pipeline.policy is policy
-    assert pipeline.writer is services.writer
-    assert pipeline.canon_admission is services.canon_admission
+    assert pipeline.writer is generation_services.writer
+    assert pipeline.canon_admission is generation_services.canon_admission
     assert pipeline._audit_task_id == "task-1"
     assert pipeline._audit_root_event_id == "root-1"
     assert not hasattr(pipeline, "config")
 
-
-def test_runtime_container_builds_callback_bound_production_scheduler(
-    monkeypatch,
-) -> None:
-    from forwin.runtime.container import RuntimeContainer
-
-    _fake_engine, fake_session_factory, _init_calls = _patch_runtime_infrastructure(
-        monkeypatch
-    )
-    infrastructure = InfrastructureConfig(
-        database_url=FAKE_DATABASE_URL,
-        retrieval_backend="hash",
-        artifact_root="/tmp/forwin-runtime-container-test-artifacts",
-    )
-    container = RuntimeContainer.from_config(
-        infrastructure,
-        policy=RuntimePolicy.for_profile("standard"),
-    )
-
-    scheduler = container.build_production_scheduler(
-        display_datetime=lambda _value: "",
-        persist_project_automation=lambda *_args, **_kwargs: None,
-        generation_terminal_statuses={"completed"},
-        upload_terminal_statuses={"succeeded"},
-    )
-
-    assert scheduler.session_factory is fake_session_factory
-    assert scheduler.config is infrastructure
-    assert (
-        scheduler.generation_application
-        is container.build_generation_application_service()
-    )
+    pipeline.close()
+    assert fake_engine.disposed is True
+    with pytest.raises(RuntimeError, match="closed"):
+        container.core_services()

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
@@ -14,12 +16,16 @@ from forwin.llm_kb.store import ROOT_FILE_KEYS
 from forwin.retrieval.memory_index import (
     HashTextEmbedder,
     TextEmbedder,
+    _close_client,
     _create_qdrant_client,
     _qdrant_models,
+    _vector_size_from_config,
 )
 
 
 LLM_KB_PROJECTION_VERSION = "llm_kb_v2"
+_COLLECTION_RACE_INSPECTION_ATTEMPTS = 5
+_COLLECTION_RACE_INSPECTION_DELAY_SECONDS = 0.1
 
 
 @dataclass
@@ -91,27 +97,120 @@ class LLMKBVectorIndex:
         qdrant_url: str | None = None,
         collection_name: str | None = None,
         embedder: TextEmbedder | None = None,
+        owns_embedder: bool = False,
         qdrant_client: Any | None = None,
         qdrant_models: Any | None = None,
     ) -> None:
         self.root = root
         self.collection_name = collection_name or _default_collection_name()
         self.embedder = embedder or HashTextEmbedder(dims=96)
-        self._rest = qdrant_models or _qdrant_models()
-        self.client = qdrant_client or _create_qdrant_client(qdrant_url or _default_qdrant_url())
-        self._ensure_collection()
+        self._owns_embedder = embedder is None or owns_embedder
+        self._qdrant_url = qdrant_url or _default_qdrant_url()
+        self._rest = qdrant_models
+        self.client = qdrant_client
+        self._owns_client = qdrant_client is None
+        self._ready = False
+        self._closed = False
+        self._ready_lock = threading.Lock()
 
-    def _ensure_collection(self) -> None:
-        collections = {item.name for item in self.client.get_collections().collections}
-        if self.collection_name in collections:
+    def _ensure_ready(self) -> None:
+        if self._closed:
+            raise RuntimeError("LLM KB vector index is closed")
+        if self._ready:
             return
-        self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config=self._rest.VectorParams(
-                size=self.embedder.dims,
-                distance=self._rest.Distance.COSINE,
-            ),
+        with self._ready_lock:
+            if self._closed:
+                raise RuntimeError("LLM KB vector index is closed")
+            if self._ready:
+                return
+            self.embedder.prepare()
+            created_client = self.client is None
+            client = self.client or _create_qdrant_client(self._qdrant_url)
+            try:
+                rest = self._rest if self._rest is not None else _qdrant_models()
+                self._ensure_collection(client, rest)
+            except Exception:
+                if created_client:
+                    _close_client(client)
+                raise
+            self.client = client
+            self._rest = rest
+            self._ready = True
+
+    def _ensure_collection(self, client: Any, rest: Any) -> None:
+        collections = {item.name for item in client.get_collections().collections}
+        if self.collection_name in collections:
+            self._require_collection_vector_size(client)
+            return
+        try:
+            client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=rest.VectorParams(
+                    size=self.embedder.dims,
+                    distance=rest.Distance.COSINE,
+                ),
+            )
+        except Exception as exc:
+            collections = {item.name for item in client.get_collections().collections}
+            if self.collection_name not in collections:
+                raise
+            existing_size = self._collection_vector_size_after_create_race(client)
+            if existing_size != self.embedder.dims:
+                raise ValueError(
+                    f"Qdrant collection {self.collection_name!r} has vector size "
+                    f"{existing_size}, expected {self.embedder.dims}."
+                ) from exc
+
+    def _require_collection_vector_size(self, client: Any) -> None:
+        existing_size = self._collection_vector_size(client)
+        if existing_size is None:
+            raise ValueError(
+                "Could not determine vector size for Qdrant collection "
+                f"{self.collection_name!r}."
+            )
+        if existing_size != self.embedder.dims:
+            raise ValueError(
+                f"Qdrant collection {self.collection_name!r} has vector size "
+                f"{existing_size}, expected {self.embedder.dims}."
+            )
+
+    def _collection_vector_size_after_create_race(self, client: Any) -> int | None:
+        last_error: Exception | None = None
+        for attempt in range(_COLLECTION_RACE_INSPECTION_ATTEMPTS):
+            try:
+                existing_size = self._collection_vector_size(client)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                existing_size = None
+            if existing_size is not None:
+                return existing_size
+            if attempt + 1 < _COLLECTION_RACE_INSPECTION_ATTEMPTS:
+                time.sleep(_COLLECTION_RACE_INSPECTION_DELAY_SECONDS)
+        if last_error is not None:
+            raise last_error
+        return None
+
+    def _collection_vector_size(self, client: Any) -> int | None:
+        collection = client.get_collection(self.collection_name)
+        vectors_config = getattr(
+            getattr(getattr(collection, "config", None), "params", None),
+            "vectors",
+            None,
         )
+        return _vector_size_from_config(vectors_config)
+
+    def close(self) -> None:
+        with self._ready_lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self.client if self._owns_client else None
+            if self._owns_client:
+                self.client = None
+            self._ready = False
+            if self._owns_embedder:
+                self.embedder.close()
+        _close_client(client)
 
     def _project_filter(
         self,
@@ -122,6 +221,8 @@ class LLMKBVectorIndex:
         as_of_chapter: int | None = None,
         index_kind: str = "llm_kb",
     ) -> Any:
+        if self._rest is None:  # pragma: no cover
+            raise RuntimeError("LLM KB vector index initialization did not complete")
         must = [
             self._rest.FieldCondition(
                 key="project_id",
@@ -163,6 +264,9 @@ class LLMKBVectorIndex:
         as_of_chapter: int = 0,
         projection_version: str = LLM_KB_PROJECTION_VERSION,
     ) -> dict[str, Any]:
+        self._ensure_ready()
+        if self.client is None or self._rest is None:  # pragma: no cover
+            raise RuntimeError("LLM KB vector index initialization did not complete")
         project_root = self.root / project_id
         sections = _collect_project_sections(
             project_root,
@@ -245,6 +349,9 @@ class LLMKBVectorIndex:
         query_text = str(query or "").strip()
         if not query_text:
             return []
+        self._ensure_ready()
+        if self.client is None or self._rest is None:  # pragma: no cover
+            raise RuntimeError("LLM KB vector index initialization did not complete")
         limit_value = max(1, int(limit or 5))
         allowed_visibility = _allowed_visibility_scopes(role)
         requested_visibility = str(visibility_scope or "").strip()

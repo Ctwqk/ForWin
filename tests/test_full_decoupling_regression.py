@@ -14,7 +14,7 @@ def test_api_genesis_service_uses_runtime_container_when_available() -> None:
     )
 
     class FakeContainer:
-        def services(self):
+        def generation_services(self):
             return SimpleNamespace(book_genesis=service)
 
     runtime = HttpRuntime(container=FakeContainer())

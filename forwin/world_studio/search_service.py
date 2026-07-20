@@ -60,45 +60,57 @@ class WorldStudioSearchService:
                 )
             )
         if "obsidian_human" in kinds:
-            results.extend(
-                ObsidianHumanVectorIndex(
-                    qdrant_url=self.qdrant_url,
-                    collection_name=self.obsidian_human_collection,
-                    qdrant_client=self.qdrant_client,
-                    qdrant_models=self.qdrant_models,
-                ).search(
-                    project_id,
-                    query,
-                    limit=per_index_limit,
-                    as_of_chapter=as_of_chapter,
-                    section_type=section_type,
-                )
+            index = ObsidianHumanVectorIndex(
+                qdrant_url=self.qdrant_url,
+                collection_name=self.obsidian_human_collection,
+                qdrant_client=self.qdrant_client,
+                qdrant_models=self.qdrant_models,
             )
+            try:
+                results.extend(
+                    index.search(
+                        project_id,
+                        query,
+                        limit=per_index_limit,
+                        as_of_chapter=as_of_chapter,
+                        section_type=section_type,
+                    )
+                )
+            finally:
+                index.close()
         if "llm_kb" in kinds:
-            results.extend(
-                LLMKnowledgeBaseRetriever(
-                    root=self.llm_kb_root,
-                    qdrant_url=self.qdrant_url,
-                    qdrant_collection=self.llm_kb_collection,
-                    qdrant_client=self.qdrant_client,
-                    qdrant_models=self.qdrant_models,
-                ).search(
-                    project_id,
-                    query,
-                    role=_llm_role(role),
-                    limit=per_index_limit,
-                    as_of_chapter=as_of_chapter,
+            retriever = LLMKnowledgeBaseRetriever(
+                root=self.llm_kb_root,
+                qdrant_url=self.qdrant_url,
+                qdrant_collection=self.llm_kb_collection,
+                qdrant_client=self.qdrant_client,
+                qdrant_models=self.qdrant_models,
+            )
+            try:
+                results.extend(
+                    retriever.search(
+                        project_id,
+                        query,
+                        role=_llm_role(role),
+                        limit=per_index_limit,
+                        as_of_chapter=as_of_chapter,
+                    )
                 )
-            )
+            finally:
+                retriever.close()
         if "skill" in kinds:
-            results.extend(
-                SkillVectorIndex(
-                    qdrant_url=self.qdrant_url,
-                    collection_name=self.skill_collection,
-                    qdrant_client=self.qdrant_client,
-                    qdrant_models=self.qdrant_models,
-                ).search(query, limit=per_index_limit)
+            index = SkillVectorIndex(
+                qdrant_url=self.qdrant_url,
+                collection_name=self.skill_collection,
+                qdrant_client=self.qdrant_client,
+                qdrant_models=self.qdrant_models,
             )
+            try:
+                results.extend(
+                    index.search(query, limit=per_index_limit)
+                )
+            finally:
+                index.close()
         results.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
         return {
             "project_id": project_id,

@@ -49,14 +49,19 @@ def build_handlers(
             )
 
     def _rebuild_human_index(project_id: str, vault_root: Path) -> None:
+        index = None
         try:
-            ObsidianHumanVectorIndex(
+            index = ObsidianHumanVectorIndex(
                 qdrant_url=_qdrant_url(),
                 qdrant_client=qdrant_client,
                 qdrant_models=qdrant_models,
-            ).rebuild_project(project_id, vault_root=vault_root)
+            )
+            index.rebuild_project(project_id, vault_root=vault_root)
         except Exception:
             return
+        finally:
+            if index is not None:
+                index.close()
 
     return {
         "export_obsidian": export_obsidian,

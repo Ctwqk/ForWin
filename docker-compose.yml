@@ -5,10 +5,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      minio:
-        condition: service_started
     env_file:
       - path: ${FORWIN_ENV_FILE:-.env}
         required: false
@@ -89,10 +85,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      minio:
-        condition: service_started
     command:
       [
         "python",
@@ -227,8 +219,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_started
     command:
       [
         "python",

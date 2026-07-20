@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Iterable
 
 from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
-from forwin.config import DEFAULT_QDRANT_URL
 from forwin.context import assemble_context
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
@@ -38,11 +39,10 @@ from forwin.protocol.context import (
 )
 from forwin.protocol.world_model import WorldContextPack
 from forwin.obsidian.frontmatter import parse_sections
-from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
+from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (
     _active_personality_contexts,
-    _database_url_from_repo,
     _edge_context,
     _extract_source_digest,
     _fact_context,
@@ -51,6 +51,7 @@ from .helpers import (
     _node_context,
     _truncate,
 )
+
 from .visibility import (
     _book_state_edge_hidden,
     _book_state_fact_hidden,
@@ -59,6 +60,9 @@ from .visibility import (
     _map_edge_hidden,
     _map_node_hidden,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _assemble_context(repo, project_id: str, chapter_plan) -> ChapterContextPack:
@@ -78,16 +82,16 @@ class RetrievalBroker:
         max_world_pages: int = 6,
         memory_index: ChapterMemoryIndex | None = None,
         llm_kb_root: Path | None = None,
-        database_url: str | None = None,
-        retrieval_backend: str = "qdrant",
-        qdrant_url: str | None = None,
-        qdrant_collection: str = "chapter_memories",
         llm_kb_qdrant_url: str | None = None,
         llm_kb_qdrant_collection: str | None = None,
         llm_kb_qdrant_client: object | None = None,
         llm_kb_qdrant_models: object | None = None,
         retrieval_budget: RetrievalBudget | None = None,
+        memory_index_provider: Callable[[], ChapterMemoryIndex] | None = None,
+        llm_kb_retriever_provider: Callable[[], LLMKnowledgeBaseRetriever] | None = None,
     ) -> None:
+        if memory_index is not None and memory_index_provider is not None:
+            raise ValueError("Pass memory_index or memory_index_provider, not both.")
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
         self.max_threads = max_threads
@@ -95,15 +99,21 @@ class RetrievalBroker:
         self.max_memories = max_memories
         self.max_world_pages = max_world_pages
         self.memory_index = memory_index
-        self.database_url = database_url
-        self.retrieval_backend = retrieval_backend
-        self.qdrant_url = qdrant_url
-        self.qdrant_collection = qdrant_collection
+        self._owns_memory_index = memory_index_provider is not None
         self.llm_kb_root = llm_kb_root
         self.llm_kb_qdrant_url = llm_kb_qdrant_url
         self.llm_kb_qdrant_collection = llm_kb_qdrant_collection
         self.llm_kb_qdrant_client = llm_kb_qdrant_client
         self.llm_kb_qdrant_models = llm_kb_qdrant_models
+        self._memory_index_provider = memory_index_provider
+        self._llm_kb_retriever_provider = (
+            llm_kb_retriever_provider or self._build_configured_llm_kb_retriever
+        )
+        self._llm_kb_retriever: LLMKnowledgeBaseRetriever | None = None
+        self._owns_llm_kb_retriever = True
+        self._closed = False
+        self._memory_index_lock = threading.Lock()
+        self._llm_kb_retriever_lock = threading.Lock()
         self.retrieval_budget = retrieval_budget or RetrievalBudget()
         self.last_observability_summary: dict[str, object] = {}
 
@@ -296,8 +306,6 @@ class RetrievalBroker:
         compiler packs keep objective truth and planned reveal context so they can
         enforce information-asymmetry contracts.
         """
-        if self.database_url is None:
-            self.database_url = _database_url_from_repo(repo)
         pack_classes: dict[str, type[WorldModelRetrievalPack]] = {
             "planning": PlanningPack,
             "writing": WritingPack,
@@ -611,13 +619,7 @@ class RetrievalBroker:
                 "planning": "planner",
                 "compiler": "compiler",
             }.get(pack_kind, "writer")
-            search_results = LLMKnowledgeBaseRetriever(
-                root=self.llm_kb_root,
-                qdrant_url=self.llm_kb_qdrant_url,
-                qdrant_collection=self.llm_kb_qdrant_collection,
-                qdrant_client=self.llm_kb_qdrant_client,
-                qdrant_models=self.llm_kb_qdrant_models,
-            ).search(
+            search_results = self._ensure_llm_kb_retriever().search(
                 project_id,
                 query,
                 role=role,
@@ -632,13 +634,78 @@ class RetrievalBroker:
             "search_results": search_results,
         }
 
-    def _ensure_memory_index(self, repo=None) -> None:  # noqa: ANN001
+    def _ensure_memory_index(self, _repo=None) -> None:  # noqa: ANN001
+        if self._closed:
+            raise RuntimeError("RetrievalBroker is closed")
         if self.memory_index is not None:
             return
-        self.memory_index = create_memory_index(
-            backend=self.retrieval_backend,
-            qdrant_url=self.qdrant_url or DEFAULT_QDRANT_URL,
-            qdrant_collection=self.qdrant_collection,
+        if self._memory_index_provider is None:
+            raise RuntimeError(
+                "memory_index or memory_index_provider is required for chapter retrieval"
+            )
+        with self._memory_index_lock:
+            if self._closed:
+                raise RuntimeError("RetrievalBroker is closed")
+            if self.memory_index is not None:
+                return
+            memory_index = self._memory_index_provider()
+            if memory_index is None:
+                raise RuntimeError("memory_index_provider returned no memory index")
+            self.memory_index = memory_index
+
+    def _ensure_llm_kb_retriever(self) -> LLMKnowledgeBaseRetriever:
+        if self._closed:
+            raise RuntimeError("RetrievalBroker is closed")
+        if self._llm_kb_retriever is not None:
+            return self._llm_kb_retriever
+        with self._llm_kb_retriever_lock:
+            if self._closed:
+                raise RuntimeError("RetrievalBroker is closed")
+            if self._llm_kb_retriever is not None:
+                return self._llm_kb_retriever
+            retriever = self._llm_kb_retriever_provider()
+            if retriever is None:
+                raise RuntimeError(
+                    "llm_kb_retriever_provider returned no retriever"
+                )
+            self._llm_kb_retriever = retriever
+            return retriever
+
+    def close(self) -> None:
+        with self._memory_index_lock, self._llm_kb_retriever_lock:
+            if self._closed:
+                return
+            self._closed = True
+            memory_index = self.memory_index if self._owns_memory_index else None
+            retriever = (
+                self._llm_kb_retriever if self._owns_llm_kb_retriever else None
+            )
+            self.memory_index = None
+            self._llm_kb_retriever = None
+        for resource in (memory_index, retriever):
+            close = getattr(resource, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception:  # noqa: BLE001
+                logger.debug("Retrieval resource close failed.", exc_info=True)
+
+    def _build_configured_llm_kb_retriever(self) -> LLMKnowledgeBaseRetriever:
+        if self.llm_kb_qdrant_client is None and not self.llm_kb_qdrant_url:
+            raise RuntimeError(
+                "llm_kb_retriever_provider or explicit llm_kb_qdrant_url is required"
+            )
+        if not self.llm_kb_qdrant_collection:
+            raise RuntimeError(
+                "llm_kb_retriever_provider or explicit llm_kb_qdrant_collection is required"
+            )
+        return LLMKnowledgeBaseRetriever(
+            root=self.llm_kb_root,
+            qdrant_url=self.llm_kb_qdrant_url,
+            qdrant_collection=self.llm_kb_qdrant_collection,
+            qdrant_client=self.llm_kb_qdrant_client,
+            qdrant_models=self.llm_kb_qdrant_models,
         )
 
     def _filter_writer_safe_world_context(

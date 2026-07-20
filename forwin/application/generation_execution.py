@@ -141,25 +141,30 @@ def _build_chapter_pipeline_for_task(
     should_pause=None,
     canon_transaction_guard=None,
 ) -> ChapterPipeline:
-    pipeline = RuntimeContainer.from_config(
+    container = RuntimeContainer.from_config(
         context.infrastructure,
         policy=context.policy,
         role="generation_worker",
-    ).build_chapter_pipeline(
-        progress_callback=progress_callback,
-        should_abort=should_abort,
-        should_pause=should_pause,
-        task_id=context.task_id,
-        root_event_id=context.root_event_id,
     )
-    if canon_transaction_guard is not None:
-        from forwin.canon.admission import CanonAdmissionService
-
-        pipeline.canon_admission = CanonAdmissionService(
-            session_factory=pipeline._SessionFactory,
-            transaction_guard=canon_transaction_guard,
+    try:
+        pipeline = container.build_chapter_pipeline(
+            progress_callback=progress_callback,
+            should_abort=should_abort,
+            should_pause=should_pause,
+            task_id=context.task_id,
+            root_event_id=context.root_event_id,
         )
-    return pipeline
+        if canon_transaction_guard is not None:
+            from forwin.canon.admission import CanonAdmissionService
+
+            pipeline.canon_admission = CanonAdmissionService(
+                session_factory=pipeline._SessionFactory,
+                transaction_guard=canon_transaction_guard,
+            )
+        return pipeline
+    except Exception:
+        container.close()
+        raise
 
 
 def execute_pipeline_task(
@@ -304,16 +309,15 @@ def execute_pipeline_task(
                 span_kind="task",
                 component=span_component,
             ):
-                pipeline.llm_client.close()
-                pipeline.engine.dispose()
+                _record_task_observability_event(
+                    pipeline,
+                    task_id=task_id,
+                    project_id=observed_project_id,
+                    event_type=DecisionEventType.TASK_CLEANUP_FINISHED,
+                    summary="生成任务 cleanup 已结束。",
+                )
         finally:
-            _record_task_observability_event(
-                pipeline,
-                task_id=task_id,
-                project_id=observed_project_id,
-                event_type=DecisionEventType.TASK_CLEANUP_FINISHED,
-                summary="生成任务 cleanup 已结束。",
-            )
+            pipeline.close()
 
 
 def execute_continuation(

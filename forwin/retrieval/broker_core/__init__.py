@@ -9,7 +9,6 @@ from .helpers import (
     _active_personality_contexts,
     _truncate,
     _extract_source_digest,
-    _database_url_from_repo,
 )
 
 from .visibility import (
@@ -34,7 +33,6 @@ __all__ = [
     '_active_personality_contexts',
     '_truncate',
     '_extract_source_digest',
-    '_database_url_from_repo',
     '_book_state_node_hidden',
     '_book_state_edge_hidden',
     '_book_state_fact_hidden',

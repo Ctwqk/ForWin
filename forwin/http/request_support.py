@@ -103,14 +103,11 @@ def _build_genesis_service(
         else RuntimeContainer.from_config(resolved, policy=policy, role="api")
     )
     service = (
-        container.services().book_genesis
+        container.generation_services().book_genesis
         if shared_container
         else container.build_book_genesis_service()
     )
     setattr(service, "_forwin_runtime_owned", True)
-    setattr(
-        service, "_forwin_runtime_container", None if shared_container else container
-    )
     setattr(service, "_forwin_runtime_shared", bool(shared_container))
     setattr(service.llm_client, "profile_id", resolved_profile.get("id", ""))
     setattr(service.llm_client, "profile_name", resolved_profile.get("name", ""))
@@ -123,20 +120,20 @@ def _close_genesis_service(
 ) -> None:
     if getattr(service, "_forwin_runtime_shared", False):
         return
-    client = getattr(service, "llm_client", None)
-    close = getattr(client, "client", None)
-    if close is not None:
+    for label, resource in (
+        ("client", getattr(service, "llm_client", None)),
+        ("artifact store", getattr(service, "artifact_store", None)),
+    ):
+        close = getattr(resource, "close", None)
+        if not callable(close):
+            continue
         try:
-            close.close()
-        except Exception:  # noqa: BLE001
-            logger.debug("BookGenesisService client close failed", exc_info=True)
-    container = getattr(service, "_forwin_runtime_container", None)
-    if container is not None and container is not runtime.container:
-        try:
-            container.services().engine.dispose()
+            close()
         except Exception:  # noqa: BLE001
             logger.debug(
-                "BookGenesisService runtime engine dispose failed", exc_info=True
+                "BookGenesisService %s close failed",
+                label,
+                exc_info=True,
             )
 
 

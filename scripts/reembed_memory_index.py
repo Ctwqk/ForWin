@@ -132,27 +132,32 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             dry_run=args.dry_run,
         )
+        print(
+            "reembed complete: "
+            f"scanned={result.scanned} "
+            f"upserted={result.upserted} "
+            f"skipped_without_draft={result.skipped_without_draft} "
+            f"collection={collection} "
+            f"embedding_backend={embedding_backend} "
+            f"dry_run={result.dry_run}"
+        )
+        if not args.dry_run:
+            actual_dims = _memory_index_vector_dims(memory_index)
+            expected_dims = int(embedding_dims or 0)
+            if expected_dims > 0 and actual_dims > 0 and actual_dims != expected_dims:
+                print(
+                    "reembed failed: "
+                    f"collection vector dims={actual_dims} expected={expected_dims}"
+                )
+                return 2
+        return 0
     finally:
-        engine.dispose()
-    print(
-        "reembed complete: "
-        f"scanned={result.scanned} "
-        f"upserted={result.upserted} "
-        f"skipped_without_draft={result.skipped_without_draft} "
-        f"collection={collection} "
-        f"embedding_backend={embedding_backend} "
-        f"dry_run={result.dry_run}"
-    )
-    if not args.dry_run:
-        actual_dims = _memory_index_vector_dims(memory_index)
-        expected_dims = int(embedding_dims or 0)
-        if expected_dims > 0 and actual_dims > 0 and actual_dims != expected_dims:
-            print(
-                "reembed failed: "
-                f"collection vector dims={actual_dims} expected={expected_dims}"
-            )
-            return 2
-    return 0
+        close = getattr(memory_index, "close", None)
+        try:
+            if callable(close):
+                close()
+        finally:
+            engine.dispose()
 
 
 def _memory_index_vector_dims(memory_index: ChapterMemoryIndex) -> int:

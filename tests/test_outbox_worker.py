@@ -85,19 +85,16 @@ def test_cli_forwards_fenced_worker_configuration(monkeypatch) -> None:
 
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            captured["disposed"] = True
+    class _Runtime:
+        session_factory = "session-factory"
+        handlers = {"event": lambda _claim: None}
 
-    monkeypatch.setattr("forwin.models.base.get_engine", lambda _url: _Engine())
-    monkeypatch.setattr("forwin.models.base.require_v5_schema", lambda _engine: None)
+        def close(self) -> None:
+            captured["closed"] = True
+
     monkeypatch.setattr(
-        "forwin.models.base.get_session_factory",
-        lambda _engine: "session-factory",
-    )
-    monkeypatch.setattr(
-        "forwin.outbox.handlers.build_default_outbox_handlers",
-        lambda **_kwargs: {"event": lambda _claim: None},
+        "forwin.runtime.workers.build_outbox_worker_runtime",
+        lambda _config: _Runtime(),
     )
 
     def run_loop(**kwargs):
@@ -132,5 +129,5 @@ def test_cli_forwards_fenced_worker_configuration(monkeypatch) -> None:
         "heartbeat_interval_seconds": 15.0,
         "base_delay_seconds": 10.0,
         "max_delay_seconds": 300.0,
-        "disposed": True,
+        "closed": True,
     }

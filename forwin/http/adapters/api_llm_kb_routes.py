@@ -92,20 +92,24 @@ def build_handlers(
             raise HTTPException(status_code=404, detail="search role must be writer, reviewer, planner, or compiler")
         with get_session() as session:
             require_project(session, project_id)
-            results = LLMKnowledgeBaseRetriever(
+            retriever = LLMKnowledgeBaseRetriever(
                 root=llm_kb_root,
                 qdrant_url=_qdrant_url(),
                 qdrant_collection=_llm_kb_qdrant_collection(),
                 qdrant_client=qdrant_client,
                 qdrant_models=qdrant_models,
-            ).search(
-                project_id,
-                query,
-                role=role_key,
-                limit=limit,
-                as_of_chapter=as_of_chapter,
-                visibility_scope=visibility_scope or None,
             )
+            try:
+                results = retriever.search(
+                    project_id,
+                    query,
+                    role=role_key,
+                    limit=limit,
+                    as_of_chapter=as_of_chapter,
+                    visibility_scope=visibility_scope or None,
+                )
+            finally:
+                retriever.close()
             return {"project_id": project_id, "role": role_key, "query": query, "results": results}
 
     def get_context_pack(project_id: str, role: str, chapter_number: int = 0, query: str = "") -> dict[str, Any]:
@@ -115,19 +119,23 @@ def build_handlers(
         with get_session() as session:
             require_project(session, project_id)
             pack_kind = ROLE_PACK_KIND[role_key]
-            pack = RetrievalBroker(
+            broker = RetrievalBroker(
                 llm_kb_root=llm_kb_root,
                 llm_kb_qdrant_url=_qdrant_url(),
                 llm_kb_qdrant_collection=_llm_kb_qdrant_collection(),
                 llm_kb_qdrant_client=qdrant_client,
                 llm_kb_qdrant_models=qdrant_models,
-            ).build_world_model_pack(
-                StateRepository(session),
-                project_id,
-                chapter_number,
-                pack_kind,
-                query=query,
             )
+            try:
+                pack = broker.build_world_model_pack(
+                    StateRepository(session),
+                    project_id,
+                    chapter_number,
+                    pack_kind,
+                    query=query,
+                )
+            finally:
+                broker.close()
             payload = pack.model_dump(mode="json")
             payload["requested_role"] = role_key
             payload["pack_kind"] = pack_kind

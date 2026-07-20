@@ -10,7 +10,7 @@ from forwin.config import InfrastructureConfig
 from forwin.model_adapter import ModelAdapter
 from forwin.observability.ports import ObservabilityPort
 from forwin.runtime.policy import RuntimePolicy
-from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
+from forwin.skills import SkillPromptLayerBuilder, SkillRouter
 
 if TYPE_CHECKING:
     from forwin.application.generation import GenerationApplicationService
@@ -22,40 +22,34 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class SkillRuntimeBundle:
-    registry: SkillRegistry
     router: SkillRouter
     prompt_layer_builder: SkillPromptLayerBuilder
 
 
 @dataclass(slots=True)
-class RuntimeServices:
+class CoreRuntimeServices:
     infrastructure: InfrastructureConfig
     policy: RuntimePolicy
     engine: Engine
     session_factory: sessionmaker
+    generation_application: GenerationApplicationService
+    artifact_store: Any
+    observability: ObservabilityPort
+
+
+@dataclass(slots=True)
+class GenerationRuntimeServices:
     llm_client: ModelAdapter
     skill_runtime: SkillRuntimeBundle
-    generation_application: GenerationApplicationService
-
     arc_director: Any
     book_genesis: Any
     subworld_manager: Any
     retrieval_broker: Any
-    artifact_store: Any
-    observability: ObservabilityPort
-
     stage_analyzer: Any
     pacing_strategist: Any
     replan_governor: Any
     world_simulator: Any
-
     arc_envelope_manager: Any
-    genesis_workspace_service: Any
-    genesis_handoff_service: Any
-    production_scheduler: Any
-    publisher_runtime: Any
-
-    context_assembler: Any
     draft_review: DraftReviewService
     writer: Any
     repair: RepairService
@@ -63,3 +57,9 @@ class RuntimeServices:
     canon_preparation: Any
     canon_admission: CanonAdmissionService
     gate_delegation: GateDelegationService
+
+
+@dataclass(slots=True)
+class PublisherRuntimeServices:
+    publisher_runtime: Any
+    production_scheduler: Any

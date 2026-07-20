@@ -17,6 +17,7 @@ def build_default_outbox_handlers(
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
     memory_index: Any | None = None,
+    memory_index_provider: Callable[[], Any] | None = None,
     canon_projection_runner: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Callable[[OutboxClaim], None]]:
     qdrant_url = getattr(config, "qdrant_url", None) if config is not None else None
@@ -43,6 +44,7 @@ def build_default_outbox_handlers(
             session_factory=session_factory,
             config=config,
             memory_index=memory_index,
+            memory_index_provider=memory_index_provider,
             obsidian_root=obsidian_root,
             llm_kb_root=llm_kb_root,
             qdrant_client=qdrant_client,

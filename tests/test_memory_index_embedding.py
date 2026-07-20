@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from forwin.retrieval.memory_index import GatewayTextEmbedder, HashTextEmbedder, create_memory_index
+from forwin.retrieval.memory_index import GatewayTextEmbedder, create_memory_index
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
@@ -43,10 +43,41 @@ def test_gateway_embedder_reads_metadata_and_embeds_without_api_key() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
-    assert embedder.dims == 3
+    assert requests == []
+    assert embedder.dims == 0
     assert embedder.embed(["末班车", "旧仓库"]) == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    assert embedder.dims == 3
     assert [request.url.path for request in requests] == ["/metadata", "/embed"]
     assert not requests[-1].headers.get("authorization")
+
+
+@pytest.mark.parametrize(
+    ("embedding_backend", "embedding_base_url", "embedding_model", "message"),
+    [
+        ("unknown", "", "", "Unsupported embedding backend"),
+        ("gateway", "", "", "base URL"),
+        ("remote", "", "model", "base URL"),
+        ("remote", "http://embedding.test", "", "model"),
+    ],
+)
+def test_create_memory_index_rejects_invalid_embedding_configuration(
+    embedding_backend: str,
+    embedding_base_url: str,
+    embedding_model: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        create_memory_index(
+            backend="qdrant",
+            qdrant_url="http://qdrant.test:6333",
+            qdrant_collection="chapter_memories_invalid_embedding",
+            qdrant_client=FakeQdrantClient(),
+            qdrant_models=FakeQdrantModels,
+            embedding_backend=embedding_backend,
+            embedding_base_url=embedding_base_url,
+            embedding_model=embedding_model,
+            embedding_required=True,
+        )
 
 
 def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None:
@@ -73,6 +104,14 @@ def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None
     )
 
     assert isinstance(index.embedder, GatewayTextEmbedder)
+    assert qdrant_client.collections == {}
+    index.upsert_chapter(
+        project_id="p1",
+        chapter_number=1,
+        title="title",
+        summary="summary",
+        body="body",
+    )
     assert index.embedder.dims == 3
     assert (
         qdrant_client.collections["chapter_memories_gateway"]["vectors_config"].size
@@ -101,6 +140,7 @@ def test_create_memory_index_accepts_collection_created_by_a_competing_role() ->
         embedding_dims=64,
     )
 
+    index.search(project_id="p1", query="query")
     assert index.collection_name == "chapter_memories_race"
     assert qdrant_client.collections["chapter_memories_race"]["vectors_config"].size == 64
 
@@ -137,8 +177,72 @@ def test_create_memory_index_retries_transient_inspection_after_competing_role(
         embedding_dims=64,
     )
 
+    index.search(project_id="p1", query="query")
     assert index.collection_name == "chapter_memories_eventual_race"
     assert qdrant_client.inspection_attempts == 2
+
+
+def test_existing_collection_inspection_failure_propagates_and_retries() -> None:
+    class FlakyInspectionClient(FakeQdrantClient):
+        inspection_attempts = 0
+
+        def get_collection(self, collection_name: str):
+            self.inspection_attempts += 1
+            if self.inspection_attempts == 1:
+                raise RuntimeError("collection inspection unavailable")
+            return super().get_collection(collection_name)
+
+    qdrant_client = FlakyInspectionClient()
+    qdrant_client.create_collection(
+        collection_name="chapter_memories_existing",
+        vectors_config=FakeQdrantModels.VectorParams(
+            size=64,
+            distance=FakeQdrantModels.Distance.COSINE,
+        ),
+    )
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_existing",
+        qdrant_client=qdrant_client,
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="hash",
+        embedding_dims=64,
+    )
+
+    with pytest.raises(RuntimeError, match="inspection unavailable"):
+        index.search(project_id="p1", query="first")
+    assert index.search(project_id="p1", query="second") == []
+    assert qdrant_client.inspection_attempts == 2
+
+
+def test_existing_collection_with_unknown_vector_shape_fails_closed() -> None:
+    qdrant_client = FakeQdrantClient()
+    qdrant_client.collections["chapter_memories_named"] = {
+        "vectors_config": {
+            "title": FakeQdrantModels.VectorParams(
+                size=64,
+                distance=FakeQdrantModels.Distance.COSINE,
+            ),
+            "body": FakeQdrantModels.VectorParams(
+                size=64,
+                distance=FakeQdrantModels.Distance.COSINE,
+            ),
+        },
+        "points": {},
+    }
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_named",
+        qdrant_client=qdrant_client,
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="hash",
+        embedding_dims=64,
+    )
+
+    with pytest.raises(ValueError, match="determine vector size"):
+        index.search(project_id="p1", query="query")
 
 
 def test_create_memory_index_rejects_raced_collection_with_wrong_dimension() -> None:
@@ -153,40 +257,51 @@ def test_create_memory_index_rejects_raced_collection_with_wrong_dimension() -> 
             )
             raise RuntimeError("collection already exists")
 
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_wrong_race",
+        qdrant_client=WrongDimensionRacingClient(),
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="hash",
+        embedding_dims=64,
+    )
+
     with pytest.raises(ValueError, match="vector size 65, expected 64"):
-        create_memory_index(
-            backend="qdrant",
-            qdrant_url="http://qdrant.test:6333",
-            qdrant_collection="chapter_memories_wrong_race",
-            qdrant_client=WrongDimensionRacingClient(),
-            qdrant_models=FakeQdrantModels,
-            embedding_backend="hash",
-            embedding_dims=64,
-        )
+        index.search(project_id="p1", query="query")
 
 
 def test_create_memory_index_required_gateway_raises_when_unavailable() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"status": "down"})
 
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_gateway_required",
+        qdrant_client=FakeQdrantClient(),
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="gateway",
+        embedding_base_url="http://embedding-gateway.test",
+        embedding_dims=64,
+        embedding_required=True,
+        embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
     with pytest.raises(RuntimeError, match="Embedding gateway required"):
-        create_memory_index(
-            backend="qdrant",
-            qdrant_url="http://qdrant.test:6333",
-            qdrant_collection="chapter_memories_gateway_required",
-            qdrant_client=FakeQdrantClient(),
-            qdrant_models=FakeQdrantModels,
-            embedding_backend="gateway",
-            embedding_base_url="http://embedding-gateway.test",
-            embedding_dims=64,
-            embedding_required=True,
-            embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
+        index.search(project_id="p1", query="query")
 
 
 def test_create_memory_index_optional_gateway_reports_hash_degradation() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"status": "down"})
+
+    requests = 0
+
+    def counted_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return handler(request)
 
     index = create_memory_index(
         backend="qdrant",
@@ -198,10 +313,13 @@ def test_create_memory_index_optional_gateway_reports_hash_degradation() -> None
         embedding_base_url="http://embedding-gateway.test",
         embedding_dims=64,
         embedding_required=False,
-        embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        embedding_http_client=httpx.Client(transport=httpx.MockTransport(counted_handler)),
     )
 
-    assert isinstance(index.embedder, HashTextEmbedder)
+    assert isinstance(index.embedder, GatewayTextEmbedder)
+    assert requests == 0
+    assert index.embedding_status()["kind"] == "gateway"
+    index.search(project_id="p1", query="query")
     assert index.embedding_status()["kind"] == "hash"
     assert index.embedding_status()["degraded"] is True
     assert index.embedding_status()["degraded_from"] == "gateway"
@@ -240,6 +358,8 @@ def test_existing_collection_dimension_mismatch_uses_side_by_side_collection() -
         embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
+    assert "chapter_memories_3d" not in qdrant_client.collections
+    index.search(project_id="p1", query="query")
     assert index.collection_name == "chapter_memories_3d"
     assert "chapter_memories" in qdrant_client.collections
     assert qdrant_client.collections["chapter_memories"]["vectors_config"].size == 64

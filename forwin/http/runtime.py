@@ -13,12 +13,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from forwin.application.task_center import TaskCenterService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
-from forwin.models.base import get_session_factory
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
-from forwin.runtime.services import RuntimeServices
 
 if TYPE_CHECKING:
     from forwin.application.project_control import ProjectControlApplicationService
@@ -68,7 +66,6 @@ class HttpRuntime:
     session_factory: sessionmaker[Session] | None = None
     pipeline: ChapterPipeline | None = None
     container: RuntimeContainer | None = None
-    services: RuntimeServices | None = None
     publisher_manager: PublisherManager | None = None
     task_center_service: TaskCenterService | None = None
     task_application: TaskApplicationService | None = None
@@ -79,7 +76,14 @@ class HttpRuntime:
     display_timezone: ZoneInfo = field(
         default_factory=lambda: ZoneInfo("America/Los_Angeles")
     )
-
+    _pipeline_lock: threading.RLock = field(
+        default_factory=threading.RLock,
+        repr=False,
+    )
+    _publisher_lock: threading.RLock = field(
+        default_factory=threading.RLock,
+        repr=False,
+    )
     def get_session(self) -> Session:
         if self.session_factory is None:
             raise RuntimeError("HTTP runtime session factory is unavailable")
@@ -95,32 +99,22 @@ class HttpRuntime:
 
         _close_genesis_service(self, service)
 
-    def startup(self) -> None:
-        from forwin.http.automation import start_automation_scheduler
+    def get_pipeline(self) -> ChapterPipeline:
+        pipeline = self.pipeline
+        if pipeline is not None:
+            return pipeline
+        with self._pipeline_lock:
+            pipeline = self.pipeline
+            if pipeline is not None:
+                return pipeline
+            if self.container is None:
+                raise RuntimeError("HTTP runtime container is unavailable")
+            if self.session_factory is None:
+                raise RuntimeError("HTTP runtime session factory is unavailable")
 
-        if self.config is None:
-            self.config = InfrastructureConfig.from_env()
-        database_url = os.environ.get("FORWIN_DATABASE_URL", self.config.database_url)
-        if database_url != self.config.database_url:
-            self.config = self.config.model_copy(update={"database_url": database_url})
-        if self.container is None:
-            self.container = RuntimeContainer.from_config(
-                self.config,
-                policy=RuntimePolicy.for_profile("standard"),
-                role="api",
-            )
-        if self.services is None:
-            self.services = self.container.services()
-        if self.engine is None:
-            self.engine = self.services.engine
-        if self.session_factory is None:
-            self.session_factory = self.services.session_factory
-        if self.session_factory is None and self.engine is not None:
-            self.session_factory = get_session_factory(self.engine)
-        if self.pipeline is None:
-            self.pipeline = self.container.build_chapter_pipeline()
+            candidate = self.container.build_chapter_pipeline()
             with self.session_factory() as session:
-                created = self.pipeline.arc_envelope_manager.backfill_missing_resolutions(
+                created = candidate.arc_envelope_manager.backfill_missing_resolutions(
                     session=session
                 )
                 if created:
@@ -128,8 +122,23 @@ class HttpRuntime:
                     logger.info("Backfilled %d active arc envelopes.", created)
                 else:
                     session.rollback()
-        if self.publisher_manager is None:
-            self.publisher_manager = PublisherManager(
+            self.pipeline = candidate
+            return candidate
+
+    def get_publisher_manager(self) -> PublisherManager:
+        manager = self.publisher_manager
+        if manager is not None:
+            return manager
+        with self._publisher_lock:
+            manager = self.publisher_manager
+            if manager is not None:
+                return manager
+            if self.config is None:
+                raise RuntimeError("HTTP runtime config is unavailable")
+            if self.session_factory is None:
+                raise RuntimeError("HTTP runtime session factory is unavailable")
+
+            candidate = PublisherManager(
                 self.session_factory,
                 extension_api_key=self.config.publisher_extension_api_key,
                 preferred_client_id=self.config.publisher_preferred_client_id,
@@ -141,37 +150,55 @@ class HttpRuntime:
                 publisher_login_discord_webhook_url=(
                     self.config.publisher_login_discord_webhook_url
                 ),
-                codex_intervention_handler=build_codex_intervention_handler(self.config),
+                codex_intervention_handler=build_codex_intervention_handler(
+                    self.config
+                ),
             )
-        self.publisher_manager.requeue_interrupted_upload_jobs()
+            candidate.requeue_interrupted_upload_jobs()
+            self.publisher_manager = candidate
+            return candidate
+
+    def startup(self) -> None:
+        from forwin.http.automation import start_automation_scheduler
+
+        if self.config is None:
+            self.config = InfrastructureConfig.from_env()
+        database_url = os.environ.get("FORWIN_DATABASE_URL", self.config.database_url)
+        if database_url != self.config.database_url:
+            self.config = self.config.model_copy(update={"database_url": database_url})
+        if self.container is None:
+            self.container = RuntimeContainer.for_api(
+                self.config,
+                policy=RuntimePolicy.for_profile("standard"),
+            )
+        core = self.container.core_services()
+        if self.engine is None:
+            self.engine = core.engine
+        if self.session_factory is None:
+            self.session_factory = core.session_factory
         start_automation_scheduler(self)
 
     def shutdown(self) -> None:
         from forwin.http.automation import stop_automation_scheduler
 
         stop_automation_scheduler(self)
-        pipeline = self.pipeline
-        pipeline_client = getattr(pipeline, "llm_client", None)
-        if pipeline is not None:
-            try:
-                pipeline_client.close()
-            except Exception:  # noqa: BLE001
-                logger.debug("Ignoring pipeline LLM shutdown error.", exc_info=True)
-        services = self.services
-        if services is not None and services.llm_client is not pipeline_client:
-            try:
-                services.llm_client.close()
-            except Exception:  # noqa: BLE001
-                logger.debug("Ignoring runtime LLM shutdown error.", exc_info=True)
-        engine = self.engine
-        if engine is not None:
-            try:
-                engine.dispose()
-            except Exception:  # noqa: BLE001
-                logger.debug("Ignoring HTTP engine shutdown error.", exc_info=True)
+        container = self.container
+        if container is not None:
+            container.close()
+        else:
+            pipeline_client = getattr(self.pipeline, "llm_client", None)
+            if pipeline_client is not None:
+                try:
+                    pipeline_client.close()
+                except Exception:  # noqa: BLE001
+                    logger.debug("Ignoring pipeline LLM shutdown error.", exc_info=True)
+            if self.engine is not None:
+                try:
+                    self.engine.dispose()
+                except Exception:  # noqa: BLE001
+                    logger.debug("Ignoring HTTP engine shutdown error.", exc_info=True)
         self.pipeline = None
         self.container = None
-        self.services = None
         self.publisher_manager = None
         self.task_center_service = None
         self.session_factory = None

@@ -161,7 +161,7 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
     runtime = build_generation_worker_runtime(config)
     try:
         exit_code = run_generation_worker_loop(
-            application_service=runtime.services.generation_application,
+            application_service=runtime.application_service,
             worker_id=args.worker_id or default_worker_id(),
             lease_seconds=args.lease_seconds,
             poll_interval=args.poll_interval,
@@ -201,7 +201,7 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
     runtime = build_publisher_worker_runtime(config)
     try:
         run_publisher_worker_loop(
-            runtime.services.publisher_runtime.backend_jobs,
+            runtime.publisher_runtime.backend_jobs,
             limit=args.limit,
             once=args.once,
             poll_interval=args.poll_interval,
@@ -212,22 +212,16 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
 
 def cmd_outbox_worker(args: argparse.Namespace) -> None:
     """Run eventually consistent outbox side effects."""
-    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
-    from forwin.outbox.handlers import build_default_outbox_handlers
     from forwin.outbox.worker import run_outbox_worker_loop
+    from forwin.runtime.workers import build_outbox_worker_runtime
 
     config = _get_config(args)
-    engine = get_engine(config.database_url)
+    runtime = build_outbox_worker_runtime(config)
     try:
-        require_v5_schema(engine)
-        Session = get_session_factory(engine)
         exit_code = run_outbox_worker_loop(
-            session_factory=Session,
+            session_factory=runtime.session_factory,
             worker_id=args.worker_id,
-            handlers=build_default_outbox_handlers(
-                session_factory=Session,
-                config=config,
-            ),
+            handlers=runtime.handlers,
             poll_interval=args.poll_interval,
             once=args.once,
             lease_seconds=args.lease_seconds,
@@ -236,7 +230,7 @@ def cmd_outbox_worker(args: argparse.Namespace) -> None:
             max_delay_seconds=args.max_delay_seconds,
         )
     finally:
-        engine.dispose()
+        runtime.close()
     if exit_code:
         sys.exit(exit_code)
 

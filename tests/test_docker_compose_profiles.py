@@ -43,6 +43,19 @@ def test_outbox_worker_is_compose_managed_with_current_image() -> None:
     assert worker["healthcheck"] == {"disable": True}
 
 
+def test_non_generation_services_depend_only_on_postgres_startup() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+
+    for service_name in ("forwin", "outbox-worker", "publisher-worker"):
+        assert set(compose["services"][service_name]["depends_on"]) == {"postgres"}
+
+    assert set(compose["services"]["generation-worker"]["depends_on"]) == {
+        "postgres",
+        "qdrant",
+        "minio",
+    }
+
+
 def test_publisher_browser_uses_browser_image_target() -> None:
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
 

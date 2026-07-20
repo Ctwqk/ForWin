@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
-import hashlib
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from forwin.observability.payloads import artifact_manifest_item
@@ -16,12 +18,30 @@ from forwin.protocol.writer import WriterOutput
 logger = logging.getLogger(__name__)
 
 
+def _close_minio_client(client: Any | None) -> None:
+    if client is None:
+        return
+    try:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+            return
+        clear = getattr(getattr(client, "_http", None), "clear", None)
+        if callable(clear):
+            clear()
+    except Exception:  # noqa: BLE001
+        logger.debug("MinIO client close failed.", exc_info=True)
+
+
 class ObjectStore:
     def write_text(self, relative_path: str, content: str, *, content_type: str) -> str:
         raise NotImplementedError
 
     def read_text(self, uri: str) -> str:
         raise NotImplementedError
+
+    def close(self) -> None:
+        return None
 
 
 class LocalObjectStore(ObjectStore):
@@ -50,28 +70,71 @@ class MinioObjectStore(ObjectStore):
         prefix: str = "artifacts",
         secure: bool = False,
     ) -> None:
-        from minio import Minio
-        from minio.error import S3Error
-
+        self.endpoint = endpoint
+        self.access_key = access_key
+        self.secret_key = secret_key
         self.bucket = bucket
         self.prefix = prefix.strip("/")
-        self.client = Minio(
-            endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            secure=secure,
-        )
-        if not self.client.bucket_exists(bucket):
+        self.secure = secure
+        self._client: Any | None = None
+        self._client_lock = threading.Lock()
+        self._closed = False
+
+    def _ensure_client(self) -> Any:
+        if self._closed:
+            raise RuntimeError("MinIO object store is closed")
+        client = self._client
+        if client is not None:
+            return client
+
+        with self._client_lock:
+            if self._closed:
+                raise RuntimeError("MinIO object store is closed")
+            client = self._client
+            if client is not None:
+                return client
+
+            from minio import Minio
+            from minio.error import S3Error
+
+            client = Minio(
+                self.endpoint,
+                access_key=self.access_key,
+                secret_key=self.secret_key,
+                secure=self.secure,
+            )
             try:
-                self.client.make_bucket(bucket)
-            except S3Error as exc:
-                race_codes = {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}
-                if exc.code not in race_codes or not self.client.bucket_exists(bucket):
-                    raise
-                logger.info(
-                    "MinIO bucket %s was created by another process.",
-                    bucket,
-                )
+                if not client.bucket_exists(self.bucket):
+                    try:
+                        client.make_bucket(self.bucket)
+                    except S3Error as exc:
+                        race_codes = {
+                            "BucketAlreadyExists",
+                            "BucketAlreadyOwnedByYou",
+                        }
+                        if (
+                            exc.code not in race_codes
+                            or not client.bucket_exists(self.bucket)
+                        ):
+                            raise
+                        logger.info(
+                            "MinIO bucket %s was created by another process.",
+                            self.bucket,
+                        )
+            except Exception:
+                _close_minio_client(client)
+                raise
+            self._client = client
+            return client
+
+    def close(self) -> None:
+        with self._client_lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self._client
+            self._client = None
+        _close_minio_client(client)
 
     def _key(self, relative_path: str) -> str:
         if self.prefix:
@@ -81,7 +144,8 @@ class MinioObjectStore(ObjectStore):
     def write_text(self, relative_path: str, content: str, *, content_type: str) -> str:
         payload = content.encode("utf-8")
         key = self._key(relative_path)
-        self.client.put_object(
+        client = self._ensure_client()
+        client.put_object(
             self.bucket,
             key,
             io.BytesIO(payload),
@@ -92,7 +156,8 @@ class MinioObjectStore(ObjectStore):
 
     def read_text(self, uri: str) -> str:
         parsed = urlparse(uri)
-        response = self.client.get_object(parsed.netloc, parsed.path.lstrip("/"))
+        client = self._ensure_client()
+        response = client.get_object(parsed.netloc, parsed.path.lstrip("/"))
         try:
             return response.read().decode("utf-8")
         finally:
@@ -115,30 +180,55 @@ class ArtifactStore:
         minio_prefix: str = "artifacts",
         minio_secure: bool = False,
         object_store: ObjectStore | None = None,
+        owns_object_store: bool = False,
     ) -> None:
         self.root_dir = root_dir
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._owns_object_store = object_store is None or owns_object_store
         if object_store is not None:
             self.object_store = object_store
             return
 
-        normalized = (backend or "local").strip().lower()
-        if normalized == "minio" and minio_endpoint and minio_access_key and minio_secret_key:
-            try:
-                self.object_store = MinioObjectStore(
-                    endpoint=minio_endpoint,
-                    access_key=minio_access_key,
-                    secret_key=minio_secret_key,
-                    bucket=minio_bucket,
-                    prefix=minio_prefix,
-                    secure=minio_secure,
-                )
+        if backend == "local":
+            self.object_store = LocalObjectStore(root_dir)
+            return
+        if backend != "minio":
+            raise ValueError(
+                f"unsupported artifact backend {backend!r}; expected 'local' or 'minio'"
+            )
+
+        required_config = {
+            "endpoint": minio_endpoint,
+            "access_key": minio_access_key,
+            "secret_key": minio_secret_key,
+            "bucket": minio_bucket,
+        }
+        missing = [
+            name for name, value in required_config.items() if not str(value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "minio artifact backend requires non-empty " + ", ".join(missing)
+            )
+        self.object_store = MinioObjectStore(
+            endpoint=minio_endpoint,
+            access_key=minio_access_key,
+            secret_key=minio_secret_key,
+            bucket=minio_bucket,
+            prefix=minio_prefix,
+            secure=minio_secure,
+        )
+
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
                 return
-            except Exception:
-                logger.warning(
-                    "MinIO artifact store unavailable, falling back to local storage.",
-                    exc_info=True,
-                )
-        self.object_store = LocalObjectStore(root_dir)
+            self._closed = True
+            object_store = self.object_store if self._owns_object_store else None
+        close = getattr(object_store, "close", None)
+        if callable(close):
+            close()
 
     def save_writer_output(
         self,

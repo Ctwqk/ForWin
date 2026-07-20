@@ -505,11 +505,16 @@ class LLMReliabilityRunner:
                 },
             }
         )
-        pipeline = RuntimeContainer.from_config(
+        container = RuntimeContainer.from_config(
             infrastructure,
             policy=policy,
             role="generation_worker",
-        ).build_chapter_pipeline()
+        )
+        try:
+            pipeline = container.build_chapter_pipeline()
+        except Exception:
+            container.close()
+            raise
         try:
             result = pipeline.run(
                 premise="主角在潮雾旧城得到一枚会记录未来声音的罗盘。",
@@ -535,13 +540,6 @@ class LLMReliabilityRunner:
                 }
             )
         finally:
-            try:
-                pipeline.llm_client.close()
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                pipeline.engine.dispose()
-            except Exception:  # noqa: BLE001
-                pass
+            pipeline.close()
         _json_dump_line(self.full_runs_path, payload)
         return payload

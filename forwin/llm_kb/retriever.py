@@ -47,3 +47,6 @@ class LLMKnowledgeBaseRetriever:
                 visibility_scope=visibility_scope,
             )
         ]
+
+    def close(self) -> None:
+        self.index.close()

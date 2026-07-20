@@ -44,11 +44,12 @@ def _run_scheduled_review_action(
 
 def _run_automation_scheduler_pass(runtime: HttpRuntime) -> None:
     production_scheduler_factory = None
-    runtime_services = None
+    publisher_services = None
     if runtime.container is not None:
-        runtime_services = runtime.container.services()
-        production_scheduler_factory = runtime_services.production_scheduler
-        generation_application = runtime_services.generation_application
+        core_services = runtime.container.core_services()
+        publisher_services = runtime.container.publisher_services()
+        production_scheduler_factory = publisher_services.production_scheduler
+        generation_application = core_services.generation_application
     else:
         generation_application = GenerationApplicationService(
             session_factory=runtime.session_factory,
@@ -75,9 +76,9 @@ def _run_automation_scheduler_pass(runtime: HttpRuntime) -> None:
         ),
         production_scheduler_factory=production_scheduler_factory,
     )
-    if runtime_services is not None:
+    if publisher_services is not None:
         try:
-            runtime_services.publisher_runtime.backend_jobs.run_pending_once(limit=1)
+            publisher_services.publisher_runtime.backend_jobs.run_pending_once(limit=1)
         except Exception:  # noqa: BLE001
             logger.exception("Publisher backend job pass failed.")
     return result
@@ -110,9 +111,12 @@ def start_automation_scheduler(runtime: HttpRuntime) -> None:
 def stop_automation_scheduler(runtime: HttpRuntime) -> None:
     runtime.automation_stop.set()
     thread = runtime.automation_thread
-    runtime.automation_thread = None
     if thread is not None and thread.is_alive():
-        thread.join(timeout=2.0)
+        if thread is threading.current_thread():
+            return
+        thread.join()
+    if runtime.automation_thread is thread:
+        runtime.automation_thread = None
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

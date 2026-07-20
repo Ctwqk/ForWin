@@ -105,6 +105,7 @@ class ChapterPipeline(
         self._audit_stage_started_at = 0.0
         self._audit_stage_chapter_number = 0
         self._audit_stage_span: SpanHandle | None = None
+        self._runtime_container = None
 
         self.engine = engine
         self._SessionFactory = session_factory
@@ -166,7 +167,16 @@ class ChapterPipeline(
             _replace_band_schedule=self._replace_band_schedule,
             _band_schedule_patch_payload=self._band_schedule_patch_payload,
         )
-        self._bind_pipeline_runtime_hooks()
+
+    def close(self) -> None:
+        runtime_container = self._runtime_container
+        if runtime_container is not None:
+            runtime_container.close()
+            return
+        try:
+            self.llm_client.close()
+        finally:
+            self.engine.dispose()
 
 
 __all__ = ["ChapterPipeline"]

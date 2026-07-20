@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -143,13 +144,23 @@ def build_canon_outbox_handlers(
     session_factory: Callable[[], Any],
     config: Any | None = None,
     memory_index: Any | None = None,
+    memory_index_provider: Callable[[], Any] | None = None,
     projection_runner: Callable[..., dict[str, Any]] = refresh_projection_now,
     obsidian_root: Path | None = None,
     llm_kb_root: Path | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
 ) -> dict[str, Callable[[OutboxClaim], None]]:
-    resolved_memory_index = memory_index or _memory_index_from_config(config)
+    if memory_index is not None and memory_index_provider is not None:
+        raise ValueError("Pass memory_index or memory_index_provider, not both")
+
+    def configured_memory_index_provider() -> Any:
+        if memory_index is not None:
+            return memory_index
+        return _memory_index_from_config(config)
+
+    provider = memory_index_provider or configured_memory_index_provider
+    resolve_memory_index = _cached_provider(provider)
     qdrant_url = getattr(config, "qdrant_url", None) if config is not None else None
     qdrant_collection = (
         getattr(config, "llm_kb_qdrant_collection", None)
@@ -161,7 +172,7 @@ def build_canon_outbox_handlers(
         handle_canon_post_commit_outbox_event(
             event,
             session_factory=session_factory,
-            memory_index=resolved_memory_index,
+            memory_index=resolve_memory_index(),
             projection_runner=projection_runner,
             obsidian_root=obsidian_root,
             llm_kb_root=llm_kb_root,
@@ -282,6 +293,27 @@ def _memory_index_from_config(config: Any | None) -> Any | None:
         embedding_dims=config.embedding_dims,
         embedding_required=config.embedding_required,
     )
+
+
+def _cached_provider(provider: Callable[[], Any]) -> Callable[[], Any]:
+    missing = object()
+    value: Any = missing
+    lock = threading.Lock()
+
+    def resolve() -> Any:
+        nonlocal value
+        if value is not missing:
+            return value
+        with lock:
+            if value is not missing:
+                return value
+            resolved = provider()
+            if resolved is None:
+                raise RuntimeError("memory index provider returned no index")
+            value = resolved
+            return resolved
+
+    return resolve
 
 
 def _event_payload(event: OutboxClaim) -> Mapping[str, object]:

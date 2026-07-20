@@ -87,7 +87,7 @@ def _display_for(runtime: HttpRuntime, value) -> str:
 def _build_task_application(runtime: HttpRuntime) -> TaskApplicationService:
     return TaskApplicationService(
         TaskApplicationDeps(
-            get_publisher_manager=lambda: runtime.publisher_manager,
+            get_publisher_manager=runtime.get_publisher_manager,
             list_generation_tasks=lambda limit: _list_generation_tasks(
                 runtime, limit
             ),
@@ -124,8 +124,8 @@ def _build_project_application(runtime: HttpRuntime) -> ProjectApplicationServic
         ProjectApplicationDeps(
             get_session=lambda: _get_session(runtime),
             get_config=lambda: runtime.config,
-            get_pipeline=lambda: runtime.pipeline,
-            get_publisher_manager=lambda: runtime.publisher_manager,
+            get_pipeline=runtime.get_pipeline,
+            get_publisher_manager=runtime.get_publisher_manager,
             display_datetime=lambda value: _display_for(runtime, value),
             build_genesis_service=runtime.build_genesis_service,
             close_genesis_service=runtime.close_genesis_service,
@@ -168,7 +168,7 @@ def _build_project_control_application(
     return ProjectControlApplicationService(
         ProjectControlApplicationDeps(
             get_session=lambda: _get_session(runtime),
-            get_pipeline=lambda: runtime.pipeline,
+            get_pipeline=runtime.get_pipeline,
             require_reason=_require_reason,
             validate_constraint_payload=_validate_constraint_payload,
             serialize_band_checkpoint=_serialize_band_checkpoint,
@@ -298,7 +298,7 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
                 ],
             ),
             publisher=PublisherDeps(
-                get_publisher_manager=lambda: runtime.publisher_manager,
+                get_publisher_manager=runtime.get_publisher_manager,
                 render_publishers_page=render_publishers_page,
             ),
         ),

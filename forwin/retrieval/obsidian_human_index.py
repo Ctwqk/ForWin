@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from hashlib import sha1
 from pathlib import Path
@@ -13,6 +14,7 @@ from forwin.obsidian.frontmatter import EDITABLE_FIELDS, parse_frontmatter, pars
 from forwin.retrieval.memory_index import (
     HashTextEmbedder,
     TextEmbedder,
+    _close_client,
     _create_qdrant_client,
     _qdrant_models,
 )
@@ -76,9 +78,37 @@ class ObsidianHumanVectorIndex:
     ) -> None:
         self.collection_name = collection_name or _default_collection_name()
         self.embedder = embedder or HashTextEmbedder(dims=96)
+        self._owns_embedder = embedder is None
         self._rest = qdrant_models or _qdrant_models()
-        self.client = qdrant_client or _create_qdrant_client(qdrant_url or _default_qdrant_url())
-        self._ensure_collection()
+        self._owns_client = qdrant_client is None
+        self.client = qdrant_client or _create_qdrant_client(
+            qdrant_url or _default_qdrant_url()
+        )
+        self._closed = False
+        self._close_lock = threading.Lock()
+        try:
+            self._ensure_collection()
+        except Exception:
+            self._close_owned_resources()
+            self._closed = True
+            raise
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("Obsidian human vector index is closed")
+
+    def _close_owned_resources(self) -> None:
+        if self._owns_embedder:
+            _close_client(self.embedder)
+        if self._owns_client:
+            _close_client(self.client)
+
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close_owned_resources()
 
     def _ensure_collection(self) -> None:
         collections = {item.name for item in self.client.get_collections().collections}
@@ -93,6 +123,7 @@ class ObsidianHumanVectorIndex:
         )
 
     def rebuild_project(self, project_id: str, *, vault_root: Path) -> dict[str, Any]:
+        self._require_open()
         sections = _collect_human_sections(project_id, vault_root)
         existing_payloads = _existing_payloads_by_point_id(
             self.client,
@@ -137,6 +168,7 @@ class ObsidianHumanVectorIndex:
         as_of_chapter: int = 0,
         section_type: str = "",
     ) -> list[dict[str, Any]]:
+        self._require_open()
         query_text = str(query or "").strip()
         if not query_text:
             return []

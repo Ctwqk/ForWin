@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import threading
 import time
 from hashlib import sha1
 from typing import Any
@@ -17,13 +18,31 @@ logger = logging.getLogger(__name__)
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
 _COLLECTION_RACE_INSPECTION_ATTEMPTS = 5
 _COLLECTION_RACE_INSPECTION_DELAY_SECONDS = 0.1
+_GATEWAY_EMBEDDING_BACKENDS = {"gateway", "embedding_gateway", "local_gateway"}
+_REMOTE_EMBEDDING_BACKENDS = {"remote", "api", "openai"}
+
+
+def _close_client(client: Any | None) -> None:
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:  # noqa: BLE001
+        logger.debug("External client close failed.", exc_info=True)
 
 
 class TextEmbedder:
     dims: int
 
+    def prepare(self) -> None:
+        return None
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
+
+    def close(self) -> None:
+        return None
 
 
 class HashTextEmbedder(TextEmbedder):
@@ -60,6 +79,7 @@ class RemoteTextEmbedder(TextEmbedder):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.dims = max(8, int(dims))
+        self._owns_client = client is None
         self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -83,6 +103,10 @@ class RemoteTextEmbedder(TextEmbedder):
             raise ValueError("embedding response size mismatch")
         return embeddings
 
+    def close(self) -> None:
+        if self._owns_client:
+            _close_client(self.client)
+
 
 class GatewayTextEmbedder(TextEmbedder):
     kind = "gateway"
@@ -93,34 +117,72 @@ class GatewayTextEmbedder(TextEmbedder):
         base_url: str,
         dims: int = 384,
         client: httpx.Client | None = None,
+        required: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self._owns_client = client is None
         self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
-        detected_dims = self._detect_dims()
-        requested_dims = int(dims or 0)
-        if detected_dims <= 0:
-            raise ValueError("embedding gateway metadata unavailable")
-        self.dims = requested_dims if requested_dims > 0 else detected_dims
-        if self.dims <= 0:
-            raise ValueError("embedding gateway dimension could not be detected")
-        if detected_dims > 0 and detected_dims != self.dims:
-            logger.warning(
-                "Embedding gateway dimension %s differs from configured dimension %s.",
-                detected_dims,
-                self.dims,
+        self._requested_dims = int(dims or 0)
+        self._required = bool(required)
+        self._ready = False
+        self._ready_lock = threading.Lock()
+        self._fallback: HashTextEmbedder | None = None
+        self.dims = max(0, self._requested_dims)
+        self.degraded_from = ""
+        self.degradation_reason = ""
+
+    def prepare(self) -> None:
+        if self._ready:
+            return
+        with self._ready_lock:
+            if self._ready:
+                return
+            try:
+                detected_dims = self._detect_dims()
+                if detected_dims <= 0:
+                    raise ValueError("embedding gateway metadata unavailable")
+            except Exception as exc:
+                logger.warning("Embedding gateway metadata unavailable.", exc_info=True)
+                if self._required:
+                    raise RuntimeError(
+                        "Embedding gateway required but unavailable"
+                    ) from exc
+                fallback = HashTextEmbedder(
+                    dims=self._requested_dims,
+                    degraded_from="gateway",
+                    degradation_reason=str(exc),
+                )
+                self._fallback = fallback
+                self.kind = fallback.kind
+                self.dims = fallback.dims
+                self.degraded_from = fallback.degraded_from
+                self.degradation_reason = fallback.degradation_reason
+                self._ready = True
+                return
+
+            self.dims = (
+                self._requested_dims
+                if self._requested_dims > 0
+                else detected_dims
             )
+            if detected_dims != self.dims:
+                logger.warning(
+                    "Embedding gateway dimension %s differs from configured dimension %s.",
+                    detected_dims,
+                    self.dims,
+                )
+            self._ready = True
 
     def _detect_dims(self) -> int:
-        try:
-            response = self.client.get(f"{self.base_url}/metadata")
-            response.raise_for_status()
-            payload = response.json()
-            return int(payload.get("dimension") or 0)
-        except Exception:
-            logger.warning("Embedding gateway metadata unavailable.", exc_info=True)
-            return 0
+        response = self.client.get(f"{self.base_url}/metadata")
+        response.raise_for_status()
+        payload = response.json()
+        return int(payload.get("dimension") or 0)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self.prepare()
+        if self._fallback is not None:
+            return self._fallback.embed(texts)
         response = self.client.post(
             f"{self.base_url}/embed",
             json={"texts": texts},
@@ -137,6 +199,10 @@ class GatewayTextEmbedder(TextEmbedder):
                 f"embedding gateway dimension mismatch: expected {self.dims}, got {mismatched[0]}"
             )
         return vectors
+
+    def close(self) -> None:
+        if self._owns_client:
+            _close_client(self.client)
 
 
 def _tokenize(text: str) -> list[str]:
@@ -225,62 +291,132 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         url: str,
         collection_name: str,
         embedder: TextEmbedder | None = None,
+        owns_embedder: bool = False,
         client: Any | None = None,
         qdrant_models: Any | None = None,
     ) -> None:
-        self._rest = qdrant_models or _qdrant_models()
-        self.client = client or _create_qdrant_client(url)
+        self._url = url
+        self._configured_collection_name = collection_name
+        self._rest = qdrant_models
+        self.client = client
+        self._owns_client = client is None
         self.embedder = embedder or HashTextEmbedder()
-        self.collection_name = self._resolve_collection_name(collection_name)
-        self._ensure_collection()
+        self._owns_embedder = embedder is None or owns_embedder
+        self.collection_name = collection_name
+        self._ready = False
+        self._closed = False
+        self._ready_lock = threading.Lock()
 
-    def _ensure_collection(self) -> None:
-        collections = {item.name for item in self.client.get_collections().collections}
-        if self.collection_name in collections:
+    def _ensure_ready(self) -> None:
+        if self._closed:
+            raise RuntimeError("Qdrant memory index is closed")
+        if self._ready:
+            return
+        with self._ready_lock:
+            if self._closed:
+                raise RuntimeError("Qdrant memory index is closed")
+            if self._ready:
+                return
+            self.embedder.prepare()
+            created_client = self.client is None
+            client = self.client or _create_qdrant_client(self._url)
+            try:
+                rest = self._rest if self._rest is not None else _qdrant_models()
+                collection_name, collections = self._resolve_collection_name(
+                    client,
+                    self._configured_collection_name,
+                )
+                self._ensure_collection(
+                    client,
+                    rest,
+                    collection_name,
+                    collections=collections,
+                )
+            except Exception:
+                if created_client:
+                    _close_client(client)
+                raise
+            self.client = client
+            self._rest = rest
+            self.collection_name = collection_name
+            self._ready = True
+
+    def _ensure_collection(
+        self,
+        client: Any,
+        rest: Any,
+        collection_name: str,
+        *,
+        collections: set[str],
+    ) -> None:
+        if collection_name in collections:
             return
         try:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=self._rest.VectorParams(
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=rest.VectorParams(
                     size=self.embedder.dims,
-                    distance=self._rest.Distance.COSINE,
+                    distance=rest.Distance.COSINE,
                 ),
             )
         except Exception as exc:
-            collections = {item.name for item in self.client.get_collections().collections}
-            if self.collection_name not in collections:
+            collections = {item.name for item in client.get_collections().collections}
+            if collection_name not in collections:
                 raise
             existing_size = self._collection_vector_size_after_create_race(
-                self.collection_name
+                client,
+                collection_name,
             )
             if existing_size != self.embedder.dims:
                 raise ValueError(
-                    f"Qdrant collection {self.collection_name!r} has vector size "
+                    f"Qdrant collection {collection_name!r} has vector size "
                     f"{existing_size}, expected {self.embedder.dims}."
                 ) from exc
             logger.info(
                 "Qdrant collection %s was created by another process.",
-                self.collection_name,
+                collection_name,
             )
 
     def _collection_vector_size_after_create_race(
-        self, collection_name: str
+        self,
+        client: Any,
+        collection_name: str,
     ) -> int | None:
+        last_error: Exception | None = None
         for attempt in range(_COLLECTION_RACE_INSPECTION_ATTEMPTS):
-            existing_size = self._collection_vector_size(collection_name)
+            try:
+                existing_size = self._collection_vector_size(client, collection_name)
+            except Exception as exc:  # noqa: BLE001 - retry visibility races only here.
+                last_error = exc
+                existing_size = None
+                logger.info(
+                    "Qdrant collection %s metadata is not visible yet.",
+                    collection_name,
+                )
             if existing_size is not None:
                 return existing_size
             if attempt + 1 < _COLLECTION_RACE_INSPECTION_ATTEMPTS:
                 time.sleep(_COLLECTION_RACE_INSPECTION_DELAY_SECONDS)
+        if last_error is not None:
+            raise last_error
         return None
 
-    def _resolve_collection_name(self, collection_name: str) -> str:
-        collections = {item.name for item in self.client.get_collections().collections}
+    def _resolve_collection_name(
+        self,
+        client: Any,
+        collection_name: str,
+    ) -> tuple[str, set[str]]:
+        collections = {item.name for item in client.get_collections().collections}
         if collection_name not in collections:
-            return collection_name
-        existing_size = self._collection_vector_size(collection_name)
-        if existing_size in {None, self.embedder.dims}:
-            return collection_name
+            return collection_name, collections
+        existing_size = self._collection_vector_size(client, collection_name)
+        if existing_size is None:
+            raise ValueError(
+                "Could not determine vector size for Qdrant collection "
+                f"{collection_name!r}."
+            )
+        if existing_size == self.embedder.dims:
+            return collection_name, collections
         candidate = f"{collection_name}_{self.embedder.dims}d"
         logger.warning(
             "Qdrant collection %s has vector size %s, expected %s; using %s instead.",
@@ -290,25 +426,26 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             candidate,
         )
         if candidate not in collections:
-            return candidate
-        candidate_size = self._collection_vector_size(candidate)
-        if candidate_size in {None, self.embedder.dims}:
-            return candidate
+            return candidate, collections
+        candidate_size = self._collection_vector_size(client, candidate)
+        if candidate_size is None:
+            raise ValueError(
+                "Could not determine vector size for Qdrant collection "
+                f"{candidate!r}."
+            )
+        if candidate_size == self.embedder.dims:
+            return candidate, collections
         raise ValueError(
             f"Qdrant collection {candidate!r} has vector size {candidate_size}, "
             f"expected {self.embedder.dims}."
         )
 
-    def _collection_vector_size(self, collection_name: str) -> int | None:
-        try:
-            collection = self.client.get_collection(collection_name)
-        except Exception:
-            logger.warning(
-                "Could not inspect Qdrant collection %s vector size.",
-                collection_name,
-                exc_info=True,
-            )
-            return None
+    def _collection_vector_size(
+        self,
+        client: Any,
+        collection_name: str,
+    ) -> int | None:
+        collection = client.get_collection(collection_name)
         vectors_config = getattr(
             getattr(getattr(collection, "config", None), "params", None),
             "vectors",
@@ -317,10 +454,25 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         return _vector_size_from_config(vectors_config)
 
     def collection_vector_size(self) -> int | None:
-        return self._collection_vector_size(self.collection_name)
+        if not self._ready or self.client is None:
+            return None
+        return self._collection_vector_size(self.client, self.collection_name)
 
     def embedding_status(self) -> dict[str, object]:
         return embedding_status(self.embedder)
+
+    def close(self) -> None:
+        with self._ready_lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self.client if self._owns_client else None
+            if self._owns_client:
+                self.client = None
+            self._ready = False
+            if self._owns_embedder:
+                self.embedder.close()
+        _close_client(client)
 
     def upsert_chapter(
         self,
@@ -331,6 +483,9 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         summary: str,
         body: str,
     ) -> None:
+        self._ensure_ready()
+        if self.client is None or self._rest is None:  # pragma: no cover
+            raise RuntimeError("Qdrant memory index initialization did not complete")
         excerpt = (body or "")[:500]
         vector = self.embedder.embed([f"{title}\n{summary}\n{excerpt}"])[0]
         self.client.upsert(
@@ -357,7 +512,13 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         query: str,
         limit: int = 3,
     ) -> list[MemorySnippet]:
-        vector = self.embedder.embed([query])[0]
+        query_text = str(query or "").strip()
+        if not query_text:
+            return []
+        self._ensure_ready()
+        if self.client is None or self._rest is None:  # pragma: no cover
+            raise RuntimeError("Qdrant memory index initialization did not complete")
+        vector = self.embedder.embed([query_text])[0]
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=vector,
@@ -400,31 +561,34 @@ def create_memory_index(
     qdrant_models: Any | None = None,
 ) -> ChapterMemoryIndex:
     normalized = (backend or "qdrant").strip().lower()
-    embedding_kind = (embedding_backend or "hash").strip().lower()
-    if embedding_kind in {"gateway", "embedding_gateway", "local_gateway"} and embedding_base_url:
-        try:
-            embedder: TextEmbedder = GatewayTextEmbedder(
-                base_url=embedding_base_url,
-                dims=embedding_dims,
-                client=embedding_http_client,
-            )
-        except Exception as exc:
-            logger.error(
-                "Embedding gateway unavailable.",
-                exc_info=True,
-            )
-            if embedding_required:
-                raise RuntimeError("Embedding gateway required but unavailable") from exc
-            embedder = HashTextEmbedder(
-                dims=embedding_dims,
-                degraded_from="gateway",
-                degradation_reason=str(exc),
-            )
-    elif (
-        embedding_kind in {"remote", "api", "openai"}
-        and embedding_model
-        and embedding_base_url
-    ):
+    if normalized != "qdrant":
+        raise ValueError(f"Unsupported retrieval backend: {backend}. Use qdrant.")
+    if not str(qdrant_url or "").strip():
+        raise ValueError(
+            "FORWIN_QDRANT_URL is required when retrieval backend is qdrant."
+        )
+    embedding_kind = str(embedding_backend or "").strip().lower()
+    supported_embedding_backends = {
+        "hash",
+        *_GATEWAY_EMBEDDING_BACKENDS,
+        *_REMOTE_EMBEDDING_BACKENDS,
+    }
+    if embedding_kind not in supported_embedding_backends:
+        raise ValueError(f"Unsupported embedding backend: {embedding_backend}")
+    if embedding_kind in _GATEWAY_EMBEDDING_BACKENDS:
+        if not str(embedding_base_url or "").strip():
+            raise ValueError("Embedding gateway base URL is required")
+        embedder: TextEmbedder = GatewayTextEmbedder(
+            base_url=embedding_base_url,
+            dims=embedding_dims,
+            client=embedding_http_client,
+            required=embedding_required,
+        )
+    elif embedding_kind in _REMOTE_EMBEDDING_BACKENDS:
+        if not str(embedding_base_url or "").strip():
+            raise ValueError("Remote embedding base URL is required")
+        if not str(embedding_model or "").strip():
+            raise ValueError("Remote embedding model is required")
         try:
             embedder = RemoteTextEmbedder(
                 api_key=embedding_api_key,
@@ -447,14 +611,11 @@ def create_memory_index(
             )
     else:
         embedder = HashTextEmbedder(dims=embedding_dims)
-    if normalized != "qdrant":
-        raise ValueError(f"Unsupported retrieval backend: {backend}. Use qdrant.")
-    if not qdrant_url:
-        raise ValueError("FORWIN_QDRANT_URL is required when retrieval backend is qdrant.")
     return QdrantChapterMemoryIndex(
         url=qdrant_url,
         collection_name=qdrant_collection,
         embedder=embedder,
+        owns_embedder=True,
         client=qdrant_client,
         qdrant_models=qdrant_models,
     )

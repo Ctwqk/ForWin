@@ -5,9 +5,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
+import pytest
 
 from forwin.cli import build_parser
 from forwin.codex_bridge.runner import CodexExecResult
+from forwin.llm_eval import runner as runner_module
 from forwin.llm_eval.runner import CodexCliEvalAdapter, EvalRunConfig, LLMReliabilityRunner
 from forwin.llm_eval.schemas import EvalCase, EvalProfile
 
@@ -204,6 +206,48 @@ def test_codex_cli_eval_adapter_uses_codex_exec_without_api_key() -> None:
     assert attempts[0]["provider_kind"] == "spark"
     assert attempts[0]["http_status"] == 200
     assert attempts[0]["llm_task_route"] == "planning_json_low_risk"
+
+
+def test_mini_real_pipeline_build_failure_closes_container(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    class Container:
+        def build_chapter_pipeline(self):
+            calls.append("build")
+            raise RuntimeError("pipeline construction failed")
+
+        def close(self) -> None:
+            calls.append("close")
+
+    container = Container()
+    monkeypatch.setattr(
+        runner_module.RuntimeContainer,
+        "from_config",
+        lambda *_args, **_kwargs: container,
+    )
+    monkeypatch.setenv(
+        "FORWIN_EVAL_DATABASE_URL",
+        "postgresql+psycopg://unused/forwin",
+    )
+    runner = LLMReliabilityRunner(
+        EvalRunConfig(
+            run_id="pipeline-build-failure",
+            artifact_root=str(tmp_path),
+        )
+    )
+    profile = EvalProfile(
+        id="failure-profile",
+        base_url="https://example.invalid/v1",
+        model="failure-model",
+    )
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        runner.run_mini_real_for_profile(profile)
+
+    assert calls == ["build", "close"]
 
 
 def test_cli_parser_exposes_llm_eval_run_and_report_subcommands() -> None:

@@ -122,20 +122,6 @@ def _extract_source_digest(content: str) -> str:
     return ""
 
 
-def _database_url_from_repo(repo) -> str | None:  # noqa: ANN001
-    session = getattr(repo, "session", None)
-    if session is None:
-        return None
-    try:
-        bind = session.get_bind()
-    except Exception:  # noqa: BLE001
-        return None
-    url = getattr(bind, "url", None)
-    if url is None:
-        return None
-    return url.render_as_string(hide_password=False)
-
-
 __all__ = [
     "_node_context",
     "_edge_context",
@@ -145,5 +131,4 @@ __all__ = [
     "_active_personality_contexts",
     "_truncate",
     "_extract_source_digest",
-    "_database_url_from_repo",
 ]

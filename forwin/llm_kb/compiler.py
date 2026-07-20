@@ -139,18 +139,22 @@ class LLMKnowledgeBaseCompiler:
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         files.append("retrieval_index.json")
         self._write_role_packs(project_id, as_of, project_root)
-        vector_index = LLMKBVectorIndex(
+        vector_store = LLMKBVectorIndex(
             self.root,
             qdrant_url=self.qdrant_url,
             collection_name=self.qdrant_collection,
             qdrant_client=self.qdrant_client,
             qdrant_models=self.qdrant_models,
-        ).rebuild_project(
-            project_id,
-            source_digest=source_digest,
-            as_of_chapter=as_of,
-            projection_version=LLM_KB_PROJECTION_VERSION,
         )
+        try:
+            vector_index = vector_store.rebuild_project(
+                project_id,
+                source_digest=source_digest,
+                as_of_chapter=as_of,
+                projection_version=LLM_KB_PROJECTION_VERSION,
+            )
+        finally:
+            vector_store.close()
         retrieval_index["vector_index"] = vector_index
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         return LLMKBCompileResult(
@@ -298,15 +302,27 @@ class LLMKnowledgeBaseCompiler:
             "planner": "planning",
             "compiler": "compiler",
         }
-        for role, pack_kind in role_map.items():
-            role_root = project_root / "packs" / role
-            role_root.mkdir(parents=True, exist_ok=True)
-            try:
-                pack = broker.build_world_model_pack(repo, project_id, as_of + 1, pack_kind)
-                payload = pack.model_dump(mode="json")
-            except Exception as exc:  # noqa: BLE001 - pack generation should not block root KB rebuild.
-                payload = {"project_id": project_id, "role": role, "error": str(exc)}
-            (role_root / "context.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            for role, pack_kind in role_map.items():
+                role_root = project_root / "packs" / role
+                role_root.mkdir(parents=True, exist_ok=True)
+                try:
+                    pack = broker.build_world_model_pack(
+                        repo, project_id, as_of + 1, pack_kind
+                    )
+                    payload = pack.model_dump(mode="json")
+                except Exception as exc:  # noqa: BLE001 - role packs are best effort.
+                    payload = {
+                        "project_id": project_id,
+                        "role": role,
+                        "error": str(exc),
+                    }
+                (role_root / "context.json").write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+        finally:
+            broker.close()
 
 
 def _hidden_node(node: WorldNode) -> bool:

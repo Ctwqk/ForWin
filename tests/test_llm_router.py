@@ -385,13 +385,11 @@ class LLMRouterTests(unittest.TestCase):
             policy=RuntimePolicy.for_profile("standard"),
             role="api",
         )
-        services = container.services()
         pipeline = container.build_chapter_pipeline()
         try:
             self.assertIsInstance(pipeline.llm_client, RoutedModelAdapter)
         finally:
-            services.llm_client.close()
-            services.engine.dispose()
+            container.close()
 
     def test_book_genesis_marks_stage_calls_for_codex_and_excludes_launch_arc(self) -> None:
         client = CapturingLLM()

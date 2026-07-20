@@ -53,7 +53,7 @@ class CanonPreparationContext:
     llm_client: ModelAdapter
     artifact_store: ArtifactStore
     _record_decision_event: Callable[..., DecisionEvent]
-    _record_rule_decision_event: Callable[..., DecisionEvent]
+    _record_rule_decision_event: Callable[..., DecisionEvent | None]
     save_prompt_trace: Callable[..., str] | None = None
 
     def drain_llm_attempt_events(self) -> list[dict[str, object]]:

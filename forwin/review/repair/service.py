@@ -59,7 +59,7 @@ class RepairExecution:
     _review_event_payload: Callable[..., dict[str, object]]
     _record_map_movement_review_issues: Callable[..., None]
     _pause_requested: Callable[[], bool]
-    _record_rule_decision_event: Callable[..., DecisionEvent]
+    _record_rule_decision_event: Callable[..., DecisionEvent | None]
     _chapter_plan_snapshot: Callable[..., dict[str, object]]
     _band_plan_snapshot: Callable[..., dict[str, object]]
     _emit_progress: Callable[..., None]
@@ -72,6 +72,9 @@ class RepairExecution:
 
 REVIEW_REPAIR_PHASE = "review_repair"
 CANON_REPAIR_PHASE = "canon_repair"
+_EXECUTABLE_REPAIR_OUTCOMES = frozenset(
+    {"local_repair", "chapter_patch", "band_patch"}
+)
 
 
 def _attempt_repair_phase(attempt: object) -> str:
@@ -189,6 +192,93 @@ def _final_residual_from_engine_decision(decision: Decision) -> FinalResidualDec
         residual_issues=list(decision.sub_action.get("residual_issues") or []),
         requires_human=bool(decision.sub_action.get("requires_human", True)),
     )
+
+
+def _normalize_repair_decision(decision: Decision) -> Decision:
+    if decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES or decision.outcome == "manual_review":
+        return decision
+    proposed_scope = str(decision.sub_action.get("scope") or "")
+    return Decision(
+        outcome="manual_review",
+        reason=(
+            f"{decision.reason}; " if decision.reason else ""
+        ) + f"{decision.outcome} is not executable by the chapter repair loop",
+        rule_id="repair_scope_not_executable",
+        missing_evidence=list(
+            dict.fromkeys([*decision.missing_evidence, "repair_executor_capability"])
+        ),
+        routed_from="RepairExecution",
+        sub_action={
+            **decision.sub_action,
+            "scope": "operator",
+            "proposed_outcome": decision.outcome,
+            "proposed_scope": proposed_scope,
+        },
+    )
+
+
+def _apply_final_residual_decision(
+    self: RepairExecution,
+    *,
+    session: Session,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_plan: ChapterPlan,
+    current_output: WriterOutput,
+    current_review: ReviewVerdict,
+    current_review_row: ChapterReview,
+    current_review_event,
+    repair_v2_input: DecisionInput,
+    phase_attempts: list[object],
+    parent_event_id: str,
+) -> tuple[WriterOutput, ReviewVerdict, bool]:
+    final_decision = AutoDecisionEngine(build_final_residual_rules()).decide(
+        repair_v2_input
+    )
+    final_decision_event = self._record_rule_decision_event(
+        updater=updater,
+        decision=final_decision,
+        decision_input=repair_v2_input,
+        related_object_type="chapter_review",
+        related_object_id=current_review_row.id,
+        parent_event_id=parent_event_id,
+    )
+    final_residual = _final_residual_from_engine_decision(final_decision)
+    force_accept = final_residual.decision == "force_accept"
+    current_review = current_review.model_copy(
+        update={
+            "verdict": "warn" if force_accept else current_review.verdict,
+            "repair_exhausted": True,
+            "final_residual_decision": final_residual,
+            "residual_review_issues": list(current_review.issues),
+            "forced_accept_applied": force_accept,
+        }
+    )
+    current_review_row.review_meta_json = _review_meta_json(current_review)
+    session.add(current_review_row)
+    if force_accept:
+        if phase_attempts:
+            phase_attempts[-1].forced_accept_applied = True
+            session.add(phase_attempts[-1])
+        final_event_id = str(getattr(final_decision_event, "id", "") or "")
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            event_family="audit_action",
+            event_type=DecisionEventType.FORCED_ACCEPT_APPLIED,
+            scope="chapter",
+            summary=f"第{chapter_plan.chapter_number}章通过 final residual policy。",
+            related_object_type="chapter_review",
+            related_object_id=current_review_row.id,
+            parent_event_id=final_event_id or str(current_review_event.id or ""),
+            payload={
+                "canon_risk": final_residual.canon_risk,
+                "reason": final_residual.reason,
+            },
+        )
+        return current_output, current_review, True
+    return current_output, current_review, False
 
 
 def _review_candidate(
@@ -428,9 +518,26 @@ def _run_repair_loop_for_phase(
             target_total_chapters=0,
             plan_layer_health=PlanLayerHealth(),
         )
-        repair_v2_decision = decide_repair_v2(repair_v2_input)
+        if len(phase_attempts) >= self.policy.review.max_rewrites:
+            return _apply_final_residual_decision(
+                self,
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_plan=chapter_plan,
+                current_output=current_output,
+                current_review=current_review,
+                current_review_row=current_review_row,
+                current_review_event=current_review_event,
+                repair_v2_input=repair_v2_input,
+                phase_attempts=phase_attempts,
+                parent_event_id=str(current_review_event.id or ""),
+            )
+        repair_v2_decision = _normalize_repair_decision(
+            decide_repair_v2(repair_v2_input)
+        )
         repair_scope = str(repair_v2_decision.sub_action.get("scope") or "")
-        self._record_rule_decision_event(
+        repair_decision_event = self._record_rule_decision_event(
             updater=updater,
             decision=repair_v2_decision,
             decision_input=repair_v2_input,
@@ -438,50 +545,23 @@ def _run_repair_loop_for_phase(
             related_object_id=current_review_row.id,
             parent_event_id=str(current_review_event.id or ""),
         )
-        repair_can_run_locally = repair_v2_decision.outcome in {
-            "local_repair",
-            "chapter_patch",
-            "band_patch",
-        }
+        repair_can_run_locally = repair_v2_decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES
         if not repair_can_run_locally:
-            final_decision = AutoDecisionEngine(build_final_residual_rules()).decide(
-                repair_v2_input
+            repair_event_id = str(getattr(repair_decision_event, "id", "") or "")
+            return _apply_final_residual_decision(
+                self,
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_plan=chapter_plan,
+                current_output=current_output,
+                current_review=current_review,
+                current_review_row=current_review_row,
+                current_review_event=current_review_event,
+                repair_v2_input=repair_v2_input,
+                phase_attempts=phase_attempts,
+                parent_event_id=repair_event_id or str(current_review_event.id or ""),
             )
-            final_residual = _final_residual_from_engine_decision(final_decision)
-            force_accept = final_residual.decision == "force_accept"
-            current_review = current_review.model_copy(
-                update={
-                    "verdict": "warn" if force_accept else current_review.verdict,
-                    "repair_exhausted": True,
-                    "final_residual_decision": final_residual,
-                    "residual_review_issues": list(current_review.issues),
-                    "forced_accept_applied": force_accept,
-                }
-            )
-            current_review_row.review_meta_json = _review_meta_json(current_review)
-            session.add(current_review_row)
-            if force_accept:
-                if phase_attempts:
-                    phase_attempts[-1].forced_accept_applied = True
-                    session.add(phase_attempts[-1])
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_plan.chapter_number,
-                    event_family="audit_action",
-                    event_type=DecisionEventType.FORCED_ACCEPT_APPLIED,
-                    scope="chapter",
-                    summary=f"第{chapter_plan.chapter_number}章通过 final residual policy。",
-                    related_object_type="chapter_review",
-                    related_object_id=current_review_row.id,
-                    parent_event_id=str(current_review_event.id or ""),
-                    payload={
-                        "canon_risk": final_residual.canon_risk,
-                        "reason": final_residual.reason,
-                    },
-                )
-                return current_output, current_review, True
-            return current_output, current_review, False
 
         attempt_no = len(existing_attempts) + 1
         phase_attempt_no = len(phase_attempts) + 1

@@ -206,13 +206,13 @@ class AuditControlStage:
         related_object_type: str = "",
         related_object_id: str = "",
         parent_event_id: str = "",
-    ) -> None:
+    ) -> DecisionEvent | None:
         try:
             payload = build_decision_event_payload(
                 decision=decision,
                 input_digest=digest_decision_input(decision_input),
             )
-            self._record_decision_event(
+            return self._record_decision_event(
                 updater=updater,
                 project_id=decision_input.project_id,
                 chapter_number=decision_input.chapter_number,
@@ -234,6 +234,7 @@ class AuditControlStage:
                 decision.rule_id,
                 exc,
             )
+            return None
 
     def _audit_current_plan_before_write(
         self,

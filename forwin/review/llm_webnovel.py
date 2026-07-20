@@ -648,6 +648,12 @@ class LLMWebNovelReviewer:
             if fallback_on_invalid:
                 return heuristic
             raise ValueError("Invalid verdict")
+        if verdict == "fail" and not any(
+            issue.severity == "error" and issue.evidence_refs for issue in issues
+        ):
+            if fallback_on_invalid:
+                return heuristic
+            raise ValueError("LLM fail verdict requires at least one anchored error issue")
         repair_instruction = None
         raw_repair = payload.get("repair_instruction")
         if isinstance(raw_repair, dict) and raw_repair:

@@ -21,6 +21,14 @@ from .policy import (
     runtime_catalog,
 )
 
+from .projection import (
+    ProjectionComponentKind,
+    ProjectionComponentStatus,
+    ProjectionHealthStatus,
+    ProjectionRefreshResponse,
+    ProjectionStatusResponse,
+)
+
 from .tasks import (
     CodexBridgeStatusResponse,
     GenerationControlInfo,
@@ -197,6 +205,11 @@ __all__ = [
     "RuntimePolicyResponse",
     "RuntimePolicyUpdateRequest",
     "runtime_catalog",
+    "ProjectionComponentKind",
+    "ProjectionComponentStatus",
+    "ProjectionHealthStatus",
+    "ProjectionRefreshResponse",
+    "ProjectionStatusResponse",
     "CodexBridgeStatusResponse",
     "GenerationControlInfo",
     "TaskResponse",

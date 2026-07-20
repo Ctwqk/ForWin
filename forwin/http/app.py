@@ -251,6 +251,12 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
         broker = getattr(runtime.pipeline, "retrieval_broker", None)
         return getattr(broker, "memory_index", None)
 
+    def provide_projection_memory_index():
+        if runtime.container is None:
+            raise RuntimeError("HTTP runtime container is unavailable")
+        broker = runtime.container.generation_services().retrieval_broker
+        return broker.resolve_memory_index()
+
     handlers = register_api_routes(
         app,
         deps=ApiRouteDeps(
@@ -259,6 +265,7 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
                 get_session=lambda: _get_session(runtime),
                 render_home_page=render_home_page,
                 get_memory_index=current_memory_index,
+                provide_memory_index=provide_projection_memory_index,
             ),
             task=TaskDeps(
                 service=runtime.task_application,

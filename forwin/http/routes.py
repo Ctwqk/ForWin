@@ -68,6 +68,8 @@ from forwin.api_schema import (
     NarrativeConstraintsResponse,
     PerformanceReportResponse,
     PerformanceSpanInfo,
+    ProjectionRefreshResponse,
+    ProjectionStatusResponse,
     ProjectAutomationUpdateResponse,
     ProjectCreateResponse,
     ProjectDeleteResponse,
@@ -106,6 +108,7 @@ class CoreDeps:
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
     get_memory_index: Callable[[], Any] = lambda: None
+    provide_memory_index: Callable[[], Any] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -215,6 +218,7 @@ def register_api_routes(
     projection_handlers = api_projection_routes.build_handlers(
         get_session=get_session,
         get_config=get_config,
+        memory_index_provider=deps.core.provide_memory_index,
     )
     proposal_handlers = api_proposal_routes.build_handlers(
         get_session=get_session,
@@ -966,13 +970,13 @@ def register_api_routes(
             "/api/projects/{project_id}/projections/refresh",
             ["POST"],
             handlers["refresh_projection"],
-            {},
+            {"response_model": ProjectionRefreshResponse},
         ),
         (
             "/api/projects/{project_id}/projections/status",
             ["GET"],
             handlers["get_projection_status"],
-            {},
+            {"response_model": ProjectionStatusResponse},
         ),
         (
             "/api/projects/{project_id}/projections/pages",

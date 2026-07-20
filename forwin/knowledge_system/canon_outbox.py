@@ -66,6 +66,7 @@ def handle_canon_post_commit_outbox_event(
                 qdrant_collection=qdrant_collection,
                 qdrant_client=qdrant_client,
                 qdrant_models=qdrant_models,
+                memory_index_provider=lambda: memory_index,
             )
             memory_index.upsert_chapter(
                 project_id=project_id,

@@ -6,6 +6,13 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from forwin.api_schema import (
+    ProjectionRefreshResponse,
+    ProjectionStatusResponse,
+    WorldModelPageInfo,
+)
+from forwin.knowledge_system.canon_projection import ProjectionRefreshError
+from forwin.knowledge_system.checkpoints import ProjectionCheckpointStore
 from forwin.knowledge_system.projection_jobs import (
     KNOWLEDGE_PROJECTION_REFRESH_EVENT,
     enqueue_projection_refresh,
@@ -15,7 +22,6 @@ from forwin.knowledge_system.projection_jobs import (
 from forwin.knowledge_system.store import load_json
 from forwin.http.request_support import require_project
 from forwin.models.knowledge import KnowledgeProjectionPageRow
-from forwin.api_schema import WorldModelPageInfo
 
 
 def build_handlers(
@@ -26,6 +32,7 @@ def build_handlers(
     llm_kb_root: Path | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
+    memory_index_provider: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[..., Any]]:
     def _qdrant_url() -> str | None:
         config = get_config() if get_config is not None else None
@@ -46,68 +53,70 @@ def build_handlers(
         defer: bool = False,
     ) -> dict[str, Any]:
         _ = (observer_type, observer_id, role_scope, force)
+        try:
+            kind = normalize_projection_kind(projection_kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         with get_session() as session:
             require_project(session, project_id)
-            try:
-                kind = normalize_projection_kind(projection_kind)
-                if defer:
-                    event = enqueue_projection_refresh(
-                        session,
-                        project_id=project_id,
-                        projection_kind=kind,
-                        as_of_chapter=as_of_chapter,
-                        trigger="projection_api_refresh",
-                    )
-                    session.commit()
-                    return {
-                        "ok": True,
-                        "deferred": True,
-                        "project_id": project_id,
-                        "projection_kind": kind,
-                        "as_of_chapter": int(as_of_chapter or 0),
-                        "event_type": KNOWLEDGE_PROJECTION_REFRESH_EVENT,
-                        "outbox_event_id": event.event_id,
-                        "outbox_row_id": event.id,
-                    }
-                payload = refresh_projection_now(
+            if defer:
+                event = enqueue_projection_refresh(
                     session,
                     project_id=project_id,
                     projection_kind=kind,
                     as_of_chapter=as_of_chapter,
                     trigger="projection_api_refresh",
-                    obsidian_root=obsidian_root,
-                    llm_kb_root=llm_kb_root,
-                    qdrant_url=_qdrant_url(),
-                    qdrant_collection=_llm_kb_collection(),
-                    qdrant_client=qdrant_client,
-                    qdrant_models=qdrant_models,
                 )
                 session.commit()
-                return payload
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                return ProjectionRefreshResponse(
+                    ok=True,
+                    deferred=True,
+                    project_id=project_id,
+                    projection_kind=kind,
+                    as_of_chapter=int(as_of_chapter or 0),
+                    event_type=KNOWLEDGE_PROJECTION_REFRESH_EVENT,
+                    outbox_event_id=event.event_id,
+                    outbox_row_id=event.id,
+                ).model_dump(mode="python")
+
+        try:
+            payload = refresh_projection_now(
+                session_factory=get_session,
+                project_id=project_id,
+                projection_kind=kind,
+                as_of_chapter=as_of_chapter,
+                trigger="projection_api_refresh",
+                obsidian_root=obsidian_root,
+                llm_kb_root=llm_kb_root,
+                qdrant_url=_qdrant_url(),
+                qdrant_collection=_llm_kb_collection(),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+                memory_index_provider=memory_index_provider,
+            )
+            return ProjectionRefreshResponse.model_validate(payload).model_dump(
+                mode="python"
+            )
+        except ProjectionRefreshError as exc:
+            raise HTTPException(status_code=503, detail=exc.as_dict()) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def get_projection_status(
         project_id: str, projection_kind: str = ""
     ) -> dict[str, Any]:
-        with get_session() as session:
-            require_project(session, project_id)
-            rows = _page_rows(session, project_id, projection_kind=projection_kind)
-            latest = max(
-                (row.updated_at for row in rows if row.updated_at is not None),
-                default=None,
-            )
-            return {
-                "project_id": project_id,
-                "projection_kind": projection_kind or "all",
-                "page_count": len(rows),
-                "latest_updated_at": latest.isoformat(sep=" ", timespec="seconds")
-                if latest
-                else "",
-                "projection_versions": sorted(
-                    {row.projection_version for row in rows if row.projection_version}
-                ),
-            }
+        if projection_kind:
+            try:
+                normalize_projection_kind(projection_kind)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            payload = ProjectionCheckpointStore(get_session).status(project_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ProjectionStatusResponse.model_validate(payload).model_dump(
+            mode="python"
+        )
 
     def list_projection_pages(
         project_id: str,

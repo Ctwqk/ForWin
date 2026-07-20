@@ -653,6 +653,12 @@ class RetrievalBroker:
                 raise RuntimeError("memory_index_provider returned no memory index")
             self.memory_index = memory_index
 
+    def resolve_memory_index(self) -> ChapterMemoryIndex:
+        self._ensure_memory_index()
+        if self.memory_index is None:  # pragma: no cover
+            raise RuntimeError("memory index initialization did not complete")
+        return self.memory_index
+
     def _ensure_llm_kb_retriever(self) -> LLMKnowledgeBaseRetriever:
         if self._closed:
             raise RuntimeError("RetrievalBroker is closed")

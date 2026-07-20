@@ -123,10 +123,39 @@ class PublisherUploadJob(Base):
             "status",
             "platform_id",
         ),
+        Index(
+            "ux_publisher_upload_jobs_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key <> ''"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, default="")
+    canon_commit_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey("canon_commit_records.id"),
+        nullable=True,
+    )
+    candidate_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    chapter_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    idempotency_key: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
     task_kind: Mapped[str] = mapped_column(
         String, default="chapter_upload", nullable=False
@@ -135,14 +164,35 @@ class PublisherUploadJob(Base):
     book_name: Mapped[str] = mapped_column(String, default="")
     chapter_title: Mapped[str] = mapped_column(String, default="")
     body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    body_sha256: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
     upload_url: Mapped[str] = mapped_column(String, default="")
     publish: Mapped[bool] = mapped_column(Boolean, default=True)
     abort_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     extension_client_id: Mapped[str] = mapped_column(String, default="")
+    current_attempt_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    available_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reconcile_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pause_reason: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
     current_url: Mapped[str] = mapped_column(String, default="")
     result_message: Mapped[str] = mapped_column(Text, default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
@@ -150,6 +200,203 @@ class PublisherUploadJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class PublisherUploadAttempt(Base):
+    __tablename__ = "publisher_upload_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "upload_job_id",
+            "attempt_number",
+            name="uq_publisher_upload_attempts_job_number",
+        ),
+        Index(
+            "ix_publisher_upload_attempts_job_status",
+            "upload_job_id",
+            "status",
+            "attempt_number",
+        ),
+        Index(
+            "ix_publisher_upload_attempts_status_lease_expires",
+            "status",
+            "lease_expires_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    upload_job_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_upload_jobs.id"),
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_kind: Mapped[str] = mapped_column(String, nullable=False)
+    worker_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    lease_epoch: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    phase: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    content_sha256: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    error_code: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    error_message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    result_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default="{}",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class PublisherUploadReceipt(Base):
+    __tablename__ = "publisher_upload_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "receipt_key",
+            name="uq_publisher_upload_receipts_receipt_key",
+        ),
+        Index(
+            "ix_publisher_upload_receipts_job_created",
+            "upload_job_id",
+            "created_at",
+        ),
+        Index(
+            "ix_publisher_upload_receipts_platform_remote",
+            "platform_id",
+            "remote_book_id",
+            "remote_chapter_id",
+        ),
+        Index(
+            "ix_publisher_upload_receipts_idempotency_key",
+            "idempotency_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    upload_job_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_upload_jobs.id"),
+        nullable=False,
+    )
+    upload_attempt_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_upload_attempts.id"),
+        nullable=False,
+    )
+    receipt_key: Mapped[str] = mapped_column(String, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    platform_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    remote_book_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    remote_chapter_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    remote_url: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    official_state: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    content_sha256: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    evidence_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default="{}",
+    )
+    source: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
     )
 
 

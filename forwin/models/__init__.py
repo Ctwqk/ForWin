@@ -20,6 +20,7 @@ from .planning_control import BandCheckpoint, NarrativeConstraint
 from .audit import DecisionEvent
 from .observability import PerformanceSpan
 from .outbox import OutboxEvent
+from .maintenance import PostCanonMaintenanceRun
 from .narrative_obligation import (
     FuturePlanAuditRunRow,
     NarrativeObligationRow,
@@ -51,11 +52,14 @@ from .publisher import (
     PublisherExtensionPlatformState,
     PublisherMilestone,
     PublisherRawComment,
+    PublisherUploadAttempt,
     PublisherUploadJob,
+    PublisherUploadReceipt,
     PublisherWorkBinding,
     ReaderScaleSnapshot,
     SignalWindowAggregate,
 )
+from .projection import ProjectionCheckpoint
 from .project import ArcPlanVersion, ChapterPlan, Project
 from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
@@ -101,6 +105,8 @@ __all__ = [
     "init_db",
     "OutboxEvent",
     "CanonCommitRecord",
+    "ProjectionCheckpoint",
+    "PostCanonMaintenanceRun",
     "new_id",
     # project
     "Project",
@@ -156,6 +162,8 @@ __all__ = [
     "PublisherBrowserSession",
     "PublisherBrowserSessionEntry",
     "PublisherUploadJob",
+    "PublisherUploadAttempt",
+    "PublisherUploadReceipt",
     "PublisherWorkBinding",
     "PublisherChapterBinding",
     "PublisherCoverAsset",

@@ -1,6 +1,6 @@
 """v5 baseline
 
-Revision ID: 0001_v5_baseline
+Revision ID: 0001_v5_recovery
 Revises:
 Create Date: 2026-07-10 08:32:25.822901
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0001_v5_baseline"
+revision: str = "0001_v5_recovery"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -97,6 +97,10 @@ def upgrade() -> None:
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("available_at", sa.DateTime(), nullable=True),
+        sa.Column("worker_id", sa.String(), server_default="", nullable=False),
+        sa.Column("lease_epoch", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
+        sa.Column("heartbeat_at", sa.DateTime(), nullable=True),
         sa.Column("locked_by", sa.String(), nullable=False),
         sa.Column("locked_at", sa.DateTime(), nullable=True),
         sa.Column("processed_at", sa.DateTime(), nullable=True),
@@ -121,6 +125,12 @@ def upgrade() -> None:
         "ix_outbox_events_status_available",
         "outbox_events",
         ["status", "available_at", "created_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_outbox_events_status_lease_expires",
+        "outbox_events",
+        ["status", "lease_expires_at", "created_at"],
         unique=False,
     )
     op.create_index(
@@ -323,38 +333,6 @@ def upgrade() -> None:
         "ix_publisher_raw_comments_work_name",
         "publisher_raw_comments",
         ["work_name"],
-        unique=False,
-    )
-    op.create_table(
-        "publisher_upload_jobs",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("project_id", sa.String(), nullable=False),
-        sa.Column("platform_id", sa.String(), nullable=False),
-        sa.Column("task_kind", sa.String(), nullable=False),
-        sa.Column("status", sa.String(), nullable=False),
-        sa.Column("book_name", sa.String(), nullable=False),
-        sa.Column("chapter_title", sa.String(), nullable=False),
-        sa.Column("body_text", sa.Text(), nullable=False),
-        sa.Column("upload_url", sa.String(), nullable=False),
-        sa.Column("publish", sa.Boolean(), nullable=False),
-        sa.Column("abort_requested", sa.Boolean(), nullable=False),
-        sa.Column("extension_client_id", sa.String(), nullable=False),
-        sa.Column("claimed_at", sa.DateTime(), nullable=True),
-        sa.Column("started_at", sa.DateTime(), nullable=True),
-        sa.Column("finished_at", sa.DateTime(), nullable=True),
-        sa.Column("deleted_at", sa.DateTime(), nullable=True),
-        sa.Column("current_url", sa.String(), nullable=False),
-        sa.Column("result_message", sa.Text(), nullable=False),
-        sa.Column("error_message", sa.Text(), nullable=False),
-        sa.Column("result_payload_json", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_publisher_upload_jobs_task_status",
-        "publisher_upload_jobs",
-        ["task_kind", "status", "platform_id"],
         unique=False,
     )
     op.create_table(
@@ -3112,12 +3090,338 @@ def upgrade() -> None:
         ["idempotency_key"],
         unique=True,
     )
+    op.create_table(
+        "projection_checkpoints",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("projection_kind", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), server_default="never", nullable=False),
+        sa.Column("target_canon_commit_id", sa.String(), nullable=True),
+        sa.Column(
+            "target_chapter_number",
+            sa.Integer(),
+            server_default="0",
+            nullable=False,
+        ),
+        sa.Column("projected_canon_commit_id", sa.String(), nullable=True),
+        sa.Column(
+            "projected_chapter_number",
+            sa.Integer(),
+            server_default="0",
+            nullable=False,
+        ),
+        sa.Column("last_event_id", sa.String(), server_default="", nullable=False),
+        sa.Column("source_digest", sa.String(), server_default="", nullable=False),
+        sa.Column("last_error", sa.Text(), server_default="", nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=True),
+        sa.Column("completed_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["projected_canon_commit_id"],
+            ["canon_commit_records.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["target_canon_commit_id"],
+            ["canon_commit_records.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "project_id",
+            "projection_kind",
+            name="uq_projection_checkpoints_project_kind",
+        ),
+    )
+    op.create_index(
+        "ix_projection_checkpoints_project_status",
+        "projection_checkpoints",
+        ["project_id", "status", "updated_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_projection_checkpoints_status_updated",
+        "projection_checkpoints",
+        ["status", "updated_at"],
+        unique=False,
+    )
+    op.create_table(
+        "post_canon_maintenance_runs",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("canon_commit_id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("chapter_number", sa.Integer(), nullable=False),
+        sa.Column("candidate_id", sa.String(), nullable=False),
+        sa.Column("step_name", sa.String(), nullable=False),
+        sa.Column("idempotency_key", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), server_default="pending", nullable=False),
+        sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("available_at", sa.DateTime(), nullable=True),
+        sa.Column("worker_id", sa.String(), server_default="", nullable=False),
+        sa.Column("lease_epoch", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
+        sa.Column("heartbeat_at", sa.DateTime(), nullable=True),
+        sa.Column("result_json", sa.Text(), server_default="{}", nullable=False),
+        sa.Column("last_error", sa.Text(), server_default="", nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=True),
+        sa.Column("completed_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["candidate_id"],
+            ["candidate_draft_records.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["canon_commit_id"],
+            ["canon_commit_records.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "canon_commit_id",
+            "step_name",
+            name="uq_post_canon_maintenance_canon_step",
+        ),
+        sa.UniqueConstraint(
+            "idempotency_key",
+            name="uq_post_canon_maintenance_idempotency_key",
+        ),
+    )
+    op.create_index(
+        "ix_post_canon_maintenance_project_chapter_status",
+        "post_canon_maintenance_runs",
+        ["project_id", "chapter_number", "status"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_post_canon_maintenance_status_available",
+        "post_canon_maintenance_runs",
+        ["status", "available_at", "created_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_post_canon_maintenance_status_lease_expires",
+        "post_canon_maintenance_runs",
+        ["status", "lease_expires_at", "created_at"],
+        unique=False,
+    )
+    op.create_table(
+        "publisher_upload_jobs",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("canon_commit_id", sa.String(), nullable=True),
+        sa.Column("candidate_id", sa.String(), server_default="", nullable=False),
+        sa.Column(
+            "chapter_number", sa.Integer(), server_default="0", nullable=False
+        ),
+        sa.Column("idempotency_key", sa.String(), server_default="", nullable=False),
+        sa.Column("platform_id", sa.String(), nullable=False),
+        sa.Column("task_kind", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("book_name", sa.String(), nullable=False),
+        sa.Column("chapter_title", sa.String(), nullable=False),
+        sa.Column("body_text", sa.Text(), nullable=False),
+        sa.Column("body_sha256", sa.String(), server_default="", nullable=False),
+        sa.Column("upload_url", sa.String(), nullable=False),
+        sa.Column("publish", sa.Boolean(), nullable=False),
+        sa.Column("abort_requested", sa.Boolean(), nullable=False),
+        sa.Column("extension_client_id", sa.String(), nullable=False),
+        sa.Column(
+            "current_attempt_id", sa.String(), server_default="", nullable=False
+        ),
+        sa.Column("available_at", sa.DateTime(), nullable=True),
+        sa.Column("reconcile_after", sa.DateTime(), nullable=True),
+        sa.Column("claimed_at", sa.DateTime(), nullable=True),
+        sa.Column("started_at", sa.DateTime(), nullable=True),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.Column("deleted_at", sa.DateTime(), nullable=True),
+        sa.Column("paused_at", sa.DateTime(), nullable=True),
+        sa.Column("pause_reason", sa.String(), server_default="", nullable=False),
+        sa.Column("current_url", sa.String(), nullable=False),
+        sa.Column("result_message", sa.Text(), nullable=False),
+        sa.Column("error_message", sa.Text(), nullable=False),
+        sa.Column("result_payload_json", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["canon_commit_id"],
+            ["canon_commit_records.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_publisher_upload_jobs_task_status",
+        "publisher_upload_jobs",
+        ["task_kind", "status", "platform_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ux_publisher_upload_jobs_idempotency_key",
+        "publisher_upload_jobs",
+        ["idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key <> ''"),
+    )
+    op.create_table(
+        "publisher_upload_attempts",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("upload_job_id", sa.String(), nullable=False),
+        sa.Column("attempt_number", sa.Integer(), nullable=False),
+        sa.Column("attempt_kind", sa.String(), nullable=False),
+        sa.Column("worker_id", sa.String(), server_default="", nullable=False),
+        sa.Column("lease_epoch", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("status", sa.String(), server_default="pending", nullable=False),
+        sa.Column("phase", sa.String(), server_default="", nullable=False),
+        sa.Column("claimed_at", sa.DateTime(), nullable=True),
+        sa.Column("heartbeat_at", sa.DateTime(), nullable=True),
+        sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.Column("content_sha256", sa.String(), server_default="", nullable=False),
+        sa.Column("error_code", sa.String(), server_default="", nullable=False),
+        sa.Column("error_message", sa.Text(), server_default="", nullable=False),
+        sa.Column("result_json", sa.Text(), server_default="{}", nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["upload_job_id"],
+            ["publisher_upload_jobs.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "upload_job_id",
+            "attempt_number",
+            name="uq_publisher_upload_attempts_job_number",
+        ),
+    )
+    op.create_index(
+        "ix_publisher_upload_attempts_job_status",
+        "publisher_upload_attempts",
+        ["upload_job_id", "status", "attempt_number"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_publisher_upload_attempts_status_lease_expires",
+        "publisher_upload_attempts",
+        ["status", "lease_expires_at", "created_at"],
+        unique=False,
+    )
+    op.create_table(
+        "publisher_upload_receipts",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("upload_job_id", sa.String(), nullable=False),
+        sa.Column("upload_attempt_id", sa.String(), nullable=False),
+        sa.Column("receipt_key", sa.String(), nullable=False),
+        sa.Column("idempotency_key", sa.String(), server_default="", nullable=False),
+        sa.Column("platform_id", sa.String(), server_default="", nullable=False),
+        sa.Column("remote_book_id", sa.String(), server_default="", nullable=False),
+        sa.Column(
+            "remote_chapter_id", sa.String(), server_default="", nullable=False
+        ),
+        sa.Column("remote_url", sa.String(), server_default="", nullable=False),
+        sa.Column("official_state", sa.String(), server_default="", nullable=False),
+        sa.Column("content_sha256", sa.String(), server_default="", nullable=False),
+        sa.Column("evidence_json", sa.Text(), server_default="{}", nullable=False),
+        sa.Column("source", sa.String(), server_default="", nullable=False),
+        sa.Column("observed_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["upload_attempt_id"],
+            ["publisher_upload_attempts.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["upload_job_id"],
+            ["publisher_upload_jobs.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "receipt_key",
+            name="uq_publisher_upload_receipts_receipt_key",
+        ),
+    )
+    op.create_index(
+        "ix_publisher_upload_receipts_idempotency_key",
+        "publisher_upload_receipts",
+        ["idempotency_key"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_publisher_upload_receipts_job_created",
+        "publisher_upload_receipts",
+        ["upload_job_id", "created_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_publisher_upload_receipts_platform_remote",
+        "publisher_upload_receipts",
+        ["platform_id", "remote_book_id", "remote_chapter_id"],
+        unique=False,
+    )
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(
+        "ix_publisher_upload_receipts_platform_remote",
+        table_name="publisher_upload_receipts",
+    )
+    op.drop_index(
+        "ix_publisher_upload_receipts_job_created",
+        table_name="publisher_upload_receipts",
+    )
+    op.drop_index(
+        "ix_publisher_upload_receipts_idempotency_key",
+        table_name="publisher_upload_receipts",
+    )
+    op.drop_table("publisher_upload_receipts")
+    op.drop_index(
+        "ix_publisher_upload_attempts_status_lease_expires",
+        table_name="publisher_upload_attempts",
+    )
+    op.drop_index(
+        "ix_publisher_upload_attempts_job_status",
+        table_name="publisher_upload_attempts",
+    )
+    op.drop_table("publisher_upload_attempts")
+    op.drop_index(
+        "ux_publisher_upload_jobs_idempotency_key",
+        table_name="publisher_upload_jobs",
+        postgresql_where=sa.text("idempotency_key <> ''"),
+    )
+    op.drop_index(
+        "ix_publisher_upload_jobs_task_status",
+        table_name="publisher_upload_jobs",
+    )
+    op.drop_table("publisher_upload_jobs")
+    op.drop_index(
+        "ix_post_canon_maintenance_status_lease_expires",
+        table_name="post_canon_maintenance_runs",
+    )
+    op.drop_index(
+        "ix_post_canon_maintenance_status_available",
+        table_name="post_canon_maintenance_runs",
+    )
+    op.drop_index(
+        "ix_post_canon_maintenance_project_chapter_status",
+        table_name="post_canon_maintenance_runs",
+    )
+    op.drop_table("post_canon_maintenance_runs")
+    op.drop_index(
+        "ix_projection_checkpoints_status_updated",
+        table_name="projection_checkpoints",
+    )
+    op.drop_index(
+        "ix_projection_checkpoints_project_status",
+        table_name="projection_checkpoints",
+    )
+    op.drop_table("projection_checkpoints")
     op.drop_index("ux_canon_commits_idempotency_key", table_name="canon_commit_records")
     op.drop_index("ux_canon_commits_candidate", table_name="canon_commit_records")
     op.drop_index("ux_canon_commits_project_chapter", table_name="canon_commit_records")
@@ -3574,10 +3878,6 @@ def downgrade() -> None:
     )
     op.drop_table("publisher_work_bindings")
     op.drop_index(
-        "ix_publisher_upload_jobs_task_status", table_name="publisher_upload_jobs"
-    )
-    op.drop_table("publisher_upload_jobs")
-    op.drop_index(
         "ix_publisher_raw_comments_work_name", table_name="publisher_raw_comments"
     )
     op.drop_index(
@@ -3609,6 +3909,9 @@ def downgrade() -> None:
     op.drop_index("ix_performance_spans_chapter", table_name="performance_spans")
     op.drop_table("performance_spans")
     op.drop_index("ux_outbox_events_event_id", table_name="outbox_events")
+    op.drop_index(
+        "ix_outbox_events_status_lease_expires", table_name="outbox_events"
+    )
     op.drop_index("ix_outbox_events_status_available", table_name="outbox_events")
     op.drop_index("ix_outbox_events_event_type", table_name="outbox_events")
     op.drop_index("ix_outbox_events_aggregate", table_name="outbox_events")

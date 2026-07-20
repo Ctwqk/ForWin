@@ -26,6 +26,7 @@ from forwin.retrieval.memory_index import (
 LLM_KB_PROJECTION_VERSION = "llm_kb_v2"
 _COLLECTION_RACE_INSPECTION_ATTEMPTS = 5
 _COLLECTION_RACE_INSPECTION_DELAY_SECONDS = 0.1
+_DELETE_BATCH_SIZE = 256
 
 
 @dataclass
@@ -72,6 +73,12 @@ class LLMKBVectorRecord:
             "section_digest": self.section_digest,
             "score": self.score,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _ExistingVectorPoint:
+    point_id: Any
+    payload: dict[str, Any]
 
 
 def _default_qdrant_url() -> str:
@@ -274,13 +281,14 @@ class LLMKBVectorIndex:
             as_of_chapter=as_of_chapter,
             projection_version=projection_version,
         )
-        existing_payloads = _existing_payloads_by_point_id(
+        existing_points = _existing_points_by_normalized_id(
             self.client,
             self.collection_name,
             project_id,
             index_kind="llm_kb",
             project_filter=self._project_filter(project_id),
         )
+        desired_point_ids: set[str] = set()
         sections_to_upsert = []
         skipped = 0
         for section in sections:
@@ -290,49 +298,47 @@ class LLMKBVectorIndex:
                 section["section_key"],
                 section["role_scope"],
             )
-            existing = existing_payloads.get(point_id)
-            if existing and existing.get("section_digest") == section.get("section_digest"):
+            desired_point_ids.add(point_id)
+            desired_payload = _desired_section_payload(project_id, section)
+            existing = existing_points.get(point_id)
+            if existing and existing.payload == desired_payload:
                 skipped += 1
                 continue
-            sections_to_upsert.append((point_id, section))
-        texts = [section["text"] for _, section in sections_to_upsert]
+            sections_to_upsert.append((point_id, section, desired_payload))
+        texts = [section["text"] for _, section, _ in sections_to_upsert]
         embeddings = self.embedder.embed(texts) if texts else []
         points = []
-        for (point_id, section), embedding in zip(sections_to_upsert, embeddings):
+        for (point_id, _section, payload), embedding in zip(
+            sections_to_upsert,
+            embeddings,
+        ):
             points.append(
                 self._rest.PointStruct(
                     id=point_id,
                     vector=embedding,
-                    payload={
-                        "project_id": project_id,
-                        "index_kind": section["index_kind"],
-                        "as_of_chapter": section["as_of_chapter"],
-                        "projection_version": section["projection_version"],
-                        "file_key": section["file_key"],
-                        "section_key": section["section_key"],
-                        "role_scope": section["role_scope"],
-                        "visibility_scope": section["visibility_scope"],
-                        "canon_status": section["canon_status"],
-                        "node_refs": section["node_refs"],
-                        "edge_refs": section["edge_refs"],
-                        "fact_refs": section["fact_refs"],
-                        "map_refs": section["map_refs"],
-                        "chapter_refs": section["chapter_refs"],
-                        "text": section["text"],
-                        "source_refs": section["source_refs"],
-                        "source_digest": section["source_digest"],
-                        "section_digest": section["section_digest"],
-                    },
+                    payload=payload,
                 )
             )
         if points:
             self.client.upsert(collection_name=self.collection_name, points=points)
+        stale_point_keys = sorted(set(existing_points) - desired_point_ids)
+        stale_point_ids = [
+            existing_points[point_key].point_id for point_key in stale_point_keys
+        ]
+        for start in range(0, len(stale_point_ids), _DELETE_BATCH_SIZE):
+            point_id_batch = stale_point_ids[start : start + _DELETE_BATCH_SIZE]
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=self._rest.PointIdsList(points=point_id_batch),
+                wait=True,
+            )
         return {
             "backend": "qdrant",
             "collection": self.collection_name,
             "section_count": len(sections),
             "upserted_section_count": len(points),
             "skipped_section_count": skipped,
+            "deleted_section_count": len(stale_point_ids),
             "dims": self.embedder.dims,
         }
 
@@ -476,41 +482,87 @@ def _collect_project_sections(
             )
     return [section for section in sections if section["text"].strip()]
 
-def _existing_payloads_by_point_id(
+def _existing_points_by_normalized_id(
     client: Any,
     collection_name: str,
     project_id: str,
     *,
     index_kind: str,
     project_filter: Any,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, _ExistingVectorPoint]:
     if hasattr(client, "collections"):
         collection = getattr(client, "collections", {}).get(collection_name, {})
         points = collection.get("points", {}) if isinstance(collection, dict) else {}
         return {
-            str(point_id): dict(getattr(point, "payload", {}) or {})
+            str(getattr(point, "id", point_id)): _ExistingVectorPoint(
+                point_id=getattr(point, "id", point_id),
+                payload=dict(getattr(point, "payload", {}) or {}),
+            )
             for point_id, point in points.items()
             if getattr(point, "payload", {}).get("project_id") == project_id
             and getattr(point, "payload", {}).get("index_kind") == index_kind
         }
-    if hasattr(client, "scroll"):
-        try:
-            response = client.scroll(
-                collection_name=collection_name,
-                scroll_filter=project_filter,
-                limit=10_000,
-                with_payload=True,
-                with_vectors=False,
+    if not hasattr(client, "scroll"):
+        raise RuntimeError("Qdrant client cannot enumerate owned LLM KB points")
+
+    points_by_id: dict[str, _ExistingVectorPoint] = {}
+    offset: Any | None = None
+    seen_offsets: set[str] = set()
+    while True:
+        response = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=project_filter,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if isinstance(response, tuple):
+            points, next_offset = response
+        else:
+            points = getattr(response, "points", response)
+            next_offset = getattr(response, "next_page_offset", None)
+        for point in points:
+            point_id = getattr(point, "id", None)
+            if point_id is None:
+                continue
+            points_by_id[str(point_id)] = _ExistingVectorPoint(
+                point_id=point_id,
+                payload=dict(getattr(point, "payload", {}) or {}),
             )
-        except TypeError:
-            return {}
-        points = response[0] if isinstance(response, tuple) else response
-        return {
-            str(getattr(point, "id", "")): dict(getattr(point, "payload", {}) or {})
-            for point in points
-            if getattr(point, "id", None)
-        }
-    return {}
+        if next_offset is None:
+            return points_by_id
+        offset_key = str(next_offset)
+        if offset_key in seen_offsets:
+            raise RuntimeError("Qdrant scroll returned a repeated page offset")
+        seen_offsets.add(offset_key)
+        offset = next_offset
+
+
+def _desired_section_payload(
+    project_id: str,
+    section: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "project_id": project_id,
+        "index_kind": section["index_kind"],
+        "as_of_chapter": section["as_of_chapter"],
+        "projection_version": section["projection_version"],
+        "file_key": section["file_key"],
+        "section_key": section["section_key"],
+        "role_scope": section["role_scope"],
+        "visibility_scope": section["visibility_scope"],
+        "canon_status": section["canon_status"],
+        "node_refs": section["node_refs"],
+        "edge_refs": section["edge_refs"],
+        "fact_refs": section["fact_refs"],
+        "map_refs": section["map_refs"],
+        "chapter_refs": section["chapter_refs"],
+        "text": section["text"],
+        "source_refs": section["source_refs"],
+        "source_digest": section["source_digest"],
+        "section_digest": section["section_digest"],
+    }
 
 
 def _markdown_sections(

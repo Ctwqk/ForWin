@@ -143,6 +143,7 @@ def build_handlers(
             query = select(KnowledgeProjectionPageRow).where(
                 KnowledgeProjectionPageRow.project_id == project_id,
                 KnowledgeProjectionPageRow.page_key == page_key,
+                KnowledgeProjectionPageRow.status == "canon_live",
             )
             if projection_kind:
                 query = query.where(
@@ -175,7 +176,8 @@ def _page_rows(
     as_of_chapter: int = 0,
 ) -> list[KnowledgeProjectionPageRow]:
     query = select(KnowledgeProjectionPageRow).where(
-        KnowledgeProjectionPageRow.project_id == project_id
+        KnowledgeProjectionPageRow.project_id == project_id,
+        KnowledgeProjectionPageRow.status == "canon_live",
     )
     if projection_kind:
         query = query.where(

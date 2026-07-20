@@ -42,6 +42,10 @@ class FakeQdrantModels:
     class FilterSelector:
         filter: Any
 
+    @dataclass
+    class PointIdsList:
+        points: list[str]
+
 
 class FakeQdrantClient:
     def __init__(self) -> None:
@@ -49,6 +53,7 @@ class FakeQdrantClient:
         self.upsert_calls = 0
         self.upserted_point_count = 0
         self.delete_calls = 0
+        self.deleted_point_ids: list[Any] = []
 
     def get_collections(self):
         return SimpleNamespace(
@@ -85,11 +90,15 @@ class FakeQdrantClient:
     def delete(self, *, collection_name: str, points_selector, wait: bool = True) -> None:  # noqa: ARG002
         self.delete_calls += 1
         collection = self.collections.setdefault(collection_name, {"points": {}})
-        point_ids = [
-            point_id
-            for point_id, point in collection["points"].items()
-            if _matches_filter(point.payload, points_selector.filter)
-        ]
+        if hasattr(points_selector, "points"):
+            self.deleted_point_ids.extend(points_selector.points)
+            point_ids = [str(point_id) for point_id in points_selector.points]
+        else:
+            point_ids = [
+                point_id
+                for point_id, point in collection["points"].items()
+                if _matches_filter(point.payload, points_selector.filter)
+            ]
         for point_id in point_ids:
             collection["points"].pop(point_id, None)
 

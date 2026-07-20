@@ -170,6 +170,7 @@ class ProjectionCheckpointStore:
         projection_kind: str,
         *,
         event_id: str = "",
+        force: bool = False,
     ) -> ProjectionRunTicket | None:
         kind = validate_projection_component(projection_kind)
         for attempt in range(2):
@@ -201,7 +202,11 @@ class ProjectionCheckpointStore:
                         row.target_canon_commit_id = target.canon_commit_id
 
                     projected = int(row.projected_chapter_number or 0)
-                    if row.status == "healthy" and projected >= target.chapter_number:
+                    if (
+                        not force
+                        and row.status == "healthy"
+                        and projected >= target.chapter_number
+                    ):
                         return None
 
                     started_at = _next_started_at(row.started_at)

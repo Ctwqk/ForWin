@@ -1,26 +1,41 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import re
+import stat as stat_module
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterator
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
+from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import KnowledgeProjectionStore
 from forwin.models.project import Project
 from forwin.protocol.book_state import FactNode, MapEdge, MapNode, WorldEdge, WorldNode
 
-from .canvas import write_canvas
+from .canvas import render_canvas
 from .frontmatter import EDITABLE_FIELDS, LOCKED_FIELDS, parse_sections, render_page
 
 
 DEFAULT_VAULT_ROOT = Path("data/world_vaults")
 OBSIDIAN_PROJECTION_VERSION = "obsidian_v2"
+OBSIDIAN_MANIFEST_FILENAME = ".forwin-projection-manifest.json"
+OBSIDIAN_MANIFEST_SCHEMA_VERSION = 1
+_EXPECTED_CURRENT_UNSET = object()
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_FILE_READ_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
 
 
 @dataclass
@@ -30,6 +45,42 @@ class ObsidianExportResult:
     exported_count: int = 0
     pages: list[str] = field(default_factory=list)
     as_of_chapter: int = 0
+    source_digest: str = ""
+    manifest_written: bool = False
+    deletion_enabled: bool = False
+    deletion_disabled_reason: str = ""
+    deleted_files: list[str] = field(default_factory=list)
+    retained_human_modified: list[str] = field(default_factory=list)
+    retained_unsafe: list[str] = field(default_factory=list)
+    retired_page_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedProjectionManifest:
+    project_id: str
+    as_of_chapter: int
+    files: dict[str, dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedManifestState:
+    manifest: ManagedProjectionManifest | None
+    disabled_reason: str = ""
+
+    @property
+    def deletion_enabled(self) -> bool:
+        return self.manifest is not None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedFileConvergence:
+    source_digest: str
+    manifest_written: bool
+    deletion_enabled: bool
+    deletion_disabled_reason: str
+    deleted_files: tuple[str, ...]
+    retained_human_modified: tuple[str, ...]
+    retained_unsafe: tuple[str, ...]
 
 
 class ObsidianExporter:
@@ -43,6 +94,7 @@ class ObsidianExporter:
         self.session = session
         self.repo = BookStateRepository(session)
         self.store = KnowledgeProjectionStore(session)
+        self._emitted_page_ids: set[str] = set()
 
     def export_project(
         self,
@@ -53,11 +105,38 @@ class ObsidianExporter:
     ) -> ObsidianExportResult:
         root = vault_root or DEFAULT_VAULT_ROOT / project_id
         root.mkdir(parents=True, exist_ok=True)
-        self._ensure_dirs(root)
+        manifest_state = load_managed_projection_manifest(root, project_id)
         as_of = self._resolve_as_of(project_id, as_of_chapter)
         runtime = BookStateProjection(self.session).load_runtime_as_of(
             project_id, as_of_chapter=as_of
         )
+        world_nodes = sorted(
+            runtime.world.nodes_by_id.values(),
+            key=lambda item: (str(item.node_type), item.id),
+        )
+        map_nodes = sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id)
+        node_page_by_id = {
+            node.id: self._node_relpath(node) for node in world_nodes
+        }
+        map_page_by_id = {
+            node.id: self._map_node_relpath(node) for node in map_nodes
+        }
+        relationship_canvas = "03_Actors/Relationship_Canvas.canvas"
+        map_canvas = "02_Map/Map_Canvas.canvas"
+        _require_unique_managed_paths(
+            [
+                "AGENTS.md",
+                "00_Index.md",
+                "01_Book/Current_State.md",
+                "01_Book/Reader_Promise_Ledger.md",
+                relationship_canvas,
+                map_canvas,
+                *node_page_by_id.values(),
+                *map_page_by_id.values(),
+            ]
+        )
+        self._emitted_page_ids = set()
+        self._ensure_dirs(root)
 
         page_paths: list[str] = []
         relationship_edges: list[tuple[str, str, str]] = []
@@ -73,23 +152,16 @@ class ObsidianExporter:
         book_pages = self._write_book_pages(root, project_id, as_of, runtime)
         page_paths.extend(book_pages)
 
-        node_page_by_id: dict[str, str] = {}
-        for node in sorted(
-            runtime.world.nodes_by_id.values(),
-            key=lambda item: (str(item.node_type), item.id),
-        ):
-            rel_path = self._node_relpath(node)
-            node_page_by_id[node.id] = rel_path
+        for node in world_nodes:
+            rel_path = node_page_by_id[node.id]
             page_paths.append(
                 self._write_node_page(
                     root, project_id, rel_path, node, runtime.world.edges_by_id, as_of
                 )
             )
 
-        map_page_by_id: dict[str, str] = {}
-        for node in sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id):
-            rel_path = self._map_node_relpath(node)
-            map_page_by_id[node.id] = rel_path
+        for node in map_nodes:
+            rel_path = map_page_by_id[node.id]
             page_paths.append(
                 self._write_map_node_page(
                     root, project_id, rel_path, node, runtime.map.edges_by_id, as_of
@@ -109,15 +181,42 @@ class ObsidianExporter:
             if source and target:
                 map_edges.append((source, target, str(edge.edge_type)))
 
-        write_canvas(
-            root / "03_Actors" / "Relationship_Canvas.canvas",
-            page_paths=sorted(node_page_by_id.values()),
-            edges=relationship_edges,
+        write_managed_text_if_changed(
+            root,
+            relationship_canvas,
+            render_canvas(
+                page_paths=sorted(node_page_by_id.values()),
+                edges=relationship_edges,
+            ),
         )
-        write_canvas(
-            root / "02_Map" / "Map_Canvas.canvas",
-            page_paths=sorted(map_page_by_id.values()),
-            edges=map_edges,
+        write_managed_text_if_changed(
+            root,
+            map_canvas,
+            render_canvas(
+                page_paths=sorted(map_page_by_id.values()),
+                edges=map_edges,
+            ),
+        )
+
+        managed_paths = {
+            "AGENTS.md",
+            relationship_canvas,
+            map_canvas,
+            *page_paths,
+        }
+        convergence = converge_managed_projection_files(
+            root,
+            project_id=project_id,
+            as_of_chapter=as_of,
+            desired_paths=managed_paths,
+            prior_state=manifest_state,
+        )
+        retired_page_count = KnowledgePageRepository(
+            self.session
+        ).retire_missing_projection_pages(
+            project_id,
+            projection_kind="obsidian",
+            active_page_ids=set(self._emitted_page_ids),
         )
 
         return ObsidianExportResult(
@@ -126,6 +225,16 @@ class ObsidianExporter:
             exported_count=len(page_paths),
             pages=page_paths,
             as_of_chapter=as_of,
+            source_digest=convergence.source_digest,
+            manifest_written=convergence.manifest_written,
+            deletion_enabled=convergence.deletion_enabled,
+            deletion_disabled_reason=convergence.deletion_disabled_reason,
+            deleted_files=list(convergence.deleted_files),
+            retained_human_modified=list(
+                convergence.retained_human_modified
+            ),
+            retained_unsafe=list(convergence.retained_unsafe),
+            retired_page_count=retired_page_count,
         )
 
     def _resolve_as_of(self, project_id: str, requested: int) -> int:
@@ -161,23 +270,25 @@ class ObsidianExporter:
             "08_Conflicts",
             "09_LLM_KB",
         ]:
-            (root / rel).mkdir(parents=True, exist_ok=True)
+            ensure_managed_directory(root, rel)
 
     def _write_rules(self, root: Path) -> None:
-        (root / "AGENTS.md").write_text(
-            "\n".join(
-                [
-                    "# ForWin Obsidian Vault Rules",
-                    "",
-                    "DB / BookState canon is the only source of truth.",
-                    "Generated canon sections are locked.",
-                    "Manual Notes, Human Questions, and Proposed Correction are editable.",
-                    "Editable sections are preserved and human-indexed.",
-                    "Canon changes require an explicit generic proposal; the vault has no reverse sync.",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
+        content = "\n".join(
+            [
+                "# ForWin Obsidian Vault Rules",
+                "",
+                "DB / BookState canon is the only source of truth.",
+                "Generated canon sections are locked.",
+                "Manual Notes, Human Questions, and Proposed Correction are editable.",
+                "Editable sections are preserved and human-indexed.",
+                "Canon changes require an explicit generic proposal; the vault has no reverse sync.",
+                "",
+            ]
+        )
+        write_managed_text_if_changed(
+            root,
+            "AGENTS.md",
+            content,
         )
 
     def _write_index(
@@ -371,10 +482,9 @@ class ObsidianExporter:
         *,
         page_type: str,
     ) -> None:
-        path = root / rel_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            current_sections = parse_sections(path.read_text(encoding="utf-8"))
+        current_markdown = read_managed_text(root, rel_path)
+        if current_markdown is not None:
+            current_sections = parse_sections(current_markdown)
             for field_name in EDITABLE_FIELDS:
                 if (
                     current_sections.get(field_name, "").strip()
@@ -389,9 +499,13 @@ class ObsidianExporter:
             "source_digest": source_digest,
         }
         markdown = render_page(frontmatter, title, sections)
-        if not path.exists() or path.read_text(encoding="utf-8") != markdown:
-            path.write_text(markdown, encoding="utf-8")
-        self.store.upsert_page(
+        write_managed_text_if_changed(
+            root,
+            rel_path,
+            markdown,
+            expected_current=current_markdown,
+        )
+        row = self.store.upsert_page(
             project_id=frontmatter.get("project_id", ""),
             page_key=frontmatter.get("forwin_id", rel_path),
             page_type=page_type,
@@ -410,6 +524,7 @@ class ObsidianExporter:
             visibility_scope=str(frontmatter.get("visibility", "")),
             canon_status="canon_projection",
         )
+        self._emitted_page_ids.add(row.id)
 
     def _frontmatter(
         self,
@@ -462,7 +577,10 @@ class ObsidianExporter:
             "contract": "05_Plot",
         }
         directory = directories.get(node_type, "01_Book")
-        return f"{directory}/{name}_{node.id}.md"
+        filename = f"{name}_{_filename_id(node.id)}.md"
+        if directory.startswith("02_Map/"):
+            filename = f"World_{filename}"
+        return f"{directory}/{filename}"
 
     def _map_node_relpath(self, node: MapNode) -> str:
         directory = "02_Map/Nodes"
@@ -470,7 +588,10 @@ class ObsidianExporter:
             directory = "02_Map/SubWorlds"
         elif str(node.node_type) == "region":
             directory = "02_Map/Regions"
-        return f"{directory}/{_slug(node.name or node.id)}_{node.id}.md"
+        return (
+            f"{directory}/Map_{_slug(node.name or node.id)}_"
+            f"{_filename_id(node.id)}.md"
+        )
 
     def _reader_visibility(self, runtime) -> str:
         reader = runtime.cognition_by_observer.get(("reader", "reader"))
@@ -522,11 +643,477 @@ class ObsidianExporter:
         }
 
 
+def load_managed_projection_manifest(
+    root: Path,
+    project_id: str,
+) -> ManagedManifestState:
+    try:
+        manifest_text = read_managed_text(root, OBSIDIAN_MANIFEST_FILENAME)
+    except (OSError, ValueError):
+        return ManagedManifestState(None, "unsafe_manifest_path")
+    if manifest_text is None:
+        return ManagedManifestState(None, "missing_manifest")
+    try:
+        payload = json.loads(manifest_text)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return ManagedManifestState(None, "corrupt_manifest")
+    if not isinstance(payload, dict):
+        return ManagedManifestState(None, "corrupt_manifest")
+    try:
+        schema_version = int(payload.get("schema_version") or 0)
+        as_of_chapter = int(payload.get("as_of_chapter") or 0)
+    except (TypeError, ValueError):
+        return ManagedManifestState(None, "corrupt_manifest")
+    if (
+        schema_version != OBSIDIAN_MANIFEST_SCHEMA_VERSION
+        or str(payload.get("project_id") or "") != project_id
+        or as_of_chapter < 0
+    ):
+        return ManagedManifestState(None, "invalid_manifest_identity")
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, dict):
+        return ManagedManifestState(None, "corrupt_manifest")
+    files: dict[str, dict[str, str]] = {}
+    for rel_path, raw_metadata in raw_files.items():
+        if not isinstance(rel_path, str) or not isinstance(raw_metadata, dict):
+            return ManagedManifestState(None, "corrupt_manifest")
+        digest = str(raw_metadata.get("sha256") or "").strip().lower()
+        kind = str(raw_metadata.get("kind") or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest) or not kind:
+            return ManagedManifestState(None, "corrupt_manifest")
+        files[rel_path] = {"sha256": digest, "kind": kind}
+    return ManagedManifestState(
+        ManagedProjectionManifest(
+            project_id=project_id,
+            as_of_chapter=as_of_chapter,
+            files=files,
+        )
+    )
+
+
+def converge_managed_projection_files(
+    root: Path,
+    *,
+    project_id: str,
+    as_of_chapter: int,
+    desired_paths: set[str],
+    prior_state: ManagedManifestState,
+) -> ManagedFileConvergence:
+    desired_files: dict[str, dict[str, str]] = {}
+    for raw_rel_path in sorted(desired_paths):
+        rel_path = _managed_relative_path(raw_rel_path)
+        desired_files[rel_path] = {
+            "sha256": _sha256_managed_file(root, rel_path),
+            "kind": _managed_file_kind(rel_path),
+        }
+
+    deleted_files: list[str] = []
+    retained_human_modified: list[str] = []
+    retained_unsafe: list[str] = []
+    prior_manifest = prior_state.manifest
+    if prior_manifest is not None:
+        stale_paths = sorted(set(prior_manifest.files) - set(desired_files))
+        for rel_path in stale_paths:
+            if rel_path == OBSIDIAN_MANIFEST_FILENAME:
+                retained_unsafe.append(rel_path)
+                continue
+            outcome = _delete_managed_file_if_unchanged(
+                root,
+                rel_path,
+                prior_manifest.files[rel_path]["sha256"],
+            )
+            if outcome == "unsafe":
+                retained_unsafe.append(rel_path)
+            elif outcome == "modified":
+                retained_human_modified.append(rel_path)
+            elif outcome == "deleted":
+                deleted_files.append(rel_path)
+
+    manifest_payload = {
+        "schema_version": OBSIDIAN_MANIFEST_SCHEMA_VERSION,
+        "project_id": project_id,
+        "as_of_chapter": int(as_of_chapter or 0),
+        "files": desired_files,
+    }
+    manifest_text = json.dumps(
+        manifest_payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    manifest_written = write_managed_text_if_changed(
+        root,
+        OBSIDIAN_MANIFEST_FILENAME,
+        manifest_text,
+    )
+    source_digest = hashlib.sha256(
+        json.dumps(
+            manifest_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ManagedFileConvergence(
+        source_digest=source_digest,
+        manifest_written=manifest_written,
+        deletion_enabled=prior_state.deletion_enabled,
+        deletion_disabled_reason=(
+            "" if prior_state.deletion_enabled else prior_state.disabled_reason
+        ),
+        deleted_files=tuple(deleted_files),
+        retained_human_modified=tuple(retained_human_modified),
+        retained_unsafe=tuple(retained_unsafe),
+    )
+
+
+def ensure_managed_directory(root: Path, rel_path: str) -> None:
+    normalized = _managed_relative_path(rel_path)
+    directory_fd = os.open(root.resolve(), _DIRECTORY_OPEN_FLAGS)
+    try:
+        for part in PurePosixPath(normalized).parts:
+            try:
+                os.mkdir(part, mode=0o777, dir_fd=directory_fd)
+            except FileExistsError:
+                pass
+            child_fd = os.open(
+                part,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = child_fd
+    finally:
+        os.close(directory_fd)
+
+
+def read_managed_text(root: Path, rel_path: str) -> str | None:
+    with _managed_parent_fd(root, rel_path) as (parent_fd, name):
+        current = _read_named_file(parent_fd, name)
+    if current is None:
+        return None
+    content, _identity = current
+    return content.decode("utf-8")
+
+
+def write_managed_text_if_changed(
+    root: Path,
+    rel_path: str,
+    content: str,
+    *,
+    expected_current: object = _EXPECTED_CURRENT_UNSET,
+) -> bool:
+    desired = content.encode("utf-8")
+    with _managed_parent_fd(root, rel_path) as (parent_fd, name):
+        current = _read_named_file(parent_fd, name)
+        current_content = current[0] if current is not None else None
+        current_identity = current[1] if current is not None else None
+        if current_content == desired:
+            return False
+        if expected_current is not _EXPECTED_CURRENT_UNSET:
+            expected_content = (
+                None
+                if expected_current is None
+                else str(expected_current).encode("utf-8")
+            )
+            if current_content != expected_content:
+                raise RuntimeError(
+                    f"managed projection file changed concurrently: {rel_path}"
+                )
+
+        temp_name = _unused_sibling_name(parent_fd, prefix=".forwin-write-")
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o666,
+            dir_fd=parent_fd,
+        )
+        try:
+            _write_all_fd(temp_fd, desired)
+            os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd)
+        try:
+            latest_identity = _stat_named_file(parent_fd, name)
+            if _file_identity(latest_identity) != _file_identity(current_identity):
+                raise RuntimeError(
+                    f"managed projection file changed concurrently: {rel_path}"
+                )
+            os.replace(
+                temp_name,
+                name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            temp_name = ""
+            return True
+        finally:
+            if temp_name:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+
+
+def _sha256_managed_file(root: Path, rel_path: str) -> str:
+    with _managed_parent_fd(root, rel_path) as (parent_fd, name):
+        current = _read_named_file(parent_fd, name)
+        if current is None:
+            raise RuntimeError(
+                f"managed projection output is missing: {rel_path}"
+            )
+        content, _identity = current
+    return hashlib.sha256(content).hexdigest()
+
+
+def _delete_managed_file_if_unchanged(
+    root: Path,
+    rel_path: str,
+    expected_digest: str,
+) -> str:
+    try:
+        with _managed_parent_fd(root, rel_path) as (parent_fd, name):
+            current = _read_named_file(parent_fd, name)
+            if current is None:
+                return "missing"
+            content, original_stat = current
+            if hashlib.sha256(content).hexdigest() != expected_digest:
+                return "modified"
+
+            quarantine_name = _unused_sibling_name(
+                parent_fd,
+                prefix=".forwin-delete-",
+            )
+            try:
+                os.rename(
+                    name,
+                    quarantine_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                return "missing"
+
+            try:
+                try:
+                    quarantined = _read_named_file(parent_fd, quarantine_name)
+                except ValueError:
+                    outcome = "unsafe"
+                else:
+                    if quarantined is None:
+                        raise RuntimeError(
+                            "managed projection quarantine disappeared during delete"
+                        )
+                    moved_content, moved_stat = quarantined
+                    if not _same_inode(moved_stat, original_stat):
+                        outcome = "unsafe"
+                    elif hashlib.sha256(moved_content).hexdigest() != expected_digest:
+                        outcome = "modified"
+                    else:
+                        final_stat = _stat_named_file(parent_fd, quarantine_name)
+                        if _file_identity(final_stat) != _file_identity(moved_stat):
+                            outcome = "unsafe"
+                        else:
+                            os.unlink(quarantine_name, dir_fd=parent_fd)
+                            return "deleted"
+
+                _restore_quarantined_file(
+                    parent_fd,
+                    quarantine_name,
+                    name,
+                )
+                return outcome
+            except Exception:
+                if _stat_named_file(parent_fd, quarantine_name) is not None:
+                    _restore_quarantined_file(
+                        parent_fd,
+                        quarantine_name,
+                        name,
+                    )
+                raise
+    except FileNotFoundError:
+        return "missing"
+    except ValueError:
+        return "unsafe"
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            return "unsafe"
+        raise
+
+
+@contextmanager
+def _managed_parent_fd(root: Path, rel_path: str) -> Iterator[tuple[int, str]]:
+    normalized = _managed_relative_path(rel_path)
+    parts = PurePosixPath(normalized).parts
+    directory_fd = os.open(root.resolve(), _DIRECTORY_OPEN_FLAGS)
+    try:
+        for part in parts[:-1]:
+            child_fd = os.open(
+                part,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = child_fd
+        yield directory_fd, parts[-1]
+    finally:
+        os.close(directory_fd)
+
+
+def _read_named_file(
+    parent_fd: int,
+    name: str,
+) -> tuple[bytes, os.stat_result] | None:
+    try:
+        file_fd = os.open(name, _FILE_READ_FLAGS, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise ValueError("managed projection path is not a regular file") from exc
+        raise
+    try:
+        file_stat = os.fstat(file_fd)
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            raise ValueError("managed projection path is not a regular file")
+        return _read_all_fd(file_fd), file_stat
+    finally:
+        os.close(file_fd)
+
+
+def _read_all_fd(file_fd: int) -> bytes:
+    os.lseek(file_fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(file_fd, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _write_all_fd(file_fd: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(file_fd, view)
+        if written <= 0:
+            raise OSError("managed projection write made no progress")
+        view = view[written:]
+
+
+def _stat_named_file(parent_fd: int, name: str) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _file_identity(file_stat: os.stat_result | None) -> tuple[int, ...] | None:
+    if file_stat is None:
+        return None
+    return (
+        int(file_stat.st_dev),
+        int(file_stat.st_ino),
+        int(file_stat.st_mode),
+        int(file_stat.st_size),
+        int(file_stat.st_mtime_ns),
+        int(file_stat.st_ctime_ns),
+    )
+
+
+def _same_inode(
+    left: os.stat_result | None,
+    right: os.stat_result | None,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return (
+        int(left.st_dev),
+        int(left.st_ino),
+        stat_module.S_IFMT(left.st_mode),
+    ) == (
+        int(right.st_dev),
+        int(right.st_ino),
+        stat_module.S_IFMT(right.st_mode),
+    )
+
+
+def _unused_sibling_name(parent_fd: int, *, prefix: str) -> str:
+    for _attempt in range(8):
+        name = f"{prefix}{uuid4().hex}.tmp"
+        if _stat_named_file(parent_fd, name) is None:
+            return name
+    raise RuntimeError("could not allocate a managed projection sibling name")
+
+
+def _restore_quarantined_file(
+    parent_fd: int,
+    quarantine_name: str,
+    original_name: str,
+) -> None:
+    if _stat_named_file(parent_fd, original_name) is not None:
+        raise RuntimeError(
+            "managed projection file changed while a stale file was quarantined"
+        )
+    os.rename(
+        quarantine_name,
+        original_name,
+        src_dir_fd=parent_fd,
+        dst_dir_fd=parent_fd,
+    )
+
+
+def _require_unique_managed_paths(paths: list[str]) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for raw_path in paths:
+        path = _managed_relative_path(raw_path)
+        if path in seen:
+            duplicates.add(path)
+        seen.add(path)
+    if duplicates:
+        raise ValueError(
+            "managed projection paths collide: " + ", ".join(sorted(duplicates))
+        )
+
+
+def _managed_relative_path(rel_path: str) -> str:
+    raw = str(rel_path or "")
+    if not raw or "\\" in raw or raw.startswith("/"):
+        raise ValueError(f"invalid managed projection path: {raw!r}")
+    raw_parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError(f"invalid managed projection path: {raw!r}")
+    return PurePosixPath(raw).as_posix()
+
+
+def _managed_file_kind(rel_path: str) -> str:
+    if rel_path == "AGENTS.md":
+        return "vault_rules"
+    if rel_path.endswith(".canvas"):
+        return "canvas"
+    if rel_path.endswith(".md"):
+        return "page"
+    return "generated_file"
+
+
 def _slug(value: str) -> str:
     text = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", value.strip(), flags=re.UNICODE).strip(
         "_"
     )
     return text[:80] or "untitled"
+
+
+def _filename_id(value: str) -> str:
+    raw = str(value or "")
+    slug = _slug(raw)
+    if slug == raw and len(raw) <= 80 and raw not in {".", ".."}:
+        return slug
+    prefix = slug[:67].rstrip("._-") or "id"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}_{digest}"
 
 
 def _format_mapping(payload: dict[str, Any]) -> str:

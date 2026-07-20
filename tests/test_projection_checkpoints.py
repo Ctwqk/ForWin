@@ -321,6 +321,111 @@ def test_stale_event_uses_latest_target_and_identity_mismatch_precedes_io(
     assert targets == [3]
 
 
+def test_target_advance_during_external_io_forces_latest_full_rebuild(
+    projection_sessions,
+) -> None:
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        _add_commit(session, "project-1", 1)
+
+    calls: defaultdict[str, list[int]] = defaultdict(list)
+    target_advanced = False
+    service: CanonProjectionService
+
+    def run(kind: str):
+        def runner(target: ProjectionTarget):
+            nonlocal target_advanced
+            calls[kind].append(target.chapter_number)
+            if kind == "obsidian" and target.chapter_number == 1 and not target_advanced:
+                target_advanced = True
+                with projection_sessions.begin() as session:
+                    _add_commit(session, "project-1", 2)
+                latest = service.checkpoints.resolve_target("project-1")
+                concurrent_ticket = service.checkpoints.begin_component(
+                    latest,
+                    "obsidian",
+                    event_id="concurrent-newer-worker",
+                )
+                assert concurrent_ticket is not None
+                service.checkpoints.complete_component(
+                    concurrent_ticket,
+                    source_digest="newer-worker-digest",
+                )
+            return {"ok": True, "source_digest": f"{kind}-{target.chapter_number}"}
+
+        return runner
+
+    service = CanonProjectionService(
+        projection_sessions,
+        component_runners={kind: run(kind) for kind in PROJECTION_COMPONENTS},
+    )
+
+    result = service.refresh("project-1", components=PROJECTION_COMPONENTS)
+
+    assert result["target_chapter_number"] == 2
+    assert calls == {
+        "obsidian": [1, 2],
+        "llm_kb": [1, 2],
+        "chapter_memory": [1, 2],
+    }
+    status = service.checkpoints.status("project-1")
+    assert status["healthy"] is True
+    assert all(item["projected_chapter_number"] == 2 for item in status["components"])
+
+
+def test_stale_runner_failure_after_write_forces_latest_repair(
+    projection_sessions,
+) -> None:
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        _add_commit(session, "project-1", 1)
+
+    calls: list[int] = []
+    external_state = {"chapter": 0}
+    target_advanced = False
+    service: CanonProjectionService
+
+    def runner(target: ProjectionTarget):
+        nonlocal target_advanced
+        calls.append(target.chapter_number)
+        external_state["chapter"] = target.chapter_number
+        if target.chapter_number == 1 and not target_advanced:
+            target_advanced = True
+            with projection_sessions.begin() as session:
+                _add_commit(session, "project-1", 2)
+            latest = service.checkpoints.resolve_target("project-1")
+            concurrent_ticket = service.checkpoints.begin_component(
+                latest,
+                "obsidian",
+                event_id="concurrent-newer-worker",
+            )
+            assert concurrent_ticket is not None
+            external_state["chapter"] = 2
+            service.checkpoints.complete_component(
+                concurrent_ticket,
+                source_digest="newer-worker-digest",
+            )
+            external_state["chapter"] = 1
+            raise RuntimeError("old projection failed after stale write")
+        return {"ok": True, "source_digest": f"obsidian-{target.chapter_number}"}
+
+    service = CanonProjectionService(
+        projection_sessions,
+        component_runners={"obsidian": runner},
+    )
+
+    result = service.refresh("project-1", components=("obsidian",))
+
+    assert result["ok"] is True
+    assert result["target_chapter_number"] == 2
+    assert calls == [1, 2]
+    assert external_state["chapter"] == 2
+    checkpoint = _checkpoint(projection_sessions, "project-1", "obsidian")
+    assert checkpoint.status == "healthy"
+    assert checkpoint.projected_chapter_number == 2
+    assert checkpoint.source_digest == "obsidian-2"
+
+
 def test_older_completion_and_failure_cannot_regress_new_success(
     projection_sessions,
 ) -> None:

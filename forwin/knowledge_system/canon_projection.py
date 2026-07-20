@@ -26,6 +26,7 @@ from forwin.obsidian import ObsidianExporter
 
 
 ComponentRunner = Callable[[ProjectionTarget], Any]
+_MAX_TARGET_CONVERGENCE_PASSES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,39 +110,61 @@ class CanonProjectionService:
         results: dict[str, dict[str, Any]] = {}
         failures: dict[str, str] = {}
 
-        for kind in ordered:
-            ticket = None
-            try:
-                ticket = self.checkpoints.begin_component(
-                    target,
-                    kind,
-                    event_id=owner_event_id,
+        force = False
+        for _pass_number in range(_MAX_TARGET_CONVERGENCE_PASSES):
+            results = {}
+            failures = {}
+            for kind in ordered:
+                ticket = None
+                try:
+                    ticket = self.checkpoints.begin_component(
+                        target,
+                        kind,
+                        event_id=owner_event_id,
+                        force=force,
+                    )
+                    if ticket is None:
+                        results[kind] = {
+                            "ok": True,
+                            "skipped": True,
+                            "target_chapter_number": target.chapter_number,
+                        }
+                        continue
+                    result = _normalize_component_result(
+                        self.component_runners[kind](target)
+                    )
+                    if result.get("ok") is False:
+                        raise RuntimeError(_component_failure_message(result))
+                    result["ok"] = True
+                    result.setdefault("skipped", False)
+                    self.checkpoints.complete_component(
+                        ticket,
+                        source_digest=_result_source_digest(result),
+                    )
+                    results[kind] = result
+                except Exception as exc:  # noqa: BLE001 - aggregate components.
+                    message = sanitize_projection_error(exc)
+                    failures[kind] = message
+                    results[kind] = {"ok": False, "error": message}
+                    if ticket is not None:
+                        self.checkpoints.fail_component(ticket, exc)
+
+            latest_target = self.checkpoints.resolve_target(project_id)
+            if latest_target != target:
+                target = latest_target
+                force = True
+                continue
+            break
+        else:
+            message = sanitize_projection_error(
+                RuntimeError(
+                    "authoritative Canon target did not stabilize during projection"
                 )
-                if ticket is None:
-                    results[kind] = {
-                        "ok": True,
-                        "skipped": True,
-                        "target_chapter_number": target.chapter_number,
-                    }
-                    continue
-                result = _normalize_component_result(
-                    self.component_runners[kind](target)
-                )
-                if result.get("ok") is False:
-                    raise RuntimeError(_component_failure_message(result))
-                result["ok"] = True
-                result.setdefault("skipped", False)
-                self.checkpoints.complete_component(
-                    ticket,
-                    source_digest=_result_source_digest(result),
-                )
-                results[kind] = result
-            except Exception as exc:  # noqa: BLE001 - aggregate independent components.
-                message = sanitize_projection_error(exc)
-                failures[kind] = message
-                results[kind] = {"ok": False, "error": message}
-                if ticket is not None:
-                    self.checkpoints.fail_component(ticket, exc)
+            )
+            failures = {kind: message for kind in ordered}
+            results = {
+                kind: {"ok": False, "error": message} for kind in ordered
+            }
 
         if failures:
             raise ProjectionRefreshError(
@@ -171,6 +194,16 @@ class CanonProjectionService:
                 "exported_count": result.exported_count,
                 "pages": list(result.pages),
                 "as_of_chapter": result.as_of_chapter,
+                "source_digest": result.source_digest,
+                "manifest_written": result.manifest_written,
+                "deletion_enabled": result.deletion_enabled,
+                "deletion_disabled_reason": result.deletion_disabled_reason,
+                "deleted_files": list(result.deleted_files),
+                "retained_human_modified": list(
+                    result.retained_human_modified
+                ),
+                "retained_unsafe": list(result.retained_unsafe),
+                "retired_page_count": result.retired_page_count,
             }
 
     def _run_llm_kb(self, target: ProjectionTarget) -> dict[str, Any]:

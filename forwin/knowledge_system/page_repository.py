@@ -63,6 +63,7 @@ class KnowledgePageRepository:
             .where(
                 KnowledgeProjectionPageRow.project_id == project_id,
                 KnowledgeProjectionPageRow.page_key == page_key,
+                KnowledgeProjectionPageRow.status != "retired",
             )
             .order_by(
                 KnowledgeProjectionPageRow.revision.desc(),
@@ -85,6 +86,42 @@ class KnowledgePageRepository:
             if chosen is not None:
                 return chosen
         return row
+
+    def retire_missing_projection_pages(
+        self,
+        project_id: str,
+        *,
+        projection_kind: str,
+        active_page_ids: set[str],
+    ) -> int:
+        active_ids = {
+            str(page_id or "").strip()
+            for page_id in active_page_ids
+            if str(page_id or "").strip()
+        }
+        rows = list(
+            self.session.execute(
+                select(KnowledgeProjectionPageRow).where(
+                    KnowledgeProjectionPageRow.project_id == project_id,
+                    KnowledgeProjectionPageRow.projection_kind == projection_kind,
+                    KnowledgeProjectionPageRow.status != "retired",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        retired = 0
+        for row in rows:
+            if str(row.id or "").strip() in active_ids:
+                continue
+            row.status = "retired"
+            row.canon_status = "retired_projection"
+            row.supersedes_page_id = ""
+            self.session.add(row)
+            retired += 1
+        if retired:
+            self.session.flush()
+        return retired
 
     def prepare_row(
         self,
@@ -206,6 +243,8 @@ class KnowledgePageRepository:
             stmt = stmt.where(KnowledgeProjectionPageRow.page_type == page_type)
         if not include_superseded:
             stmt = stmt.where(KnowledgeProjectionPageRow.status == "canon_live")
+        else:
+            stmt = stmt.where(KnowledgeProjectionPageRow.status != "retired")
         return list(
             self.session.execute(
                 stmt.order_by(

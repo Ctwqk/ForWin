@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 
-def write_canvas(path: Path, *, page_paths: list[str], edges: list[tuple[str, str, str]]) -> None:
+def render_canvas(
+    *,
+    page_paths: list[str],
+    edges: list[tuple[str, str, str]],
+) -> str:
     nodes = []
     node_ids: dict[str, str] = {}
     for index, page_path in enumerate(page_paths):
@@ -35,7 +38,8 @@ def write_canvas(path: Path, *, page_paths: list[str], edges: list[tuple[str, st
                 "label": label,
             }
         )
-    path.write_text(
-        json.dumps({"nodes": nodes, "edges": canvas_edges}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    return json.dumps(
+        {"nodes": nodes, "edges": canvas_edges},
+        ensure_ascii=False,
+        indent=2,
     )

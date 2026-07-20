@@ -329,6 +329,43 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         assert f'op.create_table(\n        "{current_table}"' in baseline
 
 
+def test_outbox_runtime_has_only_fenced_nonterminal_claims() -> None:
+    owned_paths = (
+        "forwin/models/outbox.py",
+        "forwin/outbox/store.py",
+        "forwin/outbox/worker.py",
+        "forwin/outbox/handlers.py",
+        "forwin/knowledge_system/projection_jobs.py",
+        "forwin/knowledge_system/canon_outbox.py",
+        "forwin/cli.py",
+        "docker-compose.yml",
+        "forwin/migrations/versions/0001_v5_baseline.py",
+    )
+    sources = {path: _read(path) for path in owned_paths}
+
+    for forbidden in (
+        "locked_by",
+        "locked_at",
+        "mark_outbox_event_failed",
+        "FORWIN_OUTBOX_WORKER_MAX_ATTEMPTS",
+        "--max-attempts",
+    ):
+        assert [path for path, source in sources.items() if forbidden in source] == []
+
+    assert 'row.status = "failed"' not in sources["forwin/outbox/store.py"]
+    assert '"failed"' not in sources["forwin/outbox/worker.py"]
+    assert "event.payload_json" not in sources[
+        "forwin/knowledge_system/projection_jobs.py"
+    ]
+    assert "event.payload_json" not in sources[
+        "forwin/knowledge_system/canon_outbox.py"
+    ]
+    assert "OutboxClaim" in sources["forwin/outbox/handlers.py"]
+    assert 'revision: str = "0001_v5_recovery"' in sources[
+        "forwin/migrations/versions/0001_v5_baseline.py"
+    ]
+
+
 def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
     for removed_path in (
         "forwin/api_artifacts.py",

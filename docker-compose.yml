@@ -104,10 +104,14 @@ services:
         "${FORWIN_OUTBOX_WORKER_ID:-forwin-outbox-worker}",
         "--poll-interval",
         "${FORWIN_OUTBOX_WORKER_POLL_INTERVAL:-2}",
-        "--max-attempts",
-        "${FORWIN_OUTBOX_WORKER_MAX_ATTEMPTS:-3}",
-        "--retry-delay-seconds",
-        "${FORWIN_OUTBOX_WORKER_RETRY_DELAY_SECONDS:-30}",
+        "--lease-seconds",
+        "${FORWIN_OUTBOX_WORKER_LEASE_SECONDS:-60}",
+        "--heartbeat-interval-seconds",
+        "${FORWIN_OUTBOX_WORKER_HEARTBEAT_INTERVAL_SECONDS:-15}",
+        "--base-delay-seconds",
+        "${FORWIN_OUTBOX_WORKER_BASE_DELAY_SECONDS:-30}",
+        "--max-delay-seconds",
+        "${FORWIN_OUTBOX_WORKER_MAX_DELAY_SECONDS:-900}",
       ]
     env_file:
       - path: ${FORWIN_ENV_FILE:-.env}

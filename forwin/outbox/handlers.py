@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from forwin.knowledge_system.canon_outbox import build_canon_outbox_handlers
 from forwin.knowledge_system.projection_jobs import build_projection_outbox_handlers
-from forwin.models.outbox import OutboxEvent
+from forwin.outbox.worker import OutboxClaim
 
 
 def build_default_outbox_handlers(
@@ -18,12 +18,12 @@ def build_default_outbox_handlers(
     qdrant_models: Any | None = None,
     memory_index: Any | None = None,
     canon_projection_runner: Callable[..., dict[str, Any]] | None = None,
-) -> dict[str, Callable[[OutboxEvent], None]]:
+) -> dict[str, Callable[[OutboxClaim], None]]:
     qdrant_url = getattr(config, "qdrant_url", None) if config is not None else None
     qdrant_collection = (
         getattr(config, "llm_kb_qdrant_collection", None) if config is not None else None
     )
-    handlers: dict[str, Callable[[OutboxEvent], None]] = {}
+    handlers: dict[str, Callable[[OutboxClaim], None]] = {}
     handlers.update(
         build_projection_outbox_handlers(
             session_factory=session_factory,

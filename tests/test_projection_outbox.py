@@ -238,7 +238,8 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
                 memory_index=memory_index,
                 canon_projection_runner=projection_fails,
             ),
-            retry_delay_seconds=0,
+            base_delay_seconds=0,
+            max_delay_seconds=0,
         )
 
         assert first.claimed is True
@@ -282,7 +283,8 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
                 memory_index=memory_index,
                 canon_projection_runner=lambda **_kwargs: {"ok": True},
             ),
-            retry_delay_seconds=0,
+            base_delay_seconds=0,
+            max_delay_seconds=0,
         )
 
         assert second.processed is True

@@ -162,8 +162,8 @@ def test_outbox_has_fenced_lease_columns_and_claim_indexes() -> None:
     assert _server_default(table.c.lease_epoch) == "0"
     assert table.c.lease_expires_at.nullable is True
     assert table.c.heartbeat_at.nullable is True
-    assert "locked_by" in table.c
-    assert "locked_at" in table.c
+    assert "locked_by" not in table.c
+    assert "locked_at" not in table.c
 
     index_names = {index.name for index in table.indexes}
     assert "ix_outbox_events_status_available" in index_names

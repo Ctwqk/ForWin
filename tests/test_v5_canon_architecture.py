@@ -113,8 +113,10 @@ def test_post_commit_handlers_are_registered_and_retryable() -> None:
     assert "build_canon_outbox_handlers" in handlers
     assert 'CANON_POST_COMMIT_EVENT = "canon.post_commit.requested"' in canon_outbox
     assert 'CANON_PUBLISHER_EVENT = "canon.publisher.requested"' in canon_outbox
-    assert "mark_outbox_event_failed(" in worker
+    assert "heartbeat_outbox_event(" in worker
+    assert "release_outbox_event_for_retry(" in worker
     assert "mark_outbox_event_processed(" in worker
+    assert "mark_outbox_event_failed(" not in worker
 
 
 def test_npc_intent_projection_stays_deleted_from_v5_runtime() -> None:

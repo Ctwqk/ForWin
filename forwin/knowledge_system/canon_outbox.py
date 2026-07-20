@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +13,8 @@ from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.audit import DecisionEvent
-from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
+from forwin.outbox.worker import OutboxClaim
 from forwin.retrieval import create_memory_index
 
 
@@ -24,7 +24,7 @@ PUBLISHER_CANON_AVAILABLE_EVENT = "publisher_canon_available"
 
 
 def handle_canon_post_commit_outbox_event(
-    event: OutboxEvent,
+    event: OutboxClaim,
     *,
     session_factory: Callable[[], Any],
     memory_index: Any,
@@ -92,7 +92,7 @@ def handle_canon_post_commit_outbox_event(
 
 
 def handle_canon_publisher_outbox_event(
-    event: OutboxEvent,
+    event: OutboxClaim,
     *,
     session_factory: Callable[[], Any],
 ) -> None:
@@ -127,7 +127,11 @@ def handle_canon_publisher_outbox_event(
                 event_type=PUBLISHER_CANON_AVAILABLE_EVENT,
                 actor_type="system",
                 summary=f"Chapter {chapter_number} is available to Publisher.",
-                payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                payload_json=json.dumps(
+                    _json_ready(payload),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
                 related_object_type="candidate_draft",
                 related_object_id=candidate.id,
             )
@@ -144,7 +148,7 @@ def build_canon_outbox_handlers(
     llm_kb_root: Path | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
-) -> dict[str, Callable[[OutboxEvent], None]]:
+) -> dict[str, Callable[[OutboxClaim], None]]:
     resolved_memory_index = memory_index or _memory_index_from_config(config)
     qdrant_url = getattr(config, "qdrant_url", None) if config is not None else None
     qdrant_collection = (
@@ -153,7 +157,7 @@ def build_canon_outbox_handlers(
         else None
     )
 
-    def handle_post_commit(event: OutboxEvent) -> None:
+    def handle_post_commit(event: OutboxClaim) -> None:
         handle_canon_post_commit_outbox_event(
             event,
             session_factory=session_factory,
@@ -167,7 +171,7 @@ def build_canon_outbox_handlers(
             qdrant_models=qdrant_models,
         )
 
-    def handle_publisher(event: OutboxEvent) -> None:
+    def handle_publisher(event: OutboxClaim) -> None:
         handle_canon_publisher_outbox_event(
             event,
             session_factory=session_factory,
@@ -216,7 +220,7 @@ def _accepted_chapter_rows(
 def _record_projection_degradation(
     *,
     session_factory: Callable[[], Any],
-    event: OutboxEvent,
+    event: OutboxClaim,
     project_id: str,
     chapter_number: int,
     exc: Exception,
@@ -232,7 +236,7 @@ def _record_projection_degradation(
                 DecisionEvent.event_type
                 == DecisionEventType.DEFERRED_MAINTENANCE_RECORDED,
                 DecisionEvent.related_object_type == "outbox_event",
-                DecisionEvent.related_object_id == event.id,
+                DecisionEvent.related_object_id == event.row_id,
             )
         ).scalar_one_or_none()
         if existing is not None:
@@ -258,7 +262,7 @@ def _record_projection_degradation(
                     sort_keys=True,
                 ),
                 related_object_type="outbox_event",
-                related_object_id=event.id,
+                related_object_id=event.row_id,
             )
         )
 
@@ -280,12 +284,16 @@ def _memory_index_from_config(config: Any | None) -> Any | None:
     )
 
 
-def _event_payload(event: OutboxEvent) -> dict[str, Any]:
-    try:
-        payload = json.loads(event.payload_json or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+def _event_payload(event: OutboxClaim) -> Mapping[str, object]:
+    return event.payload
+
+
+def _json_ready(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_ready(item) for item in value]
+    return value
 
 
 __all__ = [

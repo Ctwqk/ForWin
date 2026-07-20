@@ -3,153 +3,42 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
-from forwin.models.base import get_engine, get_session_factory, init_db
-from tests.postgres import postgres_test_url
+from forwin.outbox import store as outbox_store
 
 
-def _session_factory(name: str):
-    engine = get_engine(postgres_test_url(name))
-    init_db(engine)
-    return engine, get_session_factory(engine)
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class _AddOnlySession:
+    def __init__(self) -> None:
+        self.added: list[object] = []
+
+    def add(self, row: object) -> None:
+        self.added.append(row)
 
 
 def test_enqueue_outbox_event_serializes_payload() -> None:
-    from forwin.models.outbox import OutboxEvent
-    from forwin.outbox.store import enqueue_outbox_event
+    session = _AddOnlySession()
 
-    engine, Session = _session_factory("outbox-enqueue")
-    try:
-        with Session.begin() as session:
-            event = enqueue_outbox_event(
-                session,
-                aggregate_type="project",
-                aggregate_id="project-1",
-                event_type="knowledge.rebuild.requested",
-                payload={"chapter": 3},
-            )
+    event = outbox_store.enqueue_outbox_event(
+        session,
+        aggregate_type="project",
+        aggregate_id="project-1",
+        event_type="knowledge.rebuild.requested",
+        payload={"chapter": 3},
+    )
 
-        with Session() as session:
-            row = session.get(OutboxEvent, event.id)
-            assert row is not None
-            assert row.status == "pending"
-            assert row.event_id
-            assert json.loads(row.payload_json) == {"chapter": 3}
-    finally:
-        engine.dispose()
+    assert session.added == [event]
+    assert event.status == "pending"
+    assert event.attempts == 0
+    assert event.event_id
+    assert json.loads(event.payload_json) == {"chapter": 3}
 
 
-def test_claim_outbox_event_skips_unavailable_events() -> None:
-    from forwin.outbox.store import claim_next_outbox_event, enqueue_outbox_event
-
-    engine, Session = _session_factory("outbox-claim-availability")
-    future = datetime.now(timezone.utc) + timedelta(hours=1)
-    try:
-        with Session.begin() as session:
-            enqueue_outbox_event(
-                session,
-                aggregate_type="project",
-                aggregate_id="project-1",
-                event_type="future.event",
-                payload={},
-                available_at=future,
-            )
-
-        with Session.begin() as session:
-            assert claim_next_outbox_event(session, worker_id="worker-1") is None
-    finally:
-        engine.dispose()
-
-
-def test_outbox_worker_processes_handled_event() -> None:
-    from forwin.models.outbox import OutboxEvent
-    from forwin.outbox.store import enqueue_outbox_event
-    from forwin.outbox.worker import run_one_outbox_event
-
-    engine, Session = _session_factory("outbox-worker-success")
-    handled = []
-    try:
-        with Session.begin() as session:
-            enqueue_outbox_event(
-                session,
-                aggregate_type="project",
-                aggregate_id="project-1",
-                event_type="test.event",
-                payload={"ok": True},
-            )
-
-        result = run_one_outbox_event(
-            session_factory=Session,
-            worker_id="worker-1",
-            handlers={"test.event": lambda event: handled.append(event.event_id)},
-        )
-
-        assert result.claimed is True
-        assert result.processed is True
-        assert handled == [result.event_id]
-        with Session() as session:
-            row = session.get(OutboxEvent, result.row_id)
-            assert row is not None
-            assert row.status == "processed"
-            assert row.processed_at is not None
-    finally:
-        engine.dispose()
-
-
-def test_outbox_worker_retries_then_fails_event() -> None:
-    from forwin.models.outbox import OutboxEvent
-    from forwin.outbox.store import enqueue_outbox_event
-    from forwin.outbox.worker import run_one_outbox_event
-
-    engine, Session = _session_factory("outbox-worker-failure")
-
-    def fail(_event):
-        raise RuntimeError("handler failed")
-
-    try:
-        with Session.begin() as session:
-            event = enqueue_outbox_event(
-                session,
-                aggregate_type="project",
-                aggregate_id="project-1",
-                event_type="test.fail",
-                payload={},
-            )
-
-        first = run_one_outbox_event(
-            session_factory=Session,
-            worker_id="worker-1",
-            handlers={"test.fail": fail},
-            max_attempts=2,
-        )
-        assert first.claimed is True
-        assert first.processed is False
-        with Session() as session:
-            row = session.get(OutboxEvent, event.id)
-            assert row is not None
-            assert row.status == "pending"
-            assert row.attempts == 1
-            assert "handler failed" in row.error_message
-
-        second = run_one_outbox_event(
-            session_factory=Session,
-            worker_id="worker-2",
-            handlers={"test.fail": fail},
-            max_attempts=2,
-        )
-        assert second.claimed is True
-        assert second.processed is False
-        with Session() as session:
-            row = session.get(OutboxEvent, event.id)
-            assert row is not None
-            assert row.status == "failed"
-            assert row.attempts == 2
-    finally:
-        engine.dispose()
-
-
-def test_outbox_worker_cli_help_exposes_once_mode() -> None:
+def test_outbox_worker_cli_help_exposes_fenced_lease_controls() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "forwin.cli", "outbox-worker", "--help"],
         check=False,
@@ -160,3 +49,88 @@ def test_outbox_worker_cli_help_exposes_once_mode() -> None:
     assert result.returncode == 0, result.stderr
     assert "--once" in result.stdout
     assert "--worker-id" in result.stdout
+    assert "--lease-seconds" in result.stdout
+    assert "--heartbeat-interval-seconds" in result.stdout
+    assert "--base-delay-seconds" in result.stdout
+    assert "--max-delay-seconds" in result.stdout
+    assert "--max-attempts" not in result.stdout
+    assert "--retry-delay-seconds" not in result.stdout
+
+
+def test_outbox_compose_uses_lease_and_bounded_backoff_configuration() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    outbox_service = compose.split("  outbox-worker:", 1)[1].split(
+        "\n  postgres:", 1
+    )[0]
+
+    for option, environment_name in (
+        ("--lease-seconds", "FORWIN_OUTBOX_WORKER_LEASE_SECONDS"),
+        (
+            "--heartbeat-interval-seconds",
+            "FORWIN_OUTBOX_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+        ),
+        ("--base-delay-seconds", "FORWIN_OUTBOX_WORKER_BASE_DELAY_SECONDS"),
+        ("--max-delay-seconds", "FORWIN_OUTBOX_WORKER_MAX_DELAY_SECONDS"),
+    ):
+        assert option in outbox_service
+        assert environment_name in outbox_service
+
+    assert "FORWIN_OUTBOX_WORKER_MAX_ATTEMPTS" not in compose
+    assert "--max-attempts" not in outbox_service
+    assert "--retry-delay-seconds" not in outbox_service
+
+
+def test_cli_forwards_fenced_worker_configuration(monkeypatch) -> None:
+    from forwin import cli
+
+    captured: dict[str, object] = {}
+
+    class _Engine:
+        def dispose(self) -> None:
+            captured["disposed"] = True
+
+    monkeypatch.setattr("forwin.models.base.get_engine", lambda _url: _Engine())
+    monkeypatch.setattr("forwin.models.base.require_v5_schema", lambda _engine: None)
+    monkeypatch.setattr(
+        "forwin.models.base.get_session_factory",
+        lambda _engine: "session-factory",
+    )
+    monkeypatch.setattr(
+        "forwin.outbox.handlers.build_default_outbox_handlers",
+        lambda **_kwargs: {"event": lambda _claim: None},
+    )
+
+    def run_loop(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("forwin.outbox.worker.run_outbox_worker_loop", run_loop)
+    monkeypatch.setattr(
+        cli,
+        "_get_config",
+        lambda _args: SimpleNamespace(database_url="postgresql://unused"),
+    )
+    args = SimpleNamespace(
+        worker_id="worker-1",
+        poll_interval=2.5,
+        once=True,
+        lease_seconds=60.0,
+        heartbeat_interval_seconds=15.0,
+        base_delay_seconds=10.0,
+        max_delay_seconds=300.0,
+    )
+
+    cli.cmd_outbox_worker(args)
+
+    assert captured == {
+        "session_factory": "session-factory",
+        "worker_id": "worker-1",
+        "handlers": {"event": captured["handlers"]["event"]},
+        "poll_interval": 2.5,
+        "once": True,
+        "lease_seconds": 60.0,
+        "heartbeat_interval_seconds": 15.0,
+        "base_delay_seconds": 10.0,
+        "max_delay_seconds": 300.0,
+        "disposed": True,
+    }

@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import logging
 import os
+import socket
 import sys
 import time
 
@@ -229,8 +230,10 @@ def cmd_outbox_worker(args: argparse.Namespace) -> None:
             ),
             poll_interval=args.poll_interval,
             once=args.once,
-            max_attempts=args.max_attempts,
-            retry_delay_seconds=args.retry_delay_seconds,
+            lease_seconds=args.lease_seconds,
+            heartbeat_interval_seconds=args.heartbeat_interval_seconds,
+            base_delay_seconds=args.base_delay_seconds,
+            max_delay_seconds=args.max_delay_seconds,
         )
     finally:
         engine.dispose()
@@ -348,7 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
     outbox_worker = sub.add_parser(
         "outbox-worker", help="运行 outbox side-effect worker"
     )
-    outbox_worker.add_argument("--worker-id", default="", help="Worker id")
+    outbox_worker.add_argument(
+        "--worker-id",
+        default=f"{socket.gethostname()}:{os.getpid()}",
+        help="Worker id",
+    )
     outbox_worker.add_argument(
         "--poll-interval", type=float, default=2.0, help="无事件时轮询间隔秒数"
     )
@@ -356,10 +363,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--once", action="store_true", help="只 claim 一次后退出"
     )
     outbox_worker.add_argument(
-        "--max-attempts", type=int, default=3, help="单个事件最大尝试次数"
+        "--lease-seconds", type=float, default=60.0, help="事件 lease 秒数"
     )
     outbox_worker.add_argument(
-        "--retry-delay-seconds", type=int, default=30, help="失败重试等待秒数"
+        "--heartbeat-interval-seconds",
+        type=float,
+        default=15.0,
+        help="lease 心跳间隔秒数",
+    )
+    outbox_worker.add_argument(
+        "--base-delay-seconds",
+        type=float,
+        default=30.0,
+        help="失败重试基础退避秒数",
+    )
+    outbox_worker.add_argument(
+        "--max-delay-seconds",
+        type=float,
+        default=900.0,
+        help="失败重试最大退避秒数",
     )
 
     return parser

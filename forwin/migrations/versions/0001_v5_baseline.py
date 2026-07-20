@@ -101,8 +101,6 @@ def upgrade() -> None:
         sa.Column("lease_epoch", sa.Integer(), server_default="0", nullable=False),
         sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
         sa.Column("heartbeat_at", sa.DateTime(), nullable=True),
-        sa.Column("locked_by", sa.String(), nullable=False),
-        sa.Column("locked_at", sa.DateTime(), nullable=True),
         sa.Column("processed_at", sa.DateTime(), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),

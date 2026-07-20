@@ -47,8 +47,6 @@ class OutboxEvent(Base):
     )
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    locked_by: Mapped[str] = mapped_column(String, nullable=False, default="")
-    locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

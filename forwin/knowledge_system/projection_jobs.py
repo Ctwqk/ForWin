@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -12,6 +11,7 @@ from forwin.models.outbox import OutboxEvent
 from forwin.models.project import Project
 from forwin.obsidian import ObsidianExporter
 from forwin.outbox.store import enqueue_outbox_event
+from forwin.outbox.worker import OutboxClaim
 
 
 KNOWLEDGE_PROJECTION_REFRESH_EVENT = "knowledge.projection.refresh_requested"
@@ -113,7 +113,7 @@ def enqueue_projection_refresh(
 
 
 def handle_projection_refresh_outbox_event(
-    event: OutboxEvent,
+    event: OutboxClaim,
     *,
     session_factory: Callable[[], Any],
     obsidian_root: Path | None = None,
@@ -123,7 +123,7 @@ def handle_projection_refresh_outbox_event(
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
 ) -> dict[str, Any]:
-    payload = json.loads(event.payload_json or "{}")
+    payload = event.payload
     project_id = str(payload.get("project_id") or event.aggregate_id or "").strip()
     if not project_id:
         raise ValueError("projection outbox event requires project_id")
@@ -154,8 +154,8 @@ def build_projection_outbox_handlers(
     qdrant_collection: str | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
-) -> dict[str, Callable[[OutboxEvent], None]]:
-    def handle(event: OutboxEvent) -> None:
+) -> dict[str, Callable[[OutboxClaim], None]]:
+    def handle(event: OutboxClaim) -> None:
         handle_projection_refresh_outbox_event(
             event,
             session_factory=session_factory,

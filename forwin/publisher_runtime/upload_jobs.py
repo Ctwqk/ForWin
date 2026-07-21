@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
@@ -494,204 +496,390 @@ class UploadJobService:
             session.refresh(job)
             return self.serialize_upload_job(job)
 
-    def create_upload_jobs_batch(
+    def create_idempotent_canon_job(
+        self,
+        session,
+        *,
+        idempotency_key: str,
+        canon_commit_id: str,
+        canon_idempotency_key: str,
+        project_id: str,
+        candidate_id: str,
+        chapter_number: int,
+        chapter_title: str,
+        body: str,
+        binding: dict[str, Any],
+        publish: bool,
+    ) -> tuple[PublisherUploadJob, bool]:
+        platform = str(binding.get("platform") or "").strip()
+        book_name = str(binding.get("book_name") or "").strip()
+        upload_url = str(binding.get("upload_url") or "").strip()
+        spec = self.platform_catalog.get(platform)
+        normalized_book_meta = self.normalize_book_meta(binding.get("book_meta"))
+        immutable_binding = {
+            "platform": platform,
+            "book_name": book_name,
+            "upload_url": upload_url,
+            "create_if_missing": bool(binding.get("create_if_missing", False)),
+            "cover_generation_enabled": bool(
+                binding.get("cover_generation_enabled", True)
+            ),
+            "cover_confirmation_required": bool(
+                binding.get("cover_confirmation_required", False)
+            ),
+            "cover_candidate_count": max(
+                1, min(int(binding.get("cover_candidate_count", 4) or 4), 8)
+            ),
+            "cover_style_hint": str(binding.get("cover_style_hint") or "").strip(),
+            "auto_cover_upload_enabled": bool(
+                binding.get("auto_cover_upload_enabled", True)
+            ),
+            "publisher_compliance_required": bool(
+                binding.get("publisher_compliance_required", False)
+            ),
+            "book_meta": normalized_book_meta,
+        }
+        body_text = str(body or "")
+        body_sha256 = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
+        expected = {
+            "project_id": str(project_id or "").strip(),
+            "canon_commit_id": str(canon_commit_id or "").strip(),
+            "candidate_id": str(candidate_id or "").strip(),
+            "chapter_number": int(chapter_number or 0),
+            "idempotency_key": str(idempotency_key or "").strip(),
+            "platform_id": platform,
+            "task_kind": "chapter_upload",
+            "book_name": book_name,
+            "chapter_title": str(chapter_title or "").strip(),
+            "body_text": body_text,
+            "body_sha256": body_sha256,
+            "upload_url": upload_url,
+            "publisher_binding": immutable_binding,
+            "canon_idempotency_key": str(canon_idempotency_key or "").strip(),
+        }
+        existing = session.execute(
+            select(PublisherUploadJob)
+            .where(PublisherUploadJob.idempotency_key == expected["idempotency_key"])
+            .with_for_update()
+        ).scalar_one_or_none()
+        if existing is not None:
+            self._assert_immutable_canon_job(existing, expected)
+            return existing, False
+
+        job = self.new_upload_job(
+            spec=spec,
+            resolved_project_id=expected["project_id"],
+            platform=platform,
+            book_name=book_name,
+            chapter_title=expected["chapter_title"],
+            body=body_text,
+            upload_url=upload_url,
+            publish=bool(publish),
+            create_if_missing=immutable_binding["create_if_missing"],
+            normalized_book_meta=normalized_book_meta,
+            status="scheduled",
+        )
+        job.canon_commit_id = expected["canon_commit_id"]
+        job.candidate_id = expected["candidate_id"]
+        job.chapter_number = expected["chapter_number"]
+        job.idempotency_key = expected["idempotency_key"]
+        job.body_sha256 = body_sha256
+        payload = _load_json_object(job.result_payload_json)
+        payload.update(
+            {
+                "cover_generation_enabled": immutable_binding[
+                    "cover_generation_enabled"
+                ],
+                "cover_confirmation_required": immutable_binding[
+                    "cover_confirmation_required"
+                ],
+                "cover_candidate_count": immutable_binding["cover_candidate_count"],
+                "cover_style_hint": immutable_binding["cover_style_hint"],
+                "auto_cover_upload_enabled": immutable_binding[
+                    "auto_cover_upload_enabled"
+                ],
+                "publisher_compliance_required": immutable_binding[
+                    "publisher_compliance_required"
+                ],
+                "publisher_identity": expected["idempotency_key"],
+                "canon_identity": {
+                    "canon_commit_id": expected["canon_commit_id"],
+                    "canon_idempotency_key": expected["canon_idempotency_key"],
+                    "project_id": expected["project_id"],
+                    "chapter_number": expected["chapter_number"],
+                    "candidate_id": expected["candidate_id"],
+                    "body_sha256": body_sha256,
+                },
+                "publisher_binding": immutable_binding,
+            }
+        )
+        job.result_payload_json = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        job.result_message = f"{spec.display_name} Canon 发布任务已物化，等待配额释放。"
+        try:
+            with session.begin_nested():
+                session.add(job)
+                session.flush()
+        except IntegrityError:
+            existing = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.idempotency_key == expected["idempotency_key"]
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            self._assert_immutable_canon_job(existing, expected)
+            return existing, False
+        self.audit.record_upload_job_event(
+            session,
+            job=job,
+            event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+            summary="Canon 发布上传任务已按不可变身份物化。",
+            actor_type="worker",
+            extra_payload={
+                "canon_commit_id": expected["canon_commit_id"],
+                "candidate_id": expected["candidate_id"],
+                "chapter_number": expected["chapter_number"],
+                "idempotency_key": expected["idempotency_key"],
+            },
+        )
+        return job, True
+
+    def release_scheduled_canon_jobs(
         self,
         *,
-        project_id: str = "",
-        platform: str,
-        book_name: str,
-        jobs: list[dict[str, Any]],
-        upload_url: str | None,
+        project_id: str,
+        job_ids: list[str],
         publish: bool,
-        create_if_missing: bool = False,
-        book_meta: dict[str, Any] | None = None,
-        cover_generation_enabled: bool = True,
-        cover_confirmation_required: bool = False,
-        cover_candidate_count: int = 4,
-        cover_style_hint: str = "",
-        auto_cover_upload_enabled: bool = True,
-        publisher_compliance_required: bool = False,
-    ) -> int:
-        spec = self.platform_catalog.get(platform)
-        normalized_book_meta = self.normalize_book_meta(book_meta)
+        actor_type: str,
+        session=None,
+    ) -> list[dict[str, Any]]:
+        normalized_project_id = str(project_id or "").strip()
+        normalized_ids = list(
+            dict.fromkeys(str(job_id or "").strip() for job_id in job_ids)
+        )
+        normalized_ids = [job_id for job_id in normalized_ids if job_id]
+        if not normalized_project_id or not normalized_ids:
+            return []
+        if session is not None:
+            released = self._release_scheduled_canon_jobs(
+                session,
+                project_id=normalized_project_id,
+                job_ids=normalized_ids,
+                publish=bool(publish),
+                actor_type=actor_type,
+            )
+            session.flush()
+            return [self.serialize_upload_job(job) for job in released]
+
+        with self.session_factory() as managed_session:
+            released = self._release_scheduled_canon_jobs(
+                managed_session,
+                project_id=normalized_project_id,
+                job_ids=normalized_ids,
+                publish=bool(publish),
+                actor_type=actor_type,
+            )
+            managed_session.commit()
+            for job in released:
+                managed_session.refresh(job)
+            return [self.serialize_upload_job(job) for job in released]
+
+    def _release_scheduled_canon_jobs(
+        self,
+        session,
+        *,
+        project_id: str,
+        job_ids: list[str],
+        publish: bool,
+        actor_type: str,
+    ) -> list[PublisherUploadJob]:
+        jobs = (
+            session.execute(
+                select(PublisherUploadJob)
+                .where(PublisherUploadJob.id.in_(job_ids))
+                .with_for_update()
+            )
+            .scalars()
+            .all()
+        )
+        by_id = {job.id: job for job in jobs}
+        missing = [job_id for job_id in job_ids if job_id not in by_id]
+        if missing:
+            raise ValueError(f"publisher jobs not found: {', '.join(missing)}")
+
+        released: list[PublisherUploadJob] = []
+        for job_id in job_ids:
+            job = by_id[job_id]
+            if (
+                job.project_id != project_id
+                or not job.canon_commit_id
+                or not job.idempotency_key
+                or job.task_kind != "chapter_upload"
+            ):
+                raise ValueError(f"publisher job is not a Canon job: {job.id}")
+            if job.deleted_at is not None:
+                raise ValueError(f"publisher job is deleted: {job.id}")
+
+            payload = _load_json_object(job.result_payload_json)
+            if bool(job.publish) != publish:
+                if self._canon_publish_mode_is_frozen(job, payload):
+                    raise ValueError(
+                        "publisher execution mode is frozen after first claim: "
+                        f"{job.id}"
+                    )
+                old_publish = bool(job.publish)
+                job.publish = publish
+                self.audit.record_upload_job_event(
+                    session,
+                    job=job,
+                    event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
+                    summary="Canon 发布执行模式已在首次领取前更新。",
+                    actor_type=str(actor_type or "system"),
+                    extra_payload={
+                        "transition": "publish_mode_updated",
+                        "publish_mode_from": old_publish,
+                        "publish_mode_to": publish,
+                    },
+                )
+            if job.status != "scheduled":
+                continue
+
+            preflight = self._canon_release_preflight(job, payload)
+            payload["preflight"] = preflight
+            platform_meta = preflight.get("platform_meta")
+            if isinstance(platform_meta, dict) and platform_meta:
+                payload["platform_meta"] = platform_meta
+            job.result_payload_json = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if not preflight.get("ok", False):
+                job.result_message = "Canon 发布任务未通过释放预检，继续保持排程状态。"
+                self.audit.record_upload_job_event(
+                    session,
+                    job=job,
+                    event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
+                    summary="Canon 发布上传任务释放预检被阻断。",
+                    actor_type=str(actor_type or "system"),
+                    extra_payload={"transition": "release_preflight_blocked"},
+                )
+                continue
+
+            job.status = "pending"
+            job.abort_requested = False
+            job.result_message = "Canon 发布任务已通过配额门并进入执行队列。"
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
+                summary="Canon 发布上传任务已释放。",
+                actor_type=str(actor_type or "system"),
+                extra_payload={"transition": "scheduled_to_pending"},
+            )
+            released.append(job)
+        return released
+
+    def _canon_release_preflight(
+        self,
+        job: PublisherUploadJob,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        binding = payload.get("publisher_binding")
+        if not isinstance(binding, dict):
+            raise ValueError(f"Canon publisher binding snapshot is missing: {job.id}")
+        book_meta = self.normalize_book_meta(binding.get("book_meta"))
         platform_meta = (
             self.platform_metadata_catalog.resolve_for_platform(
-                platform, normalized_book_meta
+                job.platform_id,
+                book_meta,
             )
             if self.platform_metadata_catalog is not None
             else {}
         )
-        normalized_jobs: list[tuple[str, str]] = []
-        seen_titles: set[str] = set()
-        for item in jobs:
-            chapter_title = str(item.get("chapter_title", "")).strip()
-            if not chapter_title or chapter_title in seen_titles:
-                continue
-            normalized_jobs.append((chapter_title, str(item.get("body", ""))))
-            seen_titles.add(chapter_title)
-        if not normalized_jobs:
-            return 0
-
-        with self.session_factory() as session:
-            resolved_project_id = self.resolve_project_id(
-                session,
-                explicit_project_id=project_id,
-                work_name=book_name,
+        compliance_required = bool(binding.get("publisher_compliance_required", False))
+        compliance = (
+            self.review_publisher_compliance(
+                project_id=job.project_id,
+                platform=job.platform_id,
+                book_name=job.book_name,
+                chapter_title=job.chapter_title,
+                body=job.body_text,
+                book_meta=book_meta,
             )
-            if (
-                create_if_missing
-                and cover_generation_enabled
-                and self.cover_service is not None
-                and self.cover_service.selected_cover_for_project(
-                    session,
-                    project_id=resolved_project_id,
-                )
-                is None
-            ):
-                cover_job = self.new_upload_job(
-                    spec=spec,
-                    resolved_project_id=resolved_project_id,
-                    platform=platform,
-                    book_name=book_name,
-                    chapter_title="",
-                    body="",
-                    upload_url=upload_url,
-                    publish=False,
-                    create_if_missing=create_if_missing,
-                    normalized_book_meta=normalized_book_meta,
-                    platform_meta=platform_meta,
-                    preflight={
-                        "ok": True,
-                        "blocking": [],
-                        "warnings": [],
-                        "platform_meta": platform_meta,
-                    },
-                    task_kind="cover_generate",
-                )
-                cover_payload = _load_json_object(cover_job.result_payload_json)
-                cover_payload.update(
-                    {
-                        "project_id": resolved_project_id,
-                        "cover_candidate_count": max(
-                            1, min(int(cover_candidate_count or 4), 8)
-                        ),
-                        "cover_style_hint": str(cover_style_hint or "").strip(),
-                        "cover_confirmation_required": bool(
-                            cover_confirmation_required
-                        ),
-                        "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
-                    }
-                )
-                cover_job.result_payload_json = json.dumps(
-                    cover_payload, ensure_ascii=False
-                )
-                cover_job.result_message = "封面生成任务已创建，等待后端执行。"
-                session.add(cover_job)
-                session.flush()
-                self.audit.record_upload_job_event(
-                    session,
-                    job=cover_job,
-                    event_type=DecisionEventType.UPLOAD_JOB_CREATED,
-                    summary="封面生成任务已创建。",
-                    actor_type="api",
-                )
-            chapter_titles = [chapter_title for chapter_title, _body in normalized_jobs]
-            existing_titles: set[str] = set()
-            if resolved_project_id and chapter_titles:
-                existing_titles = {
-                    str(title or "").strip()
-                    for title in session.execute(
-                        select(PublisherUploadJob.chapter_title).where(
-                            PublisherUploadJob.project_id == resolved_project_id,
-                            PublisherUploadJob.chapter_title.in_(chapter_titles),
-                            PublisherUploadJob.deleted_at.is_(None),
-                        )
-                    )
-                    .scalars()
-                    .all()
-                    if str(title or "").strip()
-                }
+            if compliance_required
+            else None
+        )
+        if self.preflight is None:
+            return {
+                "ok": True,
+                "blocking": [],
+                "warnings": [],
+                "platform_meta": platform_meta,
+            }
+        return self.preflight.check_upload_readiness(
+            platform_id=job.platform_id,
+            book_name=job.book_name,
+            chapter_title=job.chapter_title,
+            body=job.body_text,
+            create_if_missing=bool(binding.get("create_if_missing", False)),
+            book_meta=book_meta,
+            publisher_compliance_required=compliance_required,
+            latest_publisher_compliance=compliance,
+        )
 
-            rows = [
-                self.new_upload_job(
-                    spec=spec,
-                    resolved_project_id=resolved_project_id,
-                    platform=platform,
-                    book_name=book_name,
-                    chapter_title=chapter_title,
-                    body=body,
-                    upload_url=upload_url,
-                    publish=publish,
-                    create_if_missing=create_if_missing,
-                    normalized_book_meta=normalized_book_meta,
-                    platform_meta=platform_meta,
-                    preflight=(
-                        self.preflight.check_upload_readiness(
-                            platform_id=platform,
-                            book_name=book_name,
-                            chapter_title=chapter_title,
-                            body=body,
-                            create_if_missing=create_if_missing,
-                            book_meta=normalized_book_meta,
-                            publisher_compliance_required=publisher_compliance_required,
-                            latest_publisher_compliance=(
-                                self.review_publisher_compliance(
-                                    project_id=resolved_project_id,
-                                    platform=platform,
-                                    book_name=book_name,
-                                    chapter_title=chapter_title,
-                                    body=body,
-                                    book_meta=normalized_book_meta,
-                                )
-                                if publisher_compliance_required
-                                else None
-                            ),
-                        )
-                        if self.preflight is not None
-                        else {
-                            "ok": True,
-                            "blocking": [],
-                            "warnings": [],
-                            "platform_meta": platform_meta,
-                        }
-                    ),
-                )
-                for chapter_title, body in normalized_jobs
-                if chapter_title not in existing_titles
-            ]
-            if not rows:
-                return 0
-            for row in rows:
-                payload = _load_json_object(row.result_payload_json)
-                payload.update(
-                    {
-                        "cover_generation_enabled": bool(cover_generation_enabled),
-                        "cover_confirmation_required": bool(
-                            cover_confirmation_required
-                        ),
-                        "cover_candidate_count": max(
-                            1, min(int(cover_candidate_count or 4), 8)
-                        ),
-                        "cover_style_hint": str(cover_style_hint or "").strip(),
-                        "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
-                        "publisher_compliance_required": bool(
-                            publisher_compliance_required
-                        ),
-                    }
-                )
-                row.result_payload_json = json.dumps(payload, ensure_ascii=False)
-            session.add_all(rows)
-            session.flush()
-            for job in rows:
-                self.audit.record_upload_job_event(
-                    session,
-                    job=job,
-                    event_type=DecisionEventType.UPLOAD_JOB_CREATED,
-                    summary="发布上传任务已批量创建。",
-                    actor_type="api",
-                )
-            session.commit()
-            return len(rows)
+    @staticmethod
+    def _canon_publish_mode_is_frozen(
+        job: PublisherUploadJob,
+        payload: dict[str, Any],
+    ) -> bool:
+        return bool(
+            payload.get("publish_mode_frozen_at")
+            or job.current_attempt_id
+            or job.claimed_at
+            or job.started_at
+            or job.status not in {"scheduled", "pending"}
+        )
+
+    @staticmethod
+    def _assert_immutable_canon_job(
+        job: PublisherUploadJob,
+        expected: dict[str, Any],
+    ) -> None:
+        payload = _load_json_object(job.result_payload_json)
+        stored = {
+            "project_id": str(job.project_id or ""),
+            "canon_commit_id": str(job.canon_commit_id or ""),
+            "candidate_id": str(job.candidate_id or ""),
+            "chapter_number": int(job.chapter_number or 0),
+            "idempotency_key": str(job.idempotency_key or ""),
+            "platform_id": str(job.platform_id or ""),
+            "task_kind": str(job.task_kind or ""),
+            "book_name": str(job.book_name or ""),
+            "chapter_title": str(job.chapter_title or ""),
+            "body_text": str(job.body_text or ""),
+            "body_sha256": str(job.body_sha256 or ""),
+            "upload_url": str(job.upload_url or ""),
+            "publisher_binding": payload.get("publisher_binding"),
+            "canon_idempotency_key": str(
+                (payload.get("canon_identity") or {}).get("canon_idempotency_key", "")
+            ),
+        }
+        mismatches = [
+            field
+            for field, expected_value in expected.items()
+            if stored.get(field) != expected_value
+        ]
+        if mismatches:
+            raise ValueError(
+                "immutable publisher job mismatch: " + ", ".join(mismatches)
+            )
 
     def get_upload_job(self, job_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -708,7 +896,7 @@ class UploadJobService:
                 raise ValueError("上传任务不存在。")
             if job.status in {"succeeded", "failed", "cancelled"}:
                 raise ValueError("终态上传任务不能再次终止。")
-            if job.status == "pending":
+            if job.status in {"scheduled", "pending"}:
                 job.status = "cancelled"
                 job.abort_requested = True
                 job.finished_at = now
@@ -841,6 +1029,14 @@ class UploadJobService:
                 job.abort_requested = False
                 job.result_message = "上传任务已被浏览器扩展自动领取。"
                 job.error_message = ""
+                if job.canon_commit_id:
+                    claim_payload = _load_json_object(job.result_payload_json)
+                    claim_payload.setdefault("publish_mode_frozen_at", isoformat(now))
+                    job.result_payload_json = json.dumps(
+                        claim_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
                 self.audit.record_upload_job_event(
                     session,
                     job=job,
@@ -1176,6 +1372,11 @@ class UploadJobService:
             "task_kind": str(job.task_kind or "chapter_upload"),
             "job_id": job.id,
             "project_id": job.project_id,
+            "canon_commit_id": str(job.canon_commit_id or ""),
+            "candidate_id": str(job.candidate_id or ""),
+            "chapter_number": int(job.chapter_number or 0),
+            "idempotency_key": str(job.idempotency_key or ""),
+            "body_sha256": str(job.body_sha256 or ""),
             "platform": job.platform_id,
             "display_name": spec.display_name,
             "status": job.status,
@@ -1217,6 +1418,7 @@ class UploadJobService:
         platform_meta: dict[str, Any] | None = None,
         preflight: dict[str, Any] | None = None,
         task_kind: str = "chapter_upload",
+        status: str = "pending",
     ) -> PublisherUploadJob:
         payload: dict[str, Any] = {}
         if resolved_project_id:
@@ -1240,7 +1442,7 @@ class UploadJobService:
             project_id=resolved_project_id,
             platform_id=platform,
             task_kind=str(task_kind or "chapter_upload").strip() or "chapter_upload",
-            status="pending",
+            status=str(status or "pending").strip() or "pending",
             book_name=book_name,
             chapter_title=chapter_title,
             body_text=body,

@@ -74,13 +74,19 @@ class ProductionScheduler:
     def run_due_projects(self, *, now: datetime) -> list[ProductionRunResult]:
         if self.session_factory is None or self.config is None:
             return []
-        now_local = now.astimezone(self.display_tz) if self.display_tz is not None else now
+        now_local = (
+            now.astimezone(self.display_tz) if self.display_tz is not None else now
+        )
         today = now_local.strftime("%Y-%m-%d")
         current_minutes = now_local.hour * 60 + now_local.minute
         session = self._session()
         try:
             ready_projects: list[tuple[Project, ProjectAutomationSettings]] = []
-            projects = session.execute(select(Project).order_by(Project.updated_at.desc())).scalars().all()
+            projects = (
+                session.execute(select(Project).order_by(Project.updated_at.desc()))
+                .scalars()
+                .all()
+            )
             for project in projects:
                 automation = normalize_project_automation(project.automation_json)
                 if not automation.enabled:
@@ -99,6 +105,7 @@ class ProductionScheduler:
             executor = ProductionExecutor(
                 generation_application=self.generation_application,
                 publisher_manager_factory=self.publisher_manager_factory,
+                release_session=session,
                 session_factory=self.session_factory,
                 config=self.config,
                 review_chapter=self.review_chapter,
@@ -121,7 +128,9 @@ class ProductionScheduler:
                     if backlog is None:
                         span.set_status("skipped")
                         continue
-                    plan = self.planner.plan(policy=policy, backlog=backlog, now=now_local)
+                    plan = self.planner.plan(
+                        policy=policy, backlog=backlog, now=now_local
+                    )
                     updated = automation.model_copy(
                         update={
                             "last_scheduler_date": today,
@@ -130,7 +139,9 @@ class ProductionScheduler:
                     )
                     if plan.blocked_reason:
                         action = action_for_blocked_reason(plan.blocked_reason)
-                        message = message_for_action(action, blocked_reason=plan.blocked_reason)
+                        message = message_for_action(
+                            action, blocked_reason=plan.blocked_reason
+                        )
                         span.tag("action", action)
                         updated = updated.model_copy(
                             update={

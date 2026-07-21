@@ -40,6 +40,7 @@ class ProductionExecutor:
         *,
         generation_application: GenerationApplicationService,
         publisher_manager_factory: Callable[[], Any] | None = None,
+        release_session: Any | None = None,
         session_factory: Callable[[], Any] | None = None,
         config: Any = None,
         review_chapter: Callable[[str, int], Any] | None = None,
@@ -47,6 +48,7 @@ class ProductionExecutor:
     ) -> None:
         self.generation_application = generation_application
         self.publisher_manager_factory = publisher_manager_factory
+        self.release_session = release_session
         self.session_factory = session_factory
         self.config = config
         self.review_chapter = review_chapter
@@ -177,36 +179,18 @@ class ProductionExecutor:
         manager = self._publisher_manager()
         if manager is None:
             return 0
-        total = 0
-        for binding in policy.publish_bindings:
-            platform = str(binding.platform or "").strip()
-            book_name = str(binding.book_name or "").strip() or project.title
-            if not platform or not book_name:
-                continue
-            total += int(
-                manager.create_upload_jobs_batch(
-                    project_id=project.id,
-                    platform=platform,
-                    book_name=book_name,
-                    jobs=plan.publish_jobs,
-                    upload_url=binding.upload_url or None,
-                    publish=True,
-                    create_if_missing=bool(binding.create_if_missing),
-                    cover_generation_enabled=bool(binding.cover_generation_enabled),
-                    cover_confirmation_required=bool(
-                        binding.cover_confirmation_required
-                    ),
-                    cover_candidate_count=int(binding.cover_candidate_count or 4),
-                    cover_style_hint=binding.cover_style_hint,
-                    auto_cover_upload_enabled=bool(binding.auto_cover_upload_enabled),
-                    publisher_compliance_required=bool(
-                        binding.publisher_compliance_required
-                    ),
-                    book_meta=binding.book_meta.model_dump(mode="json"),
-                )
-                or 0
-            )
-        return total
+        release_request = {
+            "project_id": project.id,
+            "job_ids": [str(item.get("job_id") or "") for item in plan.publish_jobs],
+            "publish": True,
+            "actor_type": "scheduler",
+        }
+        if self.release_session is not None:
+            release_request["session"] = self.release_session
+        released = manager.release_canon_jobs(
+            **release_request,
+        )
+        return len(released or [])
 
     def _publisher_manager(self) -> Any:
         if self.publisher_manager_factory is not None:

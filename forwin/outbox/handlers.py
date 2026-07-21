@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from forwin.knowledge_system.canon_outbox import build_canon_outbox_handlers
 from forwin.knowledge_system.projection_jobs import build_projection_outbox_handlers
 from forwin.maintenance.events import POST_CANON_PHASE3_EVENT
 from forwin.outbox.worker import OutboxClaim
+from forwin.publisher_runtime.canon_jobs import CANON_PUBLISHER_REQUESTED
 
 
 def build_default_outbox_handlers(
@@ -22,6 +24,7 @@ def build_default_outbox_handlers(
     memory_index_provider: Callable[[], Any] | None = None,
     canon_projection_runner: Callable[..., dict[str, Any]] | None = None,
     post_canon_service_provider: Callable[[], Any] | None = None,
+    publisher_job_service_provider: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[[OutboxClaim], None]]:
     if memory_index is not None and memory_index_provider is not None:
         raise ValueError("Pass memory_index or memory_index_provider, not both")
@@ -32,7 +35,9 @@ def build_default_outbox_handlers(
     )
     qdrant_url = getattr(config, "qdrant_url", None) if config is not None else None
     qdrant_collection = (
-        getattr(config, "llm_kb_qdrant_collection", None) if config is not None else None
+        getattr(config, "llm_kb_qdrant_collection", None)
+        if config is not None
+        else None
     )
     handlers: dict[str, Callable[[OutboxClaim], None]] = {}
     handlers.update(
@@ -71,7 +76,9 @@ def build_default_outbox_handlers(
         def handle_post_canon_phase3(event: OutboxClaim) -> None:
             service = resolve_post_canon_service()
             payload = event.payload
-            project_id = str(payload.get("project_id") or event.aggregate_id or "").strip()
+            project_id = str(
+                payload.get("project_id") or event.aggregate_id or ""
+            ).strip()
             chapter_number = int(payload.get("chapter_number") or 0)
             candidate_id = str(payload.get("candidate_id") or "").strip()
             commit_id = service.resolve_event_canon_commit(
@@ -88,6 +95,36 @@ def build_default_outbox_handlers(
             )
 
         handlers[POST_CANON_PHASE3_EVENT] = handle_post_canon_phase3
+    if publisher_job_service_provider is not None:
+        resolve_publisher_jobs = _shared_provider(
+            publisher_job_service_provider,
+            resource_name="Canon publisher job service",
+        )
+
+        def handle_canon_publisher(event: OutboxClaim) -> None:
+            service = resolve_publisher_jobs()
+            payload = event.payload
+            bindings_raw = payload.get("publisher_bindings") or []
+            if not isinstance(bindings_raw, list) or not all(
+                isinstance(item, Mapping) for item in bindings_raw
+            ):
+                raise ValueError("Canon publisher bindings snapshot is invalid")
+            service.materialize(
+                canon_commit_id=str(payload.get("canon_commit_id") or "").strip(),
+                canon_idempotency_key=str(
+                    payload.get("canon_idempotency_key") or ""
+                ).strip(),
+                project_id=str(
+                    payload.get("project_id") or event.aggregate_id or ""
+                ).strip(),
+                chapter_number=int(payload.get("chapter_number") or 0),
+                candidate_id=str(payload.get("candidate_id") or "").strip(),
+                chapter_title=str(payload.get("chapter_title") or "").strip(),
+                bindings=[dict(item) for item in bindings_raw],
+                publish=bool(payload.get("publish", True)),
+            )
+
+        handlers[CANON_PUBLISHER_REQUESTED] = handle_canon_publisher
     return handlers
 
 

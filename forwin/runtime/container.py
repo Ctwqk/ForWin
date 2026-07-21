@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from forwin.maintenance.post_canon import PostCanonMaintenanceService
+    from forwin.publisher_runtime.canon_jobs import CanonPublisherJobService
 
 RuntimeRole = Literal[
     "api",
@@ -66,6 +67,7 @@ class RuntimeContainer:
     _generation_services: GenerationRuntimeServices | None = None
     _publisher_services: PublisherRuntimeServices | None = None
     _post_canon_maintenance: PostCanonMaintenanceService | None = None
+    _outbox_publisher_jobs: CanonPublisherJobService | None = None
     _outbox_handlers: dict | None = None
     _outbox_resources: list[object] = field(default_factory=list)
     _closed: bool = False
@@ -272,7 +274,9 @@ class RuntimeContainer:
                 try:
                     core.engine.dispose()
                 except Exception:  # noqa: BLE001
-                    logger.debug("Ignoring runtime engine shutdown error.", exc_info=True)
+                    logger.debug(
+                        "Ignoring runtime engine shutdown error.", exc_info=True
+                    )
 
     def _build_core_services(self) -> CoreRuntimeServices:
         infrastructure = self.infrastructure
@@ -338,9 +342,7 @@ class RuntimeContainer:
                 max_summaries=infrastructure.retrieval_max_summaries,
                 llm_kb_qdrant_url=infrastructure.qdrant_url,
                 llm_kb_qdrant_collection=infrastructure.llm_kb_qdrant_collection,
-                memory_index_provider=lambda: self._build_memory_index(
-                    infrastructure
-                ),
+                memory_index_provider=lambda: self._build_memory_index(infrastructure),
             )
 
             writer = build_writer(
@@ -385,12 +387,8 @@ class RuntimeContainer:
             draft_review = DraftReviewService(
                 experience_review_enabled=policy.review.allows_signal("experience"),
                 lint_review_enabled=policy.review.allows_signal("lint"),
-                map_movement_review_enabled=policy.review.allows_signal(
-                    "map_movement"
-                ),
-                personality_review_enabled=policy.review.allows_signal(
-                    "personality"
-                ),
+                map_movement_review_enabled=policy.review.allows_signal("map_movement"),
+                personality_review_enabled=policy.review.allows_signal("personality"),
                 canon_quality_review_in_hub_enabled=policy.review.allows_signal(
                     "canon_quality"
                 ),
@@ -437,11 +435,26 @@ class RuntimeContainer:
 
     def _build_publisher_services(self) -> PublisherRuntimeServices:
         core = self.core_services()
+        publisher_runtime = self._build_publisher_runtime(core)
+        return PublisherRuntimeServices(
+            publisher_runtime=publisher_runtime,
+            production_scheduler=ProductionSchedulerFactory(
+                session_factory=core.session_factory,
+                infrastructure=core.infrastructure,
+                generation_application=core.generation_application,
+                observability=core.observability,
+            ),
+        )
+
+    def _build_publisher_runtime(
+        self,
+        core: CoreRuntimeServices,
+    ) -> PublisherRuntimeService:
         infrastructure = core.infrastructure
         model_profile = infrastructure.resolve_model_profile(
             core.policy.model_profile_id
         )
-        publisher_runtime = PublisherRuntimeService(
+        return PublisherRuntimeService(
             session_factory=core.session_factory,
             extension_api_key=infrastructure.publisher_extension_api_key,
             heartbeat_stale_seconds=90,
@@ -452,20 +465,9 @@ class RuntimeContainer:
             ),
             strict_preferred_client=infrastructure.publisher_strict_preferred_client,
             observability=core.observability,
-            codex_intervention_handler=build_codex_intervention_handler(
-                infrastructure
-            ),
+            codex_intervention_handler=build_codex_intervention_handler(infrastructure),
             minimax_api_key=model_profile.api_key,
             minimax_base_url=model_profile.base_url,
-        )
-        return PublisherRuntimeServices(
-            publisher_runtime=publisher_runtime,
-            production_scheduler=ProductionSchedulerFactory(
-                session_factory=core.session_factory,
-                infrastructure=infrastructure,
-                generation_application=core.generation_application,
-                observability=core.observability,
-            ),
         )
 
     def _build_outbox_handlers(self) -> dict:
@@ -476,9 +478,8 @@ class RuntimeContainer:
             session_factory=core.session_factory,
             config=core.infrastructure,
             memory_index_provider=self._provide_outbox_memory_index,
-            post_canon_service_provider=(
-                self._provide_outbox_post_canon_maintenance
-            ),
+            post_canon_service_provider=(self._provide_outbox_post_canon_maintenance),
+            publisher_job_service_provider=self._provide_outbox_publisher_jobs,
         )
 
     def _resolve_post_canon_maintenance(
@@ -516,6 +517,15 @@ class RuntimeContainer:
                 self._post_canon_maintenance = service
             return service
 
+    def _provide_outbox_publisher_jobs(self) -> CanonPublisherJobService:
+        with self._lock:
+            self._require_open()
+            service = self._outbox_publisher_jobs
+            if service is None:
+                service = self._build_publisher_runtime(self.core_services()).canon_jobs
+                self._outbox_publisher_jobs = service
+            return service
+
     def _build_outbox_post_canon_maintenance(
         self,
         core: CoreRuntimeServices,
@@ -545,9 +555,7 @@ class RuntimeContainer:
                 director=arc_director,
                 subworld_manager=subworld_manager,
             )
-            llm_available = (
-                bool(model_profile.api_key) or infrastructure.codex_enabled
-            )
+            llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
             world_simulator = WorldSimulator(
                 llm_client=(
                     llm_client

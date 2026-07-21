@@ -5,6 +5,7 @@ from .auth import ExtensionAuthService
 from .backend_jobs import PublisherBackendJobRunner
 from .browser_sessions import BrowserCookieCodec, BrowserSessionService
 from .bindings import PublisherBindingService
+from .canon_jobs import CanonPublisherJobService
 from .comment_sync import CommentSyncService
 from .connection_state import ExtensionConnectionService
 from .covers import MiniMaxImageClient, PublisherCoverService
@@ -40,7 +41,9 @@ class PublisherRuntimeService:
             platform_metadata_catalog=self.platform_metadata_catalog
         )
         self.auth = ExtensionAuthService(extension_api_key=extension_api_key)
-        self.audit = PublisherAuditService(session_factory=session_factory, observability=observability)
+        self.audit = PublisherAuditService(
+            session_factory=session_factory, observability=observability
+        )
         self.bindings = PublisherBindingService(session_factory=session_factory)
         self.cover_service = PublisherCoverService(
             session_factory=session_factory,
@@ -80,6 +83,10 @@ class PublisherRuntimeService:
             bindings=self.bindings,
             cover_service=self.cover_service,
             codex_intervention_handler=codex_intervention_handler,
+        )
+        self.canon_jobs = CanonPublisherJobService(
+            session_factory=session_factory,
+            upload_jobs=self.upload_jobs,
         )
         self.comment_sync = CommentSyncService(
             session_factory=session_factory,

@@ -174,13 +174,15 @@ def normalize_project_automation(
         for entry in items if isinstance(items, list) else []:
             publish_entry = _normalize_publish_settings(entry)
             platform = publish_entry["platform"]
-            if not platform or platform in seen_platforms:
+            if not platform:
                 continue
+            if platform in seen_platforms:
+                raise ValueError(
+                    f"duplicate publisher platform configuration: {platform}"
+                )
             normalized.append(publish_entry)
             seen_platforms.add(platform)
-            if len(normalized) >= 2:
-                break
-        return normalized
+        return normalized[:2]
 
     publish_payload = _normalize_publish_settings(payload.get("publish"))
     publish_bindings = _normalize_publish_bindings(payload.get("publish_bindings"))

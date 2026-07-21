@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from forwin.knowledge_system import canon_outbox
-from forwin.knowledge_system.canon_outbox import CANON_POST_COMMIT_EVENT
+from forwin.knowledge_system.canon_outbox import (
+    CANON_POST_COMMIT_EVENT,
+    CANON_PUBLISHER_EVENT,
+)
 from forwin.maintenance.events import POST_CANON_PHASE3_EVENT
 from forwin.outbox.handlers import build_default_outbox_handlers
 from forwin.outbox.worker import OutboxClaim
@@ -44,6 +47,29 @@ def _phase3_claim() -> OutboxClaim:
         },
         worker_id="worker-1",
         lease_epoch=2,
+        attempts=1,
+    )
+
+
+def _publisher_claim() -> OutboxClaim:
+    return OutboxClaim(
+        row_id="row-publisher",
+        event_id="event-publisher",
+        event_type=CANON_PUBLISHER_EVENT,
+        aggregate_type="project",
+        aggregate_id="project-1",
+        payload={
+            "canon_commit_id": "canon-1",
+            "canon_idempotency_key": "canon-key-1",
+            "project_id": "project-1",
+            "chapter_number": 1,
+            "candidate_id": "candidate-1",
+            "chapter_title": "第一章",
+            "publisher_bindings": [{"platform": "qidian", "book_name": "事件快照书名"}],
+            "publish": True,
+        },
+        worker_id="worker-1",
+        lease_epoch=3,
         attempts=1,
     )
 
@@ -177,3 +203,33 @@ def test_phase3_handler_resolves_service_lazily_once() -> None:
     assert calls[0] == "provider"
     assert calls.count("provider") == 1
     assert [item[0] for item in calls[1:]] == ["resolve", "run", "resolve", "run"]
+
+
+def test_publisher_handler_resolves_materializer_lazily_once() -> None:
+    calls: list[object] = []
+
+    class Service:
+        def materialize(self, **request) -> None:
+            calls.append(("materialize", request))
+
+    service = Service()
+
+    def provider():
+        calls.append("provider")
+        return service
+
+    handlers = build_default_outbox_handlers(
+        session_factory=lambda: None,
+        publisher_job_service_provider=provider,
+    )
+
+    assert calls == []
+    handlers[CANON_PUBLISHER_EVENT](_publisher_claim())
+    handlers[CANON_PUBLISHER_EVENT](_publisher_claim())
+
+    assert calls[0] == "provider"
+    assert calls.count("provider") == 1
+    assert [item[0] for item in calls[1:]] == ["materialize", "materialize"]
+    request = calls[1][1]
+    assert request["canon_idempotency_key"] == "canon-key-1"
+    assert request["bindings"] == [{"platform": "qidian", "book_name": "事件快照书名"}]

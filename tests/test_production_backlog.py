@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-
+from forwin.candidate_drafts import candidate_body_hash
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.draft import ChapterDraft
+from forwin.models.canon import CanonCommitRecord
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
@@ -56,25 +56,82 @@ def test_repository_loads_backlog_statuses_and_active_tasks() -> None:
                 plans.append(plan)
             session.add_all(plans)
             session.flush()
-            session.add_all(
-                [
-                    ChapterDraft(
-                        id=new_id(),
-                        chapter_plan_id=plans[4].id,
-                        version=1,
-                        body_text="第五章正文",
-                        summary="摘要",
-                        char_count=100,
-                    ),
-                    ChapterDraft(
-                        id=new_id(),
-                        chapter_plan_id=plans[5].id,
-                        version=1,
-                        body_text="第六章正文",
-                        summary="摘要",
-                        char_count=100,
-                    ),
-                ]
+            drafts = [
+                ChapterDraft(
+                    id=new_id(),
+                    chapter_plan_id=plans[4].id,
+                    version=1,
+                    body_text="第五章正文",
+                    summary="摘要",
+                    char_count=100,
+                ),
+                ChapterDraft(
+                    id=new_id(),
+                    chapter_plan_id=plans[5].id,
+                    version=1,
+                    body_text="第六章正文",
+                    summary="摘要",
+                    char_count=100,
+                ),
+            ]
+            session.add_all(drafts)
+            session.flush()
+            review = ChapterReview(
+                id=new_id(),
+                draft_id=drafts[0].id,
+                verdict="pass",
+                issues_json="[]",
+                review_meta_json='{"verdict":"pass"}',
+            )
+            session.add(review)
+            session.flush()
+            candidate_id = new_id()
+            canon_commit_id = new_id()
+            canon_key = "canon-production-backlog-5"
+            session.add(
+                CandidateDraftRecord(
+                    id=candidate_id,
+                    project_id=project.id,
+                    chapter_plan_id=plans[4].id,
+                    chapter_number=5,
+                    candidate_draft_id=drafts[0].id,
+                    review_id=review.id,
+                    body_hash=candidate_body_hash(drafts[0].body_text),
+                    plan_revision="plan-r1",
+                    policy_version=1,
+                    canon_commit_id=canon_commit_id,
+                    idempotency_key=canon_key,
+                    status="accepted",
+                    canon_status="committed",
+                )
+            )
+            session.flush()
+            session.add(
+                CanonCommitRecord(
+                    id=canon_commit_id,
+                    idempotency_key=canon_key,
+                    candidate_id=candidate_id,
+                    project_id=project.id,
+                    chapter_number=5,
+                    status="committed",
+                )
+            )
+            session.flush()
+            session.add(
+                PublisherUploadJob(
+                    id="upload-scheduled-canon",
+                    project_id=project.id,
+                    canon_commit_id=canon_commit_id,
+                    candidate_id=candidate_id,
+                    chapter_number=5,
+                    idempotency_key="publisher-production-backlog-5",
+                    platform_id="fanqie",
+                    status="scheduled",
+                    book_name=project.title,
+                    chapter_title="第5章",
+                    body_text="第五章正文",
+                    body_sha256=candidate_body_hash("第五章正文"),
+                )
             )
             session.add(
                 PublisherUploadJob(
@@ -112,10 +169,15 @@ def test_repository_loads_backlog_statuses_and_active_tasks() -> None:
         assert backlog.drafted_unreviewed == [3]
         assert backlog.needs_review == [4]
         assert backlog.reviewed_unpublished == [5]
+        assert [item.job_id for item in backlog.scheduled_publish_jobs] == [
+            "upload-scheduled-canon"
+        ]
         assert backlog.has_active_generation_task is True
         assert backlog.has_active_upload_task is True
 
         with Session() as session:
-            assert session.execute(select(PublisherUploadJob)).scalar_one().status == "pending"
+            assert (
+                session.get(PublisherUploadJob, "upload-existing").status == "pending"
+            )
     finally:
         engine.dispose()

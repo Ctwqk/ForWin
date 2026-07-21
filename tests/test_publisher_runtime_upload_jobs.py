@@ -193,62 +193,6 @@ def test_upload_job_blocks_failed_publisher_compliance_review() -> None:
         engine.dispose()
 
 
-def test_batch_upload_job_blocks_hard_preflight_failure() -> None:
-    engine, runtime = _runtime("publisher-runtime-batch-preflight-block")
-    try:
-        try:
-            runtime.upload_jobs.create_upload_jobs_batch(
-                platform="fanqie",
-                book_name="测试书",
-                jobs=[{"chapter_title": "第一章", "body": "正文"}],
-                upload_url=None,
-                publish=True,
-                create_if_missing=True,
-                book_meta={
-                    "audience": "male",
-                    "primary_category": "都市日常",
-                    "intro": "太短",
-                },
-            )
-        except ValueError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError("expected preflight failure")
-
-        assert "发布预检失败" in message
-        assert "主角名" in message or "简介" in message
-    finally:
-        engine.dispose()
-
-
-def test_batch_upload_job_blocks_failed_publisher_compliance_review() -> None:
-    engine, runtime = _runtime("publisher-runtime-batch-compliance-block")
-    try:
-        try:
-            runtime.upload_jobs.create_upload_jobs_batch(
-                platform="qidian",
-                book_name="测试书",
-                jobs=[
-                    {
-                        "chapter_title": "第一章",
-                        "body": "主角说：加微信 vx123456 领取番外。",
-                    }
-                ],
-                upload_url=None,
-                publish=True,
-                publisher_compliance_required=True,
-            )
-        except ValueError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError("expected publisher compliance failure")
-
-        assert "发布预检失败" in message
-        assert "平台合规 reviewer" in message
-    finally:
-        engine.dispose()
-
-
 def test_claim_next_upload_job_does_not_return_cover_generate() -> None:
     engine, runtime = _runtime("publisher-runtime-claim-skips-cover-generate")
     try:

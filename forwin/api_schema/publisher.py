@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-
 class PublisherPlatformInfo(BaseModel):
     platform_id: str
     display_name: str
@@ -76,6 +75,11 @@ class PublisherUploadJobResponse(BaseModel):
     task_kind: str = "chapter_upload"
     job_id: str
     project_id: str = ""
+    canon_commit_id: str = ""
+    candidate_id: str = ""
+    chapter_number: int = 0
+    idempotency_key: str = ""
+    body_sha256: str = ""
     platform: str
     display_name: str
     status: str
@@ -398,41 +402,41 @@ class ExtensionCommentsBatchResponse(BaseModel):
 
 
 __all__ = [
-    'PublisherPlatformInfo',
-    'PublisherBookMetaRequest',
-    'PublisherUploadJobCreateRequest',
-    'ProjectChapterPublishRequest',
-    'PublisherUploadJobResponse',
-    'ExtensionBrowserCookie',
-    'ExtensionPlatformHeartbeat',
-    'ExtensionHeartbeatRequest',
-    'ExtensionHeartbeatResponse',
-    'ExtensionLoginQrNotifyRequest',
-    'ExtensionLoginQrNotifyResponse',
-    'ExtensionSessionSyncRequest',
-    'ExtensionSessionSyncResponse',
-    'ExtensionBrowserSessionResponse',
-    'PublisherBrowserSessionSummaryResponse',
-    'ExtensionClaimUploadJobRequest',
-    'ExtensionClaimUploadJobResponse',
-    'ExtensionClaimCommentSyncJobRequest',
-    'ExtensionClaimCommentSyncJobResponse',
-    'UploadJobResultRequest',
-    'CommentSyncJobResultRequest',
-    'PublisherCommentSyncJobRequest',
-    'PublisherCommentSyncJobResponse',
-    'PublisherWorkBindingResponse',
-    'PublisherChapterBindingResponse',
-    'PublisherCoverAssetResponse',
-    'PublisherCoverGenerateRequest',
-    'PublisherCoverSelectRequest',
-    'PublisherCoverUploadRequest',
-    'PublisherAuditSyncRequest',
-    'PublisherPreflightRequest',
-    'PublisherPreflightResponse',
-    'PublisherLoginQrOneShotRequest',
-    'PublisherLoginQrOneShotResponse',
-    'PublisherRawCommentInput',
-    'ExtensionCommentsBatchRequest',
-    'ExtensionCommentsBatchResponse',
+    "PublisherPlatformInfo",
+    "PublisherBookMetaRequest",
+    "PublisherUploadJobCreateRequest",
+    "ProjectChapterPublishRequest",
+    "PublisherUploadJobResponse",
+    "ExtensionBrowserCookie",
+    "ExtensionPlatformHeartbeat",
+    "ExtensionHeartbeatRequest",
+    "ExtensionHeartbeatResponse",
+    "ExtensionLoginQrNotifyRequest",
+    "ExtensionLoginQrNotifyResponse",
+    "ExtensionSessionSyncRequest",
+    "ExtensionSessionSyncResponse",
+    "ExtensionBrowserSessionResponse",
+    "PublisherBrowserSessionSummaryResponse",
+    "ExtensionClaimUploadJobRequest",
+    "ExtensionClaimUploadJobResponse",
+    "ExtensionClaimCommentSyncJobRequest",
+    "ExtensionClaimCommentSyncJobResponse",
+    "UploadJobResultRequest",
+    "CommentSyncJobResultRequest",
+    "PublisherCommentSyncJobRequest",
+    "PublisherCommentSyncJobResponse",
+    "PublisherWorkBindingResponse",
+    "PublisherChapterBindingResponse",
+    "PublisherCoverAssetResponse",
+    "PublisherCoverGenerateRequest",
+    "PublisherCoverSelectRequest",
+    "PublisherCoverUploadRequest",
+    "PublisherAuditSyncRequest",
+    "PublisherPreflightRequest",
+    "PublisherPreflightResponse",
+    "PublisherLoginQrOneShotRequest",
+    "PublisherLoginQrOneShotResponse",
+    "PublisherRawCommentInput",
+    "ExtensionCommentsBatchRequest",
+    "ExtensionCommentsBatchResponse",
 ]

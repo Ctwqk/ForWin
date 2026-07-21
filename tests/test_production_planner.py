@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from forwin.production.backlog import ProductionBacklog
+from forwin.production.backlog import ProductionBacklog, ProductionPublishJob
 from forwin.production.planner import ProductionPlanner
 from forwin.production.policy import ProductionPolicy, ProductionQuota
 
@@ -54,7 +54,11 @@ def test_planner_records_review_candidate_statuses() -> None:
     )
 
     assert plan.review_chapters == [2, 3, 4]
-    assert plan.review_chapter_statuses == {2: "needs_review", 3: "drafted", 4: "drafted"}
+    assert plan.review_chapter_statuses == {
+        2: "needs_review",
+        3: "drafted",
+        4: "drafted",
+    }
 
 
 def test_planner_prioritizes_planned_chapters_before_failed_chapters() -> None:
@@ -97,9 +101,68 @@ def test_planner_publishes_only_with_auto_publish_and_binding() -> None:
         backlog=ProductionBacklog(
             project_id="project-1",
             reviewed_unpublished=[5, 6, 7],
+            scheduled_publish_jobs=[
+                ProductionPublishJob(
+                    job_id="job-qidian-5",
+                    idempotency_key="key-qidian-5",
+                    canon_commit_id="canon-5",
+                    candidate_id="candidate-5",
+                    chapter_number=5,
+                    platform="fanqie",
+                ),
+                ProductionPublishJob(
+                    job_id="job-qidian-6",
+                    idempotency_key="key-qidian-6",
+                    canon_commit_id="canon-6",
+                    candidate_id="candidate-6",
+                    chapter_number=6,
+                    platform="fanqie",
+                ),
+            ],
         ),
         now=datetime(2026, 5, 5, tzinfo=timezone.utc),
     )
 
     assert plan.publish_chapters == [5, 6]
+    assert [job["job_id"] for job in plan.publish_jobs] == [
+        "job-qidian-5",
+        "job-qidian-6",
+    ]
     assert plan.generation_mode == ""
+
+
+def test_planner_releases_only_snapshotted_jobs_for_current_platform_policy() -> None:
+    plan = ProductionPlanner().plan(
+        policy=ProductionPolicy(
+            enabled=True,
+            auto_publish=True,
+            quota=ProductionQuota(write=0, publish=1),
+            publish_bindings=[{"platform": "qidian", "book_name": "当前书名"}],
+        ),
+        backlog=ProductionBacklog(
+            project_id="project-1",
+            reviewed_unpublished=[8],
+            scheduled_publish_jobs=[
+                ProductionPublishJob(
+                    job_id="job-qidian-8",
+                    idempotency_key="key-qidian-8",
+                    canon_commit_id="canon-8",
+                    candidate_id="candidate-8",
+                    chapter_number=8,
+                    platform="qidian",
+                ),
+                ProductionPublishJob(
+                    job_id="job-fanqie-8",
+                    idempotency_key="key-fanqie-8",
+                    canon_commit_id="canon-8",
+                    candidate_id="candidate-8",
+                    chapter_number=8,
+                    platform="fanqie",
+                ),
+            ],
+        ),
+        now=datetime(2026, 5, 5, tzinfo=timezone.utc),
+    )
+
+    assert plan.publish_chapters == [8]
+    assert [job["job_id"] for job in plan.publish_jobs] == ["job-qidian-8"]

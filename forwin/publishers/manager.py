@@ -91,7 +91,9 @@ class PublisherManager:
         self.login_qr_notifier = DiscordLoginQrNotifier(
             publisher_login_discord_webhook_url
         )
-        self._login_qr_notification_throttle: dict[tuple[str, str], tuple[datetime, str]] = {}
+        self._login_qr_notification_throttle: dict[
+            tuple[str, str], tuple[datetime, str]
+        ] = {}
         self._login_qr_one_shots: dict[str, dict[str, Any]] = {}
         self._login_qr_one_shot_exhausted_until: dict[str, datetime] = {}
         self.runtime = PublisherRuntimeService(
@@ -116,7 +118,9 @@ class PublisherManager:
 
     def _sync_runtime_config(self) -> None:
         self.runtime.auth.extension_api_key = str(self.extension_api_key or "").strip()
-        self.runtime.connection_state.heartbeat_stale_seconds = self.heartbeat_stale_seconds
+        self.runtime.connection_state.heartbeat_stale_seconds = (
+            self.heartbeat_stale_seconds
+        )
         self.runtime.connection_state.preferred_client_id = str(
             self.preferred_client_id or ""
         ).strip()
@@ -166,7 +170,9 @@ class PublisherManager:
             "login_qr_notifications_allowed": True,
         }
 
-    def _active_login_qr_one_shot(self, platform_id: str, now: datetime) -> dict[str, Any] | None:
+    def _active_login_qr_one_shot(
+        self, platform_id: str, now: datetime
+    ) -> dict[str, Any] | None:
         one_shot = self._login_qr_one_shots.get(platform_id)
         if not one_shot:
             return None
@@ -290,7 +296,9 @@ class PublisherManager:
                     self._login_qr_one_shots.pop(platform_id, None)
                     expires_at = one_shot.get("expires_at")
                     if isinstance(expires_at, datetime) and now < expires_at:
-                        self._login_qr_one_shot_exhausted_until[platform_id] = expires_at
+                        self._login_qr_one_shot_exhausted_until[platform_id] = (
+                            expires_at
+                        )
             return result
 
         result = self.login_qr_notifier.notify(
@@ -302,7 +310,10 @@ class PublisherManager:
             captured_at=captured_at,
         )
         if result.get("ok") and throttle_key[0] and throttle_key[1]:
-            self._login_qr_notification_throttle[throttle_key] = (now, image_fingerprint)
+            self._login_qr_notification_throttle[throttle_key] = (
+                now,
+                image_fingerprint,
+            )
         return result
 
     def _notify_login_success_platforms(
@@ -384,6 +395,29 @@ class PublisherManager:
             cover_style_hint=cover_style_hint,
             auto_cover_upload_enabled=auto_cover_upload_enabled,
             publisher_compliance_required=publisher_compliance_required,
+        )
+
+    def materialize_canon_jobs(self, **request: Any) -> list[dict[str, Any]]:
+        return self.runtime.canon_jobs.materialize(**request)
+
+    def find_canon_job(self, **identity: Any) -> dict[str, Any] | None:
+        return self.runtime.canon_jobs.find(**identity)
+
+    def release_canon_jobs(
+        self,
+        *,
+        project_id: str,
+        job_ids: list[str],
+        publish: bool,
+        actor_type: str,
+        session=None,
+    ) -> list[dict[str, Any]]:
+        return self.runtime.canon_jobs.release(
+            project_id=project_id,
+            job_ids=job_ids,
+            publish=publish,
+            actor_type=actor_type,
+            session=session,
         )
 
     def list_work_bindings(
@@ -518,7 +552,11 @@ class PublisherManager:
         book_name: str = "",
     ) -> dict[str, Any]:
         with self.session_factory() as session:
-            work = session.get(PublisherWorkBinding, work_binding_id) if work_binding_id else None
+            work = (
+                session.get(PublisherWorkBinding, work_binding_id)
+                if work_binding_id
+                else None
+            )
             if work is None and project_id:
                 work = session.execute(
                     select(PublisherWorkBinding)
@@ -529,7 +567,8 @@ class PublisherManager:
                     .limit(1)
                 ).scalar_one_or_none()
             payload = {
-                "project_id": project_id or (work.project_id if work is not None else ""),
+                "project_id": project_id
+                or (work.project_id if work is not None else ""),
                 "work_binding_id": work.id if work is not None else "",
                 "remote_book_id": work.remote_book_id if work is not None else "",
                 "remote_url": work.remote_url if work is not None else "",
@@ -570,41 +609,6 @@ class PublisherManager:
             body=body,
             create_if_missing=create_if_missing,
             book_meta=normalized_book_meta,
-        )
-
-    def create_upload_jobs_batch(
-        self,
-        *,
-        project_id: str = "",
-        platform: str,
-        book_name: str,
-        jobs: list[dict[str, Any]],
-        upload_url: str | None,
-        publish: bool,
-        create_if_missing: bool = False,
-        book_meta: dict[str, Any] | None = None,
-        cover_generation_enabled: bool = True,
-        cover_confirmation_required: bool = False,
-        cover_candidate_count: int = 4,
-        cover_style_hint: str = "",
-        auto_cover_upload_enabled: bool = True,
-        publisher_compliance_required: bool = False,
-    ) -> int:
-        return self.runtime.upload_jobs.create_upload_jobs_batch(
-            project_id=project_id,
-            platform=platform,
-            book_name=book_name,
-            jobs=jobs,
-            upload_url=upload_url,
-            publish=publish,
-            create_if_missing=create_if_missing,
-            book_meta=book_meta,
-            cover_generation_enabled=cover_generation_enabled,
-            cover_confirmation_required=cover_confirmation_required,
-            cover_candidate_count=cover_candidate_count,
-            cover_style_hint=cover_style_hint,
-            auto_cover_upload_enabled=auto_cover_upload_enabled,
-            publisher_compliance_required=publisher_compliance_required,
         )
 
     def get_upload_job(self, job_id: str) -> dict[str, Any]:
@@ -840,7 +844,9 @@ class PublisherManager:
     def _serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
         return self.runtime.upload_jobs.serialize_upload_job(job)
 
-    def _serialize_comment_sync_job(self, job: PublisherCommentSyncJob) -> dict[str, Any]:
+    def _serialize_comment_sync_job(
+        self, job: PublisherCommentSyncJob
+    ) -> dict[str, Any]:
         return self.runtime.comment_sync.serialize_comment_sync_job(job)
 
     def _new_upload_job(self, *args, **kwargs) -> PublisherUploadJob:

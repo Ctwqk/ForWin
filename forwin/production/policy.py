@@ -4,7 +4,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.api_schema import ProjectAutomationPublishSettings, ProjectAutomationSettings
+from forwin.api_schema import (
+    ProjectAutomationPublishSettings,
+    ProjectAutomationSettings,
+)
 from forwin.long_run_policy import LongRunPolicy, normalize_long_run_policy
 
 
@@ -38,7 +41,9 @@ class ProductionPolicy(BaseModel):
     auto_publish: bool = False
     max_active_generation_tasks: int = 1
     max_active_upload_tasks: int = 1
-    publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
+    publish_bindings: list[ProjectAutomationPublishSettings] = Field(
+        default_factory=list
+    )
     long_run_policy: LongRunPolicy = Field(default_factory=LongRunPolicy)
 
 
@@ -49,8 +54,10 @@ def _automation_publish_bindings(
     seen_platforms: set[str] = set()
     for binding in list(getattr(automation, "publish_bindings", []) or []):
         platform = str(binding.platform or "").strip()
-        if not platform or platform in seen_platforms:
+        if not platform:
             continue
+        if platform in seen_platforms:
+            raise ValueError(f"duplicate publisher platform configuration: {platform}")
         bindings.append(binding)
         seen_platforms.add(platform)
     publish = getattr(automation, "publish", None)
@@ -83,12 +90,18 @@ def policy_from_automation(automation: ProjectAutomationSettings) -> ProductionP
         enabled=bool(getattr(automation, "enabled", False)),
         daily_start_time=str(getattr(automation, "daily_start_time", "") or "09:00"),
         quota=ProductionQuota(
-            plan=_clamp_quota(getattr(automation, "daily_plan_quota", 0), default=0, minimum=0),
+            plan=_clamp_quota(
+                getattr(automation, "daily_plan_quota", 0), default=0, minimum=0
+            ),
             write=write_quota,
-            review=_clamp_quota(getattr(automation, "daily_review_quota", 0), default=0, minimum=0),
+            review=_clamp_quota(
+                getattr(automation, "daily_review_quota", 0), default=0, minimum=0
+            ),
             publish=publish_quota,
         ),
-        stop_when_review_pending=bool(getattr(automation, "stop_when_review_pending", True)),
+        stop_when_review_pending=bool(
+            getattr(automation, "stop_when_review_pending", True)
+        ),
         auto_publish=auto_publish,
         max_active_generation_tasks=_clamp_quota(
             getattr(automation, "max_active_generation_tasks", 1),

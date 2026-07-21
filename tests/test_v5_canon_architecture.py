@@ -71,7 +71,10 @@ def test_only_canon_admission_assigns_accepted_chapter_status() -> None:
         if relative == "forwin/canon/admission.py":
             continue
         source = path.read_text(encoding="utf-8")
-        if '.status = "accepted"' in source and "KnowledgeEditProposalRow" not in source:
+        if (
+            '.status = "accepted"' in source
+            and "KnowledgeEditProposalRow" not in source
+        ):
             offenders.append(relative)
 
     assert offenders == []
@@ -149,3 +152,18 @@ def test_npc_intent_projection_stays_deleted_from_v5_runtime() -> None:
             offenders.append(path.relative_to(ROOT).as_posix())
 
     assert offenders == []
+
+
+def test_legacy_publisher_batch_port_stays_deleted() -> None:
+    assert not (ROOT / "forwin/publisher_runtime/ports.py").exists()
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    for forbidden in (
+        "create_upload_jobs_batch",
+        "PublisherJobBatchRequest",
+        "PublisherRuntimeJobClient",
+    ):
+        assert forbidden not in production_source

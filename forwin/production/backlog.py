@@ -5,10 +5,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class ProductionPublishChapter(BaseModel):
+class ProductionPublishJob(BaseModel):
+    job_id: str
+    idempotency_key: str
+    canon_commit_id: str
+    candidate_id: str
     chapter_number: int
-    chapter_title: str
-    body: str
+    platform: str
 
 
 class ProductionBacklog(BaseModel):
@@ -23,15 +26,20 @@ class ProductionBacklog(BaseModel):
     has_active_upload_task: bool = False
     chapter_plan_count: int = 0
     has_existing_chapter_plans: bool = False
-    reviewed_unpublished_payloads: list[ProductionPublishChapter] = Field(default_factory=list)
+    scheduled_publish_jobs: list[ProductionPublishJob] = Field(default_factory=list)
 
-    def publish_jobs_for(self, chapter_numbers: list[int]) -> list[dict[str, Any]]:
+    def publish_jobs_for(
+        self,
+        chapter_numbers: list[int],
+        *,
+        platforms: set[str],
+    ) -> list[dict[str, Any]]:
         selected = {int(item) for item in chapter_numbers}
         return [
-            {
-                "chapter_title": item.chapter_title,
-                "body": item.body,
-            }
-            for item in self.reviewed_unpublished_payloads
-            if int(item.chapter_number) in selected
+            item.model_dump(mode="json")
+            for item in self.scheduled_publish_jobs
+            if int(item.chapter_number) in selected and item.platform in platforms
         ]
+
+
+__all__ = ["ProductionBacklog", "ProductionPublishJob"]

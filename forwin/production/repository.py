@@ -9,13 +9,15 @@ from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.project import ChapterPlan
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
-from forwin.state.query_helpers import load_latest_drafts_by_plan_id
-
-from .backlog import ProductionBacklog, ProductionPublishChapter
+from .backlog import ProductionBacklog, ProductionPublishJob
 
 
 def _normalized_project_ids(project_ids: list[str]) -> list[str]:
-    return [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
+    return [
+        str(project_id or "").strip()
+        for project_id in project_ids
+        if str(project_id or "").strip()
+    ]
 
 
 class ProductionRepository:
@@ -31,17 +33,22 @@ class ProductionRepository:
     ) -> dict[str, ProductionBacklog]:
         ids = _normalized_project_ids(project_ids)
         backlogs = {
-            project_id: ProductionBacklog(project_id=project_id)
-            for project_id in ids
+            project_id: ProductionBacklog(project_id=project_id) for project_id in ids
         }
         if not ids:
             return backlogs
 
-        plans = self.session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id.in_(ids))
-            .order_by(ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+        plans = (
+            self.session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id.in_(ids))
+                .order_by(
+                    ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc()
+                )
+            )
+            .scalars()
+            .all()
+        )
         plans_by_project: dict[str, list[ChapterPlan]] = defaultdict(list)
         for plan in plans:
             backlog = backlogs.get(str(plan.project_id or ""))
@@ -64,15 +71,7 @@ class ProductionRepository:
                 backlog.needs_review.append(chapter_number)
         self._attach_continue_worksets(backlogs, plans_by_project)
 
-        accepted_plans = self.session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id.in_(ids),
-                ChapterPlan.status == "accepted",
-            )
-            .order_by(ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-        self._attach_reviewed_unpublished(backlogs, accepted_plans)
+        self._attach_scheduled_publish_jobs(backlogs, ids)
         self._attach_active_generation_flags(
             backlogs,
             ids,
@@ -106,8 +105,12 @@ class ProductionRepository:
                 backlog.failed = []
                 continue
             selected = set(workset.chapter_numbers)
-            filtered_planned = [number for number in backlog.planned_unwritten if number in selected]
-            filtered_failed = [number for number in backlog.failed if number in selected]
+            filtered_planned = [
+                number for number in backlog.planned_unwritten if number in selected
+            ]
+            filtered_failed = [
+                number for number in backlog.failed if number in selected
+            ]
             if filtered_planned or filtered_failed:
                 backlog.planned_unwritten = filtered_planned
                 backlog.failed = filtered_failed
@@ -115,62 +118,54 @@ class ProductionRepository:
                 backlog.planned_unwritten = list(workset.chapter_numbers)
                 backlog.failed = []
 
-    def _attach_reviewed_unpublished(
+    def _attach_scheduled_publish_jobs(
         self,
         backlogs: dict[str, ProductionBacklog],
-        accepted_plans: list[ChapterPlan],
+        project_ids: list[str],
     ) -> None:
-        if not accepted_plans:
+        if not project_ids:
             return
-        plan_ids = [plan.id for plan in accepted_plans]
-        draft_by_plan_id = load_latest_drafts_by_plan_id(self.session, plan_ids)
-        accepted_titles_by_project: dict[str, set[str]] = defaultdict(set)
-        for plan in accepted_plans:
-            title = str(plan.title or "").strip()
-            if title:
-                accepted_titles_by_project[str(plan.project_id or "")].add(title)
-        uploaded_or_queued_titles: dict[str, set[str]] = defaultdict(set)
-        title_filters = {
-            title
-            for titles in accepted_titles_by_project.values()
-            for title in titles
-        }
-        if title_filters:
-            rows = self.session.execute(
-                select(
-                    PublisherUploadJob.project_id,
-                    PublisherUploadJob.chapter_title,
-                ).where(
+        jobs = (
+            self.session.execute(
+                select(PublisherUploadJob)
+                .where(
                     PublisherUploadJob.deleted_at.is_(None),
-                    PublisherUploadJob.project_id.in_(list(accepted_titles_by_project.keys())),
-                    PublisherUploadJob.chapter_title.in_(title_filters),
-                    PublisherUploadJob.status.in_(["pending", "running", "terminating", "succeeded"]),
+                    PublisherUploadJob.project_id.in_(project_ids),
+                    PublisherUploadJob.task_kind == "chapter_upload",
+                    PublisherUploadJob.status == "scheduled",
+                    PublisherUploadJob.canon_commit_id.is_not(None),
+                    PublisherUploadJob.candidate_id != "",
+                    PublisherUploadJob.chapter_number > 0,
+                    PublisherUploadJob.idempotency_key != "",
                 )
-            ).all()
-            for project_id, chapter_title in rows:
-                normalized_project_id = str(project_id or "").strip()
-                normalized_title = str(chapter_title or "").strip()
-                if normalized_project_id and normalized_title:
-                    uploaded_or_queued_titles[normalized_project_id].add(normalized_title)
-
-        for plan in accepted_plans:
-            project_id = str(plan.project_id or "").strip()
+                .order_by(
+                    PublisherUploadJob.project_id.asc(),
+                    PublisherUploadJob.chapter_number.asc(),
+                    PublisherUploadJob.platform_id.asc(),
+                    PublisherUploadJob.id.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        seen_chapters: dict[str, set[int]] = defaultdict(set)
+        for job in jobs:
+            project_id = str(job.project_id or "").strip()
             backlog = backlogs.get(project_id)
             if backlog is None:
                 continue
-            title = str(plan.title or "").strip()
-            if title and title in uploaded_or_queued_titles.get(project_id, set()):
-                continue
-            draft = draft_by_plan_id.get(plan.id)
-            if draft is None:
-                continue
-            chapter_number = int(plan.chapter_number or 0)
-            backlog.reviewed_unpublished.append(chapter_number)
-            backlog.reviewed_unpublished_payloads.append(
-                ProductionPublishChapter(
+            chapter_number = int(job.chapter_number or 0)
+            if chapter_number not in seen_chapters[project_id]:
+                backlog.reviewed_unpublished.append(chapter_number)
+                seen_chapters[project_id].add(chapter_number)
+            backlog.scheduled_publish_jobs.append(
+                ProductionPublishJob(
+                    job_id=job.id,
+                    idempotency_key=job.idempotency_key,
+                    canon_commit_id=str(job.canon_commit_id or ""),
+                    candidate_id=job.candidate_id,
                     chapter_number=chapter_number,
-                    chapter_title=title or f"第{chapter_number}章",
-                    body=str(draft.body_text or ""),
+                    platform=job.platform_id,
                 )
             )
 
@@ -181,16 +176,20 @@ class ProductionRepository:
         *,
         terminal_statuses: set[str],
     ) -> None:
-        rows = self.session.execute(
-            select(GenerationTask.project_id)
-            .where(
-                GenerationTask.deleted_at.is_(None),
-                GenerationTask.task_kind == "generation",
-                GenerationTask.project_id.in_(project_ids),
-                GenerationTask.status.notin_(tuple(terminal_statuses)),
+        rows = (
+            self.session.execute(
+                select(GenerationTask.project_id)
+                .where(
+                    GenerationTask.deleted_at.is_(None),
+                    GenerationTask.task_kind == "generation",
+                    GenerationTask.project_id.in_(project_ids),
+                    GenerationTask.status.notin_(tuple(terminal_statuses)),
+                )
+                .distinct()
             )
-            .distinct()
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for project_id in rows:
             backlog = backlogs.get(str(project_id or "").strip())
             if backlog is not None:
@@ -203,15 +202,20 @@ class ProductionRepository:
         *,
         terminal_statuses: set[str],
     ) -> None:
-        rows = self.session.execute(
-            select(PublisherUploadJob.project_id)
-            .where(
-                PublisherUploadJob.deleted_at.is_(None),
-                PublisherUploadJob.project_id.in_(project_ids),
-                PublisherUploadJob.status.notin_(tuple(terminal_statuses)),
+        rows = (
+            self.session.execute(
+                select(PublisherUploadJob.project_id)
+                .where(
+                    PublisherUploadJob.deleted_at.is_(None),
+                    PublisherUploadJob.project_id.in_(project_ids),
+                    PublisherUploadJob.status.notin_(tuple(terminal_statuses)),
+                    PublisherUploadJob.status != "scheduled",
+                )
+                .distinct()
             )
-            .distinct()
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for project_id in rows:
             backlog = backlogs.get(str(project_id or "").strip())
             if backlog is not None:

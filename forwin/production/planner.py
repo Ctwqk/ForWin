@@ -64,7 +64,9 @@ class ProductionPlanner:
             )
 
         write_quota = max(0, int(policy.quota.write or 0))
-        has_existing_chapter_plans = backlog.has_existing_chapter_plans or backlog.chapter_plan_count > 0
+        has_existing_chapter_plans = (
+            backlog.has_existing_chapter_plans or backlog.chapter_plan_count > 0
+        )
         if write_quota > 0 and not has_existing_chapter_plans:
             plan.write_chapters.extend(range(1, write_quota + 1))
             plan.generation_mode = "initial"
@@ -77,16 +79,36 @@ class ProductionPlanner:
                 plan.requested_chapters = len(plan.write_chapters)
 
         publish_quota = max(0, int(policy.quota.publish or 0))
+        publish_platforms = {
+            str(binding.platform or "").strip()
+            for binding in policy.publish_bindings
+            if str(binding.platform or "").strip()
+        }
         if (
             publish_quota > 0
             and policy.auto_publish
-            and policy.publish_bindings
+            and publish_platforms
             and backlog.reviewed_unpublished
         ):
             if backlog.has_active_upload_task and policy.max_active_upload_tasks <= 1:
                 plan.notes.append("active_upload_task")
             else:
-                plan.publish_chapters.extend(backlog.reviewed_unpublished[:publish_quota])
-                plan.publish_jobs.extend(backlog.publish_jobs_for(plan.publish_chapters))
+                eligible_chapters = {
+                    item.chapter_number
+                    for item in backlog.scheduled_publish_jobs
+                    if item.platform in publish_platforms
+                }
+                plan.publish_chapters.extend(
+                    chapter_number
+                    for chapter_number in backlog.reviewed_unpublished
+                    if chapter_number in eligible_chapters
+                )
+                del plan.publish_chapters[publish_quota:]
+                plan.publish_jobs.extend(
+                    backlog.publish_jobs_for(
+                        plan.publish_chapters,
+                        platforms=publish_platforms,
+                    )
+                )
 
         return plan

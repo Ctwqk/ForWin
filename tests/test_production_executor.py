@@ -12,7 +12,9 @@ from forwin.production.policy import policy_from_automation
 
 
 class RecordingApplicationService:
-    def __init__(self, *, task_id: str = "task-1", error: Exception | None = None) -> None:
+    def __init__(
+        self, *, task_id: str = "task-1", error: Exception | None = None
+    ) -> None:
         self.task_id = task_id
         self.error = error
         self.commands = []
@@ -40,7 +42,9 @@ def test_executor_starts_initial_generation_task() -> None:
     ).execute(
         plan=plan,
         project=project,
-        policy=policy_from_automation(normalize_project_automation({"daily_chapter_quota": 2})),
+        policy=policy_from_automation(
+            normalize_project_automation({"daily_chapter_quota": 2})
+        ),
     )
 
     assert result.action == "started_initial_generation"
@@ -66,7 +70,9 @@ def test_executor_starts_continue_generation_task() -> None:
     ).execute(
         plan=plan,
         project=project,
-        policy=policy_from_automation(normalize_project_automation({"daily_chapter_quota": 3})),
+        policy=policy_from_automation(
+            normalize_project_automation({"daily_chapter_quota": 3})
+        ),
     )
 
     assert result.action == "started_continue_generation"
@@ -109,8 +115,12 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
         publish_chapters=[3],
         publish_jobs=[
             {
-                "chapter_title": "第3章",
-                "body": "正文",
+                "job_id": "job-fanqie-3",
+                "idempotency_key": "publisher-key-3",
+                "canon_commit_id": "canon-3",
+                "candidate_id": "candidate-3",
+                "chapter_number": 3,
+                "platform": "fanqie",
             }
         ],
     )
@@ -131,7 +141,10 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
     result = ProductionExecutor(
         generation_application=RecordingApplicationService(),
         publisher_manager_factory=lambda: SimpleNamespace(
-            create_upload_jobs_batch=lambda **kwargs: publish_calls.append(kwargs) or 1
+            release_canon_jobs=lambda **kwargs: (
+                publish_calls.append(kwargs)
+                or [{"job_id": "job-fanqie-3", "status": "pending"}]
+            )
         ),
     ).execute(
         plan=plan,
@@ -141,8 +154,14 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
 
     assert result.action == "started_publish_jobs"
     assert result.publish_job_count == 1
-    assert publish_calls[0]["platform"] == "fanqie"
-    assert publish_calls[0]["jobs"] == [{"chapter_title": "第3章", "body": "正文"}]
+    assert publish_calls == [
+        {
+            "project_id": project.id,
+            "job_ids": ["job-fanqie-3"],
+            "publish": True,
+            "actor_type": "scheduler",
+        }
+    ]
 
 
 def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
@@ -158,13 +177,19 @@ def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
 
     result = ProductionExecutor(
         generation_application=RecordingApplicationService(),
-        review_chapter=lambda project_id, chapter_number: review_calls.append((project_id, chapter_number)),
-        approve_chapter_review=lambda project_id, chapter_number: approve_calls.append((project_id, chapter_number)),
+        review_chapter=lambda project_id, chapter_number: review_calls.append(
+            (project_id, chapter_number)
+        ),
+        approve_chapter_review=lambda project_id, chapter_number: approve_calls.append(
+            (project_id, chapter_number)
+        ),
     ).execute(
         plan=plan,
         project=project,
         policy=policy_from_automation(
-            normalize_project_automation({"daily_chapter_quota": 1, "daily_review_quota": 2})
+            normalize_project_automation(
+                {"daily_chapter_quota": 1, "daily_review_quota": 2}
+            )
         ),
     )
 

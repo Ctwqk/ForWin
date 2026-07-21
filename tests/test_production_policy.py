@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.application.read_models import normalize_project_automation
 from forwin.production.policy import policy_from_automation
 
@@ -55,7 +57,10 @@ def test_policy_prefers_new_quota_fields_and_clamps_bounds() -> None:
     assert policy.quota.publish == 20
     assert policy.stop_when_review_pending is False
     assert policy.auto_publish is True
-    assert [binding.platform for binding in policy.publish_bindings] == ["qidian", "fanqie"]
+    assert [binding.platform for binding in policy.publish_bindings] == [
+        "qidian",
+        "fanqie",
+    ]
 
 
 def test_policy_auto_publish_backfills_publish_quota_when_missing() -> None:
@@ -90,3 +95,28 @@ def test_policy_carries_long_run_policy() -> None:
     assert policy.long_run_policy.mode == "factory_batch"
     assert policy.long_run_policy.batch_size == 12
     assert policy.long_run_policy.defer_observation_failures is True
+
+
+def test_duplicate_publish_platform_configuration_is_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate publisher platform"):
+        normalize_project_automation(
+            {
+                "publish_bindings": [
+                    {"platform": "qidian", "book_name": "主绑定"},
+                    {"platform": "qidian", "book_name": "重复绑定"},
+                ]
+            }
+        )
+
+
+def test_duplicate_publish_platform_after_supported_limit_is_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate publisher platform"):
+        normalize_project_automation(
+            {
+                "publish_bindings": [
+                    {"platform": "qidian", "book_name": "起点绑定"},
+                    {"platform": "fanqie", "book_name": "番茄绑定"},
+                    {"platform": "qidian", "book_name": "晚到的重复绑定"},
+                ]
+            }
+        )

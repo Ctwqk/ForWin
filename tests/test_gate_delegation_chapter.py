@@ -323,7 +323,9 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
                 )
             ),
             _emit_progress=lambda *_args, **_kwargs: None,
-            _run_phase3_pass=lambda **_kwargs: None,
+            _recover_post_canon_before_chapter=lambda **_kwargs: None,
+            _run_phase3_pass=lambda **_kwargs: {"run_ids": {}},
+            _run_post_canon_order_controls=lambda **_kwargs: {},
             _audit_future_plans_after_acceptance=lambda **_kwargs: None,
             _record_generation_audit_report_if_due=lambda **_kwargs: None,
             _cancelled_result=lambda project_id, requested, **kwargs: RunResult(
@@ -335,10 +337,6 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
         )
         monkeypatch.setattr(
             "forwin.generation.pipeline_core.project_chapters.save_accepted_trope_usage_for_chapter",
-            lambda *_args, **_kwargs: None,
-        )
-        monkeypatch.setattr(
-            "forwin.generation.pipeline_core.project_chapters._verify_obligations_after_acceptance",
             lambda *_args, **_kwargs: None,
         )
         monkeypatch.setattr(

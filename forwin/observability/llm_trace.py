@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any
 
 from forwin.audit.events import DecisionEventType
@@ -470,3 +471,20 @@ def _hash_text(text: str) -> str:
 
 def _preview(text: str, *, limit: int = 500) -> str:
     return " ".join(str(text or "").split())[: max(1, int(limit or 500))]
+
+
+_POST_CANON_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def post_canon_trace_artifact_key(
+    *,
+    canon_commit_id: str,
+    step_name: str,
+) -> str:
+    commit_id = str(canon_commit_id or "").strip()
+    step = str(step_name or "").strip()
+    if not _POST_CANON_ID_RE.fullmatch(commit_id):
+        raise ValueError("canon_commit_id is not safe for an artifact key")
+    if not _POST_CANON_ID_RE.fullmatch(step):
+        raise ValueError("step_name is not safe for an artifact key")
+    return f"post_canon/{commit_id}/{step}/llm_trace.json"

@@ -194,6 +194,36 @@ def test_close_releases_only_materialized_external_resources(monkeypatch) -> Non
     assert calls == ["retrieval", "llm", "outbox", "artifact", "engine"]
 
 
+def test_outbox_phase3_provider_never_builds_generation_bundle(monkeypatch) -> None:
+    from forwin.runtime.container import RuntimeContainer
+
+    service = object()
+    core = SimpleNamespace()
+    container = _container("outbox_worker")
+    monkeypatch.setattr(
+        RuntimeContainer,
+        "core_services",
+        lambda _self: core,
+    )
+    monkeypatch.setattr(
+        RuntimeContainer,
+        "_build_generation_services",
+        lambda _self: (_ for _ in ()).throw(
+            AssertionError("outbox phase3 must not build generation services")
+        ),
+    )
+    monkeypatch.setattr(
+        RuntimeContainer,
+        "_build_outbox_post_canon_maintenance",
+        lambda _self, _core: service,
+        raising=False,
+    )
+
+    assert container._provide_outbox_post_canon_maintenance() is service
+    assert container._provide_outbox_post_canon_maintenance() is service
+    assert container._generation_services is None
+
+
 def test_task_pipeline_build_failure_closes_its_container(monkeypatch) -> None:
     from forwin.application import generation_execution
 

@@ -18,6 +18,7 @@ from forwin.http.adapters import (
     api_project_control_routes,
     api_llm_kb_routes,
     api_map_routes,
+    api_maintenance_routes,
     api_obsidian_routes,
     api_proposal_routes,
     api_projection_routes,
@@ -68,6 +69,7 @@ from forwin.api_schema import (
     NarrativeConstraintsResponse,
     PerformanceReportResponse,
     PerformanceSpanInfo,
+    PostCanonMaintenanceStatusResponse,
     ProjectionRefreshResponse,
     ProjectionStatusResponse,
     ProjectAutomationUpdateResponse,
@@ -220,6 +222,9 @@ def register_api_routes(
         get_config=get_config,
         memory_index_provider=deps.core.provide_memory_index,
     )
+    maintenance_handlers = api_maintenance_routes.build_handlers(
+        get_session=get_session,
+    )
     proposal_handlers = api_proposal_routes.build_handlers(
         get_session=get_session,
     )
@@ -238,6 +243,7 @@ def register_api_routes(
         **obsidian_handlers,
         **llm_kb_handlers,
         **projection_handlers,
+        **maintenance_handlers,
         **proposal_handlers,
         **map_handlers,
     }
@@ -989,6 +995,12 @@ def register_api_routes(
             ["GET"],
             handlers["get_projection_page"],
             {},
+        ),
+        (
+            "/api/projects/{project_id}/maintenance/post-canon",
+            ["GET"],
+            handlers["get_post_canon_maintenance_status"],
+            {"response_model": PostCanonMaintenanceStatusResponse},
         ),
         (
             "/api/projects/{project_id}/context-pack/{role}",

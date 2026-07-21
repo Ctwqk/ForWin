@@ -51,6 +51,7 @@ GENERATION_STAGE_ORDER = (
     "repair_review",
     "applying_canon",
     "running_post_acceptance",
+    "post_acceptance_deferred",
     "paused_for_review",
     "completed",
     "failed",

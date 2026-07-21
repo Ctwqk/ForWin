@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import threading
-from typing import Callable, Literal, cast
+from typing import TYPE_CHECKING, Callable, Literal, cast
 
 from forwin.application.generation import GenerationApplicationService
 from forwin.canon import CanonAdmissionService, CanonPreparationService
@@ -43,6 +43,9 @@ from forwin.writer.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from forwin.maintenance.post_canon import PostCanonMaintenanceService
+
 RuntimeRole = Literal[
     "api",
     "generation_worker",
@@ -62,6 +65,7 @@ class RuntimeContainer:
     _core_services: CoreRuntimeServices | None = None
     _generation_services: GenerationRuntimeServices | None = None
     _publisher_services: PublisherRuntimeServices | None = None
+    _post_canon_maintenance: PostCanonMaintenanceService | None = None
     _outbox_handlers: dict | None = None
     _outbox_resources: list[object] = field(default_factory=list)
     _closed: bool = False
@@ -203,6 +207,10 @@ class RuntimeContainer:
                 canon_preparation=generation.canon_preparation,
                 canon_admission=generation.canon_admission,
                 gate_delegation=generation.gate_delegation,
+                post_canon_maintenance=self._resolve_post_canon_maintenance(
+                    core=core,
+                    generation=generation,
+                ),
                 progress_callback=progress_callback,
                 should_abort=should_abort,
                 should_pause=should_pause,
@@ -468,7 +476,111 @@ class RuntimeContainer:
             session_factory=core.session_factory,
             config=core.infrastructure,
             memory_index_provider=self._provide_outbox_memory_index,
+            post_canon_service_provider=(
+                self._provide_outbox_post_canon_maintenance
+            ),
         )
+
+    def _resolve_post_canon_maintenance(
+        self,
+        *,
+        core: CoreRuntimeServices,
+        generation: GenerationRuntimeServices,
+    ) -> PostCanonMaintenanceService:
+        from forwin.maintenance.post_canon import PostCanonMaintenanceService
+
+        service = self._post_canon_maintenance
+        if service is None:
+            service = PostCanonMaintenanceService(
+                session_factory=core.session_factory,
+                stage_analyzer=generation.stage_analyzer,
+                pacing_strategist=generation.pacing_strategist,
+                replan_governor=generation.replan_governor,
+                arc_envelope_manager=generation.arc_envelope_manager,
+                world_simulator=generation.world_simulator,
+                artifact_store=core.artifact_store,
+                llm_client=generation.llm_client,
+            )
+            self._post_canon_maintenance = service
+        return service
+
+    def _provide_outbox_post_canon_maintenance(
+        self,
+    ) -> PostCanonMaintenanceService:
+        with self._lock:
+            self._require_open()
+            core = self.core_services()
+            service = self._post_canon_maintenance
+            if service is None:
+                service = self._build_outbox_post_canon_maintenance(core)
+                self._post_canon_maintenance = service
+            return service
+
+    def _build_outbox_post_canon_maintenance(
+        self,
+        core: CoreRuntimeServices,
+    ) -> PostCanonMaintenanceService:
+        from forwin.maintenance.post_canon import PostCanonMaintenanceService
+
+        infrastructure = core.infrastructure
+        policy = core.policy
+        model_profile = infrastructure.resolve_model_profile(policy.model_profile_id)
+        llm_client = self._build_llm_client(infrastructure, policy)
+        try:
+            arc_director = ArcDirector(
+                llm_client=llm_client,
+                max_tokens=infrastructure.max_tokens,
+            )
+            subworld_manager = SubWorldManager(director=arc_director)
+            stage_analyzer = StageAnalyzer()
+            pacing_strategist = PacingStrategist(
+                window_size=3,
+                stale_thread_window=3,
+                min_avg_chars=1600,
+                max_avg_chars=3800,
+                active_thread_limit=infrastructure.phase_active_thread_limit,
+            )
+            replan_governor = ReplanGovernor(
+                cooldown_chapters=3,
+                director=arc_director,
+                subworld_manager=subworld_manager,
+            )
+            llm_available = (
+                bool(model_profile.api_key) or infrastructure.codex_enabled
+            )
+            world_simulator = WorldSimulator(
+                llm_client=(
+                    llm_client
+                    if policy.planning.use_llm_simulation and llm_available
+                    else None
+                ),
+                active_thread_limit=infrastructure.phase_active_thread_limit,
+            )
+            planning_service = PlanningService.build_default(
+                director=arc_director,
+                subworld_manager=subworld_manager,
+                trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
+            )
+            arc_envelope_manager = ArcEnvelopeManager(
+                director=arc_director,
+                subworld_manager=subworld_manager,
+                planning_service=planning_service,
+            )
+            service = PostCanonMaintenanceService(
+                session_factory=core.session_factory,
+                stage_analyzer=stage_analyzer,
+                pacing_strategist=pacing_strategist,
+                replan_governor=replan_governor,
+                arc_envelope_manager=arc_envelope_manager,
+                world_simulator=world_simulator,
+                artifact_store=core.artifact_store,
+                llm_client=llm_client,
+            )
+        except Exception:
+            llm_client.close()
+            raise
+        self._outbox_resources.append(llm_client)
+        return service
 
     def _provide_outbox_memory_index(self):
         with self._lock:

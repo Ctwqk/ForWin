@@ -26,6 +26,7 @@ from forwin.generation.pipeline_core.world_projection import PostCanonStage
 from forwin.generation.pipeline_core.writer_attention import WriterExecutionStage
 from forwin.genesis import BookGenesisService
 from forwin.model_adapter import ModelAdapter
+from forwin.maintenance.post_canon import PostCanonMaintenanceService
 from forwin.observability.ports import SpanHandle
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
@@ -87,6 +88,7 @@ class ChapterPipeline(
         canon_preparation: CanonPreparationService,
         canon_admission: CanonAdmissionService,
         gate_delegation: GateDelegationService,
+        post_canon_maintenance: PostCanonMaintenanceService | None = None,
         progress_callback: Callable[[str, dict[str, object]], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
@@ -130,6 +132,19 @@ class ChapterPipeline(
         self.canon_preparation = canon_preparation
         self.canon_admission = canon_admission
         self.gate_delegation = gate_delegation
+        self.post_canon_maintenance = (
+            post_canon_maintenance
+            or PostCanonMaintenanceService(
+                session_factory=self._SessionFactory,
+                stage_analyzer=self.stage_analyzer,
+                pacing_strategist=self.pacing_strategist,
+                replan_governor=self.replan_governor,
+                arc_envelope_manager=self.arc_envelope_manager,
+                world_simulator=self.world_simulator,
+                artifact_store=self.artifact_store,
+                llm_client=self.llm_client,
+            )
+        )
         self.canon_preparation_context = CanonPreparationContext(
             policy=self.policy,
             llm_client=self.llm_client,

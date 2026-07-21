@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from forwin.book_state.repository import BookStateRepository
+from forwin.generation.pipeline_core.common import logger
+from forwin.generation.pipeline_core.result import RunResult
+from forwin.models import new_id
+from forwin.models.draft import ChapterReview
 from forwin.protocol.book_state import (
     GraphDelta,
     GraphDeltaType,
@@ -9,15 +15,11 @@ from forwin.protocol.book_state import (
     WorldEdge,
     WorldNode,
 )
-import json
-from forwin.generation.pipeline_core.common import logger
 from forwin.protocol.review import ReviewVerdict
-from forwin.models.draft import ChapterReview
-from forwin.models import new_id
-from forwin.generation.pipeline_core.result import RunResult
-from sqlalchemy.orm import Session
-from forwin.state.updater import StateUpdater
 from forwin.protocol.writer import WriterOutput
+from forwin.state.updater import StateUpdater
+
+
 def _load_review_verdict(review: ChapterReview) -> ReviewVerdict:
     meta = (
         json.loads(review.review_meta_json or "{}")
@@ -38,48 +40,6 @@ def _load_review_verdict(review: ChapterReview) -> ReviewVerdict:
 class FinalizationStage:
     """Owns the finalization stage behavior."""
 
-    def _flush_background_llm_trace(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        chapter_number: int,
-        stage_key: str,
-        trace_scope: str,
-    ) -> str:
-        drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
-        attempts = drain_attempts() if callable(drain_attempts) else []
-        if not attempts:
-            return ""
-        return self._save_prompt_trace_payload(
-            session=session,
-            updater=StateUpdater(session),
-            project_id=project_id,
-            prompt_trace={
-                "trace_scope": trace_scope,
-                "stage_key": stage_key,
-                "template_id": f"{trace_scope}:{stage_key}",
-                "template_version": "v1",
-                "effective_system_prompt": "",
-                "prompt_layers": [],
-                "input_snapshot": {
-                    "project_id": project_id,
-                    "chapter_number": chapter_number,
-                    "stage_key": stage_key,
-                },
-                "model_profile": {
-                    "profile_id": getattr(self.llm_client, "profile_id", ""),
-                    "profile_name": getattr(self.llm_client, "profile_name", ""),
-                    "model": getattr(self.llm_client, "model", ""),
-                    "base_url": getattr(self.llm_client, "base_url", ""),
-                },
-                "attempts": attempts,
-                "output_summary": {
-                    "status": "recorded",
-                    "chapter_number": chapter_number,
-                },
-            },
-        )
     def _abort_requested(self) -> bool:
         try:
             return bool(self.should_abort and self.should_abort())

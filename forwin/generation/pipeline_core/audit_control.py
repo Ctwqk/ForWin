@@ -732,9 +732,7 @@ class AuditControlStage:
             .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
             .first()
         )
-        if existing_boundary_checkpoint is not None and str(
-            existing_boundary_checkpoint.status or ""
-        ) in {"pending", "warn", "fail", "error"}:
+        if existing_boundary_checkpoint is not None:
             return existing_boundary_checkpoint
         band_plans = (
             session.query(ChapterPlan)

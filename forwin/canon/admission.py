@@ -22,10 +22,13 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.audit import DecisionEvent
 from forwin.models.knowledge import KnowledgeEditProposalRow
+from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import ChapterPlan, Project
+from forwin.maintenance.state import post_canon_barrier_ready
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.outbox.store import enqueue_outbox_event
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
+from forwin.runtime.policy_store import ProjectPolicyStore
 
 from .entity_admission import EntityAdmissionCommitter
 from .plan import CanonCommitPlan
@@ -74,7 +77,9 @@ class CanonAdmissionService:
                 if self.transaction_guard is not None and not self.transaction_guard(
                     session
                 ):
-                    raise CanonStaleVersion("generation task lease lost before Canon commit")
+                    raise CanonStaleVersion(
+                        "generation task lease lost before Canon commit"
+                    )
 
                 prior = session.execute(
                     select(CanonCommitRecord)
@@ -84,6 +89,15 @@ class CanonAdmissionService:
                 if prior is not None:
                     return _outcome_from_record(prior, idempotent=True)
 
+                self._require_previous_post_canon_barrier(
+                    session=session,
+                    plan=plan,
+                    band_checkpoint_action=(
+                        ProjectPolicyStore(session)
+                        .load(project)
+                        .policy.pause.band_checkpoint_action
+                    ),
+                )
                 chapter = (
                     session.execute(
                         select(ChapterPlan)
@@ -253,6 +267,44 @@ class CanonAdmissionService:
                 failure_reason=str(exc),
             )
 
+    @staticmethod
+    def _require_previous_post_canon_barrier(
+        *,
+        session: Session,
+        plan: CanonCommitPlan,
+        band_checkpoint_action: str = "pause_on_warn",
+    ) -> None:
+        if int(plan.chapter_number or 0) <= 1:
+            return
+        previous_chapter = int(plan.chapter_number) - 1
+        previous = session.execute(
+            select(CanonCommitRecord).where(
+                CanonCommitRecord.project_id == plan.project_id,
+                CanonCommitRecord.chapter_number == previous_chapter,
+                CanonCommitRecord.status == "committed",
+            )
+        ).scalar_one_or_none()
+        if previous is None:
+            raise CanonStaleVersion(
+                f"previous Canon chapter {previous_chapter} is not committed"
+            )
+        runs = list(
+            session.execute(
+                select(PostCanonMaintenanceRun).where(
+                    PostCanonMaintenanceRun.canon_commit_id == previous.id
+                )
+            ).scalars()
+        )
+        if not post_canon_barrier_ready(
+            runs,
+            session=session,
+            band_checkpoint_action=band_checkpoint_action,
+        ):
+            raise CanonStaleVersion(
+                f"previous Canon chapter {previous_chapter} has an incomplete "
+                "post-Canon maintenance/order-control barrier"
+            )
+
     def _revalidate_locked_plan(
         self,
         *,
@@ -265,7 +317,9 @@ class CanonAdmissionService:
         if chapter is None:
             raise CanonStaleVersion("chapter plan no longer exists")
         if str(chapter.status or "") == "accepted":
-            raise CanonStaleVersion("chapter is already accepted by another Canon commit")
+            raise CanonStaleVersion(
+                "chapter is already accepted by another Canon commit"
+            )
         if candidate is None:
             raise CanonStaleVersion("candidate no longer exists")
         if candidate.project_id != plan.project_id:

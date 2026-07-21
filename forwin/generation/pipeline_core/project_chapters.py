@@ -12,15 +12,12 @@ from forwin.generation.pipeline_core.chapter_review_gate import (
     handle_chapter_review_gate,
 )
 from forwin.generation.pipeline_core import chapter_execution_support
-from forwin.generation.pipeline_core.obligation_resolution import (
-    _verify_obligations_after_acceptance,
-)
 from forwin.generation.pipeline_core.result import RunResult
-from forwin.planning.checkpoints import BandCheckpointDetail, BandCheckpointIssueInfo
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import attach_gate_outcome
-from forwin.review.issue_groups import issue_group_for_issue
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
+from forwin.models.planning_control import BandCheckpoint
+from forwin.planning.future_plan_audit.models import FuturePlanAuditRun
 from forwin.checker.rules import ContinuityChecker
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
@@ -70,6 +67,55 @@ class ChapterExecutionStage:
                     current_chapter=chapter_num,
                 )
             if self._pause_requested():
+                return self._paused_result(
+                    project_id,
+                    requested_chapters,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    frozen_artifacts=frozen_artifacts,
+                    current_chapter=max(0, chapter_num - 1),
+                )
+            post_canon_run_ids: list[str] = []
+            try:
+                self._recover_post_canon_before_chapter(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                )
+            except Exception as exc:  # noqa: BLE001
+                session.rollback()
+                repo, updater, checker = self._make_state_helpers(session)
+                run_ids = list(getattr(exc, "maintenance_run_ids", []) or [])
+                deferred_maintenance.record_deferred_maintenance(
+                    updater,
+                    deferred_maintenance.DeferredMaintenanceRecord(
+                        project_id=project_id,
+                        chapter_number=max(0, chapter_num - 1),
+                        task_type="post_canon_continuation_preflight",
+                        reason=str(exc),
+                        payload={
+                            "error_class": exc.__class__.__name__,
+                            "blocked_chapter": chapter_num,
+                            "canon_commit_id": str(
+                                getattr(exc, "canon_commit_id", "") or ""
+                            ),
+                        },
+                        maintenance_run_ids=run_ids,
+                    ),
+                )
+                session.commit()
+                paused_chapters.append(chapter_num)
+                self._emit_progress(
+                    "stage_changed",
+                    stage="post_acceptance_deferred",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=max(0, chapter_num - 1),
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 return self._paused_result(
                     project_id,
                     requested_chapters,
@@ -660,121 +706,49 @@ class ChapterExecutionStage:
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                 )
-                self._run_phase3_pass(
+                phase3_result = self._run_phase3_pass(
                     session=session,
                     project_id=project_id,
                     chapter_number=chapter_num,
+                    canon_commit_id=canon_outcome.commit_id,
                 )
-                _verify_obligations_after_acceptance(
-                    self,
-                    session=session,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    accepted_text=writer_output.body,
+                post_canon_run_ids = list(
+                    dict(phase3_result.get("run_ids") or {}).values()
                 )
-                future_plan_audit_result = self._audit_future_plans_after_acceptance(
+                control_result = self._run_post_canon_order_controls(
                     session=session,
-                    updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_num,
                     trigger_stage="post_acceptance",
+                    canon_commit_id=canon_outcome.commit_id,
+                )
+                future_payload = control_result.get("future_plan_audit")
+                future_plan_audit_result = (
+                    FuturePlanAuditRun.model_validate(future_payload)
+                    if isinstance(future_payload, dict)
+                    else None
                 )
                 future_plan_audit_blocked = bool(
                     future_plan_audit_result is not None
                     and future_plan_audit_result.blocking_reasons
                 )
-                self._record_generation_audit_report_if_due(
-                    session=session,
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    future_plan_audit_result=future_plan_audit_result,
+                checkpoint_payload = control_result.get("checkpoint")
+                checkpoint_row = (
+                    session.get(BandCheckpoint, str(checkpoint_payload.get("id") or ""))
+                    if isinstance(checkpoint_payload, dict)
+                    and str(checkpoint_payload.get("id") or "")
+                    else None
                 )
-                checkpoint_row = None
-                checkpoint_pause = False
-                checkpoint_warn_pause = False
-                if policy.pause.band_checkpoint_action != "continue":
-                    try:
-                        checkpoint_row = self._create_auto_band_checkpoint(
-                            session=session,
-                            repo=repo,
-                            updater=updater,
-                            project_id=project_id,
-                            chapter_number=chapter_num,
-                        )
-                    except Exception as exc:
-                        band_row = repo.get_band_row_for_chapter(
-                            project_id, chapter_num
-                        )
-                        if band_row is None:
-                            raise
-                        checkpoint_row = updater.save_band_checkpoint(
-                            BandCheckpointDetail(
-                                project_id=project_id,
-                                arc_id=band_row.arc_id,
-                                band_id=band_row.band_id,
-                                chapter_start=int(band_row.chapter_start or 0),
-                                chapter_end=int(band_row.chapter_end or 0),
-                                trigger_source="auto_band_end",
-                                boundary_kind="band_end",
-                                boundary_chapter=chapter_num,
-                                status="error",
-                                summary="band checkpoint evaluator 异常，运行已暂停。",
-                                issues=[
-                                    BandCheckpointIssueInfo(
-                                        code="checkpoint_evaluator_error",
-                                        severity="error",
-                                        issue_group=issue_group_for_issue(
-                                            code="runtime"
-                                        ),
-                                        description="checkpoint evaluator 执行失败。",
-                                        detail=f"{exc.__class__.__name__}: {exc}",
-                                    )
-                                ],
-                            )
-                        )
-                        self._record_decision_event(
-                            updater=updater,
-                            project_id=project_id,
-                            band_id=band_row.band_id,
-                            chapter_number=chapter_num,
-                            event_family="runtime_observation",
-                            event_type=DecisionEventType.CHECKPOINT_EVALUATOR_ERROR,
-                            scope="band",
-                            summary="band checkpoint evaluator 异常。",
-                            reason=str(exc),
-                            related_object_type="band_checkpoint",
-                            related_object_id=checkpoint_row.id,
-                            payload=attach_gate_outcome(
-                                {
-                                    "status": "error",
-                                    "error_class": exc.__class__.__name__,
-                                    "error_summary": str(exc),
-                                },
-                                chapter_execution_support.checkpoint_event_gate_outcome(
-                                    checkpoint_row,
-                                    chapter_number=chapter_num,
-                                    policy_version=int(
-                                        getattr(project, "runtime_policy_version", 0)
-                                        or 0
-                                    ),
-                                    decision="error",
-                                    blocked=True,
-                                ),
-                            ),
-                        )
-                    if checkpoint_row is not None and checkpoint_row.status in {
-                        "fail",
-                        "error",
-                    }:
-                        checkpoint_pause = True
-                    if (
-                        checkpoint_row is not None
-                        and checkpoint_row.status == "warn"
-                        and policy.pause.band_checkpoint_action
-                        in {"pause_on_warn", "pause_always"}
-                    ):
-                        checkpoint_warn_pause = True
+                checkpoint_pause = bool(
+                    checkpoint_row is not None
+                    and checkpoint_row.status in {"fail", "error"}
+                )
+                checkpoint_warn_pause = bool(
+                    checkpoint_row is not None
+                    and checkpoint_row.status == "warn"
+                    and policy.pause.band_checkpoint_action
+                    in {"pause_on_warn", "pause_always"}
+                )
                 should_pause_for_checkpoint = checkpoint_pause or (
                     checkpoint_warn_pause and chapter_num != last_requested_chapter
                 )
@@ -953,6 +927,10 @@ class ChapterExecutionStage:
                 repo, updater, checker = self._make_state_helpers(session)
                 current_plan = repo.get_chapter_plan(project_id, chapter_num)
                 if current_plan is not None and current_plan.status == "accepted":
+                    run_ids = list(
+                        getattr(exc, "maintenance_run_ids", post_canon_run_ids)
+                        or post_canon_run_ids
+                    )
                     deferred_maintenance.record_deferred_maintenance(
                         updater,
                         deferred_maintenance.DeferredMaintenanceRecord(
@@ -960,7 +938,13 @@ class ChapterExecutionStage:
                             chapter_number=chapter_num,
                             task_type="post_acceptance_pipeline",
                             reason=str(exc),
-                            payload={"error_class": exc.__class__.__name__},
+                            payload={
+                                "error_class": exc.__class__.__name__,
+                                "canon_commit_id": str(
+                                    getattr(exc, "canon_commit_id", "") or ""
+                                ),
+                            },
+                            maintenance_run_ids=run_ids,
                         ),
                     )
                     session.commit()
@@ -980,7 +964,16 @@ class ChapterExecutionStage:
                         "Chapter %d remains accepted; post-acceptance work was deferred.",
                         chapter_num,
                     )
-                    break
+                    paused_chapters.append(chapter_num)
+                    return self._paused_result(
+                        project_id,
+                        requested_chapters,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                        current_chapter=chapter_num,
+                    )
                 updater.mark_chapter_status(project_id, chapter_num, "failed")
                 session.commit()
                 failed_chapters.append(chapter_num)

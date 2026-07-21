@@ -29,6 +29,14 @@ from .projection import (
     ProjectionStatusResponse,
 )
 
+from .maintenance import (
+    PostCanonChapterStatus,
+    PostCanonMaintenanceChapterInfo,
+    PostCanonMaintenanceRunInfo,
+    PostCanonMaintenanceStatusResponse,
+    PostCanonRunStatus,
+)
+
 from .tasks import (
     CodexBridgeStatusResponse,
     GenerationControlInfo,
@@ -210,6 +218,11 @@ __all__ = [
     "ProjectionHealthStatus",
     "ProjectionRefreshResponse",
     "ProjectionStatusResponse",
+    "PostCanonChapterStatus",
+    "PostCanonMaintenanceChapterInfo",
+    "PostCanonMaintenanceRunInfo",
+    "PostCanonMaintenanceStatusResponse",
+    "PostCanonRunStatus",
     "CodexBridgeStatusResponse",
     "GenerationControlInfo",
     "TaskResponse",

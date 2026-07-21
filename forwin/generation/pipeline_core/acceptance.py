@@ -3,9 +3,6 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.generation.pipeline_core.obligation_resolution import (
-    _verify_obligations_after_acceptance,
-)
 from forwin.audit.events import DecisionActorType, DecisionEventType
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.maintenance.deferred import (
@@ -168,47 +165,76 @@ class AcceptanceStage:
             session.commit()
 
             maintenance_deferred = False
+            maintenance_blockers: list[str] = []
+            maintenance_run_ids: list[str] = []
             try:
-                self._run_phase3_pass(
+                phase3 = self._run_phase3_pass(
                     session=session,
                     project_id=project_id,
                     chapter_number=chapter_number,
+                    canon_commit_id=canon_outcome.commit_id,
                 )
-                _verify_obligations_after_acceptance(
-                    self,
-                    session=session,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    accepted_text=writer_output.body,
+                maintenance_run_ids = list(
+                    dict(phase3.get("run_ids") or {}).values()
                 )
-                self._audit_future_plans_after_acceptance(
+                self._run_post_canon_order_controls(
                     session=session,
-                    updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
                     trigger_stage="manual_acceptance",
+                    canon_commit_id=canon_outcome.commit_id,
                 )
-                session.commit()
+                maintenance_blockers = (
+                    self.post_canon_maintenance.barrier_blocking_reasons(
+                        canon_outcome.commit_id
+                    )
+                )
+                maintenance_deferred = bool(maintenance_blockers)
             except Exception as exc:  # noqa: BLE001
                 maintenance_deferred = True
                 session.rollback()
+                maintenance_run_ids = list(
+                    getattr(exc, "maintenance_run_ids", maintenance_run_ids)
+                    or maintenance_run_ids
+                )
                 _repo, updater, _checker = self._make_state_helpers(session)
                 record_deferred_maintenance(
                     updater,
                     DeferredMaintenanceRecord(
                         project_id=project_id,
                         chapter_number=chapter_number,
-                        task_type="post_acceptance_planning",
+                        task_type="post_canon_phase3",
                         reason=str(exc),
-                        payload={"error_class": exc.__class__.__name__},
+                        payload={
+                            "error_class": exc.__class__.__name__,
+                            "canon_commit_id": canon_outcome.commit_id,
+                        },
+                        maintenance_run_ids=maintenance_run_ids,
+                    ),
+                )
+                session.commit()
+
+            if maintenance_blockers:
+                _repo, updater, _checker = self._make_state_helpers(session)
+                record_deferred_maintenance(
+                    updater,
+                    DeferredMaintenanceRecord(
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        task_type="post_canon_order_controls_blocked",
+                        reason="; ".join(maintenance_blockers),
+                        payload={"canon_commit_id": canon_outcome.commit_id},
+                        maintenance_run_ids=maintenance_run_ids,
                     ),
                 )
                 session.commit()
 
             return {
-                "status": "accepted",
+                "status": (
+                    "maintenance_pending" if maintenance_deferred else "accepted"
+                ),
                 "message": (
-                    f"第{chapter_number}章已接受并写入 Canon；后置维护已延后。"
+                    f"第{chapter_number}章已接受并写入 Canon；后置维护或顺序控制待恢复。"
                     if maintenance_deferred
                     else f"第{chapter_number}章已接受并写入 Canon。"
                 ),

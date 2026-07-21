@@ -153,3 +153,14 @@ def test_pipeline_only_uses_prepared_atomic_canon_entrypoint() -> None:
     assert "CanonAdmissionService(" in container_source
     assert "session_factory=session_factory" in container_source
     assert "CanonPreparationService()" in container_source
+
+
+def test_canon_admission_checks_previous_maintenance_inside_project_lock() -> None:
+    admission_source = Path("forwin/canon/admission.py").read_text(encoding="utf-8")
+
+    project_lock = admission_source.index("select(Project)")
+    idempotent_replay = admission_source.index("if prior is not None:")
+    barrier = admission_source.index("self._require_previous_post_canon_barrier(")
+    chapter_lock = admission_source.index("select(ChapterPlan)")
+
+    assert project_lock < idempotent_replay < barrier < chapter_lock

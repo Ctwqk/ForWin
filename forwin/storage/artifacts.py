@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -326,6 +326,29 @@ class ArtifactStore:
             "preview": preview,
         }
 
+    def save_keyed_artifact(
+        self,
+        *,
+        project_id: str,
+        artifact_key: str,
+        content: str,
+        content_type: str,
+    ) -> dict[str, object]:
+        key = _safe_artifact_key(artifact_key)
+        uri = self.object_store.write_text(
+            f"projects/{project_id}/keyed/{key}",
+            str(content or ""),
+            content_type=content_type,
+        )
+        encoded = str(content or "").encode("utf-8")
+        return {
+            "artifact_uri": uri,
+            "artifact_key": key,
+            "content_type": content_type,
+            "size": len(encoded),
+            "hash": hashlib.sha256(encoded).hexdigest(),
+        }
+
     def save_observability_diagnostic(
         self,
         *,
@@ -367,3 +390,16 @@ def _safe_path_part(value: object) -> str:
     text = str(value or "").strip()
     cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in text)
     return cleaned.strip("_")[:96]
+
+
+def _safe_artifact_key(value: object) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    path = PurePosixPath(text)
+    if not text or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("artifact_key must be a safe relative path")
+    for part in path.parts:
+        if len(part) > 128 or any(
+            not (ch.isalnum() or ch in {"-", "_", "."}) for ch in part
+        ):
+            raise ValueError("artifact_key contains an unsafe path segment")
+    return path.as_posix()

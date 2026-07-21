@@ -119,6 +119,28 @@ def test_post_commit_handlers_are_registered_and_retryable() -> None:
     assert "mark_outbox_event_failed(" not in worker
 
 
+def test_post_canon_phase3_has_one_durable_owner() -> None:
+    service = _source("forwin/maintenance/post_canon.py")
+    stage = _source("forwin/generation/pipeline_core/world_projection.py")
+    handlers = _source("forwin/outbox/handlers.py")
+
+    for method in (
+        "def _run_planning_step(",
+        "def _run_arc_step(",
+        "def _run_world_step(",
+        "def _run_feedback_step(",
+    ):
+        assert method in service
+
+    assert "post_canon_idempotency_key(" in service
+    assert "commit.idempotency_key" in service
+    assert "self.post_canon_maintenance.run_for_chapter(" in stage
+    assert "self.stage_analyzer.analyze(" not in stage
+    assert "self.world_simulator.simulate(" not in stage
+    assert "POST_CANON_PHASE3_EVENT" in handlers
+    assert "post_canon_service_provider" in handlers
+
+
 def test_npc_intent_projection_stays_deleted_from_v5_runtime() -> None:
     offenders = []
     for path in sorted((ROOT / "forwin").rglob("*.py")):

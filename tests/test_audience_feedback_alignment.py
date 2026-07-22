@@ -28,7 +28,7 @@ from forwin.arc_sizing import policy_for_total_chapters
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.stage_analysis import PacingStrategist
 from forwin.simulation.world import CommentAnalyzer
-from forwin.publishers import PublisherManager
+from forwin.publishers.manager import PublisherManager
 from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
 

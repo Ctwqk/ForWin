@@ -30,3 +30,26 @@ SUPPORTED_PLATFORMS: dict[str, PlatformSpec] = {
         publish_url="https://write.qq.com/portal/dashboard",
     ),
 }
+
+SUPPORTED_PLATFORM_IDS = frozenset(SUPPORTED_PLATFORMS)
+
+
+def normalize_supported_platform(
+    platform: object,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    normalized = str(platform or "").strip()
+    if not normalized and allow_empty:
+        return ""
+    if normalized not in SUPPORTED_PLATFORM_IDS:
+        raise ValueError(f"unsupported publisher platform: {normalized or '<empty>'}")
+    return normalized
+
+
+__all__ = [
+    "PlatformSpec",
+    "SUPPORTED_PLATFORM_IDS",
+    "SUPPORTED_PLATFORMS",
+    "normalize_supported_platform",
+]

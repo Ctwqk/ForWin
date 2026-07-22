@@ -14,6 +14,13 @@ from forwin.candidate_drafts import (
     candidate_plan_revision,
 )
 from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.outbox_events import (
+    CANON_PHASE3_REQUESTED,
+    CANON_PROJECTION_REQUESTED,
+    CANON_PUBLISHER_REQUESTED,
+    canon_event_id,
+)
+from forwin.canon.plan import CanonCommitPlan
 from forwin.canon.preparation import CanonPreparationService
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
@@ -28,7 +35,7 @@ from forwin.models.entity import Entity, EntityAlias
 from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.subworld import SubWorldRosterItem
 from forwin.naming import (
     EntityAdmissionDecision,
@@ -46,7 +53,7 @@ from tests.postgres import postgres_test_url
 @dataclass(frozen=True)
 class PreparedCanon:
     Session: sessionmaker[Session]
-    plan: object
+    plan: CanonCommitPlan
     project_id: str
     chapter_plan_id: str
     candidate_id: str
@@ -67,6 +74,17 @@ def prepared_canon() -> PreparedCanon:
             premise="All accepted state commits together.",
             genre="thriller",
             runtime_policy=RuntimePolicy.for_profile("standard"),
+            automation_json=json.dumps(
+                {
+                    "publish_bindings": [
+                        {
+                            "platform": "qidian",
+                            "book_name": "Prepared Publisher Snapshot",
+                            "upload_url": "https://write.example/prepared",
+                        }
+                    ]
+                }
+            ),
         )
         arc = updater.create_arc_plan(project.id, "Arc one")
         subworld = updater.create_subworld(
@@ -238,6 +256,34 @@ def _fail_at(expected_stage: str) -> Callable[[str], None]:
     return fail
 
 
+def _rebuild_plan(
+    plan: CanonCommitPlan,
+    *,
+    approved_book_state_changes: ApprovedGraphDeltaSet,
+    entity_admission_plan: EntityAdmissionPlan,
+) -> CanonCommitPlan:
+    return CanonCommitPlan.build(
+        project_id=plan.project_id,
+        chapter_number=plan.chapter_number,
+        candidate_id=plan.candidate_id,
+        candidate_body_hash=plan.candidate_body_hash,
+        plan_revision=plan.plan_revision,
+        policy_version=plan.policy_version,
+        expected_previous_accepted_chapter=plan.expected_previous_accepted_chapter,
+        expected_book_state_chapter=plan.expected_book_state_chapter,
+        approved_book_state_changes=approved_book_state_changes,
+        entity_admission_plan=entity_admission_plan,
+        acceptance_mode=plan.acceptance_mode,
+        repair_attempt_count=plan.repair_attempt_count,
+        residual_review_issues=plan.residual_review_issues,
+        canon_risk_level=plan.canon_risk_level,
+        chapter_title=plan.chapter_title,
+        publisher_bindings=plan.publisher_bindings,
+        audit_events=plan.audit_events,
+        schema_version=plan.schema_version,
+    )
+
+
 @pytest.mark.parametrize(
     "failure_stage",
     ["book_state", "entity", "obligation", "chapter", "outbox"],
@@ -288,7 +334,7 @@ def test_atomic_commit_writes_all_authoritative_state_once(
     assert snapshot["entities"] == 1
     assert snapshot["aliases"] == 1
     assert int(snapshot["audit_events"]) >= 3
-    assert snapshot["outbox_events"] == 2
+    assert snapshot["outbox_events"] == 3
     assert snapshot["canon_commits"] == 1
     assert snapshot["chapter_status"] == "accepted"
     assert snapshot["obligation_status"] == "active"
@@ -299,11 +345,95 @@ def test_atomic_commit_writes_all_authoritative_state_once(
         assert roster_item is not None
         assert candidate.status == "accepted"
         assert candidate.canon_commit_id == outcome.commit_id
+        assert outcome.commit_id == prepared_canon.plan.canon_commit_id
+        outbox_rows = (
+            session.execute(select(OutboxEvent).order_by(OutboxEvent.event_type.asc()))
+            .scalars()
+            .all()
+        )
+        assert {row.event_type for row in outbox_rows} == {
+            CANON_PROJECTION_REQUESTED,
+            CANON_PHASE3_REQUESTED,
+            CANON_PUBLISHER_REQUESTED,
+        }
+        for row in outbox_rows:
+            payload = json.loads(row.payload_json)
+            assert row.event_id == canon_event_id(
+                prepared_canon.plan.idempotency_key,
+                row.event_type,
+            )
+            assert payload["canon_commit_id"] == outcome.commit_id
+            assert payload["canon_idempotency_key"] == prepared_canon.plan.idempotency_key
+            assert payload["project_id"] == prepared_canon.project_id
+            assert payload["chapter_number"] == 1
+            assert payload["candidate_id"] == prepared_canon.candidate_id
+        publisher_row = next(
+            row for row in outbox_rows if row.event_type == CANON_PUBLISHER_REQUESTED
+        )
+        publisher_payload = json.loads(publisher_row.payload_json)
+        assert publisher_payload["body_sha256"] == prepared_canon.plan.candidate_body_hash
+        assert publisher_payload["publisher_bindings"] == [
+            {
+                "auto_cover_upload_enabled": True,
+                "book_meta": {
+                    "audience": "",
+                    "intro": "",
+                    "plot_tags": [],
+                    "primary_category": "",
+                    "protagonist_names": [],
+                    "role_tags": [],
+                    "theme_tags": [],
+                },
+                "book_name": "Prepared Publisher Snapshot",
+                "cover_candidate_count": 4,
+                "cover_confirmation_required": False,
+                "cover_generation_enabled": True,
+                "cover_style_hint": "",
+                "create_if_missing": False,
+                "platform": "qidian",
+                "publisher_compliance_required": True,
+                "upload_url": "https://write.example/prepared",
+            }
+        ]
         roster_metadata = json.loads(roster_item.metadata_json)
         assert roster_metadata["character_id"] == f"character-{candidate.id}"
         assert roster_metadata["book_state_node_id"] == f"character-{candidate.id}"
         assert roster_metadata["canon_source"] == "book_state"
         assert "pending_entity_admission" not in roster_metadata
+
+
+def test_publisher_event_uses_prepared_snapshot_after_settings_change(
+    prepared_canon: PreparedCanon,
+) -> None:
+    with prepared_canon.Session.begin() as session:
+        project = session.get(Project, prepared_canon.project_id)
+        assert project is not None
+        project.automation_json = json.dumps(
+            {
+                "publish_bindings": [
+                    {"platform": "fanqie", "book_name": "Changed Too Late"}
+                ]
+            }
+        )
+
+    outcome = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        prepared_canon.plan
+    )
+
+    assert outcome.blocked is False
+    with prepared_canon.Session() as session:
+        row = session.execute(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == CANON_PUBLISHER_REQUESTED
+            )
+        ).scalar_one()
+        payload = json.loads(row.payload_json)
+        assert [item["platform"] for item in payload["publisher_bindings"]] == [
+            "qidian"
+        ]
+        assert payload["publisher_bindings"][0]["book_name"] == (
+            "Prepared Publisher Snapshot"
+        )
 
 
 def test_same_idempotency_key_returns_prior_commit(
@@ -330,17 +460,16 @@ def test_empty_graph_delta_cannot_commit_second_candidate_for_accepted_chapter(
         graph_deltas=[],
         approved_by=["book_state_review"],
     )
-    first_plan = prepared_canon.plan.model_copy(
-        update={
-            "approved_book_state_changes": empty_changes,
-            "entity_admission_plan": EntityAdmissionPlan(
-                project_id=prepared_canon.project_id,
-                chapter_number=1,
-                candidate_fingerprint=(
-                    prepared_canon.plan.entity_admission_plan.candidate_fingerprint
-                ),
+    first_plan = _rebuild_plan(
+        prepared_canon.plan,
+        approved_book_state_changes=empty_changes,
+        entity_admission_plan=EntityAdmissionPlan(
+            project_id=prepared_canon.project_id,
+            chapter_number=1,
+            candidate_fingerprint=(
+                prepared_canon.plan.entity_admission_plan.candidate_fingerprint
             ),
-        }
+        ),
     )
     with prepared_canon.Session.begin() as session:
         first_candidate = session.get(
@@ -348,6 +477,7 @@ def test_empty_graph_delta_cannot_commit_second_candidate_for_accepted_chapter(
             prepared_canon.candidate_id,
         )
         assert first_candidate is not None
+        first_candidate.idempotency_key = first_plan.idempotency_key
         first_candidate.canon_commit_plan_json = first_plan.model_dump_json()
 
     first = CanonAdmissionService(

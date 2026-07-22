@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
-from collections.abc import Mapping
 from typing import Any, Callable
 
-from forwin.knowledge_system.canon_outbox import build_canon_outbox_handlers
 from forwin.knowledge_system.projection_jobs import build_projection_outbox_handlers
-from forwin.maintenance.events import POST_CANON_PHASE3_EVENT
+from forwin.maintenance.events import build_post_canon_outbox_handlers
 from forwin.outbox.worker import OutboxClaim
-from forwin.publisher_runtime.canon_jobs import CANON_PUBLISHER_REQUESTED
+from forwin.publisher_runtime.canon_jobs import (
+    build_canon_publisher_outbox_handlers,
+)
 
 
 def build_default_outbox_handlers(
@@ -22,7 +22,6 @@ def build_default_outbox_handlers(
     qdrant_models: Any | None = None,
     memory_index: Any | None = None,
     memory_index_provider: Callable[[], Any] | None = None,
-    canon_projection_runner: Callable[..., dict[str, Any]] | None = None,
     post_canon_service_provider: Callable[[], Any] | None = None,
     publisher_job_service_provider: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[[OutboxClaim], None]]:
@@ -39,8 +38,7 @@ def build_default_outbox_handlers(
         if config is not None
         else None
     )
-    handlers: dict[str, Callable[[OutboxClaim], None]] = {}
-    handlers.update(
+    handler_maps = [
         build_projection_outbox_handlers(
             session_factory=session_factory,
             obsidian_root=obsidian_root,
@@ -51,81 +49,42 @@ def build_default_outbox_handlers(
             qdrant_models=qdrant_models,
             memory_index_provider=shared_memory_provider,
         )
-    )
-    canon_kwargs: dict[str, Any] = {}
-    if canon_projection_runner is not None:
-        canon_kwargs["projection_runner"] = canon_projection_runner
-    handlers.update(
-        build_canon_outbox_handlers(
-            session_factory=session_factory,
-            config=config,
-            memory_index_provider=shared_memory_provider,
-            obsidian_root=obsidian_root,
-            llm_kb_root=llm_kb_root,
-            qdrant_client=qdrant_client,
-            qdrant_models=qdrant_models,
-            **canon_kwargs,
-        )
-    )
+    ]
     if post_canon_service_provider is not None:
         resolve_post_canon_service = _shared_provider(
             post_canon_service_provider,
             resource_name="post-Canon maintenance service",
         )
-
-        def handle_post_canon_phase3(event: OutboxClaim) -> None:
-            service = resolve_post_canon_service()
-            payload = event.payload
-            project_id = str(
-                payload.get("project_id") or event.aggregate_id or ""
-            ).strip()
-            chapter_number = int(payload.get("chapter_number") or 0)
-            candidate_id = str(payload.get("candidate_id") or "").strip()
-            commit_id = service.resolve_event_canon_commit(
-                canon_commit_id=str(payload.get("canon_commit_id") or "").strip(),
-                project_id=project_id,
-                chapter_number=chapter_number,
-                candidate_id=candidate_id,
+        assert resolve_post_canon_service is not None
+        handler_maps.append(
+            build_post_canon_outbox_handlers(
+                service_provider=resolve_post_canon_service,
             )
-            service.run(
-                canon_commit_id=commit_id,
-                worker_id=(
-                    f"outbox:{event.worker_id}:{event.row_id}:{event.lease_epoch}"
-                ),
-            )
-
-        handlers[POST_CANON_PHASE3_EVENT] = handle_post_canon_phase3
+        )
     if publisher_job_service_provider is not None:
         resolve_publisher_jobs = _shared_provider(
             publisher_job_service_provider,
             resource_name="Canon publisher job service",
         )
-
-        def handle_canon_publisher(event: OutboxClaim) -> None:
-            service = resolve_publisher_jobs()
-            payload = event.payload
-            bindings_raw = payload.get("publisher_bindings") or []
-            if not isinstance(bindings_raw, list) or not all(
-                isinstance(item, Mapping) for item in bindings_raw
-            ):
-                raise ValueError("Canon publisher bindings snapshot is invalid")
-            service.materialize(
-                canon_commit_id=str(payload.get("canon_commit_id") or "").strip(),
-                canon_idempotency_key=str(
-                    payload.get("canon_idempotency_key") or ""
-                ).strip(),
-                project_id=str(
-                    payload.get("project_id") or event.aggregate_id or ""
-                ).strip(),
-                chapter_number=int(payload.get("chapter_number") or 0),
-                candidate_id=str(payload.get("candidate_id") or "").strip(),
-                chapter_title=str(payload.get("chapter_title") or "").strip(),
-                bindings=[dict(item) for item in bindings_raw],
-                publish=bool(payload.get("publish", True)),
+        assert resolve_publisher_jobs is not None
+        handler_maps.append(
+            build_canon_publisher_outbox_handlers(
+                service_provider=resolve_publisher_jobs,
             )
+        )
+    return _merge_handler_maps(*handler_maps)
 
-        handlers[CANON_PUBLISHER_REQUESTED] = handle_canon_publisher
-    return handlers
+
+def _merge_handler_maps(
+    *handler_maps: dict[str, Callable[[OutboxClaim], None]],
+) -> dict[str, Callable[[OutboxClaim], None]]:
+    merged: dict[str, Callable[[OutboxClaim], None]] = {}
+    for handler_map in handler_maps:
+        for event_type, handler in handler_map.items():
+            if event_type in merged:
+                raise ValueError(f"duplicate outbox handler owner: {event_type}")
+            merged[event_type] = handler
+    return merged
 
 
 def _shared_provider(

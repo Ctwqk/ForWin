@@ -1,27 +1,39 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import replace
 
 import pytest
 
-from forwin.knowledge_system import canon_outbox
-from forwin.knowledge_system.canon_outbox import (
-    CANON_POST_COMMIT_EVENT,
-    CANON_PUBLISHER_EVENT,
+from forwin.canon.outbox_events import (
+    CANON_PHASE3_REQUESTED,
+    CANON_PROJECTION_REQUESTED,
+    CANON_PUBLISHER_REQUESTED,
+    canon_commit_id,
+    canon_event_id,
 )
-from forwin.maintenance.events import POST_CANON_PHASE3_EVENT
-from forwin.outbox.handlers import build_default_outbox_handlers
+from forwin.knowledge_system import projection_jobs
+from forwin.outbox.handlers import (
+    _merge_handler_maps,
+    build_default_outbox_handlers,
+)
 from forwin.outbox.worker import OutboxClaim
+
+
+CANON_KEY = "canon-key-1"
+CANON_COMMIT_ID = canon_commit_id(CANON_KEY)
 
 
 def _claim() -> OutboxClaim:
     return OutboxClaim(
         row_id="row-1",
-        event_id="event-1",
-        event_type=CANON_POST_COMMIT_EVENT,
+        event_id=canon_event_id(CANON_KEY, CANON_PROJECTION_REQUESTED),
+        event_type=CANON_PROJECTION_REQUESTED,
         aggregate_type="project",
         aggregate_id="project-1",
         payload={
+            "schema_version": 1,
+            "canon_commit_id": CANON_COMMIT_ID,
+            "canon_idempotency_key": CANON_KEY,
             "project_id": "project-1",
             "chapter_number": 1,
             "candidate_id": "candidate-1",
@@ -35,12 +47,14 @@ def _claim() -> OutboxClaim:
 def _phase3_claim() -> OutboxClaim:
     return OutboxClaim(
         row_id="row-phase3",
-        event_id="event-phase3",
-        event_type=POST_CANON_PHASE3_EVENT,
+        event_id=canon_event_id(CANON_KEY, CANON_PHASE3_REQUESTED),
+        event_type=CANON_PHASE3_REQUESTED,
         aggregate_type="project",
         aggregate_id="project-1",
         payload={
-            "canon_commit_id": "canon-1",
+            "schema_version": 1,
+            "canon_commit_id": CANON_COMMIT_ID,
+            "canon_idempotency_key": CANON_KEY,
             "project_id": "project-1",
             "chapter_number": 1,
             "candidate_id": "candidate-1",
@@ -54,18 +68,26 @@ def _phase3_claim() -> OutboxClaim:
 def _publisher_claim() -> OutboxClaim:
     return OutboxClaim(
         row_id="row-publisher",
-        event_id="event-publisher",
-        event_type=CANON_PUBLISHER_EVENT,
+        event_id=canon_event_id(CANON_KEY, CANON_PUBLISHER_REQUESTED),
+        event_type=CANON_PUBLISHER_REQUESTED,
         aggregate_type="project",
         aggregate_id="project-1",
         payload={
-            "canon_commit_id": "canon-1",
-            "canon_idempotency_key": "canon-key-1",
+            "schema_version": 1,
+            "canon_commit_id": CANON_COMMIT_ID,
+            "canon_idempotency_key": CANON_KEY,
             "project_id": "project-1",
             "chapter_number": 1,
             "candidate_id": "candidate-1",
             "chapter_title": "第一章",
-            "publisher_bindings": [{"platform": "qidian", "book_name": "事件快照书名"}],
+            "body_sha256": "body-hash-1",
+            "publisher_bindings": (
+                {
+                    "platform": "qidian",
+                    "book_name": "事件快照书名",
+                    "book_meta": {"theme_tags": ("悬疑", "都市")},
+                },
+            ),
             "publish": True,
         },
         worker_id="worker-1",
@@ -74,48 +96,32 @@ def _publisher_claim() -> OutboxClaim:
     )
 
 
-def _config() -> SimpleNamespace:
-    return SimpleNamespace(
-        retrieval_backend="qdrant",
-        retrieval_root="unused",
-        qdrant_url="http://qdrant:6333",
-        qdrant_collection="chapters",
-        llm_kb_qdrant_collection="llm-kb",
-        embedding_backend="gateway",
-        embedding_base_url="http://embedding:8080",
-        embedding_api_key="",
-        embedding_model="model",
-        embedding_dims=384,
-        embedding_required=True,
-    )
-
-
 def test_default_handler_registration_does_not_construct_memory_index(
     monkeypatch,
 ) -> None:
     calls: list[str] = []
     memory_index = object()
+
+    def provider():
+        calls.append("create")
+        return memory_index
+
     monkeypatch.setattr(
-        canon_outbox,
-        "create_memory_index",
-        lambda **_kwargs: calls.append("create") or memory_index,
-    )
-    monkeypatch.setattr(
-        canon_outbox,
-        "handle_canon_post_commit_outbox_event",
-        lambda _event, *, memory_index, **_kwargs: calls.append(
-            "handle" if memory_index is not None else "missing"
+        projection_jobs,
+        "handle_projection_refresh_outbox_event",
+        lambda _event, *, memory_index_provider, **_kwargs: calls.append(
+            "handle" if memory_index_provider() is memory_index else "missing"
         ),
     )
 
     handlers = build_default_outbox_handlers(
         session_factory=lambda: None,
-        config=_config(),
+        memory_index_provider=provider,
     )
 
     assert calls == []
-    handlers[CANON_POST_COMMIT_EVENT](_claim())
-    handlers[CANON_POST_COMMIT_EVENT](_claim())
+    handlers[CANON_PROJECTION_REQUESTED](_claim())
+    handlers[CANON_PROJECTION_REQUESTED](_claim())
     assert calls == ["create", "handle", "handle"]
 
 
@@ -130,21 +136,21 @@ def test_memory_index_provider_failure_is_visible_and_retryable(monkeypatch) -> 
         return memory_index
 
     monkeypatch.setattr(
-        canon_outbox,
-        "handle_canon_post_commit_outbox_event",
-        lambda _event, *, memory_index, **_kwargs: calls.append(
-            "handle" if memory_index is not None else "missing"
+        projection_jobs,
+        "handle_projection_refresh_outbox_event",
+        lambda _event, *, memory_index_provider, **_kwargs: calls.append(
+            "handle" if memory_index_provider() is memory_index else "missing"
         ),
     )
-    handlers = canon_outbox.build_canon_outbox_handlers(
+    handlers = build_default_outbox_handlers(
         session_factory=lambda: None,
         memory_index_provider=provider,
     )
 
     with pytest.raises(OSError, match="qdrant unavailable"):
-        handlers[CANON_POST_COMMIT_EVENT](_claim())
-    handlers[CANON_POST_COMMIT_EVENT](_claim())
-    handlers[CANON_POST_COMMIT_EVENT](_claim())
+        handlers[CANON_PROJECTION_REQUESTED](_claim())
+    handlers[CANON_PROJECTION_REQUESTED](_claim())
+    handlers[CANON_PROJECTION_REQUESTED](_claim())
 
     assert calls == ["provider", "provider", "handle", "handle"]
 
@@ -158,18 +164,21 @@ def test_empty_memory_index_provider_result_is_not_cached(monkeypatch) -> None:
         return None if calls.count("provider") == 1 else memory_index
 
     monkeypatch.setattr(
-        canon_outbox,
-        "handle_canon_post_commit_outbox_event",
-        lambda _event, *, memory_index, **_kwargs: calls.append("handle"),
+        projection_jobs,
+        "handle_projection_refresh_outbox_event",
+        lambda _event, *, memory_index_provider, **_kwargs: (
+            memory_index_provider(),
+            calls.append("handle"),
+        ),
     )
-    handlers = canon_outbox.build_canon_outbox_handlers(
+    handlers = build_default_outbox_handlers(
         session_factory=lambda: None,
         memory_index_provider=provider,
     )
 
-    with pytest.raises(RuntimeError, match="returned no index"):
-        handlers[CANON_POST_COMMIT_EVENT](_claim())
-    handlers[CANON_POST_COMMIT_EVENT](_claim())
+    with pytest.raises(RuntimeError, match="returned no resource"):
+        handlers[CANON_PROJECTION_REQUESTED](_claim())
+    handlers[CANON_PROJECTION_REQUESTED](_claim())
 
     assert calls == ["provider", "provider", "handle"]
 
@@ -180,7 +189,7 @@ def test_phase3_handler_resolves_service_lazily_once() -> None:
     class Service:
         def resolve_event_canon_commit(self, **identity):
             calls.append(("resolve", identity))
-            return "canon-1"
+            return CANON_COMMIT_ID
 
         def run(self, **request) -> None:
             calls.append(("run", request))
@@ -197,8 +206,8 @@ def test_phase3_handler_resolves_service_lazily_once() -> None:
     )
 
     assert calls == []
-    handlers[POST_CANON_PHASE3_EVENT](_phase3_claim())
-    handlers[POST_CANON_PHASE3_EVENT](_phase3_claim())
+    handlers[CANON_PHASE3_REQUESTED](_phase3_claim())
+    handlers[CANON_PHASE3_REQUESTED](_phase3_claim())
 
     assert calls[0] == "provider"
     assert calls.count("provider") == 1
@@ -224,12 +233,104 @@ def test_publisher_handler_resolves_materializer_lazily_once() -> None:
     )
 
     assert calls == []
-    handlers[CANON_PUBLISHER_EVENT](_publisher_claim())
-    handlers[CANON_PUBLISHER_EVENT](_publisher_claim())
+    handlers[CANON_PUBLISHER_REQUESTED](_publisher_claim())
+    handlers[CANON_PUBLISHER_REQUESTED](_publisher_claim())
 
     assert calls[0] == "provider"
     assert calls.count("provider") == 1
     assert [item[0] for item in calls[1:]] == ["materialize", "materialize"]
     request = calls[1][1]
-    assert request["canon_idempotency_key"] == "canon-key-1"
-    assert request["bindings"] == [{"platform": "qidian", "book_name": "事件快照书名"}]
+    assert request["canon_idempotency_key"] == CANON_KEY
+    assert request["bindings"][0]["platform"] == "qidian"
+    assert request["bindings"][0]["book_name"] == "事件快照书名"
+    assert request["bindings"][0]["book_meta"]["theme_tags"] == ["悬疑", "都市"]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "claim_factory"),
+    (
+        (CANON_PHASE3_REQUESTED, _phase3_claim),
+        (CANON_PUBLISHER_REQUESTED, _publisher_claim),
+    ),
+)
+def test_invalid_canon_event_fails_before_service_resolution(
+    event_type,
+    claim_factory,
+) -> None:
+    calls: list[str] = []
+
+    def provider():
+        calls.append("provider")
+        return object()
+
+    handlers = build_default_outbox_handlers(
+        session_factory=lambda: None,
+        post_canon_service_provider=provider,
+        publisher_job_service_provider=provider,
+    )
+    claim = claim_factory()
+    invalid = replace(
+        claim,
+        payload={
+            key: value
+            for key, value in claim.payload.items()
+            if key != "candidate_id"
+        },
+    )
+
+    with pytest.raises(ValueError, match="candidate_id"):
+        handlers[event_type](invalid)
+
+    assert calls == []
+
+
+def test_nondeterministic_canon_commit_id_fails_before_service_resolution() -> None:
+    calls: list[str] = []
+
+    def provider():
+        calls.append("provider")
+        return object()
+
+    handlers = build_default_outbox_handlers(
+        session_factory=lambda: None,
+        post_canon_service_provider=provider,
+    )
+    claim = _phase3_claim()
+    invalid = replace(
+        claim,
+        payload={**claim.payload, "canon_commit_id": "wrong-commit-id"},
+    )
+
+    with pytest.raises(ValueError, match="commit ID is not deterministic"):
+        handlers[CANON_PHASE3_REQUESTED](invalid)
+
+    assert calls == []
+
+
+def test_handler_registry_rejects_duplicate_event_owners() -> None:
+    def handler(_event) -> None:
+        return None
+
+    with pytest.raises(ValueError, match="duplicate outbox handler owner: event.a"):
+        _merge_handler_maps({"event.a": handler}, {"event.a": handler})
+
+
+def test_default_registry_has_exactly_one_handler_for_each_canon_event() -> None:
+    class Phase3Service:
+        pass
+
+    class PublisherService:
+        pass
+
+    handlers = build_default_outbox_handlers(
+        session_factory=lambda: None,
+        post_canon_service_provider=Phase3Service,
+        publisher_job_service_provider=PublisherService,
+    )
+
+    canon_event_types = {
+        CANON_PROJECTION_REQUESTED,
+        CANON_PHASE3_REQUESTED,
+        CANON_PUBLISHER_REQUESTED,
+    }
+    assert {key for key in handlers if key.startswith("canon.")} == canon_event_types

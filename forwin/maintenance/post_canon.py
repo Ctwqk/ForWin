@@ -206,16 +206,20 @@ class PostCanonMaintenanceService:
         self,
         *,
         canon_commit_id: str,
+        canon_idempotency_key: str,
         project_id: str,
         chapter_number: int,
         candidate_id: str,
     ) -> str:
         commit_id = str(canon_commit_id or "").strip()
+        normalized_canon_key = str(canon_idempotency_key or "").strip()
         normalized_project = str(project_id or "").strip()
         normalized_chapter = int(chapter_number or 0)
         normalized_candidate = str(candidate_id or "").strip()
         if not commit_id:
             raise ValueError("post-Canon event requires canon_commit_id")
+        if not normalized_canon_key:
+            raise ValueError("post-Canon event requires canon_idempotency_key")
         if not normalized_project:
             raise ValueError("post-Canon event requires project_id")
         if normalized_chapter < 1:
@@ -227,6 +231,7 @@ class PostCanonMaintenanceService:
             if (
                 commit is None
                 or commit.status != "committed"
+                or commit.idempotency_key != normalized_canon_key
                 or commit.project_id != normalized_project
                 or int(commit.chapter_number or 0) != normalized_chapter
                 or commit.candidate_id != normalized_candidate

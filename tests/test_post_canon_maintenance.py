@@ -553,6 +553,7 @@ def test_run_materialization_rejects_unknown_step_rows() -> None:
 def test_phase3_event_requires_complete_canon_identity() -> None:
     commit = SimpleNamespace(
         id="canon-1",
+        idempotency_key="canon-key-1",
         project_id="project-1",
         chapter_number=1,
         candidate_id="candidate-1",
@@ -565,9 +566,20 @@ def test_phase3_event_requires_complete_canon_identity() -> None:
         PostCanonMaintenanceService.resolve_event_canon_commit(
             service,
             canon_commit_id="canon-1",
+            canon_idempotency_key="canon-key-1",
             project_id="project-1",
             chapter_number=1,
             candidate_id="",
+        )
+
+    with pytest.raises(ValueError, match="does not match committed Canon"):
+        PostCanonMaintenanceService.resolve_event_canon_commit(
+            service,
+            canon_commit_id="canon-1",
+            canon_idempotency_key="wrong-key",
+            project_id="project-1",
+            chapter_number=1,
+            candidate_id="candidate-1",
         )
 
 

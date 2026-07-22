@@ -165,6 +165,7 @@ def _materialize(
         chapter_number=fixture.chapter_number,
         candidate_id=fixture.candidate_id,
         chapter_title=chapter_title or fixture.chapter_title,
+        body_sha256=candidate_body_hash(fixture.body),
         bindings=bindings
         or [
             {
@@ -293,6 +294,28 @@ def test_mismatched_replay_payload_fails_without_overwriting_job() -> None:
         assert stored["book_name"] == "事件时书名"
         with fixture.runtime.session_factory() as session:
             assert session.scalar(select(func.count(PublisherUploadJob.id))) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_materializer_rejects_tampered_event_body_hash() -> None:
+    fixture = _fixture("canon-publisher-body-hash")
+    try:
+        with pytest.raises(ValueError, match="body hash mismatch"):
+            fixture.runtime.canon_jobs.materialize(
+                canon_commit_id=fixture.canon_commit_id,
+                canon_idempotency_key=fixture.canon_idempotency_key,
+                project_id=fixture.project_id,
+                chapter_number=fixture.chapter_number,
+                candidate_id=fixture.candidate_id,
+                chapter_title=fixture.chapter_title,
+                body_sha256="tampered-body-hash",
+                bindings=[{"platform": "qidian", "book_name": "事件时书名"}],
+                publish=False,
+            )
+
+        with fixture.runtime.session_factory() as session:
+            assert session.scalar(select(func.count(PublisherUploadJob.id))) == 0
     finally:
         fixture.engine.dispose()
 

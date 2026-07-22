@@ -11,6 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from forwin.http.adapters import api_projection_routes
+from forwin.canon.outbox_events import (
+    CANON_EVENT_SCHEMA_VERSION,
+    CANON_PROJECTION_REQUESTED,
+)
 from forwin.knowledge_system import checkpoints as checkpoint_module
 from forwin.knowledge_system.canon_projection import (
     CanonProjectionService,
@@ -25,8 +29,6 @@ from forwin.knowledge_system.checkpoints import (
     sanitize_projection_error,
 )
 from forwin.knowledge_system.projection_jobs import (
-    CANON_PROJECTION_EVENT_SCHEMA_VERSION,
-    CANON_PROJECTION_REQUESTED_EVENT,
     KNOWLEDGE_PROJECTION_REFRESH_EVENT,
     build_projection_outbox_handlers,
     normalize_projection_kind,
@@ -667,7 +669,7 @@ def test_handler_registry_is_inert_and_canon_schema_fails_before_refresh(
 
     assert set(handlers) == {
         KNOWLEDGE_PROJECTION_REFRESH_EVENT,
-        CANON_PROJECTION_REQUESTED_EVENT,
+        CANON_PROJECTION_REQUESTED,
     }
     assert provider_calls == []
 
@@ -692,12 +694,12 @@ def test_handler_registry_is_inert_and_canon_schema_fails_before_refresh(
     invalid_canon_claim = OutboxClaim(
         row_id="row-2",
         event_id="event-2",
-        event_type=CANON_PROJECTION_REQUESTED_EVENT,
+        event_type=CANON_PROJECTION_REQUESTED,
         aggregate_type="project",
         aggregate_id="project-1",
         payload=MappingProxyType(
             {
-                "schema_version": CANON_PROJECTION_EVENT_SCHEMA_VERSION,
+                "schema_version": CANON_EVENT_SCHEMA_VERSION,
                 "project_id": "project-1",
             }
         ),
@@ -706,8 +708,8 @@ def test_handler_registry_is_inert_and_canon_schema_fails_before_refresh(
         lease_epoch=1,
         attempts=1,
     )
-    with pytest.raises(ValueError, match="missing required fields"):
-        handlers[CANON_PROJECTION_REQUESTED_EVENT](invalid_canon_claim)
+    with pytest.raises(ValueError, match="canon_commit_id"):
+        handlers[CANON_PROJECTION_REQUESTED](invalid_canon_claim)
     assert len(refresh_calls) == 1
 
 

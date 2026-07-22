@@ -980,7 +980,7 @@ def test_default_projection_handler_consumes_detached_claim_payload(
     factory = _SessionFactory([_RecordingSession()])
     factory.sessions[0].get = lambda _model, _key: SimpleNamespace(id="project-1")
 
-    def refresh(_session, **kwargs):
+    def refresh(**kwargs):
         captured.update(kwargs)
         return {"ok": True}
 
@@ -994,12 +994,12 @@ def test_default_projection_handler_consumes_detached_claim_payload(
         event_id="event-1",
         event_type=projection_jobs.KNOWLEDGE_PROJECTION_REFRESH_EVENT,
         aggregate_type="project",
-        aggregate_id="fallback-project",
+        aggregate_id="project-1",
         payload=MappingProxyType(
             {
                 "project_id": "project-1",
                 "projection_kind": "obsidian",
-                "as_of_chapter": 7,
+                "requested_as_of_chapter": 7,
                 "trigger": "test",
             }
         ),
@@ -1014,4 +1014,6 @@ def test_default_projection_handler_consumes_detached_claim_payload(
     assert not hasattr(claim, "payload_json")
     assert captured["project_id"] == "project-1"
     assert captured["projection_kind"] == "obsidian"
-    assert captured["as_of_chapter"] == 7
+    assert captured["trigger"] == "test"
+    assert captured["event_id"] == "event-1"
+    assert captured["event_identity"] is None

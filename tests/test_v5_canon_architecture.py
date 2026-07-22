@@ -47,8 +47,8 @@ def test_canon_path_has_no_synchronous_projection_or_external_side_effects() -> 
         assert forbidden not in generation_source
 
     assert "enqueue_outbox_event(" in canon_source
-    assert "canon.post_commit.requested" in preparation_source
-    assert "canon.publisher.requested" in preparation_source
+    assert "build_canon_recovery_events(" in _source("forwin/canon/plan.py")
+    assert "canon.post_commit.requested" not in preparation_source
 
 
 def test_old_canon_and_book_state_write_entrypoints_stay_deleted() -> None:
@@ -113,14 +113,25 @@ def test_v5_baseline_contains_candidate_and_canon_commit_contracts() -> None:
         assert f'"{index}"' in baseline
 
 
-def test_post_commit_handlers_are_registered_and_retryable() -> None:
+def test_three_recovery_handlers_are_registered_and_retryable() -> None:
     handlers = _source("forwin/outbox/handlers.py")
-    canon_outbox = _source("forwin/knowledge_system/canon_outbox.py")
+    canon_events = _source("forwin/canon/outbox_events.py")
     worker = _source("forwin/outbox/worker.py")
 
-    assert "build_canon_outbox_handlers" in handlers
-    assert 'CANON_POST_COMMIT_EVENT = "canon.post_commit.requested"' in canon_outbox
-    assert 'CANON_PUBLISHER_EVENT = "canon.publisher.requested"' in canon_outbox
+    assert not (ROOT / "forwin/knowledge_system/canon_outbox.py").exists()
+    assert 'CANON_PROJECTION_REQUESTED = "canon.projection.requested"' in canon_events
+    assert 'CANON_PHASE3_REQUESTED = "canon.phase3.requested"' in canon_events
+    assert 'CANON_PUBLISHER_REQUESTED = "canon.publisher.requested"' in canon_events
+    for builder in (
+        "build_projection_outbox_handlers",
+        "build_post_canon_outbox_handlers",
+        "build_canon_publisher_outbox_handlers",
+    ):
+        assert builder in handlers
+    assert "canon.post_commit.requested" not in "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
     assert "heartbeat_outbox_event(" in worker
     assert "release_outbox_event_for_retry(" in worker
     assert "mark_outbox_event_processed(" in worker
@@ -145,7 +156,7 @@ def test_post_canon_phase3_has_one_durable_owner() -> None:
     assert "self.post_canon_maintenance.run_for_chapter(" in stage
     assert "self.stage_analyzer.analyze(" not in stage
     assert "self.world_simulator.simulate(" not in stage
-    assert "POST_CANON_PHASE3_EVENT" in handlers
+    assert "build_post_canon_outbox_handlers" in handlers
     assert "post_canon_service_provider" in handlers
 
 
@@ -172,6 +183,14 @@ def test_legacy_publisher_batch_port_stays_deleted() -> None:
         "PublisherRuntimeJobClient",
     ):
         assert forbidden not in production_source
+
+
+def test_publisher_platform_catalog_has_one_owner() -> None:
+    runtime_catalog = _source("forwin/publisher_runtime/platform_catalog.py")
+
+    assert "from forwin.publishers.platforms import" in runtime_catalog
+    assert "_FALLBACK_SUPPORTED_PLATFORMS" not in runtime_catalog
+    assert "import_module" not in runtime_catalog
 
 
 def test_publisher_recovery_has_no_blind_retry_or_codex_browser_intervention() -> None:

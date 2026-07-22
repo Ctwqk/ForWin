@@ -49,7 +49,6 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
     allowed_exact = {
         "forwin/models/__init__.py",
         "forwin/models/outbox.py",
-        "forwin/knowledge_system/canon_outbox.py",
         "forwin/knowledge_system/projection_jobs.py",
     }
     allowed_prefixes = ("forwin/outbox/",)

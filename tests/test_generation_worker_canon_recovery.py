@@ -14,6 +14,11 @@ from forwin.candidate_drafts import (
     candidate_plan_revision,
 )
 from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.outbox_events import (
+    CANON_RECOVERY_EVENT_TYPES,
+    canon_event_id,
+)
+from forwin.canon.plan import CanonCommitPlan
 from forwin.canon.preparation import CanonPreparationService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline_core.result import RunResult
@@ -52,7 +57,7 @@ from tests.postgres import postgres_test_url
 class RecoveryFixture:
     Session: sessionmaker[Session]
     database_url: str
-    plan: object
+    plan: CanonCommitPlan
     project_id: str
     chapter_plan_id: str
     candidate_id: str
@@ -291,7 +296,20 @@ def _assert_single_committed_state(fixture: RecoveryFixture) -> None:
         assert session.scalar(select(func.count(Entity.id))) == 1
         assert session.scalar(select(func.count(EntityAlias.id))) == 1
         assert session.scalar(select(func.count(NarrativeObligationRow.id))) == 1
-        assert session.scalar(select(func.count(OutboxEvent.id))) == 2
+        outbox_events = list(
+            session.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == fixture.project_id,
+                )
+            )
+        )
+        assert {event.event_type for event in outbox_events} == set(
+            CANON_RECOVERY_EVENT_TYPES
+        )
+        assert {event.event_id for event in outbox_events} == {
+            canon_event_id(fixture.plan.idempotency_key, event_type)
+            for event_type in CANON_RECOVERY_EVENT_TYPES
+        }
         deferred = list(
             session.scalars(
                 select(DecisionEvent).where(

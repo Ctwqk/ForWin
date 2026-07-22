@@ -20,7 +20,7 @@ from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.audit import DecisionEvent
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
@@ -31,7 +31,8 @@ from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 
-from .plan import CanonAuditEvent, CanonCommitPlan, CanonOutboxEvent
+from .outbox_events import publisher_binding_snapshot
+from .plan import CanonAuditEvent, CanonCommitPlan
 from .types import CanonPreparationOutcome
 
 
@@ -382,6 +383,14 @@ class CanonPreparationService:
             )
             or 0
         )
+        project = session.get(Project, project_id)
+        chapter = session.get(ChapterPlan, candidate.chapter_plan_id)
+        if project is None or chapter is None:
+            raise ValueError("Canon publisher snapshot source is missing")
+        publisher_bindings = publisher_binding_snapshot(
+            project.automation_json,
+            default_book_name=project.title,
+        )
         plan = CanonCommitPlan.build(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -397,6 +406,8 @@ class CanonPreparationService:
             repair_attempt_count=repair_attempt_count,
             residual_review_issues=residual_review_issues,
             canon_risk_level=canon_risk_level,
+            chapter_title=str(chapter.title or "").strip() or f"第{chapter_number}章",
+            publisher_bindings=publisher_bindings,
             audit_events=(
                 CanonAuditEvent(
                     event_type=DecisionEventType.CANON_COMMIT,
@@ -405,24 +416,6 @@ class CanonPreparationService:
                     payload={"candidate_id": candidate.id},
                     related_object_type="candidate_draft",
                     related_object_id=candidate.id,
-                ),
-            ),
-            outbox_events=(
-                CanonOutboxEvent(
-                    event_type="canon.post_commit.requested",
-                    payload={
-                        "project_id": project_id,
-                        "chapter_number": chapter_number,
-                        "candidate_id": candidate.id,
-                    },
-                ),
-                CanonOutboxEvent(
-                    event_type="canon.publisher.requested",
-                    payload={
-                        "project_id": project_id,
-                        "chapter_number": chapter_number,
-                        "candidate_id": candidate.id,
-                    },
                 ),
             ),
         )

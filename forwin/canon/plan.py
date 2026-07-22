@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from forwin.naming import EntityAdmissionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
+
+from .outbox_events import (
+    CanonOutboxEvent,
+    CanonPublisherBindingSnapshot,
+    CanonPublisherEventPayload,
+    build_canon_recovery_events,
+    canon_commit_id,
+    parse_canon_event_payload,
+)
 
 
 class _FrozenCanonModel(BaseModel):
@@ -23,14 +33,6 @@ class CanonAuditEvent(_FrozenCanonModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     related_object_type: str = ""
     related_object_id: str = ""
-
-
-class CanonOutboxEvent(_FrozenCanonModel):
-    event_type: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    aggregate_type: str = "project"
-    aggregate_id: str = ""
-    event_id: str = ""
 
 
 class CanonCommitPlan(_FrozenCanonModel):
@@ -49,9 +51,31 @@ class CanonCommitPlan(_FrozenCanonModel):
     repair_attempt_count: int = 0
     residual_review_issues: tuple[dict[str, Any], ...] = ()
     canon_risk_level: str = ""
+    chapter_title: str
+    publisher_bindings: tuple[CanonPublisherBindingSnapshot, ...] = ()
     audit_events: tuple[CanonAuditEvent, ...] = ()
-    outbox_events: tuple[CanonOutboxEvent, ...] = ()
+    outbox_events: tuple[CanonOutboxEvent, ...]
+    canon_commit_id: str
     idempotency_key: str
+
+    @model_validator(mode="after")
+    def _validate_recovery_events(self) -> Self:
+        expected_commit_id = canon_commit_id(self.idempotency_key)
+        if self.canon_commit_id != expected_commit_id:
+            raise ValueError("Canon commit ID does not match the idempotency key")
+        expected_events = build_canon_recovery_events(
+            canon_idempotency_key=self.idempotency_key,
+            canon_commit_id_value=self.canon_commit_id,
+            project_id=self.project_id,
+            chapter_number=self.chapter_number,
+            candidate_id=self.candidate_id,
+            chapter_title=self.chapter_title,
+            body_sha256=self.candidate_body_hash,
+            publisher_bindings=self.publisher_bindings,
+        )
+        if self.outbox_events != expected_events:
+            raise ValueError("Canon recovery event plan is not canonical")
+        return self
 
     @classmethod
     def build(
@@ -72,8 +96,11 @@ class CanonCommitPlan(_FrozenCanonModel):
         residual_review_issues: list[dict[str, Any]]
         | tuple[dict[str, Any], ...] = (),
         canon_risk_level: str = "",
+        chapter_title: str,
+        publisher_bindings: Sequence[
+            Mapping[str, Any] | CanonPublisherBindingSnapshot
+        ] = (),
         audit_events: tuple[CanonAuditEvent, ...] = (),
-        outbox_events: tuple[CanonOutboxEvent, ...] = (),
         schema_version: Literal["v1"] = "v1",
     ) -> Self:
         normalized_project_id = str(project_id or "").strip()
@@ -97,21 +124,23 @@ class CanonCommitPlan(_FrozenCanonModel):
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
         )
-        event_type_counts: dict[str, int] = {}
-        normalized_outbox: list[CanonOutboxEvent] = []
-        for event in outbox_events:
-            event_type = str(event.event_type or "").strip()
-            count = event_type_counts.get(event_type, 0)
-            event_type_counts[event_type] = count + 1
-            suffix = event_type if count == 0 else f"{event_type}:{count}"
-            normalized_outbox.append(
-                event.model_copy(
-                    update={
-                        "aggregate_id": event.aggregate_id or normalized_project_id,
-                        "event_id": f"{idempotency_key}:{suffix}",
-                    }
-                )
-            )
+        normalized_commit_id = canon_commit_id(idempotency_key)
+        normalized_outbox = build_canon_recovery_events(
+            canon_idempotency_key=idempotency_key,
+            canon_commit_id_value=normalized_commit_id,
+            project_id=normalized_project_id,
+            chapter_number=normalized_chapter,
+            candidate_id=str(candidate_id or "").strip(),
+            chapter_title=str(chapter_title or "").strip(),
+            body_sha256=str(candidate_body_hash or "").strip(),
+            publisher_bindings=publisher_bindings,
+        )
+        publisher_payload = parse_canon_event_payload(
+            normalized_outbox[-1].event_type,
+            normalized_outbox[-1].payload,
+        )
+        if not isinstance(publisher_payload, CanonPublisherEventPayload):
+            raise TypeError("Canon publisher event payload normalization failed")
         return cls(
             schema_version=schema_version,
             project_id=normalized_project_id,
@@ -136,8 +165,11 @@ class CanonCommitPlan(_FrozenCanonModel):
                 dict(item) for item in residual_review_issues
             ),
             canon_risk_level=str(canon_risk_level or ""),
+            chapter_title=publisher_payload.chapter_title,
+            publisher_bindings=publisher_payload.publisher_bindings,
             audit_events=tuple(audit_events),
             outbox_events=tuple(normalized_outbox),
+            canon_commit_id=normalized_commit_id,
             idempotency_key=idempotency_key,
         )
 
@@ -181,5 +213,4 @@ def _idempotency_key(
 __all__ = [
     "CanonAuditEvent",
     "CanonCommitPlan",
-    "CanonOutboxEvent",
 ]

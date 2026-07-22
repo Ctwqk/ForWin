@@ -34,11 +34,6 @@ class ProjectPublishBindingTests(unittest.TestCase):
                         "book_name": "旧起点书名",
                         "create_if_missing": False,
                     },
-                    {
-                        "platform": "zhihu",
-                        "book_name": "知乎盐言版",
-                        "create_if_missing": True,
-                    },
                 ],
             }
         )
@@ -50,6 +45,16 @@ class ProjectPublishBindingTests(unittest.TestCase):
             [item.platform for item in automation.publish_bindings],
             ["qidian", "fanqie"],
         )
+
+    def test_project_automation_rejects_unsupported_platform(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported publisher platform: qidain"):
+            ProjectAutomationUpdateRequest.model_validate(
+                {
+                    "publish_bindings": [
+                        {"platform": "qidain", "book_name": "拼写错误"}
+                    ]
+                }
+            )
 
     def test_normalize_project_automation_backfills_bindings_from_legacy_publish(self) -> None:
         automation = normalize_project_automation(

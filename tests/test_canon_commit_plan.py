@@ -12,7 +12,12 @@ from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.canon.plan import (
     CanonAuditEvent,
     CanonCommitPlan,
-    CanonOutboxEvent,
+)
+from forwin.canon.outbox_events import (
+    CANON_PHASE3_REQUESTED,
+    CANON_PROJECTION_REQUESTED,
+    CANON_PUBLISHER_REQUESTED,
+    canon_event_id,
 )
 from forwin.canon.preparation import (
     BookStatePreparationOutcome,
@@ -60,7 +65,31 @@ def _entity_plan() -> EntityAdmissionPlan:
     )
 
 
-def _build_plan(*, body_hash: str = "body-a", plan_revision: str = "plan-a"):
+def _build_plan(
+    *,
+    body_hash: str = "body-a",
+    plan_revision: str = "plan-a",
+    publisher_bindings=None,
+):
+    bindings = (
+        (
+            {
+                "platform": "qidian",
+                "book_name": "起点测试书",
+                "upload_url": "https://write.example/qidian",
+                "book_meta": {
+                    "audience": "  男频  ",
+                    "theme_tags": ["悬疑", "", "  都市  "],
+                },
+            },
+            {
+                "platform": "fanqie",
+                "book_name": "番茄测试书",
+            },
+        )
+        if publisher_bindings is None
+        else publisher_bindings
+    )
     return CanonCommitPlan.build(
         project_id="project-plan",
         chapter_number=7,
@@ -83,12 +112,8 @@ def _build_plan(*, body_hash: str = "body-a", plan_revision: str = "plan-a"):
                 summary="canon commit",
             ),
         ),
-        outbox_events=(
-            CanonOutboxEvent(
-                event_type="canon.post_commit.requested",
-                payload={"project_id": "project-plan", "chapter_number": 7},
-            ),
-        ),
+        chapter_title="第七章 旧城回声",
+        publisher_bindings=bindings,
     )
 
 
@@ -101,9 +126,44 @@ def test_canon_commit_plan_key_is_deterministic_and_candidate_specific() -> None
     assert first.idempotency_key == identical.idempotency_key
     assert first.idempotency_key != changed_body.idempotency_key
     assert first.idempotency_key != changed_plan.idempotency_key
-    assert first.outbox_events[0].event_id == (
-        f"{first.idempotency_key}:canon.post_commit.requested"
+    assert first.canon_commit_id == identical.canon_commit_id
+    assert len(first.canon_commit_id) == 64
+    assert tuple(event.event_type for event in first.outbox_events) == (
+        CANON_PROJECTION_REQUESTED,
+        CANON_PHASE3_REQUESTED,
+        CANON_PUBLISHER_REQUESTED,
     )
+    assert tuple(event.event_id for event in first.outbox_events) == tuple(
+        canon_event_id(first.idempotency_key, event_type)
+        for event_type in (
+            CANON_PROJECTION_REQUESTED,
+            CANON_PHASE3_REQUESTED,
+            CANON_PUBLISHER_REQUESTED,
+        )
+    )
+    for event in first.outbox_events:
+        assert event.payload["schema_version"] == 1
+        assert event.payload["canon_commit_id"] == first.canon_commit_id
+        assert event.payload["canon_idempotency_key"] == first.idempotency_key
+        assert event.payload["project_id"] == first.project_id
+        assert event.payload["chapter_number"] == first.chapter_number
+        assert event.payload["candidate_id"] == first.candidate_id
+    publisher_payload = first.outbox_events[-1].payload
+    assert publisher_payload["body_sha256"] == first.candidate_body_hash
+    assert [
+        binding["platform"] for binding in publisher_payload["publisher_bindings"]
+    ] == ["fanqie", "qidian"]
+    assert publisher_payload["chapter_title"] == "第七章 旧城回声"
+    assert publisher_payload["publish"] is False
+    assert publisher_payload["publisher_bindings"][1]["book_meta"] == {
+        "audience": "男频",
+        "primary_category": "",
+        "theme_tags": ["悬疑", "都市"],
+        "role_tags": [],
+        "plot_tags": [],
+        "protagonist_names": [],
+        "intro": "",
+    }
 
 
 def test_canon_commit_plan_is_frozen_and_rejects_cross_project_payloads() -> None:
@@ -115,7 +175,10 @@ def test_canon_commit_plan_is_frozen_and_rejects_cross_project_payloads() -> Non
     with pytest.raises(ValueError, match="BookState project mismatch"):
         CanonCommitPlan.build(
             **{
-                **plan.model_dump(mode="python", exclude={"idempotency_key"}),
+                **plan.model_dump(
+                    mode="python",
+                    exclude={"canon_commit_id", "idempotency_key", "outbox_events"},
+                ),
                 "approved_book_state_changes": plan.approved_book_state_changes.model_copy(
                     update={"project_id": "other-project"}
                 ),
@@ -131,6 +194,33 @@ def test_canon_commit_plan_round_trips_without_losing_typed_payloads() -> None:
     assert restored == plan
     assert restored.approved_book_state_changes.graph_deltas[0].id == "delta-plan-7"
     assert restored.entity_admission_plan.candidate_fingerprint == "candidate-body-a"
+
+
+def test_canon_commit_plan_rejects_duplicate_publisher_platforms() -> None:
+    with pytest.raises(ValueError, match="duplicate publisher platform"):
+        _build_plan(
+            publisher_bindings=(
+                {"platform": "qidian", "book_name": "第一份"},
+                {"platform": "qidian", "book_name": "第二份"},
+            )
+        )
+
+
+def test_canon_commit_plan_rejects_unsupported_publisher_platform() -> None:
+    with pytest.raises(ValueError, match="unsupported publisher platform: qidain"):
+        _build_plan(
+            publisher_bindings=(
+                {"platform": "qidain", "book_name": "拼写错误"},
+            )
+        )
+
+
+def test_canon_plan_emits_publisher_event_with_no_configured_bindings() -> None:
+    plan = _build_plan(publisher_bindings=())
+
+    assert len(plan.outbox_events) == 3
+    assert plan.outbox_events[-1].event_type == CANON_PUBLISHER_REQUESTED
+    assert plan.outbox_events[-1].payload["publisher_bindings"] == []
 
 
 def test_prepare_from_approved_persists_only_precanon_candidate_state() -> None:

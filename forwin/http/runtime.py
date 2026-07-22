@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from forwin.application.task_center import TaskCenterService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
-from forwin.publishers import PublisherManager
+from forwin.publishers.manager import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 

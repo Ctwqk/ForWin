@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from forwin.planning.checkpoints import (
     BandCheckpointDetail,
@@ -11,6 +11,7 @@ from forwin.planning.checkpoints import (
 from forwin.audit.events import DecisionEventInfo
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.long_run_policy import LongRunPolicy
+from forwin.publishers.platforms import normalize_supported_platform
 from forwin.protocol.subworld import SubWorldSummary
 from forwin.runtime.policy import RuntimePolicy
 from .genesis import BookGenesisStageState
@@ -54,6 +55,11 @@ class ProjectAutomationPublishSettings(BaseModel):
     book_meta: "PublisherBookMetaRequest" = Field(
         default_factory=lambda: PublisherBookMetaRequest()
     )
+
+    @field_validator("platform")
+    @classmethod
+    def _supported_platform(cls, value: str) -> str:
+        return normalize_supported_platform(value, allow_empty=True)
 
 
 class ProjectAutomationSettings(BaseModel):

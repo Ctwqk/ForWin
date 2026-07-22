@@ -123,7 +123,7 @@ class CanonAdmissionService:
                     plan=plan,
                 )
 
-                commit_id = new_id()
+                commit_id = plan.canon_commit_id
                 candidate_repository = CandidateDraftRepository(session)
                 candidate_repository.transition(plan.candidate_id, "committing")
 

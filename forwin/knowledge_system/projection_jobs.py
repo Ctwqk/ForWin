@@ -6,6 +6,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from forwin.canon.outbox_events import (
+    CANON_PROJECTION_REQUESTED,
+    CanonProjectionEventPayload,
+    parse_canon_event_envelope,
+)
 from forwin.knowledge_system.canon_projection import (
     CanonProjectionService,
     ProjectionRefreshError,
@@ -20,8 +25,6 @@ from forwin.outbox.worker import OutboxClaim
 
 
 KNOWLEDGE_PROJECTION_REFRESH_EVENT = "knowledge.projection.refresh_requested"
-CANON_PROJECTION_REQUESTED_EVENT = "canon.projection.requested"
-CANON_PROJECTION_EVENT_SCHEMA_VERSION = 1
 VALID_PROJECTION_KINDS = frozenset(
     {"all", "world_studio", *PROJECTION_COMPONENTS}
 )
@@ -142,8 +145,17 @@ def handle_projection_refresh_outbox_event(
 
     event_identity = None
     projection_kind = str(payload.get("projection_kind") or "all")
-    if event.event_type == CANON_PROJECTION_REQUESTED_EVENT:
-        event_identity = _canon_projection_event_identity(payload)
+    if event.event_type == CANON_PROJECTION_REQUESTED:
+        parsed = parse_canon_event_envelope(
+            event_type=event.event_type,
+            event_id=event.event_id,
+            aggregate_type=event.aggregate_type,
+            aggregate_id=event.aggregate_id,
+            payload=payload,
+        )
+        if not isinstance(parsed, CanonProjectionEventPayload):
+            raise TypeError("Canon projection event payload has the wrong type")
+        event_identity = _canon_projection_event_identity(parsed)
         projection_kind = "all"
 
     return refresh_projection_now(
@@ -189,46 +201,19 @@ def build_projection_outbox_handlers(
 
     return {
         KNOWLEDGE_PROJECTION_REFRESH_EVENT: handle,
-        CANON_PROJECTION_REQUESTED_EVENT: handle,
+        CANON_PROJECTION_REQUESTED: handle,
     }
 
 
 def _canon_projection_event_identity(
-    payload: Mapping[str, object],
+    parsed: CanonProjectionEventPayload,
 ) -> ProjectionEventIdentity:
-    try:
-        schema_version = int(payload.get("schema_version") or 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("canon projection event schema_version is invalid") from exc
-    if schema_version != CANON_PROJECTION_EVENT_SCHEMA_VERSION:
-        raise ValueError("unsupported canon projection event schema_version")
-
-    required = {
-        "canon_commit_id": str(payload.get("canon_commit_id") or "").strip(),
-        "canon_idempotency_key": str(
-            payload.get("canon_idempotency_key") or ""
-        ).strip(),
-        "project_id": str(payload.get("project_id") or "").strip(),
-        "candidate_id": str(payload.get("candidate_id") or "").strip(),
-    }
-    missing = [key for key, value in required.items() if not value]
-    try:
-        chapter_number = int(payload.get("chapter_number") or 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("canon projection event chapter_number is invalid") from exc
-    if chapter_number <= 0:
-        missing.append("chapter_number")
-    if missing:
-        raise ValueError(
-            "canon projection event missing required fields: "
-            + ", ".join(sorted(set(missing)))
-        )
     return ProjectionEventIdentity(
-        canon_commit_id=required["canon_commit_id"],
-        canon_idempotency_key=required["canon_idempotency_key"],
-        project_id=required["project_id"],
-        chapter_number=chapter_number,
-        candidate_id=required["candidate_id"],
+        canon_commit_id=parsed.canon_commit_id,
+        canon_idempotency_key=parsed.canon_idempotency_key,
+        project_id=parsed.project_id,
+        chapter_number=parsed.chapter_number,
+        candidate_id=parsed.candidate_id,
     )
 
 
@@ -244,8 +229,6 @@ def _resolve_session_factory(
 
 
 __all__ = [
-    "CANON_PROJECTION_EVENT_SCHEMA_VERSION",
-    "CANON_PROJECTION_REQUESTED_EVENT",
     "KNOWLEDGE_PROJECTION_REFRESH_EVENT",
     "ProjectionRefreshError",
     "VALID_PROJECTION_KINDS",

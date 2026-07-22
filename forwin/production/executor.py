@@ -197,7 +197,7 @@ class ProductionExecutor:
             return self.publisher_manager_factory()
         if self.session_factory is None or self.config is None:
             return None
-        from forwin.publishers import PublisherManager
+        from forwin.publishers.manager import PublisherManager
 
         return PublisherManager(
             self.session_factory,

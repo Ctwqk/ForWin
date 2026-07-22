@@ -335,8 +335,10 @@ def test_outbox_runtime_has_only_fenced_nonterminal_claims() -> None:
         "forwin/outbox/store.py",
         "forwin/outbox/worker.py",
         "forwin/outbox/handlers.py",
+        "forwin/canon/outbox_events.py",
         "forwin/knowledge_system/projection_jobs.py",
-        "forwin/knowledge_system/canon_outbox.py",
+        "forwin/maintenance/events.py",
+        "forwin/publisher_runtime/canon_jobs.py",
         "forwin/cli.py",
         "docker-compose.yml",
         "forwin/migrations/versions/0001_v5_baseline.py",
@@ -357,8 +359,9 @@ def test_outbox_runtime_has_only_fenced_nonterminal_claims() -> None:
     assert "event.payload_json" not in sources[
         "forwin/knowledge_system/projection_jobs.py"
     ]
+    assert "event.payload_json" not in sources["forwin/maintenance/events.py"]
     assert "event.payload_json" not in sources[
-        "forwin/knowledge_system/canon_outbox.py"
+        "forwin/publisher_runtime/canon_jobs.py"
     ]
     assert "OutboxClaim" in sources["forwin/outbox/handlers.py"]
     assert 'revision: str = "0001_v5_recovery"' in sources[

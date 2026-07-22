@@ -11,7 +11,6 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
-from forwin.models.audit import DecisionEvent
 from forwin.models.outbox import OutboxEvent
 from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.models.project import ChapterPlan
@@ -94,7 +93,7 @@ def test_projection_refresh_can_defer_to_outbox_worker(tmp_path: Path) -> None:
             payload = json.loads(row.payload_json)
             assert payload["project_id"] == project_id
             assert payload["projection_kind"] == "all"
-            assert payload["as_of_chapter"] == 1
+            assert payload["requested_as_of_chapter"] == 1
             assert _projection_page_count(session, project_id) == 0
 
         result = run_one_outbox_event(
@@ -122,12 +121,18 @@ def test_projection_refresh_can_defer_to_outbox_worker(tmp_path: Path) -> None:
 
 def test_outbox_worker_cli_registers_default_handlers() -> None:
     source = Path("forwin/cli.py").read_text(encoding="utf-8")
-    assert "build_default_outbox_handlers" in source
-    assert "handlers=build_default_outbox_handlers" in source
+    assert "build_outbox_worker_runtime" in source
+    assert "handlers=runtime.handlers" in source
 
 
-def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
-    from forwin.knowledge_system.canon_outbox import CANON_POST_COMMIT_EVENT
+def test_canon_projection_failure_preserves_acceptance_and_retries(
+    tmp_path: Path,
+) -> None:
+    from forwin.canon.outbox_events import (
+        CANON_PROJECTION_REQUESTED,
+        canon_commit_id,
+        canon_event_id,
+    )
     from forwin.outbox.handlers import build_default_outbox_handlers
 
     engine, Session = _session_factory("canon-projection-retry")
@@ -135,9 +140,12 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
     class MemoryIndex:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
+            self.fail = True
 
         def upsert_chapter(self, **kwargs) -> None:
             self.calls.append(dict(kwargs))
+            if self.fail:
+                raise RuntimeError("projection backend unavailable")
 
     memory_index = MemoryIndex()
     try:
@@ -202,6 +210,7 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
             session.add(candidate)
             session.flush()
             commit = CanonCommitRecord(
+                id=canon_commit_id(candidate.idempotency_key),
                 idempotency_key=candidate.idempotency_key,
                 candidate_id=candidate.id,
                 project_id=project.id,
@@ -216,9 +225,15 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
                 session,
                 aggregate_type="project",
                 aggregate_id=project.id,
-                event_type=CANON_POST_COMMIT_EVENT,
-                event_id="canon-projection-retry-event",
+                event_type=CANON_PROJECTION_REQUESTED,
+                event_id=canon_event_id(
+                    commit.idempotency_key,
+                    CANON_PROJECTION_REQUESTED,
+                ),
                 payload={
+                    "schema_version": 1,
+                    "canon_commit_id": commit.id,
+                    "canon_idempotency_key": commit.idempotency_key,
                     "project_id": project.id,
                     "chapter_number": 1,
                     "candidate_id": candidate.id,
@@ -227,16 +242,16 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
             event_id = event.id
             project_id = project.id
 
-        def projection_fails(**_kwargs):
-            raise RuntimeError("projection backend unavailable")
-
         first = run_one_outbox_event(
             session_factory=Session,
             worker_id="canon-projection-worker",
             handlers=build_default_outbox_handlers(
                 session_factory=Session,
+                obsidian_root=tmp_path / "vaults",
+                llm_kb_root=tmp_path / "kb",
+                qdrant_client=FakeQdrantClient(),
+                qdrant_models=FakeQdrantModels,
                 memory_index=memory_index,
-                canon_projection_runner=projection_fails,
             ),
             base_delay_seconds=0,
             max_delay_seconds=0,
@@ -257,39 +272,32 @@ def test_canon_projection_failure_preserves_acceptance_and_retries() -> None:
                     CandidateDraftRecord.project_id == project_id
                 )
             ).scalar_one()
-            deferred = (
-                session.execute(
-                    select(DecisionEvent).where(
-                        DecisionEvent.project_id == project_id,
-                        DecisionEvent.event_type == "deferred_maintenance_recorded",
-                    )
-                )
-                .scalars()
-                .all()
-            )
             assert row is not None
             assert row.status == "pending"
             assert row.attempts == 1
             assert accepted.status == "accepted"
             assert candidate.status == "accepted"
-            assert len(deferred) == 1
-            assert memory_index.calls == []
+            assert len(memory_index.calls) == 1
 
+        memory_index.fail = False
         second = run_one_outbox_event(
             session_factory=Session,
             worker_id="canon-projection-worker",
             handlers=build_default_outbox_handlers(
                 session_factory=Session,
+                obsidian_root=tmp_path / "vaults",
+                llm_kb_root=tmp_path / "kb",
+                qdrant_client=FakeQdrantClient(),
+                qdrant_models=FakeQdrantModels,
                 memory_index=memory_index,
-                canon_projection_runner=lambda **_kwargs: {"ok": True},
             ),
             base_delay_seconds=0,
             max_delay_seconds=0,
         )
 
         assert second.processed is True
-        assert len(memory_index.calls) == 1
-        assert memory_index.calls[0]["project_id"] == project_id
+        assert len(memory_index.calls) == 2
+        assert memory_index.calls[-1]["project_id"] == project_id
         with Session() as session:
             row = session.get(OutboxEvent, event_id)
             chapter = session.execute(

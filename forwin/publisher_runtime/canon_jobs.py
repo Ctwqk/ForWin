@@ -1,54 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from forwin.candidate_drafts import candidate_body_hash
+from forwin.canon.outbox_events import (
+    CANON_PUBLISHER_REQUESTED,
+    CanonPublisherBindingSnapshot,
+    CanonPublisherEventPayload,
+    parse_canon_event_envelope,
+)
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ChapterPlan, Project
+from forwin.outbox.worker import OutboxClaim
 
 from .idempotency import publisher_job_idempotency_key
-
-
-CANON_PUBLISHER_REQUESTED = "canon.publisher.requested"
-
-
-class CanonPublisherBindingSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    platform: str
-    book_name: str
-    upload_url: str = ""
-    create_if_missing: bool = False
-    cover_generation_enabled: bool = True
-    cover_confirmation_required: bool = False
-    cover_candidate_count: int = 4
-    cover_style_hint: str = ""
-    auto_cover_upload_enabled: bool = True
-    publisher_compliance_required: bool = False
-    book_meta: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("platform", "book_name")
-    @classmethod
-    def _required_text(cls, value: str, info) -> str:
-        normalized = str(value or "").strip()
-        if not normalized:
-            raise ValueError(f"{info.field_name} must be non-empty")
-        return normalized
-
-    @field_validator("upload_url", "cover_style_hint")
-    @classmethod
-    def _optional_text(cls, value: str) -> str:
-        return str(value or "").strip()
-
-    @field_validator("cover_candidate_count")
-    @classmethod
-    def _candidate_count(cls, value: int) -> int:
-        return max(1, min(int(value or 4), 8))
 
 
 class CanonPublisherJobService:
@@ -65,6 +34,7 @@ class CanonPublisherJobService:
         chapter_number: int,
         candidate_id: str,
         chapter_title: str,
+        body_sha256: str,
         bindings: Sequence[Mapping[str, Any] | CanonPublisherBindingSnapshot],
         publish: bool = True,
     ) -> list[dict[str, Any]]:
@@ -76,6 +46,7 @@ class CanonPublisherJobService:
         normalized_candidate_id = str(candidate_id or "").strip()
         normalized_commit_id = str(canon_commit_id or "").strip()
         normalized_canon_key = str(canon_idempotency_key or "").strip()
+        normalized_body_hash = str(body_sha256 or "").strip()
         normalized_chapter = int(chapter_number or 0)
 
         with self.session_factory() as session:
@@ -86,6 +57,7 @@ class CanonPublisherJobService:
                 project_id=normalized_project_id,
                 chapter_number=normalized_chapter,
                 candidate_id=normalized_candidate_id,
+                body_sha256=normalized_body_hash,
             )
             jobs = []
             for binding in normalized_bindings:
@@ -197,6 +169,7 @@ class CanonPublisherJobService:
         project_id: str,
         chapter_number: int,
         candidate_id: str,
+        body_sha256: str,
     ) -> tuple[Project, CanonCommitRecord, CandidateDraftRecord, ChapterDraft]:
         if not canon_commit_id or not canon_idempotency_key:
             raise ValueError("Canon publisher identity is incomplete")
@@ -238,11 +211,44 @@ class CanonPublisherJobService:
             raise ValueError("accepted candidate draft not found")
         if candidate_body_hash(draft.body_text) != candidate.body_hash:
             raise ValueError("accepted candidate body hash mismatch")
+        if not body_sha256 or body_sha256 != candidate.body_hash:
+            raise ValueError("Canon publisher body hash mismatch")
         return project, commit, candidate, draft
 
 
+def build_canon_publisher_outbox_handlers(
+    *,
+    service_provider: Callable[[], CanonPublisherJobService],
+) -> dict[str, Callable[[OutboxClaim], None]]:
+    def handle(event: OutboxClaim) -> None:
+        parsed = parse_canon_event_envelope(
+            event_type=event.event_type,
+            event_id=event.event_id,
+            aggregate_type=event.aggregate_type,
+            aggregate_id=event.aggregate_id,
+            payload=event.payload,
+        )
+        if not isinstance(parsed, CanonPublisherEventPayload):
+            raise TypeError("Canon publisher event payload has the wrong type")
+        service_provider().materialize(
+            canon_commit_id=parsed.canon_commit_id,
+            canon_idempotency_key=parsed.canon_idempotency_key,
+            project_id=parsed.project_id,
+            chapter_number=parsed.chapter_number,
+            candidate_id=parsed.candidate_id,
+            chapter_title=parsed.chapter_title,
+            body_sha256=parsed.body_sha256,
+            bindings=[
+                binding.model_dump(mode="json")
+                for binding in parsed.publisher_bindings
+            ],
+            publish=parsed.publish,
+        )
+
+    return {CANON_PUBLISHER_REQUESTED: handle}
+
+
 __all__ = [
-    "CANON_PUBLISHER_REQUESTED",
-    "CanonPublisherBindingSnapshot",
     "CanonPublisherJobService",
+    "build_canon_publisher_outbox_handlers",
 ]

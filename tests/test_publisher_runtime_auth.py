@@ -29,7 +29,7 @@ def test_extension_auth_service_reports_missing_configuration() -> None:
     assert auth.backend_ready_payload() == {"extension_api_key_configured": False}
 
 
-def test_publisher_manager_auth_facade_keeps_legacy_exception_imports() -> None:
+def test_publisher_manager_auth_facade_uses_runtime_auth_errors() -> None:
     manager = PublisherManager(lambda: None, extension_api_key="expected-secret")
 
     with pytest.raises(PublisherExtensionAuthError):

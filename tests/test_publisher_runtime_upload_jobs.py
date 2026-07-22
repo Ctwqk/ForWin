@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
+import pytest
 from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
-from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
+from forwin.models.publisher import (
+    PublisherConnectionState,
+    PublisherUploadJob,
+    PublisherWorkBinding,
+)
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publishers.manager import PublisherManager
 from tests.postgres import postgres_test_url
@@ -24,6 +30,58 @@ def _runtime(name: str) -> tuple[object, PublisherRuntimeService]:
         preferred_client_id="",
         publisher_session_secret="",
         publisher_session_encryption_required=False,
+    )
+
+
+def _complete_mutating_job(
+    runtime: PublisherRuntimeService,
+    created: dict,
+    claimed: dict,
+    *,
+    current_url: str,
+    remote_book_id: str = "book-1",
+    remote_chapter_id: str = "chapter-1",
+    official_state: str = "drafted",
+    details: dict | None = None,
+    message: str = "完成",
+) -> dict:
+    runtime.attempts.transition(
+        job_id=created["job_id"],
+        attempt_id=claimed["attempt_id"],
+        worker_id="client-1",
+        lease_epoch=claimed["lease_epoch"],
+        phase="mutation_started",
+        current_url=current_url,
+    )
+    runtime.upload_jobs.record_upload_receipt(
+        job_id=created["job_id"],
+        attempt_id=claimed["attempt_id"],
+        client_id="client-1",
+        lease_epoch=claimed["lease_epoch"],
+        receipt={
+            "remote_book_id": remote_book_id,
+            "remote_chapter_id": remote_chapter_id,
+            "remote_url": current_url,
+            "official_state": official_state,
+            "content_sha256": created["body_sha256"],
+            "evidence": {
+                "verified": True,
+                "content_sha256": created["body_sha256"],
+                "confirmation_text": "accepted",
+            },
+        },
+    )
+    return runtime.upload_jobs.update_upload_job_result(
+        job_id=created["job_id"],
+        client_id="client-1",
+        attempt_id=claimed["attempt_id"],
+        lease_epoch=claimed["lease_epoch"],
+        outcome="succeeded",
+        message=message,
+        current_url=current_url,
+        error_code="",
+        error_message="",
+        details=details or {},
     )
 
 
@@ -63,17 +121,17 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
             client_id="client-1",
             connected_platforms=["qidian"],
         )
-        updated = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="succeeded",
-            message="完成",
+        assert claimed is not None
+        assert claimed["idempotency_key"].startswith("publisher-job:v1:")
+        assert len(claimed["body_sha256"]) == 64
+        updated = _complete_mutating_job(
+            runtime,
+            created,
+            claimed,
             current_url="https://write.qq.com/portal/dashboard",
-            error="",
-            result_payload={"remote_chapter_id": "remote-1"},
+            remote_chapter_id="remote-1",
         )
 
-        assert claimed is not None
         assert claimed["job_id"] == created["job_id"]
         assert updated["status"] == "succeeded"
         assert updated["result_payload"]["create_if_missing"] is True
@@ -219,7 +277,7 @@ def test_claim_next_upload_job_does_not_return_cover_generate() -> None:
         engine.dispose()
 
 
-def test_terminal_upload_success_ignores_late_failure_result() -> None:
+def test_terminal_upload_success_rejects_late_failure_result() -> None:
     engine, runtime = _runtime("publisher-runtime-terminal-result-ignored")
     try:
         created = runtime.upload_jobs.create_upload_job(
@@ -230,37 +288,45 @@ def test_terminal_upload_success_ignores_late_failure_result() -> None:
             upload_url=None,
             publish=False,
         )
+        claimed = runtime.upload_jobs.claim_next_upload_job(
+            client_id="client-1",
+            connected_platforms=["qidian"],
+        )
+        assert claimed is not None
 
-        succeeded = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="succeeded",
-            message="章节草稿已保存到起点。",
+        succeeded = _complete_mutating_job(
+            runtime,
+            created,
+            claimed,
             current_url="https://write.qq.com/portal/booknovels/chaptertmp/CBID/123456?entry=publish#ccid=987654321",
-            error="",
-            result_payload={
-                "mode": "draft",
-                "official_status": "drafted",
-                "remote_chapter_id": "987654321",
-            },
+            remote_book_id="123456",
+            remote_chapter_id="987654321",
+            message="章节草稿已保存到起点。",
         )
-        late_failure = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://write.qq.com/portal/login",
-            error="平台页面没有准备好，无法执行上传。",
-            result_payload={"error_code": "platform-not-ready"},
-        )
+        with pytest.raises(ValueError, match="fence is no longer current"):
+            runtime.upload_jobs.update_upload_job_result(
+                job_id=created["job_id"],
+                client_id="client-1",
+                attempt_id=claimed["attempt_id"],
+                lease_epoch=claimed["lease_epoch"],
+                outcome="failed",
+                message="上传失败。",
+                current_url="https://write.qq.com/portal/login",
+                error_code="platform-not-ready",
+                error_message="平台页面没有准备好，无法执行上传。",
+                details={},
+            )
 
         assert succeeded["status"] == "succeeded"
-        assert late_failure["status"] == "succeeded"
-        assert late_failure["message"] == "章节草稿已保存到起点。"
-        assert late_failure["error"] == ""
-        assert late_failure["current_url"].endswith("#ccid=987654321")
-        assert late_failure["result_payload"]["remote_chapter_id"] == "987654321"
-        assert "error_code" not in late_failure["result_payload"]
+        stored = runtime.upload_jobs.get_upload_job(created["job_id"])
+        assert stored["status"] == "succeeded"
+        assert stored["message"] == "章节草稿已保存到起点。"
+        assert stored["error"] == ""
+        assert stored["current_url"] == (
+            "https://write.qq.com/portal/booknovels/chaptertmp/CBID/123456"
+            "?ccid=987654321"
+        )
+        assert stored["result_payload"]["receipt"]["remote_chapter_id"] == ("987654321")
 
         with runtime.session_factory() as session:
             state = session.get(PublisherConnectionState, "qidian")
@@ -271,30 +337,87 @@ def test_terminal_upload_success_ignores_late_failure_result() -> None:
         engine.dispose()
 
 
+def test_pre_mutation_login_error_code_marks_platform_disconnected() -> None:
+    engine, runtime = _runtime("publisher-runtime-login-error-code")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="qidian",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+        claimed = runtime.upload_jobs.claim_next_upload_job(
+            client_id="client-1",
+            connected_platforms=["qidian"],
+        )
+        assert claimed is not None
+
+        result = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            attempt_id=claimed["attempt_id"],
+            lease_epoch=claimed["lease_epoch"],
+            outcome="failed",
+            message="platform request rejected",
+            current_url="",
+            error_code="login-required",
+            error_message="platform request rejected",
+            details={},
+        )
+
+        assert result["status"] == "pending"
+        with runtime.session_factory() as session:
+            state = session.get(PublisherConnectionState, "qidian")
+            assert state is not None
+            assert state.connected is False
+            assert state.last_error == "platform request rejected"
+    finally:
+        engine.dispose()
+
+
 def test_claim_next_upload_job_returns_cover_upload_and_audit_sync() -> None:
     engine, runtime = _runtime("publisher-runtime-claim-task-kinds")
     try:
         with runtime.session_factory() as session:
-            session.add_all(
-                [
+            jobs = []
+            for task_kind, payload in (
+                (
+                    "cover_upload",
+                    {
+                        "work_binding_id": "work-1",
+                        "remote_book_id": "book-1",
+                        "cover_asset_id": "cover-1",
+                        "file_path": "/tmp/cover.png",
+                    },
+                ),
+                (
+                    "audit_sync",
+                    {
+                        "work_binding_id": "work-1",
+                        "remote_book_id": "book-1",
+                    },
+                ),
+            ):
+                job_id = new_id()
+                jobs.append(
                     PublisherUploadJob(
+                        id=job_id,
+                        idempotency_key=f"publisher-job:v1:{job_id}",
+                        body_sha256=hashlib.sha256(
+                            f"{task_kind}:{job_id}".encode()
+                        ).hexdigest(),
                         platform_id="qidian",
-                        task_kind="cover_upload",
+                        task_kind=task_kind,
                         status="pending",
                         book_name="测试书",
                         chapter_title="",
                         body_text="",
+                        result_payload_json=json.dumps(payload),
                     ),
-                    PublisherUploadJob(
-                        platform_id="qidian",
-                        task_kind="audit_sync",
-                        status="pending",
-                        book_name="测试书",
-                        chapter_title="",
-                        body_text="",
-                    ),
-                ]
-            )
+                )
+            session.add_all(jobs)
             session.commit()
 
         first = runtime.upload_jobs.claim_next_upload_job(
@@ -302,15 +425,68 @@ def test_claim_next_upload_job_returns_cover_upload_and_audit_sync() -> None:
             connected_platforms=["qidian"],
         )
         assert first is not None
-        runtime.upload_jobs.update_upload_job_result(
-            job_id=first["job_id"],
-            client_id="client-1",
-            status="succeeded",
-            message="封面上传完成",
-            current_url="https://write.qq.com/portal/dashboard",
-            error="",
-            result_payload={"cover_state": "uploaded"},
-        )
+        if first["task_kind"] == "cover_upload":
+            _complete_mutating_job(
+                runtime,
+                first,
+                first,
+                current_url="",
+                remote_book_id="book-1",
+                remote_chapter_id="",
+                official_state="cover_uploaded",
+                details={"cover_state": "uploaded"},
+            )
+        else:
+            runtime.attempts.transition(
+                job_id=first["job_id"],
+                attempt_id=first["attempt_id"],
+                worker_id="client-1",
+                lease_epoch=first["lease_epoch"],
+                phase="observation_started",
+            )
+            with pytest.raises(ValueError, match="identity does not match"):
+                runtime.upload_jobs.update_upload_job_result(
+                    job_id=first["job_id"],
+                    client_id="client-1",
+                    attempt_id=first["attempt_id"],
+                    lease_epoch=first["lease_epoch"],
+                    outcome="succeeded",
+                    message="错误审核身份",
+                    current_url="",
+                    error_code="",
+                    error_message="",
+                    details={
+                        "work": {
+                            "work_binding_id": "work-other",
+                            "remote_book_id": "book-1",
+                            "audit_state": "unknown",
+                        },
+                        "chapters": [],
+                        "cover": {"cover_state": "unknown"},
+                        "milestones": [],
+                    },
+                )
+            runtime.upload_jobs.update_upload_job_result(
+                job_id=first["job_id"],
+                client_id="client-1",
+                attempt_id=first["attempt_id"],
+                lease_epoch=first["lease_epoch"],
+                outcome="succeeded",
+                message="审核同步完成",
+                current_url="",
+                error_code="",
+                error_message="",
+                details={
+                    "work": {
+                        "work_binding_id": "work-1",
+                        "remote_book_id": "book-1",
+                        "audit_state": "unknown",
+                    },
+                    "chapters": [],
+                    "cover": {"cover_state": "unknown"},
+                    "milestones": [],
+                },
+            )
         second = runtime.upload_jobs.claim_next_upload_job(
             client_id="client-1",
             connected_platforms=["qidian"],
@@ -325,8 +501,8 @@ def test_claim_next_upload_job_returns_cover_upload_and_audit_sync() -> None:
         engine.dispose()
 
 
-def test_legacy_create_upload_job_returns_chapter_upload_task_kind() -> None:
-    engine, runtime = _runtime("publisher-runtime-legacy-task-kind")
+def test_manual_create_upload_job_returns_chapter_upload_task_kind() -> None:
+    engine, runtime = _runtime("publisher-runtime-manual-task-kind")
     try:
         created = runtime.upload_jobs.create_upload_job(
             platform="fanqie",
@@ -338,6 +514,58 @@ def test_legacy_create_upload_job_returns_chapter_upload_task_kind() -> None:
         )
 
         assert created["task_kind"] == "chapter_upload"
+    finally:
+        engine.dispose()
+
+
+def test_audit_sync_uses_exact_work_binding_identity() -> None:
+    engine, runtime = _runtime("publisher-runtime-audit-binding-identity")
+    manager = PublisherManager(runtime.session_factory, extension_api_key="secret")
+    try:
+        with runtime.session_factory() as session:
+            work = PublisherWorkBinding(
+                project_id="project-bound",
+                platform_id="qidian",
+                book_name="绑定作品",
+                remote_book_id="book-bound",
+                remote_url="https://write.qq.com/book/bookmanage/bookdetail/100/200",
+            )
+            session.add(work)
+            session.commit()
+            work_binding_id = work.id
+
+        with pytest.raises(ValueError, match="项目与作品绑定不一致"):
+            manager.enqueue_audit_sync(
+                project_id="project-other",
+                platform="qidian",
+                work_binding_id=work_binding_id,
+            )
+        with pytest.raises(ValueError, match="平台与作品绑定不一致"):
+            manager.enqueue_audit_sync(
+                project_id="project-bound",
+                platform="fanqie",
+                work_binding_id=work_binding_id,
+            )
+        with pytest.raises(ValueError, match="书名与作品绑定不一致"):
+            manager.enqueue_audit_sync(
+                project_id="project-bound",
+                platform="qidian",
+                work_binding_id=work_binding_id,
+                book_name="另一部作品",
+            )
+
+        created = manager.enqueue_audit_sync(
+            project_id="project-bound",
+            platform="qidian",
+            work_binding_id=work_binding_id,
+            book_name="绑定作品",
+        )
+
+        assert created["project_id"] == "project-bound"
+        assert created["platform"] == "qidian"
+        assert created["book_name"] == "绑定作品"
+        assert created["result_payload"]["work_binding_id"] == work_binding_id
+        assert created["result_payload"]["remote_book_id"] == "book-bound"
     finally:
         engine.dispose()
 
@@ -361,196 +589,5 @@ def test_upload_job_service_available_through_manager_runtime_facade() -> None:
 
         assert facade["job_id"] == created["job_id"]
         assert facade["message"] == "番茄小说 上传任务已创建，等待浏览器扩展执行。"
-    finally:
-        engine.dispose()
-
-
-def test_non_login_upload_failure_requeues_until_codex_intervention() -> None:
-    engine, runtime = _runtime("publisher-runtime-upload-retry")
-    try:
-        codex_calls = []
-
-        def submit_codex_intervention(intervention: dict) -> dict:
-            codex_calls.append(dict(intervention))
-            return {"ok": True, "job_id": "codex-job-1", "status": "queued"}
-
-        runtime.upload_jobs.codex_intervention_handler = submit_codex_intervention
-        created = runtime.upload_jobs.create_upload_job(
-            platform="fanqie",
-            book_name="测试书",
-            chapter_title="第一章",
-            body="正文",
-            upload_url=None,
-            publish=False,
-        )
-
-        first = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://fanqienovel.com/main/writer/",
-            error="番茄章节管理页未找到新草稿。",
-            result_payload={"error_code": "publish-not-confirmed"},
-        )
-        second = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://fanqienovel.com/main/writer/",
-            error="番茄章节管理页未找到新草稿。",
-            result_payload={"error_code": "publish-not-confirmed"},
-        )
-        third = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://fanqienovel.com/main/writer/",
-            error="番茄章节管理页未找到新草稿。",
-            result_payload={"error_code": "publish-not-confirmed"},
-        )
-
-        assert first["status"] == "pending"
-        assert first["deletable"] is False
-        assert first["result_payload"]["auto_retry"]["failure_count"] == 1
-        assert first["result_payload"]["auto_retry"]["next_attempt"] == 2
-        assert second["status"] == "pending"
-        assert second["result_payload"]["auto_retry"]["failure_count"] == 2
-        assert second["result_payload"]["auto_retry"]["next_attempt"] == 3
-        assert third["status"] == "failed"
-        assert third["deletable"] is True
-        assert third["result_payload"]["auto_retry"]["failure_count"] == 3
-        assert third["result_payload"]["auto_retry"]["exhausted"] is True
-        assert third["result_payload"]["codex_intervention_required"] is True
-        prompt = third["result_payload"]["codex_intervention"]["prompt"]
-        assert "ForWin 上传任务需要 Codex 介入" in prompt
-        assert len(codex_calls) == 1
-        assert third["result_payload"]["codex_intervention"]["status"] == "submitted"
-        assert (
-            third["result_payload"]["codex_intervention"]["call"]["job_id"]
-            == "codex-job-1"
-        )
-    finally:
-        engine.dispose()
-
-
-def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
-    engine, runtime = _runtime("publisher-runtime-upload-retry-cleared")
-    try:
-        created = runtime.upload_jobs.create_upload_job(
-            platform="fanqie",
-            book_name="测试书",
-            chapter_title="第一章",
-            body="正文",
-            upload_url=None,
-            publish=False,
-        )
-
-        first = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://fanqienovel.com/main/writer/",
-            error="番茄章节管理页未找到新草稿。",
-            result_payload={
-                "error_code": "publish-not-confirmed",
-                "failure_phase": "confirm",
-            },
-        )
-        assert first["status"] == "pending"
-
-        succeeded = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="succeeded",
-            message="完成",
-            current_url="https://fanqienovel.com/main/writer/",
-            error="",
-            result_payload={"remote_chapter_id": "remote-1"},
-        )
-
-        payload = succeeded["result_payload"]
-        assert succeeded["status"] == "succeeded"
-        assert payload["remote_chapter_id"] == "remote-1"
-        assert "auto_retry" not in payload
-        assert "codex_intervention_required" not in payload
-        assert "codex_intervention" not in payload
-        assert "error_code" not in payload
-        assert "failure_phase" not in payload
-        assert payload["retry_history"][0]["failure_count"] == 1
-    finally:
-        engine.dispose()
-
-
-def test_qidian_draft_timeout_with_real_ccid_is_recorded_as_success() -> None:
-    engine, runtime = _runtime("publisher-runtime-qidian-ccid-recovery")
-    try:
-        created = runtime.upload_jobs.create_upload_job(
-            platform="qidian",
-            book_name="测试书",
-            chapter_title="第一章",
-            body="正文",
-            upload_url=None,
-            publish=False,
-        )
-
-        updated = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url=(
-                "https://write.qq.com/portal/booknovels/chaptertmp/CBID/123"
-                "?entry=publish#ccid=96252587187165183"
-            ),
-            error="浏览器扩展执行超时，未能完成平台章节流程。",
-            result_payload={"error_code": "extension-upload-timeout"},
-        )
-
-        assert updated["status"] == "succeeded"
-        assert updated["message"] == "章节草稿已保存到起点。"
-        assert updated["error"] == ""
-        assert (
-            updated["result_payload"]["verified_via"]
-            == "qidian-real-ccid-timeout-recovery"
-        )
-        assert (
-            updated["result_payload"]["recovered_error_code"]
-            == "extension-upload-timeout"
-        )
-        assert "auto_retry" not in updated["result_payload"]
-    finally:
-        engine.dispose()
-
-
-def test_login_upload_failure_does_not_retry() -> None:
-    engine, runtime = _runtime("publisher-runtime-upload-login-failure")
-    try:
-        created = runtime.upload_jobs.create_upload_job(
-            platform="qidian",
-            book_name="测试书",
-            chapter_title="第一章",
-            body="正文",
-            upload_url=None,
-            publish=False,
-        )
-
-        updated = runtime.upload_jobs.update_upload_job_result(
-            job_id=created["job_id"],
-            client_id="client-1",
-            status="failed",
-            message="上传失败。",
-            current_url="https://write.qq.com/portal/login",
-            error="平台当前仍在登录页，请先完成扫码登录。",
-            result_payload={"error_code": "platform-login-required"},
-        )
-
-        assert updated["status"] == "failed"
-        assert updated["result_payload"]["auto_retry"]["failure_count"] == 1
-        assert updated["result_payload"]["auto_retry"]["login_failure"] is True
-        assert updated["result_payload"].get("codex_intervention_required") is not True
     finally:
         engine.dispose()

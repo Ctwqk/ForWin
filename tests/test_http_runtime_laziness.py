@@ -99,7 +99,7 @@ def test_pipeline_is_built_and_backfilled_once_on_first_access() -> None:
     assert calls == ["build", "session.enter", "backfill", "commit", "session.exit"]
 
 
-def test_publisher_manager_is_built_and_requeued_once_on_first_access(
+def test_publisher_manager_recovers_interrupted_attempts_once_on_first_access(
     monkeypatch,
 ) -> None:
     calls: list[str] = []
@@ -108,15 +108,10 @@ def test_publisher_manager_is_built_and_requeued_once_on_first_access(
         def __init__(self, session_factory, **_kwargs) -> None:
             calls.append(f"init:{session_factory}")
 
-        def requeue_interrupted_upload_jobs(self) -> None:
-            calls.append("requeue")
+        def recover_interrupted_upload_attempts(self) -> None:
+            calls.append("recover")
 
     monkeypatch.setattr(runtime_module, "PublisherManager", Manager)
-    monkeypatch.setattr(
-        runtime_module,
-        "build_codex_intervention_handler",
-        lambda _config: None,
-    )
     runtime = HttpRuntime(
         config=InfrastructureConfig(minimax_api_key=""),
         session_factory="session-factory",  # type: ignore[arg-type]
@@ -125,7 +120,7 @@ def test_publisher_manager_is_built_and_requeued_once_on_first_access(
     manager = runtime.get_publisher_manager()
 
     assert runtime.get_publisher_manager() is manager
-    assert calls == ["init:session-factory", "requeue"]
+    assert calls == ["init:session-factory", "recover"]
 
 
 def test_automation_shutdown_joins_before_clearing_thread() -> None:

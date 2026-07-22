@@ -19,7 +19,11 @@ from forwin.api_schema import (
     PublisherLoginQrOneShotRequest,
     PublisherPreflightRequest,
     PublisherUploadJobCreateRequest,
-    UploadJobResultRequest,
+    UploadAttemptHeartbeatRequest,
+    UploadAttemptPhaseRequest,
+    UploadAttemptReceiptRequest,
+    UploadAttemptReconcileRequest,
+    UploadAttemptResultRequest,
 )
 
 from . import operations
@@ -245,15 +249,81 @@ class PublisherApplicationService:
             x_forwin_extension_key=extension_key,
         )
 
-    def update_publisher_upload_job_result(
+    def finish_publisher_upload_attempt(
         self,
         job_id: str,
-        req: UploadJobResultRequest,
+        attempt_id: str,
+        req: UploadAttemptResultRequest,
         *,
         extension_key: str | None,
     ):
-        return operations.update_publisher_upload_job_result(
+        return operations.finish_publisher_upload_attempt(
             job_id,
+            attempt_id,
+            req,
+            publisher_manager=self.get_publisher_manager(),
+            x_forwin_extension_key=extension_key,
+        )
+
+    def heartbeat_publisher_upload_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptHeartbeatRequest,
+        *,
+        extension_key: str | None,
+    ):
+        return operations.heartbeat_publisher_upload_attempt(
+            job_id,
+            attempt_id,
+            req,
+            publisher_manager=self.get_publisher_manager(),
+            x_forwin_extension_key=extension_key,
+        )
+
+    def transition_publisher_upload_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptPhaseRequest,
+        *,
+        extension_key: str | None,
+    ):
+        return operations.transition_publisher_upload_attempt(
+            job_id,
+            attempt_id,
+            req,
+            publisher_manager=self.get_publisher_manager(),
+            x_forwin_extension_key=extension_key,
+        )
+
+    def reconcile_publisher_upload_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptReconcileRequest,
+        *,
+        extension_key: str | None,
+    ):
+        return operations.reconcile_publisher_upload_attempt(
+            job_id,
+            attempt_id,
+            req,
+            publisher_manager=self.get_publisher_manager(),
+            x_forwin_extension_key=extension_key,
+        )
+
+    def record_publisher_upload_receipt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptReceiptRequest,
+        *,
+        extension_key: str | None,
+    ):
+        return operations.record_publisher_upload_receipt(
+            job_id,
+            attempt_id,
             req,
             publisher_manager=self.get_publisher_manager(),
             x_forwin_extension_key=extension_key,

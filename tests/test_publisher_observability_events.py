@@ -47,7 +47,7 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
                 book_name="发布审计",
                 chapter_title="第一章",
                 body="这是一段不应该进入 DecisionEvent 的正文",
-                upload_url="https://example.test/book",
+                upload_url="https://write.qq.com/portal/book/1",
                 publish=True,
                 create_if_missing=False,
                 book_meta={"audience": "male"},
@@ -57,14 +57,42 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
                 connected_platforms=["qidian"],
             )
             assert claimed is not None
+            manager.transition_upload_attempt(
+                job_id=created["job_id"],
+                attempt_id=claimed["attempt_id"],
+                worker_id="client-1",
+                lease_epoch=claimed["lease_epoch"],
+                phase="mutation_started",
+                current_url="https://write.qq.com/chapter/1",
+            )
+            manager.record_upload_receipt(
+                job_id=created["job_id"],
+                client_id="client-1",
+                attempt_id=claimed["attempt_id"],
+                lease_epoch=claimed["lease_epoch"],
+                receipt={
+                    "remote_book_id": "book-1",
+                    "remote_chapter_id": "remote-1",
+                    "remote_url": "https://write.qq.com/chapter/1",
+                    "official_state": "published",
+                    "content_sha256": created["body_sha256"],
+                    "evidence": {
+                        "verified": True,
+                        "content_sha256": created["body_sha256"],
+                    },
+                },
+            )
             manager.update_upload_job_result(
                 job_id=created["job_id"],
                 client_id="client-1",
-                status="succeeded",
+                attempt_id=claimed["attempt_id"],
+                lease_epoch=claimed["lease_epoch"],
+                outcome="succeeded",
                 message="uploaded",
-                current_url="https://example.test/chapter/1",
-                error="",
-                result_payload={"remote_chapter_id": "remote-1"},
+                current_url="https://write.qq.com/chapter/1",
+                error_code="",
+                error_message="",
+                details={},
             )
 
             with session_factory() as session:
@@ -86,6 +114,10 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
     assert DecisionEventType.UPLOAD_JOB_CREATED in event_types
     assert DecisionEventType.UPLOAD_JOB_CLAIMED in event_types
     assert DecisionEventType.UPLOAD_JOB_SUCCEEDED in event_types
+    succeeded_event = next(
+        row for row in rows if row.event_type == DecisionEventType.UPLOAD_JOB_SUCCEEDED
+    )
+    assert _event_payload(succeeded_event)["worker_id"] == "client-1"
     for row in rows:
         if row.event_type.startswith("upload_job_"):
             payload = _event_payload(row)

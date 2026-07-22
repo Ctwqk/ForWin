@@ -8,14 +8,16 @@ from fastapi import Header
 from forwin.api_schema import (
     CommentSyncJobResultRequest,
     ExtensionClaimCommentSyncJobRequest,
-    ExtensionClaimUploadJobRequest,
     ExtensionCommentsBatchRequest,
     ExtensionHeartbeatRequest,
     ExtensionLoginQrNotifyRequest,
     ExtensionSessionSyncRequest,
-    UploadJobResultRequest,
 )
 from forwin.application.publisher import PublisherApplicationService
+
+from .api_publisher_extension_attempt_routes import (
+    build_handlers as build_upload_attempt_handlers,
+)
 
 
 def build_handlers(
@@ -71,26 +73,6 @@ def build_handlers(
             extension_key=x_forwin_extension_key,
         )
 
-    def update_publisher_upload_job_result(
-        job_id: str,
-        req: UploadJobResultRequest,
-        x_forwin_extension_key: str | None = Header(default=None),
-    ):
-        return service.update_publisher_upload_job_result(
-            job_id,
-            req,
-            extension_key=x_forwin_extension_key,
-        )
-
-    def claim_publisher_upload_job(
-        req: ExtensionClaimUploadJobRequest,
-        x_forwin_extension_key: str | None = Header(default=None),
-    ):
-        return service.claim_publisher_upload_job(
-            req,
-            extension_key=x_forwin_extension_key,
-        )
-
     def claim_publisher_comment_sync_job(
         req: ExtensionClaimCommentSyncJobRequest,
         x_forwin_extension_key: str | None = Header(default=None),
@@ -120,7 +102,7 @@ def build_handlers(
             extension_key=x_forwin_extension_key,
         )
 
-    return {
+    handlers = {
         "download_publisher_extension_package": service.download_publisher_extension_package,
         "download_publisher_firefox_extension_package": service.download_publisher_firefox_extension_package,
         "list_publisher_platforms": service.list_publisher_platforms,
@@ -146,13 +128,13 @@ def build_handlers(
         "publisher_extension_get_browser_session": publisher_extension_get_browser_session,
         "get_publisher_browser_session_summary": service.get_publisher_browser_session_summary,
         "publisher_extension_heartbeat_status": publisher_extension_heartbeat_status,
-        "update_publisher_upload_job_result": update_publisher_upload_job_result,
-        "claim_publisher_upload_job": claim_publisher_upload_job,
         "claim_publisher_comment_sync_job": claim_publisher_comment_sync_job,
         "create_publisher_comment_sync_job": service.create_publisher_comment_sync_job,
         "update_publisher_comment_sync_job_result": update_publisher_comment_sync_job_result,
         "ingest_publisher_comments_batch": ingest_publisher_comments_batch,
     }
+    handlers.update(build_upload_attempt_handlers(service=service))
+    return handlers
 
 
 __all__ = ["build_handlers"]

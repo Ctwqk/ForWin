@@ -1,34 +1,37 @@
 from __future__ import annotations
 
 import json
-import re
 import hashlib
-from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from forwin.audit.events import DecisionEventType
+from forwin.models.base import new_id
 from forwin.models.project import Project
-from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
+from forwin.models.publisher import (
+    PublisherConnectionState,
+    PublisherUploadAttempt,
+    PublisherUploadJob,
+    PublisherUploadReceipt,
+)
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
 from forwin.review.publisher_compliance import PublisherComplianceReviewer
 from .audit import PublisherAuditService, terminal_upload_event_type
-from .browser_sessions import isoformat, utc_now
+from .attempts import (
+    PublisherAttemptFenceError,
+    PublisherInvalidTransitionError,
+    PublisherReceiptRequiredError,
+    PublisherResourceNotFoundError,
+)
+from .browser_sessions import as_utc, isoformat, utc_now
+from .receipts import PublisherReceiptValidationError
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog, PlatformSpec
 
-
-AUTO_UPLOAD_MAX_ATTEMPTS = 3
-EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS = (
-    "chapter_upload",
-    "cover_upload",
-    "audit_sync",
-)
-
-QIDIAN_REAL_CCID_RE = re.compile(r"(?:[?#&])ccid=(\d{6,})")
 
 LOGIN_FAILURE_ERROR_CODES = {
     "login-required",
@@ -54,8 +57,6 @@ LOGIN_FAILURE_FRAGMENTS = (
     "请先完成扫码",
 )
 
-CodexInterventionHandler = Callable[[dict[str, Any]], dict[str, Any] | None]
-
 
 def _load_json_object(raw: str | None) -> dict[str, Any]:
     try:
@@ -65,23 +66,34 @@ def _load_json_object(raw: str | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _as_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+def _receipt_projection_payload(
+    payload: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    projected = dict(payload)
+    for key in (
+        "remote_book_id",
+        "remote_chapter_id",
+        "remote_url",
+        "official_state",
+        "content_sha256",
+    ):
+        projected[key] = receipt.get(key, "")
+    return projected
 
 
 def _upload_failure_is_login_failure(
     *,
     current_url: str,
+    error_code: str,
     error: str,
     message: str,
     result_payload: dict[str, Any],
 ) -> bool:
     error_code = (
         str(
-            result_payload.get("error_code")
+            error_code
+            or result_payload.get("error_code")
             or result_payload.get("code")
             or result_payload.get("reason")
             or ""
@@ -102,103 +114,6 @@ def _upload_failure_is_login_failure(
         )
     ).lower()
     return any(fragment.lower() in haystack for fragment in LOGIN_FAILURE_FRAGMENTS)
-
-
-def _failed_qidian_draft_has_real_ccid(
-    job: PublisherUploadJob,
-    *,
-    current_url: str,
-    error: str,
-    result_payload: dict[str, Any],
-) -> bool:
-    if str(job.platform_id or "").strip() != "qidian" or bool(job.publish):
-        return False
-    error_code = str(result_payload.get("error_code") or "").strip()
-    if error_code != "extension-upload-timeout" and "执行超时" not in str(error or ""):
-        return False
-    url = str(current_url or "").strip()
-    if "write.qq.com" not in url or "/chaptertmp/" not in url:
-        return False
-    return QIDIAN_REAL_CCID_RE.search(url) is not None
-
-
-def _upload_retry_history(
-    history: Any,
-    *,
-    failure_count: int,
-    failed_at: str,
-    current_url: str,
-    error: str,
-    message: str,
-) -> list[dict[str, Any]]:
-    rows = history if isinstance(history, list) else []
-    normalized = [row for row in rows if isinstance(row, dict)][-7:]
-    normalized.append(
-        {
-            "attempt": failure_count,
-            "failure_count": failure_count,
-            "failed_at": failed_at,
-            "current_url": current_url,
-            "message": message,
-            "error": error,
-        }
-    )
-    return normalized
-
-
-def _clear_terminal_failure_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    cleaned = dict(payload)
-    retry = cleaned.get("auto_retry")
-    if isinstance(retry, dict):
-        history = retry.get("history")
-        if isinstance(history, list) and history:
-            cleaned["retry_history"] = [row for row in history if isinstance(row, dict)]
-    for key in (
-        "auto_retry",
-        "codex_intervention_required",
-        "codex_intervention",
-        "error_code",
-        "error_class",
-        "last_error",
-        "failure_phase",
-        "failed_at",
-        "last_failed_at",
-    ):
-        cleaned.pop(key, None)
-    return cleaned
-
-
-def _build_codex_intervention_payload(
-    job: PublisherUploadJob,
-    *,
-    failure_count: int,
-    max_attempts: int,
-    current_url: str,
-    error: str,
-    message: str,
-) -> dict[str, Any]:
-    prompt = "\n".join(
-        [
-            "ForWin 上传任务需要 Codex 介入。",
-            f"job_id: {job.id}",
-            f"platform: {job.platform_id}",
-            f"book_name: {job.book_name}",
-            f"chapter_title: {job.chapter_title}",
-            f"publish: {bool(job.publish)}",
-            f"attempts: {failure_count}/{max_attempts}",
-            f"current_url: {current_url}",
-            f"message: {message}",
-            f"error: {error}",
-            "",
-            "请连接 Linux 发布浏览器 CDP，检查平台页面状态，确认章节是否已经保存为草稿或需要手动继续上传。",
-            "不要绕过登录；除非 publish=true，不要执行正式发布。",
-        ]
-    )
-    return {
-        "status": "requested",
-        "runner": "codex",
-        "prompt": prompt,
-    }
 
 
 def _publisher_compliance_payload(verdict: Any) -> dict[str, Any]:
@@ -234,7 +149,6 @@ class UploadJobService:
         audit: PublisherAuditService,
         bindings=None,
         cover_service=None,
-        codex_intervention_handler: CodexInterventionHandler | None = None,
         publisher_compliance_reviewer=None,
     ) -> None:
         self.session_factory = session_factory
@@ -245,10 +159,11 @@ class UploadJobService:
         self.audit = audit
         self.bindings = bindings
         self.cover_service = cover_service
-        self.codex_intervention_handler = codex_intervention_handler
         self.publisher_compliance_reviewer = (
             publisher_compliance_reviewer or PublisherComplianceReviewer()
         )
+        self.attempts = None
+        self.receipts = None
 
     def review_publisher_compliance(
         self,
@@ -285,20 +200,6 @@ class UploadJobService:
         )
         verdict = self.publisher_compliance_reviewer.review(context, writer_output)
         return _publisher_compliance_payload(verdict)
-
-    def request_codex_intervention(self, intervention: dict[str, Any]) -> None:
-        handler = self.codex_intervention_handler
-        if handler is None:
-            return
-        try:
-            result = handler(intervention)
-        except Exception as exc:  # noqa: BLE001
-            intervention["status"] = "request_failed"
-            intervention["error"] = f"{exc.__class__.__name__}: {exc}"
-            return
-        intervention["status"] = "submitted"
-        if isinstance(result, dict):
-            intervention["call"] = result
 
     def list_upload_jobs(
         self,
@@ -891,8 +792,15 @@ class UploadJobService:
     def terminate_upload_job(self, job_id: str) -> dict[str, Any]:
         now = utc_now()
         with self.session_factory() as session:
-            job = session.get(PublisherUploadJob, job_id)
-            if job is None or job.deleted_at is not None:
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.id == job_id,
+                    PublisherUploadJob.deleted_at.is_(None),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
                 raise ValueError("上传任务不存在。")
             if job.status in {"succeeded", "failed", "cancelled"}:
                 raise ValueError("终态上传任务不能再次终止。")
@@ -902,6 +810,12 @@ class UploadJobService:
                 job.finished_at = now
                 job.result_message = "上传任务已在排队阶段取消。"
                 job.error_message = ""
+            elif job.status == "reconciling":
+                job.abort_requested = True
+                job.result_message = "已请求终止远端写入；任务将只读对账后收敛。"
+            elif job.status == "paused":
+                job.abort_requested = True
+                job.result_message = "已请求终止；风险暂停状态等待操作员处理。"
             else:
                 job.status = "terminating"
                 job.abort_requested = True
@@ -921,8 +835,15 @@ class UploadJobService:
     def delete_upload_job(self, job_id: str) -> dict[str, Any]:
         now = utc_now()
         with self.session_factory() as session:
-            job = session.get(PublisherUploadJob, job_id)
-            if job is None or job.deleted_at is not None:
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.id == job_id,
+                    PublisherUploadJob.deleted_at.is_(None),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
                 raise ValueError("上传任务不存在。")
             if job.status not in {"succeeded", "failed", "cancelled"}:
                 raise ValueError("运行中的上传任务不能删除，请先终止。")
@@ -937,422 +858,224 @@ class UploadJobService:
         client_id: str,
         connected_platforms: list[str],
     ) -> dict[str, Any] | None:
-        platforms = [
-            platform
-            for platform in connected_platforms
-            if self.platform_catalog.has(platform)
-        ]
-        if not platforms:
-            return None
+        return self._attempt_service().claim(
+            client_id=client_id,
+            connected_platforms=connected_platforms,
+        )
 
-        now = utc_now()
-        with self.session_factory() as session:
-            job = session.execute(
-                select(PublisherUploadJob)
-                .where(
-                    PublisherUploadJob.status.in_(["running", "terminating"]),
-                    PublisherUploadJob.finished_at.is_(None),
-                    PublisherUploadJob.deleted_at.is_(None),
-                    PublisherUploadJob.extension_client_id == client_id,
-                    PublisherUploadJob.platform_id.in_(platforms),
-                    PublisherUploadJob.task_kind.in_(
-                        EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
-                    ),
-                )
-                .order_by(
-                    PublisherUploadJob.started_at.asc(),
-                    PublisherUploadJob.created_at.asc(),
-                )
-                .limit(1)
-            ).scalar_one_or_none()
-            if job is not None:
-                return self.serialize_upload_job(job)
-
-            claimable_platforms = self.connection_state.claimable_platforms(
-                session,
-                client_id=client_id,
-                platforms=platforms,
-            )
-            if not claimable_platforms:
-                return None
-
-            while True:
-                job = session.execute(
-                    select(PublisherUploadJob)
-                    .where(
-                        PublisherUploadJob.status == "pending",
-                        PublisherUploadJob.abort_requested.is_(False),
-                        PublisherUploadJob.deleted_at.is_(None),
-                        PublisherUploadJob.platform_id.in_(claimable_platforms),
-                        PublisherUploadJob.task_kind.in_(
-                            EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
-                        ),
-                    )
-                    .order_by(PublisherUploadJob.created_at.asc())
-                    .limit(1)
-                ).scalar_one_or_none()
-                if job is None:
-                    return None
-
-                claimed_at = job.claimed_at or now
-                started_at = job.started_at or now
-                claimed = session.execute(
-                    update(PublisherUploadJob)
-                    .where(
-                        PublisherUploadJob.id == job.id,
-                        PublisherUploadJob.status == "pending",
-                        PublisherUploadJob.abort_requested.is_(False),
-                        PublisherUploadJob.deleted_at.is_(None),
-                        PublisherUploadJob.task_kind.in_(
-                            EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS
-                        ),
-                    )
-                    .values(
-                        status="running",
-                        extension_client_id=client_id,
-                        claimed_at=claimed_at,
-                        started_at=started_at,
-                        abort_requested=False,
-                        result_message="上传任务已被浏览器扩展自动领取。",
-                        error_message="",
-                    )
-                )
-                if not claimed.rowcount:
-                    session.rollback()
-                    continue
-
-                session.flush()
-                job.status = "running"
-                job.extension_client_id = client_id
-                job.claimed_at = claimed_at
-                job.started_at = started_at
-                job.abort_requested = False
-                job.result_message = "上传任务已被浏览器扩展自动领取。"
-                job.error_message = ""
-                if job.canon_commit_id:
-                    claim_payload = _load_json_object(job.result_payload_json)
-                    claim_payload.setdefault("publish_mode_frozen_at", isoformat(now))
-                    job.result_payload_json = json.dumps(
-                        claim_payload,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    )
-                self.audit.record_upload_job_event(
-                    session,
-                    job=job,
-                    event_type=DecisionEventType.UPLOAD_JOB_CLAIMED,
-                    summary="发布上传任务已被浏览器扩展领取。",
-                    actor_type="extension",
-                )
-                session.commit()
-                session.refresh(job)
-                return self.serialize_upload_job(job)
-
-    def requeue_interrupted_upload_jobs(self) -> list[str]:
-        now = utc_now()
-        recovered_platforms: set[str] = set()
-        with self.session_factory() as session:
-            jobs = (
-                session.execute(
-                    select(PublisherUploadJob).where(
-                        PublisherUploadJob.status.in_(["running", "terminating"]),
-                        PublisherUploadJob.finished_at.is_(None),
-                        PublisherUploadJob.deleted_at.is_(None),
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            for job in jobs:
-                if job.abort_requested:
-                    job.status = "cancelled"
-                    job.finished_at = now
-                    job.result_message = "服务重启时检测到终止请求，任务已取消。"
-                else:
-                    job.status = "pending"
-                    job.started_at = None
-                    job.extension_client_id = ""
-                    job.current_url = ""
-                    job.error_message = ""
-                    job.result_payload_json = json.dumps(
-                        {"phase": "requeued-after-restart"},
-                        ensure_ascii=False,
-                    )
-                    job.result_message = "服务重启后，上传任务已重新排队。"
-                recovered_platforms.add(job.platform_id)
-
-                state = session.get(PublisherConnectionState, job.platform_id)
-                if state is not None:
-                    state.last_heartbeat_at = now
-            session.commit()
-        return sorted(recovered_platforms)
+    def recover_interrupted_upload_attempts(self) -> list[str]:
+        return self._attempt_service().recover_interrupted()
 
     def update_upload_job_result(
         self,
         *,
         job_id: str,
         client_id: str,
-        status: str,
+        attempt_id: str,
+        lease_epoch: int,
+        outcome: str,
         message: str,
         current_url: str,
-        error: str,
-        result_payload: dict[str, Any] | None = None,
+        error_code: str,
+        error_message: str,
+        details: dict[str, Any] | None = None,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
-        if status not in {"running", "succeeded", "failed", "cancelled"}:
+        if outcome not in {"succeeded", "failed", "cancelled"}:
             raise ValueError("不支持的上传任务状态。")
-
-        now = utc_now()
+        completed_at = now or utc_now()
         with self.session_factory() as session:
-            job = session.get(PublisherUploadJob, job_id)
-            if job is None or job.deleted_at is not None:
-                raise ValueError("上传任务不存在。")
-            if job.status in {"succeeded", "failed", "cancelled"}:
-                return self.serialize_upload_job(job)
-
             self.connection_state.ensure_extension_client(session, client_id)
-            if client_id:
-                job.extension_client_id = client_id
-            effective_status = status
-            if job.abort_requested and status in {"succeeded", "failed", "cancelled"}:
-                effective_status = "cancelled"
-            elif job.abort_requested and status == "running":
-                effective_status = "terminating"
-
-            merged_payload = _load_json_object(job.result_payload_json)
-            if result_payload:
-                merged_payload.update(result_payload)
-
-            requeued_after_failure = False
-            if effective_status == "failed" and _failed_qidian_draft_has_real_ccid(
-                job,
-                current_url=current_url,
-                error=error,
-                result_payload=merged_payload,
-            ):
-                recovered_error_code = str(merged_payload.pop("error_code", "") or "")
-                effective_status = "succeeded"
-                message = "章节草稿已保存到起点。"
-                error = ""
-                merged_payload.update(
-                    {
-                        "phase": "server-timeout-ccid-recovered",
-                        "mode": "draft",
-                        "official_status": "drafted",
-                        "verified_via": "qidian-real-ccid-timeout-recovery",
-                    }
-                )
-                if recovered_error_code:
-                    merged_payload["recovered_error_code"] = recovered_error_code
-            if effective_status == "failed":
-                failed_at = isoformat(now)
-                existing_retry = merged_payload.get("auto_retry", {})
-                if not isinstance(existing_retry, dict):
-                    existing_retry = {}
-                failure_count = _as_int(existing_retry.get("failure_count"), 0) + 1
-                login_failure = _upload_failure_is_login_failure(
-                    current_url=current_url,
-                    error=error,
-                    message=message,
-                    result_payload=merged_payload,
-                )
-                exhausted = failure_count >= AUTO_UPLOAD_MAX_ATTEMPTS
-                requeued_after_failure = (
-                    not login_failure and not exhausted and not job.abort_requested
-                )
-                merged_payload["auto_retry"] = {
-                    "failure_count": failure_count,
-                    "max_attempts": AUTO_UPLOAD_MAX_ATTEMPTS,
-                    "next_attempt": (
-                        failure_count + 1 if requeued_after_failure else 0
-                    ),
-                    "login_failure": login_failure,
-                    "exhausted": bool(not login_failure and exhausted),
-                    "last_failed_at": failed_at,
-                    "last_current_url": current_url,
-                    "last_message": message,
-                    "last_error": error,
-                    "history": _upload_retry_history(
-                        existing_retry.get("history", []),
-                        failure_count=failure_count,
-                        failed_at=failed_at,
-                        current_url=current_url,
-                        error=error,
-                        message=message,
-                    ),
-                }
-                if requeued_after_failure:
-                    effective_status = "pending"
-                    message = (
-                        "上传失败，已自动重新排队"
-                        f"（第 {failure_count + 1}/{AUTO_UPLOAD_MAX_ATTEMPTS} 次尝试）。"
-                    )
-                    error = ""
-                    current_url = ""
-                elif not login_failure and exhausted:
-                    merged_payload["codex_intervention_required"] = True
-                    intervention = _build_codex_intervention_payload(
-                        job,
-                        failure_count=failure_count,
-                        max_attempts=AUTO_UPLOAD_MAX_ATTEMPTS,
-                        current_url=current_url,
-                        error=error,
-                        message=message,
-                    )
-                    self.request_codex_intervention(intervention)
-                    merged_payload["codex_intervention"] = intervention
-
-            if effective_status in {"succeeded", "cancelled"}:
-                merged_payload = _clear_terminal_failure_payload(merged_payload)
-
-            if effective_status == "running":
-                job.claimed_at = job.claimed_at or now
-                job.started_at = job.started_at or now
-                job.finished_at = None
-                job.error_message = ""
-            elif effective_status in {"succeeded", "failed", "cancelled"}:
-                job.started_at = job.started_at or now
-                job.finished_at = now
-            elif effective_status == "pending":
-                job.claimed_at = None
-                job.started_at = None
-                job.finished_at = None
-                job.extension_client_id = ""
-
-            job.status = effective_status
-            job.current_url = current_url
-            job.result_message = (
-                "上传任务已取消。" if effective_status == "cancelled" else message
+            attempt_service = self._attempt_service()
+            job, attempt = attempt_service.require_fence(
+                session,
+                job_id=job_id,
+                attempt_id=attempt_id,
+                worker_id=client_id,
+                lease_epoch=lease_epoch,
+                now=completed_at,
             )
-            job.error_message = (
-                "" if effective_status in {"cancelled", "pending"} else error
-            )
-
-            task_kind = (
-                str(job.task_kind or "chapter_upload").strip() or "chapter_upload"
-            )
+            if attempt.attempt_kind == "reconcile" and job.task_kind != "audit_sync":
+                raise PublisherInvalidTransitionError(
+                    "chapter and cover reconciliation must use the reconcile endpoint"
+                )
             if (
-                self.bindings is not None
-                and effective_status == "succeeded"
-                and task_kind == "chapter_upload"
+                job.task_kind == "audit_sync"
+                and outcome == "succeeded"
+                and attempt.phase != "observation_started"
             ):
-                work_binding = self.bindings.upsert_work_binding_from_upload_job(
-                    session,
-                    job=job,
-                    result_payload=merged_payload,
-                    current_url=current_url,
+                raise PublisherInvalidTransitionError(
+                    "audit success requires observation_started phase acknowledgement"
                 )
-                chapter_binding = self.bindings.upsert_chapter_binding_from_upload_job(
-                    session,
-                    job=job,
-                    work_binding=work_binding,
-                    result_payload=merged_payload,
-                    current_url=current_url,
-                )
-                merged_payload["work_binding"] = self.bindings.serialize_work_binding(
-                    work_binding
-                )
-                merged_payload["chapter_binding"] = (
-                    self.bindings.serialize_chapter_binding(chapter_binding)
-                )
-                if self.cover_service is not None:
-                    cover_upload_job = self.cover_service.enqueue_cover_upload_if_ready(
-                        session,
-                        job=job,
-                        payload=merged_payload,
-                        work_binding=work_binding,
+            merged_payload = _load_json_object(job.result_payload_json)
+            result_details = details if isinstance(details, dict) else {}
+            if outcome == "succeeded":
+                if job.task_kind == "chapter_upload" and result_details:
+                    raise PublisherInvalidTransitionError(
+                        "chapter success details must be empty; receipt is authoritative"
                     )
-                    if cover_upload_job is not None:
-                        merged_payload["cover_upload_job_id"] = cover_upload_job.id
-                        self.audit.record_upload_job_event(
-                            session,
-                            job=cover_upload_job,
-                            event_type=DecisionEventType.UPLOAD_JOB_CREATED,
-                            summary="封面上传任务已创建。",
-                            actor_type="api",
-                        )
-            elif (
-                self.bindings is not None
-                and effective_status == "succeeded"
-                and task_kind == "cover_upload"
-            ):
-                work_binding = self.bindings.update_from_cover_upload_result(
-                    session,
-                    job=job,
-                    result_payload=merged_payload,
-                    current_url=current_url,
-                )
-                if work_binding is not None:
-                    merged_payload["work_binding"] = (
-                        self.bindings.serialize_work_binding(work_binding)
-                    )
-            elif (
-                self.bindings is not None
-                and effective_status == "succeeded"
-                and task_kind == "audit_sync"
-            ):
-                work_binding = self.bindings.update_from_audit_sync_result(
-                    session,
-                    job=job,
-                    result_payload=merged_payload,
-                    current_url=current_url,
-                )
-                if work_binding is not None:
-                    merged_payload["work_binding"] = (
-                        self.bindings.serialize_work_binding(work_binding)
-                    )
-
-            job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
-
-            if self.platform_catalog.has(job.platform_id):
-                state = session.get(PublisherConnectionState, job.platform_id)
-                if state is None:
-                    state = PublisherConnectionState(platform_id=job.platform_id)
-                    session.add(state)
-                if client_id:
-                    state.extension_client_id = client_id
-                state.last_heartbeat_at = now
-                if effective_status == "succeeded":
-                    state.connected = True
-                    state.last_error = ""
-                elif effective_status == "failed" and _upload_failure_is_login_failure(
-                    current_url=current_url,
-                    error=error,
-                    message=message,
-                    result_payload=merged_payload,
+                if (
+                    job.task_kind == "cover_upload"
+                    and not str(result_details.get("cover_state") or "").strip()
                 ):
-                    state.connected = False
-                    state.last_error = error or message
-                self.connection_state.upsert_extension_platform_state(
-                    session,
-                    client_id=client_id,
-                    platform_id=job.platform_id,
-                    connected=state.connected,
-                    login_method=state.login_method,
-                    last_error=state.last_error,
-                    status_payload={
-                        "platform": job.platform_id,
-                        "connected": state.connected,
-                        "login_method": state.login_method,
-                        "last_error": state.last_error,
-                        "source": "upload-job-result",
-                    },
-                    last_heartbeat_at=now,
+                    raise PublisherInvalidTransitionError(
+                        "cover success requires typed cover_state details"
+                    )
+                if job.task_kind == "cover_upload" and set(result_details) - {
+                    "cover_state",
+                    "audit_state",
+                    "platform_message",
+                }:
+                    raise PublisherInvalidTransitionError(
+                        "cover success contains unsupported result details"
+                    )
+                if job.task_kind == "audit_sync":
+                    audit_work = result_details.get("work")
+                    if not (
+                        set(result_details)
+                        == {"work", "chapters", "cover", "milestones"}
+                        and isinstance(audit_work, dict)
+                        and isinstance(result_details.get("chapters"), list)
+                        and isinstance(result_details.get("cover"), dict)
+                        and isinstance(result_details.get("milestones"), list)
+                    ):
+                        raise PublisherInvalidTransitionError(
+                            "audit success requires complete typed observation details"
+                        )
+                    if (
+                        str(audit_work.get("work_binding_id") or "").strip()
+                        != str(merged_payload.get("work_binding_id") or "").strip()
+                        or str(audit_work.get("remote_book_id") or "").strip()
+                        != str(merged_payload.get("remote_book_id") or "").strip()
+                    ):
+                        raise PublisherInvalidTransitionError(
+                            "audit observation identity does not match the claimed job"
+                        )
+            merged_payload["last_result"] = result_details
+            receipt_row = session.execute(
+                select(PublisherUploadReceipt)
+                .where(
+                    PublisherUploadReceipt.upload_job_id == job.id,
+                    PublisherUploadReceipt.upload_attempt_id == attempt.id,
+                    PublisherUploadReceipt.content_sha256 == job.body_sha256,
                 )
+                .order_by(PublisherUploadReceipt.created_at.asc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if receipt_row is not None and outcome != "succeeded":
+                raise PublisherInvalidTransitionError(
+                    "receipt-confirmed publisher attempt cannot report a negative result"
+                )
+            if outcome == "succeeded" and job.task_kind in {
+                "chapter_upload",
+                "cover_upload",
+            }:
+                if receipt_row is None:
+                    raise PublisherReceiptRequiredError(
+                        "mutating publisher success requires a durable receipt"
+                    )
+                serialized_receipt = self._receipt_service().serialize(receipt_row)
+                merged_payload["receipt"] = serialized_receipt
 
+            job, attempt = attempt_service.finish(
+                session,
+                job_id=job_id,
+                attempt_id=attempt_id,
+                worker_id=client_id,
+                lease_epoch=lease_epoch,
+                status=outcome,
+                now=completed_at,
+            )
+            job.current_url = (
+                receipt_row.remote_url
+                if receipt_row is not None and receipt_row.remote_url
+                else current_url
+            )
+            attempt.error_message = str(error_message or "")
+            attempt.error_code = str(error_code or "")
+            attempt.result_json = json.dumps(
+                {
+                    "requested_status": outcome,
+                    "effective_job_status": job.status,
+                    "message": message,
+                    "current_url": current_url,
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "details": result_details,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if job.status == "succeeded":
+                job.result_message = message or "发布任务已完成。"
+                job.error_message = ""
+                side_effect_payload = {**result_details, **merged_payload}
+                if receipt_row is not None:
+                    side_effect_payload = _receipt_projection_payload(
+                        side_effect_payload,
+                        serialized_receipt,
+                    )
+                side_effect_url = (
+                    receipt_row.remote_url
+                    if receipt_row is not None and receipt_row.remote_url
+                    else current_url
+                )
+                self._apply_success_side_effects(
+                    session,
+                    job=job,
+                    merged_payload=side_effect_payload,
+                    current_url=side_effect_url,
+                )
+                for key in (
+                    "work_binding",
+                    "chapter_binding",
+                    "cover_upload_job_id",
+                ):
+                    if key in side_effect_payload:
+                        merged_payload[key] = side_effect_payload[key]
+            elif job.status == "reconciling":
+                job.result_message = "远端写入结果不确定，任务等待只读对账。"
+                job.error_message = str(error_message or message or "")
+            elif job.status == "pending":
+                job.result_message = "发布尝试在远端写入前失败，任务等待重试。"
+                job.error_message = ""
+            elif job.status == "cancelled":
+                job.result_message = "上传任务已取消。"
+                job.error_message = ""
+            else:
+                job.result_message = message
+                job.error_message = ""
+            job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
+            self._update_extension_connection_state(
+                session,
+                job=job,
+                client_id=client_id,
+                requested_status=outcome,
+                message=message,
+                current_url=current_url,
+                error_code=error_code,
+                error=error_message,
+                result_payload=result_details,
+                now=completed_at,
+            )
             self.audit.record_upload_job_event(
                 session,
                 job=job,
-                event_type=terminal_upload_event_type(effective_status),
-                summary=f"发布上传任务状态更新为 {effective_status}。",
+                event_type=terminal_upload_event_type(job.status),
+                summary=f"发布上传任务状态更新为 {job.status}。",
                 actor_type="extension",
                 extra_payload={
-                    "requested_status": status,
-                    "effective_status": effective_status,
+                    "attempt_id": attempt.id,
+                    "attempt_kind": attempt.attempt_kind,
+                    "attempt_phase": attempt.phase,
+                    "lease_epoch": attempt.lease_epoch,
+                    "worker_id": attempt.worker_id,
+                    "requested_status": outcome,
+                    "effective_status": job.status,
                     "error_class": "publisher_upload_error"
                     if job.error_message
                     else "",
                     "error_message": job.error_message,
-                    "requeued_after_failure": requeued_after_failure,
                     "remote_chapter_id": (
                         str(merged_payload.get("remote_chapter_id") or "")
                         if isinstance(merged_payload, dict)
@@ -1362,7 +1085,452 @@ class UploadJobService:
             )
             session.commit()
             session.refresh(job)
-            return self.serialize_upload_job(job)
+            session.refresh(attempt)
+            payload = attempt_service.serialize_state(
+                job,
+                attempt,
+                now=completed_at,
+            )
+            payload["disposition"] = "applied"
+            if receipt_row is not None:
+                payload["protocol_receipt"] = self._receipt_service().serialize(
+                    receipt_row
+                )
+            return payload
+
+    def reconcile_upload_job(
+        self,
+        *,
+        job_id: str,
+        client_id: str,
+        attempt_id: str,
+        lease_epoch: int,
+        outcome: str,
+        receipt: dict[str, Any] | None,
+        evidence: dict[str, Any] | None,
+        client_observed_at: str = "",
+        current_url: str = "",
+        error_code: str = "",
+        error_message: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        received_at = now or utc_now()
+        with self.session_factory() as session:
+            self.connection_state.ensure_extension_client(session, client_id)
+            attempt_service = self._attempt_service()
+            job, attempt = attempt_service.require_fence(
+                session,
+                job_id=job_id,
+                attempt_id=attempt_id,
+                worker_id=client_id,
+                lease_epoch=lease_epoch,
+                now=received_at,
+            )
+            if attempt.attempt_kind != "reconcile" or attempt.phase not in {
+                "observation_started",
+                "receipt_observed",
+            }:
+                raise PublisherInvalidTransitionError(
+                    "reconciliation requires observation_started phase acknowledgement"
+                )
+            receipt_row = None
+            if receipt is not None:
+                receipt_row, _created = self._receipt_service().record(
+                    session,
+                    job=job,
+                    attempt=attempt,
+                    receipt=receipt,
+                    source="reconcile",
+                    observed_at=received_at,
+                )
+            job, attempt = attempt_service.resolve_reconciliation(
+                session,
+                job_id=job_id,
+                attempt_id=attempt_id,
+                worker_id=client_id,
+                lease_epoch=lease_epoch,
+                outcome=outcome,
+                receipt_recorded=receipt_row is not None,
+                pause_reason=str((evidence or {}).get("reason") or error_message or ""),
+                now=received_at,
+            )
+            canonical_current_url = (
+                receipt_row.remote_url
+                if receipt_row is not None and receipt_row.remote_url
+                else str(current_url or "").strip()
+            )
+            if canonical_current_url:
+                job.current_url = canonical_current_url
+            merged_payload = _load_json_object(job.result_payload_json)
+            merged_payload["reconciliation"] = {
+                "outcome": str(outcome or "").strip(),
+                "evidence": evidence if isinstance(evidence, dict) else {},
+                "observed_at": str(client_observed_at or ""),
+                "attempt_id": attempt.id,
+                "lease_epoch": attempt.lease_epoch,
+                "current_url": str(current_url or ""),
+                "error_code": str(error_code or ""),
+                "error_message": str(error_message or ""),
+            }
+            if receipt_row is not None:
+                serialized_receipt = self._receipt_service().serialize(receipt_row)
+                merged_payload["receipt"] = serialized_receipt
+            attempt.result_json = json.dumps(
+                merged_payload["reconciliation"],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if job.status == "succeeded":
+                job.result_message = "只读对账确认远端章节已存在。"
+                job.error_message = ""
+                side_effect_payload = _receipt_projection_payload(
+                    merged_payload,
+                    serialized_receipt,
+                )
+                self._apply_success_side_effects(
+                    session,
+                    job=job,
+                    merged_payload=side_effect_payload,
+                    current_url=canonical_current_url,
+                )
+                for key in ("work_binding", "chapter_binding", "cover_upload_job_id"):
+                    if key in side_effect_payload:
+                        merged_payload[key] = side_effect_payload[key]
+            elif job.status == "pending":
+                job.result_message = "只读对账权威确认不存在，允许新的执行尝试。"
+                job.error_message = ""
+            elif job.status == "paused":
+                job.result_message = "平台风险状态已暂停，等待操作员处理。"
+                job.error_message = str(error_message or "")
+            else:
+                job.result_message = "只读对账结果仍不确定，保持对账状态。"
+            job.result_payload_json = json.dumps(
+                merged_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=terminal_upload_event_type(job.status),
+                summary=f"发布只读对账结果为 {outcome}。",
+                actor_type="extension",
+                extra_payload={
+                    "attempt_id": attempt.id,
+                    "attempt_kind": attempt.attempt_kind,
+                    "lease_epoch": attempt.lease_epoch,
+                    "worker_id": attempt.worker_id,
+                    "reconciliation_outcome": str(outcome or "").strip(),
+                    "receipt_id": receipt_row.id if receipt_row is not None else "",
+                },
+            )
+            session.commit()
+            session.refresh(job)
+            session.refresh(attempt)
+            payload = attempt_service.serialize_state(
+                job,
+                attempt,
+                now=received_at,
+            )
+            payload["disposition"] = "applied"
+            payload["reconciliation_outcome"] = str(outcome or "").strip()
+            if receipt_row is not None:
+                payload["protocol_receipt"] = self._receipt_service().serialize(
+                    receipt_row
+                )
+            return payload
+
+    def record_upload_receipt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        client_id: str,
+        lease_epoch: int,
+        receipt: dict[str, Any],
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        observed_at = now or utc_now()
+        with self.session_factory() as session:
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.id == str(job_id or "").strip(),
+                    PublisherUploadJob.deleted_at.is_(None),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise PublisherResourceNotFoundError("job", str(job_id or ""))
+            attempt = session.execute(
+                select(PublisherUploadAttempt)
+                .where(
+                    PublisherUploadAttempt.id == str(attempt_id or "").strip(),
+                    PublisherUploadAttempt.upload_job_id == str(job_id or "").strip(),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None:
+                raise PublisherResourceNotFoundError(
+                    "attempt",
+                    str(attempt_id or ""),
+                )
+            if attempt.worker_id != str(
+                client_id or ""
+            ).strip() or attempt.lease_epoch != int(lease_epoch or 0):
+                raise PublisherAttemptFenceError(
+                    "publisher attempt fence is no longer current",
+                    job_status=job.status,
+                    current_attempt_id=job.current_attempt_id,
+                )
+            if job.task_kind not in {"chapter_upload", "cover_upload"}:
+                raise PublisherReceiptValidationError(
+                    "read-only publisher jobs do not accept receipts"
+                )
+            was_succeeded = job.status == "succeeded"
+            receipt_row, created = self._receipt_service().record(
+                session,
+                job=job,
+                attempt=attempt,
+                receipt=receipt,
+                source="journal_sync",
+                observed_at=observed_at,
+            )
+            lease_expires_at = as_utc(attempt.lease_expires_at)
+            current_time = as_utc(observed_at)
+            live_current = bool(
+                job.current_attempt_id == attempt.id
+                and attempt.status == "running"
+                and lease_expires_at is not None
+                and current_time is not None
+                and lease_expires_at > current_time
+            )
+            attempt_service = self._attempt_service()
+            if live_current:
+                if attempt.attempt_kind == "execute" and attempt.phase not in {
+                    "mutation_started",
+                    "receipt_observed",
+                }:
+                    raise PublisherInvalidTransitionError(
+                        "execute receipt requires mutation_started phase acknowledgement"
+                    )
+                if attempt.attempt_kind == "reconcile" and attempt.phase not in {
+                    "observation_started",
+                    "receipt_observed",
+                }:
+                    raise PublisherInvalidTransitionError(
+                        "reconcile receipt requires observation_started phase acknowledgement"
+                    )
+                attempt_service.advance_phase(attempt, "receipt_observed")
+                attempt.heartbeat_at = observed_at
+                attempt.lease_expires_at = observed_at + timedelta(
+                    seconds=attempt_service.default_lease_seconds
+                )
+                if receipt_row.remote_url:
+                    job.current_url = receipt_row.remote_url
+                receipt_disposition = "created" if created else "duplicate"
+            else:
+                job, attempt = attempt_service.accept_late_receipt(
+                    session,
+                    job_id=job_id,
+                    attempt_id=attempt_id,
+                    worker_id=client_id,
+                    lease_epoch=lease_epoch,
+                    now=observed_at,
+                )
+                receipt_disposition = "duplicate" if was_succeeded else "late_applied"
+            if receipt_row.remote_url:
+                job.current_url = receipt_row.remote_url
+            merged_payload = _load_json_object(job.result_payload_json)
+            serialized_receipt = self._receipt_service().serialize(receipt_row)
+            merged_payload["receipt"] = serialized_receipt
+            job.result_payload_json = json.dumps(
+                merged_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            job.result_message = (
+                "发布回执已持久化，等待终态确认。"
+                if live_current
+                else "迟到发布回执已持久化，任务确认成功。"
+            )
+            job.error_message = ""
+            if not live_current and not was_succeeded:
+                side_effect_payload = _receipt_projection_payload(
+                    merged_payload,
+                    serialized_receipt,
+                )
+                self._apply_success_side_effects(
+                    session,
+                    job=job,
+                    merged_payload=side_effect_payload,
+                    current_url=receipt_row.remote_url,
+                )
+                for key in ("work_binding", "chapter_binding", "cover_upload_job_id"):
+                    if key in side_effect_payload:
+                        merged_payload[key] = side_effect_payload[key]
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=(
+                    DecisionEventType.UPLOAD_JOB_PROGRESS
+                    if live_current
+                    else DecisionEventType.UPLOAD_JOB_SUCCEEDED
+                ),
+                summary="发布回执已幂等记录。",
+                actor_type="extension",
+                extra_payload={
+                    "attempt_id": attempt.id,
+                    "lease_epoch": attempt.lease_epoch,
+                    "receipt_id": receipt_row.id,
+                    "receipt_key": receipt_row.receipt_key,
+                    "receipt_source": receipt_row.source,
+                    "worker_id": attempt.worker_id,
+                },
+            )
+            session.commit()
+            session.refresh(job)
+            session.refresh(attempt)
+            payload = attempt_service.serialize_state(
+                job,
+                attempt,
+                now=observed_at,
+            )
+            payload["receipt_disposition"] = receipt_disposition
+            payload["protocol_receipt"] = self._receipt_service().serialize(receipt_row)
+            return payload
+
+    def _apply_success_side_effects(
+        self,
+        session,
+        *,
+        job: PublisherUploadJob,
+        merged_payload: dict[str, Any],
+        current_url: str,
+    ) -> None:
+        if self.bindings is None:
+            return
+        task_kind = str(job.task_kind or "chapter_upload").strip() or "chapter_upload"
+        if task_kind == "chapter_upload":
+            work_binding = self.bindings.upsert_work_binding_from_upload_job(
+                session,
+                job=job,
+                result_payload=merged_payload,
+                current_url=current_url,
+            )
+            chapter_binding = self.bindings.upsert_chapter_binding_from_upload_job(
+                session,
+                job=job,
+                work_binding=work_binding,
+                result_payload=merged_payload,
+                current_url=current_url,
+            )
+            merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                work_binding
+            )
+            merged_payload["chapter_binding"] = self.bindings.serialize_chapter_binding(
+                chapter_binding
+            )
+            if self.cover_service is not None:
+                cover_upload_job = self.cover_service.enqueue_cover_upload_if_ready(
+                    session,
+                    job=job,
+                    payload=merged_payload,
+                    work_binding=work_binding,
+                )
+                if cover_upload_job is not None:
+                    merged_payload["cover_upload_job_id"] = cover_upload_job.id
+                    self.audit.record_upload_job_event(
+                        session,
+                        job=cover_upload_job,
+                        event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                        summary="封面上传任务已创建。",
+                        actor_type="api",
+                    )
+        elif task_kind == "cover_upload":
+            work_binding = self.bindings.update_from_cover_upload_result(
+                session,
+                job=job,
+                result_payload=merged_payload,
+                current_url=current_url,
+            )
+            if work_binding is not None:
+                merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                    work_binding
+                )
+        elif task_kind == "audit_sync":
+            work_binding = self.bindings.update_from_audit_sync_result(
+                session,
+                job=job,
+                result_payload=merged_payload,
+                current_url=current_url,
+            )
+            if work_binding is not None:
+                merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                    work_binding
+                )
+
+    def _update_extension_connection_state(
+        self,
+        session,
+        *,
+        job: PublisherUploadJob,
+        client_id: str,
+        requested_status: str,
+        message: str,
+        current_url: str,
+        error_code: str,
+        error: str,
+        result_payload: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        if not self.platform_catalog.has(job.platform_id):
+            return
+        state = session.get(PublisherConnectionState, job.platform_id)
+        if state is None:
+            state = PublisherConnectionState(platform_id=job.platform_id)
+            session.add(state)
+        if client_id:
+            state.extension_client_id = client_id
+        state.last_heartbeat_at = now
+        if job.status == "succeeded":
+            state.connected = True
+            state.last_error = ""
+        elif requested_status == "failed" and _upload_failure_is_login_failure(
+            current_url=current_url,
+            error_code=error_code,
+            error=error,
+            message=message,
+            result_payload=result_payload,
+        ):
+            state.connected = False
+            state.last_error = error or message
+        self.connection_state.upsert_extension_platform_state(
+            session,
+            client_id=client_id,
+            platform_id=job.platform_id,
+            connected=state.connected,
+            login_method=state.login_method,
+            last_error=state.last_error,
+            status_payload={
+                "platform": job.platform_id,
+                "connected": state.connected,
+                "login_method": state.login_method,
+                "last_error": state.last_error,
+                "source": "upload-job-result",
+            },
+            last_heartbeat_at=now,
+        )
+
+    def _attempt_service(self):
+        if self.attempts is None:
+            raise RuntimeError("publisher attempt service is not configured")
+        return self.attempts
+
+    def _receipt_service(self):
+        if self.receipts is None:
+            raise RuntimeError("publisher receipt service is not configured")
+        return self.receipts
 
     def serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
         spec = self.platform_catalog.get(job.platform_id)
@@ -1420,6 +1588,7 @@ class UploadJobService:
         task_kind: str = "chapter_upload",
         status: str = "pending",
     ) -> PublisherUploadJob:
+        job_id = new_id()
         payload: dict[str, Any] = {}
         if resolved_project_id:
             payload["project_id"] = resolved_project_id
@@ -1439,13 +1608,16 @@ class UploadJobService:
                 raise ValueError(f"发布预检失败：{details or '请补全平台必填信息。'}")
             payload["preflight"] = preflight
         return PublisherUploadJob(
+            id=job_id,
             project_id=resolved_project_id,
+            idempotency_key=f"publisher-job:v1:{job_id}",
             platform_id=platform,
             task_kind=str(task_kind or "chapter_upload").strip() or "chapter_upload",
             status=str(status or "pending").strip() or "pending",
             book_name=book_name,
             chapter_title=chapter_title,
             body_text=body,
+            body_sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
             upload_url=upload_url or "",
             publish=publish,
             abort_requested=False,

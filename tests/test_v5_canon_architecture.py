@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from forwin.api_schema import (
+    ExtensionClaimUploadJobResponse,
+    PublisherUploadJobResponse,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -167,3 +172,65 @@ def test_legacy_publisher_batch_port_stays_deleted() -> None:
         "PublisherRuntimeJobClient",
     ):
         assert forbidden not in production_source
+
+
+def test_publisher_recovery_has_no_blind_retry_or_codex_browser_intervention() -> None:
+    assert not (ROOT / "forwin/publisher_runtime/codex_intervention.py").exists()
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    publisher_ui = _source("forwin/ui_assets/publishers/app_uploads.js")
+    for forbidden in (
+        "AUTO_UPLOAD_MAX_ATTEMPTS",
+        "qidian-real-ccid-timeout-recovery",
+        "build_codex_intervention_handler",
+        "codex_intervention_required",
+    ):
+        assert forbidden not in production_source
+        assert forbidden not in publisher_ui
+    for stale_ui_field in (
+        "auto_retry",
+        "max_attempts",
+        "codex_intervention",
+    ):
+        assert stale_ui_field not in publisher_ui
+
+
+def test_publisher_extension_attempt_protocol_stays_hard_cut() -> None:
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    routes = _source("forwin/http/routes.py")
+    manager = _source("forwin/publishers/manager.py")
+
+    for legacy_name in (
+        "UploadJobResultRequest",
+        "UploadJobReconciliationRequest",
+        "UploadReceiptSyncRequest",
+        "UploadAttemptTransitionRequest",
+    ):
+        assert legacy_name not in production_source
+    assert '"/api/publishers/upload-jobs/{job_id}/result"' not in routes
+    assert "_install_compat_hooks" not in manager
+    assert ExtensionClaimUploadJobResponse.model_config["extra"] == "forbid"
+    assert set(ExtensionClaimUploadJobResponse.model_fields) == {
+        "found",
+        "server_time",
+        "retry_after_seconds",
+        "claim",
+    }
+    assert set(PublisherUploadJobResponse.model_fields).isdisjoint(
+        {
+            "attempt_id",
+            "attempt_number",
+            "attempt_kind",
+            "attempt_status",
+            "attempt_phase",
+            "lease_epoch",
+            "lease_expires_at",
+            "execution_mode",
+        }
+    )

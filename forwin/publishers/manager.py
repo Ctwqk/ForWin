@@ -10,29 +10,17 @@ from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
+from forwin.models.base import new_id
 from forwin.models.publisher import (
-    PublisherBrowserSessionEntry,
-    PublisherCommentSyncJob,
-    PublisherExtensionClient,
-    PublisherCoverAsset,
     PublisherUploadJob,
     PublisherWorkBinding,
 )
 from forwin.publisher_runtime.browser_sessions import (
-    browser_session_sort_key,
     isoformat as _isoformat,
-    pick_browser_session_entry,
-    pick_browser_sessions_by_platform,
     utc_now as _utc_now,
-)
-from forwin.publisher_runtime.connection_state import (
-    ensure_extension_client,
-    upsert_extension_platform_state,
 )
 from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
 from forwin.publisher_runtime.service import PublisherRuntimeService
-from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
-from forwin.publisher_runtime.platform_catalog import PlatformSpec
 
 LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS = 2 * 60
 
@@ -77,7 +65,6 @@ class PublisherManager:
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
         publisher_login_discord_webhook_url: str = "",
-        codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.extension_api_key = str(extension_api_key or "").strip()
@@ -104,16 +91,9 @@ class PublisherManager:
             publisher_session_secret=self.publisher_session_secret,
             publisher_session_encryption_required=self.publisher_session_encryption_required,
             strict_preferred_client=self.strict_preferred_client,
-            codex_intervention_handler=codex_intervention_handler,
         )
         self._plaintext_cookie_storage_warned = (
             self.runtime.browser_cookie_codec._plaintext_cookie_storage_warned
-        )
-        self._install_compat_hooks()
-
-    def _install_compat_hooks(self) -> None:
-        self.runtime.connection_state.ensure_extension_client = (
-            lambda session, client_id: self._ensure_extension_client(session, client_id)
         )
 
     def _sync_runtime_config(self) -> None:
@@ -498,50 +478,8 @@ class PublisherManager:
         )
 
     def enqueue_cover_upload(self, cover_asset_id: str) -> dict[str, Any]:
-        with self.session_factory() as session:
-            cover = session.get(PublisherCoverAsset, cover_asset_id)
-            if cover is None:
-                raise ValueError("封面不存在。")
-            work = (
-                session.get(PublisherWorkBinding, cover.work_binding_id)
-                if cover.work_binding_id
-                else None
-            )
-            if work is None and cover.project_id:
-                work = session.execute(
-                    select(PublisherWorkBinding)
-                    .where(PublisherWorkBinding.project_id == cover.project_id)
-                    .limit(1)
-                ).scalar_one_or_none()
-            if work is None:
-                raise ValueError("封面尚未绑定平台作品，不能上传。")
-            payload = {
-                "project_id": work.project_id,
-                "work_binding_id": work.id,
-                "platform": work.platform_id,
-                "book_name": work.book_name,
-                "remote_book_id": work.remote_book_id,
-                "remote_url": work.remote_url,
-                "cover_asset_id": cover.id,
-                "file_path": cover.file_path,
-            }
-            job = PublisherUploadJob(
-                project_id=work.project_id,
-                platform_id=work.platform_id,
-                task_kind="cover_upload",
-                status="pending",
-                book_name=work.book_name,
-                chapter_title="",
-                body_text="",
-                upload_url=work.remote_url,
-                publish=False,
-                result_message="封面上传任务已创建，等待浏览器扩展执行。",
-                result_payload_json=json.dumps(payload, ensure_ascii=False),
-            )
-            session.add(job)
-            session.commit()
-            session.refresh(job)
-            return self.runtime.upload_jobs.serialize_upload_job(job)
+        job = self.runtime.cover_service.enqueue_cover_upload(cover_asset_id)
+        return self.runtime.upload_jobs.serialize_upload_job(job)
 
     def enqueue_audit_sync(
         self,
@@ -566,21 +504,53 @@ class PublisherManager:
                     )
                     .limit(1)
                 ).scalar_one_or_none()
+            if work is None or not str(work.remote_book_id or "").strip():
+                raise ValueError("审核同步需要已绑定的平台作品 ID。")
+            requested_project_id = str(project_id or "").strip()
+            requested_platform = str(platform or "").strip()
+            requested_book_name = str(book_name or "").strip()
+            if (
+                requested_project_id
+                and requested_project_id != str(work.project_id or "").strip()
+            ):
+                raise ValueError("审核同步项目与作品绑定不一致。")
+            if requested_platform != str(work.platform_id or "").strip():
+                raise ValueError("审核同步平台与作品绑定不一致。")
+            if (
+                requested_book_name
+                and requested_book_name != str(work.book_name or "").strip()
+            ):
+                raise ValueError("审核同步书名与作品绑定不一致。")
             payload = {
-                "project_id": project_id
-                or (work.project_id if work is not None else ""),
-                "work_binding_id": work.id if work is not None else "",
-                "remote_book_id": work.remote_book_id if work is not None else "",
-                "remote_url": work.remote_url if work is not None else "",
+                "project_id": work.project_id,
+                "work_binding_id": work.id,
+                "remote_book_id": work.remote_book_id,
+                "remote_url": work.remote_url,
             }
+            job_id = new_id()
+            content_sha256 = hashlib.sha256(
+                json.dumps(
+                    {
+                        "platform": work.platform_id,
+                        "work_binding_id": work.id,
+                        "remote_book_id": work.remote_book_id,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
             job = PublisherUploadJob(
+                id=job_id,
                 project_id=payload["project_id"],
-                platform_id=platform or (work.platform_id if work is not None else ""),
+                idempotency_key=f"publisher-job:v1:{job_id}",
+                platform_id=work.platform_id,
                 task_kind="audit_sync",
                 status="pending",
-                book_name=book_name or (work.book_name if work is not None else ""),
+                book_name=work.book_name,
                 chapter_title="",
                 body_text="",
+                body_sha256=content_sha256,
                 upload_url=payload["remote_url"],
                 publish=False,
                 result_message="审核同步任务已创建，等待浏览器扩展执行。",
@@ -684,8 +654,42 @@ class PublisherManager:
             connected_platforms=connected_platforms,
         )
 
-    def requeue_interrupted_upload_jobs(self) -> list[str]:
-        return self.runtime.upload_jobs.requeue_interrupted_upload_jobs()
+    def heartbeat_upload_attempt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_epoch: int,
+    ) -> dict[str, Any]:
+        return self.runtime.attempts.heartbeat(
+            job_id=job_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            lease_epoch=lease_epoch,
+        )
+
+    def transition_upload_attempt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_epoch: int,
+        phase: str,
+        current_url: str = "",
+    ) -> dict[str, Any]:
+        return self.runtime.attempts.transition(
+            job_id=job_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            lease_epoch=lease_epoch,
+            phase=phase,
+            current_url=current_url,
+        )
+
+    def recover_interrupted_upload_attempts(self) -> list[str]:
+        return self.runtime.upload_jobs.recover_interrupted_upload_attempts()
 
     def record_extension_heartbeat(
         self,
@@ -717,20 +721,72 @@ class PublisherManager:
         *,
         job_id: str,
         client_id: str,
-        status: str,
+        attempt_id: str,
+        lease_epoch: int,
+        outcome: str,
         message: str,
         current_url: str,
-        error: str,
-        result_payload: dict[str, Any] | None = None,
+        error_code: str,
+        error_message: str,
+        details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.upload_jobs.update_upload_job_result(
             job_id=job_id,
             client_id=client_id,
-            status=status,
+            attempt_id=attempt_id,
+            lease_epoch=lease_epoch,
+            outcome=outcome,
             message=message,
             current_url=current_url,
-            error=error,
-            result_payload=result_payload,
+            error_code=error_code,
+            error_message=error_message,
+            details=details,
+        )
+
+    def reconcile_upload_job(
+        self,
+        *,
+        job_id: str,
+        client_id: str,
+        attempt_id: str,
+        lease_epoch: int,
+        outcome: str,
+        receipt: dict[str, Any] | None,
+        evidence: dict[str, Any] | None,
+        observed_at: str = "",
+        current_url: str = "",
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any]:
+        return self.runtime.upload_jobs.reconcile_upload_job(
+            job_id=job_id,
+            client_id=client_id,
+            attempt_id=attempt_id,
+            lease_epoch=lease_epoch,
+            outcome=outcome,
+            receipt=receipt,
+            evidence=evidence,
+            client_observed_at=observed_at,
+            current_url=current_url,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    def record_upload_receipt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        client_id: str,
+        lease_epoch: int,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runtime.upload_jobs.record_upload_receipt(
+            job_id=job_id,
+            attempt_id=attempt_id,
+            client_id=client_id,
+            lease_epoch=lease_epoch,
+            receipt=receipt,
         )
 
     def create_comment_sync_job(
@@ -809,107 +865,3 @@ class PublisherManager:
             stale_seconds=stale_seconds,
             allow_latest_recent_fallback=allow_latest_recent_fallback,
         )
-
-    def _record_project_event(self, *args, **kwargs):
-        return self.runtime.audit.record_project_event(*args, **kwargs)
-
-    def _record_upload_job_event(self, *args, **kwargs):
-        return self.runtime.audit.record_upload_job_event(*args, **kwargs)
-
-    def _record_comment_sync_event(self, *args, **kwargs):
-        return self.runtime.audit.record_comment_sync_event(*args, **kwargs)
-
-    @staticmethod
-    def _browser_session_sort_key(row) -> tuple[datetime, datetime, datetime]:
-        return browser_session_sort_key(row)
-
-    def _pick_browser_session_entry(
-        self,
-        entries: list[PublisherBrowserSessionEntry],
-    ) -> PublisherBrowserSessionEntry | None:
-        return pick_browser_session_entry(entries)
-
-    def _pick_browser_sessions_by_platform(
-        self,
-        entries: list[PublisherBrowserSessionEntry],
-    ) -> dict[str, PublisherBrowserSessionEntry]:
-        return pick_browser_sessions_by_platform(entries)
-
-    def _normalize_cookie(self, cookie: dict[str, Any]) -> dict[str, Any]:
-        return self.runtime.browser_cookie_codec.normalize_cookie(cookie)
-
-    def _normalize_book_meta(self, book_meta: dict[str, Any] | None) -> dict[str, Any]:
-        return self.runtime.upload_jobs.normalize_book_meta(book_meta)
-
-    def _serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
-        return self.runtime.upload_jobs.serialize_upload_job(job)
-
-    def _serialize_comment_sync_job(
-        self, job: PublisherCommentSyncJob
-    ) -> dict[str, Any]:
-        return self.runtime.comment_sync.serialize_comment_sync_job(job)
-
-    def _new_upload_job(self, *args, **kwargs) -> PublisherUploadJob:
-        return self.runtime.upload_jobs.new_upload_job(*args, **kwargs)
-
-    def _resolve_project_id(self, *args, **kwargs) -> str:
-        return self.runtime.upload_jobs.resolve_project_id(*args, **kwargs)
-
-    def _claimable_platforms(self, *args, **kwargs) -> list[str]:
-        return self.runtime.connection_state.claimable_platforms(*args, **kwargs)
-
-    def _preferred_client_can_claim_platform(self, *args, **kwargs) -> bool:
-        return self.runtime.connection_state.preferred_client_can_claim_platform(
-            *args,
-            **kwargs,
-        )
-
-    @staticmethod
-    def _upsert_extension_platform_state(*args, **kwargs) -> None:
-        upsert_extension_platform_state(*args, **kwargs)
-
-    def _is_recent(self, value: datetime | None) -> bool:
-        return self.runtime.connection_state.is_recent(value)
-
-    def _ensure_extension_client(
-        self,
-        session,
-        client_id: str,
-    ) -> PublisherExtensionClient | None:
-        return ensure_extension_client(session, client_id)
-
-    def _is_browser_session_connected(
-        self,
-        platform: str,
-        cookies_json: str,
-        last_error: str,
-    ) -> bool:
-        return self.runtime.browser_cookie_codec.is_browser_session_connected(
-            platform,
-            cookies_json,
-            last_error,
-        )
-
-    def _encode_cookies_for_storage(self, cookies: list[dict[str, Any]]) -> str:
-        return self.runtime.browser_cookie_codec.encode(cookies)
-
-    def _decode_cookies_from_storage(self, raw: str) -> list[dict[str, Any]]:
-        return self.runtime.browser_cookie_codec.decode(raw)
-
-    def _decode_cookies_from_storage_metadata(self, raw: str) -> dict[str, Any]:
-        return self.runtime.browser_cookie_codec.decode_metadata(raw)
-
-    def _decode_cookies_from_storage_with_metadata(
-        self,
-        raw: str,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        return self.runtime.browser_cookie_codec.decode_with_metadata(raw)
-
-    def _normalize_cookie_list(self, cookies: list[Any]) -> list[dict[str, Any]]:
-        return self.runtime.browser_cookie_codec.normalize_cookie_list(cookies)
-
-    def _cookie_names_from_json(self, cookies_json: str) -> list[str]:
-        return self.runtime.browser_cookie_codec.cookie_names_from_json(cookies_json)
-
-    def _spec(self, platform: str) -> PlatformSpec:
-        return self.runtime.platform_catalog.get(platform)

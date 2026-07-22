@@ -4,7 +4,11 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_pages import render_home_page, render_publishers_page
@@ -79,6 +83,8 @@ from forwin.http.tasks import (
 
 logger = logging.getLogger(__name__)
 
+_PUBLISHER_EXTENSION_PROTOCOL_PREFIX = "/api/publishers/extension/upload-jobs"
+
 
 def _display_for(runtime: HttpRuntime, value) -> str:
     return _display_datetime(value, display_timezone=runtime.display_timezone)
@@ -88,12 +94,10 @@ def _build_task_application(runtime: HttpRuntime) -> TaskApplicationService:
     return TaskApplicationService(
         TaskApplicationDeps(
             get_publisher_manager=runtime.get_publisher_manager,
-            list_generation_tasks=lambda limit: _list_generation_tasks(
-                runtime, limit
-            ),
+            list_generation_tasks=lambda limit: _list_generation_tasks(runtime, limit),
             serialize_task=_serialize_task,
-            get_generation_task_or_404=lambda task_id: (
-                _get_generation_task_or_404(runtime, task_id)
+            get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(
+                runtime, task_id
             ),
             serialize_generation_task_center_item=(
                 _serialize_generation_task_center_item
@@ -109,8 +113,8 @@ def _build_task_application(runtime: HttpRuntime) -> TaskApplicationService:
                 _get_project_backed_task_item_or_404(runtime, task_id)
             ),
             task_is_terminal=_task_is_terminal,
-            mutate_generation_task=lambda task_id, action: (
-                _mutate_generation_task(runtime, task_id, action)
+            mutate_generation_task=lambda task_id, action: _mutate_generation_task(
+                runtime, task_id, action
             ),
             active_generation_task_ids=lambda project_id="": (
                 _active_generation_task_ids(runtime, project_id)
@@ -149,8 +153,8 @@ def _build_project_application(runtime: HttpRuntime) -> ProjectApplicationServic
             persist_project_automation=_persist_project_automation,
             log_decision_event=_log_decision_event,
             serialize_task=_serialize_task,
-            get_generation_task_or_404=lambda task_id: (
-                _get_generation_task_or_404(runtime, task_id)
+            get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(
+                runtime, task_id
             ),
             active_generation_task_error_cls=ActiveGenerationTaskError,
             require_reason=_require_reason,
@@ -190,10 +194,15 @@ async def lifespan(app: FastAPI):
     runtime: HttpRuntime = app.state.forwin_runtime
     runtime.startup()
     config = runtime.config
-    if config is not None and str(config.http_bind or "").strip() in {
-        "0.0.0.0",
-        "::",
-    } and not basic_auth_enabled(config):
+    if (
+        config is not None
+        and str(config.http_bind or "").strip()
+        in {
+            "0.0.0.0",
+            "::",
+        }
+        and not basic_auth_enabled(config)
+    ):
         logger.warning(
             "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "
             "This is acceptable only on a trusted LAN."
@@ -221,6 +230,28 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
     runtime.task_application = _build_task_application(runtime)
     runtime.project_control_application = _build_project_control_application(runtime)
     runtime.project_application = _build_project_application(runtime)
+
+    @app.exception_handler(RequestValidationError)
+    async def publisher_extension_validation_error(
+        request: Request,
+        exc: RequestValidationError,
+    ):
+        if not request.url.path.startswith(_PUBLISHER_EXTENSION_PROTOCOL_PREFIX):
+            return await request_validation_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=422,
+            content=jsonable_encoder(
+                {
+                    "detail": {
+                        "code": "validation_error",
+                        "message": (
+                            "publisher extension protocol request validation failed"
+                        ),
+                        "errors": exc.errors(),
+                    }
+                }
+            ),
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -282,9 +313,7 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
                 get_prompt_trace_detail=observability_handlers[
                     "get_prompt_trace_detail"
                 ],
-                read_artifact_preview=observability_handlers[
-                    "read_artifact_preview"
-                ],
+                read_artifact_preview=observability_handlers["read_artifact_preview"],
                 get_task_performance_report=observability_handlers[
                     "get_task_performance_report"
                 ],

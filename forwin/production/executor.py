@@ -197,9 +197,6 @@ class ProductionExecutor:
             return self.publisher_manager_factory()
         if self.session_factory is None or self.config is None:
             return None
-        from forwin.publisher_runtime.codex_intervention import (
-            build_codex_intervention_handler,
-        )
         from forwin.publishers import PublisherManager
 
         return PublisherManager(
@@ -222,5 +219,4 @@ class ProductionExecutor:
             publisher_login_discord_webhook_url=str(
                 getattr(self.config, "publisher_login_discord_webhook_url", "") or ""
             ),
-            codex_intervention_handler=build_codex_intervention_handler(self.config),
         )

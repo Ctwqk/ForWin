@@ -22,7 +22,11 @@ def test_extension_heartbeat_returns_retryable_payload_when_database_is_busy() -
         {},
         Exception("deadlock detected"),
     )
-    with patch.object(manager, "_ensure_extension_client", side_effect=locked):
+    with patch.object(
+        manager.runtime.connection_state,
+        "ensure_extension_client",
+        side_effect=locked,
+    ):
         payload = manager.record_extension_heartbeat(
             client_id="client-1",
             extension_version="0.1.0",
@@ -45,7 +49,11 @@ def test_browser_session_sync_returns_retryable_payload_when_database_is_busy() 
         {},
         Exception("deadlock detected"),
     )
-    with patch.object(manager, "_ensure_extension_client", side_effect=locked):
+    with patch.object(
+        manager.runtime.connection_state,
+        "ensure_extension_client",
+        side_effect=locked,
+    ):
         payload = manager.record_browser_session(
             client_id="client-1",
             platform="qidian",

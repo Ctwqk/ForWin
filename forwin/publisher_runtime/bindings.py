@@ -161,7 +161,9 @@ def _infer_remote_chapter_id(
 
 
 def _normalize_audit_state(payload: dict[str, Any]) -> str:
-    explicit = str(payload.get("audit_state") or payload.get("review_state") or "").strip()
+    explicit = str(
+        payload.get("audit_state") or payload.get("review_state") or ""
+    ).strip()
     if explicit:
         return explicit
     haystack = "\n".join(
@@ -178,7 +180,16 @@ def _normalize_audit_state(payload: dict[str, Any]) -> str:
 
 
 def _normalize_publish_state(job: PublisherUploadJob, payload: dict[str, Any]) -> str:
-    official = str(payload.get("official_status") or payload.get("publish_state") or "").strip().lower()
+    official = (
+        str(
+            payload.get("official_state")
+            or payload.get("official_status")
+            or payload.get("publish_state")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if official in {"draft", "drafted", "saved_draft"}:
         return "drafted"
     if official in {"published", "publish_success"}:
@@ -274,9 +285,12 @@ class PublisherBindingService:
             result_payload,
             "remote_book_url",
             "work_url",
-            "remote_url",
         )
-        if not remote_url and _looks_like_remote_url(current_url):
+        if (
+            job.task_kind != "chapter_upload"
+            and not remote_url
+            and _looks_like_remote_url(current_url)
+        ):
             remote_url = str(current_url or "").strip()
         binding = self.get_work_binding(
             session,
@@ -330,7 +344,10 @@ class PublisherBindingService:
         result_payload: dict[str, Any],
         current_url: str = "",
     ) -> PublisherChapterBinding:
-        chapter_number = _as_int(result_payload.get("chapter_number"), 0)
+        chapter_number = _as_int(
+            result_payload.get("chapter_number"),
+            int(job.chapter_number or 0),
+        )
         chapter_title = str(
             result_payload.get("chapter_title") or job.chapter_title or ""
         ).strip()
@@ -364,7 +381,12 @@ class PublisherBindingService:
         )
         if remote_chapter_id:
             chapter.remote_chapter_id = remote_chapter_id
-        remote_url = _first_text(result_payload, "remote_chapter_url", "chapter_url")
+        remote_url = _first_text(
+            result_payload,
+            "remote_chapter_url",
+            "chapter_url",
+            "remote_url",
+        )
         if not remote_url and _looks_like_remote_url(current_url):
             remote_url = str(current_url or "").strip()
         if remote_url:
@@ -400,7 +422,11 @@ class PublisherBindingService:
         current_url: str = "",
     ) -> PublisherWorkBinding | None:
         work_binding_id = _first_text(result_payload, "work_binding_id")
-        binding = session.get(PublisherWorkBinding, work_binding_id) if work_binding_id else None
+        binding = (
+            session.get(PublisherWorkBinding, work_binding_id)
+            if work_binding_id
+            else None
+        )
         if binding is None:
             binding = self.get_work_binding(
                 session,
@@ -412,6 +438,11 @@ class PublisherBindingService:
         if binding is None:
             return None
         cover_state = _first_text(result_payload, "cover_state", "status")
+        if (
+            not cover_state
+            and _first_text(result_payload, "official_state") == "cover_uploaded"
+        ):
+            cover_state = "uploaded"
         if cover_state:
             binding.cover_state = cover_state
         if _looks_like_remote_url(current_url):
@@ -508,7 +539,9 @@ class PublisherBindingService:
             "updated_at": isoformat(binding.updated_at),
         }
 
-    def serialize_chapter_binding(self, binding: PublisherChapterBinding) -> dict[str, Any]:
+    def serialize_chapter_binding(
+        self, binding: PublisherChapterBinding
+    ) -> dict[str, Any]:
         return {
             "id": binding.id,
             "work_binding_id": binding.work_binding_id,
@@ -535,12 +568,17 @@ class PublisherBindingService:
         platform_id: str = "",
     ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
-            stmt = select(PublisherWorkBinding).order_by(PublisherWorkBinding.updated_at.desc())
+            stmt = select(PublisherWorkBinding).order_by(
+                PublisherWorkBinding.updated_at.desc()
+            )
             if project_id:
                 stmt = stmt.where(PublisherWorkBinding.project_id == project_id)
             if platform_id:
                 stmt = stmt.where(PublisherWorkBinding.platform_id == platform_id)
-            return [self.serialize_work_binding(row) for row in session.execute(stmt).scalars().all()]
+            return [
+                self.serialize_work_binding(row)
+                for row in session.execute(stmt).scalars().all()
+            ]
 
     def list_chapter_bindings(
         self,
@@ -554,9 +592,14 @@ class PublisherBindingService:
                 PublisherChapterBinding.updated_at.desc()
             )
             if work_binding_id:
-                stmt = stmt.where(PublisherChapterBinding.work_binding_id == work_binding_id)
+                stmt = stmt.where(
+                    PublisherChapterBinding.work_binding_id == work_binding_id
+                )
             if project_id:
                 stmt = stmt.where(PublisherChapterBinding.project_id == project_id)
             if platform_id:
                 stmt = stmt.where(PublisherChapterBinding.platform_id == platform_id)
-            return [self.serialize_chapter_binding(row) for row in session.execute(stmt).scalars().all()]
+            return [
+                self.serialize_chapter_binding(row)
+                for row in session.execute(stmt).scalars().all()
+            ]

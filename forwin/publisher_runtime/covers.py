@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import struct
@@ -9,15 +10,19 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL
+from forwin.models.base import new_id
 from forwin.models.publisher import (
     PublisherChapterBinding,
     PublisherCoverAsset,
     PublisherUploadJob,
     PublisherWorkBinding,
 )
+
 from .browser_sessions import utc_now
+from .idempotency import publisher_cover_upload_idempotency_key
 
 
 def _load_json_object(raw: str | None) -> dict[str, Any]:
@@ -33,7 +38,9 @@ def _dump_json(payload: dict[str, Any] | list[Any]) -> str:
 
 
 def _safe_part(value: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value or ""))
+    cleaned = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value or "")
+    )
     return cleaned.strip("_") or "manual"
 
 
@@ -53,9 +60,9 @@ def _image_dimensions(data: bytes) -> tuple[str, int, int]:
                 continue
             if index + 2 > len(data):
                 break
-            segment_length = struct.unpack(">H", data[index:index + 2])[0]
+            segment_length = struct.unpack(">H", data[index : index + 2])[0]
             if marker in {0xC0, 0xC1, 0xC2, 0xC3} and index + 7 < len(data):
-                height, width = struct.unpack(">HH", data[index + 3:index + 7])
+                height, width = struct.unpack(">HH", data[index + 3 : index + 7])
                 return "image/jpeg", int(width), int(height)
             index += segment_length
     return "", 0, 0
@@ -70,7 +77,9 @@ class MiniMaxImageClient:
         timeout_seconds: float = 120.0,
     ) -> None:
         self.api_key = str(api_key or os.environ.get("MINIMAX_API_KEY", "")).strip()
-        self.base_url = str(base_url or os.environ.get("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL)).rstrip("/")
+        self.base_url = str(
+            base_url or os.environ.get("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL)
+        ).rstrip("/")
         self.timeout_seconds = float(timeout_seconds or 120.0)
 
     def generate_images(
@@ -114,7 +123,11 @@ class MiniMaxImageClient:
                         "base64": b64,
                         "mime_type": row.get("mime_type") or "image/png",
                         "request_id": request_id,
-                        "raw": {k: v for k, v in row.items() if k not in {"base64", "image_base64", "b64_json"}},
+                        "raw": {
+                            k: v
+                            for k, v in row.items()
+                            if k not in {"base64", "image_base64", "b64_json"}
+                        },
                     }
                 )
                 continue
@@ -125,7 +138,9 @@ class MiniMaxImageClient:
                 result.append(
                     {
                         "bytes": image_response.content,
-                        "mime_type": image_response.headers.get("content-type", "image/png").split(";")[0],
+                        "mime_type": image_response.headers.get(
+                            "content-type", "image/png"
+                        ).split(";")[0],
                         "request_id": request_id,
                         "raw": {"url": image_url},
                     }
@@ -144,7 +159,10 @@ class PublisherCoverService:
     ) -> None:
         self.session_factory = session_factory
         self.image_client = image_client or MiniMaxImageClient()
-        self.cover_dir = Path(cover_dir or os.environ.get("FORWIN_PUBLISHER_COVER_DIR", "var/publisher_covers"))
+        self.cover_dir = Path(
+            cover_dir
+            or os.environ.get("FORWIN_PUBLISHER_COVER_DIR", "var/publisher_covers")
+        )
         self.minimax_model = str(minimax_model or "image-01")
 
     def generate_cover_candidates(
@@ -209,10 +227,14 @@ class PublisherCoverService:
             project_id=str(payload.get("project_id") or job.project_id or ""),
             platform_id=job.platform_id,
             book_name=job.book_name,
-            book_meta=payload.get("book_meta") if isinstance(payload.get("book_meta"), dict) else {},
+            book_meta=payload.get("book_meta")
+            if isinstance(payload.get("book_meta"), dict)
+            else {},
             candidate_count=int(payload.get("cover_candidate_count") or 4),
             cover_style_hint=str(payload.get("cover_style_hint") or ""),
-            cover_confirmation_required=bool(payload.get("cover_confirmation_required", False)),
+            cover_confirmation_required=bool(
+                payload.get("cover_confirmation_required", False)
+            ),
         )
         with self.session_factory() as session:
             job = session.get(PublisherUploadJob, job_id)
@@ -220,8 +242,12 @@ class PublisherCoverService:
                 payload = _load_json_object(job.result_payload_json)
                 payload.update(result)
                 job.result_payload_json = _dump_json(payload)
-                job.result_message = "封面候选已生成。" if result.get("ok") else "封面生成失败。"
-                job.error_message = "" if result.get("ok") else str(result.get("failure_reason") or "")
+                job.result_message = (
+                    "封面候选已生成。" if result.get("ok") else "封面生成失败。"
+                )
+                job.error_message = (
+                    "" if result.get("ok") else str(result.get("failure_reason") or "")
+                )
                 job.status = "succeeded" if result.get("ok") else "failed"
                 job.finished_at = utc_now()
                 if result.get("ok"):
@@ -306,15 +332,23 @@ class PublisherCoverService:
             file_size_bytes=len(data),
             mime_type=mime_type,
             platform_validation_json=_dump_json(
-                self.validate_candidate_bytes(data=data, mime_type=mime_type, width=width, height=height)
+                self.validate_candidate_bytes(
+                    data=data, mime_type=mime_type, width=width, height=height
+                )
             ),
             minimax_request_id=str(row.get("request_id") or ""),
-            raw_payload_json=_dump_json({k: v for k, v in row.items() if k not in {"bytes", "base64"}}),
+            raw_payload_json=_dump_json(
+                {k: v for k, v in row.items() if k not in {"bytes", "base64"}}
+            ),
         )
         session.add(asset)
         session.flush()
         if data:
-            folder = self.cover_dir / _safe_part(project_id or "manual") / _safe_part(platform_id)
+            folder = (
+                self.cover_dir
+                / _safe_part(project_id or "manual")
+                / _safe_part(platform_id)
+            )
             folder.mkdir(parents=True, exist_ok=True)
             file_path = folder / f"{asset.id}{extension}"
             file_path.write_bytes(data)
@@ -357,11 +391,17 @@ class PublisherCoverService:
             for asset in assets:
                 asset.status = "failed"
             return None
-        selected = sorted(valid_assets, key=lambda asset: float(asset.score or 0.0), reverse=True)[0]
+        selected = sorted(
+            valid_assets, key=lambda asset: float(asset.score or 0.0), reverse=True
+        )[0]
         for asset in assets:
             if asset.id == selected.id:
-                asset.status = "generated" if cover_confirmation_required else "selected"
-                asset.selection_state = "candidate" if cover_confirmation_required else "selected"
+                asset.status = (
+                    "generated" if cover_confirmation_required else "selected"
+                )
+                asset.selection_state = (
+                    "candidate" if cover_confirmation_required else "selected"
+                )
             else:
                 asset.selection_state = "candidate"
         session.flush()
@@ -387,6 +427,43 @@ class PublisherCoverService:
             stmt.order_by(PublisherCoverAsset.updated_at.desc()).limit(1)
         ).scalar_one_or_none()
 
+    def enqueue_cover_upload(self, cover_asset_id: str) -> PublisherUploadJob:
+        with self.session_factory() as session:
+            cover = session.get(PublisherCoverAsset, cover_asset_id)
+            if cover is None:
+                raise ValueError("封面不存在。")
+            work_binding = (
+                session.get(PublisherWorkBinding, cover.work_binding_id)
+                if cover.work_binding_id
+                else None
+            )
+            if work_binding is None and cover.project_id:
+                candidates = (
+                    session.execute(
+                        select(PublisherWorkBinding).where(
+                            PublisherWorkBinding.project_id == cover.project_id,
+                            PublisherWorkBinding.remote_book_id != "",
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if len(candidates) == 1:
+                    work_binding = candidates[0]
+                elif len(candidates) > 1:
+                    raise ValueError("封面对应多个平台作品，请先明确作品绑定。")
+            if work_binding is None:
+                raise ValueError("封面尚未绑定平台作品，不能上传。")
+            upload_job, _created = self._ensure_cover_upload_job(
+                session,
+                cover=cover,
+                work_binding=work_binding,
+                auto_upload=False,
+            )
+            session.commit()
+            session.refresh(upload_job)
+            return upload_job
+
     def enqueue_cover_upload_if_ready(
         self,
         session,
@@ -401,7 +478,11 @@ class PublisherCoverService:
             return None
         if work_binding is None:
             work_binding_id = str(payload.get("work_binding_id") or "").strip()
-            work_binding = session.get(PublisherWorkBinding, work_binding_id) if work_binding_id else None
+            work_binding = (
+                session.get(PublisherWorkBinding, work_binding_id)
+                if work_binding_id
+                else None
+            )
         if work_binding is None:
             work_binding = session.execute(
                 select(PublisherWorkBinding)
@@ -417,7 +498,9 @@ class PublisherCoverService:
             select(PublisherChapterBinding)
             .where(
                 PublisherChapterBinding.work_binding_id == work_binding.id,
-                PublisherChapterBinding.publish_state.in_(["published", "submitted", "drafted"]),
+                PublisherChapterBinding.publish_state.in_(
+                    ["published", "submitted", "drafted"]
+                ),
             )
             .limit(1)
         ).scalar_one_or_none()
@@ -430,21 +513,49 @@ class PublisherCoverService:
         )
         if cover is None:
             return None
+        upload_job, created = self._ensure_cover_upload_job(
+            session,
+            cover=cover,
+            work_binding=work_binding,
+            auto_upload=True,
+        )
+        return upload_job if created else None
+
+    def _ensure_cover_upload_job(
+        self,
+        session,
+        *,
+        cover: PublisherCoverAsset,
+        work_binding: PublisherWorkBinding,
+        auto_upload: bool,
+    ) -> tuple[PublisherUploadJob, bool]:
+        try:
+            cover_bytes = Path(cover.file_path).read_bytes()
+        except OSError as exc:
+            raise ValueError("封面文件不可读，不能创建上传任务。") from exc
+        if not str(work_binding.remote_book_id or "").strip():
+            raise ValueError("封面上传需要稳定的平台作品 ID。")
+        content_sha256 = hashlib.sha256(cover_bytes).hexdigest()
+        idempotency_key = publisher_cover_upload_idempotency_key(
+            work_binding_id=work_binding.id,
+            platform_id=work_binding.platform_id,
+            cover_asset_id=cover.id,
+            content_sha256=content_sha256,
+        )
         existing = session.execute(
             select(PublisherUploadJob)
-            .where(
-                PublisherUploadJob.task_kind == "cover_upload",
-                PublisherUploadJob.platform_id == work_binding.platform_id,
-                PublisherUploadJob.status.in_(["pending", "running", "succeeded"]),
-                PublisherUploadJob.result_payload_json.contains(cover.id),
-            )
-            .limit(1)
+            .where(PublisherUploadJob.idempotency_key == idempotency_key)
+            .with_for_update()
         ).scalar_one_or_none()
         if existing is not None:
-            return None
-        cover.work_binding_id = work_binding.id
-        work_binding.cover_asset_id = cover.id
-        work_binding.cover_state = "queued"
+            self._assert_cover_upload_identity(
+                existing,
+                work_binding=work_binding,
+                cover=cover,
+                content_sha256=content_sha256,
+            )
+            return existing, False
+
         upload_payload = {
             "project_id": work_binding.project_id,
             "work_binding_id": work_binding.id,
@@ -454,24 +565,86 @@ class PublisherCoverService:
             "remote_url": work_binding.remote_url,
             "cover_asset_id": cover.id,
             "file_path": cover.file_path,
-            "auto_cover_upload_enabled": True,
         }
+        if auto_upload:
+            upload_payload["auto_cover_upload_enabled"] = True
+        job_id = new_id()
         upload_job = PublisherUploadJob(
+            id=job_id,
             project_id=work_binding.project_id,
+            idempotency_key=idempotency_key,
             platform_id=work_binding.platform_id,
             task_kind="cover_upload",
             status="pending",
             book_name=work_binding.book_name,
             chapter_title="",
             body_text="",
+            body_sha256=content_sha256,
             upload_url=work_binding.remote_url,
             publish=False,
             result_message="封面上传任务已创建，等待浏览器扩展执行。",
             result_payload_json=_dump_json(upload_payload),
         )
-        session.add(upload_job)
-        session.flush()
-        return upload_job
+        try:
+            with session.begin_nested():
+                session.add(upload_job)
+                session.flush()
+        except IntegrityError:
+            existing = session.execute(
+                select(PublisherUploadJob)
+                .where(PublisherUploadJob.idempotency_key == idempotency_key)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            self._assert_cover_upload_identity(
+                existing,
+                work_binding=work_binding,
+                cover=cover,
+                content_sha256=content_sha256,
+            )
+            return existing, False
+        cover.work_binding_id = work_binding.id
+        work_binding.cover_asset_id = cover.id
+        work_binding.cover_state = "queued"
+        return upload_job, True
+
+    @staticmethod
+    def _assert_cover_upload_identity(
+        job: PublisherUploadJob,
+        *,
+        work_binding: PublisherWorkBinding,
+        cover: PublisherCoverAsset,
+        content_sha256: str,
+    ) -> None:
+        payload = _load_json_object(job.result_payload_json)
+        expected = {
+            "project_id": work_binding.project_id,
+            "platform_id": work_binding.platform_id,
+            "task_kind": "cover_upload",
+            "book_name": work_binding.book_name,
+            "body_sha256": content_sha256,
+            "work_binding_id": work_binding.id,
+            "remote_book_id": work_binding.remote_book_id,
+            "cover_asset_id": cover.id,
+            "file_path": cover.file_path,
+        }
+        stored = {
+            "project_id": job.project_id,
+            "platform_id": job.platform_id,
+            "task_kind": job.task_kind,
+            "book_name": job.book_name,
+            "body_sha256": job.body_sha256,
+            "work_binding_id": str(payload.get("work_binding_id") or ""),
+            "remote_book_id": str(payload.get("remote_book_id") or ""),
+            "cover_asset_id": str(payload.get("cover_asset_id") or ""),
+            "file_path": str(payload.get("file_path") or ""),
+        }
+        mismatches = [key for key, value in expected.items() if stored[key] != value]
+        if mismatches:
+            raise ValueError(
+                "immutable cover upload job mismatch: " + ", ".join(mismatches)
+            )
 
     def list_cover_assets(
         self,
@@ -480,12 +653,19 @@ class PublisherCoverService:
         work_binding_id: str = "",
     ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
-            stmt = select(PublisherCoverAsset).order_by(PublisherCoverAsset.updated_at.desc())
+            stmt = select(PublisherCoverAsset).order_by(
+                PublisherCoverAsset.updated_at.desc()
+            )
             if project_id:
                 stmt = stmt.where(PublisherCoverAsset.project_id == project_id)
             if work_binding_id:
-                stmt = stmt.where(PublisherCoverAsset.work_binding_id == work_binding_id)
-            return [self.serialize_cover_asset(row) for row in session.execute(stmt).scalars().all()]
+                stmt = stmt.where(
+                    PublisherCoverAsset.work_binding_id == work_binding_id
+                )
+            return [
+                self.serialize_cover_asset(row)
+                for row in session.execute(stmt).scalars().all()
+            ]
 
     def set_cover_selection(
         self,
@@ -502,13 +682,19 @@ class PublisherCoverService:
             if cover is None:
                 raise ValueError("封面不存在。")
             if normalized_state in {"selected", "approved"}:
-                existing = session.execute(
-                    select(PublisherCoverAsset).where(
-                        PublisherCoverAsset.id != cover.id,
-                        PublisherCoverAsset.project_id == cover.project_id,
-                        PublisherCoverAsset.selection_state.in_(["selected", "approved"]),
+                existing = (
+                    session.execute(
+                        select(PublisherCoverAsset).where(
+                            PublisherCoverAsset.id != cover.id,
+                            PublisherCoverAsset.project_id == cover.project_id,
+                            PublisherCoverAsset.selection_state.in_(
+                                ["selected", "approved"]
+                            ),
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 for row in existing:
                     row.selection_state = "candidate"
                     if row.status in {"selected", "approved"}:
@@ -517,7 +703,9 @@ class PublisherCoverService:
             cover.status = status or (
                 "selected"
                 if normalized_state == "selected"
-                else "approved" if normalized_state == "approved" else normalized_state
+                else "approved"
+                if normalized_state == "approved"
+                else normalized_state
             )
             session.commit()
             session.refresh(cover)

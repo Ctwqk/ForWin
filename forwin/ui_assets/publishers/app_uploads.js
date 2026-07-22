@@ -9,29 +9,9 @@
       const payload = data && data.result_payload && typeof data.result_payload === 'object'
         ? data.result_payload
         : {};
-      const retry = payload.auto_retry && typeof payload.auto_retry === 'object'
-        ? payload.auto_retry
-        : null;
       const lines = [];
       if (data.task_kind && data.task_kind !== 'chapter_upload') {
         lines.push(`任务类型：${data.task_kind}`);
-      }
-      if (retry && retry.failure_count) {
-        const maxAttempts = retry.max_attempts || 3;
-        if (retry.login_failure) {
-          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，登录状态失效，等待重新登录。`);
-        } else if (retry.next_attempt) {
-          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，已排队第 ${retry.next_attempt} 次尝试。`);
-        } else if (retry.exhausted) {
-          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，已达上限。`);
-        }
-      }
-      if (payload.codex_intervention_required) {
-        const intervention = payload.codex_intervention && typeof payload.codex_intervention === 'object'
-          ? payload.codex_intervention
-          : {};
-        const codexJobId = intervention.call && intervention.call.job_id;
-        lines.push(codexJobId ? `Codex：已提交介入任务 ${codexJobId}` : 'Codex：已请求介入排查上传失败。');
       }
       if (payload.work_binding && payload.work_binding.remote_book_id) {
         lines.push(`远端作品：${payload.work_binding.remote_book_id}`);

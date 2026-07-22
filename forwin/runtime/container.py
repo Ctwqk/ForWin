@@ -21,7 +21,6 @@ from forwin.planning.stage_analysis import (
     ReplanGovernor,
     StageAnalyzer,
 )
-from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.review.draft_service import DraftReviewService
@@ -465,7 +464,6 @@ class RuntimeContainer:
             ),
             strict_preferred_client=infrastructure.publisher_strict_preferred_client,
             observability=core.observability,
-            codex_intervention_handler=build_codex_intervention_handler(infrastructure),
             minimax_api_key=model_profile.api_key,
             minimax_base_url=model_profile.base_url,
         )

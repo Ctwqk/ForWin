@@ -11,8 +11,6 @@ from fastapi.responses import PlainTextResponse
 
 
 _EXTENSION_KEY_AUTH_ROUTES = (
-    ("GET", re.compile(r"^/api/publishers/upload-jobs/[^/]+$")),
-    ("POST", re.compile(r"^/api/publishers/upload-jobs/[^/]+/result$")),
     ("POST", re.compile(r"^/api/publishers/comment-sync-jobs/[^/]+/result$")),
 )
 
@@ -48,7 +46,8 @@ def _path_is_exempt(path: str, exempt_prefixes: tuple[str, ...]) -> bool:
 def _valid_extension_key(config, request: Request) -> bool:
     method = request.method.upper()
     path = request.url.path
-    if not any(
+    extension_namespace = path.startswith("/api/publishers/extension/")
+    if not extension_namespace and not any(
         route_method == method and pattern.fullmatch(path)
         for route_method, pattern in _EXTENSION_KEY_AUTH_ROUTES
     ):
@@ -56,19 +55,14 @@ def _valid_extension_key(config, request: Request) -> bool:
 
     expected = str(getattr(config, "publisher_extension_api_key", "") or "")
     provided = str(request.headers.get("x-forwin-extension-key", "") or "")
-    return bool(
-        expected
-        and provided
-        and secrets.compare_digest(provided, expected)
-    )
+    return bool(expected and provided and secrets.compare_digest(provided, expected))
 
 
 def make_basic_auth_middleware(config):
     user = str(getattr(config, "http_basic_user", "") or "")
     password = str(getattr(config, "http_basic_password", "") or "")
     exempt_prefixes = tuple(
-        str(item)
-        for item in getattr(config, "http_basic_exempt_paths", ()) or ()
+        str(item) for item in getattr(config, "http_basic_exempt_paths", ()) or ()
     )
 
     async def middleware(
@@ -76,7 +70,9 @@ def make_basic_auth_middleware(config):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         path = request.url.path
-        if _path_is_exempt(path, exempt_prefixes) or _valid_extension_key(config, request):
+        if _path_is_exempt(path, exempt_prefixes) or _valid_extension_key(
+            config, request
+        ):
             return await call_next(request)
 
         header = request.headers.get("authorization", "")

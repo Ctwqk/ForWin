@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from forwin.publisher_runtime.idempotency import publisher_job_idempotency_key
+import pytest
+
+from forwin.publisher_runtime.idempotency import (
+    publisher_cover_upload_idempotency_key,
+    publisher_job_idempotency_key,
+)
 
 
 def test_publisher_job_idempotency_key_matches_golden_vector() -> None:
@@ -29,3 +34,22 @@ def test_publish_mode_is_not_part_of_publisher_job_identity() -> None:
     publish_enabled = publisher_job_idempotency_key(**request)
 
     assert draft_only == publish_enabled
+
+
+def test_cover_upload_idempotency_key_matches_golden_vector() -> None:
+    assert (
+        publisher_cover_upload_idempotency_key(
+            work_binding_id="work-1",
+            platform_id="qidian",
+            cover_asset_id="cover-1",
+            content_sha256="a" * 64,
+        )
+        == "aabe694f56251a3278d725a44d4aba19429948d810ffff47f48130d7bd198dc3"
+    )
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        publisher_cover_upload_idempotency_key(
+            work_binding_id="work-1",
+            platform_id="qidian",
+            cover_asset_id="cover-1",
+            content_sha256="A" * 64,
+        )

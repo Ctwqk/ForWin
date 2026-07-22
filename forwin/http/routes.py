@@ -86,6 +86,10 @@ from forwin.api_schema import (
     PublisherPreflightResponse,
     PublisherUploadJobResponse,
     PublisherWorkBindingResponse,
+    UploadAttemptReceiptResponse,
+    UploadAttemptReconcileResponse,
+    UploadAttemptResultResponse,
+    UploadAttemptStateResponse,
     StartWritingResponse,
     TaskContractResponse,
     TaskMutationResponse,
@@ -156,6 +160,7 @@ class ApiRouteDeps:
     project_control: ProjectControlDeps
     observability: ObservabilityDeps
     publisher: PublisherDeps
+
 
 def register_api_routes(
     app: FastAPI,
@@ -498,16 +503,40 @@ def register_api_routes(
             {"response_model": ExtensionBrowserSessionResponse | None},
         ),
         (
-            "/api/publishers/upload-jobs/{job_id}/result",
-            ["POST"],
-            handlers["update_publisher_upload_job_result"],
-            {"response_model": PublisherUploadJobResponse},
-        ),
-        (
             "/api/publishers/extension/upload-jobs/claim",
             ["POST"],
             handlers["claim_publisher_upload_job"],
             {"response_model": ExtensionClaimUploadJobResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/heartbeat",
+            ["POST"],
+            handlers["heartbeat_publisher_upload_attempt"],
+            {"response_model": UploadAttemptStateResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/phase",
+            ["POST"],
+            handlers["transition_publisher_upload_attempt"],
+            {"response_model": UploadAttemptStateResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/result",
+            ["POST"],
+            handlers["finish_publisher_upload_attempt"],
+            {"response_model": UploadAttemptResultResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/receipt",
+            ["POST"],
+            handlers["record_publisher_upload_receipt"],
+            {"response_model": UploadAttemptReceiptResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/reconcile",
+            ["POST"],
+            handlers["reconcile_publisher_upload_attempt"],
+            {"response_model": UploadAttemptReconcileResponse},
         ),
         (
             "/api/publishers/extension/comment-sync-jobs/claim",

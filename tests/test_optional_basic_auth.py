@@ -37,7 +37,9 @@ def _build_app(config: InfrastructureConfig) -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/api/publishers/extension/heartbeat")
-    async def extension_heartbeat(x_forwin_extension_key: str | None = Header(default=None)):
+    async def extension_heartbeat(
+        x_forwin_extension_key: str | None = Header(default=None),
+    ):
         if x_forwin_extension_key != config.publisher_extension_api_key:
             raise HTTPException(401, "extension auth failed")
         return {"ok": True}
@@ -51,7 +53,9 @@ def _build_app(config: InfrastructureConfig) -> FastAPI:
 
 async def _request(app: FastAPI, method: str, path: str, **kwargs) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
         return await client.request(method, path, **kwargs)
 
 
@@ -67,7 +71,9 @@ async def test_basic_auth_disabled_by_default() -> None:
 
 @pytest.mark.asyncio
 async def test_basic_auth_rejects_missing_or_wrong_credentials() -> None:
-    app = _build_app(InfrastructureConfig(http_basic_user="alice", http_basic_password="secret"))
+    app = _build_app(
+        InfrastructureConfig(http_basic_user="alice", http_basic_password="secret")
+    )
 
     missing = await _request(app, "GET", "/api/projects")
     wrong = await _request(
@@ -85,7 +91,9 @@ async def test_basic_auth_rejects_missing_or_wrong_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_basic_auth_accepts_correct_credentials() -> None:
-    app = _build_app(InfrastructureConfig(http_basic_user="alice", http_basic_password="secret"))
+    app = _build_app(
+        InfrastructureConfig(http_basic_user="alice", http_basic_password="secret")
+    )
 
     response = await _request(
         app,
@@ -132,7 +140,7 @@ async def test_basic_auth_exempts_health_and_extension_paths() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extension_key_can_bypass_basic_auth_for_extension_used_job_paths() -> None:
+async def test_extension_key_cannot_bypass_basic_auth_for_ordinary_job_routes() -> None:
     config = InfrastructureConfig(
         http_basic_user="alice",
         http_basic_password="secret",
@@ -152,8 +160,8 @@ async def test_extension_key_can_bypass_basic_auth_for_extension_used_job_paths(
 
     assert missing_key.status_code == 401
     assert missing_key.headers["www-authenticate"] == 'Basic realm="ForWin"'
-    assert correct_key.status_code == 200
-    assert correct_key.json() == {"job_id": "job-1"}
+    assert correct_key.status_code == 401
+    assert correct_key.headers["www-authenticate"] == 'Basic realm="ForWin"'
 
 
 def test_config_rejects_partial_basic_auth() -> None:

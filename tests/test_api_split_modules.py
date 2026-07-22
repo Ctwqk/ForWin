@@ -113,6 +113,7 @@ class ApiSplitModuleTests(unittest.TestCase):
             "forwin/http/adapters/api_system_routes.py": 500,
             "forwin/http/adapters/api_task_routes.py": 500,
             "forwin/http/adapters/api_publisher_routes.py": 200,
+            "forwin/http/adapters/api_publisher_extension_attempt_routes.py": 180,
             "forwin/http/adapters/api_project_routes.py": 80,
             "forwin/application/publisher/service.py": 400,
             "forwin/application/projects/service.py": 500,

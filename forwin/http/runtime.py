@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from forwin.application.task_center import TaskCenterService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
-from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
@@ -85,6 +84,7 @@ class HttpRuntime:
         default_factory=threading.RLock,
         repr=False,
     )
+
     def get_session(self) -> Session:
         if self.session_factory is None:
             raise RuntimeError("HTTP runtime session factory is unavailable")
@@ -151,11 +151,8 @@ class HttpRuntime:
                 publisher_login_discord_webhook_url=(
                     self.config.publisher_login_discord_webhook_url
                 ),
-                codex_intervention_handler=build_codex_intervention_handler(
-                    self.config
-                ),
             )
-            candidate.requeue_interrupted_upload_jobs()
+            candidate.recover_interrupted_upload_attempts()
             self.publisher_manager = candidate
             return candidate
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .audit import PublisherAuditService
 from .auth import ExtensionAuthService
+from .attempts import PublisherAttemptService
 from .backend_jobs import PublisherBackendJobRunner
 from .browser_sessions import BrowserCookieCodec, BrowserSessionService
 from .bindings import PublisherBindingService
@@ -12,7 +13,8 @@ from .covers import MiniMaxImageClient, PublisherCoverService
 from .platform_catalog import PlatformCatalog
 from .platform_catalogs import PlatformMetadataCatalog
 from .preflight import PublisherPreflightService
-from .upload_jobs import CodexInterventionHandler, UploadJobService
+from .receipts import PublisherReceiptService
+from .upload_jobs import UploadJobService
 
 
 class PublisherRuntimeService:
@@ -27,7 +29,6 @@ class PublisherRuntimeService:
         publisher_session_encryption_required: bool,
         strict_preferred_client: bool = False,
         observability=None,
-        codex_intervention_handler: CodexInterventionHandler | None = None,
         minimax_api_key: str = "",
         minimax_base_url: str = "",
         publisher_cover_dir: str = "",
@@ -82,8 +83,18 @@ class PublisherRuntimeService:
             audit=self.audit,
             bindings=self.bindings,
             cover_service=self.cover_service,
-            codex_intervention_handler=codex_intervention_handler,
         )
+        self.receipts = PublisherReceiptService()
+        self.attempts = PublisherAttemptService(
+            session_factory=session_factory,
+            platform_catalog=self.platform_catalog,
+            connection_state=self.connection_state,
+            audit=self.audit,
+            job_serializer=self.upload_jobs.serialize_upload_job,
+            default_lease_seconds=heartbeat_stale_seconds,
+        )
+        self.upload_jobs.attempts = self.attempts
+        self.upload_jobs.receipts = self.receipts
         self.canon_jobs = CanonPublisherJobService(
             session_factory=session_factory,
             upload_jobs=self.upload_jobs,

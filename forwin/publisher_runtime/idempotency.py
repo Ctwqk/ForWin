@@ -4,6 +4,7 @@ import hashlib
 
 
 _PUBLISHER_CHAPTER_IDENTITY_VERSION = "publisher-chapter:v1"
+_PUBLISHER_COVER_IDENTITY_VERSION = "publisher-cover:v1"
 
 
 def publisher_job_idempotency_key(
@@ -28,6 +29,28 @@ def publisher_job_idempotency_key(
     return hashlib.sha256("\0".join(components).encode("utf-8")).hexdigest()
 
 
+def publisher_cover_upload_idempotency_key(
+    *,
+    work_binding_id: str,
+    platform_id: str,
+    cover_asset_id: str,
+    content_sha256: str,
+) -> str:
+    normalized_hash = _identity_component(content_sha256, "content_sha256")
+    if len(normalized_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in normalized_hash
+    ):
+        raise ValueError("content_sha256 must be lowercase SHA-256 hex")
+    components = (
+        _PUBLISHER_COVER_IDENTITY_VERSION,
+        _identity_component(work_binding_id, "work_binding_id"),
+        _identity_component(platform_id, "platform_id"),
+        _identity_component(cover_asset_id, "cover_asset_id"),
+        normalized_hash,
+    )
+    return hashlib.sha256("\0".join(components).encode("utf-8")).hexdigest()
+
+
 def _identity_component(value: str, name: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -37,4 +60,7 @@ def _identity_component(value: str, name: str) -> str:
     return normalized
 
 
-__all__ = ["publisher_job_idempotency_key"]
+__all__ = [
+    "publisher_cover_upload_idempotency_key",
+    "publisher_job_idempotency_key",
+]

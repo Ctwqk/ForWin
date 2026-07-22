@@ -78,8 +78,33 @@ def _ensure_template() -> str:
 
 
 def postgres_test_url(name: str | None = None, *, keep_until_exit: bool = False) -> str:
-    base = _base_url()
     template_name = _ensure_template()
+    return _create_test_database_url(
+        name,
+        template_name=template_name,
+        keep_until_exit=keep_until_exit,
+    )
+
+
+def postgres_empty_test_url(
+    name: str | None = None,
+    *,
+    keep_until_exit: bool = False,
+) -> str:
+    return _create_test_database_url(
+        name,
+        template_name="template0",
+        keep_until_exit=keep_until_exit,
+    )
+
+
+def _create_test_database_url(
+    name: str | None,
+    *,
+    template_name: str,
+    keep_until_exit: bool,
+) -> str:
+    base = _base_url()
     db_name = (
         f"{_sanitize_name(base.database or 'forwin_test')}_"
         f"{_sanitize_name(name)}_{uuid4().hex[:8]}"

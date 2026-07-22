@@ -193,6 +193,16 @@ def test_publisher_platform_catalog_has_one_owner() -> None:
     assert "import_module" not in runtime_catalog
 
 
+def test_server_side_webpage_uploader_stays_deleted() -> None:
+    assert not (ROOT / "forwin/publishers/server_uploader.py").exists()
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    assert "ServerPublisherUploader" not in production_source
+
+
 def test_publisher_recovery_has_no_blind_retry_or_codex_browser_intervention() -> None:
     assert not (ROOT / "forwin/publisher_runtime/codex_intervention.py").exists()
 

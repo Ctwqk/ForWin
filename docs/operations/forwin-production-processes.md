@@ -2,6 +2,8 @@
 
 This document describes the production process roles implied by the ForWin
 service-process roadmap. It complements `docs/operations/infra-distribution-plan.md`.
+Recovery and full-stack rollback procedures are in
+[V5 Recovery And Rollback](v5-recovery-rollback.md).
 
 ## 126 App Processes
 

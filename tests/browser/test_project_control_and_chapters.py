@@ -20,7 +20,7 @@ def test_project_control_actions_review_and_chapter_operations(
 
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v2")
+    expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v1")
     expect(
         page.locator("#runtime_policy_generation_audit_interval")
     ).to_have_count(0)

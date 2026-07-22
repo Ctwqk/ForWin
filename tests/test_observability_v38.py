@@ -383,6 +383,10 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                         "_SessionFactory": session_factory,
                         "llm_client": fake_llm,
                         "engine": fake_engine,
+                        "close": lambda self: (
+                            self.llm_client.close(),
+                            self.engine.dispose(),
+                        ),
                     },
                 )()
                 updates: list[dict[str, object]] = []
@@ -464,6 +468,10 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                         "_SessionFactory": session_factory,
                         "llm_client": FakeCloser(),
                         "engine": FakeEngine(),
+                        "close": lambda self: (
+                            self.llm_client.close(),
+                            self.engine.dispose(),
+                        ),
                     },
                 )()
 

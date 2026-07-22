@@ -509,7 +509,13 @@ def test_projection_api_refresh_status_and_pages(tmp_path: Path) -> None:
         assert refreshed["ok"] is True
         assert refreshed["projection_kind"] == "all"
         status = handlers["get_projection_status"](project_id, projection_kind="obsidian")
-        assert status["page_count"] >= 1
+        obsidian_status = next(
+            item
+            for item in status["components"]
+            if item["projection_kind"] == "obsidian"
+        )
+        assert obsidian_status["status"] == "healthy"
+        assert obsidian_status["lag"] == 0
         pages = handlers["list_projection_pages"](project_id, projection_kind="obsidian")
         page = next(item for item in pages if item.page_key == "character:char_lin")
         assert page.projection_kind == "obsidian"

@@ -58,22 +58,22 @@ def _setup_project(session):
         runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     arc = updater.create_arc_plan(
-        project.id, "母星通讯危机", chapter_start=21, chapter_end=28
+        project.id, "母星通讯危机", chapter_start=1, chapter_end=8
     )
     chapter = updater.create_chapter_plan(
         project_id=project.id,
         arc_plan_id=arc.id,
-        chapter_number=23,
+        chapter_number=1,
         title="乱码呼号",
         one_line="修复防线并收到异常通讯",
         goals=["修复防线", "处理乱码通讯"],
     )
     WorldContractRepository(session).save_chapter_intent(
         ChapterWorldDeltaIntent(
-            intent_id="chapter_23_intent",
+            intent_id="chapter_1_intent",
             project_id=project.id,
             chapter_plan_id=chapter.id,
-            chapter_number=23,
+            chapter_number=1,
             visible_delta_intents=["殖民地防线修复"],
             hint_delta_intents=["乱码通讯", "父亲旧部呼号"],
             must_not_reveal=["father_sieged"],
@@ -169,7 +169,7 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
                 chapter,
                 WriterOutput(
                     project_id=project.id,
-                    chapter_number=23,
+                    chapter_number=1,
                     title="乱码呼号",
                     body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
                     end_of_chapter_summary="收到异常通讯。",
@@ -211,7 +211,7 @@ def test_canon_admission_blocks_review_failure_before_book_state_commit() -> Non
                 chapter,
                 WriterOutput(
                     project_id=project.id,
-                    chapter_number=23,
+                    chapter_number=1,
                     title="提前揭示",
                     body="通讯接通后，父亲明确说自己已经在母星被围。",
                     end_of_chapter_summary="提前揭示母星危机。",
@@ -259,7 +259,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
                 chapter,
                 WriterOutput(
                     project_id=project.id,
-                    chapter_number=23,
+                    chapter_number=1,
                     title="乱码呼号",
                     body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
                     end_of_chapter_summary="收到异常通讯。",

@@ -58,6 +58,7 @@ def test_execute_pipeline_task_records_operation_and_cleanup_spans() -> None:
             observability=obs,
             llm_client=fake_llm,
             engine=fake_engine,
+            close=lambda: (fake_llm.close(), fake_engine.dispose()),
         )
         result = SimpleNamespace(
             status="completed",
@@ -125,6 +126,7 @@ def test_execute_pipeline_task_records_worker_component_when_requested() -> None
             observability=obs,
             llm_client=fake_llm,
             engine=fake_engine,
+            close=lambda: (fake_llm.close(), fake_engine.dispose()),
         )
         result = SimpleNamespace(
             status="completed",

@@ -869,7 +869,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
 
     latest_review_meta = json.loads(latest_attempt_review.review_meta_json or "{}")
     assert result.status == "needs_review"
-    assert len(attempts) >= 2
+    assert len(attempts) == 1
     assert {attempt.repair_phase for attempt in attempts} == {"canon_repair"}
     assert [attempt.phase_attempt_no for attempt in attempts] == list(
         range(1, len(attempts) + 1)

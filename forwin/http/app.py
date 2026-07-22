@@ -21,6 +21,20 @@ from forwin.application.project_control import (
     ProjectControlApplicationDeps,
     ProjectControlApplicationService,
 )
+from forwin.application.project_control.support import (
+    build_audit_insights as _build_audit_insights,
+    build_causal_replay as _build_causal_replay,
+    decision_refs_for_chapter_review as _decision_refs_for_chapter_review,
+    latest_band_checkpoint_row as _latest_band_checkpoint_row,
+    latest_related_decision_event as _latest_related_decision_event,
+    list_decision_event_rows as _list_decision_event_rows,
+    log_decision_event as _log_decision_event,
+    persist_project_automation as _persist_project_automation,
+    serialize_band_checkpoint as _serialize_band_checkpoint,
+    serialize_constraint as _serialize_constraint,
+    serialize_decision_event as _serialize_decision_event,
+    validate_constraint_payload as _validate_constraint_payload,
+)
 from forwin.application.tasks import TaskApplicationDeps, TaskApplicationService
 from forwin.http.adapters import api_observability_routes
 from forwin.http.generation import (
@@ -31,23 +45,11 @@ from forwin.http.generation import (
     _project_has_active_generation_task,
 )
 from forwin.http.project_support import (
-    _build_audit_insights,
-    _build_causal_replay,
-    _decision_refs_for_chapter_review,
     _delete_project,
     _get_generation_task_or_404,
-    _latest_band_checkpoint_row,
-    _latest_related_decision_event,
-    _list_decision_event_rows,
-    _log_decision_event,
     _mutate_generation_task,
-    _persist_project_automation,
     _require_reason,
-    _serialize_band_checkpoint,
-    _serialize_constraint,
-    _serialize_decision_event,
     _update_task,
-    _validate_constraint_payload,
 )
 from forwin.http.request_support import (
     _active_genesis_revision,

@@ -720,7 +720,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         task = api_module._create_task_record(title="missing update", requested_chapters=1)
         api_module._persist_generation_task("task-deleted-before-update", task)
 
-        from forwin.http.project_support import _run_generation_task_db_write
+        from forwin.http.tasks import _run_generation_task_db_write
 
         def delete_before_write(operation, **kwargs):
             with self.session_factory.begin() as session:
@@ -732,7 +732,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             return _run_generation_task_db_write(operation, **kwargs)
 
         with patch(
-            "forwin.http.project_support._run_generation_task_db_write",
+            "forwin.http.tasks._run_generation_task_db_write",
             side_effect=delete_before_write,
         ):
             api_module._update_task(

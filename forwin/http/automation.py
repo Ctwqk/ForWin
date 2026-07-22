@@ -14,13 +14,13 @@ from forwin.api_schema import (
 )
 import forwin.models.phase  # noqa: F401
 from forwin.application.generation import GenerationApplicationService
+from forwin.application.project_control.support import (
+    persist_project_automation as _persist_project_automation,
+)
 from forwin.http.request_support import (
     _display_datetime,
     _get_session,
     _utcnow,
-)
-from forwin.http.project_support import (
-    _persist_project_automation,
 )
 from forwin.http.runtime import GENERATION_TERMINAL_STATUSES, HttpRuntime
 

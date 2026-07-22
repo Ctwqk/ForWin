@@ -10,23 +10,12 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from forwin.application.project_control import support as project_control_support
-from forwin.api_schema import (
-    BandCheckpointDetail,
-    CausalReplayResponse,
-    AuditInsightsResponse,
-    ProjectAutomationSettings,
-    TaskMutationResponse,
-)
-from forwin.audit.events import DecisionEventInfo, DecisionEventType
+from forwin.api_schema import TaskMutationResponse
+from forwin.audit.events import DecisionEventType
 from forwin.generation.task_repository import GenerationTaskRepository
-from forwin.planning.constraints import NarrativeConstraintInfo
+import forwin.http.tasks as task_support
 from forwin.models.base import Base
 from forwin.models.project import Project, ChapterPlan
-from forwin.models.planning_control import (
-    BandCheckpoint,
-    NarrativeConstraint,
-)
-from forwin.models.audit import DecisionEvent
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
@@ -47,7 +36,6 @@ from forwin.http.tasks import (
     _generation_task_from_row,
     _load_generation_task,
     _new_stage_history_entry,
-    _run_generation_task_db_write,
     _task_is_deletable,
     _task_is_pausable,
     _task_is_terminable,
@@ -205,7 +193,7 @@ def _update_task(runtime: HttpRuntime, task_id: str, **changes: Any) -> None:
             session.add(row)
             session.commit()
 
-    _run_generation_task_db_write(
+    task_support._run_generation_task_db_write(
         _operation,
         context=f"update_generation_task:{task_id}",
     )
@@ -274,13 +262,13 @@ def _mutate_generation_task(
 
             updated = _apply_locked_task_update(row, changes)
             if project_id and event_type is not None:
-                parent = _latest_related_decision_event(
+                parent = project_control_support.latest_related_decision_event(
                     session,
                     project_id=project_id,
                     related_object_type="generation_task",
                     related_object_id=task_id,
                 )
-                _log_decision_event(
+                project_control_support.log_decision_event(
                     session,
                     project_id=project_id,
                     task_id=task_id,
@@ -311,7 +299,7 @@ def _mutate_generation_task(
             session.commit()
             response["value"] = snapshot
 
-    _run_generation_task_db_write(
+    task_support._run_generation_task_db_write(
         _operation,
         context=f"{action}_generation_task:{task_id}",
     )
@@ -346,100 +334,12 @@ def _require_reason(reason: str, *, action: str) -> str:
     return normalized
 
 
-def _validate_constraint_payload(
-    *, constraint_type: str, level: str, status: str
-) -> tuple[str, str, str]:
-    return project_control_support.validate_constraint_payload(
-        constraint_type=constraint_type,
-        level=level,
-        status=status,
-    )
-
-
-def _persist_project_automation(
-    session,
-    project: Project,
-    automation: ProjectAutomationSettings,
-) -> ProjectAutomationSettings:
-    return project_control_support.persist_project_automation(
-        session, project, automation
-    )
-
-
-def _log_decision_event(session, **kwargs):
-    return project_control_support.log_decision_event(session, **kwargs)
-
-
-def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
-    return project_control_support.latest_band_checkpoint_row(
-        session,
-        project_id=project_id,
-        band_id=band_id,
-    )
-
-
-def _serialize_band_checkpoint(
-    row: BandCheckpoint, *, session=None
-) -> BandCheckpointDetail:
-    return project_control_support.serialize_band_checkpoint(row, session=session)
-
-
-def _serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
-    return project_control_support.serialize_constraint(row)
-
-
-def _serialize_decision_event(row: DecisionEvent) -> DecisionEventInfo:
-    return project_control_support.serialize_decision_event(row)
-
-
-def _list_decision_event_rows(session, **kwargs) -> list[DecisionEvent]:
-    return project_control_support.list_decision_event_rows(session, **kwargs)
-
-
-def _latest_related_decision_event(session, **kwargs) -> DecisionEvent | None:
-    return project_control_support.latest_related_decision_event(session, **kwargs)
-
-
-def _decision_refs_for_chapter_review(
-    session,
-    *,
-    project_id: str,
-    chapter_number: int,
-    review_id: str,
-) -> list[DecisionEventInfo]:
-    return project_control_support.decision_refs_for_chapter_review(
-        session,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        review_id=review_id,
-    )
-
-
-def _build_causal_replay(
-    session,
-    *,
-    project_id: str,
-    scope: str = "",
-    arc_id: str = "",
-    band_id: str = "",
-    chapter_number: int = 0,
-    task_id: str = "",
-) -> CausalReplayResponse:
-    return project_control_support.build_causal_replay(
-        session,
-        project_id=project_id,
-        scope=scope,
-        arc_id=arc_id,
-        band_id=band_id,
-        chapter_number=chapter_number,
-        task_id=task_id,
-    )
-
-
-def _build_audit_insights(session, *, project_id: str) -> AuditInsightsResponse:
-    return project_control_support.build_audit_insights(
-        session, project_id=project_id
-    )
-
-
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = [
+    "_apply_locked_task_update",
+    "_delete_project",
+    "_get_generation_task_or_404",
+    "_mutate_generation_task",
+    "_require_reason",
+    "_running_task_lease_seconds",
+    "_update_task",
+]

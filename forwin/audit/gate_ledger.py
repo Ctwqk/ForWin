@@ -675,7 +675,10 @@ class GateLedgerService:
             end = int(row.chapter_end or 0)
             if key in band_ranges:
                 previous = band_ranges[key]
-                start = min(value for value in (previous[0], start) if value > 0)
+                start = min(
+                    (value for value in (previous[0], start) if value > 0),
+                    default=0,
+                )
                 end = max(previous[1], end)
             band_ranges[key] = (start, end)
         events = (

@@ -298,6 +298,29 @@ class TestGateLedger:
         assert _metric(cross_report, "hard_floor").opportunities == 3
         assert cross_report.project_count == 2
 
+    def test_duplicate_unanchored_band_ranges_remain_reportable(self) -> None:
+        project, arc = self._project_with_bands("unanchored bands")
+        self.session.add_all(
+            [
+                BandExperiencePlan(
+                    project_id=project.id,
+                    arc_id=arc.id,
+                    band_id="band:0:0",
+                    chapter_start=0,
+                    chapter_end=0,
+                )
+                for _index in range(2)
+            ]
+        )
+        self.session.commit()
+
+        report = GateLedgerService(self.session).report(
+            scope="project", project_id=project.id
+        )
+
+        assert report.project_id == project.id
+        assert len(report.metrics) == 7
+
     def test_unreconstructable_legacy_denominator_is_unknown(self) -> None:
         project, _arc = self._project_with_bands("legacy")
         self.session.add(

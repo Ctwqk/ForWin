@@ -2,14 +2,125 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { PublisherExtensionController } from '../lib/controller.js';
+import { createUploadJournal } from '../lib/upload-journal.js';
 
-function makeController(overrides = {}) {
+const CONTENT_SHA256 = 'a'.repeat(64);
+const NORMALIZED_CONTENT_SHA256 = 'b'.repeat(64);
+
+function executionContentEvidence() {
+  return {
+    observed_content_sha256: CONTENT_SHA256,
+    expected_normalized_sha256: NORMALIZED_CONTENT_SHA256,
+    observed_normalized_sha256: NORMALIZED_CONTENT_SHA256,
+    content_match_basis: 'normalized-editor-text-sha256',
+  };
+}
+
+function makeUploadClaim(overrides = {}) {
+  const jobOverrides = overrides.job || {};
+  const replacesInput = Boolean(
+    jobOverrides.task_kind && jobOverrides.task_kind !== 'chapter_upload',
+  );
+  const claim = {
+    execution_mode: 'execute',
+    job: {
+      job_id: 'job-1',
+      idempotency_key: 'publisher-job:v1:job-1',
+      task_kind: 'chapter_upload',
+      platform: 'qidian',
+      content_sha256: CONTENT_SHA256,
+      input: {
+        book_name: 'Test Book',
+        chapter_title: 'Chapter 1',
+        body: 'Body',
+        publish: false,
+        upload_url: 'https://write.qq.com/portal/dashboard',
+      },
+    },
+    attempt: {
+      attempt_id: 'attempt-1',
+      attempt_number: 1,
+      lease_epoch: 7,
+      phase: 'claimed',
+      lease_expires_at: '2026-07-21T12:01:30Z',
+      heartbeat_interval_seconds: 3600,
+    },
+  };
+  return {
+    ...claim,
+    ...overrides,
+    job: {
+      ...claim.job,
+      ...jobOverrides,
+      input: replacesInput
+        ? { ...(jobOverrides.input || {}) }
+        : { ...claim.job.input, ...(jobOverrides.input || {}) },
+    },
+    attempt: { ...claim.attempt, ...(overrides.attempt || {}) },
+  };
+}
+
+function makeMemoryUploadJournalStore(initialSnapshot) {
+  let snapshot = initialSnapshot == null ? initialSnapshot : structuredClone(initialSnapshot);
+  const writes = [];
+  const read = async () => (snapshot == null ? snapshot : structuredClone(snapshot));
+  const write = async (next) => {
+    snapshot = structuredClone(next);
+    writes.push(structuredClone(next));
+  };
+  return {
+    createJournal: () => createUploadJournal({ read, write }),
+    get snapshot() {
+      return snapshot == null ? snapshot : structuredClone(snapshot);
+    },
+    writes,
+  };
+}
+
+function makeController(overrides = {}, journalStore = makeMemoryUploadJournalStore()) {
   const events = [];
-  const uploadResults = [];
   const loginQrNotifications = [];
   const loginQrStatusEvents = [];
   const closedTabs = [];
   const restoredCookies = [];
+  const backendOverrides = overrides.backend || {};
+  const defaultBackend = {
+    heartbeat: async () => ({ ok: true }),
+    syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+    getBrowserSession: async () => null,
+    claimNextUploadJob: async () => ({ found: false, claim: null }),
+    heartbeatUploadAttempt: async () => ({
+      attempt_status: 'running',
+      job_status: 'running',
+      abort_requested: false,
+      next_action: 'execute',
+    }),
+    updateUploadAttemptPhase: async () => ({
+      attempt_status: 'running',
+      job_status: 'running',
+      abort_requested: false,
+      next_action: 'heartbeat',
+    }),
+    submitUploadAttemptResult: async () => ({
+      attempt_status: 'succeeded',
+      job_status: 'succeeded',
+    }),
+    submitUploadReceipt: async () => ({
+      attempt_status: 'running',
+      job_status: 'running',
+    }),
+    reconcileUploadAttempt: async () => ({
+      attempt_status: 'succeeded',
+      job_status: 'succeeded',
+    }),
+    claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+    syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+    notifyLoginQr: async (payload) => {
+      loginQrNotifications.push(payload);
+      return { ok: true, dispatched: true };
+    },
+    updateCommentSyncJobResult: async () => ({ ok: true }),
+  };
   const deps = {
     ensureClientId: async () => 'client-1',
     getClientId: async () => 'client-1',
@@ -71,6 +182,10 @@ function makeController(overrides = {}) {
       message: '审核状态已同步。',
       resultPayload: { work: { audit_state: 'under_review' }, chapters: [] },
     }),
+    runReconciliationCommand: async () => ({
+      outcome: 'indeterminate',
+      reason: 'No conclusive remote evidence.',
+    }),
     runCommentSyncCommand: async () => ({
       ok: true,
       currentUrl: 'https://fanqienovel.com/main/writer/',
@@ -78,42 +193,17 @@ function makeController(overrides = {}) {
       comments: [],
       resultPayload: { source: 'fanqie-author-api' },
     }),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'qidian',
-        display_name: '起点小说',
-        book_name: '测试书',
-        chapter_title: '第一章',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-      }),
-      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
-      notifyLoginQr: async (payload) => {
-        loginQrNotifications.push(payload);
-        return { ok: true, dispatched: true };
-      },
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-      updateCommentSyncJobResult: async () => ({ ok: true }),
-    },
+    uploadJournal: journalStore.createJournal(),
     recordLoginQrNotification: async (event) => {
       loginQrStatusEvents.push(event);
     },
     ...overrides,
+    backend: { ...defaultBackend, ...backendOverrides },
   };
   return {
     controller: new PublisherExtensionController(deps),
     events,
-    uploadResults,
+    journalStore,
     loginQrNotifications,
     loginQrStatusEvents,
     closedTabs,
@@ -193,13 +283,8 @@ test('controller does not let popup close event reset a confirmed login', async 
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
       getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
   });
@@ -230,18 +315,6 @@ test('controller still opens login popup when heartbeat sync fails', async () =>
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
       getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'qidian',
-        display_name: '起点小说',
-        book_name: '测试书',
-        chapter_title: '第一章',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-      }),
-      updateUploadJobResult: async () => ({ ok: true }),
     },
   });
 
@@ -706,16 +779,11 @@ test('controller ignores login QR notification failures while login remains visi
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
       getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
       notifyLoginQr: async () => {
         throw new Error('network down');
       },
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
   });
@@ -813,13 +881,8 @@ test('controller restores backend sessions before heartbeat even when local brow
           ],
         };
       },
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('not used');
-      },
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
   });
@@ -832,420 +895,548 @@ test('controller restores backend sessions before heartbeat even when local brow
   assert.equal(heartbeatCalls.length, 1);
 });
 
-test('controller marks upload job running then succeeded', async () => {
-  const { controller, uploadResults } = makeController();
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(uploadResults[0].status, 'running');
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-});
-
-test('controller gives qidian draft upload a longer execution timeout', async () => {
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  const delays = [];
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    delays.push(Number(delay || 0));
-    return originalSetTimeout(callback, delay, ...args);
-  };
-  globalThis.clearTimeout = (timer) => originalClearTimeout(timer);
-  try {
-    const { controller } = makeController({
-      backend: {
-        heartbeat: async () => ({ ok: true }),
-        syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-        getBrowserSession: async () => null,
-        claimNextUploadJob: async () => ({ found: false, job: null }),
-        claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-        getUploadJob: async () => ({
-          job_id: 'job-qidian-draft',
-          platform: 'qidian',
-          display_name: '起点小说',
-          book_name: '测试书',
-          chapter_title: '第一章',
-          body: '正文',
-          upload_url: null,
-          publish: false,
-        }),
-        syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
-        updateUploadJobResult: async () => ({ ok: true }),
-        updateCommentSyncJobResult: async () => ({ ok: true }),
-      },
-    });
-
-    await controller.handleMessage(
-      { action: 'execute-upload-job', payload: { jobId: 'job-qidian-draft' } },
-      { tab: { id: 100 } },
-    );
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-  }
-
-  assert.ok(Math.max(...delays) >= 420000);
-});
-
-test('controller recovers qidian draft timeout when a real ccid draft url exists', async () => {
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearTimeout = globalThis.clearTimeout;
-  const timeoutSentinel = { qidianTimeout: true };
-  globalThis.setTimeout = (callback, delay, ...args) => {
-    if (Number(delay || 0) >= 420000) {
-      callback(...args);
-      return timeoutSentinel;
-    }
-    return originalSetTimeout(callback, delay, ...args);
-  };
-  globalThis.clearTimeout = (timer) => {
-    if (timer === timeoutSentinel) {
-      return;
-    }
-    return originalClearTimeout(timer);
-  };
-  try {
-    const { controller, uploadResults } = makeController({
-      getTab: async (tabId) => ({
-        id: tabId,
-        status: 'complete',
-        url: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/35512915704247809?entry=publish#ccid=96252466911310489',
-      }),
-      runUploadCommand: async () => new Promise(() => {}),
-      backend: {
-        heartbeat: async () => ({ ok: true }),
-        syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-        getBrowserSession: async () => null,
-        claimNextUploadJob: async () => ({ found: false, job: null }),
-        claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-        getUploadJob: async () => ({
-          job_id: 'job-qidian-timeout-recover',
-          platform: 'qidian',
-          display_name: '起点小说',
-          book_name: '测试书',
-          chapter_title: '第一章',
-          body: '正文',
-          upload_url: null,
-          publish: false,
-        }),
-        syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
-        updateUploadJobResult: async (_jobId, payload) => {
-          uploadResults.push(payload);
-          return { ok: true };
-        },
-        updateCommentSyncJobResult: async () => ({ ok: true }),
-      },
-    });
-
-    await controller.handleMessage(
-      { action: 'execute-upload-job', payload: { jobId: 'job-qidian-timeout-recover' } },
-      { tab: { id: 100 } },
-    );
-
-    assert.equal(uploadResults.at(-1).status, 'succeeded');
-    assert.equal(uploadResults.at(-1).error, '');
-    assert.equal(uploadResults.at(-1).result_payload.verified_via, 'qidian-real-ccid-timeout-recovery');
-    assert.equal(uploadResults.at(-1).result_payload.error_code, undefined);
-  } finally {
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearTimeout = originalClearTimeout;
-  }
-});
-
-test('controller cancels upload job before execution when abort was requested', async () => {
-  const { controller, uploadResults } = makeController({
-    runUploadCommand: async () => {
-      throw new Error('should not execute aborted upload');
+test('controller syncs pending upload journal entries before claiming new work', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const seedJournal = journalStore.createJournal();
+  const pendingClaim = makeUploadClaim({
+    job: {
+      job_id: 'job-recovery',
+      idempotency_key: 'publisher-job:v1:job-recovery',
     },
+    attempt: { attempt_id: 'attempt-recovery' },
+  });
+  await seedJournal.recordClaim({ clientId: 'client-1', claim: pendingClaim });
+  await seedJournal.saveResult('attempt-recovery', {
+    outcome: 'failed',
+    message: '',
+    current_url: '',
+    error_code: 'extension-worker-restarted',
+    error_message: 'Worker restarted.',
+    details: {},
+  });
+
+  const calls = [];
+  const { controller } = makeController({
+    getPlatformState: async (platformId) => (
+      platformId === 'qidian' ? { connected: true } : {}
+    ),
     backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'qidian',
-        display_name: '起点小说',
-        status: 'terminating',
-        abort_requested: true,
-        book_name: '测试书',
-        chapter_title: '第一章',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-      }),
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
+      submitUploadAttemptResult: async () => {
+        calls.push('journal-result');
+        return { attempt_status: 'failed', job_status: 'failed' };
       },
-      updateCommentSyncJobResult: async () => ({ ok: true }),
+      claimNextUploadJob: async () => {
+        calls.push('claim');
+        return { found: false, claim: null };
+      },
     },
-  });
+  }, journalStore);
 
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
+  const dispatchResult = await controller.dispatchPendingUploadJobs();
 
-  assert.equal(uploadResults.at(-1).status, 'cancelled');
-  assert.equal(uploadResults.at(-1).result_payload.phase, 'abort-before-start');
+  assert.deepEqual(calls, ['journal-result', 'claim']);
+  assert.deepEqual(dispatchResult, { found: false });
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
 });
 
-test('controller closes execution tabs after successful upload', async () => {
-  let controllerRef = null;
-  const { controller, closedTabs, uploadResults } = makeController({
-    runUploadCommand: async (_tabId, payload) => {
-      await controllerRef.handleTabCreated({ id: 88, openerTabId: 77 });
-      return {
-        ok: true,
-        currentUrl: 'https://write.qq.com/portal/dashboard',
-        message: `章节发布动作已提交：${payload.chapter_title}`,
-        resultPayload: { mode: 'publish' },
-      };
-    },
-  });
-  controllerRef = controller;
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.deepEqual(closedTabs.sort((a, b) => a - b), [77, 88]);
-  assert.equal(uploadResults.at(-1).result_payload.tab_cleanup.closed_tab_ids.length, 2);
-});
-
-test('controller keeps execution tabs open when upload fails', async () => {
-  let controllerRef = null;
-  const { controller, closedTabs, uploadResults } = makeController({
+test('controller persists and acknowledges mutation_started before running the mutation command', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const calls = [];
+  const { controller } = makeController({
     runUploadCommand: async () => {
-      await controllerRef.handleTabCreated({ id: 99, openerTabId: 77 });
+      const record = journalStore.snapshot.records[0];
+      assert.equal(record.local_phase, 'mutation_started');
+      assert.deepEqual(calls, ['phase']);
+      calls.push('mutation');
       return {
         ok: false,
-        currentUrl: 'https://write.qq.com/portal/login',
-        message: '上传失败。',
-        error: '需要重新登录',
-        resultPayload: { mode: 'publish' },
-      };
-    },
-  });
-  controllerRef = controller;
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.deepEqual(closedTabs, []);
-  assert.equal(uploadResults.at(-1).status, 'failed');
-  assert.equal(uploadResults.at(-1).result_payload.tab_cleanup.attempted, false);
-});
-
-test('controller forwards create-if-missing book metadata to upload command', async () => {
-  const payloads = [];
-  const { controller } = makeController({
-    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
-    runUploadCommand: async (_tabId, payload) => {
-      payloads.push(payload);
-      return {
-        ok: true,
-        currentUrl: 'https://fanqienovel.com/main/writer/',
-        message: '章节发布动作已提交。',
-        resultPayload: { mode: 'publish' },
+        currentUrl: 'https://write.qq.com/portal/dashboard',
+        errorCode: 'platform-rejected',
+        error: 'Rejected by platform.',
       };
     },
     backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'fanqie',
-        display_name: '番茄小说',
-        book_name: '旧巷春灯',
-        chapter_title: '第一章 雨巷来信',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-        result_payload: {
-          create_if_missing: true,
-          book_meta: {
-            audience: 'male',
-            primary_category: '都市日常',
-            protagonist_names: ['韩砚', '林雾'],
-            intro: '一段关于旧城、旧案和失踪真相的故事。',
-          },
-        },
-      }),
-      updateUploadJobResult: async () => ({ ok: true }),
-    },
-  });
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(payloads.length, 1);
-  assert.equal(payloads[0].create_if_missing, true);
-  assert.equal(payloads[0].book_meta.primary_category, '都市日常');
-  assert.deepEqual(payloads[0].book_meta.protagonist_names, ['韩砚', '林雾']);
-});
-
-test('controller dispatches cover upload task kind to cover command', async () => {
-  const payloads = [];
-  const { controller, uploadResults } = makeController({
-    getTab: async () => ({ id: 77, url: 'https://write.qq.com/portal/book/123' }),
-    runCoverUploadCommand: async (_tabId, payload) => {
-      payloads.push(payload);
-      return {
-        ok: true,
-        currentUrl: 'https://write.qq.com/portal/book/123',
-        message: '封面上传动作已提交。',
-        resultPayload: { cover_state: 'under_review' },
-      };
-    },
-    runUploadCommand: async () => {
-      throw new Error('chapter upload command should not run for cover_upload');
-    },
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'cover-job-1',
-        task_kind: 'cover_upload',
-        platform: 'qidian',
-        display_name: '起点小说',
-        book_name: '测试书',
-        upload_url: null,
-        result_payload: {
-          work_binding_id: 'work-1',
-          remote_book_id: 'book-1',
-          remote_url: 'https://write.qq.com/portal/book/123',
-          cover_asset_id: 'cover-1',
-          file_path: '/tmp/cover.png',
-        },
-      }),
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'cover-job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(payloads.length, 1);
-  assert.equal(payloads[0].file_path, '/tmp/cover.png');
-  assert.equal(payloads[0].cover_asset_id, 'cover-1');
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-  assert.equal(uploadResults.at(-1).result_payload.task_kind, 'cover_upload');
-  assert.equal(uploadResults.at(-1).result_payload.cover_state, 'under_review');
-});
-
-test('controller dispatches audit sync task kind to audit sync command', async () => {
-  const payloads = [];
-  const { controller, uploadResults } = makeController({
-    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/book-info/456' }),
-    runAuditSyncCommand: async (_tabId, payload) => {
-      payloads.push(payload);
-      return {
-        ok: true,
-        currentUrl: 'https://fanqienovel.com/main/writer/book-info/456',
-        message: '审核状态已同步。',
-        resultPayload: {
-          work: { remote_book_id: 'book-456', audit_state: 'under_review' },
-          chapters: [{ chapter_number: 1, audit_state: 'under_review' }],
-          cover: { cover_state: 'under_review' },
-        },
-      };
-    },
-    runUploadCommand: async () => {
-      throw new Error('chapter upload command should not run for audit_sync');
-    },
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'audit-job-1',
-        task_kind: 'audit_sync',
-        platform: 'fanqie',
-        display_name: '番茄小说',
-        book_name: '测试书',
-        upload_url: null,
-        result_payload: {
-          work_binding_id: 'work-456',
-          remote_book_id: 'book-456',
-          remote_url: 'https://fanqienovel.com/main/writer/book-info/456',
-        },
-      }),
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'audit-job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(payloads.length, 1);
-  assert.equal(payloads[0].remote_book_id, 'book-456');
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-  assert.equal(uploadResults.at(-1).result_payload.task_kind, 'audit_sync');
-  assert.equal(uploadResults.at(-1).result_payload.work.audit_state, 'under_review');
-});
-
-test('controller auto-dispatches claimed upload job for connected platform', async () => {
-  let claimedOnce = false;
-  const { controller, uploadResults } = makeController({
-    getPlatformState: async (platformId) => (platformId === 'qidian' ? { connected: true } : {}),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => {
-        if (claimedOnce) {
-          return { found: false, job: null };
-        }
-        claimedOnce = true;
+      updateUploadAttemptPhase: async (_jobId, _attemptId, payload) => {
+        assert.equal(journalStore.snapshot.records[0].local_phase, 'mutation_started');
+        assert.equal(payload.phase, 'mutation_started');
+        calls.push('phase');
         return {
-          found: true,
-          job: {
-            job_id: 'job-auto',
-            platform: 'qidian',
-            display_name: '起点小说',
-            status: 'running',
-            book_name: '测试书',
-            chapter_title: '第一章',
-            body: '正文',
-            upload_url: null,
-            publish: false,
-          },
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'heartbeat',
         };
       },
-      getUploadJob: async () => {
-        throw new Error('should not fetch job again');
+      submitUploadAttemptResult: async () => {
+        calls.push('result');
+        return { attempt_status: 'failed', job_status: 'failed' };
       },
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
+    },
+  }, journalStore);
+
+  await controller.executeUploadClaim(makeUploadClaim());
+
+  assert.deepEqual(calls, ['phase', 'mutation', 'result']);
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller never mutates when the backend does not acknowledge mutation_started', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  let mutationCalls = 0;
+  let resultCalls = 0;
+  const { controller, closedTabs } = makeController({
+    runUploadCommand: async () => {
+      mutationCalls += 1;
+      return { ok: true };
+    },
+    backend: {
+      updateUploadAttemptPhase: async () => {
+        const error = new Error('phase endpoint unavailable');
+        error.status = 503;
+        throw error;
+      },
+      submitUploadAttemptResult: async () => {
+        resultCalls += 1;
+        return { attempt_status: 'failed', job_status: 'reconciling' };
+      },
+    },
+  }, journalStore);
+
+  await assert.rejects(
+    controller.executeUploadClaim(makeUploadClaim()),
+    /phase endpoint unavailable/,
+  );
+
+  assert.equal(mutationCalls, 0);
+  assert.equal(resultCalls, 0);
+  assert.deepEqual(closedTabs, [77]);
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'mutation_started');
+});
+
+test('controller adopts unparented tabs while exactly one execution is active', async () => {
+  const { controller, closedTabs } = makeController();
+  controller.registerExecutionTask('upload:job-1:attempt-1', 77);
+
+  await controller.handleTabCreated({ id: 88, openerTabId: 0 });
+  const cleanup = await controller.cleanupExecutionTabs('upload:job-1:attempt-1');
+
+  assert.deepEqual(cleanup.closed_tab_ids, [77, 88]);
+  assert.deepEqual(closedTabs, [77, 88]);
+});
+
+test('controller persists receipt and result before backend acknowledgements on success', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const calls = [];
+  let submittedReceipt;
+  let submittedResult;
+  const { controller } = makeController({
+    runUploadCommand: async () => {
+      calls.push('mutation');
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/222#ccid=333',
+        message: 'Saved.',
+        resultPayload: {
+          official_status: 'drafted',
+          ...executionContentEvidence(),
+        },
+      };
+    },
+    backend: {
+      updateUploadAttemptPhase: async (_jobId, _attemptId, payload) => {
+        assert.equal(journalStore.snapshot.records[0].local_phase, 'mutation_started');
+        assert.equal(payload.phase, 'mutation_started');
+        calls.push('phase');
+        return {
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'heartbeat',
+        };
+      },
+      submitUploadReceipt: async (_jobId, _attemptId, payload) => {
+        const record = journalStore.snapshot.records[0];
+        const { client_id: clientId, lease_epoch: leaseEpoch, ...receipt } = payload;
+        assert.equal(record.local_phase, 'ack_pending');
+        assert.equal(clientId, 'client-1');
+        assert.equal(leaseEpoch, 7);
+        assert.deepEqual(record.receipt, receipt);
+        assert.ok(record.result);
+        submittedReceipt = payload;
+        calls.push('receipt');
+        return { attempt_status: 'running', job_status: 'running' };
+      },
+      submitUploadAttemptResult: async (_jobId, _attemptId, payload) => {
+        const record = journalStore.snapshot.records[0];
+        const { client_id: clientId, lease_epoch: leaseEpoch, ...result } = payload;
+        assert.equal(record.local_phase, 'ack_pending');
+        assert.equal(clientId, 'client-1');
+        assert.equal(leaseEpoch, 7);
+        assert.deepEqual(record.result, result);
+        assert.ok(record.receipt);
+        submittedResult = payload;
+        calls.push('result');
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+    },
+  }, journalStore);
+
+  const outcome = await controller.executeUploadClaim(makeUploadClaim());
+
+  assert.deepEqual(calls, ['phase', 'mutation', 'receipt', 'result']);
+  assert.equal(submittedReceipt.remote_book_id, '222');
+  assert.equal(submittedReceipt.remote_chapter_id, '333');
+  assert.equal(submittedResult.outcome, 'succeeded');
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+  assert.deepEqual(
+    journalStore.writes.map((snapshot) => snapshot.records[0].local_phase),
+    ['claimed', 'mutation_started', 'receipt_observed', 'ack_pending', 'acked'],
+  );
+});
+
+test('controller restart replays receipt and result without repeating a mutation', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  let mutationCalls = 0;
+  let firstResultCalls = 0;
+  const firstWorker = makeController({
+    runUploadCommand: async () => {
+      mutationCalls += 1;
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/222#ccid=333',
+        message: 'Saved.',
+        resultPayload: executionContentEvidence(),
+      };
+    },
+    backend: {
+      submitUploadReceipt: async () => {
+        throw new Error('receipt endpoint unavailable');
+      },
+      submitUploadAttemptResult: async () => {
+        firstResultCalls += 1;
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+    },
+  }, journalStore);
+
+  await assert.rejects(
+    firstWorker.controller.executeUploadClaim(makeUploadClaim()),
+    /receipt endpoint unavailable/,
+  );
+  assert.equal(mutationCalls, 1);
+  assert.equal(firstResultCalls, 0);
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'ack_pending');
+  assert.ok(journalStore.snapshot.records[0].receipt);
+  assert.ok(journalStore.snapshot.records[0].result);
+
+  const replayCalls = [];
+  const restartedWorker = makeController({
+    runUploadCommand: async () => {
+      throw new Error('mutation command must not run during journal replay');
+    },
+    runCoverUploadCommand: async () => {
+      throw new Error('cover mutation command must not run during journal replay');
+    },
+    backend: {
+      submitUploadReceipt: async () => {
+        replayCalls.push('receipt');
+        return { attempt_status: 'running', job_status: 'running' };
+      },
+      submitUploadAttemptResult: async () => {
+        replayCalls.push('result');
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+    },
+  }, journalStore);
+
+  const syncResult = await restartedWorker.controller.syncUploadJournal();
+
+  assert.deepEqual(replayCalls, ['receipt', 'result']);
+  assert.equal(mutationCalls, 1);
+  assert.deepEqual(syncResult, { handled: 1 });
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller recovers a mutation_started crash through read-only reconciliation only', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const seedJournal = journalStore.createJournal();
+  const interruptedClaim = makeUploadClaim();
+  await seedJournal.recordClaim({ clientId: 'client-1', claim: interruptedClaim });
+  await seedJournal.markMutationStarted(interruptedClaim.attempt.attempt_id);
+
+  const calls = [];
+  let claimCalls = 0;
+  const reconcileClaim = makeUploadClaim({
+    execution_mode: 'reconcile',
+    attempt: {
+      attempt_id: 'attempt-2',
+      attempt_number: 2,
+      lease_epoch: 8,
+    },
+  });
+  const { controller } = makeController({
+    getPlatformState: async (platformId) => (
+      platformId === 'qidian' ? { connected: true } : {}
+    ),
+    runUploadCommand: async () => {
+      calls.push('mutation');
+      throw new Error('recovery must not repeat the remote mutation');
+    },
+    runCoverUploadCommand: async () => {
+      calls.push('cover-mutation');
+      throw new Error('recovery must not invoke a cover mutation');
+    },
+    runReconciliationCommand: async () => {
+      calls.push('read-only-reconcile');
+      return {
+        outcome: 'matched',
+        currentUrl: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/222#ccid=333',
+        matchedContentSha256: CONTENT_SHA256,
+        officialState: 'drafted',
+        confirmationText: 'Saved.',
+        matchBasis: ['chapter_title', 'content_sha256'],
+      };
+    },
+    backend: {
+      submitUploadAttemptResult: async (_jobId, attemptId, payload) => {
+        calls.push(`retire:${attemptId}:${payload.outcome}`);
+        return { attempt_status: 'failed', job_status: 'reconciling' };
+      },
+      claimNextUploadJob: async () => {
+        claimCalls += 1;
+        return claimCalls === 1
+          ? { found: true, claim: reconcileClaim }
+          : { found: false, claim: null };
+      },
+      updateUploadAttemptPhase: async (_jobId, attemptId, payload) => {
+        calls.push(`phase:${attemptId}:${payload.phase}`);
+        return {
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'reconcile',
+        };
+      },
+      reconcileUploadAttempt: async (_jobId, attemptId, payload) => {
+        calls.push(`reconcile:${attemptId}:${payload.outcome}`);
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+      submitUploadReceipt: async () => {
+        throw new Error('matched reconciliation submits its receipt atomically');
+      },
+    },
+  }, journalStore);
+
+  const outcome = await controller.dispatchPendingUploadJobs();
+
+  assert.deepEqual(calls, [
+    'retire:attempt-1:failed',
+    'phase:attempt-2:observation_started',
+    'read-only-reconcile',
+    'reconcile:attempt-2:matched',
+  ]);
+  assert.deepEqual(outcome, { found: true, handled: 1 });
+  assert.equal(claimCalls, 2);
+  assert.deepEqual(
+    journalStore.snapshot.records.map((record) => record.local_phase),
+    ['acked', 'acked'],
+  );
+});
+
+test('controller routes reconcile claims only through read-only reconciliation', async () => {
+  const commandCalls = [];
+  const backendCalls = [];
+  let reconciliationRequest;
+  const { controller, journalStore } = makeController({
+    runUploadCommand: async () => {
+      commandCalls.push('upload');
+      throw new Error('upload mutation must not run for reconciliation');
+    },
+    runCoverUploadCommand: async () => {
+      commandCalls.push('cover');
+      throw new Error('cover mutation must not run for reconciliation');
+    },
+    runReconciliationCommand: async () => {
+      commandCalls.push('reconcile');
+      return {
+        outcome: 'matched',
+        currentUrl: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/222#ccid=333',
+        matchedContentSha256: CONTENT_SHA256,
+        officialState: 'drafted',
+        confirmationText: 'Saved.',
+        matchBasis: ['content_sha256'],
+      };
+    },
+    backend: {
+      updateUploadAttemptPhase: async (_jobId, _attemptId, payload) => {
+        backendCalls.push(payload.phase);
+        return {
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'reconcile',
+        };
+      },
+      reconcileUploadAttempt: async (_jobId, _attemptId, payload) => {
+        backendCalls.push('reconcile-result');
+        reconciliationRequest = payload;
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+      submitUploadAttemptResult: async () => {
+        throw new Error('typed mutation result endpoint must not handle reconciliation');
       },
     },
   });
 
-  await controller.dispatchPendingUploadJobs();
+  const outcome = await controller.executeUploadClaim(
+    makeUploadClaim({ execution_mode: 'reconcile' }),
+  );
 
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
+  assert.deepEqual(commandCalls, ['reconcile']);
+  assert.deepEqual(backendCalls, ['observation_started', 'reconcile-result']);
+  assert.equal(reconciliationRequest.outcome, 'matched');
+  assert.equal(reconciliationRequest.receipt.remote_book_id, '222');
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller consumes nested claim envelopes and caps each dispatch at eight', async () => {
+  let claimCalls = 0;
+  const receivedClaims = [];
+  const { controller } = makeController({
+    getPlatformState: async (platformId) => (
+      platformId === 'qidian' ? { connected: true } : {}
+    ),
+    backend: {
+      claimNextUploadJob: async () => {
+        claimCalls += 1;
+        const claim = makeUploadClaim({
+          job: {
+            job_id: 'job-' + claimCalls,
+            idempotency_key: 'publisher-job:v1:job-' + claimCalls,
+          },
+          attempt: { attempt_id: 'attempt-' + claimCalls },
+        });
+        return { found: true, claim };
+      },
+    },
+  });
+  controller.executeUploadClaim = async (claim) => {
+    receivedClaims.push(claim);
+    return { status: 'succeeded' };
+  };
+
+  const result = await controller.dispatchPendingUploadJobs();
+
+  assert.deepEqual(result, { found: true, handled: 8, truncated: true });
+  assert.equal(claimCalls, 8);
+  assert.equal(receivedClaims.length, 8);
+  assert.equal(receivedClaims[0].execution_mode, 'execute');
+  assert.equal(receivedClaims[0].job.job_id, 'job-1');
+  assert.equal(receivedClaims[0].attempt.attempt_id, 'attempt-1');
+  assert.equal(receivedClaims[7].job.job_id, 'job-8');
+});
+
+test('controller reports audit observations through the typed result endpoint', async () => {
+  const commandCalls = [];
+  const backendCalls = [];
+  let submittedResult;
+  const auditClaim = makeUploadClaim({
+    execution_mode: 'reconcile',
+    job: {
+      job_id: 'audit-job-1',
+      idempotency_key: 'publisher-job:v1:audit-job-1',
+      task_kind: 'audit_sync',
+      input: {
+        book_name: 'Test Book',
+        work_binding_id: 'binding-1',
+        upload_url: 'https://write.qq.com/portal/book/222',
+        remote_book_id: '222',
+      },
+    },
+    attempt: { attempt_id: 'audit-attempt-1' },
+  });
+  const { controller, journalStore } = makeController({
+    runUploadCommand: async () => {
+      commandCalls.push('upload');
+      throw new Error('chapter mutation must not run for audit observation');
+    },
+    runCoverUploadCommand: async () => {
+      commandCalls.push('cover');
+      throw new Error('cover mutation must not run for audit observation');
+    },
+    runAuditSyncCommand: async (_tabId, payload) => {
+      commandCalls.push('audit');
+      assert.equal(payload.remote_book_id, '222');
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/book/222',
+        message: 'Audit state synchronized.',
+        resultPayload: {
+          work: {
+            work_binding_id: 'binding-1',
+            remote_book_id: '222',
+            remote_url: 'https://write.qq.com/portal/book/222',
+            audit_state: 'under_review',
+            official_status: 'Review pending',
+            platform_message: 'Audit state synchronized.',
+          },
+          chapters: [{
+            chapter_number: 1,
+            chapter_title: 'Chapter 1',
+            remote_chapter_id: 'chapter-1',
+            remote_chapter_url: 'https://write.qq.com/portal/book/222/chapter/1',
+            publish_state: 'published',
+            audit_state: 'approved',
+            audit_reason: '',
+            word_count: 1200,
+          }],
+          cover: { cover_state: 'under_review' },
+          milestones: [{
+            milestone_type: 'first_review',
+            state: 'open',
+            message: 'Review started.',
+          }],
+        },
+      };
+    },
+    backend: {
+      updateUploadAttemptPhase: async (_jobId, _attemptId, payload) => {
+        backendCalls.push(payload.phase);
+        return {
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'reconcile',
+        };
+      },
+      submitUploadAttemptResult: async (_jobId, _attemptId, payload) => {
+        backendCalls.push('typed-result');
+        submittedResult = payload;
+        return { attempt_status: 'succeeded', job_status: 'succeeded' };
+      },
+      reconcileUploadAttempt: async () => {
+        throw new Error('audit observations must use the typed result endpoint');
+      },
+    },
+  });
+
+  const outcome = await controller.executeUploadClaim(auditClaim);
+
+  assert.deepEqual(commandCalls, ['audit']);
+  assert.deepEqual(backendCalls, ['observation_started', 'typed-result']);
+  assert.equal(submittedResult.outcome, 'succeeded');
+  assert.equal(submittedResult.details.work.audit_state, 'under_review');
+  assert.equal(submittedResult.details.chapters[0].audit_state, 'approved');
+  assert.deepEqual(Object.keys(submittedResult.details).sort(), [
+    'chapters',
+    'cover',
+    'milestones',
+    'work',
+  ]);
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
 });
 
 test('controller auto-dispatches claimed comment sync job for connected platform', async () => {
@@ -1281,7 +1472,6 @@ test('controller auto-dispatches claimed comment sync job for connected platform
     backend: {
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => {
         if (claimedOnce) {
           return { found: false, job: null };
@@ -1305,7 +1495,6 @@ test('controller auto-dispatches claimed comment sync job for connected platform
         syncedPayloads.push(payload);
         return { ok: true, inserted: 1, updated: 0 };
       },
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async (_jobId, payload) => {
         commentResults.push(payload);
         return { ok: true };
@@ -1322,237 +1511,6 @@ test('controller auto-dispatches claimed comment sync job for connected platform
   assert.equal(commentResults.at(-1).result_payload.inserted, 1);
 });
 
-test('controller resumes an already running claimed upload job for the same client', async () => {
-  let claimedOnce = false;
-  const { controller, uploadResults } = makeController({
-    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
-    getPlatformState: async (platformId) => (platformId === 'fanqie' ? { connected: true } : {}),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => {
-        if (claimedOnce) {
-          return { found: false, job: null };
-        }
-        claimedOnce = true;
-        return {
-          found: true,
-          job: {
-            job_id: 'job-running',
-            platform: 'fanqie',
-            display_name: '番茄小说',
-            status: 'running',
-            book_name: '我的一本书dasdgasdf',
-            chapter_title: '江潮入夜',
-            body: '正文',
-            upload_url: null,
-            publish: false,
-          },
-        };
-      },
-      getUploadJob: async () => {
-        throw new Error('should not fetch job again');
-      },
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.dispatchPendingUploadJobs();
-
-  assert.equal(uploadResults.length, 2);
-  assert.equal(uploadResults[0].status, 'running');
-  assert.equal(uploadResults[0].result_payload.phase, 'opened-upload-tab');
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-});
-
-test('controller records extension error code in upload job payload', async () => {
-  const uploadResults = [];
-  const { controller } = makeController({
-    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
-    runUploadCommand: async () => ({
-      ok: false,
-      currentUrl: 'https://fanqienovel.com/main/writer/create',
-      error: '番茄当前账号已达到当日创建作品上限。',
-      errorCode: 'create-book-rate-limited',
-      resultPayload: { platform_reason: 'daily-create-limit' },
-    }),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'fanqie',
-        display_name: '番茄小说',
-        book_name: '远潮夜灯',
-        chapter_title: '第一章 雨声抵港',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-        result_payload: {
-          create_if_missing: true,
-        },
-      }),
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(uploadResults.at(-1).status, 'failed');
-  assert.equal(uploadResults.at(-1).result_payload.error_code, 'create-book-rate-limited');
-  assert.equal(uploadResults.at(-1).result_payload.platform_reason, 'daily-create-limit');
-});
-
-test('controller retries page-not-ready upload errors before failing', async () => {
-  const uploadResults = [];
-  let attempts = 0;
-  const { controller } = makeController({
-    runUploadCommand: async () => {
-      attempts += 1;
-      return {
-        ok: attempts >= 3,
-        currentUrl: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/35512915704247809?entry=publish',
-        error: attempts >= 3 ? '' : '平台页面没有准备好，无法执行上传。',
-        message: attempts >= 3 ? '章节已进入平台审核。' : '',
-        resultPayload: attempts >= 3 ? { official_status: 'review-pending' } : {},
-      };
-    },
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => ({
-        job_id: 'job-1',
-        platform: 'qidian',
-        display_name: '起点小说',
-        book_name: '寒港夜汐',
-        chapter_title: '潮声过堤',
-        body: '正文',
-        upload_url: null,
-        publish: true,
-      }),
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.handleMessage(
-    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
-    { tab: { id: 100 } },
-  );
-
-  assert.equal(attempts, 3);
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-  assert.equal(uploadResults.at(-1).result_payload.official_status, 'review-pending');
-});
-
-test('controller dispatch caps claimed upload jobs per pass', async () => {
-  let claimed = 0;
-  const { controller, uploadResults } = makeController({
-    getPlatformState: async (platformId) => (platformId === 'qidian' ? { connected: true } : {}),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => {
-        claimed += 1;
-        return {
-          found: true,
-          job: {
-            job_id: `job-${claimed}`,
-            platform: 'qidian',
-            display_name: '起点小说',
-            status: 'running',
-            book_name: '测试书',
-            chapter_title: `第${claimed}章`,
-            body: '正文',
-            upload_url: null,
-            publish: false,
-          },
-        };
-      },
-      getUploadJob: async () => {
-        throw new Error('should not fetch job again');
-      },
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  const result = await controller.dispatchPendingUploadJobs();
-
-  assert.equal(result.truncated, true);
-  assert.equal(result.handled, 8);
-  assert.equal(claimed, 8);
-  assert.equal(uploadResults.filter((item) => item.status === 'succeeded').length, 8);
-});
-
-test('controller syncs and dispatches when strong cookies exist before saved connected state flips', async () => {
-  let synced = 0;
-  let claimed = 0;
-  const { controller, uploadResults } = makeController({
-    getPlatformState: async () => ({ connected: false }),
-    getCookies: async (platformId) => (
-      platformId === 'qidian'
-        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
-        : []
-    ),
-    backend: {
-      heartbeat: async () => ({ ok: true }),
-      syncBrowserSession: async () => {
-        synced += 1;
-        return { ok: true, cookie_count: 2 };
-      },
-      claimNextUploadJob: async () => {
-        claimed += 1;
-        if (claimed > 1) {
-          return { found: false, job: null };
-        }
-        return {
-          found: true,
-          job: {
-            job_id: 'job-cookie-signal',
-            platform: 'qidian',
-            display_name: '起点小说',
-            status: 'running',
-            book_name: '测试书',
-            chapter_title: '第一章',
-            body: '正文',
-            upload_url: null,
-            publish: false,
-          },
-        };
-      },
-      getUploadJob: async () => {
-        throw new Error('should not fetch job again');
-      },
-      updateUploadJobResult: async (_jobId, payload) => {
-        uploadResults.push(payload);
-        return { ok: true };
-      },
-    },
-  });
-
-  await controller.syncConnectedSessionsToBackend();
-  await controller.dispatchPendingUploadJobs();
-
-  assert.equal(synced, 2);
-  assert.equal(uploadResults.at(-1).status, 'succeeded');
-});
-
 test('controller heartbeat reports cookie summary without leaking full cookies', async () => {
   const payloads = [];
   const { controller } = makeController({
@@ -1562,11 +1520,6 @@ test('controller heartbeat reports cookie summary without leaking full cookies',
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     getCookies: async (platformId) => (
       platformId === 'qidian'
@@ -1593,11 +1546,6 @@ test('controller heartbeat uses inspected login page to override stale auth cook
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async (platformId) => (
       platformId === 'qidian'
@@ -1638,11 +1586,6 @@ test('controller heartbeat probes dashboard when login page has strong cookies',
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async (platformId) => (
       platformId === 'qidian'
@@ -2128,11 +2071,6 @@ test('controller probes Fanqie dashboard when strong cookies outlive stale login
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => null,
     ensurePlatformProbeInspection: async (platformId) => {
@@ -2235,11 +2173,7 @@ test('controller retries active login QR notification after a failed attempt', a
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
       getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
       notifyLoginQr: async (payload) => {
         notifyAttempts += 1;
@@ -2249,7 +2183,6 @@ test('controller retries active login QR notification after a failed attempt', a
         loginQrNotifications.push(payload);
         return { message: 'queued', dispatched: false };
       },
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
   });
@@ -2307,18 +2240,13 @@ test('controller throttles active login QR notification after backend accepts it
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
       getBrowserSession: async () => null,
-      claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
       notifyLoginQr: async (payload) => {
         notifyAttempts += 1;
         loginQrNotifications.push(payload);
         return { ok: true, dispatched: false, message: 'Discord login QR webhook is not configured.' };
       },
-      updateUploadJobResult: async () => ({ ok: true }),
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
   });
@@ -2354,11 +2282,6 @@ test('controller heartbeat does not display connected before page verification',
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => null,
     getPlatformState: async () => ({}),
@@ -2387,11 +2310,6 @@ test('controller heartbeat probes dashboard when cookie signal has no platform t
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => null,
     ensurePlatformProbeInspection: async (platformId) => {
@@ -2437,11 +2355,6 @@ test('controller heartbeat probes Fanqie dashboard when inspection is inconclusi
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async (platformId) => (
       platformId === 'fanqie'
@@ -2499,11 +2412,6 @@ test('controller heartbeat probes dashboard when platform inspection is not ok',
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => ({
       ok: false,
@@ -2551,11 +2459,6 @@ test('controller session sync carries unverified page evidence', async () => {
         payloads.push(payload);
         return { ok: true, cookie_count: 2 };
       },
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => null,
     getPlatformState: async () => ({}),
@@ -2586,11 +2489,6 @@ test('controller session sync uses dashboard probe before syncing cookie session
         payloads.push(payload);
         return { ok: true, cookie_count: 2 };
       },
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async () => null,
     ensurePlatformProbeInspection: async (platformId) => {
@@ -2636,11 +2534,6 @@ test('controller session sync probes Fanqie before syncing inconclusive cookie s
         payloads.push(payload);
         return { ok: true, cookie_count: 2 };
       },
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     inspectPlatformState: async (platformId) => (
       platformId === 'fanqie'
@@ -2697,11 +2590,6 @@ test('controller heartbeat does not keep sticky connected=true without current s
         return { ok: true };
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
     getPlatformState: async (platformId) => (
       platformId === 'qidian'
@@ -2754,11 +2642,6 @@ test('controller session sync sends only cookie fields needed by the backend upl
         payloads.push(payload);
         return { ok: true, cookie_count: 1 };
       },
-      claimNextUploadJob: async () => ({ found: false, job: null }),
-      getUploadJob: async () => {
-        throw new Error('unused');
-      },
-      updateUploadJobResult: async () => ({ ok: true }),
     },
   });
 

@@ -4,8 +4,12 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js?v=0.1.57';
-import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
+} from './platforms.js?v=0.1.58';
+import {
+  buildAttemptResult,
+  buildExecutionReceipt,
+  buildReconciliationRequest,
+} from './reconciliation.js?v=0.1.58';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
@@ -31,22 +35,6 @@ function loginQrNotificationsDisabled(result) {
   }
   const message = String(result?.message || '').toLowerCase();
   return message.includes('webhook is not configured');
-}
-
-function hasRecoverableQidianDraftUrl(platformId, url) {
-  if (String(platformId || '').trim() !== 'qidian') {
-    return false;
-  }
-  const text = String(url || '').trim();
-  if (!text.includes('write.qq.com') || !text.includes('/chaptertmp/')) {
-    return false;
-  }
-  const match = text.match(/(?:[?#&]|#)ccid=([^&#]+)/);
-  if (!match) {
-    return false;
-  }
-  const ccid = decodeURIComponent(match[1] || '').trim();
-  return /^\d{6,}$/.test(ccid) && ccid !== '-1';
 }
 
 function isLoginRequiredError(value) {
@@ -91,9 +79,6 @@ export class PublisherExtensionController {
     }
     if (action === 'open-login') {
       return this.openLogin(String(payload.platform || '').trim(), sender?.tab?.id || 0);
-    }
-    if (action === 'execute-upload-job') {
-      return this.executeUploadJob(String(payload.jobId || '').trim(), sender?.tab?.id || 0);
     }
     throw new Error(`Unsupported action: ${action}`);
   }
@@ -166,14 +151,6 @@ export class PublisherExtensionController {
     };
   }
 
-  async executeUploadJob(jobId, originTabId) {
-    if (!jobId) {
-      throw new Error('缺少上传任务 ID。');
-    }
-    const job = await this.deps.backend.getUploadJob(jobId);
-    return this.executeUploadJobPayload(job, originTabId);
-  }
-
   async executeCommentSyncJob(jobId, originTabId) {
     if (!jobId) {
       throw new Error('缺少评论同步任务 ID。');
@@ -191,10 +168,13 @@ export class PublisherExtensionController {
   }
 
   linkExecutionTab(tabId, openerTabId) {
-    if (!tabId || !openerTabId) {
+    if (!tabId) {
       return;
     }
-    const taskKey = this.executionTabToTask.get(openerTabId);
+    let taskKey = this.executionTabToTask.get(openerTabId);
+    if (!taskKey && this.executionTasks.size === 1) {
+      [taskKey] = this.executionTasks.keys();
+    }
     if (!taskKey) {
       return;
     }
@@ -277,403 +257,438 @@ export class PublisherExtensionController {
     return false;
   }
 
-  async runUploadWithPageReadyRetries(tabId, platformId, uploadPayload) {
-    let result = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      result = await this.deps.runUploadCommand(tabId, uploadPayload);
-      if (result.ok || !String(result.error || '').includes('平台页面没有准备好')) {
-        return result;
-      }
-      await this.waitForOpenedUploadTab(tabId, platformId, 8000 + (attempt * 4000));
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 1500 + (attempt * 1000)));
+  _requireUploadJournal() {
+    if (!this.deps.uploadJournal) {
+      throw new Error('Upload journal is not configured.');
     }
-    return result || {
-      ok: false,
-      error: '平台页面没有准备好，无法执行上传。',
-      currentUrl: '',
+    return this.deps.uploadJournal;
+  }
+
+  _attemptCoordinates(entry) {
+    const job = entry?.job || {};
+    const attempt = entry?.attempt || {};
+    return {
+      job,
+      attempt,
+      jobId: String(job.job_id || ''),
+      attemptId: String(attempt.attempt_id || ''),
+      fence: {
+        client_id: String(entry?.client_id || ''),
+        lease_epoch: Number(attempt.lease_epoch || 0),
+      },
     };
   }
 
-  async executeUploadJobPayload(job, originTabId = 0) {
-    const taskKind = String(job?.task_kind || 'chapter_upload').trim() || 'chapter_upload';
-    if (taskKind === 'cover_upload') {
-      return this.executeCoverUploadJobPayload(job, originTabId);
-    }
-    if (taskKind === 'audit_sync') {
-      return this.executeAuditSyncJobPayload(job, originTabId);
-    }
-    return this.executeChapterUploadJobPayload(job, originTabId);
+  _isStaleAttemptError(error) {
+    return ['stale_attempt', 'lease_expired'].includes(String(error?.code || ''));
   }
 
-  async executeSimplePublisherTaskJobPayload(job, originTabId = 0, options = {}) {
-    const clientId = await this.deps.getClientId();
-    const adapter = getPlatformAdapter(job.platform);
-    const taskKind = String(options.taskKind || job.task_kind || '').trim();
-    const command = options.command;
-    if (typeof command !== 'function') {
-      throw new Error(`缺少 ${taskKind} 执行命令。`);
-    }
-    const taskKey = `${taskKind}:${job.job_id}`;
-    const displayAction = String(options.displayAction || '发布任务');
-    const initialJob = Object.prototype.hasOwnProperty.call(job || {}, 'status') ? job : await this.deps.backend.getUploadJob(job.job_id);
-
-    if (initialJob.abort_requested || initialJob.status === 'terminating' || initialJob.status === 'cancelled') {
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'cancelled',
-        message: `${displayAction}已取消。`,
-        current_url: '',
-        error: '',
-        result_payload: { task_kind: taskKind, phase: 'abort-before-start' },
-      });
-      return { message: `${displayAction}已取消。` };
-    }
-
-    if (job.status !== 'running') {
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'running',
-        message: `${adapter.displayName} ${displayAction}已被浏览器扩展接管。`,
-        current_url: '',
-        error: '',
-        result_payload: { task_kind: taskKind, phase: 'claimed' },
-      });
-    }
-    await this.deps.notifyPage(originTabId, 'upload-status', {
-      jobId: job.job_id,
-      status: 'running',
-      platform: job.platform,
-      message: `${adapter.displayName} ${displayAction}执行中。`,
-    });
-
-    try {
-      const payload = job.result_payload || {};
-      const targetUrl = payload.remote_url || job.upload_url || adapter.dashboardUrl || adapter.publishUrl;
-      const tab = await this.deps.openUploadTab(targetUrl);
-      this.registerExecutionTask(taskKey, tab.tabId);
-      await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
-      const openedTab = await this.deps.getTab(tab.tabId);
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'running',
-        message: `${adapter.displayName} 正在打开${displayAction}页面。`,
-        current_url: String(openedTab?.url || targetUrl || ''),
-        error: '',
-        result_payload: { ...payload, task_kind: taskKind, phase: 'opened-upload-tab' },
-      });
-      const commandPayload = {
-        platform: job.platform,
-        display_name: job.display_name,
-        book_name: job.book_name,
-        ...(payload || {}),
-      };
-      const result = await command(tab.tabId, commandPayload);
-      const finalStatus = result.ok ? 'succeeded' : 'failed';
-      const cleanupPayload = result.ok ? await this.cleanupExecutionTabs(taskKey) : { attempted: false };
-      if (!result.ok) {
-        this.forgetExecutionTask(taskKey);
-      }
-      const resultPayload = {
-        ...(result.resultPayload || {}),
-        ...(result.errorCode ? { error_code: result.errorCode } : {}),
-        task_kind: taskKind,
-        tab_cleanup: cleanupPayload,
-      };
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: finalStatus,
-        message: result.message || (result.ok ? `${displayAction}已完成。` : `${displayAction}失败。`),
-        current_url: result.currentUrl || '',
-        error: result.error || '',
-        result_payload: resultPayload,
-      });
-      await this.deps.notifyPage(originTabId, 'upload-status', {
-        jobId: job.job_id,
-        status: finalStatus,
-        platform: job.platform,
-        message: result.message || (result.ok ? `${displayAction}已完成。` : `${displayAction}失败。`),
-      });
-      return {
-        message: result.ok ? `浏览器扩展已完成${displayAction}。` : `${displayAction}失败，请查看任务状态。`,
-      };
-    } catch (error) {
-      this.forgetExecutionTask(taskKey);
-      const message = error instanceof Error ? error.message : String(error);
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'failed',
-        message: `浏览器扩展执行${displayAction}时失败。`,
-        current_url: '',
-        error: message,
-        result_payload: { task_kind: taskKind, phase: 'controller-error' },
-      });
-      await this.deps.notifyPage(originTabId, 'upload-status', {
-        jobId: job.job_id,
-        status: 'failed',
-        platform: job.platform,
-        message,
-      });
-      throw error;
-    }
+  _attemptMustStop(response) {
+    return Boolean(response?.abort_requested || response?.next_action === 'stop');
   }
 
-  async executeCoverUploadJobPayload(job, originTabId = 0) {
-    return this.executeSimplePublisherTaskJobPayload(job, originTabId, {
-      taskKind: 'cover_upload',
-      displayAction: '封面上传任务',
-      command: this.deps.runCoverUploadCommand,
-    });
+  async _callAttemptBackend(entry, method, payload = {}) {
+    const { jobId, attemptId, fence } = this._attemptCoordinates(entry);
+    return this.deps.backend[method](jobId, attemptId, { ...fence, ...payload });
   }
 
-  async executeAuditSyncJobPayload(job, originTabId = 0) {
-    return this.executeSimplePublisherTaskJobPayload(job, originTabId, {
-      taskKind: 'audit_sync',
-      displayAction: '审核同步任务',
-      command: this.deps.runAuditSyncCommand,
-    });
-  }
-
-  async executeChapterUploadJobPayload(job, originTabId = 0) {
-    const clientId = await this.deps.getClientId();
-    const adapter = getPlatformAdapter(job.platform);
-    const taskKey = `upload:${job.job_id}`;
-    const refreshJob = async () => {
-      if (typeof this.deps.backend?.getUploadJob !== 'function') {
-        return job;
-      }
-      try {
-        const latest = await this.deps.backend.getUploadJob(job.job_id);
-        return latest && latest.job_id ? { ...job, ...latest } : job;
-      } catch (_error) {
-        return job;
+  _startUploadAttemptHeartbeat(entry, taskKey) {
+    const intervalSeconds = Math.max(
+      1,
+      Number(entry?.attempt?.heartbeat_interval_seconds || 30),
+    );
+    let active = true;
+    let blocked = false;
+    let blockReason = '';
+    let timerId = null;
+    const stopExecution = async (reason) => {
+      blocked = true;
+      blockReason = reason;
+      if (taskKey) {
+        await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
       }
     };
-    const cancelUpload = async (phase, currentUrl = '') => {
-      this.forgetExecutionTask(taskKey);
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'cancelled',
-        message: '浏览器扩展已响应终止请求，上传任务已取消。',
-        current_url: currentUrl,
-        error: '',
-        result_payload: { phase },
-      });
-      await this.deps.notifyPage(originTabId, 'upload-status', {
-        jobId: job.job_id,
-        status: 'cancelled',
-        platform: job.platform,
-        message: '上传任务已取消。',
-      });
-      return { message: '浏览器扩展已取消上传任务。' };
-    };
-    const createAbortWatcher = (pollMs = 1000) => {
-      let active = true;
-      let timerId = null;
-      let resumeWait = null;
-      const promise = new Promise((resolve) => {
-        const loop = async () => {
-          while (active) {
-            const latestJob = await refreshJob();
-            if (latestJob.abort_requested || latestJob.status === 'terminating' || latestJob.status === 'cancelled') {
-              active = false;
-              await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
-              resolve({
-                __forwinAborted: true,
-                currentUrl: '',
-              });
-              return;
-            }
-            await new Promise((resume) => {
-              resumeWait = resume;
-              timerId = globalThis.setTimeout(() => {
-                timerId = null;
-                const wake = resumeWait;
-                resumeWait = null;
-                if (wake) {
-                  wake();
-                }
-              }, pollMs);
-            });
+    const schedule = () => {
+      if (!active || blocked) {
+        return;
+      }
+      timerId = globalThis.setTimeout(async () => {
+        try {
+          const response = await this._callAttemptBackend(entry, 'heartbeatUploadAttempt');
+          if (this._attemptMustStop(response)) {
+            await stopExecution('abort-requested');
           }
-        };
-        loop().catch(() => resolve({ __forwinAbortWatcherFailed: true }));
-      });
-      return {
-        promise,
-        stop() {
-          active = false;
-          if (timerId) {
-            globalThis.clearTimeout(timerId);
-            timerId = null;
-          }
-          if (resumeWait) {
-            const wake = resumeWait;
-            resumeWait = null;
-            wake();
-          }
-        },
-      };
-    };
-    const initialJob = Object.prototype.hasOwnProperty.call(job || {}, 'status') ? job : await refreshJob();
-    if (initialJob.abort_requested || initialJob.status === 'terminating' || initialJob.status === 'cancelled') {
-      return cancelUpload('abort-before-start');
-    }
-
-    if (job.status !== 'running') {
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'running',
-        message: `${adapter.displayName} 上传任务已被浏览器扩展接管。`,
-        current_url: '',
-        error: '',
-        result_payload: { phase: 'claimed' },
-      });
-    }
-    await this.deps.notifyPage(originTabId, 'upload-status', {
-      jobId: job.job_id,
-      status: 'running',
-      platform: job.platform,
-      message: `${adapter.displayName} 上传任务执行中。`,
-    });
-
-    try {
-      const targetUrl = job.upload_url || adapter.publishUrl;
-      const tab = await this.deps.openUploadTab(targetUrl);
-      this.registerExecutionTask(taskKey, tab.tabId);
-      await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
-      const openedTab = await this.deps.getTab(tab.tabId);
-      const executionTimeoutMs = uploadExecutionTimeoutMs(job.platform);
-      const latestJob = await refreshJob();
-      if (latestJob.abort_requested || latestJob.status === 'terminating' || latestJob.status === 'cancelled') {
-        await this.cleanupExecutionTabs(taskKey);
-        return cancelUpload('abort-before-execute', String(openedTab?.url || targetUrl || ''));
-      }
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'running',
-        message: `${adapter.displayName} 正在打开平台编辑页。`,
-        current_url: String(openedTab?.url || targetUrl || ''),
-        error: '',
-        result_payload: {
-          ...(job.result_payload || {}),
-          phase: 'opened-upload-tab',
-          upload_execution_timeout_ms: executionTimeoutMs,
-        },
-      });
-      const uploadPayload = {
-        platform: job.platform,
-        display_name: job.display_name,
-        book_name: job.book_name,
-        chapter_title: job.chapter_title,
-        body: job.body,
-        publish: job.publish,
-        create_if_missing: Boolean(job.result_payload?.create_if_missing),
-        book_meta: job.result_payload?.book_meta || null,
-      };
-      const abortWatcher = createAbortWatcher(1000);
-      let timeoutId = null;
-      const timedResult = await Promise.race([
-        this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload)
-          .catch((error) => ({ __forwinUploadError: error })),
-        new Promise((resolve) => {
-          timeoutId = globalThis.setTimeout(
-            () => resolve({ __forwinTimedOut: true }),
-            executionTimeoutMs,
+        } catch (error) {
+          await stopExecution(
+            Number(error?.status || 0) === 409
+              ? 'attempt-fence-rejected'
+              : 'attempt-heartbeat-failed',
           );
-        }),
-        abortWatcher.promise,
-      ]);
-      abortWatcher.stop();
-      if (timeoutId) {
-        globalThis.clearTimeout(timeoutId);
-      }
-      if (timedResult?.__forwinAborted) {
-        return cancelUpload('abort-during-execute', String((await this.deps.getTab(tab.tabId))?.url || ''));
-      }
-      if (timedResult?.__forwinUploadError) {
-        throw timedResult.__forwinUploadError;
-      }
-      let result = timedResult;
-      if (timedResult?.__forwinTimedOut) {
-        const timeoutUrl = String((await this.deps.getTab(tab.tabId))?.url || '');
-        result = hasRecoverableQidianDraftUrl(job.platform, timeoutUrl)
-          ? {
-            ok: true,
-            currentUrl: timeoutUrl,
-            message: '章节草稿已保存到起点。',
-            resultPayload: {
-              phase: 'execute-upload-timeout-recovered',
-              mode: 'draft',
-              official_status: 'drafted',
-              verified_via: 'qidian-real-ccid-timeout-recovery',
-              timeout_ms: executionTimeoutMs,
-            },
-          }
-          : {
-          ok: false,
-          currentUrl: timeoutUrl,
-          error: '浏览器扩展执行超时，未能完成平台章节流程。',
-          errorCode: 'extension-upload-timeout',
-          resultPayload: {
-            phase: 'execute-upload-timeout',
-            timeout_ms: executionTimeoutMs,
-          },
-        };
-      }
-      const finalStatus = result.ok ? 'succeeded' : 'failed';
-      const cleanupPayload = result.ok ? await this.cleanupExecutionTabs(taskKey) : { attempted: false };
-      if (!result.ok) {
-        this.forgetExecutionTask(taskKey);
-      }
-      const resultPayload = {
-        ...(result.resultPayload || {}),
-        ...(result.errorCode ? { error_code: result.errorCode } : {}),
-        tab_cleanup: cleanupPayload,
-      };
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: finalStatus,
-        message: result.message || (result.ok ? '上传已完成。' : '上传失败。'),
-        current_url: result.currentUrl || '',
-        error: result.error || '',
-        result_payload: resultPayload,
-      });
+        } finally {
+          schedule();
+        }
+      }, intervalSeconds * 1000);
+      timerId?.unref?.();
+    };
+    schedule();
+    return {
+      isBlocked: () => blocked,
+      reason: () => blockReason,
+      stop() {
+        active = false;
+        if (timerId) {
+          globalThis.clearTimeout(timerId);
+          timerId = null;
+        }
+      },
+    };
+  }
 
-      await this.deps.setPlatformState(job.platform, {
-        connected: finalStatus === 'succeeded' ? true : !String(result.currentUrl || '').includes('login'),
-        loginMethod: 'scan',
-        lastError: result.error || '',
-      });
-      await this.sendHeartbeat();
-      await this.syncConnectedSessionsToBackend();
-      await this.deps.notifyPage(originTabId, 'upload-status', {
-        jobId: job.job_id,
-        status: finalStatus,
-        platform: job.platform,
-        message: result.message || (result.ok ? '上传已完成。' : '上传失败。'),
-      });
-      return {
-        message: result.ok ? '浏览器扩展已完成上传。' : '上传失败，请查看任务状态。',
-      };
-    } catch (error) {
-      this.forgetExecutionTask(taskKey);
-      const message = error instanceof Error ? error.message : String(error);
-      await this.deps.backend.updateUploadJobResult(job.job_id, {
-        client_id: clientId,
-        status: 'failed',
-        message: '浏览器扩展执行上传任务时失败。',
-        current_url: '',
-        error: message,
-        result_payload: { phase: 'controller-error' },
-      });
-      await this.deps.notifyPage(originTabId, 'upload-status', {
-        jobId: job.job_id,
-        status: 'failed',
-        platform: job.platform,
-        message,
-      });
-      throw error;
+  _uploadTargetUrl(job) {
+    const adapter = getPlatformAdapter(job.platform);
+    return String(
+      job.input?.upload_url
+      || job.input?.remote_url
+      || adapter.dashboardUrl
+      || adapter.publishUrl
+      || '',
+    );
+  }
+
+  async _notifyUploadAttempt(originTabId, entry, status, message) {
+    await this.deps.notifyPage(originTabId, 'upload-status', {
+      jobId: entry.job.job_id,
+      attemptId: entry.attempt.attempt_id,
+      status,
+      platform: entry.job.platform,
+      message,
+    });
+  }
+
+  async _submitStoredResult(entry) {
+    if (entry.execution_mode === 'reconcile' && entry.job.task_kind !== 'audit_sync') {
+      return this._callAttemptBackend(entry, 'reconcileUploadAttempt', entry.result);
     }
+    return this._callAttemptBackend(entry, 'submitUploadAttemptResult', entry.result);
+  }
+
+  async _markJournalAcknowledged(attemptId) {
+    const journal = this._requireUploadJournal();
+    await journal.markAcknowledged(attemptId);
+    await journal.compact();
+  }
+
+  async _saveJournalResult(attemptId, result) {
+    const journal = this._requireUploadJournal();
+    await journal.saveResult(attemptId, result);
+    return journal.get(attemptId);
+  }
+
+  async _replayJournalEntry(rawEntry) {
+    const journal = this._requireUploadJournal();
+    let entry = await journal.get(rawEntry.attempt.attempt_id);
+    if (entry.receipt && !entry.result) {
+      entry = await this._saveJournalResult(
+        entry.attempt.attempt_id,
+        buildAttemptResult({
+          job: entry.job,
+          result: {
+            ok: true,
+            message: 'Durable publisher receipt recovered after extension restart.',
+            currentUrl: entry.receipt.remote_url,
+            resultPayload: entry.job.task_kind === 'cover_upload'
+              ? {
+                cover_state: 'uploaded',
+                platform_message: entry.receipt.evidence?.platform_message || '',
+              }
+              : {},
+          },
+        }),
+      );
+    }
+    if (entry.receipt) {
+      const receiptState = await this._callAttemptBackend(
+        entry,
+        'submitUploadReceipt',
+        entry.receipt,
+      );
+      if (receiptState?.job_status === 'succeeded' && receiptState?.attempt_status !== 'running') {
+        await this._markJournalAcknowledged(entry.attempt.attempt_id);
+        return { acknowledged: true, recovered_by: 'late_receipt' };
+      }
+    }
+    if (!entry.result) {
+      if (entry.execution_mode === 'reconcile' && entry.job.task_kind !== 'audit_sync') {
+        try {
+          await this._callAttemptBackend(entry, 'updateUploadAttemptPhase', {
+            phase: 'observation_started',
+            current_url: '',
+          });
+        } catch (error) {
+          if (!this._isStaleAttemptError(error)) {
+            throw error;
+          }
+          await this._saveJournalResult(
+            entry.attempt.attempt_id,
+            buildReconciliationRequest({
+              job: entry.job,
+              observedAt: new Date().toISOString(),
+              observation: {
+                outcome: 'indeterminate',
+                reason: 'Backend already retired the local reconciliation fence.',
+              },
+            }),
+          );
+          await this._markJournalAcknowledged(entry.attempt.attempt_id);
+          return { acknowledged: true, recovered_by: 'stale_reconciliation_fence' };
+        }
+        entry = await this._saveJournalResult(
+          entry.attempt.attempt_id,
+          buildReconciliationRequest({
+            job: entry.job,
+            observedAt: new Date().toISOString(),
+            observation: {
+              outcome: 'indeterminate',
+              reason: 'Extension worker restarted before read-only evidence was persisted.',
+            },
+          }),
+        );
+      } else {
+        entry = await this._saveJournalResult(
+          entry.attempt.attempt_id,
+          buildAttemptResult({
+            job: entry.job,
+            result: {
+              ok: false,
+              errorCode: 'extension-worker-restarted',
+              error: 'Extension worker restarted before a durable remote receipt was recorded.',
+            },
+          }),
+        );
+      }
+    }
+    try {
+      await this._submitStoredResult(entry);
+    } catch (error) {
+      if (!this._isStaleAttemptError(error)) {
+        throw error;
+      }
+    }
+    await this._markJournalAcknowledged(entry.attempt.attempt_id);
+    return { acknowledged: true, recovered_by: 'result_replay' };
+  }
+
+  async syncUploadJournal() {
+    if (!this.deps.uploadJournal) {
+      return { skipped: true, handled: 0 };
+    }
+    const journal = this._requireUploadJournal();
+    await journal.load();
+    const entries = await journal.pending();
+    let handled = 0;
+    for (const entry of entries) {
+      await this._replayJournalEntry(entry);
+      handled += 1;
+    }
+    await journal.compact();
+    return { handled };
+  }
+
+  async _runMutationCommand(tabId, job) {
+    const command = job.task_kind === 'cover_upload'
+      ? this.deps.runCoverUploadCommand
+      : this.deps.runUploadCommand;
+    if (typeof command !== 'function') {
+      throw new Error(`Missing browser command for ${job.task_kind}.`);
+    }
+    return command(tabId, {
+      platform: job.platform,
+      task_kind: job.task_kind,
+      content_sha256: job.content_sha256,
+      ...(job.input || {}),
+    }).catch((error) => ({
+      ok: false,
+      errorCode: 'extension-command-failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+
+  async _executeMutatingClaim(entry, originTabId) {
+    const journal = this._requireUploadJournal();
+    const taskKey = `upload:${entry.job.job_id}:${entry.attempt.attempt_id}`;
+    const heartbeat = this._startUploadAttemptHeartbeat(entry, taskKey);
+    try {
+      await this._notifyUploadAttempt(originTabId, entry, 'running', '浏览器扩展正在执行发布任务。');
+      const tab = await this.deps.openUploadTab(this._uploadTargetUrl(entry.job));
+      this.registerExecutionTask(taskKey, tab.tabId);
+      await this.waitForOpenedUploadTab(tab.tabId, entry.job.platform, 8000);
+      const opened = await this.deps.getTab(tab.tabId);
+      await journal.markMutationStarted(entry.attempt.attempt_id);
+      entry = await journal.get(entry.attempt.attempt_id);
+      const phaseState = await this._callAttemptBackend(entry, 'updateUploadAttemptPhase', {
+        phase: 'mutation_started',
+        current_url: String(opened?.url || ''),
+      });
+      if (this._attemptMustStop(phaseState) || heartbeat.isBlocked()) {
+        const cancelled = buildAttemptResult({
+          job: entry.job,
+          result: {
+            outcome: 'cancelled',
+            message: 'Publisher attempt stopped before the browser mutation command.',
+            currentUrl: String(opened?.url || ''),
+          },
+        });
+        entry = await this._saveJournalResult(entry.attempt.attempt_id, cancelled);
+        await this._submitStoredResult(entry);
+        await this._markJournalAcknowledged(entry.attempt.attempt_id);
+        return { status: 'cancelled' };
+      }
+
+      let platformResult = await this._runMutationCommand(tab.tabId, entry.job);
+      if (heartbeat.isBlocked() && !platformResult?.ok) {
+        throw new Error(`Publisher attempt stopped after mutation began: ${heartbeat.reason()}`);
+      }
+      if (platformResult?.ok) {
+        try {
+          const receipt = buildExecutionReceipt({
+            job: entry.job,
+            result: platformResult,
+            observedAt: new Date().toISOString(),
+          });
+          await journal.saveReceipt(entry.attempt.attempt_id, receipt);
+        } catch (error) {
+          platformResult = {
+            ok: false,
+            currentUrl: platformResult?.currentUrl || '',
+            errorCode: 'receipt-evidence-missing',
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+      const result = buildAttemptResult({ job: entry.job, result: platformResult });
+      await journal.saveResult(entry.attempt.attempt_id, result);
+      entry = await journal.get(entry.attempt.attempt_id);
+      await this.cleanupExecutionTabs(taskKey);
+      if (entry.receipt) {
+        await this._callAttemptBackend(entry, 'submitUploadReceipt', entry.receipt);
+      }
+      const finalState = await this._submitStoredResult(entry);
+      await this._markJournalAcknowledged(entry.attempt.attempt_id);
+      await this._notifyUploadAttempt(
+        originTabId,
+        entry,
+        finalState?.job_status || result.outcome,
+        result.message || result.error_message,
+      );
+      return { status: finalState?.job_status || result.outcome };
+    } finally {
+      heartbeat.stop();
+      await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
+    }
+  }
+
+  async _executeAuditClaim(entry, originTabId) {
+    const taskKey = `audit:${entry.job.job_id}:${entry.attempt.attempt_id}`;
+    const heartbeat = this._startUploadAttemptHeartbeat(entry, taskKey);
+    try {
+      const tab = await this.deps.openUploadTab(this._uploadTargetUrl(entry.job));
+      this.registerExecutionTask(taskKey, tab.tabId);
+      await this.waitForOpenedUploadTab(tab.tabId, entry.job.platform, 8000);
+      const opened = await this.deps.getTab(tab.tabId);
+      const phaseState = await this._callAttemptBackend(entry, 'updateUploadAttemptPhase', {
+        phase: 'observation_started',
+        current_url: String(opened?.url || ''),
+      });
+      if (this._attemptMustStop(phaseState) || heartbeat.isBlocked()) {
+        throw new Error('Audit attempt was stopped before observation.');
+      }
+      const platformResult = await this.deps.runAuditSyncCommand(tab.tabId, {
+        platform: entry.job.platform,
+        task_kind: entry.job.task_kind,
+        content_sha256: entry.job.content_sha256,
+        ...(entry.job.input || {}),
+      });
+      const result = buildAttemptResult({ job: entry.job, result: platformResult });
+      entry = await this._saveJournalResult(entry.attempt.attempt_id, result);
+      const finalState = await this._submitStoredResult(entry);
+      await this._markJournalAcknowledged(entry.attempt.attempt_id);
+      if (result.outcome === 'succeeded') {
+        await this.cleanupExecutionTabs(taskKey);
+      }
+      await this._notifyUploadAttempt(
+        originTabId,
+        entry,
+        finalState?.job_status || result.outcome,
+        result.message || result.error_message,
+      );
+      return { status: finalState?.job_status || result.outcome };
+    } finally {
+      heartbeat.stop();
+      await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
+    }
+  }
+
+  async _executeReconciliationClaim(entry, originTabId) {
+    const taskKey = `reconcile:${entry.job.job_id}:${entry.attempt.attempt_id}`;
+    const heartbeat = this._startUploadAttemptHeartbeat(entry, taskKey);
+    try {
+      const tab = await this.deps.openUploadTab(this._uploadTargetUrl(entry.job));
+      this.registerExecutionTask(taskKey, tab.tabId);
+      await this.waitForOpenedUploadTab(tab.tabId, entry.job.platform, 8000);
+      const opened = await this.deps.getTab(tab.tabId);
+      const phaseState = await this._callAttemptBackend(entry, 'updateUploadAttemptPhase', {
+        phase: 'observation_started',
+        current_url: String(opened?.url || ''),
+      });
+      if (this._attemptMustStop(phaseState) || heartbeat.isBlocked()) {
+        throw new Error('Reconciliation attempt was stopped before observation.');
+      }
+      const observation = await this.deps.runReconciliationCommand(tab.tabId, {
+        platform: entry.job.platform,
+        task_kind: entry.job.task_kind,
+        content_sha256: entry.job.content_sha256,
+        ...(entry.job.input || {}),
+      });
+      const request = buildReconciliationRequest({
+        job: entry.job,
+        observation,
+        observedAt: new Date().toISOString(),
+      });
+      entry = await this._saveJournalResult(entry.attempt.attempt_id, request);
+      const finalState = await this._submitStoredResult(entry);
+      await this._markJournalAcknowledged(entry.attempt.attempt_id);
+      await this.cleanupExecutionTabs(taskKey);
+      await this._notifyUploadAttempt(
+        originTabId,
+        entry,
+        finalState?.job_status || request.outcome,
+        request.error_message || `只读核对结果：${request.outcome}`,
+      );
+      return { status: finalState?.job_status || request.outcome };
+    } finally {
+      heartbeat.stop();
+      await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
+    }
+  }
+
+  async executeUploadClaim(claim, originTabId = 0) {
+    if (!claim?.job?.job_id || !claim?.attempt?.attempt_id) {
+      throw new Error('Upload claim is missing its job or attempt fence.');
+    }
+    const journal = this._requireUploadJournal();
+    const clientId = await this.deps.getClientId();
+    let entry = await journal.recordClaim({ clientId, claim });
+    entry = entry || await journal.get(claim.attempt.attempt_id);
+    if (entry.local_phase !== 'claimed' || entry.receipt || entry.result) {
+      return this._replayJournalEntry(entry);
+    }
+    if (entry.job.task_kind === 'audit_sync') {
+      return this._executeAuditClaim(entry, originTabId);
+    }
+    if (entry.execution_mode === 'reconcile') {
+      return this._executeReconciliationClaim(entry, originTabId);
+    }
+    return this._executeMutatingClaim(entry, originTabId);
   }
 
   async executeCommentSyncJobPayload(job, originTabId = 0) {
@@ -1048,10 +1063,31 @@ export class PublisherExtensionController {
   }
 
   async _dispatchPendingUploadJobs() {
-    return this._dispatchPendingJobs({
-      claimJob: (payload) => this.deps.backend.claimNextUploadJob(payload),
-      executeJob: (job) => this.executeUploadJobPayload(job, 0),
-    });
+    const settings = await this.deps.getSettings();
+    if (!settings.backendBaseUrl || !settings.apiKey) {
+      return { skipped: true };
+    }
+    await this.syncUploadJournal();
+    const clientId = await this.deps.getClientId();
+    const connectedPlatforms = await this._collectConnectedPlatforms();
+    if (!connectedPlatforms.length) {
+      return { skipped: true };
+    }
+
+    let handled = 0;
+    const MAX_JOBS_PER_DISPATCH = 8;
+    while (handled < MAX_JOBS_PER_DISPATCH) {
+      const claimed = await this.deps.backend.claimNextUploadJob({
+        client_id: clientId,
+        connected_platforms: connectedPlatforms,
+      });
+      if (!claimed?.found || !claimed.claim) {
+        return handled ? { found: true, handled } : { found: false };
+      }
+      handled += 1;
+      await this.executeUploadClaim(claimed.claim, 0);
+    }
+    return { found: true, handled, truncated: true };
   }
 
   async _dispatchPendingCommentSyncJobs() {

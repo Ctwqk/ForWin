@@ -1,12 +1,13 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.57';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.58';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
-import { getPlatformAdapter } from './lib/platforms.js?v=0.1.57';
+import { getPlatformAdapter } from './lib/platforms.js?v=0.1.58';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
+import { createUploadJournal } from './lib/upload-journal.js?v=0.1.58';
 import {
   assertDebuggerCapability,
   extensionCapabilities,
@@ -24,6 +25,7 @@ const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const LOGIN_QR_THROTTLE_KEY = 'forwinPublisherLoginQrThrottle';
 const LOGIN_QR_DISABLED_KEY = 'forwinPublisherLoginQrDisabled';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
+const UPLOAD_JOURNAL_KEY = 'forwinPublisherUploadJournalV1';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
@@ -46,6 +48,11 @@ async function getStorageValue(key, fallbackValue) {
 async function setStorageValue(key, value) {
   await wrapCall(extensionApi.storage.local, 'set', { [key]: value });
 }
+
+const uploadJournal = createUploadJournal({
+  read: () => getStorageValue(UPLOAD_JOURNAL_KEY, null),
+  write: (snapshot) => setStorageValue(UPLOAD_JOURNAL_KEY, snapshot),
+});
 
 async function getBackgroundStatus() {
   return await getStorageValue(BACKGROUND_STATUS_KEY, {});
@@ -679,24 +686,6 @@ async function inspectQidianEditorState(tabId) {
   }
 }
 
-async function inspectPlatformAgentDebug(tabId) {
-  if (!tabId) {
-    return { ok: false, debug: null, currentUrl: '' };
-  }
-  const ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
-  if (!ready) {
-    return { ok: false, debug: null, currentUrl: '' };
-  }
-  try {
-    return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-      channel: PLATFORM_AGENT_CHANNEL,
-      action: 'inspect-platform-agent-debug',
-    }) || { ok: false, debug: null, currentUrl: '' };
-  } catch (_error) {
-    return { ok: false, debug: null, currentUrl: '' };
-  }
-}
-
 async function probePlatformAgentResponsive(tabId) {
   if (!tabId) {
     return false;
@@ -744,6 +733,65 @@ async function sendPlatformAgentMessage(
       }, timeoutMs);
     }),
   ]);
+}
+
+async function sendMutatingPlatformAgentMessage(
+  tabId,
+  action,
+  payload,
+  timeoutMs,
+  options = TOP_FRAME_MESSAGE_OPTIONS,
+) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      resolve(value);
+    };
+    timeoutId = globalThis.setTimeout(async () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      await closeTab(tabId).catch(() => {});
+      resolve({
+        ok: false,
+        error: '平台写入命令超时，远端结果必须只读对账。',
+        errorCode: 'platform-mutation-timeout',
+        currentUrl: '',
+        resultPayload: {
+          phase: 'mutation-message-timeout',
+          action,
+        },
+      });
+    }, timeoutMs);
+    wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+      channel: PLATFORM_AGENT_CHANNEL,
+      action,
+      payload,
+    }, options).then(finish, (error) => {
+      finish({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error || ''),
+        errorCode: 'platform-mutation-disconnected',
+        currentUrl: '',
+        resultPayload: {
+          phase: 'mutation-message-disconnected',
+          action,
+        },
+      });
+    });
+  });
 }
 
 async function attachDebugger(tabId) {
@@ -999,11 +1047,11 @@ async function runUploadCommand(tabId, payload) {
   if (!tabId) {
     return { ok: false, error: '未能打开上传页面。' };
   }
+  const rootTabId = tabId;
   let activeTabId = tabId;
   let readyState = await waitForRunnablePlatformTab(payload.platform, activeTabId, 8000);
   let ready = Boolean(readyState?.ready);
   let attempt = 0;
-  let lastError = '';
   while (attempt < 12) {
     attempt += 1;
     try {
@@ -1022,7 +1070,7 @@ async function runUploadCommand(tabId, payload) {
           await sleep(1200);
         }
       }
-      const response = await sendPlatformAgentMessage(
+      const response = await sendMutatingPlatformAgentMessage(
         activeTabId,
         'run-upload',
         payload,
@@ -1030,42 +1078,10 @@ async function runUploadCommand(tabId, payload) {
         TOP_FRAME_MESSAGE_OPTIONS,
       );
       if (response) {
-        if (!response.ok && response.errorCode === 'platform-agent-timeout') {
-          lastError = response.error || '平台页面执行超时。';
-          const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 6000);
-          if (workflowTabId) {
-            activeTabId = workflowTabId;
-          }
-          const redirectedTabId = await waitForUploadEditorTab(payload.platform, activeTabId, 6000);
-          if (redirectedTabId) {
-            activeTabId = redirectedTabId;
-          }
-          readyState = await waitForRunnablePlatformTab(payload.platform, activeTabId, 6000);
-          if (readyState) {
-            const debugState = await inspectPlatformAgentDebug(activeTabId);
-            response.resultPayload = {
-              ...(response.resultPayload || {}),
-              debug_step: debugState?.debug?.step || '',
-              debug_extra: debugState?.debug?.extra || null,
-            };
-            ready = Boolean(readyState.ready);
-            await sleep(1000);
-            continue;
-          }
-          const currentTab = await getTab(activeTabId);
-          const debugState = await inspectPlatformAgentDebug(activeTabId);
-          return {
-            ok: false,
-            error: '平台页面执行超时，且未能确认进入章节编辑流程。',
-            errorCode: 'chapter-editor-navigation-failed',
-            currentUrl: String(currentTab?.url || ''),
-            resultPayload: {
-              ...(response.resultPayload || {}),
-              phase: 'platform-agent-timeout',
-              debug_step: debugState?.debug?.step || '',
-              debug_extra: debugState?.debug?.extra || null,
-            },
-          };
+        if (['platform-mutation-timeout', 'platform-mutation-disconnected'].includes(
+          response.errorCode,
+        )) {
+          return response;
         }
         if (!response.ok && response.errorCode === 'trusted-body-input-required') {
           await applyTrustedFanqieBodyInput(activeTabId, payload.body, response.trustedBodyTarget);
@@ -1119,11 +1135,24 @@ async function runUploadCommand(tabId, payload) {
           payload = {
             ...payload,
             trustedPublishDone: true,
+            confirmedContentEvidence: {
+              observed_content_sha256: response.resultPayload?.observed_content_sha256 || '',
+              expected_normalized_sha256:
+                response.resultPayload?.expected_normalized_sha256 || '',
+              observed_normalized_sha256:
+                response.resultPayload?.observed_normalized_sha256 || '',
+              content_match_basis: response.resultPayload?.content_match_basis || '',
+            },
           };
           continue;
         }
         if (!response.ok && response.errorCode === 'editor-navigation-pending') {
-          const redirectedTabId = await waitForUploadEditorTab(payload.platform, activeTabId, 15000);
+          const redirectedTabId = await waitForUploadEditorTab(
+            payload.platform,
+            activeTabId,
+            15000,
+            rootTabId,
+          );
           if (redirectedTabId) {
             activeTabId = redirectedTabId;
           }
@@ -1137,7 +1166,12 @@ async function runUploadCommand(tabId, payload) {
           continue;
         }
         if (!response.ok && response.errorCode === 'create-book-page-pending') {
-          const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 15000);
+          const workflowTabId = await waitForPlatformWorkflowTab(
+            payload.platform,
+            activeTabId,
+            15000,
+            rootTabId,
+          );
           if (workflowTabId) {
             activeTabId = workflowTabId;
           }
@@ -1156,7 +1190,12 @@ async function runUploadCommand(tabId, payload) {
             return response;
           }
           await navigateTab(activeTabId, verifyUrl);
-          const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 15000);
+          const workflowTabId = await waitForPlatformWorkflowTab(
+            payload.platform,
+            activeTabId,
+            15000,
+            rootTabId,
+          );
           if (workflowTabId) {
             activeTabId = workflowTabId;
           }
@@ -1170,38 +1209,37 @@ async function runUploadCommand(tabId, payload) {
             };
           }
           await sleep(1800);
-          return verifyFanqieDraftOnPage(activeTabId, payload.chapter_title);
+          return verifyFanqieDraftOnPage(activeTabId, payload.chapter_title, {
+            observed_content_sha256: response.resultPayload?.observed_content_sha256 || '',
+            expected_normalized_sha256:
+              response.resultPayload?.expected_normalized_sha256 || '',
+            observed_normalized_sha256:
+              response.resultPayload?.observed_normalized_sha256 || '',
+            content_match_basis: response.resultPayload?.content_match_basis || '',
+          }, {
+            remote_book_id: response.resultPayload?.remote_book_id || '',
+            remote_chapter_id: response.resultPayload?.remote_chapter_id || '',
+          });
         }
         return response;
       }
-    } catch (_error) {
-      lastError = _error instanceof Error ? _error.message : String(_error || '');
+    } catch (error) {
       const currentTab = await getTab(activeTabId);
       const currentUrl = String(currentTab?.url || '');
-      if (isReceivingEndError(lastError) && isPlatformWorkflowUrl(payload.platform, currentUrl)) {
-        const runnable = await waitForRunnableWorkflowTab(payload.platform, activeTabId, 5000);
-        if (runnable) {
-          ready = Boolean(runnable.ready);
-          await sleep(800);
-          continue;
-        }
-      }
-      const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 2500);
-      if (workflowTabId) {
-        activeTabId = workflowTabId;
-      }
-      const redirectedTabId = await waitForUploadEditorTab(payload.platform, activeTabId, 2500);
-      if (redirectedTabId) {
-        activeTabId = redirectedTabId;
-      }
-      readyState = await waitForRunnablePlatformTab(payload.platform, activeTabId, 4000);
-      ready = Boolean(readyState?.ready);
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error || ''),
+        errorCode: 'platform-mutation-interrupted',
+        currentUrl,
+        resultPayload: { phase: 'mutation-command-interrupted' },
+      };
     }
   }
   const currentTab = await getTab(activeTabId);
   return {
     ok: false,
-    error: lastError || '平台页面没有准备好，无法执行上传。',
+    error: '平台页面没有完成可确认的上传前置流程。',
+    errorCode: 'platform-mutation-precondition-exhausted',
     currentUrl: String(currentTab?.url || ''),
   };
 }
@@ -1265,7 +1303,7 @@ async function runCoverUploadCommand(tabId, payload) {
       },
     };
   }
-  return sendPlatformAgentMessage(
+  return sendMutatingPlatformAgentMessage(
     tabId,
     'run-cover-upload',
     {
@@ -1293,6 +1331,32 @@ async function runAuditSyncCommand(tabId, payload) {
     };
   }
   return sendPlatformAgentMessage(tabId, 'run-audit-sync', payload, 45000, TOP_FRAME_MESSAGE_OPTIONS);
+}
+
+async function runReconciliationCommand(tabId, payload) {
+  if (!tabId) {
+    return {
+      outcome: 'indeterminate',
+      currentUrl: '',
+      reason: 'No publisher tab was available for read-only reconciliation.',
+    };
+  }
+  const readyState = await waitForRunnablePlatformTab(payload.platform, tabId, 12000);
+  if (!readyState?.ready) {
+    const tab = await getTab(tabId);
+    return {
+      outcome: 'indeterminate',
+      currentUrl: String(tab?.url || ''),
+      reason: 'Publisher page was not ready for read-only reconciliation.',
+    };
+  }
+  return sendPlatformAgentMessage(
+    tabId,
+    'reconcile-upload',
+    payload,
+    45000,
+    TOP_FRAME_MESSAGE_OPTIONS,
+  );
 }
 
 function isUploadEditorUrl(platformId, url = '') {
@@ -1481,12 +1545,38 @@ function rankPlatformUrl(platformId, url = '') {
   return 5;
 }
 
-async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000) {
+function executionTabIds(tabs, rootTabId, currentTabId) {
+  const related = new Set([Number(rootTabId || 0), Number(currentTabId || 0)].filter(Boolean));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const tab of tabs) {
+      const tabId = Number(tab?.id || 0);
+      const openerTabId = Number(tab?.openerTabId || 0);
+      if (tabId && openerTabId && related.has(openerTabId) && !related.has(tabId)) {
+        related.add(tabId);
+        changed = true;
+      }
+    }
+  }
+  return related;
+}
+
+async function waitForUploadEditorTab(
+  platformId,
+  currentTabId,
+  timeoutMs = 8000,
+  rootTabId = currentTabId,
+) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < timeoutMs) {
     const tabs = await queryTabs({}) || [];
+    const relatedTabIds = executionTabIds(tabs, rootTabId, currentTabId);
     const candidates = tabs
-      .filter((tab) => isUploadEditorUrl(platformId, String(tab?.url || '')))
+      .filter((tab) => (
+        relatedTabIds.has(Number(tab?.id || 0))
+        && isUploadEditorUrl(platformId, String(tab?.url || ''))
+      ))
       .sort((left, right) => {
         if ((left?.id || 0) === currentTabId) {
           return 1;
@@ -1517,12 +1607,21 @@ async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000
   return 0;
 }
 
-async function waitForPlatformWorkflowTab(platformId, currentTabId, timeoutMs = 8000) {
+async function waitForPlatformWorkflowTab(
+  platformId,
+  currentTabId,
+  timeoutMs = 8000,
+  rootTabId = currentTabId,
+) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < timeoutMs) {
     const tabs = await queryTabs({}) || [];
+    const relatedTabIds = executionTabIds(tabs, rootTabId, currentTabId);
     const candidates = tabs
-      .filter((tab) => isPlatformWorkflowUrl(platformId, String(tab?.url || '')))
+      .filter((tab) => (
+        relatedTabIds.has(Number(tab?.id || 0))
+        && isPlatformWorkflowUrl(platformId, String(tab?.url || ''))
+      ))
       .sort((left, right) => {
         if ((left?.id || 0) === currentTabId) {
           return 1;
@@ -1551,10 +1650,6 @@ async function waitForPlatformWorkflowTab(platformId, currentTabId, timeoutMs = 
     await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
   }
   return 0;
-}
-
-function isReceivingEndError(message = '') {
-  return String(message || '').includes('Receiving end does not exist');
 }
 
 async function waitForRunnableWorkflowTab(platformId, tabId, timeoutMs = 8000) {
@@ -2000,7 +2095,12 @@ async function ensurePlatformProbeInspection(platformId) {
   return await inspectPlatformState(platformId);
 }
 
-async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
+async function verifyFanqieDraftOnPage(
+  tabId,
+  chapterTitle,
+  contentEvidence = {},
+  expectedIdentity = {},
+) {
   let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
     || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
   if (!ready) {
@@ -2017,7 +2117,7 @@ async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
         return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
           channel: PLATFORM_AGENT_CHANNEL,
           action: 'verify-fanqie-draft',
-          payload: { chapterTitle },
+          payload: { chapterTitle, contentEvidence, expectedIdentity },
         });
       } catch (_error) {
         ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
@@ -2071,14 +2171,23 @@ const controller = new PublisherExtensionController({
     async heartbeat(payload) {
       return withBackendClient((client) => client.heartbeat(payload));
     },
-    async getUploadJob(jobId) {
-      return withBackendClient((client) => client.getUploadJob(jobId));
-    },
-    async updateUploadJobResult(jobId, payload) {
-      return withBackendClient((client) => client.updateUploadJobResult(jobId, payload));
-    },
     async claimNextUploadJob(payload) {
       return withBackendClient((client) => client.claimNextUploadJob(payload));
+    },
+    async heartbeatUploadAttempt(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.heartbeatUploadAttempt(jobId, attemptId, payload));
+    },
+    async updateUploadAttemptPhase(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.updateUploadAttemptPhase(jobId, attemptId, payload));
+    },
+    async submitUploadAttemptResult(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.submitUploadAttemptResult(jobId, attemptId, payload));
+    },
+    async submitUploadReceipt(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.submitUploadReceipt(jobId, attemptId, payload));
+    },
+    async reconcileUploadAttempt(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.reconcileUploadAttempt(jobId, attemptId, payload));
     },
     async claimNextCommentSyncJob(payload) {
       return withBackendClient((client) => client.claimNextCommentSyncJob(payload));
@@ -2105,6 +2214,7 @@ const controller = new PublisherExtensionController({
       };
     },
   },
+  uploadJournal,
   ensureClientId,
   getClientId: ensureClientId,
   getSettings,
@@ -2127,6 +2237,7 @@ const controller = new PublisherExtensionController({
   runUploadCommand,
   runCoverUploadCommand,
   runAuditSyncCommand,
+  runReconciliationCommand,
   runCommentSyncCommand,
   inspectLoginState,
   inspectPlatformState,

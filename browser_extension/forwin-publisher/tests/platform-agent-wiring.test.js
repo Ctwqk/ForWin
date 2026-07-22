@@ -71,3 +71,65 @@ test('platform agent does not treat generic Fanqie dashboard login text as login
   assert.match(fanqieInspectBlock, /\/main\/writer\/login/);
   assert.match(fanqieInspectBlock, /登录\/注册/);
 });
+
+test('platform agent exposes a dedicated read-only upload reconciliation command', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+  const block = source.match(
+    /async\s+function\s+reconcileUploadReadOnly\s*\([^)]*\)\s*\{[\s\S]*?\n  \}\n\n  async function prepareCoverUpload/,
+  )?.[0] || '';
+
+  assert.ok(block);
+  assert.match(source, /message\.action\s*===\s*'reconcile-upload'/);
+  assert.match(source, /reconcileUploadReadOnly\(message\.payload\s*\|\|\s*\{\}\)/);
+  assert.match(block, /matchedContentSha256/);
+  assert.match(block, /expectedContentSha256/);
+  assert.doesNotMatch(block, /\.click\s*\(/);
+  assert.doesNotMatch(block, /dispatchEvent\s*\(/);
+  assert.doesNotMatch(block, /fill[A-Z]\w*\s*\(/);
+  assert.doesNotMatch(block, /runUpload\s*\(/);
+  assert.doesNotMatch(block, /runCoverUpload\s*\(/);
+});
+
+test('platform agent returns stable chapter identity with successful upload evidence', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+chapterRemoteIdentity\s*\(/);
+  assert.match(source, /async\s+function\s+chapterContentEvidence\s*\(/);
+  assert.match(source, /editor-content-hash-mismatch/);
+  assert.match(source, /observed_normalized_sha256/);
+  assert.match(source, /normalized-editor-text-sha256/);
+  assert.match(source, /remote_book_id:\s*remoteBookId/);
+  assert.match(source, /remote_chapter_id:\s*remoteChapterId/);
+  assert.match(source, /\.\.\.chapterRemoteIdentity\(platform,\s*chapterTitle\)/);
+  assert.match(source, /\.\.\.chapterRemoteIdentity\('fanqie',\s*chapterTitle\)/);
+  assert.match(source, /\.\.\.chapterRemoteIdentity\('qidian',\s*chapterTitle\)/);
+});
+
+test('platform agent requires exact cover identity and fresh platform acceptance', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+  const block = source.match(
+    /async\s+function\s+runCoverUpload\s*\([^)]*\)\s*\{[\s\S]*?\n  \}\n\n  async function runAuditSync/,
+  )?.[0] || '';
+
+  assert.ok(block);
+  assert.match(source, /function\s+observedCoverRemoteBookId\s*\(/);
+  assert.match(source, /function\s+coverAcceptanceSignal\s*\(/);
+  assert.match(block, /const beforeText = pageText\(\)/);
+  assert.match(block, /observedCoverRemoteBookId\(payload, window\.location\.href\)/);
+  assert.match(block, /cover-upload-not-confirmed/);
+  assert.match(block, /cover-remote-book-mismatch/);
+  assert.match(block, /acceptance_signal:\s*acceptanceSignal/);
+  assert.doesNotMatch(block, /message:\s*'封面上传动作已提交。'/);
+});
+
+test('platform agent never treats visible historical cover state as a matched asset', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+  const block = source.match(
+    /if \(taskKind === 'cover_upload'\) \{[\s\S]*?\n    \}\n    if \(taskKind !== 'chapter_upload'\)/,
+  )?.[0] || '';
+
+  assert.ok(block);
+  assert.match(block, /outcome:\s*'indeterminate'/);
+  assert.match(block, /matchedContentSha256:\s*''/);
+  assert.doesNotMatch(block, /outcome:\s*accepted\s*\?/);
+});

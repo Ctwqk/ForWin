@@ -3010,19 +3010,94 @@
     return '';
   }
 
-  async function verifyPublishOutcome(platform, chapterTitle, publish) {
+  function chapterRemoteIdentity(platform, chapterTitle, expectedChapterId = '') {
+    const candidates = [String(window.location.href || '')];
+    if (platform === 'fanqie') {
+      const expectedTitle = String(chapterTitle || '').trim();
+      for (const anchor of Array.from(document.querySelectorAll('a[href]'))) {
+        const label = String(anchor?.innerText || anchor?.textContent || '').trim();
+        if (expectedTitle && label.includes(expectedTitle)) {
+          const href = String(anchor.href || anchor.getAttribute('href') || '');
+          if (expectedChapterId) {
+            let parsed;
+            try {
+              parsed = new URL(href, window.location.href);
+            } catch (_error) {
+              continue;
+            }
+            const anchorChapterId = parsed.searchParams.get('chapter_id')
+              || parsed.searchParams.get('item_id')
+              || parsed.pathname.match(
+                /\/main\/writer\/(?:chapter-edit|chapter-detail)\/\d+\/(\d+)/,
+              )?.[1]
+              || parsed.pathname.match(/\/main\/writer\/\d+\/publish\/(\d+)/)?.[1]
+              || '';
+            if (anchorChapterId !== expectedChapterId) {
+              continue;
+            }
+          }
+          candidates.unshift(href);
+        }
+      }
+    }
+    for (const candidate of candidates) {
+      let parsed;
+      try {
+        parsed = new URL(candidate, window.location.href);
+      } catch (_error) {
+        continue;
+      }
+      let remoteBookId = '';
+      let remoteChapterId = '';
+      if (platform === 'qidian') {
+        remoteBookId = parsed.pathname.match(/\/CBID\/(\d+)(?:\/|$)/i)?.[1] || '';
+        const fragment = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+        remoteChapterId = parsed.searchParams.get('ccid') || fragment.get('ccid') || '';
+      } else if (platform === 'fanqie') {
+        const chapterPath = parsed.pathname.match(
+          /\/main\/writer\/(?:chapter-edit|chapter-detail)\/(\d+)\/(\d+)/,
+        );
+        remoteBookId = parsed.pathname.match(
+          /\/main\/writer\/(?:chapter-manage|book-info)\/(\d+)/,
+        )?.[1]
+          || parsed.pathname.match(/\/main\/writer\/(\d+)\/publish(?:\/|$)/)?.[1]
+          || chapterPath?.[1]
+          || '';
+        remoteChapterId = parsed.searchParams.get('chapter_id')
+          || parsed.searchParams.get('item_id')
+          || chapterPath?.[2]
+          || parsed.pathname.match(/\/main\/writer\/\d+\/publish\/(\d+)/)?.[1]
+          || '';
+      }
+      if (
+        remoteBookId
+        && remoteChapterId
+        && /^\d+$/.test(remoteChapterId)
+        && (!expectedChapterId || remoteChapterId === expectedChapterId)
+      ) {
+        return {
+          remote_book_id: remoteBookId,
+          remote_chapter_id: remoteChapterId,
+          remote_url: parsed.href,
+        };
+      }
+    }
+    return {};
+  }
+
+  async function verifyPublishOutcome(platform, chapterTitle, publish, contentEvidence) {
     if (!publish) {
       if (platform === 'fanqie') {
-        return buildFanqieDraftVerifyRequest(chapterTitle);
+        return buildFanqieDraftVerifyRequest(chapterTitle, contentEvidence);
       }
       if (platform === 'qidian') {
-        return verifyQidianDraftSavedOnCurrentPage(chapterTitle);
+        return verifyQidianDraftSavedOnCurrentPage(chapterTitle, contentEvidence);
       }
       return {
         ok: true,
         currentUrl: window.location.href,
         message: '章节草稿保存动作已提交。',
-        resultPayload: { mode: 'draft' },
+        resultPayload: { mode: 'draft', ...contentEvidence },
       };
     }
     await sleep(1200);
@@ -3033,9 +3108,11 @@
         ok: true,
         currentUrl: window.location.href,
         message: officialStatus === 'published' ? '章节已发布。' : '章节已进入平台审核。',
-        resultPayload: {
-          mode: 'publish',
-          official_status: officialStatus,
+          resultPayload: {
+            mode: 'publish',
+            official_status: officialStatus,
+            ...contentEvidence,
+            ...chapterRemoteIdentity(platform, chapterTitle),
         },
       };
     }
@@ -3054,11 +3131,13 @@
           ok: true,
           currentUrl: window.location.href,
           message: '章节已提交至起点，等待平台审核。',
-          resultPayload: {
-            mode: 'publish',
-            official_status: 'review-pending',
-            verified_via: 'chapter-page',
-            word_count: wordCount,
+            resultPayload: {
+              mode: 'publish',
+              official_status: 'review-pending',
+              verified_via: 'chapter-page',
+              word_count: wordCount,
+              ...contentEvidence,
+              ...chapterRemoteIdentity(platform, chapterTitle),
           },
         };
       }
@@ -3317,11 +3396,26 @@
     return hasDraftListSignal();
   }
 
-  async function verifyFanqieDraftSavedOnCurrentPage(chapterTitle) {
+  async function verifyFanqieDraftSavedOnCurrentPage(
+    chapterTitle,
+    contentEvidence = {},
+    expectedIdentity = {},
+  ) {
     await ensureFanqieDraftTabVisible();
     const text = pageText();
     const title = String(chapterTitle || '').trim();
-    if (title && text.includes(title)) {
+    const remoteIdentity = chapterRemoteIdentity(
+      'fanqie',
+      chapterTitle,
+      String(expectedIdentity.remote_chapter_id || ''),
+    );
+    const identityMatched = Boolean(
+      expectedIdentity.remote_book_id
+      && expectedIdentity.remote_chapter_id
+      && remoteIdentity.remote_book_id === expectedIdentity.remote_book_id
+      && remoteIdentity.remote_chapter_id === expectedIdentity.remote_chapter_id,
+    );
+    if (title && text.includes(title) && identityMatched) {
       return {
         ok: true,
         currentUrl: window.location.href,
@@ -3330,13 +3424,15 @@
           mode: 'draft',
           official_status: 'drafted',
           verified_via: 'chapter-manage',
+          ...contentEvidence,
+          ...remoteIdentity,
         },
       };
     }
     return {
       ok: false,
       currentUrl: window.location.href,
-      error: '番茄章节管理页未找到新草稿。',
+      error: '番茄章节管理页未找到与本次保存 ID 一致的新草稿。',
       errorCode: 'publish-not-confirmed',
       resultPayload: {
         mode: 'draft',
@@ -3427,7 +3523,7 @@
     };
   }
 
-  async function verifyQidianDraftSavedOnCurrentPage(chapterTitle) {
+  async function verifyQidianDraftSavedOnCurrentPage(chapterTitle, contentEvidence = {}) {
     const text = pageText();
     const saveSignals = readQidianDraftSaveSignals(chapterTitle);
     const editorStatus = saveSignals.editorStatus;
@@ -3446,6 +3542,8 @@
           official_status: 'drafted',
           verified_via: saveSignals.hasRealCcid ? 'chapter-page' : 'chapter-list',
           word_count: editorStatus.wordCount,
+          ...contentEvidence,
+          ...chapterRemoteIdentity('qidian', chapterTitle),
         },
       };
     }
@@ -3485,7 +3583,7 @@
     }, timeoutMs);
   }
 
-  function buildFanqieDraftVerifyRequest(chapterTitle) {
+  function buildFanqieDraftVerifyRequest(chapterTitle, contentEvidence = {}) {
     const workId = extractFanqieWorkId();
     if (!workId) {
       return {
@@ -3510,6 +3608,8 @@
           chapter_title: chapterTitle,
           verify_phase: 'pending-chapter-manage',
           verify_url: `https://fanqienovel.com/main/writer/chapter-manage/${workId}?type=2`,
+          ...contentEvidence,
+          ...chapterRemoteIdentity('fanqie', chapterTitle),
         },
       };
     }
@@ -3690,6 +3790,21 @@
         setDebugStep('run-upload-fanqie-save-wait-done');
       }
     }
+    const contentProof = await chapterContentEvidence(payload);
+    setDebugStep('run-upload-content-evidence', contentProof.resultPayload);
+    if (!contentProof.matched) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '编辑器正文与 claimed 章节内容不一致，拒绝执行远端写入。',
+        errorCode: 'editor-content-hash-mismatch',
+        resultPayload: {
+          mode: payload.publish ? 'publish' : 'draft',
+          ...contentProof.resultPayload,
+        },
+      };
+    }
+    const contentEvidence = contentProof.resultPayload;
     if (!(window.location.href.includes('write.qq.com') && payload.publish && payload.trustedPublishDone)) {
       setDebugStep('run-upload-click-action-start', { publish: Boolean(payload.publish) });
       await clickAction(Boolean(payload.publish));
@@ -3711,6 +3826,7 @@
             resultPayload: {
               mode: 'publish',
               chapter_title: payload.chapter_title,
+              ...contentEvidence,
             },
           };
         }
@@ -3732,6 +3848,7 @@
       window.location.href.includes('write.qq.com') ? 'qidian' : 'fanqie',
       payload.chapter_title,
       Boolean(payload.publish),
+      contentEvidence,
     );
   }
 
@@ -3764,6 +3881,236 @@
       return 'under_review';
     }
     return 'unknown';
+  }
+
+  async function sha256Hex(value) {
+    if (!globalThis.crypto?.subtle) {
+      return '';
+    }
+    const encoded = new TextEncoder().encode(String(value || ''));
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  function normalizeChapterContentForEvidence(value) {
+    return String(value || '')
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .replaceAll('\u00a0', ' ')
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  function chapterBodyForReadOnlyReconciliation() {
+    if (window.location.href.includes('write.qq.com')) {
+      try {
+        const activeEditorText = window.tinymce?.activeEditor?.getContent?.({ format: 'text' })
+          || window.tinyMCE?.activeEditor?.getContent?.({ format: 'text' });
+        if (String(activeEditorText || '')) {
+          return String(activeEditorText);
+        }
+      } catch (_error) {
+        // Continue through the DOM-only readers below.
+      }
+      const frame = document.querySelector('iframe#mce_0_ifr');
+      const frameBody = frame?.contentDocument?.body || frame?.contentWindow?.document?.body;
+      const textarea = document.querySelector('textarea#mce_0');
+      return String(frameBody?.innerText || frameBody?.textContent || textarea?.value || '');
+    }
+    const editor = document.querySelector('.ProseMirror[contenteditable="true"]');
+    return String(editor?.innerText || editor?.textContent || '');
+  }
+
+  async function chapterContentEvidence(payload) {
+    const expectedHash = String(payload?.content_sha256 || '').trim().toLowerCase();
+    const confirmed = payload?.confirmedContentEvidence;
+    if (
+      payload?.trustedPublishDone
+      && confirmed
+      && confirmed.observed_content_sha256 === expectedHash
+      && /^[0-9a-f]{64}$/.test(confirmed.expected_normalized_sha256 || '')
+      && confirmed.expected_normalized_sha256 === confirmed.observed_normalized_sha256
+      && confirmed.content_match_basis === 'normalized-editor-text-sha256'
+    ) {
+      return { matched: true, resultPayload: { ...confirmed } };
+    }
+    const expected = normalizeChapterContentForEvidence(payload?.body);
+    const observed = normalizeChapterContentForEvidence(
+      chapterBodyForReadOnlyReconciliation(),
+    );
+    const [expectedNormalizedSha256, observedNormalizedSha256] = await Promise.all([
+      sha256Hex(expected),
+      sha256Hex(observed),
+    ]);
+    const matched = Boolean(
+      /^[0-9a-f]{64}$/.test(expectedHash)
+      && expected
+      && observed
+      && expectedNormalizedSha256 === observedNormalizedSha256,
+    );
+    return {
+      matched,
+      resultPayload: {
+        observed_content_sha256: matched ? expectedHash : '',
+        expected_normalized_sha256: expectedNormalizedSha256,
+        observed_normalized_sha256: observedNormalizedSha256,
+        content_match_basis: 'normalized-editor-text-sha256',
+      },
+    };
+  }
+
+  function chapterTitleForReadOnlyReconciliation() {
+    const titleNode = document.querySelector(
+      '#inputTitle, input[placeholder*="章节"], textarea[placeholder*="章节"], input[placeholder*="标题"]',
+    );
+    return String(titleNode?.value || titleNode?.textContent || '').trim();
+  }
+
+  function remoteBookIdFromPublisherUrl(platform, rawUrl) {
+    let parsed;
+    try {
+      parsed = new URL(String(rawUrl || ''));
+    } catch (_error) {
+      return '';
+    }
+    if (platform === 'qidian') {
+      return parsed.pathname.match(/\/CBID\/(\d+)(?:\/|$)/i)?.[1]
+        || parsed.pathname.match(/\/portal\/book\/([^/?#]+)(?:\/|$)/i)?.[1]
+        || '';
+    }
+    if (platform === 'fanqie') {
+      return parsed.pathname.match(
+        /\/main\/writer\/(?:chapter-manage|book-info)\/(\d+)/,
+      )?.[1]
+        || parsed.pathname.match(/\/main\/writer\/(\d+)\/publish(?:\/|$)/)?.[1]
+        || parsed.pathname.match(
+          /\/main\/writer\/(?:chapter-edit|chapter-detail)\/(\d+)\/\d+/,
+        )?.[1]
+        || '';
+    }
+    return '';
+  }
+
+  function samePublisherPage(leftUrl, rightUrl) {
+    try {
+      const left = new URL(String(leftUrl || ''));
+      const right = new URL(String(rightUrl || ''));
+      return left.origin.toLowerCase() === right.origin.toLowerCase()
+        && (left.pathname.replace(/\/+$/, '') || '/')
+          === (right.pathname.replace(/\/+$/, '') || '/');
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function observedCoverRemoteBookId(payload, currentUrl) {
+    const expected = String(payload?.remote_book_id || '').trim();
+    if (!expected) {
+      return '';
+    }
+    const parsed = remoteBookIdFromPublisherUrl(payload?.platform, currentUrl);
+    if (parsed) {
+      return parsed === expected ? parsed : '';
+    }
+    const claimedUrl = String(payload?.remote_url || payload?.upload_url || '').trim();
+    return claimedUrl && samePublisherPage(currentUrl, claimedUrl) ? expected : '';
+  }
+
+  function coverAcceptanceSignal(currentText, previousText = '', requireCoverContext = false) {
+    if (requireCoverContext && !String(currentText || '').includes('封面')) {
+      return '';
+    }
+    const explicitSignals = ['上传成功', '保存成功', '提交成功'];
+    const explicit = explicitSignals.find((signal) => (
+      String(currentText || '').includes(signal)
+      && !String(previousText || '').includes(signal)
+    ));
+    if (explicit) {
+      return explicit;
+    }
+    const stateSignals = ['审核中', '待审核', '审核通过'];
+    return stateSignals.find((signal) => (
+      String(currentText || '').includes(signal)
+      && !String(previousText || '').includes(signal)
+    )) || '';
+  }
+
+  async function reconcileUploadReadOnly(payload) {
+    const taskKind = String(payload?.task_kind || '').trim();
+    const expectedContentSha256 = String(payload?.content_sha256 || '').trim().toLowerCase();
+    const currentUrl = String(window.location.href || '');
+    const text = pageText();
+    if (taskKind === 'cover_upload') {
+      const remoteBookId = observedCoverRemoteBookId(payload, currentUrl);
+      const acceptanceSignal = coverAcceptanceSignal(text, '', true);
+      return {
+        outcome: 'indeterminate',
+        currentUrl,
+        remoteBookId,
+        matchedContentSha256: '',
+        officialState: 'cover_uploaded',
+        match: '',
+        matchBasis: [
+          ...(remoteBookId ? ['remote_book_id'] : []),
+          ...(acceptanceSignal ? ['visible_cover_state'] : []),
+        ],
+        selector: 'body',
+        confirmationText: acceptanceSignal,
+        platformMessage: text.slice(0, 500),
+        acceptanceSignal,
+        reason: !remoteBookId
+          ? 'Publisher page did not match the claimed remote book identity.'
+          : 'Visible cover state cannot be bound to the claimed asset hash.',
+      };
+    }
+    if (taskKind !== 'chapter_upload') {
+      return {
+        outcome: 'indeterminate',
+        currentUrl,
+        reason: 'This task kind does not use upload reconciliation.',
+      };
+    }
+
+    const expectedTitle = String(payload?.chapter_title || '').trim();
+    const observedTitle = chapterTitleForReadOnlyReconciliation();
+    const observedBody = chapterBodyForReadOnlyReconciliation();
+    const matchedContentSha256 = observedBody ? await sha256Hex(observedBody) : '';
+    const titleMatched = Boolean(
+      expectedTitle
+      && (observedTitle === expectedTitle || (!observedTitle && text.includes(expectedTitle))),
+    );
+    const contentMatched = Boolean(
+      expectedContentSha256
+      && matchedContentSha256 === expectedContentSha256,
+    );
+    const matched = titleMatched && contentMatched;
+    const officialStatus = resolveOfficialStatus(text);
+    return {
+      outcome: matched ? 'matched' : 'indeterminate',
+      currentUrl,
+      matchedContentSha256,
+      officialState: payload?.publish
+        ? (officialStatus === 'published' ? 'published' : 'review_pending')
+        : 'drafted',
+      match: matched ? 'chapter-title-and-content-sha256' : '',
+      matchBasis: [
+        ...(titleMatched ? ['chapter_title'] : []),
+        ...(contentMatched ? ['content_sha256'] : []),
+      ],
+      selector: window.location.href.includes('write.qq.com')
+        ? 'iframe#mce_0_ifr, textarea#mce_0'
+        : '.ProseMirror[contenteditable="true"]',
+      matched,
+      confirmationText: officialStatus,
+      platformMessage: text.slice(0, 500),
+      reason: matched
+        ? ''
+        : 'Platform page did not expose an exact title and content hash match.',
+    };
   }
 
   async function prepareCoverUpload(payload) {
@@ -3808,15 +4155,35 @@
     }
     const selector = payload.fileInputSelector || coverFileInputSelector();
     const input = selector ? document.querySelector(selector) : null;
+    const beforeText = pageText();
     if (input) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    await Promise.race([
-      waitForPageSignal(['上传成功', '保存成功', '提交成功', '审核中', '待审核', '封面'], 6000),
-      sleep(1500),
-    ]);
+    const acceptanceSignal = await waitForCondition(
+      () => coverAcceptanceSignal(pageText(), beforeText),
+      6000,
+    );
     const text = pageText();
+    const remoteBookId = observedCoverRemoteBookId(payload, window.location.href);
+    if (!acceptanceSignal || !remoteBookId) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: !remoteBookId
+          ? '当前平台页面与待上传封面的作品身份不一致。'
+          : '平台页面未确认本次封面上传已被接受。',
+        errorCode: !remoteBookId
+          ? 'cover-remote-book-mismatch'
+          : 'cover-upload-not-confirmed',
+        resultPayload: {
+          task_kind: 'cover_upload',
+          phase: 'acceptance-not-confirmed',
+          remote_book_id: remoteBookId,
+          remote_url: window.location.href,
+        },
+      };
+    }
     const auditState = normalizeAuditStateFromText(text);
     const coverState = auditState === 'rejected'
       ? 'rejected'
@@ -3828,16 +4195,17 @@
     return {
       ok: true,
       currentUrl: window.location.href,
-      message: coverState === 'uploaded' ? '封面上传动作已提交。' : '封面已进入平台处理流程。',
+      message: `平台已确认封面上传：${acceptanceSignal}`,
       resultPayload: {
         task_kind: 'cover_upload',
         cover_state: coverState,
         audit_state: auditState,
         platform_message: text.slice(0, 500),
+        acceptance_signal: acceptanceSignal,
         work_binding_id: payload.work_binding_id || '',
         cover_asset_id: payload.cover_asset_id || '',
-        remote_book_id: payload.remote_book_id || '',
-        remote_url: payload.remote_url || window.location.href,
+        remote_book_id: remoteBookId,
+        remote_url: window.location.href,
       },
     };
   }
@@ -3941,7 +4309,11 @@
       return false;
     }
     if (message.action === 'verify-fanqie-draft') {
-      verifyFanqieDraftSavedOnCurrentPage(message.payload?.chapterTitle || '')
+      verifyFanqieDraftSavedOnCurrentPage(
+        message.payload?.chapterTitle || '',
+        message.payload?.contentEvidence || {},
+        message.payload?.expectedIdentity || {},
+      )
         .then(sendResponse)
         .catch((error) => {
           sendResponse({
@@ -4004,6 +4376,18 @@
             resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
               ? error.resultPayload
               : {},
+          });
+        });
+      return true;
+    }
+    if (message.action === 'reconcile-upload') {
+      reconcileUploadReadOnly(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            outcome: 'indeterminate',
+            currentUrl: window.location.href,
+            reason: error instanceof Error ? error.message : String(error),
           });
         });
       return true;

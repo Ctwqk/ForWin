@@ -33,6 +33,36 @@ test('background backend adapter wires login QR notifications', async () => {
   assert.match(source, /client\)\s*=>\s*client\.notifyLoginQr\(payload\)/);
 });
 
+test('background persists the upload journal and wires fenced attempt APIs', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /createUploadJournal/);
+  assert.match(source, /UPLOAD_JOURNAL_KEY/);
+  assert.match(source, /read:\s*\(\)\s*=>\s*getStorageValue\(UPLOAD_JOURNAL_KEY/);
+  assert.match(source, /write:\s*\(snapshot\)\s*=>\s*setStorageValue\(UPLOAD_JOURNAL_KEY,\s*snapshot\)/);
+  assert.match(source, /uploadJournal,/);
+  for (const method of [
+    'heartbeatUploadAttempt',
+    'updateUploadAttemptPhase',
+    'submitUploadAttemptResult',
+    'submitUploadReceipt',
+    'reconcileUploadAttempt',
+  ]) {
+    assert.match(source, new RegExp(`async\\s+${method}\\s*\\(`));
+    assert.match(source, new RegExp(`client\\.${method}\\(`));
+  }
+  assert.doesNotMatch(source, /async\s+getUploadJob\s*\(/);
+  assert.doesNotMatch(source, /async\s+updateUploadJobResult\s*\(/);
+});
+
+test('background routes reconciliation through a dedicated read-only platform command', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /async\s+function\s+runReconciliationCommand\s*\(/);
+  assert.match(source, /'reconcile-upload'/);
+  assert.match(source, /runReconciliationCommand,/);
+});
+
 test('background throttles login QR notifications at the backend boundary', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
@@ -142,8 +172,25 @@ test('background routes platform business commands to the top frame', async () =
 
   assert.match(source, /const\s+TOP_FRAME_MESSAGE_OPTIONS\s*=\s*\{\s*frameId:\s*0\s*\}/);
   assert.match(source, /sendPlatformAgentMessage[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
-  assert.match(source, /runUploadCommand[\s\S]*sendPlatformAgentMessage\([\s\S]*'run-upload'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+  assert.match(source, /runUploadCommand[\s\S]*sendMutatingPlatformAgentMessage\([\s\S]*'run-upload'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
   assert.match(source, /runCommentSyncCommand[\s\S]*sendPlatformAgentMessage\([\s\S]*'run-comment-sync'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+});
+
+test('background never retries an unknown mutation outcome or adopts unrelated tabs', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+  const uploadBlock = source.match(
+    /async\s+function\s+runUploadCommand\s*\([^)]*\)\s*\{[\s\S]*?\n\}\n\nasync function runCommentSyncCommand/,
+  )?.[0] || '';
+
+  assert.ok(uploadBlock);
+  assert.match(source, /async\s+function\s+sendMutatingPlatformAgentMessage\s*\(/);
+  assert.match(source, /platform-mutation-timeout/);
+  assert.match(source, /await\s+closeTab\(tabId\)/);
+  assert.match(uploadBlock, /platform-mutation-disconnected/);
+  assert.doesNotMatch(uploadBlock, /platform-agent-timeout/);
+  assert.doesNotMatch(uploadBlock, /isReceivingEndError/);
+  assert.match(source, /function\s+executionTabIds\s*\(/);
+  assert.match(source, /relatedTabIds\.has\(Number\(tab\?\.id\s*\|\|\s*0\)\)/);
 });
 
 test('background inspects publisher login state in the top frame', async () => {

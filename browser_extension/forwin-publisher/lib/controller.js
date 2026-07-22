@@ -4,12 +4,14 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js?v=0.1.58';
+} from './platforms.js?v=0.1.60';
 import {
   buildAttemptResult,
   buildExecutionReceipt,
   buildReconciliationRequest,
-} from './reconciliation.js?v=0.1.58';
+  buildRiskPauseRequest,
+} from './reconciliation.js?v=0.1.60';
+import { guardRiskInspection } from './risk-inspection.js?v=0.1.60';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
@@ -283,6 +285,17 @@ export class PublisherExtensionController {
     return ['stale_attempt', 'lease_expired'].includes(String(error?.code || ''));
   }
 
+  _stalePauseCoverage(error) {
+    if (!this._isStaleAttemptError(error)) {
+      return '';
+    }
+    const detail = error?.payload?.detail;
+    const jobStatus = String(
+      detail?.job_status || error?.payload?.job_status || '',
+    );
+    return ['succeeded', 'failed', 'cancelled'].includes(jobStatus) ? jobStatus : '';
+  }
+
   _attemptMustStop(response) {
     return Boolean(response?.abort_requested || response?.next_action === 'stop');
   }
@@ -372,6 +385,10 @@ export class PublisherExtensionController {
     return this._callAttemptBackend(entry, 'submitUploadAttemptResult', entry.result);
   }
 
+  async _submitStoredPause(entry) {
+    return this._callAttemptBackend(entry, 'pauseUploadAttempt', entry.pause);
+  }
+
   async _markJournalAcknowledged(attemptId) {
     const journal = this._requireUploadJournal();
     await journal.markAcknowledged(attemptId);
@@ -384,9 +401,53 @@ export class PublisherExtensionController {
     return journal.get(attemptId);
   }
 
+  _isRiskPauseSignal(signal) {
+    return Boolean(signal?.riskPause || signal?.risk_pause);
+  }
+
+  async _persistAndReportRiskPause(entry, signal, originTabId) {
+    const journal = this._requireUploadJournal();
+    const pause = buildRiskPauseRequest({
+      signal,
+      observedAt: new Date().toISOString(),
+    });
+    await journal.savePause(entry.attempt.attempt_id, pause);
+    entry = await journal.get(entry.attempt.attempt_id);
+    let pauseState;
+    try {
+      pauseState = await this._submitStoredPause(entry);
+    } catch (error) {
+      const coveredStatus = this._stalePauseCoverage(error);
+      if (!coveredStatus) {
+        throw error;
+      }
+      pauseState = { job_status: coveredStatus };
+    }
+    await this._markJournalAcknowledged(entry.attempt.attempt_id);
+    const finalStatus = pauseState?.job_status || 'paused';
+    await this._notifyUploadAttempt(
+      originTabId,
+      entry,
+      finalStatus,
+      pause.evidence.message || `Publisher risk pause: ${pause.risk_reason}`,
+    );
+    return { status: finalStatus };
+  }
+
   async _replayJournalEntry(rawEntry) {
     const journal = this._requireUploadJournal();
     let entry = await journal.get(rawEntry.attempt.attempt_id);
+    if (entry.pause) {
+      try {
+        await this._submitStoredPause(entry);
+      } catch (error) {
+        if (!this._stalePauseCoverage(error)) {
+          throw error;
+        }
+      }
+      await this._markJournalAcknowledged(entry.attempt.attempt_id);
+      return { acknowledged: true, recovered_by: 'risk_pause_replay' };
+    }
     if (entry.receipt && !entry.result) {
       entry = await this._saveJournalResult(
         entry.attempt.attempt_id,
@@ -523,6 +584,27 @@ export class PublisherExtensionController {
       this.registerExecutionTask(taskKey, tab.tabId);
       await this.waitForOpenedUploadTab(tab.tabId, entry.job.platform, 8000);
       const opened = await this.deps.getTab(tab.tabId);
+      const riskSignal = await this.deps.inspectPlatformRiskCommand(tab.tabId, {
+        platform: entry.job.platform,
+        boundary: 'pre-mutation',
+      });
+      const riskBlocker = guardRiskInspection(riskSignal, 'pre-mutation');
+      if (this._isRiskPauseSignal(riskBlocker)) {
+        return this._persistAndReportRiskPause(entry, riskBlocker, originTabId);
+      }
+      if (riskBlocker) {
+        const result = buildAttemptResult({ job: entry.job, result: riskBlocker });
+        entry = await this._saveJournalResult(entry.attempt.attempt_id, result);
+        const finalState = await this._submitStoredResult(entry);
+        await this._markJournalAcknowledged(entry.attempt.attempt_id);
+        await this._notifyUploadAttempt(
+          originTabId,
+          entry,
+          finalState?.job_status || result.outcome,
+          result.error_message,
+        );
+        return { status: finalState?.job_status || result.outcome };
+      }
       await journal.markMutationStarted(entry.attempt.attempt_id);
       entry = await journal.get(entry.attempt.attempt_id);
       const phaseState = await this._callAttemptBackend(entry, 'updateUploadAttemptPhase', {
@@ -545,6 +627,9 @@ export class PublisherExtensionController {
       }
 
       let platformResult = await this._runMutationCommand(tab.tabId, entry.job);
+      if (this._isRiskPauseSignal(platformResult)) {
+        return this._persistAndReportRiskPause(entry, platformResult, originTabId);
+      }
       if (heartbeat.isBlocked() && !platformResult?.ok) {
         throw new Error(`Publisher attempt stopped after mutation began: ${heartbeat.reason()}`);
       }
@@ -608,6 +693,9 @@ export class PublisherExtensionController {
         content_sha256: entry.job.content_sha256,
         ...(entry.job.input || {}),
       });
+      if (this._isRiskPauseSignal(platformResult)) {
+        return this._persistAndReportRiskPause(entry, platformResult, originTabId);
+      }
       const result = buildAttemptResult({ job: entry.job, result: platformResult });
       entry = await this._saveJournalResult(entry.attempt.attempt_id, result);
       const finalState = await this._submitStoredResult(entry);
@@ -679,7 +767,7 @@ export class PublisherExtensionController {
     const clientId = await this.deps.getClientId();
     let entry = await journal.recordClaim({ clientId, claim });
     entry = entry || await journal.get(claim.attempt.attempt_id);
-    if (entry.local_phase !== 'claimed' || entry.receipt || entry.result) {
+    if (entry.local_phase !== 'claimed' || entry.receipt || entry.result || entry.pause) {
       return this._replayJournalEntry(entry);
     }
     if (entry.job.task_kind === 'audit_sync') {

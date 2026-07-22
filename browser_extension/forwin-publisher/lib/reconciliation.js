@@ -6,6 +6,8 @@ function first(...values) {
   return values.map(text).find(Boolean) || '';
 }
 
+const RISK_REASONS = new Set(['captcha', 'mfa', 'account_risk']);
+
 function resultPayload(result) {
   const payload = result?.resultPayload || result?.result_payload;
   return payload && typeof payload === 'object' ? payload : {};
@@ -286,6 +288,31 @@ export function buildAttemptResult({ job, result }) {
   };
 }
 
+export function buildRiskPauseRequest({ signal, observedAt }) {
+  const source = signal && typeof signal === 'object' ? signal : {};
+  const evidenceSource = source.riskEvidence && typeof source.riskEvidence === 'object'
+    ? source.riskEvidence
+    : source.risk_evidence && typeof source.risk_evidence === 'object'
+      ? source.risk_evidence
+      : {};
+  const riskReason = first(source.riskReason, source.risk_reason);
+  if (!RISK_REASONS.has(riskReason)) {
+    throw new Error('Publisher risk pause requires a typed risk reason.');
+  }
+  return {
+    risk_reason: riskReason,
+    observed_at: text(observedAt),
+    current_url: first(source.currentUrl, source.current_url),
+    evidence: {
+      detector: first(evidenceSource.detector, 'publisher-risk-v1'),
+      boundary: first(evidenceSource.boundary, 'unknown'),
+      selector: first(evidenceSource.selector),
+      matched_text: first(evidenceSource.matchedText, evidenceSource.matched_text),
+      message: first(evidenceSource.message, source.message, source.error),
+    },
+  };
+}
+
 function reconciliationEvidence(observation, overrides = {}) {
   return {
     procedure: first(observation?.procedure, 'read-only-platform-inspection'),
@@ -308,6 +335,7 @@ function reconciliationEvidence(observation, overrides = {}) {
         : null,
     reason: first(overrides.reason, observation?.reason),
     platform_message: first(observation?.platformMessage, observation?.platform_message),
+    risk_reason: first(overrides.riskReason),
   };
 }
 
@@ -323,6 +351,7 @@ export function buildReconciliationRequest({
   let errorCode = first(observation?.errorCode, observation?.error_code);
   let errorMessage = first(observation?.errorMessage, observation?.error_message);
   let reason = first(observation?.reason);
+  let riskReason = first(observation?.riskReason, observation?.risk_reason);
   const matchedHash = first(
     observation?.matchedContentSha256,
     observation?.matched_content_sha256,
@@ -347,6 +376,13 @@ export function buildReconciliationRequest({
     errorMessage = 'Authoritative absence is not enabled by backend policy.';
     reason = errorMessage;
   }
+  if (outcome === 'risk_pause' && !RISK_REASONS.has(riskReason)) {
+    outcome = 'indeterminate';
+    riskReason = '';
+    errorCode = 'risk-reason-invalid';
+    errorMessage = 'Risk pause evidence did not include a supported typed reason.';
+    reason = errorMessage;
+  }
   if (outcome === 'matched') {
     try {
       receipt = buildExecutionReceipt({
@@ -368,7 +404,7 @@ export function buildReconciliationRequest({
     }
   }
 
-  const evidence = reconciliationEvidence(observation, { reason });
+  const evidence = reconciliationEvidence(observation, { reason, riskReason });
   if (outcome === 'matched') {
     evidence.matched = true;
     evidence.matched_content_sha256 = expectedHash;

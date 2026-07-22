@@ -85,8 +85,10 @@ from forwin.api_schema import (
     PublisherPlatformInfo,
     PublisherPreflightResponse,
     PublisherUploadJobResponse,
+    PublisherUploadResumeResponse,
     PublisherWorkBindingResponse,
     UploadAttemptReceiptResponse,
+    UploadAttemptPauseResponse,
     UploadAttemptReconcileResponse,
     UploadAttemptResultResponse,
     UploadAttemptStateResponse,
@@ -201,7 +203,8 @@ def register_api_routes(
         service=PublisherApplicationService(
             get_publisher_manager=get_publisher_manager,
             extension_root=Path.cwd() / "browser_extension" / "forwin-publisher",
-        )
+        ),
+        get_config=get_config,
     )
     project_handlers = api_project_routes.build_handlers(service=deps.project.service)
     project_control_handlers = api_project_control_routes.build_handlers(
@@ -461,6 +464,12 @@ def register_api_routes(
             {"response_model": TaskMutationResponse},
         ),
         (
+            "/api/publishers/upload-jobs/{job_id}/resume",
+            ["POST"],
+            handlers["resume_publisher_upload_job"],
+            {"response_model": PublisherUploadResumeResponse},
+        ),
+        (
             "/api/publishers/upload-jobs/{job_id}",
             ["DELETE"],
             handlers["delete_publisher_upload_job"],
@@ -525,6 +534,12 @@ def register_api_routes(
             ["POST"],
             handlers["finish_publisher_upload_attempt"],
             {"response_model": UploadAttemptResultResponse},
+        ),
+        (
+            "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/pause",
+            ["POST"],
+            handlers["pause_publisher_upload_attempt"],
+            {"response_model": UploadAttemptPauseResponse},
         ),
         (
             "/api/publishers/extension/upload-jobs/{job_id}/attempts/{attempt_id}/receipt",

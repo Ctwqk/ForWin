@@ -814,8 +814,39 @@ class UploadJobService:
                 job.abort_requested = True
                 job.result_message = "已请求终止远端写入；任务将只读对账后收敛。"
             elif job.status == "paused":
+                payload = _load_json_object(job.result_payload_json)
+                risk_pause = payload.get("risk_pause")
+                risk_pause = risk_pause if isinstance(risk_pause, dict) else {}
+                attempt_kind = str(risk_pause.get("attempt_kind") or "execute")
+                attempt_phase = str(risk_pause.get("attempt_phase") or "claimed")
+                needs_reconciliation = attempt_kind == "reconcile" or attempt_phase in {
+                    "mutation_started",
+                    "receipt_observed",
+                    "observation_started",
+                }
                 job.abort_requested = True
-                job.result_message = "已请求终止；风险暂停状态等待操作员处理。"
+                job.status = "reconciling" if needs_reconciliation else "cancelled"
+                job.finished_at = None if needs_reconciliation else now
+                job.available_at = None
+                job.reconcile_after = now if needs_reconciliation else None
+                job.paused_at = None
+                job.pause_reason = ""
+                job.result_message = (
+                    "风险暂停任务已终止远端写入，等待只读对账。"
+                    if needs_reconciliation
+                    else "风险暂停任务已在远端写入前取消。"
+                )
+                payload.pop("risk_pause", None)
+                payload["risk_termination"] = {
+                    **risk_pause,
+                    "terminated_at": isoformat(now),
+                    "next_status": job.status,
+                }
+                job.result_payload_json = json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
             else:
                 job.status = "terminating"
                 job.abort_requested = True
@@ -1151,7 +1182,7 @@ class UploadJobService:
                 lease_epoch=lease_epoch,
                 outcome=outcome,
                 receipt_recorded=receipt_row is not None,
-                pause_reason=str((evidence or {}).get("reason") or error_message or ""),
+                risk_reason=str((evidence or {}).get("risk_reason") or ""),
                 now=received_at,
             )
             canonical_current_url = (
@@ -1212,7 +1243,11 @@ class UploadJobService:
             self.audit.record_upload_job_event(
                 session,
                 job=job,
-                event_type=terminal_upload_event_type(job.status),
+                event_type=(
+                    DecisionEventType.UPLOAD_JOB_PAUSED
+                    if job.status == "paused"
+                    else terminal_upload_event_type(job.status)
+                ),
                 summary=f"发布只读对账结果为 {outcome}。",
                 actor_type="extension",
                 extra_payload={
@@ -1535,6 +1570,12 @@ class UploadJobService:
     def serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
         spec = self.platform_catalog.get(job.platform_id)
         payload = json.loads(job.result_payload_json or "{}")
+        risk_pause = payload.get("risk_pause")
+        pause_token = (
+            str(risk_pause.get("pause_token") or "").strip()
+            if isinstance(risk_pause, dict)
+            else ""
+        )
         terminal = job.status in {"succeeded", "failed", "cancelled"}
         return {
             "task_kind": str(job.task_kind or "chapter_upload"),
@@ -1564,6 +1605,12 @@ class UploadJobService:
             "claimed_at": isoformat(job.claimed_at),
             "started_at": isoformat(job.started_at),
             "finished_at": isoformat(job.finished_at),
+            "paused_at": isoformat(job.paused_at),
+            "pause_reason": str(job.pause_reason or ""),
+            "pause_token": pause_token,
+            "resumable": bool(
+                job.status == "paused" and not job.abort_requested and pause_token
+            ),
             "terminable": bool(
                 job.deleted_at is None and not terminal and not job.abort_requested
             ),

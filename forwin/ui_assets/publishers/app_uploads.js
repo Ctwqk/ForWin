@@ -39,6 +39,8 @@
         ...uploadJobPayloadLines(data),
         data.current_url ? `当前页面：${data.current_url}` : '',
         data.started_at ? `开始时间：${data.started_at}` : '',
+        data.paused_at ? `暂停时间：${data.paused_at}` : '',
+        data.pause_reason ? `暂停类型：${PAUSE_REASON_LABELS[data.pause_reason] || data.pause_reason}` : '',
         data.finished_at ? `结束时间：${data.finished_at}` : '',
       ].filter(Boolean);
       const el = document.getElementById('upload_status');
@@ -62,11 +64,16 @@
         statusEl.className = 'status';
         return false;
       }
-      const activeCount = items.filter((item) => item.status === 'pending' || item.status === 'running').length;
+      const activeCount = items.filter(
+        (item) => ['pending', 'running', 'reconciling'].includes(item.status),
+      ).length;
+      const pausedCount = items.filter((item) => item.status === 'paused').length;
       statusEl.textContent = activeCount
         ? `最近任务中有 ${activeCount} 条仍在执行或排队，列表会自动刷新。`
-        : `最近展示 ${items.length} 条上传任务。`;
-      statusEl.className = `status ${activeCount ? 'warn' : 'ok'}`;
+        : pausedCount
+          ? `最近任务中有 ${pausedCount} 条等待操作员处理。`
+          : `最近展示 ${items.length} 条上传任务。`;
+      statusEl.className = `status ${activeCount || pausedCount ? 'warn' : 'ok'}`;
       items.forEach((item) => {
         const node = document.createElement('div');
         node.className = 'task-item';
@@ -75,6 +82,8 @@
           item.extension_client_id ? `执行端：${item.extension_client_id}` : '执行端：等待分配',
           item.created_at ? `创建时间：${item.created_at}` : '',
           item.started_at ? `开始时间：${item.started_at}` : '',
+          item.paused_at ? `暂停时间：${item.paused_at}` : '',
+          item.pause_reason ? `暂停类型：${PAUSE_REASON_LABELS[item.pause_reason] || item.pause_reason}` : '',
           item.finished_at ? `结束时间：${item.finished_at}` : '',
           item.message ? `说明：${item.message}` : '',
           item.error ? `错误：${item.error}` : '',
@@ -92,6 +101,11 @@
           link.textContent = item.current_url;
           linkWrap.appendChild(link);
           node.appendChild(linkWrap);
+        }
+        if (item.resumable) {
+          const actions = createNode('div', '', 'task-actions');
+          actions.appendChild(createButton('恢复任务', () => openUploadResumeDialog(item)));
+          node.appendChild(actions);
         }
         listEl.appendChild(node);
       });
@@ -120,7 +134,7 @@
         const data = await res.json();
         renderUploadJob(data);
         await loadUploadJobs(true);
-        if (data.status === 'succeeded' || data.status === 'failed') {
+        if (['succeeded', 'failed', 'cancelled', 'paused'].includes(data.status)) {
           await loadPlatforms();
           return;
         }
@@ -130,6 +144,71 @@
         await run();
       } else {
         uploadPollTimer = window.setTimeout(run, 0);
+      }
+    }
+
+    function openUploadResumeDialog(job) {
+      if (!job || !job.resumable || !job.pause_token || !job.pause_reason) return;
+      pendingResumeJob = job;
+      document.getElementById('upload_resume_summary').textContent = [
+        `${job.display_name} | ${job.book_name} / ${job.chapter_title}`,
+        `暂停类型：${PAUSE_REASON_LABELS[job.pause_reason] || job.pause_reason}`,
+        job.paused_at ? `暂停时间：${job.paused_at}` : '',
+      ].filter(Boolean).join('\n');
+      document.getElementById('upload_resume_reason').value = '';
+      document.getElementById('upload_resume_status').textContent = '';
+      document.getElementById('upload_resume_submit').disabled = false;
+      document.getElementById('upload_resume_dialog').showModal();
+      document.getElementById('upload_resume_reason').focus();
+    }
+
+    function closeUploadResumeDialog() {
+      const dialog = document.getElementById('upload_resume_dialog');
+      if (dialog.open) dialog.close();
+      pendingResumeJob = null;
+    }
+
+    async function resumeUploadJob(event) {
+      event.preventDefault();
+      const job = pendingResumeJob;
+      if (!job) return;
+      const reason = document.getElementById('upload_resume_reason').value.trim();
+      const statusEl = document.getElementById('upload_resume_status');
+      const submit = document.getElementById('upload_resume_submit');
+      if (reason.length < 3) {
+        statusEl.textContent = '请填写至少 3 个字符的操作员理由。';
+        statusEl.className = 'status warn';
+        return;
+      }
+      submit.disabled = true;
+      statusEl.textContent = '正在恢复任务...';
+      statusEl.className = 'status';
+      try {
+        const res = await fetch(`/api/publishers/upload-jobs/${job.job_id}/resume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expected_pause_reason: job.pause_reason,
+            expected_pause_token: job.pause_token,
+            operator_reason: reason,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = apiErrorMessage(data, '恢复任务失败。');
+          statusEl.className = 'status warn';
+          return;
+        }
+        const resumedJob = data.job || job;
+        closeUploadResumeDialog();
+        renderUploadJob(resumedJob);
+        await loadUploadJobs(true);
+        await pollUploadJob(resumedJob.job_id, true);
+      } catch (error) {
+        statusEl.textContent = error instanceof Error ? error.message : String(error);
+        statusEl.className = 'status warn';
+      } finally {
+        submit.disabled = false;
       }
     }
 
@@ -175,4 +254,20 @@
       document.getElementById('upload_status').textContent += '\\n任务已入队，等待首选 Linux 扩展优先领取。';
       await loadUploadJobs(true);
       await pollUploadJob(data.job_id, true);
+    }
+    let pendingResumeJob = null;
+
+    const PAUSE_REASON_LABELS = {
+      captcha: 'CAPTCHA / 人机验证',
+      mfa: 'MFA / 二次验证',
+      account_risk: '账号风险',
+    };
+
+    function apiErrorMessage(data, fallback) {
+      const detail = data && data.detail;
+      if (typeof detail === 'string' && detail) return detail;
+      if (detail && typeof detail === 'object') {
+        return detail.message || detail.code || fallback;
+      }
+      return (data && (data.message || data.error)) || fallback;
     }

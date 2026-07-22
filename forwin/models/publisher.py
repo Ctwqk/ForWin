@@ -400,6 +400,43 @@ class PublisherUploadReceipt(Base):
     )
 
 
+class PublisherOperatorAction(Base):
+    __tablename__ = "publisher_operator_actions"
+    __table_args__ = (
+        UniqueConstraint(
+            "upload_job_id",
+            "action",
+            "pause_token",
+            name="uq_publisher_operator_actions_job_action_pause",
+        ),
+        Index(
+            "ix_publisher_operator_actions_job_created",
+            "upload_job_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    upload_job_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_upload_jobs.id"),
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    pause_token: Mapped[str] = mapped_column(String, nullable=False)
+    actor_id: Mapped[str] = mapped_column(String, nullable=False)
+    auth_method: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    old_state_json: Mapped[str] = mapped_column(Text, nullable=False)
+    new_state_json: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=func.now(),
+    )
+
+
 class PublisherWorkBinding(Base):
     __tablename__ = "publisher_work_bindings"
     __table_args__ = (

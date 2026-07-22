@@ -3659,6 +3659,119 @@
     }
   }
 
+  function detectPublisherRiskSignal(boundary = 'unknown') {
+    const visibleText = pageText().slice(0, 12000);
+    const rules = [
+      {
+        riskReason: 'account_risk',
+        selectors: [
+          '[data-risk-control]',
+          '[class*="account-risk"]',
+          '[class*="risk-control"]',
+          '[class*="security-alert"]',
+        ],
+        phrases: [
+          '账号存在风险',
+          '账户存在风险',
+          '账号异常',
+          '账户异常',
+          '账号已受限',
+          '账号安全风险',
+          '请先完成实名认证',
+          '需要身份核验',
+        ],
+      },
+      {
+        riskReason: 'mfa',
+        selectors: [
+          'input[autocomplete="one-time-code"]',
+          'input[name*="otp" i]',
+          'input[id*="otp" i]',
+          'input[name*="sms" i][name*="code" i]',
+          'input[placeholder*="短信验证码"]',
+          'input[placeholder*="动态口令"]',
+        ],
+        phrases: [
+          '短信验证码',
+          '邮箱验证码',
+          '动态口令',
+          '双重验证',
+          '两步验证',
+          '二次验证',
+          '验证您的身份',
+        ],
+      },
+      {
+        riskReason: 'captcha',
+        selectors: [
+          'iframe[src*="captcha" i]',
+          '[class*="captcha" i]',
+          '[id*="captcha" i]',
+          '[class*="geetest" i]',
+          '[class*="yidun" i]',
+          '[class*="slider-captcha" i]',
+        ],
+        phrases: [
+          '人机验证',
+          '滑块验证',
+          '请完成验证',
+          '安全验证',
+          '拖动滑块',
+          '请依次点击',
+        ],
+      },
+    ];
+    for (const rule of rules) {
+      for (const selector of rule.selectors) {
+        const node = document.querySelector(selector);
+        if (node && isVisibleElement(node)) {
+          return {
+            detected: true,
+            riskReason: rule.riskReason,
+            boundary,
+            selector,
+            matchedText: String(node.innerText || node.textContent || '').trim().slice(0, 500),
+          };
+        }
+      }
+      const matchedText = rule.phrases.find((phrase) => visibleText.includes(phrase));
+      if (matchedText) {
+        return {
+          detected: true,
+          riskReason: rule.riskReason,
+          boundary,
+          selector: 'body',
+          matchedText,
+        };
+      }
+    }
+    return { detected: false, boundary };
+  }
+
+  function buildRiskPauseResult(boundary) {
+    const signal = detectPublisherRiskSignal(boundary);
+    if (!signal.detected) {
+      return { detected: false, riskPause: false, currentUrl: window.location.href };
+    }
+    const message = `Publisher ${signal.riskReason} risk signal detected.`;
+    return {
+      ok: false,
+      detected: true,
+      riskPause: true,
+      riskReason: signal.riskReason,
+      currentUrl: window.location.href,
+      errorCode: 'publisher-risk-pause',
+      error: message,
+      riskEvidence: {
+        detector: 'publisher-risk-v1',
+        boundary: signal.boundary,
+        selector: signal.selector,
+        matchedText: signal.matchedText,
+        message,
+      },
+    };
+  }
+
   async function runUpload(payload) {
     setDebugStep('run-upload-start', {
       platform: String(payload?.platform || ''),
@@ -3666,6 +3779,10 @@
       chapterTitle: String(payload?.chapter_title || ''),
       publish: Boolean(payload?.publish),
     });
+    const initialRisk = buildRiskPauseResult('pre-mutation');
+    if (initialRisk.riskPause) {
+      return initialRisk;
+    }
     if (window.location.href.includes('login')) {
       return {
         ok: false,
@@ -3695,6 +3812,10 @@
     setDebugStep('run-upload-editor-ready-wait');
     await waitForEditorReady(10000);
     setDebugStep('run-upload-editor-ready');
+    const editorRisk = buildRiskPauseResult('pre-mutation');
+    if (editorRisk.riskPause) {
+      return editorRisk;
+    }
     if (window.location.href.includes('write.qq.com')) {
       const qidianChapterReady = await prepareQidianNewChapter();
       if (qidianChapterReady?.pending) {
@@ -3806,15 +3927,27 @@
     }
     const contentEvidence = contentProof.resultPayload;
     if (!(window.location.href.includes('write.qq.com') && payload.publish && payload.trustedPublishDone)) {
+      const saveRisk = buildRiskPauseResult('before-save');
+      if (saveRisk.riskPause) {
+        return saveRisk;
+      }
       setDebugStep('run-upload-click-action-start', { publish: Boolean(payload.publish) });
       await clickAction(Boolean(payload.publish));
       setDebugStep('run-upload-click-action-done', { publish: Boolean(payload.publish) });
       if (window.location.href.includes('fanqienovel.com')) {
+        const confirmRisk = buildRiskPauseResult('before-confirm');
+        if (confirmRisk.riskPause) {
+          return confirmRisk;
+        }
         setDebugStep('run-upload-fanqie-confirm-start', { publish: Boolean(payload.publish) });
         await confirmFanqiePublishIfNeeded(Boolean(payload.publish));
         setDebugStep('run-upload-fanqie-confirm-done', { publish: Boolean(payload.publish) });
       }
       if (window.location.href.includes('write.qq.com') && payload.publish) {
+        const confirmRisk = buildRiskPauseResult('before-confirm');
+        if (confirmRisk.riskPause) {
+          return confirmRisk;
+        }
         const qidianConfirm = await confirmQidianPublishIfNeeded();
         if (qidianConfirm?.needsTrustedConfirm) {
           return {
@@ -3838,6 +3971,10 @@
       waitForCondition(() => !window.location.href.includes('login'), 4000),
       sleep(800),
     ]);
+    const postActionRisk = buildRiskPauseResult('post-action');
+    if (postActionRisk.riskPause) {
+      return postActionRisk;
+    }
     if (window.location.href.includes('write.qq.com') && !payload.publish) {
       setDebugStep('run-upload-qidian-draft-save-wait-start');
       await waitForQidianDraftSaved(payload.chapter_title, 30000);
@@ -4044,6 +4181,17 @@
     const expectedContentSha256 = String(payload?.content_sha256 || '').trim().toLowerCase();
     const currentUrl = String(window.location.href || '');
     const text = pageText();
+    const risk = buildRiskPauseResult('read-only-reconciliation');
+    if (risk.riskPause) {
+      return {
+        outcome: 'risk_pause',
+        riskReason: risk.riskReason,
+        currentUrl,
+        selector: risk.riskEvidence.selector,
+        platformMessage: risk.riskEvidence.matchedText,
+        reason: risk.error,
+      };
+    }
     if (taskKind === 'cover_upload') {
       const remoteBookId = observedCoverRemoteBookId(payload, currentUrl);
       const acceptanceSignal = coverAcceptanceSignal(text, '', true);
@@ -4114,6 +4262,10 @@
   }
 
   async function prepareCoverUpload(payload) {
+    const risk = buildRiskPauseResult('pre-mutation');
+    if (risk.riskPause) {
+      return risk;
+    }
     const selector = coverFileInputSelector();
     if (!selector) {
       return {
@@ -4156,6 +4308,10 @@
     const selector = payload.fileInputSelector || coverFileInputSelector();
     const input = selector ? document.querySelector(selector) : null;
     const beforeText = pageText();
+    const saveRisk = buildRiskPauseResult('before-save');
+    if (saveRisk.riskPause) {
+      return saveRisk;
+    }
     if (input) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -4165,6 +4321,10 @@
       6000,
     );
     const text = pageText();
+    const postActionRisk = buildRiskPauseResult('post-action');
+    if (postActionRisk.riskPause) {
+      return postActionRisk;
+    }
     const remoteBookId = observedCoverRemoteBookId(payload, window.location.href);
     if (!acceptanceSignal || !remoteBookId) {
       return {
@@ -4211,6 +4371,10 @@
   }
 
   async function runAuditSync(payload) {
+    const risk = buildRiskPauseResult('read-only-audit');
+    if (risk.riskPause) {
+      return risk;
+    }
     await sleep(800);
     const text = pageText();
     const auditState = normalizeAuditStateFromText(text);
@@ -4265,6 +4429,10 @@
     }
     if (message.action === 'inspect-login-state') {
       sendResponse(inspectLoginState());
+      return false;
+    }
+    if (message.action === 'inspect-publisher-risk') {
+      sendResponse(buildRiskPauseResult(message.payload?.boundary || 'pre-mutation'));
       return false;
     }
     if (message.action === 'extract-login-qr-image') {

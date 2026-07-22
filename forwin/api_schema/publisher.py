@@ -99,8 +99,51 @@ class PublisherUploadJobResponse(BaseModel):
     claimed_at: str = ""
     started_at: str = ""
     finished_at: str = ""
+    paused_at: str = ""
+    pause_reason: Literal["", "captcha", "mfa", "account_risk"] = ""
+    pause_token: str = ""
+    resumable: bool = False
     terminable: bool = False
     deletable: bool = False
+
+
+class PublisherUploadResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_pause_reason: Literal["captcha", "mfa", "account_risk"]
+    expected_pause_token: str = Field(min_length=1, max_length=200)
+    operator_reason: str = Field(min_length=3, max_length=1000)
+
+
+class PublisherUploadResumeTransition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pause_token: str
+    pause_reason: Literal["captcha", "mfa", "account_risk"]
+    actor: str
+    auth_method: Literal["basic", "trusted_proxy"]
+    operator_reason: str
+    transitioned_at: str
+    attempt_id: str
+    attempt_kind: Literal["execute", "reconcile"]
+    attempt_phase: Literal[
+        "claimed",
+        "mutation_started",
+        "observation_started",
+        "receipt_observed",
+    ]
+    old_state: Literal["paused"]
+    new_state: Literal["pending", "reconciling"]
+
+
+class PublisherUploadResumeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: Literal[True] = True
+    disposition: Literal["applied", "idempotent"]
+    server_time: str
+    job: PublisherUploadJobResponse
+    transition: PublisherUploadResumeTransition
 
 
 class ExtensionBrowserCookie(BaseModel):
@@ -315,6 +358,26 @@ class UploadAttemptPhaseRequest(_AttemptFenceRequest):
     current_url: str = Field(default="", max_length=4000)
 
 
+class PublisherRiskPauseEvidence(_StrictPublisherProtocolModel):
+    detector: str = Field(default="publisher-risk-v1", max_length=200)
+    boundary: str = Field(min_length=1, max_length=200)
+    selector: str = Field(default="", max_length=500)
+    matched_text: str = Field(default="", max_length=1000)
+    message: str = Field(default="", max_length=1000)
+
+
+class UploadAttemptPauseRequest(_AttemptFenceRequest):
+    risk_reason: Literal["captcha", "mfa", "account_risk"]
+    observed_at: str = Field(min_length=1, max_length=100)
+    current_url: str = Field(default="", max_length=4000)
+    evidence: PublisherRiskPauseEvidence
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: str) -> str:
+        return PublisherUploadReceiptEvidence.validate_observed_at(value)
+
+
 class ExtensionChapterUploadResultDetails(_StrictPublisherProtocolModel):
     pass
 
@@ -417,6 +480,7 @@ class PublisherReconciliationEvidence(_StrictPublisherProtocolModel):
     pagination_complete: bool | None = None
     reason: str = Field(default="", max_length=1000)
     platform_message: str = Field(default="", max_length=1000)
+    risk_reason: Literal["", "captcha", "mfa", "account_risk"] = ""
 
 
 class PublisherUploadReceiptEvidence(_StrictPublisherProtocolModel):
@@ -476,12 +540,10 @@ class UploadAttemptReconcileRequest(_AttemptFenceRequest):
             raise ValueError("matched reconciliation requires a receipt")
         if self.outcome != "matched" and self.receipt is not None:
             raise ValueError("receipt is only valid for matched reconciliation")
-        if (
-            self.outcome == "risk_pause"
-            and not self.evidence.reason.strip()
-            and not self.error_message.strip()
-        ):
-            raise ValueError("risk_pause requires an evidence reason")
+        if self.outcome == "risk_pause" and not self.evidence.risk_reason:
+            raise ValueError("risk_pause requires a typed risk reason")
+        if self.outcome != "risk_pause" and self.evidence.risk_reason:
+            raise ValueError("risk reason is only valid for risk_pause")
         return self
 
 
@@ -515,6 +577,10 @@ class UploadAttemptStateResponse(_StrictPublisherProtocolModel):
         "failed",
         "cancelled",
         "expired",
+        "paused",
+        "indeterminate",
+        "interrupted",
+        "superseded",
     ]
     lease_epoch: int = Field(gt=0)
     phase: Literal[
@@ -542,6 +608,12 @@ class UploadAttemptResultResponse(UploadAttemptStateResponse):
     available_at: str | None = None
     reconcile_after: str | None = None
     pause_reason: str = ""
+
+
+class UploadAttemptPauseResponse(UploadAttemptStateResponse):
+    disposition: Literal["applied", "idempotent", "abort_converged"] = "applied"
+    pause_reason: Literal["captcha", "mfa", "account_risk"]
+    pause_token: str
 
 
 class UploadAttemptReceiptResponse(UploadAttemptStateResponse):
@@ -741,6 +813,9 @@ __all__ = [
     "PublisherUploadJobCreateRequest",
     "ProjectChapterPublishRequest",
     "PublisherUploadJobResponse",
+    "PublisherUploadResumeRequest",
+    "PublisherUploadResumeTransition",
+    "PublisherUploadResumeResponse",
     "ExtensionBrowserCookie",
     "ExtensionPlatformHeartbeat",
     "ExtensionHeartbeatRequest",
@@ -760,6 +835,8 @@ __all__ = [
     "ExtensionAuditSyncClaimJob",
     "UploadAttemptHeartbeatRequest",
     "UploadAttemptPhaseRequest",
+    "PublisherRiskPauseEvidence",
+    "UploadAttemptPauseRequest",
     "ExtensionClaimCommentSyncJobRequest",
     "ExtensionClaimCommentSyncJobResponse",
     "UploadAttemptResultRequest",
@@ -768,6 +845,7 @@ __all__ = [
     "UploadAttemptReconcileRequest",
     "UploadAttemptStateResponse",
     "UploadAttemptResultResponse",
+    "UploadAttemptPauseResponse",
     "UploadAttemptReceiptResponse",
     "UploadAttemptReconcileResponse",
     "CommentSyncJobResultRequest",

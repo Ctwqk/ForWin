@@ -169,6 +169,7 @@ export function createUploadJournal({
           local_phase: 'claimed',
           receipt: null,
           result: null,
+          pause: null,
           created_at: timestamp,
           updated_at: timestamp,
           acked_at: null,
@@ -278,6 +279,29 @@ export function createUploadJournal({
       });
     },
 
+    async savePause(attemptId, pause) {
+      return schedule(async () => {
+        await ensureLoaded();
+        return updateRecord(attemptId, (record) => {
+          assertNotAcknowledged(record);
+          if (record.pause) {
+            if (!sameValue(record.pause, pause)) {
+              throw new Error(`conflicting pause for upload attempt ${attemptId}`);
+            }
+            return false;
+          }
+          if (!['claimed', 'mutation_started'].includes(record.local_phase)) {
+            throw new Error(
+              `cannot save pause from ${record.local_phase} for attempt ${attemptId}`,
+            );
+          }
+          record.pause = clone(pause);
+          record.local_phase = 'paused';
+          return true;
+        });
+      });
+    },
+
     async markAcknowledged(attemptId) {
       return schedule(async () => {
         await ensureLoaded();
@@ -285,7 +309,7 @@ export function createUploadJournal({
           if (record.local_phase === 'acked') {
             return false;
           }
-          if (record.local_phase !== 'ack_pending') {
+          if (!['ack_pending', 'paused'].includes(record.local_phase)) {
             throw new Error(
               `cannot acknowledge ${record.local_phase} attempt ${attemptId}`,
             );

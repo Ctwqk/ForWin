@@ -47,6 +47,7 @@ test('background persists the upload journal and wires fenced attempt APIs', asy
     'submitUploadAttemptResult',
     'submitUploadReceipt',
     'reconcileUploadAttempt',
+    'pauseUploadAttempt',
   ]) {
     assert.match(source, new RegExp(`async\\s+${method}\\s*\\(`));
     assert.match(source, new RegExp(`client\\.${method}\\(`));
@@ -61,6 +62,17 @@ test('background routes reconciliation through a dedicated read-only platform co
   assert.match(source, /async\s+function\s+runReconciliationCommand\s*\(/);
   assert.match(source, /'reconcile-upload'/);
   assert.match(source, /runReconciliationCommand,/);
+});
+
+test('background exposes read-only risk inspection and checks before trusted mutations', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /async\s+function\s+inspectPlatformRiskCommand\s*\(/);
+  assert.match(source, /'inspect-publisher-risk'/);
+  assert.match(source, /inspectPlatformRiskCommand,/);
+  assert.match(source, /riskBeforeTrustedMutation/);
+  assert.match(source, /riskBeforeTrustedMutation[\s\S]*applyTrustedFanqieBodyInput/);
+  assert.match(source, /prepare-cover-upload[\s\S]*riskBeforeTrustedMutation[\s\S]*setFileInputFiles/);
 });
 
 test('background throttles login QR notifications at the backend boundary', async () => {

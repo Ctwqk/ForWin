@@ -74,6 +74,21 @@ function uploadResult(overrides = {}) {
   };
 }
 
+function riskPause(overrides = {}) {
+  return {
+    risk_reason: 'captcha',
+    observed_at: '2026-07-21T12:01:00Z',
+    current_url: 'https://write.qq.com/portal/dashboard',
+    evidence: {
+      detector: 'publisher-risk-v1',
+      boundary: 'pre-mutation',
+      selector: 'iframe[src*="captcha"]',
+      matched_text: '',
+    },
+    ...overrides,
+  };
+}
+
 function memoryStore(initialValue) {
   let value = initialValue == null ? initialValue : structuredClone(initialValue);
   let writes = 0;
@@ -132,6 +147,7 @@ test('recordClaim persists the new record before its promise resolves', async ()
   assert.equal(record.local_phase, 'claimed');
   assert.equal(record.receipt, null);
   assert.equal(record.result, null);
+  assert.equal(record.pause, null);
   assert.equal(record.created_at, '2026-07-21T12:00:00Z');
   assert.equal(record.updated_at, '2026-07-21T12:00:00Z');
   assert.equal(record.acked_at, null);
@@ -185,10 +201,49 @@ test('attempt-specific operations reject an unknown attempt', async () => {
     () => journal.markMutationStarted('missing-attempt'),
     () => journal.saveReceipt('missing-attempt', uploadReceipt()),
     () => journal.saveResult('missing-attempt', uploadResult({ outcome: 'failed' })),
+    () => journal.savePause('missing-attempt', riskPause()),
     () => journal.markAcknowledged('missing-attempt'),
   ];
   for (const operation of operations) {
     await assert.rejects(operation(), /unknown upload attempt.*missing-attempt/);
+  }
+});
+
+test('risk pause is durable before backend acknowledgement from either safe phase', async () => {
+  for (const mutationStarted of [false, true]) {
+    const store = memoryStore();
+    const journal = createUploadJournal({ read: store.read, write: store.write });
+    const claim = uploadClaim({
+      attempt: { attempt_id: mutationStarted ? 'attempt-after' : 'attempt-before' },
+    });
+    const attemptId = claim.attempt.attempt_id;
+    await journal.recordClaim({ clientId: 'extension-1', claim });
+    if (mutationStarted) {
+      await journal.markMutationStarted(attemptId);
+    }
+
+    const pause = riskPause({
+      evidence: {
+        ...riskPause().evidence,
+        boundary: mutationStarted ? 'post-save' : 'pre-mutation',
+      },
+    });
+    const paused = await journal.savePause(attemptId, pause);
+
+    assert.equal(paused.local_phase, 'paused');
+    assert.deepEqual(paused.pause, pause);
+    assert.deepEqual(store.value.records[0].pause, pause);
+    const writesAfterPause = store.writes;
+    assert.deepEqual(await journal.savePause(attemptId, structuredClone(pause)), paused);
+    assert.equal(store.writes, writesAfterPause);
+    await assert.rejects(
+      journal.savePause(attemptId, riskPause({ risk_reason: 'mfa' })),
+      /conflicting pause.*attempt/,
+    );
+
+    const acknowledged = await journal.markAcknowledged(attemptId);
+    assert.equal(acknowledged.local_phase, 'acked');
+    assert.deepEqual(acknowledged.pause, pause);
   }
 });
 

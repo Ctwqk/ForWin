@@ -133,3 +133,22 @@ test('platform agent never treats visible historical cover state as a matched as
   assert.match(block, /matchedContentSha256:\s*''/);
   assert.doesNotMatch(block, /outcome:\s*accepted\s*\?/);
 });
+
+test('platform agent detects typed risk signals without challenge bypass actions', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+  const detector = source.match(
+    /function\s+detectPublisherRiskSignal\s*\([^)]*\)\s*\{[\s\S]*?\n  \}\n\n  function buildRiskPauseResult/,
+  )?.[0] || '';
+
+  assert.ok(detector);
+  assert.match(detector, /captcha/);
+  assert.match(detector, /mfa/);
+  assert.match(detector, /account_risk/);
+  assert.match(source, /message\.action\s*===\s*'inspect-publisher-risk'/);
+  assert.match(source, /buildRiskPauseResult\('pre-mutation'/);
+  assert.match(source, /buildRiskPauseResult\('before-save'/);
+  assert.match(source, /buildRiskPauseResult\('before-confirm'/);
+  assert.match(source, /buildRiskPauseResult\('post-action'/);
+  assert.doesNotMatch(detector, /\.click\s*\(/);
+  assert.doesNotMatch(detector, /dispatchEvent\s*\(/);
+});

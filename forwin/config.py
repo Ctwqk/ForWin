@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
@@ -286,6 +288,12 @@ def _infrastructure_env_values() -> dict[str, object]:
         "http_port": _env_int(env, "FORWIN_HTTP_PORT", 8899),
         "http_basic_user": _env_str(env, "FORWIN_HTTP_BASIC_USER"),
         "http_basic_password": _env_str(env, "FORWIN_HTTP_BASIC_PASSWORD"),
+        "http_trusted_operator_header": _env_str(
+            env, "FORWIN_HTTP_TRUSTED_OPERATOR_HEADER"
+        ),
+        "http_trusted_operator_proxies": tuple(
+            _env_csv(env, "FORWIN_HTTP_TRUSTED_OPERATOR_PROXIES")
+        ),
         "http_basic_exempt_paths": tuple(
             _env_csv(env, "FORWIN_HTTP_BASIC_EXEMPT_PATHS")
         )
@@ -396,6 +404,8 @@ class _InfrastructureFields:
     http_port: int = 8899
     http_basic_user: str = ""
     http_basic_password: str = ""
+    http_trusted_operator_header: str = ""
+    http_trusted_operator_proxies: tuple[str, ...] = ()
     http_basic_exempt_paths: tuple[str, ...] = DEFAULT_HTTP_BASIC_EXEMPT_PATHS
     allow_unauthenticated_lan: bool = False
     allow_bind_all_interfaces: bool = False
@@ -452,6 +462,28 @@ class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ig
             raise ValueError(
                 "FORWIN_HTTP_BASIC_USER and FORWIN_HTTP_BASIC_PASSWORD must be set together"
             )
+        trusted_header = str(self.http_trusted_operator_header or "").strip()
+        trusted_proxies = tuple(
+            str(value or "").strip()
+            for value in self.http_trusted_operator_proxies
+            if str(value or "").strip()
+        )
+        if bool(trusted_header) != bool(trusted_proxies):
+            raise ValueError(
+                "FORWIN_HTTP_TRUSTED_OPERATOR_HEADER and "
+                "FORWIN_HTTP_TRUSTED_OPERATOR_PROXIES must be set together"
+            )
+        if trusted_header and not re.fullmatch(r"[A-Za-z0-9-]+", trusted_header):
+            raise ValueError(
+                "FORWIN_HTTP_TRUSTED_OPERATOR_HEADER must be a valid HTTP header name"
+            )
+        for network in trusted_proxies:
+            try:
+                ipaddress.ip_network(network, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    "FORWIN_HTTP_TRUSTED_OPERATOR_PROXIES must contain valid IP networks"
+                ) from exc
         bind = str(self.http_bind or "").strip().lower()
         local_binds = {"", "127.0.0.1", "localhost", "::1"}
         binds_all = bind in {"0.0.0.0", "::"}

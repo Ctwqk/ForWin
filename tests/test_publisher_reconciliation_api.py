@@ -9,13 +9,17 @@ from pydantic import ValidationError
 
 from forwin.api_schema import (
     ExtensionClaimUploadJobRequest,
+    PublisherUploadResumeRequest,
     UploadAttemptHeartbeatRequest,
+    UploadAttemptPauseRequest,
     UploadAttemptPhaseRequest,
     UploadAttemptReceiptRequest,
     UploadAttemptReconcileRequest,
     UploadAttemptResultRequest,
 )
+from forwin.api_auth import OperatorPrincipal
 from forwin.application.publisher import PublisherApplicationService
+from forwin.config import InfrastructureConfig
 from forwin.http.adapters.api_publisher_routes import build_handlers
 from forwin.http import HttpRuntime, create_app
 from forwin.publisher_runtime.attempts import PublisherAttemptFenceError
@@ -120,6 +124,54 @@ class _Manager:
             _state_payload(attempt_phase=str(kwargs["phase"])),
         )
 
+    def pause_upload_attempt(self, **kwargs):
+        return self._respond(
+            "pause",
+            kwargs,
+            _state_payload(
+                status="paused",
+                attempt_status="paused",
+                lease_expires_at="",
+                pause_reason=str(kwargs["risk_reason"]),
+                pause_token=str(kwargs["attempt_id"]),
+                pause_disposition="applied",
+            ),
+        )
+
+    def resume_upload_job(self, **kwargs):
+        transition = {
+            "pause_token": str(kwargs["expected_pause_token"]),
+            "pause_reason": str(kwargs["expected_pause_reason"]),
+            "actor": str(kwargs["operator_actor_id"]),
+            "auth_method": str(kwargs["operator_auth_method"]),
+            "operator_reason": str(kwargs["operator_reason"]),
+            "transitioned_at": NOW,
+            "attempt_id": str(kwargs["expected_pause_token"]),
+            "attempt_kind": "execute",
+            "attempt_phase": "claimed",
+            "old_state": "paused",
+            "new_state": "pending",
+        }
+        return self._respond(
+            "resume",
+            kwargs,
+            {
+                "disposition": "applied",
+                "job": {
+                    "job_id": "job-1",
+                    "platform": "qidian",
+                    "display_name": "起点中文网",
+                    "status": "pending",
+                    "book_name": "Book",
+                    "chapter_title": "Chapter 1",
+                    "body": "body",
+                    "publish": False,
+                    "message": "等待重新领取",
+                },
+                "transition": transition,
+            },
+        )
+
     def update_upload_job_result(self, **kwargs):
         return self._respond(
             "result",
@@ -178,6 +230,17 @@ def _client(manager: _Manager) -> TestClient:
     return TestClient(create_app(runtime))
 
 
+def _authenticated_client(manager: _Manager) -> TestClient:
+    runtime = HttpRuntime(
+        config=InfrastructureConfig(
+            http_basic_user="alice",
+            http_basic_password="secret",
+        )
+    )
+    runtime.publisher_manager = manager
+    return TestClient(create_app(runtime))
+
+
 def test_protocol_requests_forbid_legacy_and_server_owned_fields() -> None:
     with pytest.raises(ValidationError):
         UploadAttemptHeartbeatRequest(
@@ -231,6 +294,13 @@ def test_protocol_requests_forbid_legacy_and_server_owned_fields() -> None:
             observed_at=NOW,
             evidence={"arbitrary": "unbounded"},
         )
+    with pytest.raises(ValidationError):
+        PublisherUploadResumeRequest(
+            expected_pause_reason="captcha",
+            expected_pause_token="attempt-1",
+            operator_reason="captcha completed manually",
+            operator_id="forged-operator",
+        )
 
 
 def test_claim_returns_nested_strict_execution_contract() -> None:
@@ -261,6 +331,114 @@ def test_claim_returns_nested_strict_execution_contract() -> None:
             },
         )
     ]
+
+
+def test_risk_pause_endpoint_preserves_typed_evidence_and_attempt_fence() -> None:
+    manager = _Manager()
+    response = _handlers(manager)["pause_publisher_upload_attempt"](
+        "job-1",
+        "attempt-1",
+        UploadAttemptPauseRequest(
+            client_id="extension-1",
+            lease_epoch=7,
+            risk_reason="captcha",
+            observed_at=NOW,
+            current_url="https://write.qq.com/portal/dashboard",
+            evidence={
+                "detector": "publisher-risk-v1",
+                "boundary": "pre-mutation",
+                "selector": 'iframe[src*="captcha"]',
+            },
+        ),
+        x_forwin_extension_key="secret",
+    )
+
+    assert response.job_status == "paused"
+    assert response.attempt_status == "paused"
+    assert response.next_action == "operator_review"
+    assert response.pause_reason == "captcha"
+    assert response.pause_token == "attempt-1"
+    assert manager.calls[-1] == (
+        "pause",
+        {
+            "job_id": "job-1",
+            "attempt_id": "attempt-1",
+            "worker_id": "extension-1",
+            "lease_epoch": 7,
+            "risk_reason": "captcha",
+            "current_url": "https://write.qq.com/portal/dashboard",
+            "evidence": {
+                "detector": "publisher-risk-v1",
+                "boundary": "pre-mutation",
+                "selector": 'iframe[src*="captcha"]',
+                "matched_text": "",
+                "message": "",
+            },
+            "observed_at": NOW,
+        },
+    )
+
+
+def test_operator_resume_forwards_stable_principal_and_aba_token() -> None:
+    manager = _Manager()
+    service = PublisherApplicationService(
+        get_publisher_manager=lambda: manager,
+        extension_root=Path("browser_extension/forwin-publisher"),
+    )
+
+    response = service.resume_publisher_upload_job(
+        "job-1",
+        PublisherUploadResumeRequest(
+            expected_pause_reason="account_risk",
+            expected_pause_token="attempt-1",
+            operator_reason="account review completed",
+        ),
+        operator_principal=OperatorPrincipal(
+            actor_id="proxy:oncall@example.com",
+            auth_method="trusted_proxy",
+        ),
+    )
+
+    assert response.job.status == "pending"
+    assert response.transition.actor == "proxy:oncall@example.com"
+    assert response.transition.pause_token == "attempt-1"
+    assert manager.calls[-1][1]["operator_auth_method"] == "trusted_proxy"
+
+
+def test_resume_http_route_requires_and_audits_basic_principal() -> None:
+    manager = _Manager()
+    client = _authenticated_client(manager)
+    request = {
+        "expected_pause_reason": "captcha",
+        "expected_pause_token": "attempt-1",
+        "operator_reason": "captcha completed manually",
+    }
+
+    rejected = client.post("/api/publishers/upload-jobs/job-1/resume", json=request)
+    accepted = client.post(
+        "/api/publishers/upload-jobs/job-1/resume",
+        json=request,
+        auth=("alice", "secret"),
+    )
+
+    assert rejected.status_code == 401
+    assert accepted.status_code == 200
+    assert accepted.json()["transition"]["actor"] == "basic:alice"
+    assert manager.calls[-1][1]["operator_actor_id"] == "basic:alice"
+
+
+def test_resume_http_route_fails_closed_when_operator_auth_is_unconfigured() -> None:
+    response = _client(_Manager()).post(
+        "/api/publishers/upload-jobs/job-1/resume",
+        json={
+            "expected_pause_reason": "captcha",
+            "expected_pause_token": "attempt-1",
+            "operator_reason": "captcha completed manually",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "operator_auth_not_configured"
 
 
 def test_attempt_heartbeat_and_phase_forward_path_fence_without_lease_override() -> (
@@ -392,7 +570,7 @@ def test_reconcile_forwards_read_only_evidence_and_conditional_receipt() -> None
 
     assert response.job_status == "reconciling"
     assert response.execution_mode == "reconcile"
-    assert response.attempt_status == "failed"
+    assert response.attempt_status == "indeterminate"
     assert manager.calls == [
         (
             "reconcile",

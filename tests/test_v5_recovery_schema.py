@@ -24,6 +24,7 @@ RECOVERY_TABLES = {
     "publisher_upload_jobs",
     "publisher_upload_attempts",
     "publisher_upload_receipts",
+    "publisher_operator_actions",
 }
 
 
@@ -147,6 +148,7 @@ def test_recovery_models_are_registered_and_exported() -> None:
         "PostCanonMaintenanceRun",
         "PublisherUploadAttempt",
         "PublisherUploadReceipt",
+        "PublisherOperatorAction",
     ):
         assert hasattr(models, name)
 
@@ -489,6 +491,7 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         ("publisher_upload_jobs", "publisher_upload_attempts"),
         ("publisher_upload_jobs", "publisher_upload_receipts"),
         ("publisher_upload_attempts", "publisher_upload_receipts"),
+        ("publisher_upload_jobs", "publisher_operator_actions"),
     ):
         assert create_position[parent] < create_position[dependent]
 
@@ -505,6 +508,7 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         ("publisher_upload_receipts", "publisher_upload_attempts"),
         ("publisher_upload_receipts", "publisher_upload_jobs"),
         ("publisher_upload_attempts", "publisher_upload_jobs"),
+        ("publisher_operator_actions", "publisher_upload_jobs"),
         ("publisher_upload_jobs", "canon_commit_records"),
     ):
         assert drop_position[dependent] < drop_position[parent]

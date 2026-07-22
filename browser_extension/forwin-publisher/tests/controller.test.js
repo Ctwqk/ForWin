@@ -113,6 +113,11 @@ function makeController(overrides = {}, journalStore = makeMemoryUploadJournalSt
       attempt_status: 'succeeded',
       job_status: 'succeeded',
     }),
+    pauseUploadAttempt: async () => ({
+      attempt_status: 'paused',
+      job_status: 'paused',
+      next_action: 'operator_review',
+    }),
     claimNextCommentSyncJob: async () => ({ found: false, job: null }),
     syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
     notifyLoginQr: async (payload) => {
@@ -186,6 +191,7 @@ function makeController(overrides = {}, journalStore = makeMemoryUploadJournalSt
       outcome: 'indeterminate',
       reason: 'No conclusive remote evidence.',
     }),
+    inspectPlatformRiskCommand: async () => ({ detected: false }),
     runCommentSyncCommand: async () => ({
       ok: true,
       currentUrl: 'https://fanqienovel.com/main/writer/',
@@ -977,6 +983,243 @@ test('controller persists and acknowledges mutation_started before running the m
   await controller.executeUploadClaim(makeUploadClaim());
 
   assert.deepEqual(calls, ['phase', 'mutation', 'result']);
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller journals a pre-mutation risk pause before reporting it and never mutates', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const calls = [];
+  const { controller } = makeController({
+    inspectPlatformRiskCommand: async () => ({
+      detected: true,
+      riskPause: true,
+      riskReason: 'captcha',
+      currentUrl: 'https://write.qq.com/portal/dashboard',
+      riskEvidence: {
+        detector: 'publisher-risk-v1',
+        boundary: 'pre-mutation',
+        selector: 'iframe[src*="captcha"]',
+        matchedText: '',
+      },
+    }),
+    runUploadCommand: async () => {
+      calls.push('mutation');
+      throw new Error('mutation must not run while a challenge is visible');
+    },
+    backend: {
+      updateUploadAttemptPhase: async () => {
+        calls.push('phase');
+        throw new Error('mutation phase must not start while paused');
+      },
+      pauseUploadAttempt: async (_jobId, _attemptId, payload) => {
+        assert.equal(journalStore.snapshot.records[0].local_phase, 'paused');
+        assert.equal(journalStore.snapshot.records[0].pause.risk_reason, 'captcha');
+        assert.equal(payload.risk_reason, 'captcha');
+        calls.push('pause');
+        return {
+          attempt_status: 'paused',
+          job_status: 'paused',
+          next_action: 'operator_review',
+        };
+      },
+    },
+  }, journalStore);
+
+  const outcome = await controller.executeUploadClaim(makeUploadClaim());
+
+  assert.deepEqual(calls, ['pause']);
+  assert.deepEqual(outcome, { status: 'paused' });
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+  assert.equal(journalStore.snapshot.records[0].pause.risk_reason, 'captcha');
+});
+
+test('controller fails closed when the pre-mutation risk inspection times out', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  let mutationCalls = 0;
+  let phaseCalls = 0;
+  let submittedResult;
+  const { controller } = makeController({
+    inspectPlatformRiskCommand: async () => ({
+      ok: false,
+      errorCode: 'platform-agent-timeout',
+      error: '平台页面风险检查超时。',
+      resultPayload: { phase: 'message-timeout' },
+    }),
+    runUploadCommand: async () => {
+      mutationCalls += 1;
+      return { ok: true };
+    },
+    backend: {
+      updateUploadAttemptPhase: async () => {
+        phaseCalls += 1;
+        return { attempt_status: 'running', job_status: 'running' };
+      },
+      submitUploadAttemptResult: async (_jobId, _attemptId, payload) => {
+        submittedResult = payload;
+        return { attempt_status: 'failed', job_status: 'pending' };
+      },
+    },
+  }, journalStore);
+
+  const outcome = await controller.executeUploadClaim(makeUploadClaim());
+
+  assert.equal(mutationCalls, 0);
+  assert.equal(phaseCalls, 0);
+  assert.equal(submittedResult.error_code, 'platform-agent-timeout');
+  assert.deepEqual(outcome, { status: 'pending' });
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller journals a risk detected after mutation_started before backend pause', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const calls = [];
+  const { controller } = makeController({
+    inspectPlatformRiskCommand: async () => ({ detected: false }),
+    runUploadCommand: async () => {
+      calls.push('mutation');
+      return {
+        ok: false,
+        riskPause: true,
+        riskReason: 'account_risk',
+        currentUrl: 'https://write.qq.com/portal/dashboard',
+        errorCode: 'publisher-risk-pause',
+        error: 'Account risk signal detected.',
+        riskEvidence: {
+          detector: 'publisher-risk-v1',
+          boundary: 'post-save',
+          matchedText: '账号存在风险',
+        },
+      };
+    },
+    backend: {
+      updateUploadAttemptPhase: async () => {
+        calls.push('phase');
+        return {
+          attempt_status: 'running',
+          job_status: 'running',
+          abort_requested: false,
+          next_action: 'heartbeat',
+        };
+      },
+      pauseUploadAttempt: async (_jobId, _attemptId, payload) => {
+        assert.equal(journalStore.snapshot.records[0].local_phase, 'paused');
+        assert.equal(journalStore.snapshot.records[0].pause.risk_reason, 'account_risk');
+        assert.equal(payload.evidence.boundary, 'post-save');
+        calls.push('pause');
+        return {
+          attempt_status: 'paused',
+          job_status: 'paused',
+          next_action: 'operator_review',
+        };
+      },
+    },
+  }, journalStore);
+
+  const outcome = await controller.executeUploadClaim(makeUploadClaim());
+
+  assert.deepEqual(calls, ['phase', 'mutation', 'pause']);
+  assert.deepEqual(outcome, { status: 'paused' });
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+});
+
+test('controller restart replays a durable risk pause without reporting failure', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const seedJournal = journalStore.createJournal();
+  const claim = makeUploadClaim();
+  await seedJournal.recordClaim({ clientId: 'client-1', claim });
+  await seedJournal.savePause('attempt-1', {
+    risk_reason: 'mfa',
+    observed_at: '2026-07-21T12:01:00Z',
+    current_url: 'https://write.qq.com/portal/dashboard',
+    evidence: {
+      detector: 'publisher-risk-v1',
+      boundary: 'before-confirm',
+      matched_text: '短信验证码',
+    },
+  });
+  const calls = [];
+  const { controller } = makeController({
+    backend: {
+      pauseUploadAttempt: async (_jobId, _attemptId, payload) => {
+        calls.push(['pause', payload.risk_reason]);
+        return { attempt_status: 'paused', job_status: 'paused' };
+      },
+      submitUploadAttemptResult: async () => {
+        calls.push(['result']);
+        throw new Error('risk pause must not become a failure result');
+      },
+    },
+  }, journalStore);
+
+  const replay = await controller.syncUploadJournal();
+
+  assert.deepEqual(replay, { handled: 1 });
+  assert.deepEqual(calls, [['pause', 'mfa']]);
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
+  assert.equal(journalStore.snapshot.records[0].result, null);
+});
+
+test('controller keeps a durable risk pause when an expired fence is not covered', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const seedJournal = journalStore.createJournal();
+  await seedJournal.recordClaim({ clientId: 'client-1', claim: makeUploadClaim() });
+  await seedJournal.savePause('attempt-1', {
+    risk_reason: 'captcha',
+    observed_at: '2026-07-21T12:01:00Z',
+    current_url: 'https://write.qq.com/portal/dashboard',
+    evidence: { detector: 'publisher-risk-v1', boundary: 'pre-mutation' },
+  });
+  const { controller } = makeController({
+    backend: {
+      pauseUploadAttempt: async () => {
+        const error = new Error('publisher attempt lease has expired');
+        error.code = 'lease_expired';
+        error.payload = {
+          detail: {
+            code: 'lease_expired',
+            job_status: 'pending',
+            current_attempt_id: '',
+          },
+        };
+        throw error;
+      },
+    },
+  }, journalStore);
+
+  await assert.rejects(controller.syncUploadJournal(), /lease has expired/);
+
+  assert.equal(journalStore.snapshot.records[0].local_phase, 'paused');
+  assert.equal(journalStore.snapshot.records[0].pause.risk_reason, 'captcha');
+});
+
+test('controller retires a durable pause after a later terminal operation', async () => {
+  const journalStore = makeMemoryUploadJournalStore();
+  const seedJournal = journalStore.createJournal();
+  await seedJournal.recordClaim({ clientId: 'client-1', claim: makeUploadClaim() });
+  await seedJournal.savePause('attempt-1', {
+    risk_reason: 'account_risk',
+    observed_at: '2026-07-21T12:01:00Z',
+    current_url: 'https://write.qq.com/portal/dashboard',
+    evidence: { detector: 'publisher-risk-v1', boundary: 'post-save' },
+  });
+  const { controller } = makeController({
+    backend: {
+      pauseUploadAttempt: async () => {
+        const error = new Error('publisher attempt fence is stale');
+        error.code = 'stale_attempt';
+        error.payload = {
+          detail: {
+            code: 'stale_attempt',
+            job_status: 'cancelled',
+            current_attempt_id: '',
+          },
+        };
+        throw error;
+      },
+    },
+  }, journalStore);
+
+  assert.deepEqual(await controller.syncUploadJournal(), { handled: 1 });
   assert.equal(journalStore.snapshot.records[0].local_phase, 'acked');
 });
 

@@ -416,7 +416,7 @@ class MockForWinBackend:
             json_reply(route, job)
             return
         upload_match = re.fullmatch(
-            r"/api/publishers/upload-jobs/([^/]+)(?:/(terminate))?", path
+            r"/api/publishers/upload-jobs/([^/]+)(?:/(terminate|resume))?", path
         )
         if upload_match:
             job_id, action = upload_match.groups()
@@ -425,13 +425,53 @@ class MockForWinBackend:
                     route, self.upload_jobs.get(job_id) or sample_upload_job(job_id)
                 )
                 return
-            self.capture(route, {})
+            request_payload = read_json(route)
+            self.capture(route, request_payload)
             if action == "terminate" and method == "POST":
                 self.upload_jobs.setdefault(job_id, sample_upload_job(job_id))[
                     "status"
                 ] = "cancelled"
                 json_reply(
                     route, {"message": "upload terminated", **self.upload_jobs[job_id]}
+                )
+                return
+            if action == "resume" and method == "POST":
+                job = self.upload_jobs.setdefault(job_id, sample_upload_job(job_id))
+                old_reason = str(job.get("pause_reason") or "captcha")
+                old_token = str(job.get("pause_token") or "attempt-paused")
+                job.update(
+                    {
+                        "status": "pending",
+                        "message": "风险暂停已解除，等待重新领取。",
+                        "paused_at": "",
+                        "pause_reason": "",
+                        "pause_token": "",
+                        "resumable": False,
+                    }
+                )
+                json_reply(
+                    route,
+                    {
+                        "ok": True,
+                        "disposition": "applied",
+                        "server_time": now_text(),
+                        "job": job,
+                        "transition": {
+                            "pause_token": old_token,
+                            "pause_reason": old_reason,
+                            "actor": "basic:test",
+                            "auth_method": "basic",
+                            "operator_reason": request_payload.get(
+                                "operator_reason", ""
+                            ),
+                            "transitioned_at": now_text(),
+                            "attempt_id": old_token,
+                            "attempt_kind": "execute",
+                            "attempt_phase": "claimed",
+                            "old_state": "paused",
+                            "new_state": "pending",
+                        },
+                    },
                 )
                 return
             if method == "DELETE":
@@ -1192,6 +1232,10 @@ def sample_upload_job(
         "updated_at": "2026-04-24T12:00:02Z",
         "started_at": "2026-04-24T12:00:01Z",
         "finished_at": "2026-04-24T12:00:02Z",
+        "paused_at": "",
+        "pause_reason": "",
+        "pause_token": "",
+        "resumable": False,
         "deletable": True,
         "terminable": False,
         "pausable": False,

@@ -341,9 +341,22 @@ test('indeterminate and risk pause observations remain receipt-free', () => {
   const paused = buildReconciliationRequest({
     job: chapterJob(),
     observedAt: OBSERVED_AT,
-    observation: { outcome: 'risk_pause', reason: 'Account verification required' },
+    observation: {
+      outcome: 'risk_pause',
+      riskReason: 'account_risk',
+      reason: 'Account verification required',
+    },
   });
   assert.equal(paused.outcome, 'risk_pause');
+  assert.equal(paused.evidence.risk_reason, 'account_risk');
   assert.equal(paused.evidence.reason, 'Account verification required');
   assert.equal(paused.receipt, undefined);
+
+  const untypedPause = buildReconciliationRequest({
+    job: chapterJob(),
+    observedAt: OBSERVED_AT,
+    observation: { outcome: 'risk_pause', reason: 'Unknown challenge' },
+  });
+  assert.equal(untypedPause.outcome, 'indeterminate');
+  assert.equal(untypedPause.error_code, 'risk-reason-invalid');
 });

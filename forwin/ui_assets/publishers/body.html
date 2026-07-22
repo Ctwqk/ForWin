@@ -138,4 +138,24 @@
       </div>
     </section>
   </div>
+
+  <dialog id="upload_resume_dialog" class="resume-dialog" aria-labelledby="upload_resume_title">
+    <form id="upload_resume_form">
+      <h2 id="upload_resume_title">恢复发布任务</h2>
+      <div id="upload_resume_summary" class="resume-summary"></div>
+      <label for="upload_resume_reason">操作员理由</label>
+      <textarea
+        id="upload_resume_reason"
+        minlength="3"
+        maxlength="1000"
+        required
+        placeholder="记录已完成的人工处理和恢复依据"
+      ></textarea>
+      <div id="upload_resume_status" class="status" aria-live="polite"></div>
+      <div class="actions resume-dialog-actions">
+        <button id="upload_resume_cancel" type="button" class="secondary">取消</button>
+        <button id="upload_resume_submit" type="submit">确认恢复</button>
+      </div>
+    </form>
+  </dialog>
   

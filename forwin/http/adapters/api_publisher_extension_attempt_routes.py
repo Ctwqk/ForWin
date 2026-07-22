@@ -8,6 +8,7 @@ from fastapi import Header
 from forwin.api_schema import (
     ExtensionClaimUploadJobRequest,
     UploadAttemptHeartbeatRequest,
+    UploadAttemptPauseRequest,
     UploadAttemptPhaseRequest,
     UploadAttemptReceiptRequest,
     UploadAttemptReconcileRequest,
@@ -68,6 +69,19 @@ def build_handlers(
             extension_key=x_forwin_extension_key,
         )
 
+    def pause_publisher_upload_attempt(
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptPauseRequest,
+        x_forwin_extension_key: str | None = Header(default=None),
+    ):
+        return service.pause_publisher_upload_attempt(
+            job_id,
+            attempt_id,
+            req,
+            extension_key=x_forwin_extension_key,
+        )
+
     def record_publisher_upload_receipt(
         job_id: str,
         attempt_id: str,
@@ -99,6 +113,7 @@ def build_handlers(
         "heartbeat_publisher_upload_attempt": heartbeat_publisher_upload_attempt,
         "transition_publisher_upload_attempt": transition_publisher_upload_attempt,
         "finish_publisher_upload_attempt": finish_publisher_upload_attempt,
+        "pause_publisher_upload_attempt": pause_publisher_upload_attempt,
         "record_publisher_upload_receipt": record_publisher_upload_receipt,
         "reconcile_publisher_upload_attempt": reconcile_publisher_upload_attempt,
     }

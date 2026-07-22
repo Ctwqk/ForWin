@@ -1,13 +1,14 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.58';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.60';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
-import { getPlatformAdapter } from './lib/platforms.js?v=0.1.58';
+import { getPlatformAdapter } from './lib/platforms.js?v=0.1.60';
+import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.60';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
-import { createUploadJournal } from './lib/upload-journal.js?v=0.1.58';
+import { createUploadJournal } from './lib/upload-journal.js?v=0.1.60';
 import {
   assertDebuggerCapability,
   extensionCapabilities,
@@ -735,6 +736,24 @@ async function sendPlatformAgentMessage(
   ]);
 }
 
+async function inspectPlatformRiskCommand(tabId, context = {}) {
+  if (!tabId) {
+    return { detected: false, riskPause: false, currentUrl: '' };
+  }
+  return sendPlatformAgentMessage(
+    tabId,
+    'inspect-publisher-risk',
+    { boundary: String(context?.boundary || 'pre-mutation') },
+    5000,
+    TOP_FRAME_MESSAGE_OPTIONS,
+  );
+}
+
+async function riskBeforeTrustedMutation(tabId, boundary) {
+  const risk = await inspectPlatformRiskCommand(tabId, { boundary });
+  return guardRiskInspection(risk, boundary);
+}
+
 async function sendMutatingPlatformAgentMessage(
   tabId,
   action,
@@ -1070,6 +1089,13 @@ async function runUploadCommand(tabId, payload) {
           await sleep(1200);
         }
       }
+      const commandRisk = await riskBeforeTrustedMutation(
+        activeTabId,
+        'before-platform-command',
+      );
+      if (commandRisk) {
+        return commandRisk;
+      }
       const response = await sendMutatingPlatformAgentMessage(
         activeTabId,
         'run-upload',
@@ -1084,6 +1110,13 @@ async function runUploadCommand(tabId, payload) {
           return response;
         }
         if (!response.ok && response.errorCode === 'trusted-body-input-required') {
+          const trustedBodyRisk = await riskBeforeTrustedMutation(
+            activeTabId,
+            'before-trusted-body-input',
+          );
+          if (trustedBodyRisk) {
+            return trustedBodyRisk;
+          }
           await applyTrustedFanqieBodyInput(activeTabId, payload.body, response.trustedBodyTarget);
           await sleep(1200);
           await inspectFanqieEditorState(activeTabId);
@@ -1095,6 +1128,13 @@ async function runUploadCommand(tabId, payload) {
           continue;
         }
         if (!response.ok && response.errorCode === 'trusted-body-input-missing') {
+          const trustedNudgeRisk = await riskBeforeTrustedMutation(
+            activeTabId,
+            'before-trusted-body-input',
+          );
+          if (trustedNudgeRisk) {
+            return trustedNudgeRisk;
+          }
           await trustedFanqieEditorNudge(activeTabId, response.trustedBodyTarget);
           await sleep(1200);
           await inspectFanqieEditorState(activeTabId);
@@ -1112,6 +1152,13 @@ async function runUploadCommand(tabId, payload) {
             || response.errorCode === 'trusted-qidian-editor-input-missing'
           )
         ) {
+          const trustedEditorRisk = await riskBeforeTrustedMutation(
+            activeTabId,
+            'before-trusted-editor-input',
+          );
+          if (trustedEditorRisk) {
+            return trustedEditorRisk;
+          }
           await applyTrustedQidianEditorInput(
             activeTabId,
             payload.chapter_title,
@@ -1129,6 +1176,13 @@ async function runUploadCommand(tabId, payload) {
           continue;
         }
         if (!response.ok && response.errorCode === 'trusted-qidian-confirm-required') {
+          const trustedConfirmRisk = await riskBeforeTrustedMutation(
+            activeTabId,
+            'before-trusted-confirm',
+          );
+          if (trustedConfirmRisk) {
+            return trustedConfirmRisk;
+          }
           await applyTrustedQidianPublishConfirm(activeTabId, response.trustedConfirmTarget);
           await sleep(1200);
           ready = await tabReadyRegistry.waitFor(activeTabId, READY_CHANNELS.PLATFORM_AGENT, 1500);
@@ -1289,6 +1343,10 @@ async function runCoverUploadCommand(tabId, payload) {
       errorCode: 'cover-upload-control-not-found',
     };
   }
+  const fileInputRisk = await riskBeforeTrustedMutation(tabId, 'before-file-input');
+  if (fileInputRisk) {
+    return fileInputRisk;
+  }
   try {
     await setFileInputFiles(tabId, prepare.fileInputSelector || 'input[type="file"]', [payload.file_path]);
   } catch (error) {
@@ -1302,6 +1360,10 @@ async function runCoverUploadCommand(tabId, payload) {
         file_input_selector: prepare.fileInputSelector || '',
       },
     };
+  }
+  const coverCommandRisk = await riskBeforeTrustedMutation(tabId, 'before-cover-command');
+  if (coverCommandRisk) {
+    return coverCommandRisk;
   }
   return sendMutatingPlatformAgentMessage(
     tabId,
@@ -2180,6 +2242,9 @@ const controller = new PublisherExtensionController({
     async updateUploadAttemptPhase(jobId, attemptId, payload) {
       return withBackendClient((client) => client.updateUploadAttemptPhase(jobId, attemptId, payload));
     },
+    async pauseUploadAttempt(jobId, attemptId, payload) {
+      return withBackendClient((client) => client.pauseUploadAttempt(jobId, attemptId, payload));
+    },
     async submitUploadAttemptResult(jobId, attemptId, payload) {
       return withBackendClient((client) => client.submitUploadAttemptResult(jobId, attemptId, payload));
     },
@@ -2238,6 +2303,7 @@ const controller = new PublisherExtensionController({
   runCoverUploadCommand,
   runAuditSyncCommand,
   runReconciliationCommand,
+  inspectPlatformRiskCommand,
   runCommentSyncCommand,
   inspectLoginState,
   inspectPlatformState,

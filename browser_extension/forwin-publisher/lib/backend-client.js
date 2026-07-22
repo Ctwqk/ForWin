@@ -65,6 +65,10 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return postUploadAttempt(jobId, attemptId, 'phase', payload);
     },
 
+    async pauseUploadAttempt(jobId, attemptId, payload) {
+      return postUploadAttempt(jobId, attemptId, 'pause', payload);
+    },
+
     async submitUploadAttemptResult(jobId, attemptId, payload) {
       return postUploadAttempt(jobId, attemptId, 'result', payload);
     },

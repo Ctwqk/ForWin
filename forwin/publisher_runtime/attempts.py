@@ -11,6 +11,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.models.base import new_id
 from forwin.models.publisher import (
     PublisherExtensionClient,
+    PublisherOperatorAction,
     PublisherUploadAttempt,
     PublisherUploadJob,
 )
@@ -24,6 +25,7 @@ from .platform_catalog import PlatformCatalog
 EXECUTE_PHASES = ("claimed", "mutation_started", "receipt_observed")
 RECONCILE_PHASES = ("claimed", "observation_started", "receipt_observed")
 CLAIMABLE_TASK_KINDS = ("chapter_upload", "cover_upload", "audit_sync")
+RISK_PAUSE_REASONS = ("captcha", "mfa", "account_risk")
 
 
 class PublisherProtocolError(ValueError):
@@ -390,6 +392,366 @@ class PublisherAttemptService:
             session.refresh(attempt)
             return self._serialize_claim(job, attempt)
 
+    def pause(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_epoch: int,
+        risk_reason: str,
+        current_url: str = "",
+        evidence: dict[str, Any] | None = None,
+        client_observed_at: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        paused_at = now or utc_now()
+        normalized_reason = self._risk_pause_reason(risk_reason)
+        normalized_job_id = str(job_id or "").strip()
+        normalized_attempt_id = str(attempt_id or "").strip()
+        normalized_worker_id = str(worker_id or "").strip()
+        with self.session_factory() as session:
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.id == normalized_job_id,
+                    PublisherUploadJob.deleted_at.is_(None),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise PublisherResourceNotFoundError("job", normalized_job_id)
+            attempt = session.execute(
+                select(PublisherUploadAttempt)
+                .where(
+                    PublisherUploadAttempt.id == normalized_attempt_id,
+                    PublisherUploadAttempt.upload_job_id == normalized_job_id,
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None:
+                raise PublisherResourceNotFoundError("attempt", normalized_attempt_id)
+            identity_matches = (
+                attempt.worker_id == normalized_worker_id
+                and attempt.lease_epoch == int(lease_epoch or 0)
+            )
+            payload = self._payload(job)
+            prior_pause = payload.get("risk_pause")
+            archived_pause = payload.get("risk_after_abort")
+            if not isinstance(archived_pause, dict):
+                archived_pause = payload.get("risk_termination")
+            if (
+                identity_matches
+                and attempt.status == "paused"
+                and job.status == "paused"
+                and job.current_attempt_id == ""
+                and job.pause_reason == normalized_reason
+                and isinstance(prior_pause, dict)
+                and prior_pause.get("pause_token") == attempt.id
+            ):
+                state = self.serialize_state(job, attempt, now=paused_at)
+                state["pause_disposition"] = "idempotent"
+                session.commit()
+                return state
+            if (
+                identity_matches
+                and job.abort_requested
+                and job.current_attempt_id == ""
+                and attempt.status in {"paused", "cancelled", "indeterminate"}
+                and isinstance(archived_pause, dict)
+                and archived_pause.get("pause_token") == attempt.id
+                and archived_pause.get("risk_reason") == normalized_reason
+            ):
+                state = self.serialize_state(job, attempt, now=paused_at)
+                state["pause_disposition"] = "idempotent"
+                session.commit()
+                return state
+            if (
+                not identity_matches
+                or job.current_attempt_id != attempt.id
+                or attempt.status != "running"
+            ):
+                raise PublisherAttemptFenceError(
+                    "publisher attempt fence is no longer current",
+                    job_status=job.status,
+                    current_attempt_id=job.current_attempt_id,
+                )
+            if not self._lease_is_live(attempt, paused_at):
+                raise PublisherLeaseExpiredError(
+                    "publisher attempt lease has expired",
+                    job_status=job.status,
+                    current_attempt_id=job.current_attempt_id,
+                )
+            allowed_phases = (
+                RECONCILE_PHASES
+                if attempt.attempt_kind == "reconcile"
+                else EXECUTE_PHASES
+            )
+            if attempt.phase not in allowed_phases:
+                raise PublisherInvalidTransitionError(
+                    "publisher risk pause requires a recognized attempt phase"
+                )
+
+            pause_payload = {
+                "pause_token": attempt.id,
+                "risk_reason": normalized_reason,
+                "attempt_id": attempt.id,
+                "attempt_kind": attempt.attempt_kind,
+                "attempt_phase": attempt.phase,
+                "lease_epoch": attempt.lease_epoch,
+                "worker_id": attempt.worker_id,
+                "current_url": str(current_url or "").strip(),
+                "client_observed_at": str(client_observed_at or "").strip(),
+                "paused_at": self._datetime_text(paused_at),
+                "evidence": evidence if isinstance(evidence, dict) else {},
+            }
+            if job.abort_requested:
+                self._converge_risk_after_abort(
+                    session,
+                    job=job,
+                    attempt=attempt,
+                    pause_payload=pause_payload,
+                    now=paused_at,
+                )
+                session.commit()
+                session.refresh(job)
+                session.refresh(attempt)
+                state = self.serialize_state(job, attempt, now=paused_at)
+                state["pause_disposition"] = "abort_converged"
+                return state
+            attempt.status = "paused"
+            attempt.finished_at = paused_at
+            attempt.heartbeat_at = paused_at
+            attempt.lease_expires_at = None
+            attempt.error_code = normalized_reason
+            attempt.error_message = str(
+                pause_payload["evidence"].get("matched_text")
+                or pause_payload["evidence"].get("message")
+                or normalized_reason
+            )
+            attempt.result_json = json.dumps(
+                pause_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            job.status = "paused"
+            job.current_attempt_id = ""
+            job.extension_client_id = ""
+            job.finished_at = None
+            job.available_at = None
+            job.reconcile_after = None
+            job.paused_at = paused_at
+            job.pause_reason = normalized_reason
+            if pause_payload["current_url"]:
+                job.current_url = pause_payload["current_url"]
+            job.result_message = "平台风险状态已暂停，等待操作员手工处理。"
+            job.error_message = ""
+            payload["risk_pause"] = pause_payload
+            payload.pop("risk_resume", None)
+            job.result_payload_json = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_PAUSED,
+                summary=f"发布任务因 {normalized_reason} 风险信号暂停。",
+                actor_type="extension",
+                extra_payload=pause_payload,
+            )
+            session.commit()
+            session.refresh(job)
+            session.refresh(attempt)
+            state = self.serialize_state(job, attempt, now=paused_at)
+            state["pause_disposition"] = "applied"
+            return state
+
+    def resume(
+        self,
+        *,
+        job_id: str,
+        expected_pause_reason: str,
+        expected_pause_token: str,
+        operator_reason: str,
+        operator_actor_id: str,
+        operator_auth_method: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        resumed_at = now or utc_now()
+        normalized_job_id = str(job_id or "").strip()
+        normalized_pause_reason = self._risk_pause_reason(expected_pause_reason)
+        normalized_pause_token = str(expected_pause_token or "").strip()
+        normalized_operator_reason = str(operator_reason or "").strip()
+        normalized_actor_id = str(operator_actor_id or "").strip()
+        normalized_auth_method = str(operator_auth_method or "").strip()
+        if not normalized_pause_token:
+            raise ValueError("publisher resume requires an expected pause token")
+        if len(normalized_operator_reason) < 3:
+            raise ValueError("publisher resume requires an operator reason")
+        if not normalized_actor_id or not normalized_auth_method:
+            raise ValueError("publisher resume requires an authenticated operator")
+        if normalized_auth_method not in {"basic", "trusted_proxy"}:
+            raise ValueError("publisher resume received an unsupported auth method")
+
+        with self.session_factory() as session:
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
+                    PublisherUploadJob.id == normalized_job_id,
+                    PublisherUploadJob.deleted_at.is_(None),
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise PublisherResourceNotFoundError("job", normalized_job_id)
+            prior_action = session.execute(
+                select(PublisherOperatorAction).where(
+                    PublisherOperatorAction.upload_job_id == normalized_job_id,
+                    PublisherOperatorAction.action == "resume",
+                    PublisherOperatorAction.pause_token == normalized_pause_token,
+                )
+            ).scalar_one_or_none()
+            if job.status != "paused":
+                if (
+                    prior_action is not None
+                    and prior_action.actor_id == normalized_actor_id
+                    and prior_action.auth_method == normalized_auth_method
+                    and prior_action.reason == normalized_operator_reason
+                ):
+                    session.commit()
+                    return {
+                        "disposition": "idempotent",
+                        "job": self.job_serializer(job),
+                        "transition": self._operator_action_transition(prior_action),
+                    }
+                raise PublisherInvalidTransitionError(
+                    "publisher job is not paused",
+                    job_status=job.status,
+                )
+            if job.abort_requested:
+                raise PublisherInvalidTransitionError(
+                    "publisher job cannot resume after abort was requested"
+                )
+            payload = self._payload(job)
+            pause_payload = payload.get("risk_pause")
+            current_pause_token = (
+                str(pause_payload.get("pause_token") or "").strip()
+                if isinstance(pause_payload, dict)
+                else ""
+            )
+            if job.pause_reason != normalized_pause_reason:
+                raise PublisherInvalidTransitionError(
+                    "publisher pause reason does not match the expected pause reason",
+                    expected_pause_reason=normalized_pause_reason,
+                    actual_pause_reason=job.pause_reason,
+                )
+            if current_pause_token != normalized_pause_token:
+                raise PublisherInvalidTransitionError(
+                    "publisher pause token is stale",
+                    expected_pause_token=normalized_pause_token,
+                    actual_pause_token=current_pause_token,
+                )
+            attempt = session.execute(
+                select(PublisherUploadAttempt)
+                .where(
+                    PublisherUploadAttempt.id == current_pause_token,
+                    PublisherUploadAttempt.upload_job_id == job.id,
+                    PublisherUploadAttempt.status == "paused",
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
+            if attempt is None or job.current_attempt_id:
+                raise PublisherAttemptFenceError(
+                    "publisher paused attempt fence is no longer current"
+                )
+
+            old_state = self._job_state_snapshot(job)
+            old_state.update(
+                {
+                    "attempt_kind": attempt.attempt_kind,
+                    "attempt_phase": attempt.phase,
+                }
+            )
+            needs_reconciliation = (
+                attempt.attempt_kind == "reconcile"
+                or self._attempt_is_uncertain(attempt)
+            )
+            new_status = "reconciling" if needs_reconciliation else "pending"
+            job.status = new_status
+            job.paused_at = None
+            job.pause_reason = ""
+            job.finished_at = None
+            job.error_message = ""
+            job.available_at = resumed_at if new_status == "pending" else None
+            job.reconcile_after = resumed_at if new_status == "reconciling" else None
+            job.result_message = (
+                "风险暂停已由操作员解除，任务等待只读对账。"
+                if needs_reconciliation
+                else "风险暂停已由操作员解除，任务等待重新领取。"
+            )
+            transition = {
+                "pause_token": normalized_pause_token,
+                "pause_reason": normalized_pause_reason,
+                "actor": normalized_actor_id,
+                "auth_method": normalized_auth_method,
+                "operator_reason": normalized_operator_reason,
+                "transitioned_at": self._datetime_text(resumed_at),
+                "attempt_id": attempt.id,
+                "attempt_kind": attempt.attempt_kind,
+                "attempt_phase": attempt.phase,
+                "old_state": "paused",
+                "new_state": new_status,
+            }
+            payload.pop("risk_pause", None)
+            payload["risk_resume"] = transition
+            job.result_payload_json = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            new_state = self._job_state_snapshot(job)
+            action = PublisherOperatorAction(
+                id=new_id(),
+                upload_job_id=job.id,
+                action="resume",
+                pause_token=normalized_pause_token,
+                actor_id=normalized_actor_id,
+                auth_method=normalized_auth_method,
+                reason=normalized_operator_reason,
+                old_state_json=json.dumps(
+                    old_state, ensure_ascii=False, sort_keys=True
+                ),
+                new_state_json=json.dumps(
+                    new_state, ensure_ascii=False, sort_keys=True
+                ),
+                occurred_at=resumed_at,
+            )
+            session.add(action)
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_RESUMED,
+                summary="发布任务风险暂停已由操作员解除。",
+                actor_type="manual_ui",
+                actor_id=normalized_actor_id,
+                reason=normalized_operator_reason,
+                event_family="audit_action",
+                extra_payload={
+                    **transition,
+                    "old_state_snapshot": old_state,
+                    "new_state_snapshot": new_state,
+                },
+            )
+            session.commit()
+            session.refresh(job)
+            return {
+                "disposition": "applied",
+                "job": self.job_serializer(job),
+                "transition": transition,
+            }
+
     def expire(self, *, now: datetime | None = None) -> list[str]:
         expired_at = now or utc_now()
         with self.session_factory() as session:
@@ -556,7 +918,7 @@ class PublisherAttemptService:
         lease_epoch: int,
         outcome: str,
         receipt_recorded: bool,
-        pause_reason: str = "",
+        risk_reason: str = "",
         now: datetime,
     ) -> tuple[PublisherUploadJob, PublisherUploadAttempt]:
         job, attempt = self.require_fence(
@@ -596,6 +958,11 @@ class PublisherAttemptService:
             raise PublisherAbsenceNotAuthoritativeError(
                 f"authoritative absence is not approved for {job.platform_id}"
             )
+        normalized_risk_reason = (
+            self._risk_pause_reason(risk_reason)
+            if normalized_outcome == "risk_pause"
+            else ""
+        )
 
         attempt.finished_at = now
         attempt.heartbeat_at = now
@@ -618,15 +985,59 @@ class PublisherAttemptService:
             job.finished_at = now if job.abort_requested else None
             job.reconcile_after = None
             job.available_at = None if job.abort_requested else now
+        elif normalized_outcome == "risk_pause" and job.abort_requested:
+            attempt.status = "indeterminate"
+            attempt.phase = "observation_started"
+            job.status = "reconciling"
+            job.finished_at = None
+            job.paused_at = None
+            job.pause_reason = ""
+            job.reconcile_after = now + self._retry_delay(attempt.attempt_number)
+            job.available_at = None
+            payload = self._payload(job)
+            payload.pop("risk_pause", None)
+            payload["risk_after_abort"] = {
+                "pause_token": attempt.id,
+                "risk_reason": normalized_risk_reason,
+                "attempt_id": attempt.id,
+                "attempt_kind": attempt.attempt_kind,
+                "attempt_phase": attempt.phase,
+                "lease_epoch": attempt.lease_epoch,
+                "worker_id": attempt.worker_id,
+                "paused_at": self._datetime_text(now),
+                "next_status": job.status,
+            }
+            job.result_payload_json = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         elif normalized_outcome == "risk_pause":
             attempt.status = "paused"
             attempt.phase = "observation_started"
             job.status = "paused"
             job.finished_at = None
             job.paused_at = now
-            job.pause_reason = str(pause_reason or "publisher risk pause").strip()
+            job.pause_reason = normalized_risk_reason
             job.reconcile_after = None
             job.available_at = None
+            payload = self._payload(job)
+            payload["risk_pause"] = {
+                "pause_token": attempt.id,
+                "risk_reason": normalized_risk_reason,
+                "attempt_id": attempt.id,
+                "attempt_kind": attempt.attempt_kind,
+                "attempt_phase": attempt.phase,
+                "lease_epoch": attempt.lease_epoch,
+                "worker_id": attempt.worker_id,
+                "paused_at": self._datetime_text(now),
+            }
+            payload.pop("risk_resume", None)
+            job.result_payload_json = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         else:
             attempt.status = "indeterminate"
             attempt.phase = "observation_started"
@@ -838,10 +1249,80 @@ class PublisherAttemptService:
                 "available_at": self._datetime_text(job.available_at),
                 "reconcile_after": self._datetime_text(job.reconcile_after),
                 "pause_reason": str(job.pause_reason or ""),
+                "pause_token": self.pause_token(job),
+                "paused_at": self._datetime_text(job.paused_at),
                 "server_time": self._datetime_text(server_time),
             }
         )
         return payload
+
+    def _converge_risk_after_abort(
+        self,
+        session,
+        *,
+        job: PublisherUploadJob,
+        attempt: PublisherUploadAttempt,
+        pause_payload: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        needs_reconciliation = (
+            attempt.attempt_kind == "reconcile" or self._attempt_is_uncertain(attempt)
+        )
+        attempt.status = "indeterminate" if needs_reconciliation else "cancelled"
+        attempt.finished_at = now
+        attempt.heartbeat_at = now
+        attempt.lease_expires_at = None
+        attempt.error_code = str(pause_payload.get("risk_reason") or "")
+        attempt.error_message = str(
+            pause_payload.get("evidence", {}).get("matched_text")
+            or pause_payload.get("evidence", {}).get("message")
+            or pause_payload.get("risk_reason")
+            or ""
+        )
+        archived_pause = {
+            **pause_payload,
+            "next_status": "reconciling" if needs_reconciliation else "cancelled",
+        }
+        attempt.result_json = json.dumps(
+            archived_pause,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        job.current_attempt_id = ""
+        job.extension_client_id = ""
+        job.status = str(archived_pause["next_status"])
+        job.finished_at = None if needs_reconciliation else now
+        job.available_at = None
+        job.reconcile_after = now if needs_reconciliation else None
+        job.paused_at = None
+        job.pause_reason = ""
+        if pause_payload.get("current_url"):
+            job.current_url = str(pause_payload["current_url"])
+        job.result_message = (
+            "终止后检测到平台风险，保持只读对账。"
+            if needs_reconciliation
+            else "终止后检测到平台风险，任务已在远端写入前取消。"
+        )
+        payload = self._payload(job)
+        payload.pop("risk_pause", None)
+        payload["risk_after_abort"] = archived_pause
+        job.result_payload_json = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        self.audit.record_upload_job_event(
+            session,
+            job=job,
+            event_type=(
+                DecisionEventType.UPLOAD_JOB_PROGRESS
+                if needs_reconciliation
+                else DecisionEventType.UPLOAD_JOB_CANCELLED
+            ),
+            summary="发布任务终止后收到平台风险报告。",
+            actor_type="extension",
+            extra_payload=archived_pause,
+        )
 
     @staticmethod
     def _payload(job: PublisherUploadJob) -> dict[str, Any]:
@@ -850,6 +1331,68 @@ class PublisherAttemptService:
         except json.JSONDecodeError:
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def pause_token(cls, job: PublisherUploadJob) -> str:
+        payload = cls._payload(job)
+        risk_pause = payload.get("risk_pause")
+        return (
+            str(risk_pause.get("pause_token") or "").strip()
+            if isinstance(risk_pause, dict)
+            else ""
+        )
+
+    @staticmethod
+    def _risk_pause_reason(value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized not in RISK_PAUSE_REASONS:
+            raise PublisherInvalidTransitionError(
+                "unsupported publisher risk pause reason"
+            )
+        return normalized
+
+    @classmethod
+    def _job_state_snapshot(cls, job: PublisherUploadJob) -> dict[str, Any]:
+        return {
+            "status": str(job.status or ""),
+            "current_attempt_id": str(job.current_attempt_id or ""),
+            "extension_client_id": str(job.extension_client_id or ""),
+            "available_at": cls._datetime_text(job.available_at),
+            "reconcile_after": cls._datetime_text(job.reconcile_after),
+            "paused_at": cls._datetime_text(job.paused_at),
+            "pause_reason": str(job.pause_reason or ""),
+            "pause_token": cls.pause_token(job),
+            "abort_requested": bool(job.abort_requested),
+        }
+
+    @staticmethod
+    def _json_object(raw: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _operator_action_transition(
+        cls,
+        action: PublisherOperatorAction,
+    ) -> dict[str, Any]:
+        old_state = cls._json_object(action.old_state_json)
+        new_state = cls._json_object(action.new_state_json)
+        return {
+            "pause_token": action.pause_token,
+            "pause_reason": str(old_state.get("pause_reason") or ""),
+            "actor": action.actor_id,
+            "auth_method": action.auth_method,
+            "operator_reason": action.reason,
+            "transitioned_at": cls._datetime_text(action.occurred_at),
+            "attempt_id": action.pause_token,
+            "attempt_kind": str(old_state.get("attempt_kind") or ""),
+            "attempt_phase": str(old_state.get("attempt_phase") or ""),
+            "old_state": str(old_state.get("status") or "paused"),
+            "new_state": str(new_state.get("status") or ""),
+        }
 
     def _lease_seconds(self, value: int | None) -> int:
         return max(10, int(value or self.default_lease_seconds))
@@ -885,4 +1428,5 @@ __all__ = [
     "PublisherProtocolError",
     "PublisherReceiptRequiredError",
     "PublisherResourceNotFoundError",
+    "RISK_PAUSE_REASONS",
 ]

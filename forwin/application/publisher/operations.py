@@ -43,9 +43,13 @@ from forwin.api_schema import (
     PublisherPreflightResponse,
     PublisherUploadJobCreateRequest,
     PublisherUploadJobResponse,
+    PublisherUploadResumeRequest,
+    PublisherUploadResumeResponse,
     PublisherWorkBindingResponse,
     TaskMutationResponse,
     UploadAttemptHeartbeatRequest,
+    UploadAttemptPauseRequest,
+    UploadAttemptPauseResponse,
     UploadAttemptPhaseRequest,
     UploadAttemptReceiptRequest,
     UploadAttemptReceiptResponse,
@@ -55,6 +59,7 @@ from forwin.api_schema import (
     UploadAttemptResultResponse,
     UploadAttemptStateResponse,
 )
+from forwin.api_auth import OperatorPrincipal
 from forwin.publisher_runtime.attempts import PublisherProtocolError
 from forwin.publisher_runtime.auth import (
     PublisherExtensionAuthError,
@@ -241,12 +246,6 @@ def _attempt_state_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if job_status == "terminating":
         job_status = "running"
     attempt_status = str(payload.get("attempt_status") or "")
-    attempt_status = {
-        "indeterminate": "failed",
-        "paused": "failed",
-        "interrupted": "expired",
-        "superseded": "cancelled",
-    }.get(attempt_status, attempt_status)
     return {
         "ok": True,
         "server_time": _server_time(payload),
@@ -562,6 +561,34 @@ def delete_publisher_upload_job(
     )
 
 
+def resume_publisher_upload_job(
+    job_id: str,
+    req: PublisherUploadResumeRequest,
+    *,
+    publisher_manager,
+    operator_principal: OperatorPrincipal,
+) -> PublisherUploadResumeResponse:
+    try:
+        payload = publisher_manager.resume_upload_job(
+            job_id=job_id,
+            expected_pause_reason=req.expected_pause_reason,
+            expected_pause_token=req.expected_pause_token,
+            operator_reason=req.operator_reason,
+            operator_actor_id=operator_principal.actor_id,
+            operator_auth_method=operator_principal.auth_method,
+        )
+    except ValueError as exc:
+        _raise_protocol_http_error(exc)
+    transition = payload.get("transition")
+    transition = transition if isinstance(transition, dict) else {}
+    return PublisherUploadResumeResponse(
+        disposition=str(payload.get("disposition") or "applied"),
+        server_time=str(transition.get("transitioned_at") or _server_time({})),
+        job=PublisherUploadJobResponse(**payload["job"]),
+        transition=transition,
+    )
+
+
 def start_publisher_login_qr_one_shot(
     req: PublisherLoginQrOneShotRequest,
     *,
@@ -762,6 +789,36 @@ def transition_publisher_upload_attempt(
     except ValueError as exc:
         _raise_protocol_http_error(exc)
     return UploadAttemptStateResponse(**_attempt_state_payload(payload))
+
+
+def pause_publisher_upload_attempt(
+    job_id: str,
+    attempt_id: str,
+    req: UploadAttemptPauseRequest,
+    *,
+    publisher_manager,
+    x_forwin_extension_key: str | None = None,
+) -> UploadAttemptPauseResponse:
+    _require_extension_auth(publisher_manager, x_forwin_extension_key)
+    try:
+        payload = publisher_manager.pause_upload_attempt(
+            job_id=job_id,
+            attempt_id=attempt_id,
+            worker_id=req.client_id,
+            lease_epoch=req.lease_epoch,
+            risk_reason=req.risk_reason,
+            current_url=req.current_url,
+            evidence=req.evidence.model_dump(mode="json", exclude_none=True),
+            observed_at=req.observed_at,
+        )
+    except ValueError as exc:
+        _raise_protocol_http_error(exc)
+    return UploadAttemptPauseResponse(
+        **_attempt_state_payload(payload),
+        disposition=str(payload.get("pause_disposition") or "applied"),
+        pause_reason=str(payload.get("pause_reason") or req.risk_reason),
+        pause_token=str(payload.get("pause_token") or attempt_id),
+    )
 
 
 def reconcile_publisher_upload_attempt(

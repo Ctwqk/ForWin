@@ -536,12 +536,12 @@ def test_reconciliation_risk_pause_blocks_new_claims() -> None:
             lease_epoch=reconcile["lease_epoch"],
             outcome="risk_pause",
             receipt=None,
-            evidence={"reason": "captcha visible"},
+            evidence={"reason": "captcha visible", "risk_reason": "captcha"},
             now=NOW + timedelta(seconds=14),
         )
 
         assert paused["status"] == "paused"
-        assert paused["pause_reason"] == "captcha visible"
+        assert paused["pause_reason"] == "captcha"
         assert (
             fixture.runtime.attempts.claim(
                 client_id="extension-risk-next",

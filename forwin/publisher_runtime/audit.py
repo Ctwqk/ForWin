@@ -50,6 +50,8 @@ class PublisherAuditService:
         related_object_type: str,
         related_object_id: str,
         actor_type: str = "extension",
+        actor_id: str = "",
+        reason: str = "",
         event_family: str = "business_event",
     ) -> DecisionEvent | None:
         normalized_project_id = str(project_id or "").strip()
@@ -92,7 +94,9 @@ class PublisherAuditService:
                     event_family=event_family,
                     event_type=event_type,
                     actor_type=actor_type,
+                    actor_id=actor_id,
                     summary=summary,
+                    reason=reason,
                     payload=payload,
                     related_object_type=related_object_type,
                     related_object_id=related_object_id,
@@ -109,6 +113,9 @@ class PublisherAuditService:
         event_type: str,
         summary: str,
         actor_type: str = "extension",
+        actor_id: str = "",
+        reason: str = "",
+        event_family: str = "business_event",
         extra_payload: dict[str, Any] | None = None,
     ) -> DecisionEvent | None:
         payload = {
@@ -144,6 +151,9 @@ class PublisherAuditService:
             related_object_type="publisher_upload_job",
             related_object_id=job.id,
             actor_type=actor_type,
+            actor_id=actor_id,
+            reason=reason,
+            event_family=event_family,
         )
 
     def record_comment_sync_event(

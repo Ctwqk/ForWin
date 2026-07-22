@@ -69,6 +69,12 @@ test('backend client posts upload job and attempt APIs with encoded path paramet
       payload: { phase: 'uploading' },
     },
     {
+      method: 'pauseUploadAttempt',
+      args: [jobId, attemptId, { risk_reason: 'captcha' }],
+      path: '/api/publishers/extension/upload-jobs/job%2Fwith%20space%3F/attempts/attempt%231%2F2/pause',
+      payload: { risk_reason: 'captcha' },
+    },
+    {
       method: 'submitUploadAttemptResult',
       args: [jobId, attemptId, { status: 'succeeded' }],
       path: '/api/publishers/extension/upload-jobs/job%2Fwith%20space%3F/attempts/attempt%231%2F2/result',

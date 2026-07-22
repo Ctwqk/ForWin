@@ -160,6 +160,8 @@ class DecisionEventType:
     UPLOAD_JOB_SUCCEEDED = "upload_job_succeeded"
     UPLOAD_JOB_FAILED = "upload_job_failed"
     UPLOAD_JOB_CANCELLED = "upload_job_cancelled"
+    UPLOAD_JOB_PAUSED = "upload_job_paused"
+    UPLOAD_JOB_RESUMED = "upload_job_resumed"
     COMMENT_SYNC_JOB_CREATED = "comment_sync_job_created"
     COMMENT_SYNC_JOB_CLAIMED = "comment_sync_job_claimed"
     COMMENT_SYNC_SUCCEEDED = "comment_sync_succeeded"
@@ -297,6 +299,8 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.UPLOAD_JOB_SUCCEEDED,
     DecisionEventType.UPLOAD_JOB_FAILED,
     DecisionEventType.UPLOAD_JOB_CANCELLED,
+    DecisionEventType.UPLOAD_JOB_PAUSED,
+    DecisionEventType.UPLOAD_JOB_RESUMED,
     DecisionEventType.COMMENT_SYNC_JOB_CREATED,
     DecisionEventType.COMMENT_SYNC_JOB_CLAIMED,
     DecisionEventType.COMMENT_SYNC_SUCCEEDED,

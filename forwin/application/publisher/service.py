@@ -19,7 +19,9 @@ from forwin.api_schema import (
     PublisherLoginQrOneShotRequest,
     PublisherPreflightRequest,
     PublisherUploadJobCreateRequest,
+    PublisherUploadResumeRequest,
     UploadAttemptHeartbeatRequest,
+    UploadAttemptPauseRequest,
     UploadAttemptPhaseRequest,
     UploadAttemptReceiptRequest,
     UploadAttemptReconcileRequest,
@@ -41,6 +43,13 @@ class PublisherApplicationService:
         self.get_publisher_manager = get_publisher_manager
         self.extension_root = extension_root
 
+    def _run(self, operation, *args, **kwargs):
+        return operation(
+            *args,
+            publisher_manager=self.get_publisher_manager(),
+            **kwargs,
+        )
+
     def download_publisher_extension_package(self):
         return operations.download_publisher_extension_package(
             extension_root=self.extension_root,
@@ -52,21 +61,13 @@ class PublisherApplicationService:
         )
 
     def list_publisher_platforms(self):
-        return operations.list_publisher_platforms(
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.list_publisher_platforms)
 
     def create_publisher_upload_job(self, req: PublisherUploadJobCreateRequest):
-        return operations.create_publisher_upload_job(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.create_publisher_upload_job, req)
 
     def get_publisher_upload_job(self, job_id: str):
-        return operations.get_publisher_upload_job(
-            job_id,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.get_publisher_upload_job, job_id)
 
     def list_publisher_upload_jobs(
         self,
@@ -74,8 +75,8 @@ class PublisherApplicationService:
         platform: str = "",
         limit: int = 30,
     ):
-        return operations.list_publisher_upload_jobs(
-            publisher_manager=self.get_publisher_manager(),
+        return self._run(
+            operations.list_publisher_upload_jobs,
             status=status,
             platform=platform,
             limit=limit,
@@ -86,8 +87,8 @@ class PublisherApplicationService:
         project_id: str = "",
         platform: str = "",
     ):
-        return operations.list_publisher_work_bindings(
-            publisher_manager=self.get_publisher_manager(),
+        return self._run(
+            operations.list_publisher_work_bindings,
             project_id=project_id,
             platform=platform,
         )
@@ -98,8 +99,8 @@ class PublisherApplicationService:
         platform: str = "",
         work_binding_id: str = "",
     ):
-        return operations.list_publisher_chapter_bindings(
-            publisher_manager=self.get_publisher_manager(),
+        return self._run(
+            operations.list_publisher_chapter_bindings,
             project_id=project_id,
             platform=platform,
             work_binding_id=work_binding_id,
@@ -110,73 +111,57 @@ class PublisherApplicationService:
         project_id: str = "",
         work_binding_id: str = "",
     ):
-        return operations.list_publisher_cover_assets(
-            publisher_manager=self.get_publisher_manager(),
+        return self._run(
+            operations.list_publisher_cover_assets,
             project_id=project_id,
             work_binding_id=work_binding_id,
         )
 
     def generate_publisher_cover_candidates(self, req: PublisherCoverGenerateRequest):
-        return operations.generate_publisher_cover_candidates(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.generate_publisher_cover_candidates, req)
 
     def select_publisher_cover_asset(self, req: PublisherCoverSelectRequest):
-        return operations.select_publisher_cover_asset(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.select_publisher_cover_asset, req)
 
     def approve_publisher_cover_asset(self, req: PublisherCoverSelectRequest):
-        return operations.approve_publisher_cover_asset(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.approve_publisher_cover_asset, req)
 
     def reject_publisher_cover_asset(self, req: PublisherCoverSelectRequest):
-        return operations.reject_publisher_cover_asset(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.reject_publisher_cover_asset, req)
 
     def enqueue_publisher_cover_upload(self, req: PublisherCoverUploadRequest):
-        return operations.enqueue_publisher_cover_upload(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.enqueue_publisher_cover_upload, req)
 
     def enqueue_publisher_audit_sync(self, req: PublisherAuditSyncRequest):
-        return operations.enqueue_publisher_audit_sync(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.enqueue_publisher_audit_sync, req)
 
     def publisher_preflight(self, req: PublisherPreflightRequest):
-        return operations.publisher_preflight(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.publisher_preflight, req)
 
     def start_publisher_login_qr_one_shot(
         self,
         req: PublisherLoginQrOneShotRequest,
     ):
-        return operations.start_publisher_login_qr_one_shot(
-            req,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.start_publisher_login_qr_one_shot, req)
 
     def terminate_publisher_upload_job(self, job_id: str):
-        return operations.terminate_publisher_upload_job(
-            job_id,
-            publisher_manager=self.get_publisher_manager(),
-        )
+        return self._run(operations.terminate_publisher_upload_job, job_id)
 
     def delete_publisher_upload_job(self, job_id: str):
-        return operations.delete_publisher_upload_job(
+        return self._run(operations.delete_publisher_upload_job, job_id)
+
+    def resume_publisher_upload_job(
+        self,
+        job_id: str,
+        req: PublisherUploadResumeRequest,
+        *,
+        operator_principal,
+    ):
+        return self._run(
+            operations.resume_publisher_upload_job,
             job_id,
-            publisher_manager=self.get_publisher_manager(),
+            req,
+            operator_principal=operator_principal,
         )
 
     def publisher_extension_heartbeat(
@@ -290,6 +275,22 @@ class PublisherApplicationService:
         extension_key: str | None,
     ):
         return operations.transition_publisher_upload_attempt(
+            job_id,
+            attempt_id,
+            req,
+            publisher_manager=self.get_publisher_manager(),
+            x_forwin_extension_key=extension_key,
+        )
+
+    def pause_publisher_upload_attempt(
+        self,
+        job_id: str,
+        attempt_id: str,
+        req: UploadAttemptPauseRequest,
+        *,
+        extension_key: str | None,
+    ):
+        return operations.pause_publisher_upload_attempt(
             job_id,
             attempt_id,
             req,

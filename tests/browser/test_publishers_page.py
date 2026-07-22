@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_publishers
+from tests.browser.fixtures import MockForWinBackend, goto_publishers, sample_upload_job
 
 
 def test_publishers_page_extension_platforms_and_upload_flow(page, browser_test_base_url: str) -> None:
@@ -51,3 +51,41 @@ def test_publishers_page_surfaces_extension_absence_and_upload_api_failure(page,
     page.locator("#body").fill("")
     page.get_by_role("button", name="直接发布").click()
     expect(page.locator("#upload_status")).to_contain_text("缺少正文")
+
+
+def test_publishers_page_resumes_a_typed_risk_pause(
+    page, browser_test_base_url: str
+) -> None:
+    paused = sample_upload_job("upload-paused")
+    paused.update(
+        {
+            "status": "paused",
+            "message": "平台风险状态已暂停，等待操作员手工处理。",
+            "finished_at": "",
+            "paused_at": "2026-04-24T12:01:30Z",
+            "pause_reason": "captcha",
+            "pause_token": "attempt-paused",
+            "resumable": True,
+            "deletable": False,
+            "terminable": True,
+        }
+    )
+    backend = MockForWinBackend(upload_jobs={"upload-paused": paused})
+    goto_publishers(page, browser_test_base_url, backend, bridge=True)
+
+    expect(page.locator("#upload_jobs_list")).to_contain_text("CAPTCHA / 人机验证")
+    page.get_by_role("button", name="恢复任务").click()
+    expect(page.locator("#upload_resume_dialog")).to_be_visible()
+    page.locator("#upload_resume_reason").fill("人工完成验证码并确认账号安全")
+    page.get_by_role("button", name="确认恢复").click()
+
+    expect(page.locator("#upload_resume_dialog")).not_to_be_visible()
+    expect(page.locator("#upload_jobs_list")).to_contain_text("pending")
+    payload = backend.captured_payloads(
+        "/api/publishers/upload-jobs/upload-paused/resume"
+    )[-1]
+    assert payload == {
+        "expected_pause_reason": "captcha",
+        "expected_pause_token": "attempt-paused",
+        "operator_reason": "人工完成验证码并确认账号安全",
+    }

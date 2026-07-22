@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import Header
+from fastapi import Header, Request
 
 from forwin.api_schema import (
     CommentSyncJobResultRequest,
@@ -12,7 +12,9 @@ from forwin.api_schema import (
     ExtensionHeartbeatRequest,
     ExtensionLoginQrNotifyRequest,
     ExtensionSessionSyncRequest,
+    PublisherUploadResumeRequest,
 )
+from forwin.api_auth import require_operator_principal
 from forwin.application.publisher import PublisherApplicationService
 
 from .api_publisher_extension_attempt_routes import (
@@ -23,7 +25,22 @@ from .api_publisher_extension_attempt_routes import (
 def build_handlers(
     *,
     service: PublisherApplicationService,
+    get_config: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[..., Any]]:
+    config_provider = get_config or (lambda: None)
+
+    def resume_publisher_upload_job(
+        job_id: str,
+        req: PublisherUploadResumeRequest,
+        request: Request,
+    ):
+        principal = require_operator_principal(request, config_provider())
+        return service.resume_publisher_upload_job(
+            job_id,
+            req,
+            operator_principal=principal,
+        )
+
     def publisher_extension_heartbeat(
         req: ExtensionHeartbeatRequest,
         x_forwin_extension_key: str | None = Header(default=None),
@@ -122,6 +139,7 @@ def build_handlers(
         "start_publisher_login_qr_one_shot": service.start_publisher_login_qr_one_shot,
         "terminate_publisher_upload_job": service.terminate_publisher_upload_job,
         "delete_publisher_upload_job": service.delete_publisher_upload_job,
+        "resume_publisher_upload_job": resume_publisher_upload_job,
         "publisher_extension_heartbeat": publisher_extension_heartbeat,
         "publisher_extension_login_qr_notify": publisher_extension_login_qr_notify,
         "publisher_extension_session_sync": publisher_extension_session_sync,

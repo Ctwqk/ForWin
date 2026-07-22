@@ -688,6 +688,48 @@ class PublisherManager:
             current_url=current_url,
         )
 
+    def pause_upload_attempt(
+        self,
+        *,
+        job_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_epoch: int,
+        risk_reason: str,
+        current_url: str = "",
+        evidence: dict[str, Any] | None = None,
+        observed_at: str = "",
+    ) -> dict[str, Any]:
+        return self.runtime.attempts.pause(
+            job_id=job_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            lease_epoch=lease_epoch,
+            risk_reason=risk_reason,
+            current_url=current_url,
+            evidence=evidence,
+            client_observed_at=observed_at,
+        )
+
+    def resume_upload_job(
+        self,
+        *,
+        job_id: str,
+        expected_pause_reason: str,
+        expected_pause_token: str,
+        operator_reason: str,
+        operator_actor_id: str,
+        operator_auth_method: str,
+    ) -> dict[str, Any]:
+        return self.runtime.attempts.resume(
+            job_id=job_id,
+            expected_pause_reason=expected_pause_reason,
+            expected_pause_token=expected_pause_token,
+            operator_reason=operator_reason,
+            operator_actor_id=operator_actor_id,
+            operator_auth_method=operator_auth_method,
+        )
+
     def recover_interrupted_upload_attempts(self) -> list[str]:
         return self.runtime.upload_jobs.recover_interrupted_upload_attempts()
 

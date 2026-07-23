@@ -752,17 +752,6 @@ class PublisherAttemptService:
                 "transition": transition,
             }
 
-    def expire(self, *, now: datetime | None = None) -> list[str]:
-        expired_at = now or utc_now()
-        with self.session_factory() as session:
-            job_ids = self._expire_in_session(
-                session,
-                now=expired_at,
-                interrupted=False,
-            )
-            session.commit()
-            return job_ids
-
     def recover_interrupted(self, *, now: datetime | None = None) -> list[str]:
         recovered_at = now or utc_now()
         with self.session_factory() as session:

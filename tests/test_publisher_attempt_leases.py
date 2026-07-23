@@ -6,10 +6,15 @@ import pytest
 from sqlalchemy import func, select
 
 from forwin.models.publisher import PublisherUploadAttempt, PublisherUploadJob
+from forwin.publisher_runtime.attempts import PublisherAttemptService
 from tests.test_canon_publisher_jobs import _fixture, _materialize
 
 
 NOW = datetime(2026, 7, 21, 12, 0, tzinfo=timezone.utc)
+
+
+def test_attempt_expiry_has_no_parallel_scheduler_entrypoint() -> None:
+    assert not hasattr(PublisherAttemptService, "expire")
 
 
 def _released_job(fixture) -> dict:
@@ -240,9 +245,14 @@ def test_expired_pre_mutation_attempt_returns_to_pending() -> None:
         )
         assert claimed is not None
 
-        expired = fixture.runtime.attempts.expire(now=NOW + timedelta(seconds=11))
+        trigger = fixture.runtime.attempts.claim(
+            client_id="extension-expire-trigger",
+            connected_platforms=["qidian"],
+            lease_seconds=10,
+            now=NOW + timedelta(seconds=11),
+        )
+        assert trigger is None
 
-        assert expired == [job["job_id"]]
         stored = fixture.runtime.upload_jobs.get_upload_job(job["job_id"])
         assert stored["status"] == "pending"
         assert (
@@ -289,10 +299,6 @@ def test_expired_post_mutation_attempt_requires_reconciliation() -> None:
             now=NOW + timedelta(seconds=1),
         )
 
-        fixture.runtime.attempts.expire(now=NOW + timedelta(seconds=12))
-
-        stored = fixture.runtime.upload_jobs.get_upload_job(job["job_id"])
-        assert stored["status"] == "reconciling"
         reconciliation = fixture.runtime.attempts.claim(
             client_id="extension-reconcile",
             connected_platforms=["qidian"],
@@ -330,7 +336,12 @@ def test_abort_before_mutation_expires_to_cancelled() -> None:
                 now=NOW + timedelta(seconds=1),
             )
 
-        fixture.runtime.attempts.expire(now=NOW + timedelta(seconds=10))
+        trigger = fixture.runtime.attempts.claim(
+            client_id="extension-abort-trigger",
+            connected_platforms=["qidian"],
+            now=NOW + timedelta(seconds=10),
+        )
+        assert trigger is None
 
         stored = fixture.runtime.upload_jobs.get_upload_job(job["job_id"])
         assert stored["status"] == "cancelled"
@@ -361,15 +372,7 @@ def test_abort_after_mutation_still_allows_read_only_reconciliation() -> None:
             now=NOW + timedelta(seconds=1),
         )
         fixture.runtime.upload_jobs.terminate_upload_job(job["job_id"])
-        fixture.runtime.attempts.expire(now=NOW + timedelta(seconds=11))
 
-        assert (
-            fixture.runtime.upload_jobs.get_upload_job(job["job_id"])["status"]
-            == "reconciling"
-        )
-        terminated = fixture.runtime.upload_jobs.terminate_upload_job(job["job_id"])
-        assert terminated["status"] == "reconciling"
-        assert terminated["abort_requested"] is True
         reconcile = fixture.runtime.attempts.claim(
             client_id="extension-abort-reconcile",
             connected_platforms=["qidian"],

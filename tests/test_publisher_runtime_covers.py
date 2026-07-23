@@ -1196,7 +1196,7 @@ def test_late_cover_receipt_converges_job_binding_and_asset(tmp_path: Path) -> N
             lease_seconds=10,
             now=NOW + timedelta(seconds=1),
         )
-        runtime.attempts.expire(now=NOW + timedelta(seconds=12))
+        runtime.attempts.recover_interrupted(now=NOW + timedelta(seconds=12))
 
         applied = runtime.upload_jobs.record_upload_receipt(
             job_id=job.id,

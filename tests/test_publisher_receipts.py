@@ -154,7 +154,7 @@ def _uncertain_job(fixture) -> tuple[dict, dict]:
         lease_seconds=10,
         now=NOW + timedelta(seconds=1),
     )
-    fixture.runtime.attempts.expire(now=NOW + timedelta(seconds=12))
+    fixture.runtime.attempts.recover_interrupted(now=NOW + timedelta(seconds=12))
     return released, claimed
 
 

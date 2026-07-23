@@ -377,9 +377,6 @@ class PublisherManager:
             publisher_compliance_required=publisher_compliance_required,
         )
 
-    def materialize_canon_jobs(self, **request: Any) -> list[dict[str, Any]]:
-        return self.runtime.canon_jobs.materialize(**request)
-
     def find_canon_job(self, **identity: Any) -> dict[str, Any] | None:
         return self.runtime.canon_jobs.find(**identity)
 

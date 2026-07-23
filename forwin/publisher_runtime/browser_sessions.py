@@ -29,10 +29,6 @@ _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 _SESSION_COOKIE_ENCODING = "fernet-v1"
 
 
-class PublisherBrowserSessionDecodeError(ValueError):
-    pass
-
-
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

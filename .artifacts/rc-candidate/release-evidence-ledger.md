@@ -1,7 +1,9 @@
 # ForWin v5 Release Evidence Ledger
 
 Updated: 2026-07-23
-Candidate source: `80af1c83323b90f8d69321c0cabe4c98f9185f48`
+Matrix candidate source: `80af1c83323b90f8d69321c0cabe4c98f9185f48`
+Integration source: resolved from Git by the collector at execution time. This
+ledger intentionally does not self-pin the commit that contains it.
 
 Status values:
 
@@ -20,7 +22,7 @@ intent, memory, or a narrower check than the stated release requirement.
 | --- | --- | --- |
 | Candidate source and image identity frozen | PROVEN | `.artifacts/v4-matrix-candidate/manifest.json`; runtime and browser image revision labels equal the candidate SHA |
 | Tracked source unchanged during run | RUNNING | Matrix harness `assert_source_frozen`; final manifest must still report `code_changes_during_run = 0` |
-| Matrix-to-RC successor delta is bounded | MISSING | Final collector now requires the matrix SHA to equal the RC or be its ancestor with every change confined to the explicit R8 publisher/recovery file allowlist or tracked release-harness directory; arbitrary HTTP and test files are rejected; final RC has not been assembled |
+| Matrix-to-RC successor delta is bounded | RUNNING | The tracked integration candidate passes `bounded_successor`: every post-matrix change is confined to the explicit R8 publisher/recovery file allowlist or tracked release-harness directory, while arbitrary HTTP and test files remain rejected; the final matrix audit and immutable RC identity are still pending |
 | L30 accepted target reached | RUNNING | Final `L30/project.json`, `chapters.json`, `tasks.json`, and `run-summary.json` |
 | L60 standard accepted target reached | RUNNING | Final `L60S/project.json`, `chapters.json`, `tasks.json`, and `run-summary.json` |
 | L60 pulp accepted target reached | RUNNING | Final `L60P/project.json`, `chapters.json`, `tasks.json`, and `run-summary.json` |
@@ -47,7 +49,7 @@ intent, memory, or a narrower check than the stated release requirement.
 | Projection consumer unavailable | REPEAT | Deterministic outbox retry test and durability commits | Stop/restart outbox worker, durable event snapshot, lease/replay evidence, lag returns to zero |
 | MinIO pre-Canon unavailable | MISSING | Contract described in runbook | Real MinIO stop before required candidate artifact; admission remains non-Canon; supported retry after restore |
 | MinIO post-Canon unavailable | RUNNING | Deterministic phase 3 retry test; isolated advisory-lock barrier design in `.artifacts/rc-candidate/post-canon-minio-barrier.md` | Execute real MinIO stop after Canon, accepted identity unchanged, same artifact key and maintenance row after restore, and prove barrier cleanup |
-| Publisher worker/backend unavailable | RUNNING | Isolated commits `1bf43f668fdd969d03e103913af93b47c9dc936b` and `e17ed39` add single-owner startup recovery, unique claim fencing, atomic/shared cover storage, orphan scavenging, remove duplicate API owners, and add structured stale-schema classification; publisher suite had `2103 passed, 1 skipped`, and the schema follow-up has 17 focused passes plus Ruff | After R6, integrate both isolated commits into the candidate, rebuild exact images, then kill/restart the real worker and prove same-job reclaim, stale-token rejection, shared-path readability, and orphan cleanup |
+| Publisher worker/backend unavailable | RUNNING | Commits `1bf43f668fdd969d03e103913af93b47c9dc936b` and `e17ed39` are integrated with single-owner startup recovery, unique claim fencing, atomic/shared cover storage, orphan scavenging, duplicate API-owner deletion, and structured stale-schema classification; follow-up convergence removed the remaining synchronous/test-only publisher paths; focused publisher recovery tests and Ruff pass | Build the exact candidate images, then kill/restart the real worker and prove same-job reclaim, stale-token rejection, shared-path readability, and orphan cleanup |
 | Publisher browser unavailable | MISSING | Recovery contract described in runbook | Stop/restart real browser process; existing job/attempt survives and resumes without duplicate mutation |
 | CAPTCHA/MFA/account-risk | REPEAT | Deterministic fenced pause/resume tests | Isolated deployed API/browser evidence for all risk classes, operator action audit, no bypass, same job identity |
 | Recovery runbook matches observed behavior | MISSING | Current runbook explicitly marks live evidence outstanding | Update only after every live fault report is complete |
@@ -67,7 +69,7 @@ intent, memory, or a narrower check than the stated release requirement.
 | V2 real generation-worker pre/post-commit crash reclaim | MISSING | Deterministic DB-state fixtures exist; isolated controller can now SIGKILL the real worker with a 30-second lease |
 | V3 fail-closed and no-direct-Canon boundary | REPEAT | Focused tests plus `GateAuditWriter` object-capability boundary; final matrix must retain real Spark model/trace evidence |
 | Annotated RC tag or immutable commit record | MISSING | Final collector requires a true annotated tag object pointing at the exact tested SHA |
-| Release harness tracked at candidate SHA | MISSING | Collector now fails unless all RC producers, the exact promotion inventory, and Compose inputs are Git-tracked and their working blobs equal the candidate commit; `release-source-files.txt` excludes drafts/logs/live evidence, and remains ignored until the post-R6 integration commit |
+| Release harness tracked at candidate SHA | PROVEN | The integration tree tracks the exact 31-file promotion inventory; `tracked_source_revision` verifies all 13 executable/Compose inputs against the candidate commit, while drafts, logs, and live evidence remain excluded |
 | One candidate identity across all evidence | MISSING | Final collector now cross-binds source tree, five image IDs, candidate stack/endpoints, and one candidate-manifest hash across V1, gates, recovery, and fresh-30; no live final set exists |
 | External signed provenance | MISSING | Local hash chains are tamper-evident only under the tracked-candidate/operator-honesty model; no externally signed CI or attestation artifact exists |
 | RC manifest complete | RUNNING | Collector v5 and freeze runbook are ready; final mode revalidates V1, bounded matrix predecessor/report, exact gate runner/argv/JUnit, eleven recovery reports/event identities, fresh-30 state/operation chain and candidate-stack endpoints, annotated tag, and exact source/tree/five-image identity |

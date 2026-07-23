@@ -13,7 +13,6 @@ from forwin.api_schema import (
     ExtensionSessionSyncRequest,
     PublisherAuditSyncRequest,
     PublisherCommentSyncJobRequest,
-    PublisherCoverGenerateRequest,
     PublisherCoverSelectRequest,
     PublisherCoverUploadRequest,
     PublisherLoginQrOneShotRequest,
@@ -116,9 +115,6 @@ class PublisherApplicationService:
             project_id=project_id,
             work_binding_id=work_binding_id,
         )
-
-    def generate_publisher_cover_candidates(self, req: PublisherCoverGenerateRequest):
-        return self._run(operations.generate_publisher_cover_candidates, req)
 
     def select_publisher_cover_asset(self, req: PublisherCoverSelectRequest):
         return self._run(operations.select_publisher_cover_asset, req)

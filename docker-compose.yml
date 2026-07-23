@@ -237,6 +237,7 @@ services:
     environment:
       - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
       - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
+      - FORWIN_PUBLISHER_COVER_DIR=${FORWIN_PUBLISHER_COVER_DIR:-/app/data/publisher_covers}
     volumes:
       - forwin-data:/app/data
     extra_hosts:

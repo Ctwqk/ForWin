@@ -181,16 +181,18 @@ def run_publisher_worker_loop(
     poll_interval: float,
     sleep=time.sleep,
 ) -> None:
-    while True:
-        handled = backend_jobs.run_pending_once(limit=limit)
-        if handled:
-            print("\n".join(handled))
-        elif once:
-            print("no publisher backend jobs")
-        if once:
-            return
-        if not handled:
-            sleep(max(float(poll_interval), 0.1))
+    with backend_jobs.singleton_worker_lock():
+        backend_jobs.recover_interrupted_cover_jobs()
+        while True:
+            handled = backend_jobs.run_pending_once(limit=limit)
+            if handled:
+                print("\n".join(handled))
+            elif once:
+                print("no publisher backend jobs")
+            if once:
+                return
+            if not handled:
+                sleep(max(float(poll_interval), 0.1))
 
 
 def cmd_publisher_worker(args: argparse.Namespace) -> None:

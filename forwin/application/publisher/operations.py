@@ -33,7 +33,6 @@ from forwin.api_schema import (
     PublisherAuditSyncRequest,
     PublisherChapterBindingResponse,
     PublisherCoverAssetResponse,
-    PublisherCoverGenerateRequest,
     PublisherCoverSelectRequest,
     PublisherCoverUploadRequest,
     PublisherPlatformInfo,
@@ -396,25 +395,6 @@ def list_publisher_cover_assets(
             work_binding_id=work_binding_id,
         )
     ]
-
-
-def generate_publisher_cover_candidates(
-    req: PublisherCoverGenerateRequest,
-    *,
-    publisher_manager,
-) -> dict[str, Any]:
-    try:
-        return publisher_manager.generate_cover_candidates(
-            project_id=req.project_id,
-            platform=req.platform,
-            book_name=req.book_name,
-            book_meta=req.book_meta.model_dump() if req.book_meta else None,
-            cover_candidate_count=req.cover_candidate_count,
-            cover_style_hint=req.cover_style_hint,
-            cover_confirmation_required=req.cover_confirmation_required,
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
 
 
 def select_publisher_cover_asset(

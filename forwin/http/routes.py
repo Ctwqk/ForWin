@@ -410,12 +410,6 @@ def register_api_routes(
             {"response_model": list[PublisherCoverAssetResponse]},
         ),
         (
-            "/api/publishers/covers/generate",
-            ["POST"],
-            handlers["generate_publisher_cover_candidates"],
-            {"response_model": dict[str, Any]},
-        ),
-        (
             "/api/publishers/covers/select",
             ["POST"],
             handlers["select_publisher_cover_asset"],

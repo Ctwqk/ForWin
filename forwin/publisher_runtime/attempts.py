@@ -779,6 +779,7 @@ class PublisherAttemptService:
                         PublisherUploadJob.finished_at.is_(None),
                         PublisherUploadJob.status.in_(["running", "terminating"]),
                         PublisherUploadJob.current_attempt_id == "",
+                        PublisherUploadJob.task_kind != "cover_generate",
                     )
                     .with_for_update(skip_locked=True)
                 )
@@ -787,19 +788,7 @@ class PublisherAttemptService:
             )
             for job in orphan_jobs:
                 job.extension_client_id = ""
-                if job.task_kind == "cover_generate":
-                    if job.abort_requested or job.status == "terminating":
-                        job.status = "cancelled"
-                        job.finished_at = recovered_at
-                        job.result_message = "封面生成任务已在重启恢复时取消。"
-                    else:
-                        job.status = "pending"
-                        job.finished_at = None
-                        job.result_message = "封面生成任务已在重启后恢复排队。"
-                    job.available_at = None
-                    job.reconcile_after = None
-                else:
-                    self._move_job_to_reconciling(job, now=recovered_at)
+                self._move_job_to_reconciling(job, now=recovered_at)
                 job_ids.append(job.id)
             session.commit()
             return sorted(set(job_ids))

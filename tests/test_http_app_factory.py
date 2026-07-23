@@ -40,6 +40,13 @@ def test_http_contract_has_one_project_generation_workflow() -> None:
     assert "/api/projects/{project_id}/continue-generation" in paths
 
 
+def test_http_contract_has_no_direct_cover_generation_workflow() -> None:
+    app = create_app(runtime=HttpRuntime())
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+
+    assert "/api/publishers/covers/generate" not in paths
+
+
 def test_cli_does_not_construct_or_run_chapter_pipeline() -> None:
     source = (ROOT / "forwin/cli.py").read_text(encoding="utf-8")
 

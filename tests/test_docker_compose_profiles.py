@@ -68,6 +68,19 @@ def test_publisher_browser_uses_browser_image_target() -> None:
     assert browser_build["target"] == "publisher-browser-runtime"
 
 
+def test_publisher_cover_files_use_worker_browser_shared_volume() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    worker = compose["services"]["publisher-worker"]
+    browser = compose["services"]["publisher-browser"]
+
+    assert (
+        "FORWIN_PUBLISHER_COVER_DIR="
+        "${FORWIN_PUBLISHER_COVER_DIR:-/app/data/publisher_covers}"
+    ) in worker["environment"]
+    assert "forwin-data:/app/data" in worker["volumes"]
+    assert "forwin-data:/app/data" in browser["volumes"]
+
+
 def test_publisher_browser_session_restore_is_opt_in() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     service_start = compose.index("  publisher-browser:")

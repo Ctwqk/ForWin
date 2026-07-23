@@ -8,7 +8,11 @@ from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
 from forwin.models.audit import DecisionEvent
-from forwin.models.publisher import PublisherOperatorAction, PublisherUploadAttempt
+from forwin.models.publisher import (
+    PublisherOperatorAction,
+    PublisherUploadAttempt,
+    PublisherUploadJob,
+)
 from forwin.publisher_runtime.attempts import PublisherInvalidTransitionError
 from tests.test_canon_publisher_jobs import _fixture, _materialize
 
@@ -419,7 +423,13 @@ def test_aborted_reconciliation_risk_stays_reconciling() -> None:
         assert terminated["status"] == "reconciling"
 
         reconcile_client = "extension-after-termination"
-        reconcile_at = NOW + timedelta(days=1)
+        with fixture.runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job["job_id"])
+            assert stored is not None
+            assert stored.reconcile_after is not None
+            reconcile_at = stored.reconcile_after.replace(
+                tzinfo=timezone.utc
+            ) + timedelta(seconds=1)
         reconcile_claim = fixture.runtime.attempts.claim(
             client_id=reconcile_client,
             connected_platforms=["qidian"],

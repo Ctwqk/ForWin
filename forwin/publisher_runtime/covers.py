@@ -161,7 +161,7 @@ class PublisherCoverService:
         self.image_client = image_client or MiniMaxImageClient()
         self.cover_dir = Path(
             cover_dir
-            or os.environ.get("FORWIN_PUBLISHER_COVER_DIR", "var/publisher_covers")
+            or os.environ.get("FORWIN_PUBLISHER_COVER_DIR", "data/publisher_covers")
         )
         self.minimax_model = str(minimax_model or "image-01")
 
@@ -177,6 +177,41 @@ class PublisherCoverService:
         work_binding_id: str = "",
         cover_confirmation_required: bool = False,
     ) -> dict[str, Any]:
+        meta, prompt, rows = self._request_cover_candidates(
+            book_name=book_name,
+            book_meta=book_meta,
+            candidate_count=candidate_count,
+            cover_style_hint=cover_style_hint,
+        )
+        with self.session_factory() as session:
+            try:
+                result = self._persist_cover_candidates(
+                    session,
+                    rows=rows,
+                    project_id=project_id,
+                    platform_id=platform_id,
+                    work_binding_id=work_binding_id,
+                    prompt=prompt,
+                    book_meta=meta,
+                    cover_confirmation_required=cover_confirmation_required,
+                )
+            except Exception:
+                self._rollback_and_discard_staged_cover_files(session)
+                raise
+            self._commit_staged_cover_transaction(
+                session,
+                asset_ids=list(result["cover_asset_ids"]),
+            )
+        return result
+
+    def _request_cover_candidates(
+        self,
+        *,
+        book_name: str,
+        book_meta: dict[str, Any] | None,
+        candidate_count: int,
+        cover_style_hint: str,
+    ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         meta = book_meta if isinstance(book_meta, dict) else {}
         count = max(1, min(int(candidate_count or 4), 8))
         prompt = self.build_prompt(
@@ -189,64 +224,133 @@ class PublisherCoverService:
             model=self.minimax_model,
             count=count,
         )
-        created: list[PublisherCoverAsset] = []
-        with self.session_factory() as session:
-            for index, row in enumerate(rows):
-                asset = self._store_candidate(
-                    session,
-                    row=row,
-                    index=index,
-                    project_id=project_id,
-                    platform_id=platform_id,
-                    work_binding_id=work_binding_id,
-                    prompt=prompt,
-                    book_meta=meta,
-                )
-                created.append(asset)
-            selected = self._select_best_candidate(
-                session,
-                created,
-                cover_confirmation_required=cover_confirmation_required,
-            )
-            session.commit()
-            return {
-                "ok": selected is not None,
-                "cover_asset_ids": [asset.id for asset in created],
-                "selected_cover_asset_id": selected.id if selected is not None else "",
-                "prompt": prompt,
-                "failure_reason": "" if selected is not None else "没有生成可用封面。",
-            }
+        return meta, prompt, rows
 
-    def generate_for_job(self, job_id: str) -> dict[str, Any]:
+    def _persist_cover_candidates(
+        self,
+        session,
+        *,
+        rows: list[dict[str, Any]],
+        project_id: str,
+        platform_id: str,
+        work_binding_id: str,
+        prompt: str,
+        book_meta: dict[str, Any],
+        cover_confirmation_required: bool,
+    ) -> dict[str, Any]:
+        created = [
+            self._store_candidate(
+                session,
+                row=row,
+                index=index,
+                project_id=project_id,
+                platform_id=platform_id,
+                work_binding_id=work_binding_id,
+                prompt=prompt,
+                book_meta=book_meta,
+            )
+            for index, row in enumerate(rows)
+        ]
+        selected = self._select_best_candidate(
+            session,
+            created,
+            cover_confirmation_required=cover_confirmation_required,
+        )
+        return {
+            "ok": selected is not None,
+            "cover_asset_ids": [asset.id for asset in created],
+            "selected_cover_asset_id": selected.id if selected is not None else "",
+            "prompt": prompt,
+            "failure_reason": "" if selected is not None else "没有生成可用封面。",
+        }
+
+    def generate_for_job(
+        self,
+        job_id: str,
+        *,
+        owner_token: str,
+    ) -> dict[str, Any]:
         with self.session_factory() as session:
             job = session.get(PublisherUploadJob, job_id)
             if job is None:
                 raise ValueError("封面生成任务不存在。")
+            if job.extension_client_id != owner_token:
+                return {"ok": False, "stale_claim": True}
             payload = _load_json_object(job.result_payload_json)
-        result = self.generate_cover_candidates(
-            project_id=str(payload.get("project_id") or job.project_id or ""),
-            platform_id=job.platform_id,
-            book_name=job.book_name,
-            book_meta=payload.get("book_meta")
-            if isinstance(payload.get("book_meta"), dict)
-            else {},
-            candidate_count=int(payload.get("cover_candidate_count") or 4),
-            cover_style_hint=str(payload.get("cover_style_hint") or ""),
-            cover_confirmation_required=bool(
+            project_id = str(payload.get("project_id") or job.project_id or "")
+            platform_id = job.platform_id
+            book_name = job.book_name
+            book_meta = (
+                payload.get("book_meta")
+                if isinstance(payload.get("book_meta"), dict)
+                else {}
+            )
+            candidate_count = int(
+                payload.get("cover_candidate_count") or 4
+            )
+            cover_style_hint = str(payload.get("cover_style_hint") or "")
+            cover_confirmation_required = bool(
                 payload.get("cover_confirmation_required", False)
-            ),
+            )
+        meta, prompt, rows = self._request_cover_candidates(
+            book_name=book_name,
+            book_meta=book_meta,
+            candidate_count=candidate_count,
+            cover_style_hint=cover_style_hint,
         )
         with self.session_factory() as session:
-            job = session.get(PublisherUploadJob, job_id)
-            if job is not None:
-                payload = _load_json_object(job.result_payload_json)
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(PublisherUploadJob.id == job_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None:
+                raise ValueError("封面生成任务不存在。")
+            payload = _load_json_object(job.result_payload_json)
+            if job.extension_client_id != owner_token:
+                return {"ok": False, "stale_claim": True}
+            if job.abort_requested or job.status == "terminating":
+                job.status = "cancelled"
+                job.finished_at = utc_now()
+                job.result_message = "封面生成任务已取消。"
+                session.commit()
+                return {"ok": False, "cancelled": True}
+            if job.status != "running":
+                return {
+                    "ok": job.status == "succeeded",
+                    "cover_asset_ids": list(
+                        payload.get("cover_asset_ids") or []
+                    ),
+                    "selected_cover_asset_id": str(
+                        payload.get("selected_cover_asset_id") or ""
+                    ),
+                    "prompt": str(payload.get("prompt") or ""),
+                    "failure_reason": str(
+                        payload.get("failure_reason") or ""
+                    ),
+                }
+            try:
+                result = self._persist_cover_candidates(
+                    session,
+                    rows=rows,
+                    project_id=project_id,
+                    platform_id=platform_id,
+                    work_binding_id="",
+                    prompt=prompt,
+                    book_meta=meta,
+                    cover_confirmation_required=cover_confirmation_required,
+                )
                 payload.update(result)
                 job.result_payload_json = _dump_json(payload)
                 job.result_message = (
-                    "封面候选已生成。" if result.get("ok") else "封面生成失败。"
+                    "封面候选已生成。"
+                    if result.get("ok")
+                    else "封面生成失败。"
                 )
                 job.error_message = (
-                    "" if result.get("ok") else str(result.get("failure_reason") or "")
+                    ""
+                    if result.get("ok")
+                    else str(result.get("failure_reason") or "")
                 )
                 job.status = "succeeded" if result.get("ok") else "failed"
                 job.finished_at = utc_now()
@@ -256,7 +360,13 @@ class PublisherCoverService:
                         job=job,
                         payload=payload,
                     )
-            session.commit()
+            except Exception:
+                self._rollback_and_discard_staged_cover_files(session)
+                raise
+            self._commit_staged_cover_transaction(
+                session,
+                asset_ids=list(result["cover_asset_ids"]),
+            )
         return result
 
     def build_prompt(
@@ -351,9 +461,114 @@ class PublisherCoverService:
             )
             folder.mkdir(parents=True, exist_ok=True)
             file_path = folder / f"{asset.id}{extension}"
-            file_path.write_bytes(data)
+            staging_folder = self.cover_dir / ".staging"
+            staging_folder.mkdir(parents=True, exist_ok=True)
+            staging_path = staging_folder / f"{asset.id}{extension}.part"
+            session.info.setdefault(
+                "publisher_cover_staged_files",
+                [],
+            ).extend([staging_path, file_path])
+            staging_path.write_bytes(data)
+            staging_path.replace(file_path)
             asset.file_path = str(file_path)
         return asset
+
+    def _commit_staged_cover_transaction(
+        self,
+        session,
+        *,
+        asset_ids: list[str],
+    ) -> None:
+        try:
+            session.commit()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            # A commit error can arrive after PostgreSQL committed the rows.
+            if self._cover_assets_are_absent(asset_ids):
+                self._discard_staged_cover_files(session)
+            else:
+                self._clear_staged_cover_files(session)
+            raise
+        self._clear_staged_cover_files(session)
+
+    def _cover_assets_are_absent(self, asset_ids: list[str]) -> bool:
+        if not asset_ids:
+            return True
+        try:
+            with self.session_factory() as verification:
+                existing_id = verification.execute(
+                    select(PublisherCoverAsset.id)
+                    .where(PublisherCoverAsset.id.in_(asset_ids))
+                    .limit(1)
+                ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001
+            return False
+        return existing_id is None
+
+    def _rollback_and_discard_staged_cover_files(self, session) -> None:
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        self._discard_staged_cover_files(session)
+
+    def cleanup_orphaned_files(self) -> list[str]:
+        if not self.cover_dir.is_dir():
+            return []
+        try:
+            with self.session_factory() as session:
+                stored_paths = session.execute(
+                    select(PublisherCoverAsset.file_path).where(
+                        PublisherCoverAsset.file_path != ""
+                    )
+                ).scalars().all()
+        except Exception:  # noqa: BLE001
+            return []
+        referenced = {
+            self._normalized_path(path)
+            for path in stored_paths
+            if str(path or "").strip()
+        }
+        removed: list[str] = []
+        for path in sorted(self.cover_dir.rglob("*")):
+            if not path.is_file() and not path.is_symlink():
+                continue
+            if self._normalized_path(path) in referenced:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            removed.append(str(path))
+        for folder in sorted(
+            (path for path in self.cover_dir.rglob("*") if path.is_dir()),
+            reverse=True,
+        ):
+            try:
+                folder.rmdir()
+            except OSError:
+                continue
+        return removed
+
+    @staticmethod
+    def _normalized_path(path: str | Path) -> Path:
+        return Path(path).expanduser().resolve(strict=False)
+
+    @staticmethod
+    def _discard_staged_cover_files(session) -> None:
+        paths = session.info.pop("publisher_cover_staged_files", [])
+        for path in paths:
+            try:
+                Path(path).unlink()
+            except OSError:
+                continue
+
+    @staticmethod
+    def _clear_staged_cover_files(session) -> None:
+        session.info.pop("publisher_cover_staged_files", None)
 
     def validate_candidate_bytes(
         self,

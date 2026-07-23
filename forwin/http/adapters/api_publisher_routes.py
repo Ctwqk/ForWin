@@ -129,7 +129,6 @@ def build_handlers(
         "list_publisher_work_bindings": service.list_publisher_work_bindings,
         "list_publisher_chapter_bindings": service.list_publisher_chapter_bindings,
         "list_publisher_cover_assets": service.list_publisher_cover_assets,
-        "generate_publisher_cover_candidates": service.generate_publisher_cover_candidates,
         "select_publisher_cover_asset": service.select_publisher_cover_asset,
         "approve_publisher_cover_asset": service.approve_publisher_cover_asset,
         "reject_publisher_cover_asset": service.reject_publisher_cover_asset,

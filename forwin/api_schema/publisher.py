@@ -715,16 +715,6 @@ class PublisherCoverAssetResponse(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class PublisherCoverGenerateRequest(BaseModel):
-    project_id: str = ""
-    platform: str
-    book_name: str
-    book_meta: PublisherBookMetaRequest | None = None
-    cover_candidate_count: int = 4
-    cover_style_hint: str = ""
-    cover_confirmation_required: bool = False
-
-
 class PublisherCoverSelectRequest(BaseModel):
     cover_asset_id: str
 
@@ -854,7 +844,6 @@ __all__ = [
     "PublisherWorkBindingResponse",
     "PublisherChapterBindingResponse",
     "PublisherCoverAssetResponse",
-    "PublisherCoverGenerateRequest",
     "PublisherCoverSelectRequest",
     "PublisherCoverUploadRequest",
     "PublisherAuditSyncRequest",

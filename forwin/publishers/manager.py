@@ -435,27 +435,6 @@ class PublisherManager:
             work_binding_id=work_binding_id,
         )
 
-    def generate_cover_candidates(
-        self,
-        *,
-        project_id: str = "",
-        platform: str,
-        book_name: str,
-        book_meta: dict[str, Any] | None = None,
-        cover_candidate_count: int = 4,
-        cover_style_hint: str = "",
-        cover_confirmation_required: bool = False,
-    ) -> dict[str, Any]:
-        return self.runtime.cover_service.generate_cover_candidates(
-            project_id=project_id,
-            platform_id=platform,
-            book_name=book_name,
-            book_meta=book_meta,
-            candidate_count=cover_candidate_count,
-            cover_style_hint=cover_style_hint,
-            cover_confirmation_required=cover_confirmation_required,
-        )
-
     def select_cover_asset(self, cover_asset_id: str) -> dict[str, Any]:
         return self.runtime.cover_service.set_cover_selection(
             cover_asset_id,

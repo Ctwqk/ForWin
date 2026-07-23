@@ -4,7 +4,8 @@ import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, text
 
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.project import Project
@@ -13,6 +14,7 @@ from forwin.models.publisher import (
     PublisherUploadJob,
     PublisherWorkBinding,
 )
+from forwin.publisher_runtime.covers import PublisherCoverService
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from tests.postgres import postgres_test_url
 
@@ -118,6 +120,19 @@ def _complete_upload(runtime: PublisherRuntimeService, created: dict, payload: d
         error_message="",
         details={},
     )
+
+
+def test_default_cover_directory_uses_shared_data_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FORWIN_PUBLISHER_COVER_DIR", raising=False)
+
+    service = PublisherCoverService(
+        session_factory=object(),
+        image_client=FakeImageClient([]),
+    )
+
+    assert service.cover_dir == Path("data/publisher_covers")
 
 
 def test_cover_generation_stores_multiple_candidates(tmp_path: Path) -> None:
@@ -247,6 +262,321 @@ def test_cover_generation_job_marks_failed_when_no_valid_candidates(
         engine.dispose()
 
 
+def test_cover_job_rolls_back_assets_when_terminal_update_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-atomic-terminal",
+        rows=[{"bytes": PNG_1X1, "score": 0.5, "request_id": "req-atomic"}],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="原子封面",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-atomic","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        monkeypatch.setattr(
+            runtime.cover_service,
+            "enqueue_cover_upload_if_ready",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("terminal update fault")
+            ),
+        )
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(
+                select(PublisherCoverAsset)
+            ).scalars().all()
+            assert stored is not None
+            assert stored.status == "failed"
+            assert covers == []
+        assert list(tmp_path.rglob("*.png")) == []
+        assert list(tmp_path.rglob("*.jpg")) == []
+        assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+    finally:
+        engine.dispose()
+
+
+def test_cover_job_preserves_committed_files_when_commit_ack_is_lost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-commit-ack-lost",
+        rows=[{"bytes": PNG_1X1, "score": 0.5, "request_id": "req-ack-lost"}],
+        cover_dir=tmp_path,
+    )
+    listener_raised = False
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="提交结果不确定",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-ack-lost","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        original_commit = runtime.session_factory.class_.commit
+
+        def commit_then_lose_ack(session) -> None:
+            nonlocal listener_raised
+            original_commit(session)
+            if not listener_raised and session.info.get(
+                "publisher_cover_staged_files"
+            ):
+                listener_raised = True
+                raise RuntimeError("commit acknowledgement lost")
+
+        monkeypatch.setattr(
+            runtime.session_factory.class_,
+            "commit",
+            commit_then_lose_ack,
+        )
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        assert listener_raised is True
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(select(PublisherCoverAsset)).scalars().all()
+            assert stored is not None
+            assert stored.status == "succeeded"
+            assert len(covers) == 1
+            assert Path(covers[0].file_path).is_file()
+    finally:
+        engine.dispose()
+
+
+def test_cover_job_scavenges_file_when_commit_outcome_check_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-commit-check-unavailable",
+        rows=[{"bytes": PNG_1X1, "score": 0.5, "request_id": "req-check-down"}],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="提交核验不可用",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-check-down","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        original_commit = runtime.session_factory.class_.commit
+
+        def fail_before_cover_commit(session) -> None:
+            if session.info.get("publisher_cover_staged_files"):
+                raise RuntimeError("database connection lost before commit")
+            original_commit(session)
+
+        monkeypatch.setattr(
+            runtime.session_factory.class_,
+            "commit",
+            fail_before_cover_commit,
+        )
+        monkeypatch.setattr(
+            runtime.cover_service,
+            "_cover_assets_are_absent",
+            lambda _asset_ids: False,
+        )
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(select(PublisherCoverAsset)).scalars().all()
+            assert stored is not None
+            assert stored.status == "failed"
+            assert covers == []
+        runtime.backend_jobs.recover_interrupted_cover_jobs(now=NOW)
+        assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+    finally:
+        engine.dispose()
+
+
+def test_cover_job_removes_partial_file_when_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-partial-write",
+        rows=[{"bytes": PNG_1X1, "score": 0.5, "request_id": "req-partial"}],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="部分文件",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-partial","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        def write_part_then_fail(path: Path, data: bytes) -> int:
+            with path.open("wb") as handle:
+                handle.write(data[:4])
+            raise OSError("partial file write")
+
+        monkeypatch.setattr(Path, "write_bytes", write_part_then_fail)
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(select(PublisherCoverAsset)).scalars().all()
+            assert stored is not None
+            assert stored.status == "failed"
+            assert covers == []
+        assert list(tmp_path.rglob("*.png")) == []
+        assert list(tmp_path.rglob("*.jpg")) == []
+        assert [path for path in tmp_path.rglob("*") if path.is_file()] == []
+    finally:
+        engine.dispose()
+
+
+def test_cover_job_honors_abort_requested_during_provider_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-abort-during-provider",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="取消封面",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-abort","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        def abort_then_return(**_kwargs):
+            with runtime.session_factory.begin() as session:
+                stored = session.get(PublisherUploadJob, job_id)
+                assert stored is not None
+                stored.status = "terminating"
+                stored.abort_requested = True
+            return [
+                {
+                    "bytes": PNG_1X1,
+                    "score": 0.5,
+                    "request_id": "req-abort",
+                }
+            ]
+
+        monkeypatch.setattr(
+            runtime.cover_service.image_client,
+            "generate_images",
+            abort_then_return,
+        )
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(
+                select(PublisherCoverAsset)
+            ).scalars().all()
+            assert stored is not None
+            assert stored.status == "cancelled"
+            assert stored.abort_requested is True
+            assert covers == []
+    finally:
+        engine.dispose()
+
+
+def test_cover_job_provider_failure_after_abort_stays_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-job-provider-failure-after-abort",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="失败后取消",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-abort-failure"}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        def abort_then_fail(**_kwargs):
+            with runtime.session_factory.begin() as session:
+                stored = session.get(PublisherUploadJob, job_id)
+                assert stored is not None
+                stored.status = "terminating"
+                stored.abort_requested = True
+            raise RuntimeError("provider interrupted after abort")
+
+        monkeypatch.setattr(
+            runtime.cover_service.image_client,
+            "generate_images",
+            abort_then_fail,
+        )
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            assert stored is not None
+            assert stored.status == "cancelled"
+            assert stored.abort_requested is True
+            assert stored.finished_at is not None
+    finally:
+        engine.dispose()
+
+
 def test_upload_creation_enqueues_cover_generate_for_create_if_missing(
     tmp_path: Path,
 ) -> None:
@@ -297,18 +627,356 @@ def test_restart_returns_backend_cover_generation_to_its_owned_queue(
             create_if_missing=True,
             book_meta=_book_meta(),
         )
-        backend_job_id = runtime.backend_jobs.claim_next_cover_generate_job()
-        assert backend_job_id
+        backend_claim = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert backend_claim is not None
+        backend_job_id = backend_claim.job_id
         assert backend_job_id != created["job_id"]
         assert runtime.upload_jobs.get_upload_job(backend_job_id)["status"] == "running"
+        with runtime.session_factory() as session:
+            claimed = session.get(PublisherUploadJob, backend_job_id)
+            assert claimed is not None
+            original_claimed_at = claimed.claimed_at
+            original_started_at = claimed.started_at
 
-        recovered = runtime.attempts.recover_interrupted(now=NOW)
+        assert runtime.attempts.recover_interrupted(now=NOW) == []
+        assert (
+            runtime.upload_jobs.get_upload_job(backend_job_id)["status"]
+            == "running"
+        )
+        recovered = runtime.backend_jobs.recover_interrupted_cover_jobs(
+            now=NOW
+        )
 
-        assert backend_job_id in recovered
+        assert recovered == [backend_job_id]
         stored = runtime.upload_jobs.get_upload_job(backend_job_id)
         assert stored["status"] == "pending"
         assert stored["extension_client_id"] == ""
-        assert runtime.backend_jobs.claim_next_cover_generate_job() == backend_job_id
+        with runtime.session_factory() as session:
+            row = session.get(PublisherUploadJob, backend_job_id)
+            assert row is not None
+            assert row.claimed_at == original_claimed_at
+            assert row.started_at == original_started_at
+            assert row.finished_at is None
+        assert runtime.backend_jobs.recover_interrupted_cover_jobs(now=NOW) == []
+        reclaimed = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert reclaimed is not None
+        assert reclaimed.job_id == backend_job_id
+        assert reclaimed.owner_token != backend_claim.owner_token
+    finally:
+        engine.dispose()
+
+
+def test_stale_cover_claim_cannot_complete_or_fail_reclaimed_job(
+    tmp_path: Path,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-stale-claim-fence",
+        rows=[{"bytes": PNG_1X1, "score": 0.5, "request_id": "req-stale"}],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="迟到 claim",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"project_id":"project-stale","book_meta":{}}',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        stale_claim = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert stale_claim is not None
+        assert stale_claim.job_id == job_id
+        assert runtime.backend_jobs.recover_interrupted_cover_jobs(now=NOW) == [job_id]
+        current_claim = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert current_claim is not None
+        assert current_claim.job_id == job_id
+        assert current_claim.owner_token != stale_claim.owner_token
+
+        stale_result = runtime.cover_service.generate_for_job(
+            job_id,
+            owner_token=stale_claim.owner_token,
+        )
+        runtime.backend_jobs.mark_failed(
+            job_id,
+            RuntimeError("late provider failure"),
+            owner_token=stale_claim.owner_token,
+        )
+
+        assert stale_result == {"ok": False, "stale_claim": True}
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(select(PublisherCoverAsset)).scalars().all()
+            assert stored is not None
+            assert stored.status == "running"
+            assert stored.extension_client_id == current_claim.owner_token
+            assert covers == []
+
+        result = runtime.cover_service.generate_for_job(
+            job_id,
+            owner_token=current_claim.owner_token,
+        )
+        assert result["ok"] is True
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            covers = session.execute(select(PublisherCoverAsset)).scalars().all()
+            assert stored is not None
+            assert stored.status == "succeeded"
+            assert len(covers) == 1
+    finally:
+        engine.dispose()
+
+
+def test_stale_cover_failure_does_not_run_global_file_scavenger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-stale-cleanup-fence",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    cleanup_calls: list[bool] = []
+    try:
+        with runtime.session_factory() as session:
+            job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="pending",
+                book_name="迟到清扫",
+                chapter_title="",
+                body_text="",
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+
+        stale_claim = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert stale_claim is not None
+        assert runtime.backend_jobs.recover_interrupted_cover_jobs(now=NOW) == [job_id]
+        current_claim = runtime.backend_jobs.claim_next_cover_generate_job()
+        assert current_claim is not None
+        monkeypatch.setattr(
+            runtime.backend_jobs,
+            "claim_next_cover_generate_job",
+            lambda: stale_claim,
+        )
+        monkeypatch.setattr(
+            runtime.cover_service,
+            "generate_for_job",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("late stale failure")
+            ),
+        )
+        monkeypatch.setattr(
+            runtime.cover_service,
+            "cleanup_orphaned_files",
+            lambda: cleanup_calls.append(True),
+        )
+
+        runtime.backend_jobs.run_pending_once(limit=1)
+
+        assert cleanup_calls == []
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, job_id)
+            assert stored is not None
+            assert stored.status == "running"
+            assert stored.extension_client_id == current_claim.owner_token
+    finally:
+        engine.dispose()
+
+
+def test_cover_recovery_scavenges_orphans_and_preserves_committed_files(
+    tmp_path: Path,
+) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-orphan-recovery",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    try:
+        referenced = tmp_path / "project" / "qidian" / "referenced.png"
+        referenced.parent.mkdir(parents=True)
+        referenced.write_bytes(PNG_1X1)
+        orphan = tmp_path / "project" / "qidian" / "orphan.png"
+        orphan.write_bytes(PNG_1X1)
+        partial = tmp_path / ".staging" / "partial.part"
+        partial.parent.mkdir(parents=True)
+        partial.write_bytes(PNG_1X1[:4])
+        with runtime.session_factory() as session:
+            session.add(
+                PublisherCoverAsset(
+                    project_id="project",
+                    source="minimax",
+                    status="selected",
+                    selection_state="selected",
+                    file_path=str(referenced),
+                    mime_type="image/png",
+                )
+            )
+            session.commit()
+
+        assert runtime.backend_jobs.recover_interrupted_cover_jobs(now=NOW) == []
+
+        assert referenced.is_file()
+        assert not orphan.exists()
+        assert not partial.exists()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("status", "abort_requested"),
+    [
+        ("running", True),
+        ("terminating", False),
+    ],
+)
+def test_cover_recovery_cancels_abort_or_terminating_without_touching_other_jobs(
+    tmp_path: Path,
+    status: str,
+    abort_requested: bool,
+) -> None:
+    engine, runtime = _runtime(
+        f"publisher-cover-recovery-{status}-{abort_requested}",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.session_factory() as session:
+            cover = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status=status,
+                abort_requested=abort_requested,
+                extension_client_id="backend",
+                claimed_at=NOW - timedelta(minutes=2),
+                started_at=NOW - timedelta(minutes=1),
+                book_name="中断封面",
+                chapter_title="",
+                body_text="",
+                result_payload_json='{"identity":"preserve"}',
+            )
+            browser_job = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="chapter_upload",
+                status="running",
+                extension_client_id="browser-client",
+                book_name="浏览器任务",
+                chapter_title="第一章",
+                body_text="正文",
+            )
+            attempt_owned_cover = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="running",
+                extension_client_id="backend",
+                current_attempt_id="attempt-owned",
+                book_name="已有 attempt",
+                chapter_title="",
+                body_text="",
+            )
+            deleted_cover = PublisherUploadJob(
+                platform_id="qidian",
+                task_kind="cover_generate",
+                status="running",
+                extension_client_id="backend",
+                deleted_at=NOW - timedelta(minutes=3),
+                book_name="已删除封面",
+                chapter_title="",
+                body_text="",
+            )
+            session.add_all(
+                [
+                    cover,
+                    browser_job,
+                    attempt_owned_cover,
+                    deleted_cover,
+                ]
+            )
+            session.commit()
+            cover_id = cover.id
+            browser_job_id = browser_job.id
+            attempt_owned_id = attempt_owned_cover.id
+            deleted_id = deleted_cover.id
+
+        recovered = runtime.backend_jobs.recover_interrupted_cover_jobs(
+            now=NOW
+        )
+
+        assert recovered == [cover_id]
+        with runtime.session_factory() as session:
+            stored = session.get(PublisherUploadJob, cover_id)
+            assert stored is not None
+            assert stored.status == "cancelled"
+            assert stored.finished_at is not None
+            assert stored.finished_at.replace(tzinfo=timezone.utc) == NOW
+            assert stored.extension_client_id == ""
+            assert stored.claimed_at == (
+                NOW - timedelta(minutes=2)
+            ).replace(tzinfo=None)
+            assert stored.started_at == (
+                NOW - timedelta(minutes=1)
+            ).replace(tzinfo=None)
+            assert stored.result_payload_json == '{"identity":"preserve"}'
+
+            browser = session.get(PublisherUploadJob, browser_job_id)
+            assert browser is not None
+            assert browser.status == "running"
+            assert browser.extension_client_id == "browser-client"
+
+            attempt_owned = session.get(
+                PublisherUploadJob,
+                attempt_owned_id,
+            )
+            assert attempt_owned is not None
+            assert attempt_owned.status == "running"
+            assert attempt_owned.current_attempt_id == "attempt-owned"
+
+            deleted = session.get(PublisherUploadJob, deleted_id)
+            assert deleted is not None
+            assert deleted.status == "running"
+    finally:
+        engine.dispose()
+
+
+def test_publisher_backend_worker_lock_is_singleton(tmp_path: Path) -> None:
+    engine, runtime = _runtime(
+        "publisher-cover-singleton-worker",
+        rows=[],
+        cover_dir=tmp_path,
+    )
+    try:
+        with runtime.backend_jobs.singleton_worker_lock():
+            with engine.connect() as observer:
+                advisory_states = observer.execute(
+                    text(
+                        """
+                        SELECT activity.state
+                        FROM pg_locks AS locks
+                        JOIN pg_stat_activity AS activity
+                          ON activity.pid=locks.pid
+                        WHERE locks.locktype='advisory'
+                          AND activity.datname=current_database()
+                        """
+                    )
+                ).scalars().all()
+            assert advisory_states
+            assert "idle in transaction" not in advisory_states
+            with pytest.raises(
+                RuntimeError,
+                match="already active",
+            ):
+                with runtime.backend_jobs.singleton_worker_lock():
+                    raise AssertionError("second worker lock must not open")
+
+        with runtime.backend_jobs.singleton_worker_lock():
+            pass
     finally:
         engine.dispose()
 

@@ -44,7 +44,6 @@ def _run_scheduled_review_action(
 
 def _run_automation_scheduler_pass(runtime: HttpRuntime) -> None:
     production_scheduler_factory = None
-    publisher_services = None
     if runtime.container is not None:
         core_services = runtime.container.core_services()
         publisher_services = runtime.container.publisher_services()
@@ -76,11 +75,6 @@ def _run_automation_scheduler_pass(runtime: HttpRuntime) -> None:
         ),
         production_scheduler_factory=production_scheduler_factory,
     )
-    if publisher_services is not None:
-        try:
-            publisher_services.publisher_runtime.backend_jobs.run_pending_once(limit=1)
-        except Exception:  # noqa: BLE001
-            logger.exception("Publisher backend job pass failed.")
     return result
 
 

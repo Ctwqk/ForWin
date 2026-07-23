@@ -75,6 +75,49 @@ def test_worker_bootstraps_resolve_only_their_owned_runtime(monkeypatch) -> None
     assert calls[-3:] == ["generation.close", "publisher.close", "outbox.close"]
 
 
+def test_api_automation_does_not_execute_publisher_backend_jobs(
+    monkeypatch,
+) -> None:
+    from forwin.http import automation
+
+    sentinel = object()
+    production_scheduler = object()
+    backend_job_calls: list[int] = []
+    backend_jobs = SimpleNamespace(
+        run_pending_once=lambda *, limit: backend_job_calls.append(limit)
+    )
+    runtime = SimpleNamespace(
+        container=SimpleNamespace(
+            core_services=lambda: SimpleNamespace(
+                generation_application=object()
+            ),
+            publisher_services=lambda: SimpleNamespace(
+                production_scheduler=production_scheduler,
+                publisher_runtime=SimpleNamespace(
+                    backend_jobs=backend_jobs
+                ),
+            ),
+        ),
+        session_factory=object(),
+        config=object(),
+        display_timezone=object(),
+        project_application=None,
+    )
+
+    def fake_scheduler_pass(**kwargs):
+        assert kwargs["production_scheduler_factory"] is production_scheduler
+        return sentinel
+
+    monkeypatch.setattr(
+        automation.api_automation,
+        "run_automation_scheduler_pass",
+        fake_scheduler_pass,
+    )
+
+    assert automation._run_automation_scheduler_pass(runtime) is sentinel
+    assert backend_job_calls == []
+
+
 def test_worker_bootstrap_failure_closes_partially_built_container(monkeypatch) -> None:
     calls: list[str] = []
 

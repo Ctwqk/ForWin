@@ -64,6 +64,8 @@ Finalize R6 only after all four cells have stopped. The finalizer binds its API,
 MCP, and PostgreSQL targets to the exact loopback ports of one verified
 candidate Compose stack. Git and Docker subprocesses reject host control
 variables instead of inheriting alternate repository or daemon targets:
+The output directory must be absent or empty; preserve any partial audit and
+use a new directory for a retry instead of overwriting earlier evidence.
 
 ```bash
 read -r -s FORWIN_MATRIX_DATABASE_URL

@@ -74,6 +74,16 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def prepare_output_directory(output: Path) -> None:
+    if output.exists() and (
+        not output.is_dir() or any(output.iterdir())
+    ):
+        raise MatrixAuditError(
+            f"matrix audit output directory is not empty: {output}"
+        )
+    output.mkdir(parents=True, exist_ok=True)
+
+
 def assert_matrix_identity(manifest: dict[str, Any], matrix_path: Path) -> dict[str, Any]:
     source_sha = str(manifest.get("source_sha") or "")
     if not source_sha:
@@ -494,7 +504,7 @@ async def run(args: argparse.Namespace) -> int:
         browser_image_id=str(identity["browser_image"]["image_id"]),
     )
     output = args.output_dir.resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    prepare_output_directory(output)
     results: dict[str, Any] = {}
     for name in EXPECTED_CELLS:
         evidence = await collect_cell(args, name, manifest["cells"][name])

@@ -48,6 +48,20 @@ def test_matrix_command_uses_l200_host_environment(
     assert captured["env"] == {"SAFE": "1"}
 
 
+def test_matrix_finalizer_refuses_nonempty_output_directory(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "final-audit"
+    output.mkdir()
+    stale_manifest = output / "manifest.json"
+    stale_manifest.write_text('{"result":"pass"}\n', encoding="utf-8")
+
+    with pytest.raises(matrix.MatrixAuditError, match="is not empty"):
+        matrix.prepare_output_directory(output)
+
+    assert stale_manifest.read_text(encoding="utf-8") == '{"result":"pass"}\n'
+
+
 def evidence(name: str) -> dict:
     expected = matrix.EXPECTED_CELLS[name]
     target = expected["target"]

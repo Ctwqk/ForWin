@@ -1,0 +1,1223 @@
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+
+MODULE_PATH = Path(__file__).with_name("collect_rc_manifest.py")
+SPEC = importlib.util.spec_from_file_location("collect_rc_manifest", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+collector = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(collector)
+
+SOURCE_SHA = "a" * 40
+SMOKE_FINALIZER_PATH = Path(__file__).with_name("finalize_smoke.py")
+MATRIX_FINALIZER_PATH = Path(__file__).with_name("finalize_matrix.py")
+L200_PATH = Path(__file__).with_name("l200_evidence.py")
+RUN_RC_GATES_PATH = Path(__file__).with_name("run_rc_gates.py")
+SMOKE_LIFECYCLE_PATH = Path(__file__).with_name("smoke_lifecycle.py")
+CANDIDATE_MCP_PATH = Path(__file__).with_name("candidate_mcp_call.py")
+RELEASE_SOURCE_MANIFEST_PATH = Path(__file__).with_name(
+    "release-source-files.txt"
+)
+MATRIX_FIXTURES_PATH = Path(__file__).with_name("test_finalize_matrix.py")
+RECOVERY_FIXTURES_PATH = Path(__file__).with_name("test_finalize_recovery.py")
+V1_FIXTURES_PATH = Path(__file__).with_name("test_finalize_v1.py")
+SOURCE_TREE = "c" * 40
+RUNTIME_IMAGE = {
+    "tag": "forwin-v5-runtime:test",
+    "image_id": "sha256:" + "1" * 64,
+    "revision": SOURCE_SHA,
+}
+BROWSER_IMAGE = {
+    "tag": "forwin-v5-browser:test",
+    "image_id": "sha256:" + "2" * 64,
+    "revision": SOURCE_SHA,
+}
+GATE_STEPS = (
+    "v1-fresh-schema",
+    "v2-canon-recovery",
+    "v3-spark-boundary",
+    "v5-projection-publisher-recovery",
+    "full-suite",
+    "ruff",
+    "compileall",
+    "diff-check",
+)
+PYTEST_STEPS = set(GATE_STEPS[:5])
+
+
+def test_collector_environment_rejects_git_and_docker_control() -> None:
+    with pytest.raises(collector.ManifestError, match="DOCKER_HOST"):
+        collector.command_environment(
+            {
+                "HOME": "/tmp/home",
+                "PATH": "/usr/bin",
+                "DOCKER_HOST": "tcp://production.example:2376",
+            }
+        )
+
+
+def test_collector_run_uses_minimal_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return Completed()
+
+    monkeypatch.setattr(
+        collector,
+        "command_environment",
+        lambda: {"SAFE": "1"},
+    )
+    monkeypatch.setattr(collector.subprocess, "run", fake_run)
+
+    assert collector.run("git", "rev-parse", "HEAD") == "ok"
+    assert captured["env"] == {"SAFE": "1"}
+
+
+def test_release_source_manifest_is_exact_and_excludes_live_evidence() -> None:
+    root = MODULE_PATH.parents[2]
+    listed = RELEASE_SOURCE_MANIFEST_PATH.read_text(
+        encoding="utf-8"
+    ).splitlines()
+    expected = sorted(
+        path.relative_to(root).as_posix()
+        for path in MODULE_PATH.parent.iterdir()
+        if path.is_file()
+        and path.suffix in {".md", ".py", ".txt", ".yml"}
+    )
+
+    assert listed == sorted(set(listed))
+    assert listed == expected
+    assert all((root / path).is_file() for path in listed)
+    assert not any(
+        "manifest.draft" in path or "gate-preflight" in path
+        for path in listed
+    )
+    assert (
+        RELEASE_SOURCE_MANIFEST_PATH.resolve()
+        in collector.RELEASE_HARNESS_PATHS
+    )
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_candidate_mcp_client_disables_env_and_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_mcp = load_module("candidate_mcp_transport", CANDIDATE_MCP_PATH)
+    sentinel = object()
+    options: dict = {}
+
+    def fake_async_client(**kwargs):
+        options.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(candidate_mcp.httpx, "AsyncClient", fake_async_client)
+    timeout = candidate_mcp.httpx.Timeout(12)
+
+    assert (
+        candidate_mcp.direct_mcp_http_client(
+            headers={"X-Test": "1"},
+            timeout=timeout,
+            auth=None,
+        )
+        is sentinel
+    )
+    assert options == {
+        "headers": {"X-Test": "1"},
+        "timeout": timeout,
+        "auth": None,
+        "trust_env": False,
+        "follow_redirects": False,
+    }
+
+
+def shared_candidate(path: Path) -> dict:
+    fixtures = load_module("collector_shared_v1_fixtures", V1_FIXTURES_PATH)
+    payload = fixtures.candidate(path)
+    payload["source"]["tree"] = SOURCE_TREE
+    payload["images"]["runtime"] = RUNTIME_IMAGE
+    payload["images"]["publisher_browser"] = BROWSER_IMAGE
+    payload["runtime_policy"] = {
+        "quality_profile": "standard",
+        "gate_delegate": "human",
+    }
+    payload["release_harness"] = {
+        "files": [
+            {
+                "path": artifact.relative_to(MODULE_PATH.parents[2]).as_posix(),
+                "sha256": collector.sha256_file(artifact),
+            }
+            for artifact in collector.RELEASE_HARNESS_PATHS
+        ]
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def smoke_stack_identity(candidate: dict) -> dict:
+    images = candidate["images"]
+    project = "forwin-v5-smoke"
+
+    def containers(services: set[str], image_key: str | None) -> list[dict]:
+        return [
+            {
+                "name": f"{project}-{service}",
+                "compose_project": project,
+                "compose_service": service,
+                "image_id": images[image_key or service]["image_id"],
+            }
+            for service in sorted(services)
+        ]
+
+    return {
+        "compose_project": project,
+        "runtime_containers": containers(
+            set(("forwin", "generation-worker", "outbox-worker", "forwin-mcp", "publisher-worker")),
+            "runtime",
+        ),
+        "publisher_browser_containers": containers(
+            {"publisher-browser"},
+            "publisher_browser",
+        ),
+        "dependency_containers": containers(
+            {"postgres", "qdrant", "minio"},
+            None,
+        ),
+        "connection_bindings": {
+            "compose_project": project,
+            "api": {
+                "compose_service": "forwin",
+                "host_ip": "127.0.0.1",
+                "host_port": 18899,
+            },
+            "mcp": {
+                "compose_service": "forwin-mcp",
+                "host_ip": "127.0.0.1",
+                "host_port": 18896,
+            },
+            "database": {
+                "compose_service": "postgres",
+                "host_ip": "127.0.0.1",
+                "host_port": 55434,
+            },
+            "qdrant": {
+                "compose_service": "qdrant",
+                "host_ip": "127.0.0.1",
+                "host_port": 16337,
+            },
+        },
+    }
+
+
+def write_smoke_transcript(
+    path: Path,
+    *,
+    candidate_path: Path,
+    identity: dict,
+    project_id: str,
+) -> None:
+    lifecycle = load_module("collector_smoke_lifecycle", SMOKE_LIFECYCLE_PATH)
+    recorder = lifecycle.Recorder("run-1")
+
+    def append(
+        tool: str,
+        *,
+        transport: str = "mcp_http",
+        stage_key: str = "",
+        task_id: str = "",
+    ) -> None:
+        recorder.append(
+            tool=tool,
+            transport=transport,
+            arguments={"project_id": project_id, "stage_key": stage_key},
+            project_id=project_id,
+            stage_key=stage_key,
+            task_id=task_id,
+            request_id=f"request-{len(recorder.operations) + 1}",
+        )
+
+    append("project_create")
+    append("project_policy_update", transport="http")
+    for stage in lifecycle.GENESIS_STAGES:
+        append("genesis_stage_generate", stage_key=stage)
+        append("genesis_stage_lock", stage_key=stage)
+    append("task_active_generation_check")
+    append("project_start_writing", task_id="task-1")
+    payload = {
+        "schema_version": 1,
+        "result": "handoff_started",
+        "source_sha": SOURCE_SHA,
+        "source_tree": SOURCE_TREE,
+        "run_id": "run-1",
+        "started_at": "2026-07-22T12:00:00+00:00",
+        "completed_at": "2026-07-22T12:01:00+00:00",
+        "project_id": project_id,
+        "handoff_task_id": "task-1",
+        "target": 30,
+        "candidate_manifest": identity["candidate_manifest"],
+        "harness": {
+            "path": str(SMOKE_LIFECYCLE_PATH),
+            "sha256": collector.sha256_file(SMOKE_LIFECYCLE_PATH),
+        },
+        "mcp_url": "http://127.0.0.1:18896/mcp",
+        "api_url": "http://127.0.0.1:18899",
+        "operation_count": len(recorder.operations),
+        "operation_chain_head": recorder.operations[-1]["operation_sha256"],
+        "operations": recorder.operations,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_smoke_evidence(
+    path: Path,
+    *,
+    candidate_path: Path | None = None,
+) -> None:
+    fixtures = load_module("collector_smoke_fixtures", MATRIX_FIXTURES_PATH)
+    evidence = fixtures.evidence("L30")
+    evidence["project"]["creation_status"] = "writing"
+    evidence["genesis"] = {
+        "project_id": evidence["project"]["id"],
+        "creation_status": "writing",
+        "can_start_writing": False,
+        "stage_states": [
+            {"stage_key": stage, "status": "locked", "locked": True}
+            for stage in fixtures.matrix.l200.GENESIS_STAGES
+        ],
+    }
+    evidence["policy"]["version"] = 1
+    evidence["task_policy_snapshots"] = {
+        "count": 1,
+        "items": [
+            {
+                "task_id": "task-1",
+                "status": "completed",
+                "policy_version": 1,
+                "payload_sha256": "a" * 64,
+                "policy_snapshot_sha256": collector.canonical_hash(
+                    evidence["policy"]["policy"]
+                ),
+            }
+        ],
+    }
+    evidence_path = path.parent / "smoke-evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    candidate_path = candidate_path or path.parent / "smoke-candidate.json"
+    candidate = shared_candidate(candidate_path)
+    candidate_time = datetime.fromisoformat(candidate["collected_at"])
+    identity = {
+        "source_sha": SOURCE_SHA,
+        "source_tree": SOURCE_TREE,
+        "candidate_manifest": {
+            "path": str(candidate_path),
+            "sha256": collector.sha256_file(candidate_path),
+        },
+        "images": {
+            key: {
+                field: image[field]
+                for field in (
+                    ("tag", "image_id", "revision")
+                    if key in {"runtime", "publisher_browser"}
+                    else ("tag", "image_id")
+                )
+            }
+            for key, image in candidate["images"].items()
+        },
+    }
+    identity["candidate_stack"] = smoke_stack_identity(candidate)
+    transcript_path = path.parent / "smoke-lifecycle.json"
+    write_smoke_transcript(
+        transcript_path,
+        candidate_path=candidate_path,
+        identity=identity,
+        project_id=evidence["project"]["id"],
+    )
+    smoke_finalizer = load_module(
+        "collector_smoke_finalizer",
+        SMOKE_FINALIZER_PATH,
+    )
+    report_path = path.parent / "smoke-report.md"
+    report_path.write_text(
+        smoke_finalizer.report(identity, evidence, []),
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_sha": SOURCE_SHA,
+                "result": "pass",
+                "target": 30,
+                "project_id": "project-200",
+                "quality_profile": "standard",
+                "gate_delegate": "human",
+                "accepted": 30,
+                "needs_review": 0,
+                "has_active_generation_task": False,
+                "code_changes_during_run": 0,
+                "identity": identity,
+                "fresh_project": {
+                    "projects": 1,
+                    "project_created_at": (
+                        candidate_time + timedelta(minutes=1)
+                    ).isoformat(),
+                },
+                "violations": [],
+                "evidence": {
+                    "path": str(evidence_path),
+                    "sha256": collector.sha256_file(evidence_path),
+                },
+                "final_report": {
+                    "path": str(report_path),
+                    "sha256": collector.sha256_file(report_path),
+                },
+                "operation_transcript": {
+                    "path": str(transcript_path),
+                    "sha256": collector.sha256_file(transcript_path),
+                },
+                "auditor": {
+                    "path": str(SMOKE_FINALIZER_PATH),
+                    "sha256": collector.sha256_file(SMOKE_FINALIZER_PATH),
+                    "matrix_helper_path": str(MATRIX_FINALIZER_PATH),
+                    "matrix_helper_sha256": collector.sha256_file(
+                        MATRIX_FINALIZER_PATH
+                    ),
+                    "database_helper_path": str(L200_PATH),
+                    "database_helper_sha256": collector.sha256_file(L200_PATH),
+                    "lifecycle_runner_path": str(SMOKE_LIFECYCLE_PATH),
+                    "lifecycle_runner_sha256": collector.sha256_file(
+                        SMOKE_LIFECYCLE_PATH
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_recovery_evidence(
+    path: Path,
+    *,
+    candidate_path: Path | None = None,
+) -> None:
+    fixtures = load_module("collector_recovery_fixtures", RECOVERY_FIXTURES_PATH)
+    fixtures.SOURCE_SHA = SOURCE_SHA
+    payload = fixtures.recovery_manifest(
+        path.parent,
+        candidate_path=candidate_path,
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_v1_evidence(
+    path: Path,
+    *,
+    candidate_path: Path | None = None,
+) -> None:
+    fixtures = load_module("collector_v1_fixtures", V1_FIXTURES_PATH)
+    candidate_path = candidate_path or path.parent / "v1-candidate.json"
+    candidate = shared_candidate(candidate_path)
+    events_path = path.parent / "v1-stack-events.jsonl"
+    fixtures.event_log(events_path, candidate_path)
+    payload = fixtures.v1.build_manifest(
+        candidate=candidate,
+        candidate_path=candidate_path,
+        events_path=events_path,
+    )
+    report_path = path.parent / "report.md"
+    fixtures.v1.atomic_write_text(
+        report_path,
+        fixtures.v1.final_report(payload),
+    )
+    payload["report"] = {
+        "path": str(report_path),
+        "sha256": fixtures.v1.sha256_file(report_path),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_matrix_audit(path: Path) -> None:
+    fixtures = load_module("collector_matrix_fixtures", MATRIX_FIXTURES_PATH)
+    raw_path = path.parent / "matrix.json"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_sha": SOURCE_SHA,
+                "code_changes_during_run": 0,
+                "matrix": "30/60S/60P/100",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cells = {}
+    results = {}
+    for name in ("L30", "L60S", "L60P", "L100"):
+        evidence_path = path.parent / f"{name}.json"
+        evidence = fixtures.evidence(name)
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        cells[name] = {
+            "project_id": evidence["project"]["id"],
+            "target": fixtures.matrix.EXPECTED_CELLS[name]["target"],
+            "violations": [],
+            "evidence_path": str(evidence_path),
+            "evidence_sha256": collector.sha256_file(evidence_path),
+        }
+        results[name] = {
+            "violations": [],
+            "evidence": evidence,
+        }
+    report_path = path.parent / "matrix-report.md"
+    report_path.write_text(
+        fixtures.matrix.final_report({"source_sha": SOURCE_SHA}, results),
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "result": "pass",
+                "identity": {
+                    "source_sha": SOURCE_SHA,
+                    "code_changes_during_run": 0,
+                    "matrix_manifest": {
+                        "path": str(raw_path),
+                        "sha256": collector.sha256_file(raw_path),
+                    },
+                },
+                "auditor": {
+                    "path": str(MATRIX_FINALIZER_PATH),
+                    "sha256": collector.sha256_file(MATRIX_FINALIZER_PATH),
+                    "database_helper_path": str(L200_PATH),
+                    "database_helper_sha256": collector.sha256_file(L200_PATH),
+                },
+                "cells": cells,
+                "final_report": {
+                    "path": str(report_path),
+                    "sha256": collector.sha256_file(report_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_evidence(
+    path: Path,
+    kind: str,
+    *,
+    candidate_path: Path | None = None,
+) -> None:
+    if kind == "release_gates":
+        runner = load_module("collector_gate_runner", RUN_RC_GATES_PATH)
+        configured = {step["name"]: step for step in runner.gate_steps()}
+        candidate_path = candidate_path or path.parent / "candidate-draft.json"
+        shared_candidate(candidate_path)
+        steps = []
+        for name in GATE_STEPS:
+            configured_step = configured[name]
+            command = list(configured_step["command"])
+            junit_path = path.parent / f"{name}.xml"
+            if name in PYTEST_STEPS:
+                command.append(f"--junitxml={junit_path}")
+            log_path = path.parent / f"{name}.log"
+            log_path.write_text(
+                "started_at=2026-07-22T12:00:00+00:00\n"
+                + "command="
+                + json.dumps(command, ensure_ascii=False)
+                + f"\n{name}: pass\n",
+                encoding="utf-8",
+            )
+            step = {
+                "name": name,
+                "kind": configured_step["kind"],
+                "command": command,
+                "started_at": "2026-07-22T12:00:00+00:00",
+                "completed_at": "2026-07-22T12:01:00+00:00",
+                "duration_seconds": 60.0,
+                "passed": True,
+                "exit_code": 0,
+                "log": {
+                    "path": str(log_path),
+                    "sha256": collector.sha256_file(log_path),
+                },
+            }
+            if name in PYTEST_STEPS:
+                junit_path.write_text(
+                    '<testsuites><testsuite tests="1" failures="0" '
+                    'errors="0"><testcase name="pass"/></testsuite></testsuites>\n',
+                    encoding="utf-8",
+                )
+                step["junit"] = {
+                    "path": str(junit_path),
+                    "exists": True,
+                    "sha256": collector.sha256_file(junit_path),
+                }
+            steps.append(step)
+        payload = {
+            "schema_version": 1,
+            "identity": {
+                "source_sha": SOURCE_SHA,
+                "source_tree": SOURCE_TREE,
+                "runtime_image": RUNTIME_IMAGE,
+                "browser_image": BROWSER_IMAGE,
+                "rc_manifest": {
+                    "path": str(candidate_path),
+                    "sha256": collector.sha256_file(candidate_path),
+                },
+            },
+            "runner": {
+                "path": str(RUN_RC_GATES_PATH),
+                "sha256": collector.sha256_file(RUN_RC_GATES_PATH),
+            },
+            "release_gate_passed": True,
+            "all_steps_completed": True,
+            "required_step_names": list(GATE_STEPS),
+            "completed_step_names": list(GATE_STEPS),
+            "steps": steps,
+        }
+    elif kind == "post_decision_smoke":
+        write_smoke_evidence(path, candidate_path=candidate_path)
+        return
+    elif kind == "live_recovery":
+        write_recovery_evidence(path, candidate_path=candidate_path)
+        return
+    elif kind == "v1_preflight":
+        write_v1_evidence(path, candidate_path=candidate_path)
+        return
+    else:
+        payload = {
+            "schema_version": 1,
+            "source_sha": SOURCE_SHA,
+            "result": "pass",
+        }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def final_args(tmp_path: Path) -> argparse.Namespace:
+    candidate_path = tmp_path / "shared-candidate.json"
+    shared_candidate(candidate_path)
+    paths = {
+        kind: tmp_path / f"{kind}.json"
+        for kind in (
+            "v1_preflight",
+            "release_gates",
+            "live_recovery",
+            "post_decision_smoke",
+        )
+    }
+    for kind, path in paths.items():
+        write_evidence(path, kind, candidate_path=candidate_path)
+    return argparse.Namespace(
+        draft=False,
+        rc_tag="v5.0.0-rc1",
+        v1_manifest=paths["v1_preflight"],
+        gate_manifest=paths["release_gates"],
+        recovery_manifest=paths["live_recovery"],
+        smoke_manifest=paths["post_decision_smoke"],
+    )
+
+
+def test_model_routing_is_resolved_for_every_runtime_role_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    services = (
+        "forwin",
+        "generation-worker",
+        "outbox-worker",
+        "forwin-mcp",
+        "publisher-worker",
+    )
+    containers = [f"stack-{service}" for service in services]
+
+    def fake_run(*command: str) -> str:
+        assert command[:3] == ("docker", "container", "inspect")
+        container = command[3]
+        service = container.removeprefix("stack-")
+        env = [
+            "FORWIN_EMBEDDING_BACKEND=gateway",
+            "FORWIN_EMBEDDING_BASE_URL=http://embedding:8080",
+            "FORWIN_EMBEDDING_MODEL=embedding-model",
+            "FORWIN_EMBEDDING_DIMS=384",
+            "FORWIN_EMBEDDING_REQUIRED=true",
+        ]
+        if service in collector.MODEL_EXECUTION_SERVICES:
+            env.extend(
+                [
+                    "MINIMAX_API_KEY=super-secret",
+                    "MINIMAX_BASE_URL=https://model.example/v1",
+                    "MINIMAX_MODEL=primary-model",
+                    "KIMI_API_KEY=kimi-secret",
+                    "KIMI_MODEL=fallback-model",
+                    "FORWIN_CODEX_ENABLED=true",
+                    "FORWIN_CODEX_DEFAULT_MODEL=codex-model",
+                ]
+            )
+        return json.dumps(
+            [
+                {
+                    "Id": f"{service}-id",
+                    "Image": "runtime-image-id",
+                    "Config": {
+                        "Env": env,
+                        "Labels": {
+                            "com.docker.compose.project": "forwin-rc",
+                            "com.docker.compose.service": service,
+                        },
+                    },
+                    "State": {
+                        "Running": True,
+                        "Health": {"Status": "healthy"},
+                    },
+                }
+            ]
+        )
+
+    monkeypatch.setattr(collector, "run", fake_run)
+    resolved = collector.inspect_model_environments(
+        containers,
+        "runtime-image-id",
+        model_profile_id="env-minimax",
+    )
+
+    assert set(resolved["services"]) == set(services)
+    assert resolved["compose_project"] == "forwin-rc"
+    assert all(
+        item["routing"]["selected_profile"]["model"] == "primary-model"
+        for service, item in resolved["services"].items()
+        if service in collector.MODEL_EXECUTION_SERVICES
+    )
+    assert all(
+        item["routing"]["codex"]["default_model"] == "codex-model"
+        for service, item in resolved["services"].items()
+        if service in collector.MODEL_EXECUTION_SERVICES
+    )
+    assert all(
+        not item["routing"]["selected_profile"]["api_key_configured"]
+        and not item["routing"]["fallback_profiles"]
+        and not item["routing"]["codex"]["enabled"]
+        for service, item in resolved["services"].items()
+        if service in collector.MODEL_PASSIVE_SERVICES
+    )
+    assert set(resolved["routing_group_hashes"]) == {
+        "model_execution",
+        "passive",
+    }
+    assert (
+        resolved["routing_group_hashes"]["model_execution"]
+        != resolved["routing_group_hashes"]["passive"]
+    )
+    assert "super-secret" not in repr(resolved)
+    assert "kimi-secret" not in repr(resolved)
+
+
+def test_model_routing_rejects_incomplete_runtime_role_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        collector,
+        "run",
+        lambda *_command: json.dumps(
+            [
+                {
+                    "Id": "api-id",
+                    "Image": "runtime-image-id",
+                    "Config": {
+                        "Env": [],
+                        "Labels": {
+                            "com.docker.compose.project": "forwin-rc",
+                            "com.docker.compose.service": "forwin",
+                        },
+                    },
+                    "State": {"Running": True},
+                }
+            ]
+        ),
+    )
+
+    with pytest.raises(collector.ManifestError, match="service set"):
+        collector.inspect_model_environments(
+            ["only-api"],
+            "runtime-image-id",
+            model_profile_id="",
+        )
+
+
+def test_passive_runtime_role_rejects_model_provider_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    services = tuple(sorted(collector.EXPECTED_RUNTIME_SERVICES))
+
+    def fake_run(*command: str) -> str:
+        service = command[3].removeprefix("stack-")
+        env = (
+            ["MINIMAX_API_KEY=must-not-be-here"]
+            if service == "forwin-mcp"
+            else []
+        )
+        return json.dumps(
+            [
+                {
+                    "Id": f"{service}-id",
+                    "Image": "runtime-image-id",
+                    "Config": {
+                        "Env": env,
+                        "Labels": {
+                            "com.docker.compose.project": "forwin-rc",
+                            "com.docker.compose.service": service,
+                        },
+                    },
+                    "State": {"Running": True},
+                }
+            ]
+        )
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    with pytest.raises(collector.ManifestError, match="passive runtime service"):
+        collector.inspect_model_environments(
+            [f"stack-{service}" for service in services],
+            "runtime-image-id",
+            model_profile_id="",
+        )
+
+
+def test_model_routing_defaults_match_source_configuration() -> None:
+    config_path = MODULE_PATH.parents[2] / "forwin/config.py"
+
+    assert collector.assert_routing_defaults(config_path) == {
+        key: collector.ROUTING_DEFAULTS[key]
+        for key in sorted(collector.ROUTING_DEFAULTS)
+    }
+
+
+def test_model_routing_default_drift_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        collector.ROUTING_DEFAULTS,
+        "MINIMAX_MODEL",
+        "stale-model",
+    )
+    config_path = MODULE_PATH.parents[2] / "forwin/config.py"
+
+    with pytest.raises(collector.ManifestError, match="routing defaults drift"):
+        collector.assert_routing_defaults(config_path)
+
+
+def test_final_release_candidate_binds_annotated_tag_and_passing_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = final_args(tmp_path)
+
+    def fake_run(*command: str) -> str:
+        if command == ("git", "cat-file", "-t", "refs/tags/v5.0.0-rc1"):
+            return "tag"
+        if command == ("git", "rev-parse", "refs/tags/v5.0.0-rc1^{}"):
+            return SOURCE_SHA
+        if command == ("git", "rev-parse", "refs/tags/v5.0.0-rc1"):
+            return "b" * 40
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    release = collector.collect_release_candidate(args, SOURCE_SHA)
+
+    assert release["status"] == "frozen"
+    assert release["annotated_tag"] == "v5.0.0-rc1"
+    assert release["tag_object_sha"] == "b" * 40
+    assert release["source_sha"] == SOURCE_SHA
+    assert set(release["evidence"]) == {
+        "v1_preflight",
+        "release_gates",
+        "live_recovery",
+        "post_decision_smoke",
+    }
+    assert all(item["result"] == "pass" for item in release["evidence"].values())
+
+
+def test_final_release_candidate_rejects_lightweight_tag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = final_args(tmp_path)
+    monkeypatch.setattr(collector, "run", lambda *_args: "commit")
+
+    with pytest.raises(collector.ManifestError, match="not annotated"):
+        collector.collect_release_candidate(args, SOURCE_SHA)
+
+
+def test_final_release_candidate_rejects_cross_candidate_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = final_args(tmp_path)
+    gate = json.loads(args.gate_manifest.read_text(encoding="utf-8"))
+    original_candidate = Path(gate["identity"]["rc_manifest"]["path"])
+    swapped_candidate = tmp_path / "swapped-candidate.json"
+    swapped = json.loads(original_candidate.read_text(encoding="utf-8"))
+    swapped["evidence_nonce"] = "different-candidate"
+    swapped_candidate.write_text(json.dumps(swapped), encoding="utf-8")
+    gate["identity"]["rc_manifest"] = {
+        "path": str(swapped_candidate),
+        "sha256": collector.sha256_file(swapped_candidate),
+    }
+    args.gate_manifest.write_text(json.dumps(gate), encoding="utf-8")
+
+    def fake_run(*command: str) -> str:
+        if command == ("git", "cat-file", "-t", "refs/tags/v5.0.0-rc1"):
+            return "tag"
+        if command == ("git", "rev-parse", "refs/tags/v5.0.0-rc1^{}"):
+            return SOURCE_SHA
+        if command == ("git", "rev-parse", "refs/tags/v5.0.0-rc1"):
+            return "b" * 40
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    with pytest.raises(collector.ManifestError, match="share one candidate"):
+        collector.collect_release_candidate(args, SOURCE_SHA)
+
+
+def test_final_release_candidate_requires_all_four_evidence_files(
+    tmp_path: Path,
+) -> None:
+    args = final_args(tmp_path)
+    args.v1_manifest = None
+
+    with pytest.raises(collector.ManifestError, match="v1-manifest"):
+        collector.collect_release_candidate(args, SOURCE_SHA)
+
+
+def test_draft_release_candidate_is_explicitly_not_frozen() -> None:
+    args = argparse.Namespace(
+        draft=True,
+        rc_tag="",
+        v1_manifest=None,
+        gate_manifest=None,
+        recovery_manifest=None,
+        smoke_manifest=None,
+    )
+
+    assert collector.collect_release_candidate(args, SOURCE_SHA) == {
+        "status": "draft",
+        "source_sha": SOURCE_SHA,
+        "annotated_tag": "",
+        "tag_object_sha": "",
+        "evidence": {},
+    }
+
+
+def test_release_gate_evidence_rejects_tampered_nested_log(tmp_path: Path) -> None:
+    path = tmp_path / "release-gates.json"
+    write_evidence(path, "release_gates")
+    (tmp_path / "v1-fresh-schema.log").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="artifact hash mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="release_gates",
+        )
+
+
+def test_release_gate_evidence_rejects_substituted_runner(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "release-gates.json"
+    write_evidence(path, "release_gates")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["runner"] = {
+        "path": str(MODULE_PATH),
+        "sha256": collector.sha256_file(MODULE_PATH),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="runner path mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="release_gates",
+        )
+
+
+def test_release_gate_evidence_rejects_substituted_command_and_log(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "release-gates.json"
+    write_evidence(path, "release_gates")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    step = payload["steps"][0]
+    step["command"] = ["true"]
+    log_path = Path(step["log"]["path"])
+    log_path.write_text(
+        "started_at=2026-07-22T12:00:00+00:00\ncommand=[\"true\"]\n",
+        encoding="utf-8",
+    )
+    step["log"]["sha256"] = collector.sha256_file(log_path)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="command mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="release_gates",
+        )
+
+
+def test_release_gate_evidence_rejects_failing_junit_with_updated_hash(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "release-gates.json"
+    write_evidence(path, "release_gates")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    junit = payload["steps"][0]["junit"]
+    junit_path = Path(junit["path"])
+    junit_path.write_text(
+        '<testsuites><testsuite tests="1" failures="1" errors="0">'
+        '<testcase name="fail"><failure/></testcase>'
+        "</testsuite></testsuites>\n",
+        encoding="utf-8",
+    )
+    junit["sha256"] = collector.sha256_file(junit_path)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="JUnit is not passing"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="release_gates",
+        )
+
+
+def test_release_gate_evidence_rejects_candidate_image_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "release-gates.json"
+    write_evidence(path, "release_gates")
+    mismatched_runtime = {
+        **RUNTIME_IMAGE,
+        "image_id": "sha256:" + "9" * 64,
+    }
+
+    with pytest.raises(collector.ManifestError, match="runtime image mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="release_gates",
+            expected_gate_identity={
+                "source_tree": SOURCE_TREE,
+                "runtime_image": mismatched_runtime,
+                "browser_image": BROWSER_IMAGE,
+            },
+        )
+
+
+def test_smoke_evidence_rejects_tampered_nested_state(tmp_path: Path) -> None:
+    path = tmp_path / "smoke.json"
+    write_smoke_evidence(path)
+    (tmp_path / "smoke-evidence.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="artifact hash mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="post_decision_smoke",
+        )
+
+
+def test_smoke_evidence_rejects_forged_report_and_updated_hash(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "smoke.json"
+    write_smoke_evidence(path)
+    report_path = tmp_path / "smoke-report.md"
+    report_path.write_text("# Forged pass\n", encoding="utf-8")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["final_report"]["sha256"] = collector.sha256_file(report_path)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="report content mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="post_decision_smoke",
+        )
+
+
+def test_recovery_evidence_rejects_tampered_fault_report(tmp_path: Path) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    (tmp_path / "publisher_mfa-report.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="recovery evidence invalid"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_v1_evidence_rejects_tampered_event_log(tmp_path: Path) -> None:
+    path = tmp_path / "v1.json"
+    write_v1_evidence(path)
+    (tmp_path / "v1-stack-events.jsonl").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="V1 evidence invalid"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="v1_preflight",
+        )
+
+
+def test_final_rc_rejects_running_matrix_manifest(tmp_path: Path) -> None:
+    path = tmp_path / "matrix-running.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_sha": SOURCE_SHA,
+                "code_changes_during_run": 0,
+                "cells": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(collector.ManifestError, match="final audit"):
+        collector.load_matrix_manifest(
+            path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
+
+
+def test_final_rc_accepts_revalidated_matrix_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+
+    def fake_run(*command: str) -> str:
+        if command[:3] == ("git", "merge-base", "--is-ancestor"):
+            return ""
+        if command[:4] == ("git", "diff", "--name-status", "--no-renames"):
+            return "M\tforwin/publisher_runtime/covers.py"
+        if command[:2] == ("git", "rev-parse"):
+            return "c" * 40
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    result = collector.load_matrix_manifest(
+        audit_path,
+        "b" * 40,
+        require_final_audit=True,
+    )
+
+    assert result["result"] == "pass"
+    assert result["source_sha"] == SOURCE_SHA
+    assert result["current_rc_source_sha"] == "b" * 40
+    assert result["predecessor_delta"]["mode"] == "bounded_successor"
+
+
+def test_matrix_successor_rejects_unapproved_writer_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*command: str) -> str:
+        if command[:3] == ("git", "merge-base", "--is-ancestor"):
+            return ""
+        if command[:4] == ("git", "diff", "--name-status", "--no-renames"):
+            return "M\tforwin/writer/generation.py"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    with pytest.raises(collector.ManifestError, match="unapproved path"):
+        collector.matrix_successor_delta(SOURCE_SHA, "b" * 40)
+
+
+def test_matrix_successor_rejects_unapproved_test_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*command: str) -> str:
+        if command[:3] == ("git", "merge-base", "--is-ancestor"):
+            return ""
+        if command[:4] == ("git", "diff", "--name-status", "--no-renames"):
+            return "M\ttests/test_writer_generation.py"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    with pytest.raises(collector.ManifestError, match="unapproved path"):
+        collector.matrix_successor_delta(SOURCE_SHA, "b" * 40)
+
+
+def test_matrix_successor_accepts_explicit_recovery_schema_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*command: str) -> str:
+        if command[:3] == ("git", "merge-base", "--is-ancestor"):
+            return ""
+        if command[:4] == ("git", "diff", "--name-status", "--no-renames"):
+            return (
+                "M\tforwin/models/base.py\n"
+                "M\ttests/test_v5_recovery_schema.py"
+            )
+        if command[:2] == ("git", "rev-parse"):
+            return "c" * 40
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+
+    result = collector.matrix_successor_delta(SOURCE_SHA, "b" * 40)
+
+    assert result["mode"] == "bounded_successor"
+    assert [item["path"] for item in result["changes"]] == [
+        "forwin/models/base.py",
+        "tests/test_v5_recovery_schema.py",
+    ]
+
+
+def test_final_rc_rejects_forged_matrix_report_and_updated_hash(
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    report_path = Path(payload["final_report"]["path"])
+    report_path.write_text("# Forged PASS\n", encoding="utf-8")
+    payload["final_report"]["sha256"] = collector.sha256_file(report_path)
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="report content mismatch"):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )

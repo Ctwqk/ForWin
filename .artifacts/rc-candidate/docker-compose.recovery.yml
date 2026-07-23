@@ -1,0 +1,91 @@
+x-provider-env: &provider-env
+  - ${FORWIN_RECOVERY_ENV_FILE:?set FORWIN_RECOVERY_ENV_FILE}
+  - ${FORWIN_RECOVERY_PROVIDER_ENV_FILE:?set FORWIN_RECOVERY_PROVIDER_ENV_FILE}
+
+x-runtime-image: &runtime-image ${FORWIN_RECOVERY_RUNTIME_IMAGE:?set FORWIN_RECOVERY_RUNTIME_IMAGE}
+x-runtime-labels: &runtime-labels
+  org.opencontainers.image.revision: ${FORWIN_RECOVERY_SOURCE_SHA:?set FORWIN_RECOVERY_SOURCE_SHA}
+
+x-isolated-runtime-environment: &isolated-runtime-environment
+  FORWIN_DATABASE_URL: postgresql+psycopg://forwin:forwin@postgres:5432/forwin
+  FORWIN_QDRANT_URL: http://qdrant:6333
+  FORWIN_ARTIFACT_BACKEND: minio
+  FORWIN_MINIO_ENDPOINT: minio:9000
+  FORWIN_MINIO_ACCESS_KEY: forwin-recovery
+  FORWIN_MINIO_SECRET_KEY: forwin-recovery-secret
+  FORWIN_MINIO_BUCKET: forwin-recovery-artifacts
+  FORWIN_MINIO_PREFIX: artifacts
+  FORWIN_MINIO_SECURE: "false"
+  FORWIN_API_BASE_URL: http://forwin:8899
+  FORWIN_BACKEND_URL: http://forwin:8899
+
+services:
+  postgres-test:
+    profiles:
+      - recovery-excluded
+
+  forwin:
+    image: *runtime-image
+    container_name: forwin-v5-recovery-api
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  generation-worker:
+    image: *runtime-image
+    container_name: forwin-v5-recovery-generation-worker
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  outbox-worker:
+    image: *runtime-image
+    container_name: forwin-v5-recovery-outbox-worker
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  postgres:
+    image: ${FORWIN_RECOVERY_POSTGRES_IMAGE:?set FORWIN_RECOVERY_POSTGRES_IMAGE}
+    container_name: forwin-v5-recovery-postgres
+    environment:
+      POSTGRES_USER: forwin
+      POSTGRES_PASSWORD: forwin
+      POSTGRES_DB: forwin
+    ports:
+      - "${FORWIN_RECOVERY_POSTGRES_BIND:-127.0.0.1:55434}:5432"
+
+  qdrant:
+    image: ${FORWIN_RECOVERY_QDRANT_IMAGE:?set FORWIN_RECOVERY_QDRANT_IMAGE}
+    container_name: forwin-v5-recovery-qdrant
+
+  forwin-mcp:
+    image: *runtime-image
+    container_name: forwin-v5-recovery-mcp
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  publisher-worker:
+    image: *runtime-image
+    container_name: forwin-v5-recovery-publisher-worker
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  publisher-browser:
+    image: ${FORWIN_RECOVERY_BROWSER_IMAGE:?set FORWIN_RECOVERY_BROWSER_IMAGE}
+    container_name: forwin-v5-recovery-publisher-browser
+    env_file: *provider-env
+    environment: *isolated-runtime-environment
+    labels: *runtime-labels
+
+  minio:
+    image: ${FORWIN_RECOVERY_MINIO_IMAGE:?set FORWIN_RECOVERY_MINIO_IMAGE}
+    container_name: forwin-v5-recovery-minio
+    environment:
+      MINIO_ROOT_USER: forwin-recovery
+      MINIO_ROOT_PASSWORD: forwin-recovery-secret
+    ports:
+      - "${FORWIN_RECOVERY_MINIO_API_BIND:-127.0.0.1:19100}:9000"
+      - "${FORWIN_RECOVERY_MINIO_CONSOLE_BIND:-127.0.0.1:19101}:9001"

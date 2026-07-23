@@ -63,19 +63,6 @@ class PreferredClientHeartbeat:
     latest_recent_backend_base_url: str = ""
     latest_recent_heartbeat_at: str = ""
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "ok": self.ok,
-            "client_id": self.client_id,
-            "backend_base_url": self.backend_base_url,
-            "last_heartbeat_at": self.last_heartbeat_at,
-            "recent_platforms": list(self.recent_platforms),
-            "message": self.message,
-            "latest_recent_client_id": self.latest_recent_client_id,
-            "latest_recent_backend_base_url": self.latest_recent_backend_base_url,
-            "latest_recent_heartbeat_at": self.latest_recent_heartbeat_at,
-        }
-
 
 def get_preferred_client_heartbeat(
     database_url: str | Path,

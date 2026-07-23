@@ -5,7 +5,9 @@
 After all tracked R8 changes are committed and final images are built, collect
 a draft identity. Every executable file in `RELEASE_HARNESS_PATHS` must already
 be tracked at `HEAD`; ignored or locally modified producers make collection
-fail. Draft status cannot initialize L200.
+fail. Draft status cannot initialize L200. The collector never overwrites an
+existing draft or final manifest; preserve a failed attempt and choose a new
+output path.
 
 After R6 has stopped and before the integration commit, promote only the
 reviewed release source inventory:
@@ -53,7 +55,9 @@ The gate runner uses a minimal child environment, rejects Git/Docker/Compose,
 Python, pytest, coverage, and uv control variables, disables ambient pytest
 plugin discovery, explicitly loads `pytest_asyncio.plugin`, and runs uv
 offline. Ruff is fixed at `0.15.22`; a missing cached tool or locked dependency
-is a failed gate, not permission to fetch a different version.
+is a failed gate, not permission to fetch a different version. `--resume` may
+append only to an incomplete gate manifest; a complete release-gate PASS is
+sealed against further writes.
 
 V1 is complete only when both the preflight manifest and the fresh-30 manifest
 pass for the exact candidate. The preflight proves the migration cycle,

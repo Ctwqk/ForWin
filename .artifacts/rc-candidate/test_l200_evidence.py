@@ -50,6 +50,32 @@ def test_l200_cli_starts_without_pythonpath() -> None:
     assert "verify-final" in completed.stdout
 
 
+def test_l200_finalization_refuses_already_finalized_manifest(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(l200.EvidenceError, match="already finalized"):
+        l200.assert_final_output_unsealed(
+            tmp_path,
+            {
+                "finalized_at": "2026-07-23T12:00:00+00:00",
+                "result": "pass",
+                "artifacts": {},
+            },
+        )
+
+
+def test_l200_finalization_refuses_partial_final_artifacts(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "final-report.md").write_text("partial\n", encoding="utf-8")
+
+    with pytest.raises(
+        l200.EvidenceError,
+        match="final output already exists: final-report.md",
+    ):
+        l200.assert_final_output_unsealed(tmp_path, {"valid": True})
+
+
 def test_l200_command_environment_rejects_git_control() -> None:
     with pytest.raises(l200.EvidenceError, match="GIT_DIR"):
         l200.command_environment(

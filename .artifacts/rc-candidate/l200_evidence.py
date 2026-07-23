@@ -4263,9 +4263,26 @@ def verify_finalized_output(output: Path) -> dict[str, Any]:
     return verify_final_artifact_set(output, run_manifest)
 
 
+def assert_final_output_unsealed(
+    output: Path,
+    run_manifest: dict[str, Any],
+) -> None:
+    sealed_fields = ("finalized_at", "result", "violations", "artifacts")
+    if any(field in run_manifest for field in sealed_fields):
+        raise EvidenceError("L200 run is already finalized")
+    existing = [
+        name for name in FINAL_ARTIFACT_NAMES if (output / name).exists()
+    ]
+    if existing:
+        raise EvidenceError(
+            "L200 final output already exists: " + ", ".join(existing)
+        )
+
+
 async def finalize(args: argparse.Namespace) -> None:
     output = args.output_dir.resolve()
     run_manifest = load_json(output / "manifest.json")
+    assert_final_output_unsealed(output, run_manifest)
     if not run_manifest.get("valid"):
         raise EvidenceError("L200 run is invalidated")
     verify_run_inputs(args, run_manifest)

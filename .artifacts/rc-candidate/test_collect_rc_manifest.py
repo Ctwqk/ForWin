@@ -52,6 +52,16 @@ GATE_STEPS = (
 PYTEST_STEPS = set(GATE_STEPS[:5])
 
 
+def test_rc_manifest_write_refuses_existing_output(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    collector.atomic_write(path, {"generation": 1})
+
+    with pytest.raises(collector.ManifestError, match="already exists"):
+        collector.atomic_write(path, {"generation": 2})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"generation": 1}
+
+
 def test_collector_environment_rejects_git_and_docker_control() -> None:
     with pytest.raises(collector.ManifestError, match="DOCKER_HOST"):
         collector.command_environment(

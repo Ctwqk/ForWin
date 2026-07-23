@@ -1637,6 +1637,8 @@ def read_optional_evidence(paths: list[Path]) -> list[dict[str, Any]]:
 
 
 def atomic_write(path: Path, payload: dict[str, Any]) -> None:
+    if path.exists():
+        raise ManifestError(f"RC manifest already exists: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -1645,7 +1647,10 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
             handle.write(body)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        try:
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise ManifestError(f"RC manifest already exists: {path}") from exc
     finally:
         try:
             os.unlink(temporary)
@@ -1706,6 +1711,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    output = args.output.resolve()
+    if output.exists():
+        raise ManifestError(f"RC manifest already exists: {output}")
     source_sha = run("git", "rev-parse", "HEAD")
     source_tree = run("git", "rev-parse", "HEAD^{tree}")
     tracked_status = run("git", "status", "--porcelain=v1", "--untracked-files=no")
@@ -1857,8 +1865,8 @@ def main() -> int:
             "sha256": sha256_file(Path(__file__).resolve()),
         },
     }
-    atomic_write(args.output.resolve(), manifest)
-    print(str(args.output.resolve()))
+    atomic_write(output, manifest)
+    print(str(output))
     return 0
 
 

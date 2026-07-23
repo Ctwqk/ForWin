@@ -400,6 +400,10 @@ def run_gates(args: argparse.Namespace) -> int:
     manifest: dict[str, Any]
     if args.resume and manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("release_gate_passed") is True:
+            raise GateError(
+                f"gate manifest already passed and is sealed: {manifest_path}"
+            )
         if manifest.get("identity") != identity:
             raise GateError("existing gate manifest identity does not match current RC")
         if manifest.get("runner") != runner_identity:

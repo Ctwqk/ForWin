@@ -118,6 +118,9 @@ entity/alias identity, outbox identity, projection convergence, maintenance
 completion, task state, publisher consistency, band evidence, or freeze drift.
 Projection convergence includes recomputed Canon-derived digests, exact
 Obsidian/LLM-KB file hashes, and exact Qdrant point-ID/payload sets.
+Finalization is single-shot: a completed manifest or any partial final output
+seals that run against overwrite. A failed or interrupted finalization requires
+a new L200 run rather than rewriting its evidence.
 
 After finalization, run the read-only verifier. It revalidates the checkpoint
 and band hash chains, the exact eight-file inventory, every artifact hash,

@@ -204,6 +204,42 @@ def test_resume_rejects_runner_code_drift(
         gates.run_gates(args)
 
 
+def test_resume_refuses_sealed_release_gate_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = {"source_sha": SOURCE_SHA}
+    output = tmp_path / "gate-output"
+    output.mkdir()
+    (output / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "identity": identity,
+                "runner": {
+                    "path": str(MODULE_PATH.resolve()),
+                    "sha256": gates.sha256_file(MODULE_PATH),
+                },
+                "steps": [],
+                "release_gate_passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gates, "assert_frozen", lambda _path: identity)
+    monkeypatch.setattr(gates, "gate_steps", lambda: [])
+    monkeypatch.setattr(gates, "selected_steps", lambda _names: [])
+    args = argparse.Namespace(
+        rc_manifest=tmp_path / "candidate.json",
+        output_dir=output,
+        resume=True,
+        step=[],
+    )
+
+    with pytest.raises(gates.GateError, match="already passed"):
+        gates.run_gates(args)
+
+
 def test_v5_gate_includes_publisher_backend_reclaim_contract() -> None:
     assert "tests/test_publisher_runtime_covers.py" in gates.V5_TESTS
     assert "tests/test_publisher_worker_cli.py" in gates.V5_TESTS

@@ -22,6 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR_VERSION = 5
 MANIFEST_SCHEMA_VERSION = 3
+MATRIX_AUDIT_SCHEMA_VERSION = 2
 DEFAULT_DEPENDENCY_IMAGES = {
     "postgres": "postgres:16-alpine",
     "qdrant": "qdrant/qdrant:v1.17.1",
@@ -835,6 +836,11 @@ def load_matrix_manifest(
     except json.JSONDecodeError as exc:
         raise ManifestError(f"matrix manifest is invalid JSON: {relative(path)}") from exc
     if require_final_audit:
+        if int(payload.get("schema_version") or 0) != MATRIX_AUDIT_SCHEMA_VERSION:
+            raise ManifestError(
+                "matrix final audit schema version mismatch: "
+                f"{payload.get('schema_version')}"
+            )
         if payload.get("result") != "pass":
             raise ManifestError("matrix final audit does not report pass")
         identity = payload.get("identity") or {}

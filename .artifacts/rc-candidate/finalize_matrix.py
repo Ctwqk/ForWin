@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX_ROOT = ROOT / ".artifacts/v4-matrix-candidate"
 DEFAULT_OUTPUT = MATRIX_ROOT / "final-audit"
 L200_MODULE_PATH = Path(__file__).with_name("l200_evidence.py")
+MATRIX_AUDIT_SCHEMA_VERSION = 2
 EXPECTED_CELLS = {
     "L30": {"target": 30, "profile": "standard", "delegate": "human"},
     "L60S": {"target": 60, "profile": "standard", "delegate": "spark"},
@@ -521,7 +522,7 @@ async def run(args: argparse.Namespace) -> int:
     report_path = output / "final-report.md"
     l200.atomic_write(report_path, final_report(identity, results))
     audit_manifest = {
-        "schema_version": 1,
+        "schema_version": MATRIX_AUDIT_SCHEMA_VERSION,
         "audited_at": now(),
         "result": "pass" if passed else "fail",
         "identity": identity,

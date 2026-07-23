@@ -502,7 +502,7 @@ def write_matrix_audit(
     path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": fixtures.matrix.MATRIX_AUDIT_SCHEMA_VERSION,
                 "result": "pass",
                 "identity": {
                     "source_sha": SOURCE_SHA,
@@ -1177,6 +1177,21 @@ def test_final_rc_accepts_matrix_tools_executed_from_frozen_worktree(
 
     assert result["result"] == "pass"
     assert result["source_sha"] == SOURCE_SHA
+
+
+def test_final_rc_rejects_legacy_matrix_audit_schema(tmp_path: Path) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="schema version"):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
 
 
 def test_matrix_successor_rejects_unapproved_writer_delta(

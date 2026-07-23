@@ -527,8 +527,12 @@ async def run(args: argparse.Namespace) -> int:
         "identity": identity,
         "auditor": {
             "path": str(Path(__file__).resolve()),
+            "source_path": str(Path(__file__).resolve().relative_to(ROOT)),
             "sha256": l200.sha256_file(Path(__file__).resolve()),
             "database_helper_path": str(L200_MODULE_PATH),
+            "database_helper_source_path": str(
+                L200_MODULE_PATH.relative_to(ROOT)
+            ),
             "database_helper_sha256": l200.sha256_file(L200_MODULE_PATH),
         },
         "cells": {

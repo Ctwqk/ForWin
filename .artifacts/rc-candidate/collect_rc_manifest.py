@@ -849,19 +849,23 @@ def load_matrix_manifest(
         expected_auditor = Path(__file__).with_name("finalize_matrix.py").resolve()
         expected_helper = Path(__file__).with_name("l200_evidence.py").resolve()
         auditor = payload.get("auditor") or {}
-        for path_key, hash_key, expected_path in (
-            ("path", "sha256", expected_auditor),
+        for path_key, source_key, hash_key, expected_path in (
+            ("path", "source_path", "sha256", expected_auditor),
             (
                 "database_helper_path",
+                "database_helper_source_path",
                 "database_helper_sha256",
                 expected_helper,
             ),
         ):
             actual_path = Path(str(auditor.get(path_key) or "")).resolve()
+            recorded_hash = str(auditor.get(hash_key) or "")
             if (
-                actual_path != expected_path
+                str(auditor.get(source_key) or "") != relative(expected_path)
                 or not actual_path.is_file()
-                or sha256_file(actual_path) != auditor.get(hash_key)
+                or sha256_file(actual_path) != recorded_hash
+                or not expected_path.is_file()
+                or sha256_file(expected_path) != recorded_hash
             ):
                 raise ManifestError(
                     f"matrix final audit tool identity mismatch: {path_key}"

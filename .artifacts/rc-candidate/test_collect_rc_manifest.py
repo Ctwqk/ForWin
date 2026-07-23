@@ -458,7 +458,12 @@ def write_v1_evidence(
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def write_matrix_audit(path: Path) -> None:
+def write_matrix_audit(
+    path: Path,
+    *,
+    auditor_path: Path = MATRIX_FINALIZER_PATH,
+    helper_path: Path = L200_PATH,
+) -> None:
     fixtures = load_module("collector_matrix_fixtures", MATRIX_FIXTURES_PATH)
     raw_path = path.parent / "matrix.json"
     raw_path.write_text(
@@ -508,10 +513,12 @@ def write_matrix_audit(path: Path) -> None:
                     },
                 },
                 "auditor": {
-                    "path": str(MATRIX_FINALIZER_PATH),
-                    "sha256": collector.sha256_file(MATRIX_FINALIZER_PATH),
-                    "database_helper_path": str(L200_PATH),
-                    "database_helper_sha256": collector.sha256_file(L200_PATH),
+                    "path": str(auditor_path),
+                    "source_path": collector.relative(MATRIX_FINALIZER_PATH),
+                    "sha256": collector.sha256_file(auditor_path),
+                    "database_helper_path": str(helper_path),
+                    "database_helper_source_path": collector.relative(L200_PATH),
+                    "database_helper_sha256": collector.sha256_file(helper_path),
                 },
                 "cells": cells,
                 "final_report": {
@@ -1144,6 +1151,32 @@ def test_final_rc_accepts_revalidated_matrix_audit(
     assert result["source_sha"] == SOURCE_SHA
     assert result["current_rc_source_sha"] == "b" * 40
     assert result["predecessor_delta"]["mode"] == "bounded_successor"
+
+
+def test_final_rc_accepts_matrix_tools_executed_from_frozen_worktree(
+    tmp_path: Path,
+) -> None:
+    frozen_harness = tmp_path / "frozen/.artifacts/rc-candidate"
+    frozen_harness.mkdir(parents=True)
+    frozen_auditor = frozen_harness / "finalize_matrix.py"
+    frozen_helper = frozen_harness / "l200_evidence.py"
+    frozen_auditor.write_bytes(MATRIX_FINALIZER_PATH.read_bytes())
+    frozen_helper.write_bytes(L200_PATH.read_bytes())
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(
+        audit_path,
+        auditor_path=frozen_auditor,
+        helper_path=frozen_helper,
+    )
+
+    result = collector.load_matrix_manifest(
+        audit_path,
+        SOURCE_SHA,
+        require_final_audit=True,
+    )
+
+    assert result["result"] == "pass"
+    assert result["source_sha"] == SOURCE_SHA
 
 
 def test_matrix_successor_rejects_unapproved_writer_delta(

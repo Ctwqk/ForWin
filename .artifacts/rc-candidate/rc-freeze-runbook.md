@@ -95,6 +95,11 @@ collector does not accept arbitrary files under `tests/` or `forwin/http/`.
 Writer, Genesis, Canon, database-schema/migration, and model-routing changes
 require a new matrix.
 
+The finalizer may execute from the frozen matrix worktree. Its manifest records
+that absolute execution path, but acceptance binds the canonical repository
+relative tool path and requires both the executed copy and final RC copy to
+have the exact same hash.
+
 ## 3. Annotated Tag
 
 Create an annotated tag at the exact candidate source only after all evidence

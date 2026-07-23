@@ -81,36 +81,6 @@ class CommentSyncService:
             session.refresh(job)
             return self.serialize_comment_sync_job(job)
 
-    def list_comment_sync_jobs(
-        self,
-        *,
-        status: str = "",
-        platform: str = "",
-        limit: int = 30,
-    ) -> list[dict[str, Any]]:
-        normalized_status = str(status or "").strip()
-        normalized_platform = str(platform or "").strip()
-        normalized_limit = max(1, min(int(limit or 30), 100))
-        with self.session_factory() as session:
-            stmt = select(PublisherCommentSyncJob).order_by(
-                PublisherCommentSyncJob.updated_at.desc()
-            )
-            if normalized_status:
-                stmt = stmt.where(PublisherCommentSyncJob.status == normalized_status)
-            if normalized_platform:
-                stmt = stmt.where(
-                    PublisherCommentSyncJob.platform_id == normalized_platform
-                )
-            jobs = session.execute(stmt.limit(normalized_limit)).scalars().all()
-            return [self.serialize_comment_sync_job(job) for job in jobs]
-
-    def get_comment_sync_job(self, job_id: str) -> dict[str, Any]:
-        with self.session_factory() as session:
-            job = session.get(PublisherCommentSyncJob, job_id)
-            if job is None:
-                raise ValueError("评论同步任务不存在。")
-            return self.serialize_comment_sync_job(job)
-
     def claim_next_comment_sync_job(
         self,
         *,
@@ -493,21 +463,6 @@ class CommentSyncService:
             "updated": updated,
             "synced_at": isoformat(now),
         }
-
-    def sync_comments_batch(
-        self,
-        *,
-        client_id: str,
-        platform: str,
-        comments: list[dict[str, Any]],
-        job_id: str = "",
-    ) -> dict[str, Any]:
-        return self.ingest_comments_batch(
-            client_id=client_id,
-            platform=platform,
-            comments=comments,
-            job_id=job_id,
-        )
 
     def serialize_comment_sync_job(
         self, job: PublisherCommentSyncJob

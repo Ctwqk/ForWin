@@ -86,13 +86,6 @@ def test_comment_sync_service_claim_ingest_and_result_keep_audit_redacted() -> N
         assert claimed["job_id"] == job["job_id"]
         assert batch["inserted"] == 1
         assert finished["status"] == "succeeded"
-        assert (
-            runtime.comment_sync.get_comment_sync_job(job["job_id"])["job_id"]
-            == job["job_id"]
-        )
-        assert (
-            runtime.comment_sync.list_comment_sync_jobs()[0]["job_id"] == job["job_id"]
-        )
 
         with runtime.session_factory() as session:
             stored_comment = session.execute(select(PublisherRawComment)).scalar_one()

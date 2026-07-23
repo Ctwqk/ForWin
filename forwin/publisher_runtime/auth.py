@@ -15,10 +15,6 @@ class ExtensionAuthService:
     def __init__(self, *, extension_api_key: str = "") -> None:
         self.extension_api_key = str(extension_api_key or "").strip()
 
-    @staticmethod
-    def normalize_client_id(client_id: str | None) -> str:
-        return str(client_id or "").strip()
-
     def verify_extension_api_key(self, provided_key: str | None) -> None:
         expected = str(self.extension_api_key or "").strip()
         candidate = str(provided_key or "").strip()

@@ -556,7 +556,14 @@ def test_require_v5_schema_rejects_old_baseline_stamp(
     )
 
     with pytest.raises(
-        RuntimeError,
-        match="0001_v5_baseline, expected 0001_v5_recovery",
-    ):
+        model_base.SchemaRevisionMismatchError,
+        match=(
+            r"\[FORWIN_SCHEMA_REVISION_MISMATCH\].*"
+            "0001_v5_baseline, expected 0001_v5_recovery"
+        ),
+    ) as raised:
         model_base.require_v5_schema(engine)
+
+    assert raised.value.code == "FORWIN_SCHEMA_REVISION_MISMATCH"
+    assert raised.value.current_revision == "0001_v5_baseline"
+    assert raised.value.expected_revision == "0001_v5_recovery"

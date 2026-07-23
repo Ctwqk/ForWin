@@ -16,6 +16,19 @@ class Base(DeclarativeBase):
     pass
 
 
+class SchemaRevisionMismatchError(RuntimeError):
+    code = "FORWIN_SCHEMA_REVISION_MISMATCH"
+
+    def __init__(self, *, current_revision: str, expected_revision: str) -> None:
+        self.current_revision = current_revision
+        self.expected_revision = expected_revision
+        super().__init__(
+            f"[{self.code}] ForWin database schema is "
+            f"{current_revision or 'unstamped'}, expected {expected_revision}. "
+            "Recreate the database and run `alembic upgrade head`."
+        )
+
+
 def new_id() -> str:
     return uuid4().hex
 
@@ -98,9 +111,9 @@ def require_v5_schema(engine: Engine) -> None:
             text("SELECT version_num FROM alembic_version")
         ).scalar_one_or_none()
     if current != expected:
-        raise RuntimeError(
-            f"ForWin database schema is {current or 'unstamped'}, expected {expected}. "
-            "Recreate the database and run `alembic upgrade head`."
+        raise SchemaRevisionMismatchError(
+            current_revision=str(current or ""),
+            expected_revision=str(expected),
         )
 
 

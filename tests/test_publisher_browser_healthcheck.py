@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import create_engine
 
@@ -10,6 +13,28 @@ from forwin.publishers.healthcheck import (
     get_preferred_client_heartbeat,
     resolve_target_client_id,
 )
+
+
+def test_heartbeat_check_script_emits_structured_failure() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/check_publisher_browser_heartbeat.py",
+            "--database-url",
+            "invalid://",
+            "--wait-seconds",
+            "0",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["message"].startswith("database URL is invalid")
 
 
 def _seed_db(path, *, client_id: str, heartbeat_at: datetime, backend_base_url: str = "http://forwin:8899") -> None:

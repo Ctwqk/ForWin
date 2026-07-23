@@ -6,13 +6,14 @@ import json
 import os
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from forwin.publishers.healthcheck import get_preferred_client_heartbeat
+from forwin.publishers.healthcheck import get_preferred_client_heartbeat  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,10 +58,10 @@ def main() -> int:
             allow_latest_recent_fallback=not str(args.client_id or "").strip(),
         )
         if last.ok:
-            print(json.dumps(last.to_dict(), ensure_ascii=False))
+            print(json.dumps(asdict(last), ensure_ascii=False))
             return 0
         if time.monotonic() >= deadline:
-            print(json.dumps(last.to_dict(), ensure_ascii=False), file=sys.stderr)
+            print(json.dumps(asdict(last), ensure_ascii=False), file=sys.stderr)
             return 1
         time.sleep(1)
 

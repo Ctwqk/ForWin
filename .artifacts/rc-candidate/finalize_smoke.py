@@ -659,6 +659,7 @@ async def run(args: argparse.Namespace) -> int:
         args.project_id,
     )
     live_policy = evidence["policy"].get("policy") or {}
+    cell["policy_version"] = int(evidence["policy"].get("version") or 0)
     cell["policy_hash"] = l200.canonical_hash(live_policy)
     fresh_state = fresh_project_state(database_url, args.project_id)
     violations = smoke_violations(

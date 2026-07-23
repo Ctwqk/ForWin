@@ -52,7 +52,7 @@ intent, memory, or a narrower check than the stated release requirement.
 | Publisher worker/backend unavailable | RUNNING | Commits `1bf43f668fdd969d03e103913af93b47c9dc936b` and `e17ed39` are integrated with single-owner startup recovery, unique claim fencing, atomic/shared cover storage, orphan scavenging, duplicate API-owner deletion, and structured stale-schema classification; follow-up convergence removed the remaining synchronous/test-only publisher paths; focused publisher recovery tests and Ruff pass | Build the exact candidate images, then kill/restart the real worker and prove same-job reclaim, stale-token rejection, shared-path readability, and orphan cleanup |
 | Publisher browser unavailable | MISSING | Recovery contract described in runbook | Stop/restart real browser process; existing job/attempt survives and resumes without duplicate mutation |
 | CAPTCHA/MFA/account-risk | REPEAT | Deterministic fenced pause/resume tests | Isolated deployed API/browser evidence for all risk classes, operator action audit, no bypass, same job identity |
-| Recovery runbook matches observed behavior | MISSING | Current runbook explicitly marks live evidence outstanding | Update only after every live fault report is complete |
+| Recovery runbook matches observed behavior | MISSING | The tracked finalizer now requires one fresh-stack lifecycle per service fault, fault-before-recovery event order, globally unique fault IDs, and non-reused event-log paths/content; live evidence remains outstanding | Update only after every live fault report is complete |
 
 ## R9 - Release Candidate Freeze
 
@@ -72,7 +72,7 @@ intent, memory, or a narrower check than the stated release requirement.
 | Release harness tracked at candidate SHA | PROVEN | The integration tree tracks the exact 31-file promotion inventory; `tracked_source_revision` verifies all 13 executable/Compose inputs against the candidate commit, while drafts, logs, and live evidence remain excluded |
 | One candidate identity across all evidence | MISSING | Final collector now cross-binds source tree, five image IDs, candidate stack/endpoints, and one candidate-manifest hash across V1, gates, recovery, and fresh-30; no live final set exists |
 | External signed provenance | MISSING | Local hash chains are tamper-evident only under the tracked-candidate/operator-honesty model; no externally signed CI or attestation artifact exists |
-| RC manifest complete | RUNNING | Collector v5 and freeze runbook are ready; final mode revalidates V1, bounded matrix predecessor/report, exact gate runner/argv/JUnit, eleven recovery reports/event identities, fresh-30 state/operation chain and candidate-stack endpoints, annotated tag, and exact source/tree/five-image identity |
+| RC manifest complete | RUNNING | Collector v5 and freeze runbook are ready; final mode revalidates V1, bounded matrix predecessor/report, exact gate runner/argv/JUnit, eleven independent recovery reports/event identities, fresh-30 state/operation chain and candidate-stack endpoints, annotated tag, and exact source/tree/five-image identity; the current offline artifact suite passes 170 tests |
 | SHA and image tags recorded | REPEAT | Earlier draft validates runtime/browser revisions; schema v3 must be recollected after integration with exact PostgreSQL/Qdrant/MinIO IDs and tracked harness |
 | Baseline schema hash recorded | PROVEN | Draft RC manifest |
 | RuntimePolicy schema version recorded | PROVEN | Draft RC manifest records schema version 2 and source hash |

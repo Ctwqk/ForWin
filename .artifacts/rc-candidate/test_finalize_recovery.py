@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -80,61 +81,79 @@ def fault_report(
     }
     contract = recovery.SERVICE_FAULTS.get(kind)
     if contract is not None:
+        identity = (
+            {
+                "source_sha": SOURCE_SHA,
+                "source_tree": (candidate.get("source") or {}).get("tree"),
+                "runtime_image": (candidate.get("images") or {}).get("runtime"),
+                "browser_image": (candidate.get("images") or {}).get(
+                    "publisher_browser"
+                ),
+                "dependency_images": {
+                    key: (candidate.get("images") or {}).get(key)
+                    for key in ("postgres", "qdrant", "minio")
+                },
+                "candidate_manifest": {
+                    "path": str(candidate_path),
+                    "sha256": recovery.sha256_file(candidate_path),
+                },
+                "harness": {
+                    key: {
+                        "path": str(path),
+                        "sha256": recovery.sha256_file(path),
+                    }
+                    for key, path in HARNESS_PATHS.items()
+                },
+                "docker": {
+                    "context": "desktop-linux",
+                    "endpoint": "unix:///tmp/docker.sock",
+                    "daemon_id": "daemon-1",
+                },
+            }
+            if candidate is not None and candidate_path is not None
+            else {"source_sha": SOURCE_SHA}
+        )
         events = []
         previous = "0" * 64
-        for action, time_field, time_value in (
+        for action, recorded_at, time_field, time_value in (
+            (
+                "fresh_up_started",
+                "2026-07-22T11:58:00+00:00",
+                "",
+                "",
+            ),
+            (
+                "fresh_up_completed",
+                "2026-07-22T11:59:00+00:00",
+                "",
+                "",
+            ),
             (
                 contract["fault_action"],
+                report["fault_time"],
                 contract["fault_time_field"],
                 report["fault_time"],
             ),
-            ("fault_service_recovered", "recovery_time", report["recovery_time"]),
+            (
+                "fault_service_recovered",
+                report["recovery_time"],
+                "recovery_time",
+                report["recovery_time"],
+            ),
         ):
             event = {
                 "schema_version": 1,
-                "recorded_at": time_value,
+                "recorded_at": recorded_at,
                 "action": action,
-                "fault_id": report["fault_id"],
-                "service": contract["service"],
-                time_field: time_value,
-                "identity": (
-                    {
-                        "source_sha": SOURCE_SHA,
-                        "source_tree": (candidate.get("source") or {}).get(
-                            "tree"
-                        ),
-                        "runtime_image": (
-                            candidate.get("images") or {}
-                        ).get("runtime"),
-                        "browser_image": (
-                            candidate.get("images") or {}
-                        ).get("publisher_browser"),
-                        "dependency_images": {
-                            key: (candidate.get("images") or {}).get(key)
-                            for key in ("postgres", "qdrant", "minio")
-                        },
-                        "candidate_manifest": {
-                            "path": str(candidate_path),
-                            "sha256": recovery.sha256_file(candidate_path),
-                        },
-                        "harness": {
-                            key: {
-                                "path": str(path),
-                                "sha256": recovery.sha256_file(path),
-                            }
-                            for key, path in HARNESS_PATHS.items()
-                        },
-                        "docker": {
-                            "context": "desktop-linux",
-                            "endpoint": "unix:///tmp/docker.sock",
-                            "daemon_id": "daemon-1",
-                        },
-                    }
-                    if candidate is not None and candidate_path is not None
-                    else {"source_sha": SOURCE_SHA}
-                ),
+                "identity": identity,
                 "previous_event_sha256": previous,
             }
+            if time_field:
+                event.update(
+                    fault_id=report["fault_id"],
+                    service=contract["service"],
+                    **{time_field: time_value},
+                )
             event["event_sha256"] = recovery.event_hash(event)
             previous = event["event_sha256"]
             events.append(event)
@@ -313,6 +332,40 @@ def recovery_manifest(
     return manifest
 
 
+def reseal_event_log(report: dict, events: list[dict]) -> None:
+    previous = "0" * 64
+    for event in events:
+        event["previous_event_sha256"] = previous
+        event["event_sha256"] = recovery.event_hash(event)
+        previous = event["event_sha256"]
+    path = Path(report["event_log"]["path"])
+    path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n",
+        encoding="utf-8",
+    )
+    report["event_log"].update(
+        sha256=recovery.sha256_file(path),
+        event_count=len(events),
+        chain_head=previous,
+    )
+
+
+def rewrite_fault_report(
+    manifest: dict,
+    kind: str,
+    update: Callable[[dict], None],
+) -> dict:
+    item = manifest["faults"][kind]
+    path = Path(item["path"])
+    report = json.loads(path.read_text(encoding="utf-8"))
+    update(report)
+    path.write_text(json.dumps(report), encoding="utf-8")
+    item["fault_id"] = report["fault_id"]
+    item["event_log"] = report.get("event_log")
+    item["sha256"] = recovery.sha256_file(path)
+    return report
+
+
 def test_complete_recovery_manifest_revalidates_all_faults(tmp_path: Path) -> None:
     manifest = recovery_manifest(tmp_path)
     assert recovery.recovery_manifest_violations(
@@ -329,6 +382,79 @@ def test_recovery_manifest_requires_every_independent_fault(tmp_path: Path) -> N
         source_sha=SOURCE_SHA,
     )
     assert "recovery fault identities mismatch" in violations
+
+
+def test_recovery_manifest_rejects_reused_fault_id(tmp_path: Path) -> None:
+    manifest = recovery_manifest(tmp_path)
+    reused_id = manifest["faults"]["publisher_captcha"]["fault_id"]
+
+    def reuse_fault_id(report: dict) -> None:
+        report["fault_id"] = reused_id
+        for artifact in report["artifacts"]:
+            path = Path(artifact["path"])
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+            snapshot["fault_id"] = reused_id
+            path.write_text(json.dumps(snapshot), encoding="utf-8")
+            artifact["sha256"] = recovery.sha256_file(path)
+
+    rewrite_fault_report(manifest, "publisher_mfa", reuse_fault_id)
+
+    violations = recovery.recovery_manifest_violations(
+        manifest,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "recovery fault_id is reused: publisher_captcha-1 "
+        "(publisher_captcha, publisher_mfa)"
+    ) in violations
+
+
+def test_recovery_manifest_rejects_shared_service_event_log(tmp_path: Path) -> None:
+    manifest = recovery_manifest(tmp_path)
+    kinds = ("qdrant_unavailable", "projection_consumer_unavailable")
+    events = []
+    for kind in kinds:
+        report_path = Path(manifest["faults"][kind]["path"])
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        events.extend(
+            json.loads(line)
+            for line in Path(report["event_log"]["path"])
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    previous = "0" * 64
+    for event in events:
+        event["previous_event_sha256"] = previous
+        event["event_sha256"] = recovery.event_hash(event)
+        previous = event["event_sha256"]
+    shared_path = tmp_path / "shared-service-events.jsonl"
+    shared_path.write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events) + "\n",
+        encoding="utf-8",
+    )
+    shared_identity = {
+        "path": str(shared_path),
+        "sha256": recovery.sha256_file(shared_path),
+        "event_count": len(events),
+        "chain_head": previous,
+    }
+    for kind in kinds:
+        rewrite_fault_report(
+            manifest,
+            kind,
+            lambda report: report.update(event_log=shared_identity),
+        )
+
+    violations = recovery.recovery_manifest_violations(
+        manifest,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "recovery service event log is reused: "
+        "projection_consumer_unavailable, qdrant_unavailable"
+    ) in violations
 
 
 def test_recovery_manifest_rejects_auditor_drift(tmp_path: Path) -> None:
@@ -365,6 +491,32 @@ def test_service_fault_requires_its_own_event_log(tmp_path: Path) -> None:
         source_sha=SOURCE_SHA,
     )
     assert "qdrant_unavailable.independent event log is missing" in violations
+
+
+def test_service_fault_requires_fresh_stack_lifecycle(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    reseal_event_log(report, events[2:])
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.fresh stack lifecycle mismatch" in violations
+
+
+def test_service_fault_requires_fault_before_recovery(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    reseal_event_log(report, [*events[:2], events[3], events[2]])
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.service event order mismatch" in violations
 
 
 def test_fault_snapshot_identity_cannot_be_detached(tmp_path: Path) -> None:

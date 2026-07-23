@@ -353,6 +353,30 @@ def fault_report_violations(
             or event_identity.get("chain_head") != events[-1].get("event_sha256")
         ):
             violations.append(f"{kind}.independent event log summary mismatch")
+        event_fault_ids = {
+            str(event.get("fault_id") or "")
+            for event in events
+            if str(event.get("fault_id") or "")
+        }
+        if event_fault_ids != {str(report.get("fault_id") or "")}:
+            violations.append(
+                f"{kind}.independent event log fault identities mismatch"
+            )
+        fresh_starts = [
+            event for event in events if event.get("action") == "fresh_up_started"
+        ]
+        fresh_completions = [
+            event
+            for event in events
+            if event.get("action") == "fresh_up_completed"
+        ]
+        fresh_lifecycle_valid = (
+            len(fresh_starts) == 1
+            and len(fresh_completions) == 1
+            and events[:2] == [fresh_starts[0], fresh_completions[0]]
+        )
+        if not fresh_lifecycle_valid:
+            violations.append(f"{kind}.fresh stack lifecycle mismatch")
         contract = SERVICE_FAULTS[kind]
         fault_events = [
             event
@@ -372,13 +396,37 @@ def fault_report_violations(
             violations.append(f"{kind}.service fault/recovery event pair mismatch")
         else:
             if (
+                events.index(fault_events[0]) >= events.index(recovery_events[0])
+                or (
+                    fresh_lifecycle_valid
+                    and events.index(fresh_completions[0])
+                    >= events.index(fault_events[0])
+                )
+            ):
+                violations.append(f"{kind}.service event order mismatch")
+            if (
                 fault_events[0].get(contract["fault_time_field"])
                 != report.get("fault_time")
                 or recovery_events[0].get("recovery_time")
                 != report.get("recovery_time")
             ):
                 violations.append(f"{kind}.service event timestamp mismatch")
-            for event in (fault_events[0], recovery_events[0]):
+            identity_events = [fault_events[0], recovery_events[0]]
+            if fresh_lifecycle_valid:
+                identity_events = [
+                    fresh_starts[0],
+                    fresh_completions[0],
+                    *identity_events,
+                ]
+            event_identities = [
+                event.get("identity") or {} for event in identity_events
+            ]
+            if any(
+                identity != event_identities[0]
+                for identity in event_identities[1:]
+            ):
+                violations.append(f"{kind}.service event identities mismatch")
+            for event in identity_events:
                 event_identity = event.get("identity") or {}
                 if event_identity.get("source_sha") != source_sha:
                     violations.append(f"{kind}.service event source SHA mismatch")
@@ -624,6 +672,41 @@ def recovery_manifest_violations(
             )
         )
         reports[kind] = report
+
+    fault_id_owners: dict[str, list[str]] = {}
+    event_path_owners: dict[str, set[str]] = {}
+    event_hash_owners: dict[str, set[str]] = {}
+    for kind, report in reports.items():
+        fault_id = str(report.get("fault_id") or "")
+        if fault_id:
+            fault_id_owners.setdefault(fault_id, []).append(kind)
+        if kind not in SERVICE_FAULTS:
+            continue
+        event_identity = report.get("event_log") or {}
+        if not isinstance(event_identity, dict):
+            continue
+        raw_event_path = str(event_identity.get("path") or "")
+        event_sha256 = str(event_identity.get("sha256") or "")
+        if raw_event_path:
+            event_path = str(Path(raw_event_path).resolve())
+            event_path_owners.setdefault(event_path, set()).add(kind)
+        if event_sha256:
+            event_hash_owners.setdefault(event_sha256, set()).add(kind)
+    for fault_id, owners in sorted(fault_id_owners.items()):
+        if len(owners) > 1:
+            violations.append(
+                f"recovery fault_id is reused: {fault_id} "
+                f"({', '.join(sorted(owners))})"
+            )
+    reused_event_logs = {
+        tuple(sorted(owners))
+        for owners in (*event_path_owners.values(), *event_hash_owners.values())
+        if len(owners) > 1
+    }
+    for owners in sorted(reused_event_logs):
+        violations.append(
+            "recovery service event log is reused: " + ", ".join(owners)
+        )
 
     if require_final_report:
         final_report_artifact = manifest.get("final_report") or {}

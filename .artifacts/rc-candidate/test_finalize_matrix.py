@@ -106,10 +106,12 @@ def evidence(name: str) -> dict:
     }
     return {
         "manifest_cell": {
+            "project_id": mcp["project"]["id"],
             "status": "complete",
             "target": target,
             "profile": profile,
             "delegate": delegate,
+            "policy_version": 1,
             "policy_hash": matrix.l200.canonical_hash(policy),
         },
         "project": mcp["project"],
@@ -119,7 +121,7 @@ def evidence(name: str) -> dict:
         "gate_ledger": mcp["gate_ledger"],
         "cost_report": mcp["cost_report"],
         "rule_provenance": mcp["rule_provenance"],
-        "policy": {"policy": policy},
+        "policy": {"version": 1, "policy": policy},
         "database": database,
         "operational": {"spark": spark},
     }
@@ -144,6 +146,29 @@ def test_projection_and_canon_identity_fail_closed() -> None:
     violations = matrix.validate_cell("L100", item)
     assert "canon.candidate_identity_mismatches=1, expected=0" in violations
     assert "projection obsidian projected=99" in violations
+
+
+def test_manifest_cell_is_bound_to_mcp_project_identity() -> None:
+    item = evidence("L30")
+    item["project"]["id"] = "different-project"
+
+    violations = matrix.validate_cell("L30", item)
+
+    assert (
+        "manifest project_id=project-200, MCP project id=different-project"
+        in violations
+    )
+
+
+def test_frozen_policy_version_detects_change_and_restore() -> None:
+    item = evidence("L30")
+    item["policy"]["version"] = 2
+    item["database"]["freeze_audit"]["runtime_policy_version"] = 2
+
+    violations = matrix.validate_cell("L30", item)
+
+    assert "live policy version=2, frozen=1" in violations
+    assert "database policy version=2, frozen=1" in violations
 
 
 def test_completed_run_validator_supports_fresh_release_smoke() -> None:

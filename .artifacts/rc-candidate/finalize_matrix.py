@@ -392,6 +392,13 @@ def validate_completed_run(
     project = evidence["project"]
     chapters = evidence["chapters"]
     violations: list[str] = []
+    manifest_project_id = str(cell.get("project_id") or "")
+    mcp_project_id = str(project.get("id") or "")
+    if manifest_project_id != mcp_project_id:
+        violations.append(
+            f"manifest project_id={manifest_project_id}, "
+            f"MCP project id={mcp_project_id}"
+        )
     if cell.get("status") != "complete":
         violations.append(f"manifest status={cell.get('status')}, expected=complete")
     if int(cell.get("target") or 0) != target:
@@ -420,6 +427,28 @@ def validate_completed_run(
     if accepted_numbers != expected_numbers or len(chapters) != target:
         violations.append("chapters are not exactly accepted 1..target")
     live_policy = evidence["policy"].get("policy") or {}
+    frozen_policy_version = int(cell.get("policy_version") or 0)
+    live_policy_version = int(evidence["policy"].get("version") or 0)
+    database_policy_version = int(
+        (evidence["database"].get("freeze_audit") or {}).get(
+            "runtime_policy_version"
+        )
+        or 0
+    )
+    if frozen_policy_version <= 0:
+        violations.append(
+            f"manifest policy_version={frozen_policy_version}, expected positive"
+        )
+    if live_policy_version != frozen_policy_version:
+        violations.append(
+            f"live policy version={live_policy_version}, "
+            f"frozen={frozen_policy_version}"
+        )
+    if database_policy_version != frozen_policy_version:
+        violations.append(
+            f"database policy version={database_policy_version}, "
+            f"frozen={frozen_policy_version}"
+        )
     if l200.canonical_hash(live_policy) != str(cell.get("policy_hash") or ""):
         violations.append("live policy hash differs from frozen matrix policy")
     if live_policy.get("quality_profile") != profile:

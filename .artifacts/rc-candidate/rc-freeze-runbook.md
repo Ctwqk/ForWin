@@ -100,6 +100,10 @@ that absolute execution path, but acceptance binds the canonical repository
 relative tool path and requires both the executed copy and final RC copy to
 have the exact same hash.
 
+Each cell also binds the manifest project ID to the MCP project identity and
+the frozen policy version to both the HTTP response and PostgreSQL row. A
+policy changed and later restored to identical content still fails by version.
+
 ## 3. Annotated Tag
 
 Create an annotated tag at the exact candidate source only after all evidence

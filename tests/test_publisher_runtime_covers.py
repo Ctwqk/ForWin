@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -75,6 +76,44 @@ def _book_meta() -> dict:
     }
 
 
+def _run_cover_generation_job(
+    runtime: PublisherRuntimeService,
+    *,
+    project_id: str,
+    platform_id: str,
+    book_name: str,
+    candidate_count: int,
+) -> dict:
+    with runtime.session_factory() as session:
+        job = PublisherUploadJob(
+            project_id=project_id,
+            platform_id=platform_id,
+            task_kind="cover_generate",
+            status="pending",
+            book_name=book_name,
+            chapter_title="",
+            body_text="",
+            result_payload_json=json.dumps(
+                {
+                    "project_id": project_id,
+                    "book_meta": _book_meta(),
+                    "cover_candidate_count": candidate_count,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    assert runtime.backend_jobs.run_pending_once(limit=1) == [job_id]
+    with runtime.session_factory() as session:
+        stored = session.get(PublisherUploadJob, job_id)
+        assert stored is not None
+        assert stored.status == "succeeded"
+        return json.loads(stored.result_payload_json)
+
+
 def _complete_upload(runtime: PublisherRuntimeService, created: dict, payload: dict):
     claimed = runtime.upload_jobs.claim_next_upload_job(
         client_id="client-1",
@@ -135,6 +174,10 @@ def test_default_cover_directory_uses_shared_data_root(
     assert service.cover_dir == Path("data/publisher_covers")
 
 
+def test_cover_generation_is_owned_by_backend_job_runner() -> None:
+    assert not hasattr(PublisherCoverService, "generate_cover_candidates")
+
+
 def test_cover_generation_stores_multiple_candidates(tmp_path: Path) -> None:
     engine, runtime = _runtime(
         "publisher-cover-store-candidates",
@@ -150,11 +193,11 @@ def test_cover_generation_stores_multiple_candidates(tmp_path: Path) -> None:
             project_id = _project(session)
             session.commit()
 
-        result = runtime.cover_service.generate_cover_candidates(
+        result = _run_cover_generation_job(
+            runtime,
             project_id=project_id,
             platform_id="qidian",
             book_name="封面测试",
-            book_meta=_book_meta(),
             candidate_count=3,
         )
 
@@ -181,11 +224,11 @@ def test_cover_generation_prefers_highest_valid_score(tmp_path: Path) -> None:
         cover_dir=tmp_path,
     )
     try:
-        result = runtime.cover_service.generate_cover_candidates(
+        result = _run_cover_generation_job(
+            runtime,
             project_id="project-score",
             platform_id="fanqie",
             book_name="高分封面",
-            book_meta=_book_meta(),
             candidate_count=2,
         )
 
@@ -211,11 +254,11 @@ def test_invalid_cover_is_not_selected_when_valid_candidate_exists(
         cover_dir=tmp_path,
     )
     try:
-        result = runtime.cover_service.generate_cover_candidates(
+        result = _run_cover_generation_job(
+            runtime,
             project_id="project-invalid",
             platform_id="qidian",
             book_name="有效封面",
-            book_meta=_book_meta(),
             candidate_count=2,
         )
 

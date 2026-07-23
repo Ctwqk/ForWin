@@ -165,45 +165,6 @@ class PublisherCoverService:
         )
         self.minimax_model = str(minimax_model or "image-01")
 
-    def generate_cover_candidates(
-        self,
-        *,
-        project_id: str = "",
-        platform_id: str,
-        book_name: str,
-        book_meta: dict[str, Any] | None = None,
-        candidate_count: int = 4,
-        cover_style_hint: str = "",
-        work_binding_id: str = "",
-        cover_confirmation_required: bool = False,
-    ) -> dict[str, Any]:
-        meta, prompt, rows = self._request_cover_candidates(
-            book_name=book_name,
-            book_meta=book_meta,
-            candidate_count=candidate_count,
-            cover_style_hint=cover_style_hint,
-        )
-        with self.session_factory() as session:
-            try:
-                result = self._persist_cover_candidates(
-                    session,
-                    rows=rows,
-                    project_id=project_id,
-                    platform_id=platform_id,
-                    work_binding_id=work_binding_id,
-                    prompt=prompt,
-                    book_meta=meta,
-                    cover_confirmation_required=cover_confirmation_required,
-                )
-            except Exception:
-                self._rollback_and_discard_staged_cover_files(session)
-                raise
-            self._commit_staged_cover_transaction(
-                session,
-                asset_ids=list(result["cover_asset_ids"]),
-            )
-        return result
-
     def _request_cover_candidates(
         self,
         *,

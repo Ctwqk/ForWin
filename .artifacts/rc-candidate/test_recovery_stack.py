@@ -17,6 +17,59 @@ SPEC.loader.exec_module(stack)
 SOURCE_SHA = "f" * 40
 
 
+def recovery_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fault_id: str = "fault-1",
+) -> tuple[dict, dict, dict]:
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_id = (
+        "a" * 32
+        if fault_id == "fault-1"
+        else stack.stable_hash(fault_id)[:32]
+    )
+    run_identity = {
+        "run_id": run_id,
+        "evidence_directory": str(evidence_dir),
+        "database_volume_name": (
+            f"forwin-v5-recovery-{run_id}-postgres-data"
+        ),
+    }
+    volume_absent = {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }
+    volume_present = {
+        "name": run_identity["database_volume_name"],
+        "exists": True,
+        "created_at": "2026-07-22T11:58:30+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T11:58:30+00:00",
+                "name": run_identity["database_volume_name"],
+            }
+        ),
+    }
+    identity = {"source_sha": SOURCE_SHA}
+    stack.append_event(
+        "fresh_up_started",
+        fault_id=fault_id,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume_absent,
+    )
+    stack.append_event(
+        "fresh_up_completed",
+        fault_id=fault_id,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume_present,
+    )
+    return run_identity, volume_present, identity
+
+
 def isolated_compose_config() -> tuple[dict, dict]:
     runtime_tag = "forwin-runtime:v1"
     browser_tag = "forwin-browser:v1"
@@ -78,7 +131,15 @@ def isolated_compose_config() -> tuple[dict, dict]:
             for service, tag in dependency_tags.items()
         },
     }
-    return {"name": stack.PROJECT, "services": services}, identity
+    return {
+        "name": stack.PROJECT,
+        "services": services,
+        "volumes": {
+            "forwin-postgres": {
+                "name": f"{stack.PROJECT}_forwin-postgres",
+            }
+        },
+    }, identity
 
 
 def test_effective_compose_validator_rejects_external_database_url() -> None:
@@ -132,6 +193,21 @@ def test_recovery_override_pins_stateful_endpoints_to_isolated_services() -> Non
             key: environment.get(key)
             for key in expected
         } == expected
+
+
+def test_recovery_override_parameterizes_all_container_and_database_volume_names(
+) -> None:
+    payload = yaml.safe_load(stack.COMPOSE_OVERRIDE.read_text(encoding="utf-8"))
+
+    assert payload["volumes"]["forwin-postgres"]["name"] == (
+        "${FORWIN_RECOVERY_DATABASE_VOLUME_NAME:"
+        "?set FORWIN_RECOVERY_DATABASE_VOLUME_NAME}"
+    )
+    for service in stack.SERVICES:
+        container_name = payload["services"][service]["container_name"]
+        assert container_name.startswith(
+            "${FORWIN_RECOVERY_PROJECT_NAME:?set FORWIN_RECOVERY_PROJECT_NAME}-"
+        )
 
 
 def test_recovery_identity_and_compose_images_come_from_candidate_manifest(
@@ -351,9 +427,648 @@ def test_recovery_events_are_written_to_explicit_hash_chain(
     first = stack.append_event("fault_started", fault_id="qdrant-1")
     second = stack.append_event("fault_recovered", fault_id="qdrant-1")
 
+    assert first["schema_version"] == 2
     assert first["previous_event_sha256"] == "0" * 64
     assert second["previous_event_sha256"] == first["event_sha256"]
     assert stack.load_verified_events() == [first, second]
+
+
+def test_recovery_run_identity_is_canonical_and_drives_unique_compose_resources(
+    tmp_path: Path,
+) -> None:
+    run_identity = stack.new_recovery_run_identity(
+        "fault-1",
+        run_id="b" * 32,
+        directory=(tmp_path / "evidence").resolve(),
+    )
+
+    assert run_identity == {
+        "run_id": "b" * 32,
+        "evidence_directory": str((tmp_path / "evidence").resolve()),
+        "database_volume_name": (
+            "forwin-v5-recovery-" + "b" * 32 + "-postgres-data"
+        ),
+    }
+    assert stack.recovery_project_name(run_identity) == (
+        "forwin-v5-recovery-" + "b" * 32
+    )
+
+    with pytest.raises(stack.StackError, match="fault identity"):
+        stack.new_recovery_run_identity(
+            "",
+            run_id="b" * 32,
+            directory=(tmp_path / "empty").resolve(),
+        )
+    with pytest.raises(stack.StackError, match="run identity"):
+        stack.new_recovery_run_identity(
+            "fault-1",
+            run_id="../shared",
+            directory=(tmp_path / "invalid").resolve(),
+        )
+
+
+def test_recovery_harness_binds_v1_and_recovery_finalizers_unambiguously() -> None:
+    harness = stack.harness_identity()
+
+    assert Path(harness["v1_finalizer"]["path"]).name == "finalize_v1.py"
+    assert Path(harness["recovery_finalizer"]["path"]).name == (
+        "finalize_recovery.py"
+    )
+    assert "finalizer" not in harness
+
+
+def test_fresh_up_records_stable_run_identity_and_database_volume_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "fault-1").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "c" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "c" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "2026-07-22T11:58:30+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T11:58:30+00:00",
+                "name": volume_name,
+            }
+        ),
+    }
+    volume_observations = iter([absent, present])
+    events: list[tuple[str, dict]] = []
+    compose_calls: list[tuple[dict, tuple[str, ...]]] = []
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda checked_identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(stack, "require_new_evidence_run", lambda: None)
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity: next(volume_observations),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **kwargs: {
+            "stage": "after" if kwargs.get("probe") else "before",
+            "services": {},
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "append_event",
+        lambda action, **payload: events.append((action, payload)) or payload,
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, run_identity: (
+            compose_calls.append((run_identity, tuple(args))) or ""
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda _service, *, run_identity: {"running": True},
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T11:58:00+00:00",
+    )
+
+    stack.fresh_up("fault-1")
+
+    expected_run_identity = {
+        "run_id": "c" * 32,
+        "evidence_directory": str(evidence_dir),
+        "database_volume_name": volume_name,
+    }
+    assert events[0] == (
+        "fresh_up_started",
+        {
+            "fault_id": "fault-1",
+            "requested_at": "2026-07-22T11:58:00+00:00",
+            "identity": identity,
+            "run_identity": expected_run_identity,
+            "database_volume": absent,
+            "before": {"stage": "before", "services": {}},
+        },
+    )
+    assert events[-1][0] == "fresh_up_completed"
+    assert events[-1][1]["run_identity"] == expected_run_identity
+    assert events[-1][1]["database_volume"] == present
+    assert all(
+        run_identity == expected_run_identity
+        for run_identity, _args in compose_calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("method_name", "service", "fault_action", "time_field"),
+    [
+        (
+            "stop_fault_service",
+            "qdrant",
+            "fault_service_stopped",
+            "fault_time",
+        ),
+        (
+            "kill_fault_service",
+            "generation-worker",
+            "fault_service_killed",
+            "crash_time",
+        ),
+    ],
+)
+def test_fault_timestamp_is_captured_after_non_running_inspection(
+    method_name: str,
+    service: str,
+    fault_action: str,
+    time_field: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeline: list[str] = []
+    times = iter(
+        [
+            "2026-07-22T12:00:00+00:00",
+            "2026-07-22T12:00:01+00:00",
+        ]
+    )
+    identity = {"source_sha": SOURCE_SHA}
+    run_identity = {
+        "run_id": "d" * 32,
+        "evidence_directory": "/tmp/fault-1",
+        "database_volume_name": (
+            "forwin-v5-recovery-" + "d" * 32 + "-postgres-data"
+        ),
+    }
+    volume = {
+        "name": run_identity["database_volume_name"],
+        "exists": True,
+        "created_at": "2026-07-22T11:58:30+00:00",
+        "fingerprint": "volume-fingerprint",
+    }
+    inspections = iter(
+        [
+            {"service": service, "running": True, "container_id": "container-1"},
+            {"service": service, "running": False, "container_id": "container-1"},
+        ]
+    )
+    events: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda fault_id, **_kwargs: {
+            "fault_id": fault_id,
+            "run_identity": run_identity,
+            "database_volume": volume,
+            "identity": identity,
+            "events": [],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "inspect_service",
+        lambda _service, *, run_identity: (
+            timeline.append("inspect") or next(inspections)
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, run_identity: timeline.append("compose") or "",
+    )
+    monkeypatch.setattr(
+        stack,
+        "command",
+        lambda *_args, **_kwargs: timeline.append("docker") or "",
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "append_event",
+        lambda action, **payload: events.append((action, payload)) or payload,
+    )
+
+    def fake_now() -> str:
+        value = next(times)
+        timeline.append(f"time:{value}")
+        return value
+
+    monkeypatch.setattr(stack, "now", fake_now)
+
+    getattr(stack, method_name)(service, "fault-1")
+
+    event = events[-1]
+    assert event[0] == fault_action
+    assert event[1]["requested_at"] == "2026-07-22T12:00:00+00:00"
+    assert event[1][time_field] == "2026-07-22T12:00:01+00:00"
+    assert event[1]["run_identity"] == run_identity
+    assert event[1]["database_volume"] == volume
+    assert timeline.index("time:2026-07-22T12:00:00+00:00") < min(
+        index
+        for index, item in enumerate(timeline)
+        if item in {"compose", "docker"}
+    )
+    assert timeline.index("inspect", 1) < timeline.index(
+        "time:2026-07-22T12:00:01+00:00"
+    )
+
+
+def test_recovery_timestamp_is_captured_after_readiness_and_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeline: list[str] = []
+    times = iter(
+        [
+            "2026-07-22T12:01:00+00:00",
+            "2026-07-22T12:01:01+00:00",
+        ]
+    )
+    identity = {"source_sha": SOURCE_SHA}
+    run_identity = {
+        "run_id": "e" * 32,
+        "evidence_directory": "/tmp/fault-1",
+        "database_volume_name": (
+            "forwin-v5-recovery-" + "e" * 32 + "-postgres-data"
+        ),
+    }
+    volume = {
+        "name": run_identity["database_volume_name"],
+        "exists": True,
+        "created_at": "2026-07-22T11:58:30+00:00",
+        "fingerprint": "volume-fingerprint",
+    }
+    events: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda fault_id, **_kwargs: {
+            "fault_id": fault_id,
+            "run_identity": run_identity,
+            "database_volume": volume,
+            "identity": identity,
+            "events": [
+                {
+                    "action": "fault_service_stopped",
+                    "service": "qdrant",
+                }
+            ],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "inspect_service",
+        lambda _service, *, run_identity: {
+            "service": "qdrant",
+            "running": False,
+            "container_id": "container-1",
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, run_identity: timeline.append("compose") or "",
+    )
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda _service, *, run_identity: (
+            timeline.append("ready")
+            or {"service": "qdrant", "running": True}
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "functional_probe",
+        lambda _service, *, run_identity: (
+            timeline.append("probe") or {"passed": True}
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "append_event",
+        lambda action, **payload: events.append((action, payload)) or payload,
+    )
+
+    def fake_now() -> str:
+        value = next(times)
+        timeline.append(f"time:{value}")
+        return value
+
+    monkeypatch.setattr(stack, "now", fake_now)
+
+    stack.start_fault_service("qdrant", "fault-1")
+
+    event = events[-1]
+    assert event[0] == "fault_service_recovered"
+    assert event[1]["requested_at"] == "2026-07-22T12:01:00+00:00"
+    assert event[1]["recovery_time"] == "2026-07-22T12:01:01+00:00"
+    assert timeline.index("probe") < timeline.index(
+        "time:2026-07-22T12:01:01+00:00"
+    )
+
+
+def test_typed_marker_rejects_duplicate_wrong_order_and_wrong_fault_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+        raising=False,
+    )
+
+    fault = stack.mark_fault("publisher_captcha", "fault", "fault-1")
+    recovery = stack.mark_fault("publisher_captcha", "recovery", "fault-1")
+
+    assert fault["action"] == "fault_marked"
+    assert fault["fault_kind"] == "publisher_captcha"
+    assert recovery["action"] == "recovery_marked"
+    assert recovery["fault_kind"] == "publisher_captcha"
+    assert fault["run_identity"] == recovery["run_identity"] == run_identity
+    assert "assertions" not in fault
+
+    with pytest.raises(stack.StackError, match="duplicate"):
+        stack.mark_fault("publisher_captcha", "recovery", "fault-1")
+    with pytest.raises(stack.StackError, match="fault identity"):
+        stack.mark_fault("publisher_captcha", "fault", "different-fault")
+
+    other_dir = (tmp_path / "wrong-order").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(other_dir))
+    recovery_lifecycle(
+        tmp_path,
+        monkeypatch,
+        fault_id="wrong-order",
+    )
+    with pytest.raises(stack.StackError, match="before fault marker"):
+        stack.mark_fault("publisher_mfa", "recovery", "wrong-order")
+
+
+def test_typed_marker_rejects_an_existing_service_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "fault_service_stopped",
+        fault_id="fault-1",
+        service="qdrant",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+
+    with pytest.raises(stack.StackError, match="duplicate fault"):
+        stack.mark_fault("publisher_captcha", "fault", "fault-1")
+
+
+@pytest.mark.parametrize(
+    "fault_kind",
+    [
+        "",
+        "publisher_backend_unavailable",
+        "publisher_unknown_risk",
+    ],
+)
+def test_typed_marker_rejects_non_risk_fault_kind(
+    fault_kind: str,
+) -> None:
+    with pytest.raises(stack.StackError, match="typed publisher risk"):
+        stack.mark_fault(fault_kind, "fault", "fault-1")
+
+
+def test_destroy_requires_completed_recovery_and_is_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "fault_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_mfa",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_mfa",
+        recovery_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    absent = {"name": run_identity["database_volume_name"], "exists": False}
+    volume_observations = iter([volume, absent])
+    compose_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity: next(volume_observations),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"stage": "before", "services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, run_identity: compose_calls.append(tuple(args)) or "",
+    )
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity: {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:02:00+00:00",
+    )
+
+    stack.destroy()
+
+    destroyed = stack.load_verified_events()[-1]
+    assert destroyed["action"] == "destroyed"
+    assert destroyed["fault_id"] == "fault-1"
+    assert destroyed["run_identity"] == run_identity
+    assert destroyed["database_volume_before"] == volume
+    assert destroyed["database_volume"] == absent
+    assert destroyed["after"]["services"] == {
+        service: {"exists": False, "running": False}
+        for service in stack.SERVICES
+    }
+    assert compose_calls == [("down", "--volumes", "--remove-orphans")]
+
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.append_event("snapshot", label="too-late")
+
+
+def test_destroy_refuses_missing_fresh_completion_without_compose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "fault-1").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "fault-1",
+        run_id="f" * 32,
+        directory=evidence_dir,
+    )
+    stack.append_event(
+        "fresh_up_started",
+        fault_id="fault-1",
+        identity={"source_sha": SOURCE_SHA},
+        run_identity=run_identity,
+        database_volume={
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    compose_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, **_kwargs: compose_calls.append(tuple(args)) or "",
+    )
+
+    with pytest.raises(stack.StackError, match="completed fresh-up"):
+        stack.destroy()
+
+    assert compose_calls == []
+
+
+def test_destroy_rejects_a_mixed_fault_recovery_pair_before_compose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "fault_service_stopped",
+        fault_id="fault-1",
+        service="qdrant",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_mfa",
+        recovery_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "assert_frozen",
+        lambda **_kwargs: pytest.fail("destroy read harness before pair validation"),
+    )
+
+    with pytest.raises(stack.StackError, match="matching fault recovery"):
+        stack.destroy()
+
+
+def test_active_run_rejects_unparseable_database_volume_creation_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "fault-1").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "fault-1",
+        run_id="1" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    stack.append_event(
+        "fresh_up_started",
+        fault_id="fault-1",
+        identity={"source_sha": SOURCE_SHA},
+        run_identity=run_identity,
+        database_volume={"name": volume_name, "exists": False},
+    )
+    stack.append_event(
+        "fresh_up_completed",
+        fault_id="fault-1",
+        identity={"source_sha": SOURCE_SHA},
+        run_identity=run_identity,
+        database_volume={
+            "name": volume_name,
+            "exists": True,
+            "created_at": "not-a-time",
+            "fingerprint": stack.stable_hash(
+                {"created_at": "not-a-time", "name": volume_name}
+            ),
+        },
+    )
+
+    with pytest.raises(stack.StackError, match="creation time"):
+        stack.require_active_recovery_run("fault-1")
 
 
 def test_v1_up_records_migration_schema_role_and_embedding_evidence(
@@ -392,13 +1107,14 @@ def test_v1_up_records_migration_schema_role_and_embedding_evidence(
         "vector_dims": [384],
     }
 
-    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
     monkeypatch.setattr(
         stack,
         "assert_isolated_compose",
         lambda checked_identity: isolated_checks.append(checked_identity),
         raising=False,
     )
+    monkeypatch.setattr(stack, "reject_terminal_evidence_directory", lambda: None)
     monkeypatch.setattr(stack, "require_new_evidence_run", lambda: None)
     monkeypatch.setattr(
         stack,

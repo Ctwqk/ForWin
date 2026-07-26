@@ -22,6 +22,8 @@ ARTIFACT_DIR = ROOT / ".artifacts/rc-candidate"
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 COMPOSE_OVERRIDE = ARTIFACT_DIR / "docker-compose.recovery.yml"
 PROJECT = "forwin-v5-recovery"
+RECOVERY_PROJECT_PREFIX = "forwin-v5-recovery"
+DATABASE_VOLUME_SUFFIX = "postgres-data"
 CANDIDATE_MANIFEST_ENV = "FORWIN_RECOVERY_CANDIDATE_MANIFEST"
 RUNTIME_ENV_FILE_ENV = "FORWIN_RECOVERY_ENV_FILE"
 PROVIDER_ENV_FILE_ENV = "FORWIN_RECOVERY_PROVIDER_ENV_FILE"
@@ -95,6 +97,15 @@ FAULT_SERVICES = {
 }
 
 CRASH_SERVICES = {"generation-worker", "publisher-worker"}
+RISK_FAULT_KINDS = frozenset(
+    {
+        "publisher_captcha",
+        "publisher_mfa",
+        "publisher_account_risk",
+    }
+)
+_FAULT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 
 ISOLATED_DATABASE_URL = (
     "postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
@@ -264,20 +275,122 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def stable_hash(value: Any) -> str:
+    try:
+        body = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise StackError(f"value is not JSON-compatible: {exc}") from exc
+    return hashlib.sha256(body).hexdigest()
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def harness_identity() -> dict[str, dict[str, str]]:
+def harness_identity(
+    *,
+    mode: str = "recovery",
+) -> dict[str, dict[str, str]]:
     paths = {
         "controller": Path(__file__).resolve(),
         "compose_file": COMPOSE_FILE.resolve(),
         "compose_override": COMPOSE_OVERRIDE.resolve(),
-        "finalizer": Path(__file__).with_name("finalize_v1.py").resolve(),
     }
+    if mode == "recovery":
+        paths.update(
+            {
+                "v1_finalizer": Path(__file__).with_name(
+                    "finalize_v1.py"
+                ).resolve(),
+                "recovery_finalizer": Path(__file__).with_name(
+                    "finalize_recovery.py"
+                ).resolve(),
+            }
+        )
+    elif mode == "v1":
+        paths["finalizer"] = Path(__file__).with_name("finalize_v1.py").resolve()
+    else:
+        raise StackError(f"unknown harness identity mode: {mode}")
     return {
         key: {"path": str(path), "sha256": sha256_file(path)}
         for key, path in paths.items()
+    }
+
+
+def validated_fault_id(fault_id: str) -> str:
+    value = str(fault_id or "")
+    if _FAULT_ID_PATTERN.fullmatch(value) is None:
+        raise StackError(
+            "fault identity must be 1-128 ASCII letters, digits, dot, "
+            "underscore, or hyphen"
+        )
+    return value
+
+
+def new_recovery_run_identity(
+    fault_id: str,
+    *,
+    run_id: str,
+    directory: Path,
+) -> dict[str, str]:
+    validated_fault_id(fault_id)
+    if _RUN_ID_PATTERN.fullmatch(str(run_id or "")) is None:
+        raise StackError("run identity must be exactly 32 lowercase hex characters")
+    canonical_directory = directory.resolve()
+    if not directory.is_absolute() or directory != canonical_directory:
+        raise StackError("run evidence directory must be absolute and canonical")
+    volume_name = (
+        f"{RECOVERY_PROJECT_PREFIX}-{run_id}-{DATABASE_VOLUME_SUFFIX}"
+    )
+    return {
+        "run_id": run_id,
+        "evidence_directory": str(canonical_directory),
+        "database_volume_name": volume_name,
+    }
+
+
+def recovery_project_name(run_identity: dict[str, Any]) -> str:
+    run_id = str(run_identity.get("run_id") or "")
+    if _RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise StackError("recovery run identity has an invalid run_id")
+    return f"{RECOVERY_PROJECT_PREFIX}-{run_id}"
+
+
+def validate_run_identity(
+    run_identity: object,
+) -> dict[str, str]:
+    expected_keys = {
+        "run_id",
+        "evidence_directory",
+        "database_volume_name",
+    }
+    if not isinstance(run_identity, dict) or set(run_identity) != expected_keys:
+        raise StackError("recovery run identity has an invalid field set")
+    run_id = str(run_identity.get("run_id") or "")
+    if _RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise StackError("recovery run identity has an invalid run_id")
+    raw_directory = Path(str(run_identity.get("evidence_directory") or ""))
+    if (
+        not raw_directory.is_absolute()
+        or raw_directory != raw_directory.resolve()
+        or raw_directory != evidence_directory()
+    ):
+        raise StackError("recovery run identity evidence directory mismatch")
+    expected_volume = (
+        f"{RECOVERY_PROJECT_PREFIX}-{run_id}-{DATABASE_VOLUME_SUFFIX}"
+    )
+    if run_identity.get("database_volume_name") != expected_volume:
+        raise StackError("recovery run identity database volume mismatch")
+    return {
+        "run_id": run_id,
+        "evidence_directory": str(raw_directory),
+        "database_volume_name": expected_volume,
     }
 
 
@@ -406,7 +519,22 @@ def host_command_environment() -> dict[str, str]:
     }
 
 
-def compose_environment() -> dict[str, str]:
+def compose_resource_identity(
+    run_identity: dict[str, Any] | None,
+) -> tuple[str, str]:
+    if run_identity is None:
+        return PROJECT, f"{PROJECT}_forwin-postgres"
+    validated = validate_run_identity(run_identity)
+    return (
+        f"{RECOVERY_PROJECT_PREFIX}-{validated['run_id']}",
+        validated["database_volume_name"],
+    )
+
+
+def compose_environment(
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> dict[str, str]:
     assert_no_control_environment()
     _manifest_path, manifest = candidate_manifest()
     source_sha = str((manifest.get("source") or {}).get("sha") or "")
@@ -424,6 +552,7 @@ def compose_environment() -> dict[str, str]:
         or not all(dependency_tags.values())
     ):
         raise StackError("candidate manifest image/source identity is incomplete")
+    project_name, database_volume_name = compose_resource_identity(run_identity)
     return {
         **host_command_environment(),
         **COMPOSE_ENV,
@@ -440,6 +569,8 @@ def compose_environment() -> dict[str, str]:
         "FORWIN_RECOVERY_POSTGRES_IMAGE": dependency_tags["postgres"],
         "FORWIN_RECOVERY_QDRANT_IMAGE": dependency_tags["qdrant"],
         "FORWIN_RECOVERY_MINIO_IMAGE": dependency_tags["minio"],
+        "FORWIN_RECOVERY_PROJECT_NAME": project_name,
+        "FORWIN_RECOVERY_DATABASE_VOLUME_NAME": database_volume_name,
     }
 
 
@@ -477,15 +608,19 @@ def docker_execution_identity() -> dict[str, str]:
     }
 
 
-def compose(*args: str) -> str:
-    environment = compose_environment()
+def compose(
+    *args: str,
+    run_identity: dict[str, Any] | None = None,
+) -> str:
+    environment = compose_environment(run_identity=run_identity)
+    project_name, _database_volume_name = compose_resource_identity(run_identity)
     return command(
         "docker",
         "compose",
         "--env-file",
         environment["FORWIN_RECOVERY_ENV_FILE"],
         "--project-name",
-        PROJECT,
+        project_name,
         "--file",
         str(COMPOSE_FILE),
         "--file",
@@ -497,8 +632,12 @@ def compose(*args: str) -> str:
     )
 
 
-def compose_process(*args: str) -> subprocess.CompletedProcess[str]:
-    environment = compose_environment()
+def compose_process(
+    *args: str,
+    run_identity: dict[str, Any] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    environment = compose_environment(run_identity=run_identity)
+    project_name, _database_volume_name = compose_resource_identity(run_identity)
     return subprocess.run(
         [
             "docker",
@@ -506,7 +645,7 @@ def compose_process(*args: str) -> subprocess.CompletedProcess[str]:
             "--env-file",
             environment["FORWIN_RECOVERY_ENV_FILE"],
             "--project-name",
-            PROJECT,
+            project_name,
             "--file",
             str(COMPOSE_FILE),
             "--file",
@@ -527,8 +666,10 @@ def validate_isolated_compose_config(
     payload: dict[str, Any],
     *,
     identity: dict[str, Any],
+    run_identity: dict[str, Any] | None = None,
 ) -> None:
-    if payload.get("name") != PROJECT:
+    project_name, database_volume_name = compose_resource_identity(run_identity)
+    if payload.get("name") != project_name:
         raise StackError("effective Compose project is not the recovery project")
     services = payload.get("services")
     if not isinstance(services, dict) or set(services) != set(SERVICES):
@@ -584,10 +725,23 @@ def validate_isolated_compose_config(
         "MINIO_ROOT_USER": ISOLATED_MINIO_ACCESS_KEY,
     }:
         raise StackError("effective MinIO credentials are not isolated")
+    volumes = payload.get("volumes") or {}
+    postgres_volume = volumes.get("forwin-postgres") or {}
+    if postgres_volume.get("name") != database_volume_name:
+        raise StackError("effective PostgreSQL volume is not run-isolated")
 
 
-def assert_isolated_compose(identity: dict[str, Any]) -> None:
-    completed = compose_process("config", "--format", "json")
+def assert_isolated_compose(
+    identity: dict[str, Any],
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> None:
+    completed = compose_process(
+        "config",
+        "--format",
+        "json",
+        run_identity=run_identity,
+    )
     if completed.returncode:
         raise StackError(
             "effective recovery Compose config could not be rendered: "
@@ -599,7 +753,11 @@ def assert_isolated_compose(identity: dict[str, Any]) -> None:
         raise StackError("effective recovery Compose config is invalid JSON") from exc
     if not isinstance(payload, dict):
         raise StackError("effective recovery Compose config is not an object")
-    validate_isolated_compose_config(payload, identity=identity)
+    validate_isolated_compose_config(
+        payload,
+        identity=identity,
+        run_identity=run_identity,
+    )
 
 
 def _completed_output(completed: subprocess.CompletedProcess[str]) -> str:
@@ -940,7 +1098,7 @@ def dependency_image_identity(
     return {"tag": tag, "image_id": image_id}
 
 
-def assert_frozen() -> dict[str, Any]:
+def assert_frozen(*, harness_mode: str = "recovery") -> dict[str, Any]:
     manifest_path, manifest = candidate_manifest()
     expected_source_sha = str((manifest.get("source") or {}).get("sha") or "")
     if not expected_source_sha:
@@ -985,7 +1143,7 @@ def assert_frozen() -> dict[str, Any]:
             tag,
             expected_image_id=image_id,
         )
-    local_harness = harness_identity()
+    local_harness = harness_identity(mode=harness_mode)
     release_harness = manifest.get("release_harness") or {}
     release_files = {
         str(item.get("path") or ""): str(item.get("sha256") or "")
@@ -1033,12 +1191,26 @@ def assert_frozen() -> dict[str, Any]:
     }
 
 
-def compose_container_id(service: str) -> str:
-    return compose("ps", "--all", "--quiet", service)
+def compose_container_id(
+    service: str,
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> str:
+    return compose(
+        "ps",
+        "--all",
+        "--quiet",
+        service,
+        run_identity=run_identity,
+    )
 
 
-def inspect_service(service: str) -> dict[str, Any]:
-    container_id = compose_container_id(service)
+def inspect_service(
+    service: str,
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    container_id = compose_container_id(service, run_identity=run_identity)
     if not container_id:
         return {"service": service, "exists": False}
     try:
@@ -1051,10 +1223,14 @@ def inspect_service(service: str) -> dict[str, Any]:
     labels = (item.get("Config") or {}).get("Labels") or {}
     actual_project = str(labels.get("com.docker.compose.project") or "")
     actual_service = str(labels.get("com.docker.compose.service") or "")
-    if actual_project != PROJECT or actual_service != service:
+    expected_project, _database_volume_name = compose_resource_identity(
+        run_identity
+    )
+    if actual_project != expected_project or actual_service != service:
         raise StackError(
             f"refusing container {container_id}: labels identify "
-            f"{actual_project}/{actual_service}, expected {PROJECT}/{service}"
+            f"{actual_project}/{actual_service}, expected "
+            f"{expected_project}/{service}"
         )
     state = item.get("State") or {}
     health = state.get("Health") or {}
@@ -1077,7 +1253,11 @@ def inspect_service(service: str) -> dict[str, Any]:
     }
 
 
-def functional_probe(service: str) -> dict[str, Any]:
+def functional_probe(
+    service: str,
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     worker_markers = {
         "generation-worker": "generation-worker",
         "outbox-worker": "outbox-worker",
@@ -1171,7 +1351,7 @@ def functional_probe(service: str) -> dict[str, Any]:
         )
     else:
         raise StackError(f"no functional probe is defined for service {service}")
-    completed = compose_process(*command_args)
+    completed = compose_process(*command_args, run_identity=run_identity)
     output = _completed_output(completed)
     if completed.returncode:
         raise StackError(f"functional probe failed for {service}: {output}")
@@ -1182,11 +1362,21 @@ def functional_probe(service: str) -> dict[str, Any]:
     }
 
 
-def stack_snapshot(*, probe: bool = False) -> dict[str, Any]:
-    services = {service: inspect_service(service) for service in SERVICES}
+def stack_snapshot(
+    *,
+    probe: bool = False,
+    run_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    services = {
+        service: inspect_service(service, run_identity=run_identity)
+        for service in SERVICES
+    }
     if probe:
         for service in SERVICES:
-            services[service]["probe"] = functional_probe(service)
+            services[service]["probe"] = functional_probe(
+                service,
+                run_identity=run_identity,
+            )
     return {
         "observed_at": now(),
         "services": services,
@@ -1197,8 +1387,10 @@ def append_event(action: str, **payload: Any) -> dict[str, Any]:
     path = events_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_verified_events()
+    if existing and existing[-1].get("action") == "destroyed":
+        raise StackError("recovery event log is terminal after destroyed")
     event = {
-        "schema_version": 1,
+        "schema_version": 2,
         "recorded_at": now(),
         "action": action,
         "previous_event_sha256": (
@@ -1214,11 +1406,185 @@ def append_event(action: str, **payload: Any) -> dict[str, Any]:
     return event
 
 
-def wait_service(service: str, timeout_seconds: int = 240) -> dict[str, Any]:
+def database_volume_observation(
+    run_identity: dict[str, Any],
+) -> dict[str, Any]:
+    validated = validate_run_identity(run_identity)
+    volume_name = validated["database_volume_name"]
+    volume_names = set(
+        command(
+            "docker",
+            "volume",
+            "ls",
+            "--format",
+            "{{.Name}}",
+        ).splitlines()
+    )
+    if volume_name not in volume_names:
+        return {"name": volume_name, "exists": False}
+    try:
+        payload = json.loads(
+            command("docker", "volume", "inspect", volume_name)
+        )
+    except json.JSONDecodeError as exc:
+        raise StackError(
+            f"docker returned invalid JSON for volume {volume_name}"
+        ) from exc
+    if len(payload) != 1:
+        raise StackError(f"expected one Docker volume for {volume_name}")
+    item = payload[0]
+    labels = item.get("Labels") or {}
+    expected_project = recovery_project_name(validated)
+    if (
+        item.get("Name") != volume_name
+        or labels.get("com.docker.compose.project") != expected_project
+        or labels.get("com.docker.compose.volume") != "forwin-postgres"
+    ):
+        raise StackError(
+            f"refusing database volume with mismatched identity: {volume_name}"
+        )
+    created_at = str(item.get("CreatedAt") or "")
+    if not created_at:
+        raise StackError(f"database volume creation time is missing: {volume_name}")
+    try:
+        datetime.fromisoformat(created_at)
+    except ValueError as exc:
+        raise StackError(
+            f"database volume creation time is invalid: {volume_name}"
+        ) from exc
+    return {
+        "name": volume_name,
+        "exists": True,
+        "created_at": created_at,
+        "fingerprint": stable_hash(
+            {"created_at": created_at, "name": volume_name}
+        ),
+    }
+
+
+def confirmed_database_volume(
+    run_identity: dict[str, Any],
+    expected: dict[str, Any],
+) -> dict[str, Any]:
+    actual = database_volume_observation(run_identity)
+    if actual != expected or actual.get("exists") is not True:
+        raise StackError("database volume identity changed during recovery run")
+    return actual
+
+
+def require_active_recovery_run(
+    fault_id: str,
+) -> dict[str, Any]:
+    validated_fault = validated_fault_id(fault_id)
+    events = load_verified_events()
+    if not events:
+        raise StackError("recovery run has no completed fresh-up")
+    if events[-1].get("action") == "destroyed":
+        raise StackError("recovery event log is terminal after destroyed")
+    if any(event.get("schema_version") != 2 for event in events):
+        raise StackError("recovery event schema version mismatch")
+    event_fault_ids = {str(event.get("fault_id") or "") for event in events}
+    if event_fault_ids != {validated_fault}:
+        raise StackError("recovery fault identity mismatch")
+    first_run_identity = validate_run_identity(events[0].get("run_identity"))
+    if any(
+        event.get("run_identity") != first_run_identity for event in events
+    ):
+        raise StackError("recovery run identity changed within event log")
+    starts = [
+        event for event in events if event.get("action") == "fresh_up_started"
+    ]
+    completions = [
+        event for event in events if event.get("action") == "fresh_up_completed"
+    ]
+    if (
+        len(starts) != 1
+        or len(completions) != 1
+        or events[:2] != [starts[0], completions[0]]
+    ):
+        raise StackError("recovery run requires one completed fresh-up")
+    volume_name = first_run_identity["database_volume_name"]
+    if starts[0].get("database_volume") != {
+        "name": volume_name,
+        "exists": False,
+    }:
+        raise StackError("fresh-up did not begin with an absent database volume")
+    database_volume = completions[0].get("database_volume")
+    created_at = (
+        database_volume.get("created_at")
+        if isinstance(database_volume, dict)
+        else None
+    )
+    try:
+        if not isinstance(created_at, str) or not created_at:
+            raise ValueError
+        datetime.fromisoformat(created_at)
+    except ValueError as exc:
+        raise StackError(
+            "fresh-up database volume creation time is invalid"
+        ) from exc
+    if (
+        not isinstance(database_volume, dict)
+        or set(database_volume)
+        != {"name", "exists", "created_at", "fingerprint"}
+        or database_volume.get("name") != volume_name
+        or database_volume.get("exists") is not True
+        or database_volume.get("fingerprint")
+        != stable_hash(
+            {
+                "created_at": database_volume.get("created_at"),
+                "name": volume_name,
+            }
+        )
+    ):
+        raise StackError("fresh-up database volume identity is invalid")
+    if any(
+        event.get("database_volume") != database_volume
+        for event in events[2:]
+    ):
+        raise StackError("database volume identity changed within event log")
+    event_identity = completions[0].get("identity")
+    if any(event.get("identity") != event_identity for event in events):
+        raise StackError("recovery harness identity changed within event log")
+    return {
+        "fault_id": validated_fault,
+        "run_identity": first_run_identity,
+        "database_volume": database_volume,
+        "identity": completions[0].get("identity"),
+        "events": events,
+    }
+
+
+def destroyed_service_inventory(
+    run_identity: dict[str, Any],
+) -> dict[str, dict[str, bool]]:
+    inventory: dict[str, dict[str, bool]] = {}
+    for service in SERVICES:
+        state = inspect_service(service, run_identity=run_identity)
+        if state.get("exists") or state.get("running"):
+            raise StackError(
+                f"service {service} still exists after recovery destroy"
+            )
+        inventory[service] = {"exists": False, "running": False}
+    return inventory
+
+
+def reject_terminal_evidence_directory() -> None:
+    events = load_verified_events()
+    if events and events[-1].get("action") == "destroyed":
+        raise StackError("recovery event log is terminal after destroyed")
+
+
+def wait_service(
+    service: str,
+    timeout_seconds: int = 240,
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
-    last = inspect_service(service)
+    last = inspect_service(service, run_identity=run_identity)
     while time.monotonic() < deadline:
-        last = inspect_service(service)
+        last = inspect_service(service, run_identity=run_identity)
         health_ready = (
             last.get("health") == "healthy"
             if service in HEALTHCHECK_SERVICES
@@ -1231,23 +1597,83 @@ def wait_service(service: str, timeout_seconds: int = 240) -> dict[str, Any]:
 
 
 def validate_config() -> None:
+    reject_terminal_evidence_directory()
     identity = assert_frozen()
-    assert_isolated_compose(identity)
-    print(json.dumps({"ok": True, **identity}, ensure_ascii=False, indent=2))
+    run_identity = new_recovery_run_identity(
+        "config-check",
+        run_id="0" * 32,
+        directory=evidence_directory(),
+    )
+    assert_isolated_compose(identity, run_identity=run_identity)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "run_identity": run_identity,
+                "compose_project_name": recovery_project_name(run_identity),
+                **identity,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
-def fresh_up() -> None:
+def fresh_up(fault_id: str) -> None:
+    reject_terminal_evidence_directory()
+    validated_fault = validated_fault_id(fault_id)
     identity = assert_frozen()
-    assert_isolated_compose(identity)
     require_new_evidence_run()
-    before = stack_snapshot()
-    append_event("fresh_up_started", identity=identity, before=before)
-    compose("down", "--volumes", "--remove-orphans")
-    compose("up", "--detach", "postgres", "qdrant", "minio")
-    wait_service("postgres")
-    wait_service("qdrant")
-    wait_service("minio")
-    compose("run", "--rm", "--no-deps", "forwin", "alembic", "upgrade", "head")
+    run_identity = new_recovery_run_identity(
+        validated_fault,
+        run_id=secrets.token_hex(16),
+        directory=evidence_directory(),
+    )
+    assert_isolated_compose(identity, run_identity=run_identity)
+    database_volume = database_volume_observation(run_identity)
+    if database_volume != {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }:
+        raise StackError("fresh-up target database volume already exists")
+    before = stack_snapshot(run_identity=run_identity)
+    requested_at = now()
+    append_event(
+        "fresh_up_started",
+        fault_id=validated_fault,
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        before=before,
+    )
+    compose(
+        "down",
+        "--volumes",
+        "--remove-orphans",
+        run_identity=run_identity,
+    )
+    compose(
+        "up",
+        "--detach",
+        "postgres",
+        "qdrant",
+        "minio",
+        run_identity=run_identity,
+    )
+    wait_service("postgres", run_identity=run_identity)
+    wait_service("qdrant", run_identity=run_identity)
+    wait_service("minio", run_identity=run_identity)
+    compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "forwin",
+        "alembic",
+        "upgrade",
+        "head",
+        run_identity=run_identity,
+    )
     compose(
         "up",
         "--detach",
@@ -1257,16 +1683,29 @@ def fresh_up() -> None:
         "forwin-mcp",
         "publisher-worker",
         "publisher-browser",
+        run_identity=run_identity,
     )
     for service in SERVICES:
-        wait_service(service)
-    after = stack_snapshot(probe=True)
-    append_event("fresh_up_completed", identity=identity, after=after)
+        wait_service(service, run_identity=run_identity)
+    after = stack_snapshot(probe=True, run_identity=run_identity)
+    database_volume = database_volume_observation(run_identity)
+    if database_volume.get("exists") is not True:
+        raise StackError("fresh-up did not create its database volume")
+    append_event(
+        "fresh_up_completed",
+        fault_id=validated_fault,
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        after=after,
+    )
     print(json.dumps(after, ensure_ascii=False, indent=2))
 
 
 def v1_up() -> None:
-    identity = assert_frozen()
+    reject_terminal_evidence_directory()
+    identity = assert_frozen(harness_mode="v1")
     assert_isolated_compose(identity)
     require_new_evidence_run()
     run_id = secrets.token_hex(16)
@@ -1312,26 +1751,108 @@ def v1_up() -> None:
 
 
 def destroy() -> None:
-    identity = assert_frozen()
-    assert_isolated_compose(identity)
-    before = stack_snapshot()
-    compose("down", "--volumes", "--remove-orphans")
-    after = stack_snapshot()
+    reject_terminal_evidence_directory()
     existing = load_verified_events()
     v1_starts = [
         event
         for event in existing
         if event.get("action") == "v1_fresh_up_started"
     ]
-    run_identity = (
-        {"run_id": str(v1_starts[0].get("run_id") or "")}
-        if len(v1_starts) == 1
-        else {}
+    if v1_starts:
+        if len(v1_starts) != 1 or any(
+            event.get("action") == "fresh_up_started" for event in existing
+        ):
+            raise StackError("V1 destroy lifecycle is invalid")
+        identity = assert_frozen(harness_mode="v1")
+        assert_isolated_compose(identity)
+        before = stack_snapshot()
+        requested_at = now()
+        compose("down", "--volumes", "--remove-orphans")
+        after = stack_snapshot()
+        if any(
+            state.get("exists") or state.get("running")
+            for state in (after.get("services") or {}).values()
+        ):
+            raise StackError("a V1 service still exists after destroy")
+        append_event(
+            "destroyed",
+            run_id=str(v1_starts[0].get("run_id") or ""),
+            requested_at=requested_at,
+            identity=identity,
+            before=before,
+            after=after,
+        )
+        print(json.dumps(after, ensure_ascii=False, indent=2))
+        return
+    fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
+    context = require_active_recovery_run(fault_id)
+    events = context["events"]
+    fault_events = [
+        event
+        for event in events
+        if event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+    ]
+    recovery_events = [
+        event
+        for event in events
+        if event.get("action")
+        in {"fault_service_recovered", "recovery_marked"}
+    ]
+    if (
+        len(fault_events) != 1
+        or len(recovery_events) != 1
+        or events.index(fault_events[0]) >= events.index(recovery_events[0])
+    ):
+        raise StackError("destroy requires one completed fault recovery")
+    fault_event = fault_events[0]
+    recovery_event = recovery_events[0]
+    if fault_event.get("action") == "fault_marked":
+        pair_matches = (
+            recovery_event.get("action") == "recovery_marked"
+            and recovery_event.get("fault_kind")
+            == fault_event.get("fault_kind")
+        )
+    else:
+        pair_matches = (
+            recovery_event.get("action") == "fault_service_recovered"
+            and recovery_event.get("service") == fault_event.get("service")
+        )
+    if not pair_matches:
+        raise StackError("destroy requires a matching fault recovery pair")
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before destroy")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    database_volume_before = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
     )
+    before = stack_snapshot(run_identity=run_identity)
+    requested_at = now()
+    compose(
+        "down",
+        "--volumes",
+        "--remove-orphans",
+        run_identity=run_identity,
+    )
+    services = destroyed_service_inventory(run_identity)
+    database_volume = database_volume_observation(run_identity)
+    if database_volume != {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }:
+        raise StackError("database volume still exists after recovery destroy")
+    after = {"observed_at": now(), "services": services}
     append_event(
         "destroyed",
-        **run_identity,
+        fault_id=fault_id,
+        requested_at=requested_at,
         identity=identity,
+        run_identity=run_identity,
+        database_volume_before=database_volume_before,
+        database_volume=database_volume,
         before=before,
         after=after,
     )
@@ -1341,22 +1862,46 @@ def destroy() -> None:
 def stop_fault_service(service: str, fault_id: str) -> None:
     if service not in FAULT_SERVICES:
         raise StackError(f"service is not an allowed fault boundary: {service}")
+    context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+        for event in context["events"]
+    ):
+        raise StackError("duplicate fault event is not allowed")
+    run_identity = context["run_identity"]
     identity = assert_frozen()
-    assert_isolated_compose(identity)
-    before = inspect_service(service)
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before fault")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
     if not before.get("running"):
         raise StackError(f"service {service} is not running before fault injection")
-    fault_time = now()
-    compose("stop", "--timeout", "10", service)
-    after = inspect_service(service)
+    requested_at = now()
+    compose(
+        "stop",
+        "--timeout",
+        "10",
+        service,
+        run_identity=run_identity,
+    )
+    after = inspect_service(service, run_identity=run_identity)
     if after.get("running"):
         raise StackError(f"service {service} is still running after stop")
+    fault_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
     event = append_event(
         "fault_service_stopped",
         fault_id=fault_id,
         service=service,
+        requested_at=requested_at,
         fault_time=fault_time,
         identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
         before=before,
         after=after,
     )
@@ -1366,12 +1911,35 @@ def stop_fault_service(service: str, fault_id: str) -> None:
 def start_fault_service(service: str, fault_id: str) -> None:
     if service not in FAULT_SERVICES:
         raise StackError(f"service is not an allowed recovery boundary: {service}")
+    context = require_active_recovery_run(fault_id)
+    fault_events = [
+        event
+        for event in context["events"]
+        if event.get("action")
+        in {"fault_service_stopped", "fault_service_killed"}
+    ]
+    recovery_events = [
+        event
+        for event in context["events"]
+        if event.get("action")
+        in {"fault_service_recovered", "recovery_marked"}
+    ]
+    if (
+        len(fault_events) != 1
+        or fault_events[0].get("service") != service
+    ):
+        raise StackError(f"recovery for {service} has no matching fault event")
+    if recovery_events:
+        raise StackError("duplicate recovery event is not allowed")
+    run_identity = context["run_identity"]
     identity = assert_frozen()
-    assert_isolated_compose(identity)
-    before = inspect_service(service)
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before recovery")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
     if before.get("running"):
         raise StackError(f"service {service} is already running before recovery")
-    recovery_time = now()
+    requested_at = now()
     if service in CRASH_SERVICES:
         command(
             "docker",
@@ -1380,15 +1948,23 @@ def start_fault_service(service: str, fault_id: str) -> None:
             "--restart=unless-stopped",
             str(before["container_id"]),
         )
-    compose("start", service)
-    ready = wait_service(service)
-    ready["probe"] = functional_probe(service)
+    compose("start", service, run_identity=run_identity)
+    ready = wait_service(service, run_identity=run_identity)
+    ready["probe"] = functional_probe(service, run_identity=run_identity)
+    recovery_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
     event = append_event(
         "fault_service_recovered",
         fault_id=fault_id,
         service=service,
+        requested_at=requested_at,
         recovery_time=recovery_time,
         identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
         before=before,
         after=ready,
     )
@@ -1398,25 +1974,43 @@ def start_fault_service(service: str, fault_id: str) -> None:
 def kill_fault_service(service: str, fault_id: str) -> None:
     if service not in CRASH_SERVICES:
         raise StackError(f"service is not an allowed crash boundary: {service}")
+    context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+        for event in context["events"]
+    ):
+        raise StackError("duplicate fault event is not allowed")
+    run_identity = context["run_identity"]
     identity = assert_frozen()
-    assert_isolated_compose(identity)
-    before = inspect_service(service)
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before crash")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
     if not before.get("running"):
         raise StackError(f"service {service} is not running before crash injection")
     container_id = str(before["container_id"])
-    crash_time = now()
+    requested_at = now()
     command("docker", "container", "update", "--restart=no", container_id)
     command("docker", "container", "kill", "--signal=KILL", container_id)
-    after = inspect_service(service)
+    after = inspect_service(service, run_identity=run_identity)
     if after.get("running"):
         raise StackError(f"service {service} is still running after SIGKILL")
+    crash_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
     event = append_event(
         "fault_service_killed",
         fault_id=fault_id,
         service=service,
+        requested_at=requested_at,
         crash_time=crash_time,
         signal="SIGKILL",
         identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
         before=before,
         after=after,
     )
@@ -1424,11 +2018,95 @@ def kill_fault_service(service: str, fault_id: str) -> None:
 
 
 def snapshot(label: str) -> None:
+    existing = load_verified_events()
+    fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
+    context = require_active_recovery_run(fault_id)
+    run_identity = context["run_identity"]
     identity = assert_frozen()
-    assert_isolated_compose(identity)
-    state = stack_snapshot()
-    event = append_event("snapshot", label=label, identity=identity, state=state)
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before snapshot")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    state = stack_snapshot(run_identity=run_identity)
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    event = append_event(
+        "snapshot",
+        fault_id=fault_id,
+        label=label,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        state=state,
+    )
     print(json.dumps(event, ensure_ascii=False, indent=2))
+
+
+def mark_fault(fault_kind: str, phase: str, fault_id: str) -> dict[str, Any]:
+    if fault_kind not in RISK_FAULT_KINDS:
+        raise StackError(
+            "fault kind is not a typed publisher risk fault"
+        )
+    if phase not in {"fault", "recovery"}:
+        raise StackError("marker phase must be fault or recovery")
+    context = require_active_recovery_run(fault_id)
+    fault_events = [
+        event
+        for event in context["events"]
+        if event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+    ]
+    marker_events = [
+        event
+        for event in context["events"]
+        if event.get("action") in {"fault_marked", "recovery_marked"}
+    ]
+    if any(event.get("fault_kind") != fault_kind for event in marker_events):
+        raise StackError("typed marker fault kind changed within recovery run")
+    if phase == "fault":
+        if fault_events:
+            raise StackError("duplicate fault marker is not allowed")
+        action = "fault_marked"
+        time_field = "fault_time"
+    else:
+        fault_markers = [
+            event for event in marker_events
+            if event.get("action") == "fault_marked"
+        ]
+        recovery_markers = [
+            event for event in marker_events
+            if event.get("action") == "recovery_marked"
+        ]
+        if len(fault_events) != 1 or not fault_markers:
+            raise StackError("recovery marker cannot be written before fault marker")
+        if recovery_markers:
+            raise StackError("duplicate recovery marker is not allowed")
+        action = "recovery_marked"
+        time_field = "recovery_time"
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before marker")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    requested_at = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    confirmed_at = now()
+    event = append_event(
+        action,
+        fault_id=fault_id,
+        fault_kind=fault_kind,
+        requested_at=requested_at,
+        **{time_field: confirmed_at},
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+    )
+    print(json.dumps(event, ensure_ascii=False, indent=2))
+    return event
 
 
 def parse_args() -> argparse.Namespace:
@@ -1437,7 +2115,8 @@ def parse_args() -> argparse.Namespace:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("config")
-    commands.add_parser("fresh-up")
+    fresh_parser = commands.add_parser("fresh-up")
+    fresh_parser.add_argument("--fault-id", required=True)
     commands.add_parser("v1-up")
     commands.add_parser("destroy")
     snapshot_parser = commands.add_parser("snapshot")
@@ -1449,6 +2128,10 @@ def parse_args() -> argparse.Namespace:
     kill_parser = commands.add_parser("kill")
     kill_parser.add_argument("service", choices=sorted(CRASH_SERVICES))
     kill_parser.add_argument("--fault-id", required=True)
+    mark_parser = commands.add_parser("mark")
+    mark_parser.add_argument("fault_kind", choices=sorted(RISK_FAULT_KINDS))
+    mark_parser.add_argument("phase", choices=("fault", "recovery"))
+    mark_parser.add_argument("--fault-id", required=True)
     return parser.parse_args()
 
 
@@ -1457,7 +2140,7 @@ def main() -> int:
     if args.command == "config":
         validate_config()
     elif args.command == "fresh-up":
-        fresh_up()
+        fresh_up(args.fault_id)
     elif args.command == "v1-up":
         v1_up()
     elif args.command == "destroy":
@@ -1468,6 +2151,8 @@ def main() -> int:
         stop_fault_service(args.service, args.fault_id)
     elif args.command == "kill":
         kill_fault_service(args.service, args.fault_id)
+    elif args.command == "mark":
+        mark_fault(args.fault_kind, args.phase, args.fault_id)
     else:
         start_fault_service(args.service, args.fault_id)
     return 0

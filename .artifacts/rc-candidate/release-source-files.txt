@@ -15,6 +15,7 @@
 .artifacts/rc-candidate/recovery-evidence-runbook.md
 .artifacts/rc-candidate/recovery-evidence-hardening-design.md
 .artifacts/rc-candidate/recovery-evidence-hardening-plan.md
+.artifacts/rc-candidate/recovery_evidence.py
 .artifacts/rc-candidate/recovery_stack.py
 .artifacts/rc-candidate/release-evidence-ledger.md
 .artifacts/rc-candidate/release-source-files.txt
@@ -28,6 +29,7 @@
 .artifacts/rc-candidate/test_finalize_v1.py
 .artifacts/rc-candidate/test_l200_database_integrity.py
 .artifacts/rc-candidate/test_l200_evidence.py
+.artifacts/rc-candidate/test_recovery_evidence.py
 .artifacts/rc-candidate/test_recovery_stack.py
 .artifacts/rc-candidate/test_run_rc_gates.py
 .artifacts/rc-candidate/v1-v3-coverage-audit.md

@@ -5,6 +5,7 @@ import importlib.util
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1090,7 +1091,11 @@ def test_smoke_evidence_rejects_forged_report_and_updated_hash(
 def test_recovery_evidence_rejects_tampered_fault_report(tmp_path: Path) -> None:
     path = tmp_path / "recovery.json"
     write_recovery_evidence(path)
-    (tmp_path / "publisher_mfa-report.json").write_text("{}", encoding="utf-8")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    Path(payload["faults"]["publisher_mfa"]["path"]).write_text(
+        "{}",
+        encoding="utf-8",
+    )
 
     with pytest.raises(collector.ManifestError, match="recovery evidence invalid"):
         collector.load_release_evidence(
@@ -1124,6 +1129,57 @@ def test_recovery_evidence_rejects_swapped_semantic_evaluator(
             source_sha=SOURCE_SHA,
             kind="live_recovery",
         )
+
+
+def test_recovery_evidence_binds_swapped_evaluator_to_candidate_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    finalizer = load_module(
+        "collector_source_bound_recovery_finalizer",
+        RECOVERY_EVALUATOR_PATH.with_name("finalize_recovery.py"),
+    )
+    swapped = RECOVERY_EVALUATOR_PATH.with_name(
+        "test_recovery_evidence.py"
+    ).resolve()
+    swapped_identity = {
+        "path": str(swapped),
+        "sha256": collector.sha256_file(swapped),
+    }
+    monkeypatch.setattr(finalizer, "EVALUATOR_PATH", swapped)
+    payload["evaluator"] = swapped_identity
+    for item in payload["faults"].values():
+        report_path = Path(item["path"])
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["evaluator"] = swapped_identity
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        item["sha256"] = collector.sha256_file(report_path)
+        item["evaluator"] = swapped_identity
+
+    class NoopLoader:
+        @staticmethod
+        def exec_module(module) -> None:
+            return None
+
+    monkeypatch.setattr(
+        collector.importlib.util,
+        "spec_from_file_location",
+        lambda *args, **kwargs: SimpleNamespace(loader=NoopLoader()),
+    )
+    monkeypatch.setattr(
+        collector.importlib.util,
+        "module_from_spec",
+        lambda spec: finalizer,
+    )
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="semantic evaluator is not bound by candidate source",
+    ):
+        collector.validate_recovery_evidence(payload, source_sha=SOURCE_SHA)
 
 
 def test_v1_evidence_rejects_tampered_event_log(tmp_path: Path) -> None:

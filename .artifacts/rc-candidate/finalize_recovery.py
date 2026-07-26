@@ -191,6 +191,151 @@ def normalized_time(value: object) -> datetime:
     return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
 
 
+def run_resource_violations(
+    kind: str,
+    *,
+    fault_id: str,
+    events: list[dict[str, Any]],
+    event_path: Path,
+    artifact_paths: dict[str, Path],
+) -> tuple[list[str], dict[str, str]]:
+    violations: list[str] = []
+    expected_run_keys = {
+        "run_id",
+        "evidence_directory",
+        "database_volume_name",
+    }
+    run_identities = [event.get("run_identity") for event in events]
+    run_identity = (
+        run_identities[0] if run_identities and isinstance(run_identities[0], dict)
+        else {}
+    )
+    if (
+        not run_identity
+        or set(run_identity) != expected_run_keys
+        or any(identity != run_identity for identity in run_identities)
+        or not str(run_identity.get("run_id") or "")
+        or not str(run_identity.get("database_volume_name") or "")
+    ):
+        violations.append(f"{kind}.run identity mismatch")
+        return violations, {}
+
+    raw_directory = Path(str(run_identity["evidence_directory"]))
+    canonical_directory = raw_directory.resolve()
+    if (
+        not raw_directory.is_absolute()
+        or str(raw_directory) != str(canonical_directory)
+    ):
+        violations.append(f"{kind}.evidence directory is not canonical")
+    if event_path.resolve().parent != canonical_directory:
+        violations.append(f"{kind}.event log directory mismatch")
+    for stage, path in artifact_paths.items():
+        if path.resolve().parent != canonical_directory:
+            violations.append(f"{kind}.{stage} artifact directory mismatch")
+
+    volume_name = str(run_identity["database_volume_name"])
+
+    def absent(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and set(value) == {"name", "exists"}
+            and value.get("name") == volume_name
+            and value.get("exists") is False
+        )
+
+    def present(value: object) -> bool:
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {"name", "exists", "created_at", "fingerprint"}
+            or value.get("name") != volume_name
+            or value.get("exists") is not True
+            or not isinstance(value.get("created_at"), str)
+            or not value.get("created_at")
+            or not isinstance(value.get("fingerprint"), str)
+            or not value.get("fingerprint")
+        ):
+            return False
+        try:
+            normalized_time(value["created_at"])
+        except ValueError:
+            return False
+        expected_fingerprint = evaluator.stable_hash(
+            {
+                "created_at": value["created_at"],
+                "name": value["name"],
+            }
+        )
+        return value["fingerprint"] == expected_fingerprint
+
+    fresh_starts = [
+        event for event in events if event.get("action") == "fresh_up_started"
+    ]
+    fresh_completions = [
+        event for event in events if event.get("action") == "fresh_up_completed"
+    ]
+    destroyed_events = [
+        event for event in events if event.get("action") == "destroyed"
+    ]
+    service_contract = SERVICE_FAULTS.get(kind)
+    fault_action = (
+        service_contract["fault_action"]
+        if service_contract is not None
+        else "fault_marked"
+    )
+    recovery_action = (
+        "fault_service_recovered"
+        if service_contract is not None
+        else "recovery_marked"
+    )
+    fault_events = [
+        event
+        for event in events
+        if event.get("fault_id") == fault_id
+        and event.get("action") == fault_action
+    ]
+    recovery_events = [
+        event
+        for event in events
+        if event.get("fault_id") == fault_id
+        and event.get("action") == recovery_action
+    ]
+    lifecycle_groups = (
+        fresh_starts,
+        fresh_completions,
+        fault_events,
+        recovery_events,
+        destroyed_events,
+    )
+    volume_valid = all(len(group) == 1 for group in lifecycle_groups)
+    present_volume: dict[str, Any] = {}
+    if volume_valid:
+        present_volume = fresh_completions[0].get("database_volume") or {}
+        volume_valid = (
+            absent(fresh_starts[0].get("database_volume"))
+            and present(present_volume)
+            and all(
+                event.get("database_volume") == present_volume
+                for event in events
+                if event is not fresh_starts[0]
+                and event is not destroyed_events[0]
+            )
+            and destroyed_events[0].get("database_volume_before")
+            == present_volume
+            and absent(destroyed_events[0].get("database_volume"))
+        )
+    if not volume_valid:
+        violations.append(f"{kind}.database volume lifecycle mismatch")
+        return violations, {}
+
+    return violations, {
+        "run_id": str(run_identity["run_id"]),
+        "evidence_directory": str(canonical_directory),
+        "volume_name": volume_name,
+        "volume_fingerprint": str(present_volume["fingerprint"]),
+    }
+
+
 def fault_report_violations(
     report: dict[str, Any],
     *,
@@ -214,12 +359,6 @@ def fault_report_violations(
         violations.append(
             f"{kind}.replay_result={report.get('replay_result')}, expected=pass"
         )
-    for field in ("expected", "actual"):
-        value = report.get(field)
-        if not isinstance(value, list) or not value or any(
-            not str(item).strip() for item in value
-        ):
-            violations.append(f"{kind}.{field} must be a nonempty text list")
     try:
         fault_time = normalized_time(report.get("fault_time"))
         recovery_time = normalized_time(report.get("recovery_time"))
@@ -252,6 +391,7 @@ def fault_report_violations(
         artifacts = []
     stages: set[str] = set()
     snapshots: dict[str, dict[str, Any]] = {}
+    artifact_paths: dict[str, Path] = {}
     for index, item in enumerate(artifacts):
         if not isinstance(item, dict):
             violations.append(f"{kind}.artifacts[{index}] is not an object")
@@ -261,6 +401,8 @@ def fault_report_violations(
             violations.append(f"{kind}.artifact stage is missing or duplicated: {stage}")
         stages.add(stage)
         path = Path(str(item.get("path") or ""))
+        if stage:
+            artifact_paths[stage] = path
         expected_hash = str(item.get("sha256") or "")
         if not path.is_file() or not expected_hash:
             violations.append(f"{kind}.{stage or index} artifact identity is incomplete")
@@ -335,6 +477,14 @@ def fault_report_violations(
             violations.append(f"{kind}.independent event log summary mismatch")
         if any(event.get("schema_version") != 2 for event in events):
             violations.append(f"{kind}.event schema version mismatch")
+        run_violations, _ = run_resource_violations(
+            kind,
+            fault_id=str(report.get("fault_id") or ""),
+            events=events,
+            event_path=event_path,
+            artifact_paths=artifact_paths,
+        )
+        violations.extend(run_violations)
         event_fault_ids = {
             str(event.get("fault_id") or "")
             for event in events
@@ -685,6 +835,7 @@ def recovery_manifest_violations(
         violations.append("recovery fault identities mismatch")
         refs = refs if isinstance(refs, dict) else {}
     reports: dict[str, dict[str, Any]] = {}
+    report_paths: dict[str, Path] = {}
     for kind in FAULT_CONTRACTS:
         item = refs.get(kind)
         if not isinstance(item, dict):
@@ -718,11 +869,18 @@ def recovery_manifest_violations(
             )
         )
         reports[kind] = report
+        report_paths[kind] = path
 
     fault_id_owners: dict[str, list[str]] = {}
     event_path_owners: dict[str, set[str]] = {}
     event_hash_owners: dict[str, set[str]] = {}
+    event_dir_owners: dict[str, set[str]] = {}
     evidence_dir_owners: dict[str, set[str]] = {}
+    artifact_dir_owners: dict[str, set[str]] = {}
+    report_dir_owners: dict[str, set[str]] = {}
+    run_id_owners: dict[str, set[str]] = {}
+    volume_name_owners: dict[str, set[str]] = {}
+    volume_fingerprint_owners: dict[str, set[str]] = {}
     for kind, report in reports.items():
         fault_id = str(report.get("fault_id") or "")
         if fault_id:
@@ -736,11 +894,54 @@ def recovery_manifest_violations(
             resolved_event_path = Path(raw_event_path).resolve()
             event_path = str(resolved_event_path)
             event_path_owners.setdefault(event_path, set()).add(kind)
-            evidence_dir_owners.setdefault(
+            event_dir_owners.setdefault(
                 str(resolved_event_path.parent), set()
             ).add(kind)
         if event_sha256:
             event_hash_owners.setdefault(event_sha256, set()).add(kind)
+        artifact_paths = {
+            str(item.get("stage") or ""): Path(str(item.get("path") or ""))
+            for item in report.get("artifacts") or []
+            if isinstance(item, dict) and str(item.get("stage") or "")
+        }
+        for artifact_path in artifact_paths.values():
+            artifact_dir_owners.setdefault(
+                str(artifact_path.resolve().parent), set()
+            ).add(kind)
+        report_path = report_paths.get(kind)
+        if report_path is not None:
+            report_dir_owners.setdefault(
+                str(report_path.resolve().parent), set()
+            ).add(kind)
+        if not raw_event_path or not Path(raw_event_path).is_file():
+            continue
+        try:
+            events = load_verified_events(Path(raw_event_path))
+        except RecoveryEvidenceError:
+            continue
+        _, resources = run_resource_violations(
+            kind,
+            fault_id=fault_id,
+            events=events,
+            event_path=Path(raw_event_path),
+            artifact_paths=artifact_paths,
+        )
+        if not resources:
+            continue
+        evidence_directory = resources["evidence_directory"]
+        evidence_dir_owners.setdefault(evidence_directory, set()).add(kind)
+        if (
+            report_path is not None
+            and str(report_path.resolve().parent) != evidence_directory
+        ):
+            violations.append(f"{kind}.report directory mismatch")
+        run_id_owners.setdefault(resources["run_id"], set()).add(kind)
+        volume_name_owners.setdefault(
+            resources["volume_name"], set()
+        ).add(kind)
+        volume_fingerprint_owners.setdefault(
+            resources["volume_fingerprint"], set()
+        ).add(kind)
     for fault_id, owners in sorted(fault_id_owners.items()):
         if len(owners) > 1:
             violations.append(
@@ -756,14 +957,25 @@ def recovery_manifest_violations(
         violations.append(
             "recovery service event log is reused: " + ", ".join(owners)
         )
-    for owners in sorted(
-        tuple(sorted(owners))
-        for owners in evidence_dir_owners.values()
-        if len(owners) > 1
-    ):
-        violations.append(
-            "recovery evidence directory is reused: " + ", ".join(owners)
-        )
+    ownership_checks = (
+        ("evidence directory", evidence_dir_owners),
+        ("event directory", event_dir_owners),
+        ("artifact directory", artifact_dir_owners),
+        ("report directory", report_dir_owners),
+        ("run_id", run_id_owners),
+        ("database volume name", volume_name_owners),
+        ("database volume fingerprint", volume_fingerprint_owners),
+    )
+    for label, ownership in ownership_checks:
+        reused = {
+            tuple(sorted(owners))
+            for owners in ownership.values()
+            if len(owners) > 1
+        }
+        for owners in sorted(reused):
+            violations.append(
+                f"recovery {label} is reused: " + ", ".join(owners)
+            )
 
     if require_final_report:
         final_report_artifact = manifest.get("final_report") or {}

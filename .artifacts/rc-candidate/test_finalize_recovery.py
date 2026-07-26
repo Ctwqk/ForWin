@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -67,6 +68,10 @@ CANDIDATE_RELEASE_PATHS = frozenset(
 )
 
 
+def volume_fingerprint(name: str, created_at: str) -> str:
+    return evidence.stable_hash({"created_at": created_at, "name": name})
+
+
 def fault_report(
     tmp_path: Path,
     kind: str,
@@ -77,8 +82,22 @@ def fault_report(
     snapshot_fixtures.SOURCE_SHA = SOURCE_SHA
     snapshots = snapshot_fixtures.valid_snapshots(kind)
     fault_id = snapshots["before"]["fault_id"]
-    fault_dir = tmp_path / fault_id
+    fault_dir = (tmp_path / fault_id).resolve()
     fault_dir.mkdir(parents=True, exist_ok=True)
+    volume_name = f"forwin-v5-recovery-{fault_id}-postgres-data"
+    volume_created_at = "2026-07-22T11:58:30+00:00"
+    volume_present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": volume_created_at,
+        "fingerprint": volume_fingerprint(volume_name, volume_created_at),
+    }
+    volume_absent = {"name": volume_name, "exists": False}
+    run_identity = {
+        "run_id": f"run-{fault_id}",
+        "evidence_directory": str(fault_dir),
+        "database_volume_name": volume_name,
+    }
     artifacts = []
     for stage in ("before", "during", "after"):
         path = fault_dir / f"{stage}.json"
@@ -191,8 +210,14 @@ def fault_report(
                 "action": action,
                 "fault_id": report["fault_id"],
                 "identity": identity,
+                "run_identity": copy.deepcopy(run_identity),
                 "previous_event_sha256": previous,
             }
+            event["database_volume"] = copy.deepcopy(
+                volume_absent
+                if action in {"fresh_up_started", "destroyed"}
+                else volume_present
+            )
             if time_field:
                 event.update(
                     fault_kind=kind,
@@ -202,6 +227,7 @@ def fault_report(
                     event["service"] = contract["service"]
             if action == "destroyed":
                 event["after"] = {"services": copy.deepcopy(DESTROY_SERVICES)}
+                event["database_volume_before"] = copy.deepcopy(volume_present)
             event["event_sha256"] = recovery.event_hash(event)
             previous = event["event_sha256"]
             events.append(event)
@@ -255,6 +281,32 @@ def test_report_assertion_types_must_match_derived_values(tmp_path: Path) -> Non
         "publisher_backend_unavailable.report assertions do not match derived assertions"
         in violations
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("expected", None),
+        ("expected", []),
+        ("actual", "arbitrary display prose"),
+        ("actual", {"anything": "goes"}),
+    ),
+)
+def test_explanatory_prose_never_changes_pass(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    if value is None:
+        report.pop(field)
+    else:
+        report[field] = value
+
+    assert recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    ) == []
 
 
 @pytest.mark.parametrize("kind", tuple(recovery.FAULT_CONTRACTS))
@@ -388,7 +440,7 @@ def recovery_manifest(
     }
     fault_refs = {}
     for kind, report in reports.items():
-        path = tmp_path / f"{kind}-report.json"
+        path = Path(report["event_log"]["path"]).resolve().parent / "report.json"
         path.write_text(json.dumps(report), encoding="utf-8")
         fault_refs[kind] = {
             "path": str(path),
@@ -512,6 +564,187 @@ def test_recovery_manifest_rejects_reused_fault_id(tmp_path: Path) -> None:
     assert (
         f"recovery fault_id is reused: {reused_id} "
         "(publisher_captcha, publisher_mfa)"
+    ) in violations
+
+
+def test_fault_rejects_missing_database_volume_evidence(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    for event in events:
+        event.pop("database_volume", None)
+        event.pop("database_volume_before", None)
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.database volume lifecycle mismatch" in violations
+
+
+def test_fault_rejects_forged_volume_creation_identity(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    volume_name = events[1]["database_volume"]["name"]
+    forged = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "not-a-docker-created-at",
+        "fingerprint": volume_fingerprint(
+            volume_name,
+            "not-a-docker-created-at",
+        ),
+    }
+    for event in events:
+        if event["action"] not in {"fresh_up_started", "destroyed"}:
+            event["database_volume"] = copy.deepcopy(forged)
+        if event["action"] == "destroyed":
+            event["database_volume_before"] = copy.deepcopy(forged)
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.database volume lifecycle mismatch" in violations
+
+
+def test_recovery_manifest_rejects_reused_database_volume(
+    tmp_path: Path,
+) -> None:
+    manifest = recovery_manifest(tmp_path)
+    source_kind = "publisher_captcha"
+    target_kind = "publisher_mfa"
+    source_report = json.loads(
+        Path(manifest["faults"][source_kind]["path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    source_events = recovery.load_verified_events(
+        Path(source_report["event_log"]["path"])
+    )
+    source_run = source_events[0]["run_identity"]
+    source_present = source_events[1]["database_volume"]
+    source_absent = source_events[0]["database_volume"]
+
+    def reuse_volume(report: dict) -> None:
+        events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+        for event in events:
+            event["run_identity"]["run_id"] = source_run["run_id"]
+            event["run_identity"]["evidence_directory"] = source_run[
+                "evidence_directory"
+            ]
+            event["run_identity"]["database_volume_name"] = source_run[
+                "database_volume_name"
+            ]
+            event["database_volume"] = copy.deepcopy(
+                source_absent
+                if event["action"] in {"fresh_up_started", "destroyed"}
+                else source_present
+            )
+            if event["action"] == "destroyed":
+                event["database_volume_before"] = copy.deepcopy(source_present)
+        reseal_event_log(report, events)
+
+    rewrite_fault_report(manifest, target_kind, reuse_volume)
+
+    violations = recovery.recovery_manifest_violations(
+        manifest,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "recovery database volume name is reused: "
+        "publisher_captcha, publisher_mfa"
+    ) in violations
+    assert (
+        "recovery database volume fingerprint is reused: "
+        "publisher_captcha, publisher_mfa"
+    ) in violations
+    assert (
+        "recovery evidence directory is reused: "
+        "publisher_captcha, publisher_mfa"
+    ) in violations
+    assert (
+        "recovery run_id is reused: publisher_captcha, publisher_mfa"
+        in violations
+    )
+
+
+def test_fault_rejects_noncanonical_run_directory(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    fault_dir = Path(report["event_log"]["path"]).parent
+    noncanonical = fault_dir / ".." / fault_dir.name
+    for event in events:
+        event["run_identity"]["evidence_directory"] = str(noncanonical)
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.evidence directory is not canonical" in violations
+
+
+def test_recovery_manifest_rejects_shared_snapshot_directory(
+    tmp_path: Path,
+) -> None:
+    manifest = recovery_manifest(tmp_path)
+    shared_dir = (tmp_path / "shared-snapshots").resolve()
+    shared_dir.mkdir()
+    kinds = ("qdrant_unavailable", "projection_consumer_unavailable")
+
+    for kind in kinds:
+        def move_snapshots(report: dict, *, fault_kind: str = kind) -> None:
+            for artifact in report["artifacts"]:
+                source = Path(artifact["path"])
+                target = shared_dir / f"{fault_kind}-{artifact['stage']}.json"
+                shutil.copyfile(source, target)
+                artifact["path"] = str(target)
+                artifact["sha256"] = recovery.sha256_file(target)
+
+        rewrite_fault_report(manifest, kind, move_snapshots)
+
+    violations = recovery.recovery_manifest_violations(
+        manifest,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.before artifact directory mismatch" in violations
+    assert (
+        "recovery artifact directory is reused: "
+        "projection_consumer_unavailable, qdrant_unavailable"
+    ) in violations
+
+
+def test_recovery_manifest_rejects_report_directory_escape(
+    tmp_path: Path,
+) -> None:
+    manifest = recovery_manifest(tmp_path)
+    escaped_dir = (tmp_path / "escaped-reports").resolve()
+    escaped_dir.mkdir()
+    kinds = ("qdrant_unavailable", "projection_consumer_unavailable")
+    for kind in kinds:
+        item = manifest["faults"][kind]
+        source = Path(item["path"])
+        escaped = escaped_dir / f"{kind}.json"
+        shutil.copyfile(source, escaped)
+        item["path"] = str(escaped)
+        item["sha256"] = recovery.sha256_file(escaped)
+
+    violations = recovery.recovery_manifest_violations(
+        manifest,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.report directory mismatch" in violations
+    assert (
+        "recovery report directory is reused: "
+        "projection_consumer_unavailable, qdrant_unavailable"
     ) in violations
 
 
@@ -656,6 +889,24 @@ def test_fault_requires_terminal_destroy(tmp_path: Path) -> None:
     report = fault_report(tmp_path, "publisher_captcha")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
     reseal_event_log(report, events[:-1])
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "publisher_captcha.terminal destroy lifecycle mismatch" in violations
+
+
+def test_fault_rejects_events_after_destroy(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "publisher_captcha")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    after_destroy = copy.deepcopy(events[-1])
+    after_destroy["action"] = "post_destroy_marker"
+    after_destroy.pop("database_volume_before")
+    after_destroy.pop("after")
+    events.append(after_destroy)
+    reseal_event_log(report, events)
 
     violations = recovery.fault_report_violations(
         report,

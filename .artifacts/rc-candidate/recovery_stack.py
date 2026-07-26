@@ -13,6 +13,8 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -110,7 +112,9 @@ FAULT_SERVICES = {
 }
 
 CRASH_SERVICES = {"generation-worker", "publisher-worker"}
-TERMINAL_ACTIONS = frozenset({"destroyed", "setup_blocked"})
+TERMINAL_ACTIONS = frozenset(
+    {"destroyed", "setup_blocked", "interrupted_cleanup"}
+)
 CLEANUP_TIMEOUT_SECONDS = 60
 RISK_FAULT_KINDS = frozenset(
     {
@@ -123,6 +127,8 @@ _FAULT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _HOLD_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _ABORT_STAGE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
+PUBLISHER_COVER_ROOT = "/app/data/publisher_covers"
+RECOVERY_SENTINEL_TABLE = "forwin_recovery_run_sentinel"
 
 ISOLATED_DATABASE_URL = (
     "postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
@@ -580,7 +586,12 @@ def has_incomplete_fresh_up(events: list[dict[str, Any]]) -> bool:
         any(event.get("action") == "fresh_up_started" for event in events)
         and not any(
             event.get("action")
-            in {"fresh_up_completed", "setup_blocked", "destroyed"}
+            in {
+                "fresh_up_completed",
+                "setup_blocked",
+                "interrupted_cleanup",
+                "destroyed",
+            }
             for event in events
         )
     )
@@ -608,7 +619,11 @@ def setup_hold_state(
     active_by_service: dict[str, str] = {}
     for event in events:
         action = event.get("action")
-        if action not in {"setup_service_held", "setup_service_released"}:
+        if action not in {
+            "setup_service_held",
+            "setup_service_released",
+            "setup_service_discarded",
+        }:
             continue
         hold_id = validated_hold_id(str(event.get("hold_id") or ""))
         service = str(event.get("service") or "")
@@ -635,7 +650,7 @@ def setup_hold_state(
         held = active_by_id.get(hold_id)
         if held is None:
             raise StackError(
-                f"release has no matching setup hold: {hold_id}"
+                f"{action} has no matching setup hold: {hold_id}"
             )
         if held["service"] != service:
             raise StackError(
@@ -1568,6 +1583,382 @@ def inspect_service(
     }
 
 
+def published_endpoint_identity(
+    service: str,
+    container_port: int,
+    *,
+    run_identity: dict[str, Any],
+) -> dict[str, Any]:
+    if service not in {"forwin", "forwin-mcp", "postgres"}:
+        raise StackError("endpoint service is not allowed")
+    if type(container_port) is not int or container_port <= 0:
+        raise StackError("endpoint container port is invalid")
+    container_id = compose_container_id(service, run_identity=run_identity)
+    if not container_id:
+        raise StackError(f"endpoint service does not exist: {service}")
+    try:
+        payload = json.loads(
+            command("docker", "container", "inspect", container_id)
+        )
+    except json.JSONDecodeError as exc:
+        raise StackError(
+            f"docker returned invalid endpoint identity for {service}"
+        ) from exc
+    if len(payload) != 1:
+        raise StackError(f"expected one endpoint container for {service}")
+    item = payload[0]
+    labels = (item.get("Config") or {}).get("Labels") or {}
+    expected_project = recovery_project_name(run_identity)
+    if (
+        labels.get("com.docker.compose.project") != expected_project
+        or labels.get("com.docker.compose.service") != service
+    ):
+        raise StackError(f"endpoint container identity drifted for {service}")
+    state = item.get("State") or {}
+    if state.get("Running") is not True:
+        raise StackError(f"endpoint service is not running: {service}")
+    ports = (item.get("NetworkSettings") or {}).get("Ports") or {}
+    published = {
+        key: value
+        for key, value in ports.items()
+        if isinstance(value, list) and value
+    }
+    expected_key = f"{container_port}/tcp"
+    if set(published) != {expected_key} or len(published[expected_key]) != 1:
+        raise StackError(
+            f"endpoint published mapping is not exact for {service}"
+        )
+    mapping = published[expected_key][0]
+    host = str(mapping.get("HostIp") or "")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise StackError(
+            f"endpoint published host is invalid for {service}"
+        ) from exc
+    if not address.is_loopback:
+        raise StackError(
+            f"endpoint published host is not loopback for {service}"
+        )
+    try:
+        host_port = int(mapping.get("HostPort") or 0)
+    except (TypeError, ValueError) as exc:
+        raise StackError(
+            f"endpoint published port is invalid for {service}"
+        ) from exc
+    if not 1 <= host_port <= 65535:
+        raise StackError(
+            f"endpoint published port is invalid for {service}"
+        )
+    return {
+        "service": service,
+        "host": address.compressed,
+        "host_port": host_port,
+        "container_port": container_port,
+        "container_id": str(item.get("Id") or ""),
+        "image_id": str(item.get("Image") or ""),
+    }
+
+
+def _sentinel_script(*, create: bool) -> str:
+    operation = """
+existing = cursor.execute(
+    "SELECT to_regclass('public.forwin_recovery_run_sentinel') AS name"
+).fetchone()["name"]
+if existing is not None:
+    raise SystemExit("recovery sentinel table already exists")
+cursor.execute(
+    "CREATE TABLE forwin_recovery_run_sentinel ("
+    "singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),"
+    "sentinel_id text NOT NULL UNIQUE,"
+    "run_id text NOT NULL UNIQUE,"
+    "fault_id text NOT NULL,"
+    "source_sha text NOT NULL,"
+    "created_at timestamptz NOT NULL DEFAULT now())"
+)
+cursor.execute(
+    "INSERT INTO forwin_recovery_run_sentinel "
+    "(sentinel_id, run_id, fault_id, source_sha) VALUES (%s, %s, %s, %s)",
+    tuple(sys.argv[1:5]),
+)
+""" if create else """
+row = cursor.execute(
+    "SELECT sentinel_id, run_id, fault_id, source_sha "
+    "FROM forwin_recovery_run_sentinel WHERE singleton = true"
+).fetchone()
+if row is None:
+    raise SystemExit("recovery sentinel row is missing")
+print(json.dumps({"table": "forwin_recovery_run_sentinel", **dict(row)}, sort_keys=True))
+"""
+    return f"""
+import json
+import sys
+import psycopg
+from psycopg.rows import dict_row
+with psycopg.connect(
+    "postgresql://forwin:forwin@postgres:5432/forwin",
+    row_factory=dict_row,
+) as connection:
+    with connection.cursor() as cursor:
+{chr(10).join('        ' + line for line in operation.strip().splitlines())}
+""".strip()
+
+
+def initialize_recovery_sentinel(
+    *,
+    fault_id: str,
+    run_identity: dict[str, Any],
+    identity: dict[str, Any],
+) -> dict[str, str]:
+    sentinel = {
+        "table": RECOVERY_SENTINEL_TABLE,
+        "sentinel_id": secrets.token_hex(32),
+        "run_id": str(run_identity["run_id"]),
+        "fault_id": validated_fault_id(fault_id),
+        "source_sha": str(identity.get("source_sha") or ""),
+    }
+    if not re.fullmatch(r"[0-9a-f]{40}", sentinel["source_sha"]):
+        raise StackError("recovery sentinel source identity is invalid")
+    compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "forwin",
+        "python",
+        "-c",
+        _sentinel_script(create=True),
+        sentinel["sentinel_id"],
+        sentinel["run_id"],
+        sentinel["fault_id"],
+        sentinel["source_sha"],
+        run_identity=run_identity,
+    )
+    return sentinel
+
+
+def read_recovery_sentinel(
+    *,
+    run_identity: dict[str, Any],
+) -> dict[str, str]:
+    output = compose(
+        "exec",
+        "-T",
+        "forwin",
+        "python",
+        "-c",
+        _sentinel_script(create=False),
+        run_identity=run_identity,
+    )
+    try:
+        value = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise StackError("recovery sentinel query returned invalid JSON") from exc
+    expected_keys = {
+        "table",
+        "sentinel_id",
+        "run_id",
+        "fault_id",
+        "source_sha",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise StackError("recovery sentinel query returned an invalid record")
+    return {key: str(value[key]) for key in expected_keys}
+
+
+def _loopback_http_endpoint(
+    value: str,
+    *,
+    label: str,
+    path: str,
+) -> tuple[str, str, int]:
+    parsed = urlsplit(str(value or ""))
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = int(parsed.port or 0)
+    except (ValueError, TypeError) as exc:
+        raise StackError(f"{label} endpoint is invalid") from exc
+    if (
+        parsed.scheme != "http"
+        or not address.is_loopback
+        or not 1 <= port <= 65535
+        or parsed.path != path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise StackError(
+            f"{label} endpoint must be exact, credential-free, and loopback"
+        )
+    return parsed.scheme, address.compressed, port
+
+
+def probe_loopback_health(url: str) -> int:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with opener.open(request, timeout=10) as response:
+            status = int(response.status)
+    except (OSError, urllib.error.HTTPError) as exc:
+        raise StackError(f"endpoint health probe failed: {url}") from exc
+    if not 200 <= status < 300:
+        raise StackError(f"endpoint health probe was not successful: {url}")
+    return status
+
+
+@mutating_controller_command
+def bind_recovery_endpoints(
+    fault_id: str,
+    api_url: str,
+    mcp_url: str,
+    database_host: str,
+    database_port: int,
+    database_name: str,
+) -> dict[str, Any]:
+    context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("action") == "endpoints_bound"
+        for event in context["events"]
+    ):
+        raise StackError("recovery endpoints were already bound")
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before endpoint binding")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    api_scheme, api_host, api_port = _loopback_http_endpoint(
+        api_url,
+        label="API",
+        path="",
+    )
+    mcp_scheme, mcp_host, mcp_port = _loopback_http_endpoint(
+        mcp_url,
+        label="MCP",
+        path="/mcp",
+    )
+    try:
+        database_address = ipaddress.ip_address(database_host)
+    except ValueError as exc:
+        raise StackError("database endpoint host is invalid") from exc
+    if (
+        not database_address.is_loopback
+        or not 1 <= int(database_port) <= 65535
+        or database_name != "forwin"
+    ):
+        raise StackError("database endpoint is not the exact isolated database")
+    mappings = {
+        "api": published_endpoint_identity(
+            "forwin", 8899, run_identity=run_identity
+        ),
+        "mcp": published_endpoint_identity(
+            "forwin-mcp", 8896, run_identity=run_identity
+        ),
+        "database": published_endpoint_identity(
+            "postgres", 5432, run_identity=run_identity
+        ),
+    }
+    requested = {
+        "api": (api_host, api_port),
+        "mcp": (mcp_host, mcp_port),
+        "database": (database_address.compressed, int(database_port)),
+    }
+    for name, (host, port) in requested.items():
+        mapping = mappings[name]
+        if (mapping["host"], mapping["host_port"]) != (host, port):
+            raise StackError(f"{name} endpoint does not map to the active run")
+    fresh_completions = [
+        event
+        for event in context["events"]
+        if event.get("action") == "fresh_up_completed"
+    ]
+    sentinel = read_recovery_sentinel(run_identity=run_identity)
+    if (
+        len(fresh_completions) != 1
+        or fresh_completions[0].get("sentinel") != sentinel
+    ):
+        raise StackError("active-run database sentinel identity drifted")
+    candidate_identity = {
+        key: identity.get(key)
+        for key in (
+            "source_sha",
+            "source_tree",
+            "runtime_image",
+            "browser_image",
+            "dependency_images",
+            "candidate_manifest",
+        )
+    }
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "fault_id": fault_id,
+        "run_id": str(run_identity["run_id"]),
+        "source_sha": str(identity.get("source_sha") or ""),
+        "source_tree": str(identity.get("source_tree") or ""),
+        "project_name": recovery_project_name(run_identity),
+        "candidate_manifest_sha256": str(
+            (identity.get("candidate_manifest") or {}).get("sha256") or ""
+        ),
+        "candidate_identity_sha256": stable_hash(candidate_identity),
+        "sentinel": sentinel,
+        "api": {
+            "scheme": api_scheme,
+            "host": api_host,
+            "port": api_port,
+            "endpoint_path": "",
+            "health_path": "/health",
+            "health_status": probe_loopback_health(
+                f"{api_scheme}://{api_host}:{api_port}/health"
+            ),
+            **{
+                key: value
+                for key, value in mappings["api"].items()
+                if key not in {"host", "host_port"}
+            },
+        },
+        "mcp": {
+            "scheme": mcp_scheme,
+            "host": mcp_host,
+            "port": mcp_port,
+            "endpoint_path": "/mcp",
+            "health_path": "/health",
+            "health_status": probe_loopback_health(
+                f"{mcp_scheme}://{mcp_host}:{mcp_port}/health"
+            ),
+            **{
+                key: value
+                for key, value in mappings["mcp"].items()
+                if key not in {"host", "host_port"}
+            },
+        },
+        "database": {
+            "scheme": "postgresql",
+            "host": database_address.compressed,
+            "port": int(database_port),
+            "database": database_name,
+            **{
+                key: value
+                for key, value in mappings["database"].items()
+                if key not in {"host", "host_port"}
+            },
+        },
+    }
+    record["identity_sha256"] = stable_hash(record)
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    append_event(
+        "endpoints_bound",
+        fault_id=fault_id,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        endpoint_identity=record,
+    )
+    print(json.dumps(record, ensure_ascii=False, indent=2))
+    return record
+
+
 def functional_probe(
     service: str,
     *,
@@ -1714,7 +2105,12 @@ def append_event(
         )
     if (
         has_incomplete_fresh_up(existing)
-        and action not in {"fresh_up_completed", "setup_blocked"}
+        and action
+        not in {
+            "fresh_up_completed",
+            "setup_blocked",
+            "interrupted_cleanup",
+        }
     ):
         raise StackError("recovery event log has an incomplete fresh-up")
     if has_incomplete_abort(existing) and action != "setup_blocked":
@@ -2307,6 +2703,12 @@ def fresh_up(fault_id: str) -> None:
             "head",
             run_identity=run_identity,
         )
+        failure_stage = "database_sentinel"
+        sentinel = initialize_recovery_sentinel(
+            fault_id=validated_fault,
+            run_identity=run_identity,
+            identity=identity,
+        )
         failure_stage = "application_up"
         compose(
             "up",
@@ -2337,9 +2739,38 @@ def fresh_up(fault_id: str) -> None:
             identity=identity,
             run_identity=run_identity,
             database_volume=database_volume,
+            sentinel=sentinel,
             after=after,
         )
     except BaseException as failure:
+        if not isinstance(failure, Exception):
+            try:
+                cleanup = cleanup_recovery_run(
+                    run_identity,
+                    fallback_timestamp=requested_at,
+                )
+                append_event(
+                    "interrupted_cleanup",
+                    _recorded_at=str(cleanup["after"]["observed_at"]),
+                    fault_id=validated_fault,
+                    requested_at=requested_at,
+                    identity=identity,
+                    run_identity=run_identity,
+                    interrupted_stage=failure_stage,
+                    database_volume_before=database_volume,
+                    database_volume=cleanup["database_volume"],
+                    cleanup_requested_at=cleanup["cleanup_requested_at"],
+                    cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
+                    cleanup_confirmed=cleanup_is_confirmed(
+                        cleanup,
+                        run_identity,
+                    ),
+                    cleanup_error=cleanup["cleanup_error"],
+                    after=cleanup["after"],
+                )
+            except BaseException:
+                pass
+            raise
         try:
             (
                 _blocked,
@@ -2702,6 +3133,16 @@ def setup_hold_service(
         raise StackError(f"service is not an allowed setup hold: {service}")
     validated_hold = validated_hold_id(hold_id)
     context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("service") == service
+        and event.get("action")
+        in {
+            "fault_service_stopped",
+            "fault_service_killed",
+        }
+        for event in context["events"]
+    ):
+        raise StackError(f"setup hold targets primary fault service: {service}")
     hold_state = setup_hold_state(context["events"])
     if validated_hold in hold_state["used_hold_ids"]:
         raise StackError(
@@ -2764,6 +3205,18 @@ def setup_release_service(
         raise StackError(f"service is not an allowed setup release: {service}")
     validated_hold = validated_hold_id(hold_id)
     context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("service") == service
+        and event.get("action")
+        in {
+            "fault_service_stopped",
+            "fault_service_killed",
+        }
+        for event in context["events"]
+    ):
+        raise StackError(
+            f"setup release targets primary fault service: {service}"
+        )
     hold_state = setup_hold_state(context["events"])
     held = hold_state["active_by_id"].get(validated_hold)
     if held is None:
@@ -2801,6 +3254,84 @@ def setup_release_service(
         service=service,
         requested_at=requested_at,
         release_time=release_time,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        before=before,
+        after=after,
+    )
+    print(json.dumps(event, ensure_ascii=False, indent=2))
+    return event
+
+
+@mutating_controller_command
+def setup_discard_service(
+    service: str,
+    fault_id: str,
+    hold_id: str,
+) -> dict[str, Any]:
+    if service not in FAULT_SERVICES:
+        raise StackError(f"service is not an allowed setup discard: {service}")
+    validated_hold = validated_hold_id(hold_id)
+    context = require_active_recovery_run(fault_id)
+    if any(
+        event.get("service") == service
+        and event.get("action")
+        in {
+            "fault_service_stopped",
+            "fault_service_killed",
+        }
+        for event in context["events"]
+    ):
+        raise StackError(
+            f"setup discard targets primary fault service: {service}"
+        )
+    hold_state = setup_hold_state(context["events"])
+    held = hold_state["active_by_id"].get(validated_hold)
+    if held is None:
+        raise StackError(
+            f"discard has no matching setup hold: {validated_hold}"
+        )
+    if held["service"] != service:
+        raise StackError(
+            "setup hold discard service mismatch: "
+            f"expected {held['service']}, got {service}"
+        )
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before setup discard")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
+    if (
+        not before.get("exists")
+        or before.get("running")
+    ):
+        raise StackError(
+            f"service {service} is running before setup discard"
+        )
+    requested_at = now()
+    after = inspect_service(service, run_identity=run_identity)
+    if (
+        not after.get("exists")
+        or after.get("running")
+        or after.get("container_id") != before.get("container_id")
+    ):
+        raise StackError(
+            f"service {service} changed while discarding setup hold"
+        )
+    discard_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    event = append_event(
+        "setup_service_discarded",
+        fault_id=fault_id,
+        hold_id=validated_hold,
+        service=service,
+        requested_at=requested_at,
+        discard_time=discard_time,
         identity=identity,
         run_identity=run_identity,
         database_volume=database_volume,
@@ -2966,6 +3497,51 @@ def abort_recovery_run(
 
 
 @mutating_controller_command
+def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
+    context = require_active_recovery_run(fault_id)
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError(
+            "recovery harness identity changed before interrupt cleanup"
+        )
+    assert_isolated_compose(identity, run_identity=run_identity)
+    database_volume_before = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    requested_at = now()
+    active_state = active_recovery_state(context["events"])
+    cleanup = cleanup_recovery_run(
+        run_identity,
+        fallback_timestamp=requested_at,
+    )
+    confirmed = cleanup_is_confirmed(cleanup, run_identity)
+    event = append_event(
+        "interrupted_cleanup",
+        _recorded_at=str(cleanup["after"]["observed_at"]),
+        fault_id=fault_id,
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume_before=database_volume_before,
+        database_volume=cleanup["database_volume"],
+        active_state=active_state,
+        cleanup_requested_at=cleanup["cleanup_requested_at"],
+        cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
+        cleanup_confirmed=confirmed,
+        cleanup_error=cleanup["cleanup_error"],
+        after=cleanup["after"],
+    )
+    print(json.dumps(event, ensure_ascii=False, indent=2))
+    if not confirmed:
+        raise StackError(
+            "interrupt cleanup did not confirm terminal resource removal"
+        )
+    return event
+
+
+@mutating_controller_command
 def snapshot(label: str) -> None:
     existing = load_verified_events()
     fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
@@ -2992,44 +3568,78 @@ def snapshot(label: str) -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+def file_inventory_script() -> str:
+    return """
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected = Path(sys.argv[2])
+if str(root) != str(expected) or not root.is_absolute():
+    raise SystemExit("inventory root does not match the exact expected root")
+try:
+    resolved = root.resolve(strict=True)
+except FileNotFoundError as exc:
+    raise SystemExit("inventory root is missing") from exc
+if resolved != root or not root.is_dir() or root.is_symlink():
+    raise SystemExit("inventory root is not a canonical real directory")
+current = Path(root.anchor)
+for part in root.parts[1:]:
+    current /= part
+    if current.is_symlink():
+        raise SystemExit("inventory root has a symlink ancestor")
+files = []
+for path in sorted(root.rglob("*")):
+    if path.is_symlink():
+        raise SystemExit("inventory contains a symlink")
+    try:
+        resolved_path = path.resolve(strict=True)
+        relative = resolved_path.relative_to(root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit("inventory path escapes the canonical root") from exc
+    if path.is_file():
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "size": path.stat().st_size,
+                "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+print(
+    json.dumps(
+        {"root": str(root), "root_exists": True, "files": files},
+        sort_keys=True,
+    )
+)
+""".strip()
+
+
 @mutating_controller_command
 def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
-    if service not in APPLICATION_SERVICES:
-        raise StackError("file inventory service is not an application service")
-    normalized_root = str(root or "").rstrip("/")
-    if (
-        not normalized_root.startswith("/app/data/")
-        or normalized_root in {"/app/data", "/app/data/"}
-        or ".." in Path(normalized_root).parts
-    ):
-        raise StackError("file inventory root must be beneath /app/data")
+    if service != "publisher-browser":
+        raise StackError("file inventory service must be publisher-browser")
+    normalized_root = str(root or "")
+    if normalized_root != PUBLISHER_COVER_ROOT:
+        raise StackError(
+            "file inventory root must be the exact publisher cover root"
+        )
     context = require_active_recovery_run(fault_id)
     run_identity = context["run_identity"]
     identity = assert_frozen()
     if identity != context["identity"]:
         raise StackError("recovery harness identity changed before file inventory")
     assert_isolated_compose(identity, run_identity=run_identity)
-    script = (
-        "import hashlib,json,sys;"
-        "from pathlib import Path;"
-        "root=Path(sys.argv[1]);"
-        "files=[];"
-        "[(files.append({'path':str(path.relative_to(root)),"
-        "'size':path.stat().st_size,"
-        "'content_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}))"
-        " for path in sorted(root.rglob('*'))"
-        " if path.is_file() and not path.is_symlink()];"
-        "print(json.dumps({'root':str(root),'root_exists':root.is_dir(),"
-        "'files':files},sort_keys=True))"
-    )
     output = compose(
         "exec",
         "-T",
         service,
         "python",
         "-c",
-        script,
+        file_inventory_script(),
         normalized_root,
+        PUBLISHER_COVER_ROOT,
         run_identity=run_identity,
     )
     try:
@@ -3039,10 +3649,27 @@ def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
     if (
         not isinstance(payload, dict)
         or payload.get("root") != normalized_root
-        or not isinstance(payload.get("root_exists"), bool)
+        or payload.get("root_exists") is not True
         or not isinstance(payload.get("files"), list)
     ):
         raise StackError("file inventory returned an invalid object")
+    for row in payload["files"]:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"path", "size", "content_sha256"}
+            or not isinstance(row.get("path"), str)
+            or not row["path"]
+            or Path(row["path"]).is_absolute()
+            or ".." in Path(row["path"]).parts
+            or type(row.get("size")) is not int
+            or row["size"] < 0
+            or re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(row.get("content_sha256") or ""),
+            )
+            is None
+        ):
+            raise StackError("file inventory returned an unsafe file row")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return payload
 
@@ -3138,13 +3765,17 @@ def parse_args() -> argparse.Namespace:
     mark_parser.add_argument("phase", choices=("fault", "recovery"))
     mark_parser.add_argument("--fault-id", required=True)
     inventory_parser = commands.add_parser("file-inventory")
-    inventory_parser.add_argument(
-        "service",
-        choices=sorted(APPLICATION_SERVICES),
-    )
+    inventory_parser.add_argument("service", choices=("publisher-browser",))
     inventory_parser.add_argument("--fault-id", required=True)
     inventory_parser.add_argument("--root", required=True)
-    for name in ("setup-hold", "setup-release"):
+    endpoint_parser = commands.add_parser("bind-endpoints")
+    endpoint_parser.add_argument("--fault-id", required=True)
+    endpoint_parser.add_argument("--api-url", required=True)
+    endpoint_parser.add_argument("--mcp-url", required=True)
+    endpoint_parser.add_argument("--database-host", required=True)
+    endpoint_parser.add_argument("--database-port", type=int, required=True)
+    endpoint_parser.add_argument("--database-name", required=True)
+    for name in ("setup-hold", "setup-release", "setup-discard"):
         child = commands.add_parser(name)
         child.add_argument("service", choices=sorted(FAULT_SERVICES))
         child.add_argument("--fault-id", required=True)
@@ -3153,6 +3784,8 @@ def parse_args() -> argparse.Namespace:
     abort_parser.add_argument("--fault-id", required=True)
     abort_parser.add_argument("--stage", required=True)
     abort_parser.add_argument("--reason", required=True)
+    interrupt_parser = commands.add_parser("interrupt-cleanup")
+    interrupt_parser.add_argument("--fault-id", required=True)
     return parser.parse_args()
 
 
@@ -3176,12 +3809,25 @@ def main() -> int:
         mark_fault(args.fault_kind, args.phase, args.fault_id)
     elif args.command == "file-inventory":
         file_inventory(args.service, args.fault_id, args.root)
+    elif args.command == "bind-endpoints":
+        bind_recovery_endpoints(
+            args.fault_id,
+            args.api_url,
+            args.mcp_url,
+            args.database_host,
+            args.database_port,
+            args.database_name,
+        )
     elif args.command == "setup-hold":
         setup_hold_service(args.service, args.fault_id, args.hold_id)
     elif args.command == "setup-release":
         setup_release_service(args.service, args.fault_id, args.hold_id)
+    elif args.command == "setup-discard":
+        setup_discard_service(args.service, args.fault_id, args.hold_id)
     elif args.command == "abort":
         abort_recovery_run(args.fault_id, args.stage, args.reason)
+    elif args.command == "interrupt-cleanup":
+        interrupt_cleanup_recovery_run(args.fault_id)
     else:
         start_fault_service(args.service, args.fault_id)
     return 0

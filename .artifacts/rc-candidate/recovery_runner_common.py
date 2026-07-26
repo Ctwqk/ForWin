@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import importlib.util
 import json
 import os
@@ -136,6 +137,259 @@ def required_url(value: str, label: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RunnerError(f"{label} must be an absolute HTTP(S) URL")
     return normalized
+
+
+def _loopback_http_url(
+    value: str,
+    *,
+    label: str,
+    expected_path: str,
+) -> dict[str, Any]:
+    normalized = str(value or "").strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(normalized)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = int(parsed.port or 0)
+    except (ValueError, TypeError) as exc:
+        raise SetupBlocked(f"{label} endpoint is invalid") from exc
+    if (
+        parsed.scheme != "http"
+        or not address.is_loopback
+        or not 1 <= port <= 65535
+        or parsed.path != expected_path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise SetupBlocked(
+            f"{label} endpoint must be exact, credential-free, and loopback"
+        )
+    return {
+        "scheme": parsed.scheme,
+        "host": address.compressed,
+        "port": port,
+        "endpoint_path": expected_path,
+    }
+
+
+def _loopback_database_url(value: str) -> dict[str, Any]:
+    parsed = urllib.parse.urlsplit(normalize_database_url(value))
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = int(parsed.port or 0)
+    except (ValueError, TypeError) as exc:
+        raise SetupBlocked("database endpoint is invalid") from exc
+    database = parsed.path.removeprefix("/")
+    if (
+        parsed.scheme not in {"postgresql", "postgres"}
+        or not address.is_loopback
+        or not 1 <= port <= 65535
+        or database != "forwin"
+        or parsed.fragment
+    ):
+        raise SetupBlocked(
+            "database endpoint must be the exact loopback recovery database"
+        )
+    return {
+        "scheme": "postgresql",
+        "host": address.compressed,
+        "port": port,
+        "database": database,
+    }
+
+
+_ENDPOINT_SERVICE_KEYS = {
+    "scheme",
+    "host",
+    "port",
+    "endpoint_path",
+    "health_path",
+    "health_status",
+    "service",
+    "container_port",
+    "container_id",
+    "image_id",
+}
+_ENDPOINT_DATABASE_KEYS = {
+    "scheme",
+    "host",
+    "port",
+    "database",
+    "service",
+    "container_port",
+    "container_id",
+    "image_id",
+}
+_ENDPOINT_SENTINEL_KEYS = {
+    "table",
+    "sentinel_id",
+    "run_id",
+    "fault_id",
+    "source_sha",
+}
+_ENDPOINT_IDENTITY_KEYS = {
+    "schema_version",
+    "fault_id",
+    "run_id",
+    "source_sha",
+    "source_tree",
+    "project_name",
+    "candidate_manifest_sha256",
+    "candidate_identity_sha256",
+    "sentinel",
+    "api",
+    "mcp",
+    "database",
+    "identity_sha256",
+}
+
+
+def _validated_endpoint_identity(
+    value: Any,
+    *,
+    fault_id: str,
+    source_sha: str,
+    api: Mapping[str, Any],
+    mcp: Mapping[str, Any],
+    database: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _ENDPOINT_IDENTITY_KEYS:
+        raise SetupBlocked("endpoint identity has an invalid field set")
+    record = dict(value)
+    if (
+        record.get("schema_version") != 1
+        or record.get("fault_id") != fault_id
+        or record.get("source_sha") != source_sha
+        or re.fullmatch(r"[0-9a-f]{32}", str(record.get("run_id") or ""))
+        is None
+        or record.get("project_name")
+        != f"forwin-v5-recovery-{record.get('run_id')}"
+        or re.fullmatch(
+            r"[0-9a-f]{40}",
+            str(record.get("source_tree") or ""),
+        )
+        is None
+    ):
+        raise SetupBlocked("endpoint identity run or source identity drifted")
+    for field in (
+        "candidate_manifest_sha256",
+        "candidate_identity_sha256",
+        "identity_sha256",
+    ):
+        canonical_digest(record.get(field), f"endpoint identity {field}")
+    sentinel = record.get("sentinel")
+    if (
+        not isinstance(sentinel, Mapping)
+        or set(sentinel) != _ENDPOINT_SENTINEL_KEYS
+        or sentinel.get("table") != "forwin_recovery_run_sentinel"
+        or sentinel.get("run_id") != record["run_id"]
+        or sentinel.get("fault_id") != fault_id
+        or sentinel.get("source_sha") != source_sha
+    ):
+        raise SetupBlocked("endpoint identity sentinel drifted")
+    canonical_digest(
+        sentinel.get("sentinel_id"),
+        "endpoint identity sentinel_id",
+    )
+    expected_endpoints = {
+        "api": {
+            **api,
+            "health_path": "/health",
+            "service": "forwin",
+            "container_port": 8899,
+        },
+        "mcp": {
+            **mcp,
+            "health_path": "/health",
+            "service": "forwin-mcp",
+            "container_port": 8896,
+        },
+        "database": {
+            **database,
+            "service": "postgres",
+            "container_port": 5432,
+        },
+    }
+    for name in ("api", "mcp", "database"):
+        endpoint = record.get(name)
+        expected_keys = (
+            _ENDPOINT_DATABASE_KEYS
+            if name == "database"
+            else _ENDPOINT_SERVICE_KEYS
+        )
+        if not isinstance(endpoint, Mapping) or set(endpoint) != expected_keys:
+            raise SetupBlocked(f"{name} endpoint identity field set drifted")
+        if any(
+            endpoint.get(field) != expected
+            for field, expected in expected_endpoints[name].items()
+        ):
+            raise SetupBlocked(f"{name} endpoint does not match the active run")
+        if (
+            not str(endpoint.get("container_id") or "")
+            or not str(endpoint.get("image_id") or "").startswith("sha256:")
+        ):
+            raise SetupBlocked(f"{name} container identity is incomplete")
+        if name != "database" and endpoint.get("health_status") != 200:
+            raise SetupBlocked(f"{name} health probe identity drifted")
+    unsigned = {
+        key: nested
+        for key, nested in record.items()
+        if key != "identity_sha256"
+    }
+    if record["identity_sha256"] != stable_hash(unsigned):
+        raise SetupBlocked("endpoint identity hash drifted")
+    return record
+
+
+def bind_recovery_endpoints(
+    *,
+    controller: Any,
+    fault_id: str,
+    source_sha: str,
+    api_url: str,
+    mcp_url: str,
+    database_url: str,
+    sentinel_reader: Callable[[], Mapping[str, Any]],
+) -> dict[str, Any]:
+    validated_fault = validate_fault_id(fault_id)
+    if SHA_PATTERN.fullmatch(str(source_sha or "")) is None:
+        raise SetupBlocked("endpoint source SHA is not canonical")
+    api = _loopback_http_url(
+        api_url,
+        label="API",
+        expected_path="",
+    )
+    mcp = _loopback_http_url(
+        mcp_url,
+        label="MCP",
+        expected_path="/mcp",
+    )
+    database = _loopback_database_url(database_url)
+    record = _validated_endpoint_identity(
+        controller.bind_endpoints(
+            fault_id=validated_fault,
+            api_url=api_url,
+            mcp_url=mcp_url,
+            database_host=str(database["host"]),
+            database_port=int(database["port"]),
+            database_name=str(database["database"]),
+        ),
+        fault_id=validated_fault,
+        source_sha=source_sha,
+        api=api,
+        mcp=mcp,
+        database=database,
+    )
+    observed_sentinel = sentinel_reader()
+    if (
+        not isinstance(observed_sentinel, Mapping)
+        or dict(observed_sentinel) != record["sentinel"]
+    ):
+        raise SetupBlocked(
+            "database endpoint did not return the active-run sentinel"
+        )
+    return record
 
 
 def required_text(value: Any, field: str) -> str:
@@ -476,6 +730,47 @@ class RecoveryController:
             validate_fault_id(hold_id),
         )
 
+    def setup_discard(
+        self,
+        service: str,
+        fault_id: str,
+        hold_id: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            "setup-discard",
+            service,
+            "--fault-id",
+            validate_fault_id(fault_id),
+            "--hold-id",
+            validate_fault_id(hold_id),
+        )
+
+    def bind_endpoints(
+        self,
+        *,
+        fault_id: str,
+        api_url: str,
+        mcp_url: str,
+        database_host: str,
+        database_port: int,
+        database_name: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            "bind-endpoints",
+            "--fault-id",
+            validate_fault_id(fault_id),
+            "--api-url",
+            str(api_url),
+            "--mcp-url",
+            str(mcp_url),
+            "--database-host",
+            str(database_host),
+            "--database-port",
+            str(database_port),
+            "--database-name",
+            str(database_name),
+        )
+
     def mark(
         self,
         fault_kind: str,
@@ -521,6 +816,13 @@ class RecoveryController:
         if "recovery abort:" not in detail:
             raise RunnerError(f"recovery controller abort failed: {detail}")
         return {"output": detail}
+
+    def interrupt_cleanup(self, fault_id: str) -> dict[str, Any]:
+        return self._run(
+            "interrupt-cleanup",
+            "--fault-id",
+            validate_fault_id(fault_id),
+        )
 
     def snapshot(self, label: str) -> dict[str, Any]:
         return self._run("snapshot", "--label", str(label))

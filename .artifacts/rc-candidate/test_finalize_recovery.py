@@ -98,6 +98,94 @@ def fault_report(
         "evidence_directory": str(fault_dir),
         "database_volume_name": volume_name,
     }
+    publisher_event_identity: dict | None = None
+    if kind.startswith("publisher_"):
+        endpoint = copy.deepcopy(
+            snapshots["before"]["state"]["target"]["endpoint_identity"]
+        )
+        run_identity["run_id"] = endpoint["run_id"]
+        endpoint["project_name"] = (
+            f"forwin-v5-recovery-{run_identity['run_id']}"
+        )
+        if candidate is not None and candidate_path is not None:
+            publisher_event_identity = {
+                "source_sha": SOURCE_SHA,
+                "source_tree": (candidate.get("source") or {}).get("tree"),
+                "runtime_image": (candidate.get("images") or {}).get("runtime"),
+                "browser_image": (candidate.get("images") or {}).get(
+                    "publisher_browser"
+                ),
+                "dependency_images": {
+                    key: (candidate.get("images") or {}).get(key)
+                    for key in ("postgres", "qdrant", "minio")
+                },
+                "candidate_manifest": {
+                    "path": str(candidate_path),
+                    "sha256": recovery.sha256_file(candidate_path),
+                },
+            }
+            endpoint.update(
+                source_tree=publisher_event_identity["source_tree"],
+                candidate_manifest_sha256=publisher_event_identity[
+                    "candidate_manifest"
+                ]["sha256"],
+            )
+            endpoint["api"]["image_id"] = publisher_event_identity[
+                "runtime_image"
+            ]["image_id"]
+            endpoint["mcp"]["image_id"] = publisher_event_identity[
+                "runtime_image"
+            ]["image_id"]
+            endpoint["database"]["image_id"] = publisher_event_identity[
+                "dependency_images"
+            ]["postgres"]["image_id"]
+        else:
+            publisher_event_identity = {
+                "source_sha": SOURCE_SHA,
+                "source_tree": endpoint["source_tree"],
+                "runtime_image": {
+                    "image_id": endpoint["api"]["image_id"],
+                },
+                "browser_image": {
+                    "image_id": "sha256:" + evidence.stable_hash(
+                        {"kind": kind, "image": "publisher-browser"}
+                    ),
+                },
+                "dependency_images": {
+                    "postgres": {
+                        "image_id": endpoint["database"]["image_id"],
+                    },
+                    "qdrant": {},
+                    "minio": {},
+                },
+                "candidate_manifest": {
+                    "sha256": endpoint["candidate_manifest_sha256"],
+                },
+            }
+        endpoint["candidate_identity_sha256"] = evidence.stable_hash(
+            {
+                key: publisher_event_identity.get(key)
+                for key in (
+                    "source_sha",
+                    "source_tree",
+                    "runtime_image",
+                    "browser_image",
+                    "dependency_images",
+                    "candidate_manifest",
+                )
+            }
+        )
+        endpoint["identity_sha256"] = evidence.stable_hash(
+            {
+                key: value
+                for key, value in endpoint.items()
+                if key != "identity_sha256"
+            }
+        )
+        for stage in ("before", "during", "after"):
+            snapshots[stage]["state"]["target"]["endpoint_identity"] = (
+                copy.deepcopy(endpoint)
+            )
     artifacts = []
     for stage in ("before", "during", "after"):
         path = fault_dir / f"{stage}.json"
@@ -170,9 +258,31 @@ def fault_report(
             if candidate is not None and candidate_path is not None
             else {"source_sha": SOURCE_SHA}
         )
+        if publisher_event_identity is not None:
+            identity = {
+                **publisher_event_identity,
+                **(
+                    {
+                        "harness": {
+                            key: {
+                                "path": str(path),
+                                "sha256": recovery.sha256_file(path),
+                            }
+                            for key, path in HARNESS_PATHS.items()
+                        },
+                        "docker": {
+                            "context": "desktop-linux",
+                            "endpoint": "unix:///tmp/docker.sock",
+                            "daemon_id": "daemon-1",
+                        },
+                    }
+                    if candidate is not None
+                    else {}
+                ),
+            }
         events = []
         previous = "0" * 64
-        for action, recorded_at, time_field, time_value in (
+        lifecycle = [
             (
                 "fresh_up_started",
                 "2026-07-22T11:58:00+00:00",
@@ -184,6 +294,30 @@ def fault_report(
                 "2026-07-22T11:59:00+00:00",
                 "",
                 "",
+            ),
+            *(
+                [
+                    (
+                        "endpoints_bound",
+                        "2026-07-22T11:59:01+00:00",
+                        "",
+                        "",
+                    )
+                ]
+                if publisher_event_identity is not None
+                else []
+            ),
+            *(
+                [
+                    (
+                        "setup_service_held",
+                        "2026-07-22T11:59:11+00:00",
+                        "",
+                        "",
+                    )
+                ]
+                if kind in recovery.PUBLISHER_RISK_FAULTS
+                else []
             ),
             (
                 contract["fault_action"],
@@ -197,13 +331,26 @@ def fault_report(
                 "recovery_time",
                 report["recovery_time"],
             ),
+            *(
+                [
+                    (
+                        "setup_service_discarded",
+                        "2026-07-22T12:01:11+00:00",
+                        "",
+                        "",
+                    )
+                ]
+                if kind in recovery.PUBLISHER_RISK_FAULTS
+                else []
+            ),
             (
                 "destroyed",
                 "2026-07-22T12:02:00+00:00",
                 "",
                 "",
             ),
-        ):
+        ]
+        for action, recorded_at, time_field, time_value in lifecycle:
             event = {
                 "schema_version": 2,
                 "recorded_at": recorded_at,
@@ -225,6 +372,66 @@ def fault_report(
                 )
                 if contract["service"]:
                     event["service"] = contract["service"]
+            if (
+                action == "fresh_up_completed"
+                and publisher_event_identity is not None
+            ):
+                event["sentinel"] = copy.deepcopy(endpoint["sentinel"])
+                event["after"] = {
+                    "services": {
+                        service: {
+                            "exists": True,
+                            "running": True,
+                            "container_id": published["container_id"],
+                            "image_id": published["image_id"],
+                        }
+                        for service, published in (
+                            ("forwin", endpoint["api"]),
+                            ("forwin-mcp", endpoint["mcp"]),
+                            ("postgres", endpoint["database"]),
+                        )
+                    }
+                }
+            if action == "endpoints_bound":
+                event["endpoint_identity"] = copy.deepcopy(endpoint)
+            if action in {
+                "setup_service_held",
+                "setup_service_discarded",
+            }:
+                terminal = snapshots["after"]["state"]["external"][
+                    "browser_hold_terminal"
+                ]
+                event.update(
+                    hold_id=terminal["hold_id"],
+                    service="publisher-browser",
+                    requested_at=(
+                        "2026-07-22T11:59:10+00:00"
+                        if action == "setup_service_held"
+                        else "2026-07-22T12:01:10+00:00"
+                    ),
+                )
+                if action == "setup_service_held":
+                    event["hold_time"] = event["recorded_at"]
+                    event["before"] = {
+                        "service": "publisher-browser",
+                        "exists": True,
+                        "running": True,
+                    }
+                    event["after"] = {
+                        "service": "publisher-browser",
+                        "exists": True,
+                        "running": False,
+                    }
+                else:
+                    event["discard_time"] = event["recorded_at"]
+                    stopped = {
+                        "service": "publisher-browser",
+                        "exists": True,
+                        "running": False,
+                        "container_id": terminal["container_id"],
+                    }
+                    event["before"] = copy.deepcopy(stopped)
+                    event["after"] = copy.deepcopy(stopped)
             if action == "destroyed":
                 event["after"] = {"services": copy.deepcopy(DESTROY_SERVICES)}
                 event["database_volume_before"] = copy.deepcopy(volume_present)
@@ -455,25 +662,25 @@ def recovery_manifest(
             "images": {
                 "runtime": {
                     "tag": "runtime:v1",
-                    "image_id": "runtime-id",
+                    "image_id": "sha256:" + "1" * 64,
                     "revision": SOURCE_SHA,
                 },
                 "publisher_browser": {
                     "tag": "browser:v1",
-                    "image_id": "browser-id",
+                    "image_id": "sha256:" + "2" * 64,
                     "revision": SOURCE_SHA,
                 },
                 "postgres": {
                     "tag": "postgres:v1",
-                    "image_id": "postgres-id",
+                    "image_id": "sha256:" + "3" * 64,
                 },
                 "qdrant": {
                     "tag": "qdrant:v1",
-                    "image_id": "qdrant-id",
+                    "image_id": "sha256:" + "4" * 64,
                 },
                 "minio": {
                     "tag": "minio:v1",
-                    "image_id": "minio-id",
+                    "image_id": "sha256:" + "5" * 64,
                 },
             },
             "release_harness": {
@@ -1006,7 +1213,7 @@ def setup_hold_event(
             "exists": True,
             "running": False,
         }
-    else:
+    elif action == "setup_service_released":
         event["release_time"] = confirmed_at
         event["before"] = {
             "service": service,
@@ -1018,6 +1225,20 @@ def setup_hold_event(
             "exists": True,
             "running": True,
             "probe": {"passed": True},
+        }
+    else:
+        event["discard_time"] = confirmed_at
+        event["before"] = {
+            "service": service,
+            "exists": True,
+            "running": False,
+            "container_id": f"{service}-container-generalized",
+        }
+        event["after"] = {
+            "service": service,
+            "exists": True,
+            "running": False,
+            "container_id": f"{service}-container-generalized",
         }
     return event
 
@@ -1041,6 +1262,148 @@ def balanced_hold_events(template: dict, *, prefix: str) -> list[dict]:
             confirmed_at="2026-07-22T12:01:11+00:00",
         ),
     ]
+
+
+def test_finalizer_allows_terminal_discard_of_typed_risk_auxiliary_hold(
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "publisher_captcha")
+
+    assert recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("running-after", "setup discard stopped postcondition mismatch"),
+        ("without-hold", "hold discard has no matching hold"),
+        ("wrong-service", "hold discard does not match held service"),
+    ),
+)
+def test_finalizer_rejects_invalid_setup_discard_lifecycle(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "publisher_captcha")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    held = next(
+        event
+        for event in events
+        if event["action"] == "setup_service_held"
+    )
+    discarded = next(
+        event
+        for event in events
+        if event["action"] == "setup_service_discarded"
+    )
+    if mutation == "running-after":
+        discarded["after"]["running"] = True
+    elif mutation == "without-hold":
+        events.remove(held)
+    else:
+        discarded["service"] = "outbox-worker"
+        discarded["before"]["service"] = "outbox-worker"
+        discarded["after"]["service"] = "outbox-worker"
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert f"publisher_captcha.{expected}" in violations
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("missing", "endpoint binding event count mismatch"),
+        ("duplicate", "endpoint binding event count mismatch"),
+        ("sentinel", "endpoint sentinel is not fresh-up bound"),
+        ("snapshot", "endpoint identity is not event-bound"),
+        (
+            "fresh-container",
+            "endpoint published container mismatch: forwin",
+        ),
+        ("candidate", "endpoint candidate identity mismatch"),
+        ("malformed", "endpoint published container mismatch: forwin"),
+    ),
+)
+def test_finalizer_rejects_unbound_publisher_endpoint_identity(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "publisher_backend_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    endpoint = next(
+        event for event in events if event["action"] == "endpoints_bound"
+    )
+    if mutation == "missing":
+        events.remove(endpoint)
+    elif mutation == "duplicate":
+        events.insert(events.index(endpoint) + 1, copy.deepcopy(endpoint))
+    elif mutation == "sentinel":
+        fresh = next(
+            event
+            for event in events
+            if event["action"] == "fresh_up_completed"
+        )
+        fresh["sentinel"]["sentinel_id"] = "f" * 64
+    elif mutation == "snapshot":
+        endpoint["endpoint_identity"]["run_id"] = "e" * 32
+    elif mutation == "fresh-container":
+        fresh = next(
+            event
+            for event in events
+            if event["action"] == "fresh_up_completed"
+        )
+        fresh["after"]["services"]["forwin"]["container_id"] = (
+            "different-container"
+        )
+    elif mutation == "candidate":
+        endpoint["identity"]["source_tree"] = "f" * 40
+    else:
+        endpoint["endpoint_identity"]["api"] = []
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        f"publisher_backend_unavailable.{expected}" in violations
+    )
+
+
+def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "publisher_mfa")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    discarded = next(
+        event
+        for event in events
+        if event["action"] == "setup_service_discarded"
+    )
+    discarded["before"]["container_id"] = "different-browser-container"
+    discarded["after"]["container_id"] = "different-browser-container"
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "publisher_mfa.typed-risk discard is not final-snapshot bound"
+        in violations
+    )
 
 
 def test_finalizer_allows_balanced_setup_holds_around_primary_fault(

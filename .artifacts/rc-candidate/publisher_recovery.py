@@ -29,6 +29,7 @@ from recovery_runner_common import (  # noqa: E402
     RunnerError,
     SetupBlocked,
     atomic_write_json_new,
+    bind_recovery_endpoints,
     candidate_identity,
     http_json,
     normalize_database_url,
@@ -715,6 +716,7 @@ def _snapshot_base(
     fault_id: str,
     stage: str,
     fixture: PublisherFixture,
+    endpoint_identity: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": 2,
@@ -723,7 +725,10 @@ def _snapshot_base(
         "fault_id": fault_id,
         "stage": stage,
         "state": {
-            "target": {"fixture": fixture.evidence_identity()},
+            "target": {
+                "fixture": fixture.evidence_identity(),
+                "endpoint_identity": dict(endpoint_identity),
+            },
             "mcp": {},
             "api": {},
             "database": {},
@@ -744,6 +749,54 @@ class SQLCollector:
         self.database = database
         self.sleep = sleep
         self.monotonic = monotonic
+        self._bound_endpoint_identity: dict[str, Any] | None = None
+
+    def bind_endpoint_identity(
+        self,
+        endpoint_identity: Mapping[str, Any],
+    ) -> None:
+        value = dict(endpoint_identity)
+        if self._bound_endpoint_identity is not None:
+            raise SetupBlocked("publisher endpoint identity was already bound")
+        if not value:
+            raise SetupBlocked("publisher endpoint identity is empty")
+        self._bound_endpoint_identity = value
+
+    def _endpoint_identity(self) -> dict[str, Any]:
+        if self._bound_endpoint_identity is None:
+            raise SetupBlocked(
+                "publisher endpoint identity was not bound before snapshot"
+            )
+        return dict(self._bound_endpoint_identity)
+
+    def read_recovery_sentinel(self) -> dict[str, str]:
+        rows = self.database.query(
+            """
+            SELECT
+                sentinel_id,
+                run_id,
+                fault_id,
+                source_sha
+            FROM forwin_recovery_run_sentinel
+            WHERE singleton = true
+            """,
+        )
+        if len(rows) != 1:
+            raise SetupBlocked(
+                "database endpoint returned no unique recovery sentinel"
+            )
+        return {
+            "table": "forwin_recovery_run_sentinel",
+            **{
+                key: str(rows[0].get(key) or "")
+                for key in (
+                    "sentinel_id",
+                    "run_id",
+                    "fault_id",
+                    "source_sha",
+                )
+            },
+        }
 
     def insert_fixture(self, fixture: PublisherFixture) -> None:
         if self._job_rows(fixture):
@@ -773,18 +826,38 @@ class SQLCollector:
                 idempotency_key AS logical_key,
                 task_kind,
                 project_id,
+                canon_commit_id,
+                candidate_id,
+                chapter_number,
                 platform_id,
                 status,
                 publish,
                 book_name,
                 chapter_title,
+                body_text,
                 body_sha256,
+                upload_url,
+                abort_requested,
                 extension_client_id AS owner_token,
+                extension_client_id,
+                current_attempt_id,
+                available_at,
+                reconcile_after,
+                claimed_at,
+                started_at,
+                finished_at,
+                deleted_at,
+                paused_at,
                 pause_reason,
-                result_payload_json
+                current_url,
+                result_message,
+                error_message,
+                result_payload_json,
+                created_at,
+                updated_at,
+                CURRENT_TIMESTAMP AS database_now
             FROM publisher_upload_jobs
-            WHERE deleted_at IS NULL
-              AND (id = %s OR idempotency_key = %s)
+            WHERE id = %s OR idempotency_key = %s
             ORDER BY id
             """,
             (fixture.job_id, fixture.logical_key),
@@ -982,6 +1055,68 @@ class SQLCollector:
             )
         return normalized
 
+    @staticmethod
+    def _timestamp(value: Any) -> str:
+        if value is None or value == "":
+            return ""
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            try:
+                parsed = datetime.fromisoformat(str(value))
+            except ValueError as exc:
+                raise SetupBlocked(
+                    "publisher job timestamp is malformed"
+                ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).isoformat()
+
+    def _browser_job(self, fixture: PublisherFixture) -> dict[str, Any]:
+        row = self._exact_row(fixture)
+        payload = _json_object(row.get("result_payload_json"))
+        return {
+            "job_id": str(row.get("job_id") or ""),
+            "logical_key": str(row.get("logical_key") or ""),
+            "task_kind": str(row.get("task_kind") or ""),
+            "project_id": str(row.get("project_id") or ""),
+            "platform_id": str(row.get("platform_id") or ""),
+            "status": str(row.get("status") or ""),
+            "publish": bool(row.get("publish")),
+            "book_name": str(row.get("book_name") or ""),
+            "chapter_title": str(row.get("chapter_title") or ""),
+            "body_sha256": str(row.get("body_sha256") or ""),
+            "unsafe_payload_paths": _unsafe_payload_paths(payload),
+            "canon_commit_id": str(row.get("canon_commit_id") or ""),
+            "candidate_id": str(row.get("candidate_id") or ""),
+            "chapter_number": int(row.get("chapter_number") or 0),
+            "body_text": str(row.get("body_text") or ""),
+            "upload_url": str(row.get("upload_url") or ""),
+            "abort_requested": bool(row.get("abort_requested")),
+            "owner_token": str(row.get("owner_token") or ""),
+            "extension_client_id": str(
+                row.get("extension_client_id") or ""
+            ),
+            "current_attempt_id": str(
+                row.get("current_attempt_id") or ""
+            ),
+            "available_at": self._timestamp(row.get("available_at")),
+            "reconcile_after": self._timestamp(row.get("reconcile_after")),
+            "claimed_at": self._timestamp(row.get("claimed_at")),
+            "started_at": self._timestamp(row.get("started_at")),
+            "finished_at": self._timestamp(row.get("finished_at")),
+            "deleted_at": self._timestamp(row.get("deleted_at")),
+            "paused_at": self._timestamp(row.get("paused_at")),
+            "pause_reason": str(row.get("pause_reason") or ""),
+            "current_url": str(row.get("current_url") or ""),
+            "result_message": str(row.get("result_message") or ""),
+            "error_message": str(row.get("error_message") or ""),
+            "result_payload": payload,
+            "created_at": self._timestamp(row.get("created_at")),
+            "updated_at": self._timestamp(row.get("updated_at")),
+            "database_now": self._timestamp(row.get("database_now")),
+        }
+
     def _job(self, fixture: PublisherFixture, *, risk: bool = False) -> dict[str, Any]:
         return self._normalize_job(
             self._exact_row(fixture),
@@ -1096,6 +1231,7 @@ class SQLCollector:
             fault_id=fault_id,
             stage=stage,
             fixture=fixture,
+            endpoint_identity=self._endpoint_identity(),
         )
         database = snapshot["state"]["database"]
         database.update(
@@ -1134,9 +1270,10 @@ class SQLCollector:
             fault_id=fault_id,
             stage=stage,
             fixture=fixture,
+            endpoint_identity=self._endpoint_identity(),
         )
         snapshot["state"]["database"].update(
-            job=self._job(fixture),
+            job=self._browser_job(fixture),
             attempts=self._attempts(fixture),
             receipts=self._receipts(fixture),
         )
@@ -1161,6 +1298,8 @@ class SQLCollector:
         stage: str,
         fixture: PublisherFixture,
         replay: Mapping[str, Any] | None = None,
+        pre_discard_state: Mapping[str, Any] | None = None,
+        browser_hold_terminal: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         snapshot = _snapshot_base(
             source_sha=source_sha,
@@ -1168,6 +1307,7 @@ class SQLCollector:
             fault_id=fault_id,
             stage=stage,
             fixture=fixture,
+            endpoint_identity=self._endpoint_identity(),
         )
         snapshot["state"]["database"].update(
             job=self._job(fixture, risk=True),
@@ -1179,6 +1319,39 @@ class SQLCollector:
                 receipts=self._receipts(fixture),
                 resume_actions=actions,
             )
+            pre_discard = dict(pre_discard_state or {})
+            snapshot["state"]["database"].update(
+                pre_discard_job=dict(
+                    pre_discard.get("job") or {}
+                ),
+                pre_discard_attempts=list(
+                    pre_discard.get("attempts") or []
+                ),
+                pre_discard_receipts=list(
+                    pre_discard.get("receipts") or []
+                ),
+                pre_discard_resume_actions=list(
+                    pre_discard.get("resume_actions") or []
+                ),
+            )
+            terminal = dict(browser_hold_terminal or {})
+            after_state = terminal.get("after")
+            after_state = (
+                dict(after_state)
+                if isinstance(after_state, Mapping)
+                else {}
+            )
+            snapshot["state"]["external"]["browser_hold_terminal"] = {
+                "action": str(terminal.get("action") or ""),
+                "fault_id": str(terminal.get("fault_id") or ""),
+                "hold_id": str(terminal.get("hold_id") or ""),
+                "service": str(terminal.get("service") or ""),
+                "container_id": str(
+                    after_state.get("container_id") or ""
+                ),
+                "exists": bool(after_state.get("exists")),
+                "running": bool(after_state.get("running")),
+            }
             replay_payload = dict(replay or {})
             replay_payload.update(
                 observation_id=(
@@ -1195,10 +1368,23 @@ class SQLCollector:
             snapshot["state"]["api"]["resume_replay"] = replay_payload
         return snapshot
 
+    def risk_terminal_state(
+        self,
+        fixture: PublisherFixture,
+    ) -> dict[str, Any]:
+        return {
+            "job": self._job(fixture, risk=True),
+            "attempts": self._attempts(fixture),
+            "receipts": self._receipts(fixture),
+            "resume_actions": self._resume_actions(fixture),
+        }
+
 
 def normalize_cover_inventory(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     if payload.get("root") != PUBLISHER_COVER_ROOT:
         raise SetupBlocked("publisher cover inventory root drifted")
+    if payload.get("root_exists") is not True:
+        raise SetupBlocked("publisher cover inventory root does not exist")
     rows = payload.get("files")
     if not isinstance(rows, list):
         raise SetupBlocked("publisher cover inventory is malformed")
@@ -1619,6 +1805,8 @@ class LiveRunner:
         fault_id: str,
         source_sha: str,
         database_url: str,
+        mcp_url: str,
+        api_url: str,
         controller: Any,
         sql_collector: SQLCollector,
         api: PublisherAPI,
@@ -1634,6 +1822,8 @@ class LiveRunner:
         self.fault_id = validate_fault_id(fault_id)
         self.source_sha = source_sha
         self.database_url = database_url
+        self.mcp_url = mcp_url
+        self.api_url = api_url
         self.controller = controller
         self.sql = sql_collector
         self.api = api
@@ -1656,6 +1846,17 @@ class LiveRunner:
             self.stage = "fresh_up"
             self.controller.fresh_up(self.fault_id)
             self.stack_started = True
+            self.stage = "endpoint_binding"
+            endpoint_identity = bind_recovery_endpoints(
+                controller=self.controller,
+                fault_id=self.fault_id,
+                source_sha=self.source_sha,
+                api_url=self.api_url,
+                mcp_url=self.mcp_url,
+                database_url=self.database_url,
+                sentinel_reader=self.sql.read_recovery_sentinel,
+            )
+            self.sql.bind_endpoint_identity(endpoint_identity)
             if self.fault_kind == "publisher_backend_unavailable":
                 snapshots = self._run_backend()
             elif self.fault_kind == "publisher_browser_unavailable":
@@ -1664,19 +1865,59 @@ class LiveRunner:
                 snapshots = self._run_risk()
         except BaseException as exc:
             failure = exc
-        finally:
-            if self.barrier is not None:
+        if self.barrier is not None:
+            try:
+                self.barrier.cleanup()
+            except BaseException as exc:
+                cleanup_errors.append(f"terminal barrier cleanup: {exc}")
+                if failure is None or not isinstance(exc, Exception):
+                    failure = exc
+            self.barrier = None
+        if self.setup_holds:
+            if failure is None:
+                failure = RunnerError(
+                    "runner completed with an active auxiliary setup hold"
+                )
+            for service, hold_id in reversed(self.setup_holds[:]):
                 try:
-                    self.barrier.cleanup()
+                    self.controller.setup_discard(
+                        service,
+                        self.fault_id,
+                        hold_id,
+                    )
                 except BaseException as exc:
-                    cleanup_errors.append(f"terminal barrier cleanup: {exc}")
-                self.barrier = None
-            cleanup_errors.extend(self._release_setup_holds())
-            cleanup_errors.extend(self._cleanup_stack())
-        if failure is None and cleanup_errors:
-            failure = RunnerError("; ".join(cleanup_errors))
-            self.stage = "cleanup"
+                    cleanup_errors.append(
+                        f"setup hold discard {service}/{hold_id}: {exc}"
+                    )
+                    if not isinstance(exc, Exception):
+                        failure = exc
+                else:
+                    self.setup_holds.remove((service, hold_id))
+        if failure is not None and not isinstance(failure, Exception):
+            if self.stack_started:
+                try:
+                    self.controller.interrupt_cleanup(self.fault_id)
+                except BaseException as exc:
+                    cleanup_errors.append(f"interrupt cleanup: {exc}")
+            raise failure.with_traceback(failure.__traceback__)
         if failure is not None:
+            if self.stack_started:
+                try:
+                    self.controller.abort(
+                        self.fault_id,
+                        self.stage,
+                        _failure_text(failure),
+                    )
+                except BaseException as exc:
+                    cleanup_errors.append(f"controller abort: {exc}")
+                    if not isinstance(exc, Exception):
+                        try:
+                            self.controller.interrupt_cleanup(self.fault_id)
+                        except BaseException as cleanup_exc:
+                            cleanup_errors.append(
+                                f"interrupt cleanup: {cleanup_exc}"
+                            )
+                        raise exc.with_traceback(exc.__traceback__)
             report = self.writer.write_setup_blocked(
                 fault_kind=self.fault_kind,
                 fault_id=self.fault_id,
@@ -1688,6 +1929,34 @@ class LiveRunner:
             return LiveRunResult("setup_blocked", report)
         if snapshots is None:
             raise RunnerError("Task 6 runner produced no snapshots")
+        self.stage = "terminal_destroy"
+        try:
+            self.controller.destroy()
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                try:
+                    self.controller.interrupt_cleanup(self.fault_id)
+                except BaseException:
+                    pass
+                raise
+            cleanup_errors.append(f"publisher stack destroy: {exc}")
+            try:
+                self.controller.abort(
+                    self.fault_id,
+                    self.stage,
+                    _failure_text(exc),
+                )
+            except BaseException as abort_exc:
+                cleanup_errors.append(f"controller abort: {abort_exc}")
+            report = self.writer.write_setup_blocked(
+                fault_kind=self.fault_kind,
+                fault_id=self.fault_id,
+                source_sha=self.source_sha,
+                failure_stage=self.stage,
+                failure_reason=_failure_text(exc),
+                cleanup_errors=cleanup_errors,
+            )
+            return LiveRunResult("setup_blocked", report)
         self.stage = "evidence_write"
         report = self.writer.write_pass_report(
             fault_kind=self.fault_kind,
@@ -1706,6 +1975,15 @@ class LiveRunner:
     def _release_hold(self, service: str, hold_id: str) -> None:
         self.controller.setup_release(service, self.fault_id, hold_id)
         self.setup_holds.remove((service, hold_id))
+
+    def _discard_hold(self, service: str, hold_id: str) -> dict[str, Any]:
+        event = self.controller.setup_discard(
+            service,
+            self.fault_id,
+            hold_id,
+        )
+        self.setup_holds.remove((service, hold_id))
+        return event
 
     def _cover_inventory(self) -> list[dict[str, Any]]:
         return normalize_cover_inventory(
@@ -1871,82 +2149,26 @@ class LiveRunner:
             pause_token=str(pause["pause_token"]),
             risk_reason=risk_reason,
         )
+        pre_discard_state = self.sql.risk_terminal_state(self.fixture)
+        self.stage = "typed_recovery_mark"
+        self.controller.mark(self.fault_kind, "recovery", self.fault_id)
+        self.recovered = True
+        self.stage = "risk_browser_setup_discard"
+        browser_hold_terminal = self._discard_hold(
+            "publisher-browser",
+            hold_id,
+        )
+        self.stage = "risk_after_snapshot"
         after = self.sql.risk_snapshot(
             source_sha=self.source_sha,
             fault_id=self.fault_id,
             stage="after",
             fixture=self.fixture,
             replay=replay,
+            pre_discard_state=pre_discard_state,
+            browser_hold_terminal=browser_hold_terminal,
         )
-        self.stage = "typed_recovery_mark"
-        self.controller.mark(self.fault_kind, "recovery", self.fault_id)
-        self.recovered = True
-        self.stage = "risk_browser_setup_release"
-        self._release_hold("publisher-browser", hold_id)
         return {"before": before, "during": during, "after": after}
-
-    def _release_setup_holds(self) -> list[str]:
-        errors: list[str] = []
-        for service, hold_id in reversed(self.setup_holds[:]):
-            try:
-                self.controller.setup_release(
-                    service,
-                    self.fault_id,
-                    hold_id,
-                )
-            except BaseException as exc:
-                errors.append(f"setup hold release {service}/{hold_id}: {exc}")
-            else:
-                self.setup_holds.remove((service, hold_id))
-        return errors
-
-    def _cleanup_stack(self) -> list[str]:
-        if not self.stack_started:
-            return []
-        errors: list[str] = []
-        service = (
-            "publisher-worker"
-            if self.fault_kind == "publisher_backend_unavailable"
-            else "publisher-browser"
-        )
-        try:
-            if self.fault_kind in RISK_REASONS:
-                if self.primary_faulted and not self.recovered:
-                    self.controller.mark(
-                        self.fault_kind,
-                        "recovery",
-                        self.fault_id,
-                    )
-                    self.recovered = True
-                elif not self.primary_faulted:
-                    self.controller.mark(
-                        self.fault_kind,
-                        "fault",
-                        self.fault_id,
-                    )
-                    self.primary_faulted = True
-                    self.controller.mark(
-                        self.fault_kind,
-                        "recovery",
-                        self.fault_id,
-                    )
-                    self.recovered = True
-            elif self.primary_faulted and not self.recovered:
-                self.controller.start(service, self.fault_id)
-                self.recovered = True
-            elif not self.primary_faulted:
-                self.controller.stop(service, self.fault_id)
-                self.primary_faulted = True
-                self.controller.start(service, self.fault_id)
-                self.recovered = True
-        except BaseException as exc:
-            errors.append(f"publisher service restore: {exc}")
-        if self.primary_faulted and self.recovered:
-            try:
-                self.controller.destroy()
-            except BaseException as exc:
-                errors.append(f"publisher stack destroy: {exc}")
-        return errors
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:
@@ -2028,6 +2250,8 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         fault_id=config.fault_id,
         source_sha=config.source_sha,
         database_url=config.database_url,
+        mcp_url=config.mcp_url,
+        api_url=config.api_url,
         controller=controller,
         sql_collector=collector,
         api=PublisherAPI(

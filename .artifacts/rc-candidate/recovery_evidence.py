@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -183,7 +185,33 @@ _BACKEND_JOB_SCHEMA = {
     "owner_token": str,
     "artifact_id": str,
 }
-_BROWSER_JOB_SCHEMA = dict(_PUBLISHER_JOB_SCHEMA)
+_BROWSER_JOB_SCHEMA = {
+    **_PUBLISHER_JOB_SCHEMA,
+    "canon_commit_id": str,
+    "candidate_id": str,
+    "chapter_number": int,
+    "body_text": str,
+    "upload_url": str,
+    "abort_requested": bool,
+    "owner_token": str,
+    "extension_client_id": str,
+    "current_attempt_id": str,
+    "available_at": str,
+    "reconcile_after": str,
+    "claimed_at": str,
+    "started_at": str,
+    "finished_at": str,
+    "deleted_at": str,
+    "paused_at": str,
+    "pause_reason": str,
+    "current_url": str,
+    "result_message": str,
+    "error_message": str,
+    "result_payload": dict,
+    "created_at": str,
+    "updated_at": str,
+    "database_now": str,
+}
 _RISK_JOB_SCHEMA = {
     **_PUBLISHER_JOB_SCHEMA,
     "pause_reason": str,
@@ -287,14 +315,51 @@ _RESUME_REPLAY_SCHEMA = {
     "first_disposition": str,
     "replay_disposition": str,
 }
+_ENDPOINT_IDENTITY_SCHEMA = {
+    "schema_version": int,
+    "fault_id": str,
+    "run_id": str,
+    "source_sha": str,
+    "source_tree": str,
+    "project_name": str,
+    "candidate_manifest_sha256": str,
+    "candidate_identity_sha256": str,
+    "sentinel": dict,
+    "api": dict,
+    "mcp": dict,
+    "database": dict,
+    "identity_sha256": str,
+}
+_PRE_DISCARD_BROWSER_SCHEMA = {
+    "action": str,
+    "fault_id": str,
+    "hold_id": str,
+    "service": str,
+    "container_id": str,
+    "exists": bool,
+    "running": bool,
+}
 _EMPTY_STRING_FIELDS = {
     "artifact_id",
+    "candidate_id",
+    "canon_commit_id",
     "chapter_title",
+    "claimed_at",
+    "current_attempt_id",
+    "current_url",
+    "deleted_at",
     "error_code",
+    "extension_client_id",
+    "finished_at",
     "pause_reason",
     "pause_token",
+    "paused_at",
     "project_id",
+    "reconcile_after",
+    "result_message",
     "risk_boundary",
+    "started_at",
+    "upload_url",
 }
 
 
@@ -351,6 +416,7 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_authoritative_identities": 0,
     },
     "publisher_backend_unavailable": {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_reclaimed": True,
         "terminal_write_boundary_observed": True,
@@ -366,8 +432,11 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "receipt_count": 0,
     },
     "publisher_browser_unavailable": {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
+        "full_job_row_unchanged": True,
+        "preclaim_boundary_preserved": True,
         "pending_job_preserved": True,
         "heartbeat_recovered": True,
         "attempt_count": 0,
@@ -375,31 +444,40 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "receipt_count": 0,
     },
     "publisher_captcha": {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
+        "hold_discard_preserved_state": True,
+        "browser_stopped_at_discard": True,
         "bypass_attempted": False,
         "attempt_count": 1,
         "receipt_count": 0,
     },
     "publisher_mfa": {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
+        "hold_discard_preserved_state": True,
+        "browser_stopped_at_discard": True,
         "bypass_attempted": False,
         "attempt_count": 1,
         "receipt_count": 0,
     },
     "publisher_account_risk": {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
+        "hold_discard_preserved_state": True,
+        "browser_stopped_at_discard": True,
         "bypass_attempted": False,
         "attempt_count": 1,
         "receipt_count": 0,
@@ -491,12 +569,14 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "publisher_backend_unavailable": {
         "before": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.jobs",
             "state.database.attempts",
             "state.database.receipts",
         ),
         "during": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.jobs",
             "state.database.attempts",
@@ -505,6 +585,7 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.external.cover_files",
         ),
         "after": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.jobs",
             "state.database.attempts",
@@ -518,18 +599,21 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "publisher_browser_unavailable": {
         "before": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
             "state.external.browser_heartbeat",
         ),
         "during": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
             "state.external.browser_heartbeat",
         ),
         "after": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
@@ -537,36 +621,78 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "publisher_captcha": {
-        "before": ("state.database.job", "state.database.attempts"),
-        "during": ("state.database.job", "state.database.attempts"),
+        "before": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
+        "during": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
         "after": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
+            "state.database.pre_discard_job",
+            "state.database.pre_discard_attempts",
+            "state.database.pre_discard_receipts",
+            "state.database.pre_discard_resume_actions",
             "state.api.resume_replay",
+            "state.external.browser_hold_terminal",
         ),
     },
     "publisher_mfa": {
-        "before": ("state.database.job", "state.database.attempts"),
-        "during": ("state.database.job", "state.database.attempts"),
+        "before": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
+        "during": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
         "after": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
+            "state.database.pre_discard_job",
+            "state.database.pre_discard_attempts",
+            "state.database.pre_discard_receipts",
+            "state.database.pre_discard_resume_actions",
             "state.api.resume_replay",
+            "state.external.browser_hold_terminal",
         ),
     },
     "publisher_account_risk": {
-        "before": ("state.database.job", "state.database.attempts"),
-        "during": ("state.database.job", "state.database.attempts"),
+        "before": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
+        "during": (
+            "state.target.endpoint_identity",
+            "state.database.job",
+            "state.database.attempts",
+        ),
         "after": (
+            "state.target.endpoint_identity",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
+            "state.database.pre_discard_job",
+            "state.database.pre_discard_attempts",
+            "state.database.pre_discard_receipts",
+            "state.database.pre_discard_resume_actions",
             "state.api.resume_replay",
+            "state.external.browser_hold_terminal",
         ),
     },
 }
@@ -1059,6 +1185,76 @@ def _publisher_fixture_safe(
     )
 
 
+def _publisher_endpoint_identity(
+    snapshots: Mapping[str, dict[str, Any]],
+) -> bool:
+    records = [
+        _path(snapshots, stage, "target.endpoint_identity")
+        for stage in STAGES
+    ]
+    if not _all_stable_equal(records):
+        return False
+    record = records[0]
+    sentinel = record["sentinel"]
+    api = record["api"]
+    mcp = record["mcp"]
+    database = record["database"]
+    try:
+        addresses = [
+            ipaddress.ip_address(endpoint["host"])
+            for endpoint in (api, mcp, database)
+        ]
+    except ValueError:
+        return False
+    return (
+        record["identity_sha256"]
+        == stable_hash(
+            {
+                key: value
+                for key, value in record.items()
+                if key != "identity_sha256"
+            }
+        )
+        and record["fault_id"] == snapshots["before"]["fault_id"]
+        and record["source_sha"] == snapshots["before"]["source_sha"]
+        and re.fullmatch(r"[0-9a-f]{32}", record["run_id"]) is not None
+        and record["project_name"]
+        == f"forwin-v5-recovery-{record['run_id']}"
+        and sentinel
+        == {
+            "table": "forwin_recovery_run_sentinel",
+            "sentinel_id": sentinel["sentinel_id"],
+            "run_id": record["run_id"],
+            "fault_id": record["fault_id"],
+            "source_sha": record["source_sha"],
+        }
+        and _SHA256_PATTERN.fullmatch(sentinel["sentinel_id"]) is not None
+        and all(address.is_loopback for address in addresses)
+        and api["scheme"] == "http"
+        and api["endpoint_path"] == ""
+        and api["health_path"] == "/health"
+        and api["health_status"] == 200
+        and api["service"] == "forwin"
+        and api["container_port"] == 8899
+        and mcp["scheme"] == "http"
+        and mcp["endpoint_path"] == "/mcp"
+        and mcp["health_path"] == "/health"
+        and mcp["health_status"] == 200
+        and mcp["service"] == "forwin-mcp"
+        and mcp["container_port"] == 8896
+        and database["scheme"] == "postgresql"
+        and database["database"] == "forwin"
+        and database["service"] == "postgres"
+        and database["container_port"] == 5432
+        and all(
+            1 <= endpoint["port"] <= 65535
+            and bool(endpoint["container_id"])
+            and endpoint["image_id"].startswith("sha256:")
+            for endpoint in (api, mcp, database)
+        )
+    )
+
+
 def _publisher_backend(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1115,6 +1311,7 @@ def _publisher_backend(
         )
     )
     return {
+        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
         "fixture_safe": _publisher_fixture_safe(
             "publisher_backend_unavailable", snapshots
         ),
@@ -1187,11 +1384,46 @@ def _publisher_browser(
         _path(snapshots, stage, "database.receipts")
         for stage in STAGES
     ]
+    stable_jobs = [
+        _without_fields(job, {"database_now"})
+        for job in jobs
+    ]
+    full_row_unchanged = _all_stable_equal(stable_jobs)
+    preclaim = True
+    for job, attempt_rows, receipt_rows in zip(
+        jobs,
+        attempts,
+        receipts,
+        strict=True,
+    ):
+        try:
+            available_at = datetime.fromisoformat(job["available_at"])
+            database_now = datetime.fromisoformat(job["database_now"])
+        except ValueError:
+            preclaim = False
+            continue
+        preclaim = preclaim and (
+            available_at.tzinfo is not None
+            and database_now.tzinfo is not None
+            and available_at > database_now
+            and job["status"] == "pending"
+            and job["owner_token"] == ""
+            and job["extension_client_id"] == ""
+            and job["owner_token"] == job["extension_client_id"]
+            and job["current_attempt_id"] == ""
+            and job["abort_requested"] is False
+            and job["deleted_at"] == ""
+            and attempt_rows == []
+            and receipt_rows == []
+        )
     return {
+        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
         "fixture_safe": _publisher_fixture_safe(
             "publisher_browser_unavailable", snapshots
         ),
-        "same_job_identity": _all_stable_equal(jobs),
+        "same_job_identity": full_row_unchanged,
+        "full_job_row_unchanged": full_row_unchanged,
+        "preclaim_boundary_preserved": preclaim,
         "pending_job_preserved": all(job["status"] == "pending" for job in jobs),
         "heartbeat_recovered": (
             len({heartbeat["browser_id"] for heartbeat in heartbeats}) == 1
@@ -1204,7 +1436,8 @@ def _publisher_browser(
         ),
         "attempt_count": max(len(rows) for rows in attempts),
         "mutation_count": sum(
-            stable_hash(job) != stable_hash(jobs[0]) for job in jobs[1:]
+            stable_hash(job) != stable_hash(stable_jobs[0])
+            for job in stable_jobs[1:]
         ),
         "receipt_count": max(len(rows) for rows in receipts),
     }
@@ -1223,6 +1456,21 @@ def _publisher_risk(
     attempts_after = attempts_by_stage[2]
     receipts = _path(snapshots, "after", "database.receipts")
     actions = _path(snapshots, "after", "database.resume_actions")
+    pre_discard_job = _path(
+        snapshots, "after", "database.pre_discard_job"
+    )
+    pre_discard_attempts = _path(
+        snapshots, "after", "database.pre_discard_attempts"
+    )
+    pre_discard_receipts = _path(
+        snapshots, "after", "database.pre_discard_receipts"
+    )
+    pre_discard_actions = _path(
+        snapshots, "after", "database.pre_discard_resume_actions"
+    )
+    browser_terminal = _path(
+        snapshots, "after", "external.browser_hold_terminal"
+    )
     replay = _path(snapshots, "after", "api.resume_replay")
     action = actions[0] if len(actions) == 1 else {}
     attempt = attempts_after[0] if len(attempts_after) == 1 else {}
@@ -1273,6 +1521,7 @@ def _publisher_risk(
         and paused_job["pause_token"] == attempt.get("attempt_id")
     )
     return {
+        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
         "fixture_safe": _publisher_fixture_safe(kind, snapshots),
         "same_job_identity": _all_stable_equal(
             [
@@ -1297,6 +1546,22 @@ def _publisher_risk(
         == replay["replay_transition_sha256"]
         and replay["first_disposition"] == "applied"
         and replay["replay_disposition"] == "idempotent",
+        "hold_discard_preserved_state": (
+            pre_discard_job == jobs[2]
+            and pre_discard_attempts == attempts_after
+            and pre_discard_receipts == receipts
+            and pre_discard_actions == actions
+        ),
+        "browser_stopped_at_discard": (
+            browser_terminal["action"] == "setup_service_discarded"
+            and browser_terminal["fault_id"]
+            == snapshots["after"]["fault_id"]
+            and browser_terminal["service"] == "publisher-browser"
+            and bool(browser_terminal["hold_id"])
+            and bool(browser_terminal["container_id"])
+            and browser_terminal["exists"] is True
+            and browser_terminal["running"] is False
+        ),
         "bypass_attempted": not (
             pre_mutation
             and receipts == []
@@ -1446,7 +1711,12 @@ def _shape_violations(
                 continue
             nested = value[field]
             permits_empty_string = (
-                field == "error_message" or field in _EMPTY_STRING_FIELDS
+                field == "error_message"
+                or field in _EMPTY_STRING_FIELDS
+                or (
+                    field == "owner_token"
+                    and kind == "publisher_browser_unavailable"
+                )
             )
             if type(nested) is not expected_type or (
                 expected_type is str
@@ -1537,6 +1807,60 @@ def _shape_violations(
             else _FIXTURE_SCHEMA
         )
         record(stage, "target.fixture", fixture_schema)
+        if kind.startswith("publisher_"):
+            endpoint = record(
+                stage,
+                "target.endpoint_identity",
+                _ENDPOINT_IDENTITY_SCHEMA,
+            )
+            if isinstance(endpoint, Mapping):
+                sentinel = endpoint.get("sentinel")
+                api_endpoint = endpoint.get("api")
+                mcp_endpoint = endpoint.get("mcp")
+                database_endpoint = endpoint.get("database")
+                if (
+                    not isinstance(sentinel, Mapping)
+                    or set(sentinel)
+                    != {
+                        "table",
+                        "sentinel_id",
+                        "run_id",
+                        "fault_id",
+                        "source_sha",
+                    }
+                    or not isinstance(api_endpoint, Mapping)
+                    or set(api_endpoint)
+                    != {
+                        "scheme",
+                        "host",
+                        "port",
+                        "endpoint_path",
+                        "health_path",
+                        "health_status",
+                        "service",
+                        "container_port",
+                        "container_id",
+                        "image_id",
+                    }
+                    or not isinstance(mcp_endpoint, Mapping)
+                    or set(mcp_endpoint) != set(api_endpoint)
+                    or not isinstance(database_endpoint, Mapping)
+                    or set(database_endpoint)
+                    != {
+                        "scheme",
+                        "host",
+                        "port",
+                        "database",
+                        "service",
+                        "container_port",
+                        "container_id",
+                        "image_id",
+                    }
+                ):
+                    violations.append(
+                        f"{stage}.state.target.endpoint identity nested "
+                        "field set mismatch"
+                    )
 
     if kind.startswith("generation_worker_"):
         for stage in STAGES:
@@ -1712,7 +2036,28 @@ def _shape_violations(
             records(stage, "database.attempts", _ATTEMPT_SCHEMA)
         records("after", "database.receipts", _RECEIPT_SCHEMA)
         records("after", "database.resume_actions", _RESUME_ACTION_SCHEMA)
+        record("after", "database.pre_discard_job", _RISK_JOB_SCHEMA)
+        records(
+            "after",
+            "database.pre_discard_attempts",
+            _ATTEMPT_SCHEMA,
+        )
+        records(
+            "after",
+            "database.pre_discard_receipts",
+            _RECEIPT_SCHEMA,
+        )
+        records(
+            "after",
+            "database.pre_discard_resume_actions",
+            _RESUME_ACTION_SCHEMA,
+        )
         record("after", "api.resume_replay", _RESUME_REPLAY_SCHEMA)
+        record(
+            "after",
+            "external.browser_hold_terminal",
+            _PRE_DISCARD_BROWSER_SCHEMA,
+        )
     if not violations:
         violations.extend(_relation_violations(kind, snapshots))
     return violations
@@ -2254,6 +2599,10 @@ def _external_relation_violations(
             violations.append(
                 "after.state.api.resume_replay job identity mismatch"
             )
+    if kind.startswith("publisher_") and not _publisher_endpoint_identity(
+        snapshots
+    ):
+        violations.append(f"{kind}.endpoint identity is not stable or bound")
     return violations
 
 

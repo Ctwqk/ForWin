@@ -467,7 +467,6 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         identity=identity,
         run_identity=run_identity,
     )
-
     project_name = stack.recovery_project_name(run_identity)
     assert payload["name"] == project_name
     assert payload["volumes"]["forwin-postgres"]["name"] == (
@@ -497,8 +496,9 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         "source": "forwin-postgres",
         "target": "/var/lib/postgresql/data",
     }
-
-    payload["services"]["qdrant"]["container_name"] = "forwin-v5-recovery-qdrant"
+    payload["services"]["qdrant"]["container_name"] = (
+        "forwin-v5-recovery-qdrant"
+    )
     with pytest.raises(stack.StackError, match="qdrant.*container"):
         stack.validate_isolated_compose_config(
             payload,
@@ -518,6 +518,186 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         )
 
 
+def test_endpoint_binding_uses_verified_dynamic_published_mappings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    mappings = {
+        ("forwin", 8899): {
+            "service": "forwin",
+            "host": "127.0.0.1",
+            "host_port": 24111,
+            "container_port": 8899,
+            "container_id": "api-container-dynamic",
+            "image_id": "sha256:" + "c" * 64,
+        },
+        ("forwin-mcp", 8896): {
+            "service": "forwin-mcp",
+            "host": "127.0.0.1",
+            "host_port": 24112,
+            "container_port": 8896,
+            "container_id": "mcp-container-dynamic",
+            "image_id": "sha256:" + "c" * 64,
+        },
+        ("postgres", 5432): {
+            "service": "postgres",
+            "host": "127.0.0.1",
+            "host_port": 24113,
+            "container_port": 5432,
+            "container_id": "postgres-container-dynamic",
+            "image_id": "sha256:" + "d" * 64,
+        },
+    }
+    sentinel = {
+        "table": stack.RECOVERY_SENTINEL_TABLE,
+        "sentinel_id": "e" * 64,
+        "run_id": run_identity["run_id"],
+        "fault_id": "fault-1",
+        "source_sha": SOURCE_SHA,
+    }
+    events = stack.load_verified_events()
+    events[1]["sentinel"] = sentinel
+    previous = "0" * 64
+    for event in events:
+        event["previous_event_sha256"] = previous
+        event["event_sha256"] = stack.event_hash(event)
+        previous = event["event_sha256"]
+    stack.events_path().write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events)
+        + "\n",
+        encoding="utf-8",
+    )
+    probes: list[str] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "published_endpoint_identity",
+        lambda service, container_port, **_kwargs: dict(
+            mappings[(service, container_port)]
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "read_recovery_sentinel",
+        lambda **_kwargs: dict(sentinel),
+    )
+    monkeypatch.setattr(
+        stack,
+        "probe_loopback_health",
+        lambda url: probes.append(url) or 200,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+
+    record = stack.bind_recovery_endpoints(
+        "fault-1",
+        "http://127.0.0.1:24111",
+        "http://127.0.0.1:24112/mcp",
+        "127.0.0.1",
+        24113,
+        "forwin",
+    )
+
+    assert record["api"]["container_id"] == "api-container-dynamic"
+    assert record["mcp"]["endpoint_path"] == "/mcp"
+    assert record["database"]["port"] == 24113
+    assert probes == [
+        "http://127.0.0.1:24111/health",
+        "http://127.0.0.1:24112/health",
+    ]
+    assert record["identity_sha256"] == stack.stable_hash(
+        {
+            key: value
+            for key, value in record.items()
+            if key != "identity_sha256"
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("api_url", "mcp_url", "database_host", "database_port", "database_name"),
+    (
+        (
+            "http://0.0.0.0:24111",
+            "http://127.0.0.1:24112/mcp",
+            "127.0.0.1",
+            24113,
+            "forwin",
+        ),
+        (
+            "http://127.0.0.1:24111",
+            "http://127.0.0.1:24112/wrong",
+            "127.0.0.1",
+            24113,
+            "forwin",
+        ),
+        (
+            "http://127.0.0.1:24111",
+            "http://127.0.0.1:24112/mcp",
+            "127.0.0.1",
+            24199,
+            "forwin",
+        ),
+        (
+            "http://127.0.0.1:24111",
+            "http://127.0.0.1:24112/mcp",
+            "127.0.0.1",
+            24113,
+            "other",
+        ),
+    ),
+)
+def test_endpoint_binding_rejects_cross_stack_or_wrong_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api_url: str,
+    mcp_url: str,
+    database_host: str,
+    database_port: int,
+    database_name: str,
+) -> None:
+    run_identity, _volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "published_endpoint_identity",
+        lambda service, container_port, **_kwargs: {
+            "service": service,
+            "host": "127.0.0.1",
+            "host_port": {
+                8899: 24111,
+                8896: 24112,
+                5432: 24113,
+            }[container_port],
+            "container_port": container_port,
+            "container_id": f"{service}-container",
+            "image_id": "sha256:" + "c" * 64,
+        },
+    )
+
+    with pytest.raises(stack.StackError):
+        stack.bind_recovery_endpoints(
+            "fault-1",
+            api_url,
+            mcp_url,
+            database_host,
+            database_port,
+            database_name,
+        )
 def test_recovery_override_pins_stateful_endpoints_to_isolated_services() -> None:
     payload = yaml.safe_load(
         stack.COMPOSE_OVERRIDE.read_text(encoding="utf-8")
@@ -635,15 +815,132 @@ def test_file_inventory_is_read_only_identity_checked_and_data_scoped(
         "publisher-browser",
         "python",
     )
-    assert "not path.is_symlink()" in args[5]
+    assert "is_symlink" in args[5]
     assert args[-1] == "/app/data/publisher_covers"
     assert kwargs == {"run_identity": run_identity}
-    with pytest.raises(stack.StackError, match="beneath /app/data"):
+    with pytest.raises(stack.StackError, match="publisher cover root"):
         stack.file_inventory.__wrapped__(
             "publisher-browser",
             "fault-inventory",
             "/etc",
         )
+    with pytest.raises(stack.StackError, match="publisher-browser"):
+        stack.file_inventory.__wrapped__(
+            "forwin",
+            "fault-inventory",
+            "/app/data/publisher_covers",
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {
+            "root": "/app/data/publisher_covers",
+            "root_exists": False,
+            "files": [],
+        },
+        {
+            "root": "/app/data/publisher_covers",
+            "root_exists": True,
+            "files": [
+                {
+                    "path": "../escaped",
+                    "size": 1,
+                    "content_sha256": "0" * 64,
+                }
+            ],
+        },
+        {
+            "root": "/app/data/publisher_covers",
+            "root_exists": True,
+            "files": [
+                {
+                    "path": "/absolute",
+                    "size": 1,
+                    "content_sha256": "0" * 64,
+                }
+            ],
+        },
+    ),
+)
+def test_file_inventory_rejects_missing_root_and_escaped_rows(
+    payload: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = {"source_sha": SOURCE_SHA}
+    run_identity = {"run_id": "4" * 32}
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda _fault_id: {
+            "identity": identity,
+            "run_identity": run_identity,
+        },
+    )
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, **_kwargs: json.dumps(payload),
+    )
+
+    with pytest.raises(stack.StackError, match="file inventory"):
+        stack.file_inventory.__wrapped__(
+            "publisher-browser",
+            "fault-inventory-generalized",
+            "/app/data/publisher_covers",
+        )
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ("missing", "root-symlink", "ancestor-symlink", "leaf-symlink"),
+)
+def test_file_inventory_script_rejects_missing_and_symlinked_paths(
+    layout: str,
+    tmp_path: Path,
+) -> None:
+    real_data = tmp_path / "real-data"
+    real_data.mkdir()
+    expected = tmp_path / "app" / "data" / "publisher_covers"
+    expected.parent.mkdir(parents=True)
+    if layout == "root-symlink":
+        expected.symlink_to(real_data, target_is_directory=True)
+    elif layout == "ancestor-symlink":
+        shutil.rmtree(expected.parent)
+        linked_data = tmp_path / "linked-data"
+        linked_data.mkdir()
+        (tmp_path / "app" / "data").symlink_to(
+            linked_data,
+            target_is_directory=True,
+        )
+        (linked_data / "publisher_covers").mkdir()
+    elif layout == "leaf-symlink":
+        expected.mkdir()
+        target = tmp_path / "outside.bin"
+        target.write_bytes(b"outside")
+        (expected / "escaped.bin").symlink_to(target)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            stack.file_inventory_script(),
+            str(expected),
+            str(expected),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
 
 
 def test_recovery_override_parameterizes_all_container_and_database_volume_names(
@@ -1434,6 +1731,140 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
     ) <= stack.CLEANUP_TIMEOUT_SECONDS
     with pytest.raises(stack.StackError, match="terminal"):
         stack.append_event("snapshot", label="retry-not-allowed")
+
+
+@pytest.mark.parametrize("interrupt_type", (KeyboardInterrupt, SystemExit))
+def test_fresh_up_interrupt_cleans_and_reraises_without_setup_blocked(
+    interrupt_type: type[BaseException],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / interrupt_type.__name__).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "6" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "6" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    cleanup_calls: list[dict] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(interrupt_type()),
+    )
+
+    def cleanup(
+        run_identity: dict,
+        *,
+        fallback_timestamp: str,
+    ) -> dict:
+        cleanup_calls.append(run_identity)
+        return {
+            "cleanup_requested_at": fallback_timestamp,
+            "cleanup_confirmed_at": fallback_timestamp,
+            "cleanup_error": None,
+            "database_volume": absent,
+            "after": {
+                "observed_at": fallback_timestamp,
+                "services": {
+                    service: {"exists": False, "running": False}
+                    for service in stack.SERVICES
+                },
+            },
+        }
+
+    monkeypatch.setattr(stack, "cleanup_recovery_run", cleanup)
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+
+    with pytest.raises(interrupt_type):
+        stack.fresh_up("fault-interrupt-generalized")
+
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "interrupted_cleanup",
+    ]
+    assert cleanup_calls == [events[0]["run_identity"]]
+    assert events[-1]["cleanup_confirmed"] is True
+    assert not {
+        "setup_blocked",
+        "fault_marked",
+        "recovery_marked",
+        "fault_service_stopped",
+        "fault_service_killed",
+        "fault_service_recovered",
+    }.intersection(event["action"] for event in events)
+
+
+def test_fresh_up_cleanup_interruption_preserves_original_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "cleanup-interruption").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "7" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "7" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    cleanup_called: list[bool] = []
+
+    def interrupted_cleanup(*_args: object, **_kwargs: object) -> dict:
+        cleanup_called.append(True)
+        raise SystemExit(12)
+
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        interrupted_cleanup,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        stack.fresh_up("fault-cleanup-interrupt-generalized")
+
+    assert cleanup_called == [True]
+    assert [event["action"] for event in stack.load_verified_events()] == [
+        "fresh_up_started"
+    ]
 
 
 def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
@@ -2411,7 +2842,7 @@ def test_setup_hold_rejects_duplicate_overlap_and_mismatched_release(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
     running = {service: True for service in stack.SERVICES}
 
     def inspect_service(service: str, **_kwargs: object) -> dict:
@@ -2588,6 +3019,149 @@ def test_destroy_rejects_unbalanced_setup_hold_before_compose(
 
     with pytest.raises(stack.StackError, match="active setup hold"):
         stack.destroy()
+
+
+def test_setup_discard_balances_only_an_active_hold_without_starting_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    running = {"publisher-browser": True}
+    compose_calls: list[tuple[str, ...]] = []
+
+    def inspect_service(service: str, **_kwargs: object) -> dict:
+        return {
+            "service": service,
+            "exists": True,
+            "running": running[service],
+            "container_id": f"{service}-container-generalized",
+        }
+
+    def compose(*args: str, **_kwargs: object) -> str:
+        compose_calls.append(args)
+        if args[0] == "stop":
+            running[args[-1]] = False
+        return ""
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(stack, "inspect_service", inspect_service)
+    monkeypatch.setattr(stack, "compose", compose)
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+
+    stack.setup_hold_service(
+        "publisher-browser",
+        "fault-1",
+        "risk-fixture-generalized",
+    )
+    discarded = stack.setup_discard_service(
+        "publisher-browser",
+        "fault-1",
+        "risk-fixture-generalized",
+    )
+
+    assert discarded["action"] == "setup_service_discarded"
+    assert discarded["before"]["running"] is False
+    assert discarded["after"]["running"] is False
+    assert discarded["after"]["container_id"] == (
+        "publisher-browser-container-generalized"
+    )
+    assert not any(call[0] == "start" for call in compose_calls)
+    assert stack.setup_hold_state(
+        stack.load_verified_events()
+    )["active_by_id"] == {}
+
+    with pytest.raises(stack.StackError, match="matching setup hold"):
+        stack.setup_discard_service(
+            "publisher-browser",
+            "fault-1",
+            "risk-fixture-generalized",
+        )
+    with pytest.raises(stack.StackError, match="matching setup hold"):
+        stack.setup_discard_service(
+            "publisher-browser",
+            "fault-1",
+            "never-held-generalized",
+        )
+
+
+def test_setup_discard_rejects_service_drift_and_running_held_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    running = {"publisher-browser": True, "outbox-worker": True}
+
+    def inspect_service(service: str, **_kwargs: object) -> dict:
+        return {
+            "service": service,
+            "exists": True,
+            "running": running[service],
+            "container_id": f"{service}-container",
+        }
+
+    def compose(*args: str, **_kwargs: object) -> str:
+        if args[0] == "stop":
+            running[args[-1]] = False
+        return ""
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(stack, "inspect_service", inspect_service)
+    monkeypatch.setattr(stack, "compose", compose)
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    stack.setup_hold_service(
+        "publisher-browser",
+        "fault-1",
+        "risk-hold-generic",
+    )
+
+    with pytest.raises(stack.StackError, match="service mismatch"):
+        stack.setup_discard_service(
+            "outbox-worker",
+            "fault-1",
+            "risk-hold-generic",
+        )
+
+    running["publisher-browser"] = True
+    with pytest.raises(stack.StackError, match="running before setup discard"):
+        stack.setup_discard_service(
+            "publisher-browser",
+            "fault-1",
+            "risk-hold-generic",
+        )
+    running["publisher-browser"] = False
+    stack.append_event(
+        "fault_service_stopped",
+        fault_id="fault-1",
+        service="publisher-browser",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    with pytest.raises(stack.StackError, match="primary fault service"):
+        stack.setup_discard_service(
+            "publisher-browser",
+            "fault-1",
+            "risk-hold-generic",
+        )
 
 
 @pytest.mark.parametrize(

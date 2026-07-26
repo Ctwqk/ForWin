@@ -99,6 +99,13 @@ AUXILIARY_HOLD_SERVICES = frozenset(
         "publisher-browser",
     }
 )
+PUBLISHER_RISK_FAULTS = frozenset(
+    {
+        "publisher_captcha",
+        "publisher_mfa",
+        "publisher_account_risk",
+    }
+)
 _SAFE_HOLD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -228,7 +235,11 @@ def setup_hold_violations(
         event
         for event in events
         if event.get("action")
-        in {"setup_service_held", "setup_service_released"}
+        in {
+            "setup_service_held",
+            "setup_service_released",
+            "setup_service_discarded",
+        }
     ]
     expected_identity = events[0].get("identity") if events else None
     if any(
@@ -264,7 +275,11 @@ def setup_hold_violations(
         confirmed_field = (
             "hold_time"
             if action == "setup_service_held"
-            else "release_time"
+            else (
+                "release_time"
+                if action == "setup_service_released"
+                else "discard_time"
+            )
         )
         requested_at: datetime | None = None
         confirmed_at: datetime | None = None
@@ -331,7 +346,23 @@ def setup_hold_violations(
                 }
                 active_by_service[service] = hold_id
             continue
-        if (
+        if action == "setup_service_released":
+            if (
+                not isinstance(before, dict)
+                or before.get("service") != service
+                or before.get("exists") is not True
+                or before.get("running") is not False
+                or not isinstance(after, dict)
+                or after.get("service") != service
+                or after.get("exists") is not True
+                or after.get("running") is not True
+                or not isinstance(after.get("probe"), dict)
+                or after["probe"].get("passed") is not True
+            ):
+                violations.append(
+                    f"{kind}.setup release readiness/probe postcondition mismatch"
+                )
+        elif (
             not isinstance(before, dict)
             or before.get("service") != service
             or before.get("exists") is not True
@@ -339,22 +370,26 @@ def setup_hold_violations(
             or not isinstance(after, dict)
             or after.get("service") != service
             or after.get("exists") is not True
-            or after.get("running") is not True
-            or not isinstance(after.get("probe"), dict)
-            or after["probe"].get("passed") is not True
+            or after.get("running") is not False
+            or not str(before.get("container_id") or "")
+            or after.get("container_id") != before.get("container_id")
         ):
             violations.append(
-                f"{kind}.setup release readiness/probe postcondition mismatch"
+                f"{kind}.setup discard stopped postcondition mismatch"
             )
         held = active_by_id.get(hold_id)
         if held is None:
             violations.append(
-                f"{kind}.hold release has no matching hold"
+                f"{kind}.hold "
+                f"{'release' if action == 'setup_service_released' else 'discard'} "
+                "has no matching hold"
             )
             continue
         if held["service"] != service:
             violations.append(
-                f"{kind}.hold release does not match held service"
+                f"{kind}.hold "
+                f"{'release' if action == 'setup_service_released' else 'discard'} "
+                "does not match held service"
             )
             continue
         if (
@@ -363,7 +398,9 @@ def setup_hold_violations(
             and requested_at < held["hold_time"]
         ):
             violations.append(
-                f"{kind}.setup release predates hold confirmation"
+                f"{kind}.setup "
+                f"{'release' if action == 'setup_service_released' else 'discard'} "
+                "predates hold confirmation"
             )
         del active_by_id[hold_id]
         del active_by_service[service]
@@ -563,6 +600,208 @@ def run_resource_violations(
     }
 
 
+def publisher_endpoint_violations(
+    kind: str,
+    *,
+    events: list[dict[str, Any]],
+    snapshots: dict[str, dict[str, Any]],
+) -> list[str]:
+    if not kind.startswith("publisher_"):
+        return []
+    violations: list[str] = []
+
+    def mapping(value: object) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    endpoint_events = [
+        event for event in events if event.get("action") == "endpoints_bound"
+    ]
+    if len(endpoint_events) != 1:
+        return [f"{kind}.endpoint binding event count mismatch"]
+    endpoint_event = endpoint_events[0]
+    endpoint = endpoint_event.get("endpoint_identity")
+    if not isinstance(endpoint, dict):
+        return [f"{kind}.endpoint binding event identity is missing"]
+    snapshot_endpoints = []
+    for stage in ("before", "during", "after"):
+        snapshot = mapping(snapshots.get(stage))
+        state = mapping(snapshot.get("state"))
+        target = mapping(state.get("target"))
+        snapshot_endpoints.append(target.get("endpoint_identity"))
+    if any(item != endpoint for item in snapshot_endpoints):
+        violations.append(f"{kind}.endpoint identity is not event-bound")
+
+    fresh_completions = [
+        event for event in events if event.get("action") == "fresh_up_completed"
+    ]
+    if (
+        len(fresh_completions) != 1
+        or events.index(endpoint_event) != events.index(fresh_completions[0]) + 1
+    ):
+        violations.append(
+            f"{kind}.endpoint binding is not immediately after fresh-up"
+        )
+        fresh_completion: dict[str, Any] = {}
+    else:
+        fresh_completion = fresh_completions[0]
+    if fresh_completion.get("sentinel") != endpoint.get("sentinel"):
+        violations.append(f"{kind}.endpoint sentinel is not fresh-up bound")
+
+    identity = mapping(endpoint_event.get("identity"))
+    run_identity = mapping(endpoint_event.get("run_identity"))
+    database_volume = endpoint_event.get("database_volume")
+    if not identity or not run_identity:
+        violations.append(f"{kind}.endpoint event run identity is malformed")
+        return violations
+    if (
+        endpoint.get("fault_id") != endpoint_event.get("fault_id")
+        or endpoint.get("run_id") != run_identity.get("run_id")
+        or endpoint.get("source_sha") != identity.get("source_sha")
+        or endpoint.get("source_tree") != identity.get("source_tree")
+        or endpoint.get("project_name")
+        != f"forwin-v5-recovery-{run_identity.get('run_id')}"
+        or not isinstance(database_volume, dict)
+        or database_volume.get("name")
+        != run_identity.get("database_volume_name")
+    ):
+        violations.append(f"{kind}.endpoint event active-run identity mismatch")
+
+    candidate_identity = {
+        key: identity.get(key)
+        for key in (
+            "source_sha",
+            "source_tree",
+            "runtime_image",
+            "browser_image",
+            "dependency_images",
+            "candidate_manifest",
+        )
+    }
+    candidate_manifest = mapping(identity.get("candidate_manifest"))
+    if (
+        endpoint.get("candidate_manifest_sha256")
+        != candidate_manifest.get("sha256")
+        or endpoint.get("candidate_identity_sha256")
+        != evaluator.stable_hash(candidate_identity)
+    ):
+        violations.append(f"{kind}.endpoint candidate identity mismatch")
+
+    runtime_image = mapping(identity.get("runtime_image")).get("image_id")
+    dependency_images = mapping(identity.get("dependency_images"))
+    postgres_image = mapping(dependency_images.get("postgres")).get(
+        "image_id"
+    )
+    expected_images = {
+        "api": runtime_image,
+        "mcp": runtime_image,
+        "database": postgres_image,
+    }
+    fresh_after = mapping(fresh_completion.get("after"))
+    fresh_services = mapping(fresh_after.get("services"))
+    service_keys = {
+        "api": "forwin",
+        "mcp": "forwin-mcp",
+        "database": "postgres",
+    }
+    for endpoint_key, service in service_keys.items():
+        published = mapping(endpoint.get(endpoint_key))
+        fresh_service = mapping(fresh_services.get(service))
+        if (
+            not published
+            or published.get("service") != service
+            or published.get("image_id") != expected_images[endpoint_key]
+            or not fresh_service
+            or fresh_service.get("exists") is not True
+            or fresh_service.get("running") is not True
+            or fresh_service.get("container_id")
+            != published.get("container_id")
+            or fresh_service.get("image_id") != published.get("image_id")
+        ):
+            violations.append(
+                f"{kind}.endpoint published container mismatch: {service}"
+            )
+    return violations
+
+
+def publisher_risk_discard_violations(
+    kind: str,
+    *,
+    events: list[dict[str, Any]],
+    snapshots: dict[str, dict[str, Any]],
+) -> list[str]:
+    if kind not in PUBLISHER_RISK_FAULTS:
+        return []
+    violations: list[str] = []
+
+    def mapping(value: object) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    browser_holds = [
+        event
+        for event in events
+        if event.get("service") == "publisher-browser"
+        and event.get("action")
+        in {
+            "setup_service_held",
+            "setup_service_released",
+            "setup_service_discarded",
+        }
+    ]
+    if [event.get("action") for event in browser_holds] != [
+        "setup_service_held",
+        "setup_service_discarded",
+    ]:
+        return [f"{kind}.typed-risk browser hold/discard lifecycle mismatch"]
+    held, discarded = browser_holds
+    after_snapshot = mapping(snapshots.get("after"))
+    after_state = mapping(after_snapshot.get("state"))
+    external = mapping(after_state.get("external"))
+    terminal = external.get("browser_hold_terminal")
+    discarded_after = mapping(discarded.get("after"))
+    expected_terminal = {
+        "action": "setup_service_discarded",
+        "fault_id": discarded.get("fault_id"),
+        "hold_id": discarded.get("hold_id"),
+        "service": discarded.get("service"),
+        "container_id": discarded_after.get("container_id"),
+        "exists": discarded_after.get("exists"),
+        "running": discarded_after.get("running"),
+    }
+    if terminal != expected_terminal:
+        violations.append(
+            f"{kind}.typed-risk discard is not final-snapshot bound"
+        )
+    fault_events = [
+        event
+        for event in events
+        if event.get("action") == "fault_marked"
+        and event.get("fault_kind") == kind
+    ]
+    recovery_events = [
+        event
+        for event in events
+        if event.get("action") == "recovery_marked"
+        and event.get("fault_kind") == kind
+    ]
+    destroyed = [
+        event for event in events if event.get("action") == "destroyed"
+    ]
+    if (
+        len(fault_events) != 1
+        or len(recovery_events) != 1
+        or len(destroyed) != 1
+        or not (
+            events.index(held)
+            < events.index(fault_events[0])
+            < events.index(recovery_events[0])
+            < events.index(discarded)
+            < events.index(destroyed[0])
+        )
+    ):
+        violations.append(f"{kind}.typed-risk discard event order mismatch")
+    return violations
+
+
 def fault_report_violations(
     report: dict[str, Any],
     *,
@@ -712,6 +951,20 @@ def fault_report_violations(
             artifact_paths=artifact_paths,
         )
         violations.extend(run_violations)
+        violations.extend(
+            publisher_endpoint_violations(
+                kind,
+                events=events,
+                snapshots=snapshots,
+            )
+        )
+        violations.extend(
+            publisher_risk_discard_violations(
+                kind,
+                events=events,
+                snapshots=snapshots,
+            )
+        )
         event_fault_ids = {
             str(event.get("fault_id") or "")
             for event in events

@@ -221,6 +221,211 @@ def test_shared_controller_exposes_typed_mark_and_read_only_file_inventory(
     ]
 
 
+def endpoint_identity(
+    common: Any | None,
+    *,
+    fault_id: str,
+    source_sha: str = "1" * 40,
+    api_port: int = 23117,
+    mcp_port: int = 23118,
+    database_port: int = 23119,
+) -> dict[str, Any]:
+    sentinel = {
+        "table": "forwin_recovery_run_sentinel",
+        "sentinel_id": hashlib.sha256(fault_id.encode()).hexdigest(),
+        "run_id": hashlib.sha256(
+            f"run:{fault_id}".encode()
+        ).hexdigest()[:32],
+        "fault_id": fault_id,
+        "source_sha": source_sha,
+    }
+    record = {
+        "schema_version": 1,
+        "fault_id": fault_id,
+        "run_id": sentinel["run_id"],
+        "source_sha": source_sha,
+        "source_tree": "2" * 40,
+        "project_name": f"forwin-v5-recovery-{sentinel['run_id']}",
+        "candidate_manifest_sha256": "3" * 64,
+        "candidate_identity_sha256": "4" * 64,
+        "sentinel": sentinel,
+        "api": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": api_port,
+            "endpoint_path": "",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin",
+            "container_port": 8899,
+            "container_id": "api-container-generalized",
+            "image_id": "sha256:" + "5" * 64,
+        },
+        "mcp": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": mcp_port,
+            "endpoint_path": "/mcp",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin-mcp",
+            "container_port": 8896,
+            "container_id": "mcp-container-generalized",
+            "image_id": "sha256:" + "5" * 64,
+        },
+        "database": {
+            "scheme": "postgresql",
+            "host": "127.0.0.1",
+            "port": database_port,
+            "database": "forwin",
+            "service": "postgres",
+            "container_port": 5432,
+            "container_id": "postgres-container-generalized",
+            "image_id": "sha256:" + "6" * 64,
+        },
+    }
+    record["identity_sha256"] = (
+        common.stable_hash(record)
+        if common is not None
+        else hashlib.sha256(
+            json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+    return record
+
+
+def test_shared_endpoint_binding_requires_exact_loopback_run_and_db_sentinel(
+    common: Any,
+) -> None:
+    fault_id = "endpoint-binding-generalized"
+    expected = endpoint_identity(common, fault_id=fault_id)
+    calls: list[Any] = []
+
+    class Controller:
+        def bind_endpoints(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(("controller", kwargs))
+            return expected
+
+    def sentinel_reader() -> dict[str, str]:
+        calls.append(("sentinel",))
+        return dict(expected["sentinel"])
+
+    bound = common.bind_recovery_endpoints(
+        controller=Controller(),
+        fault_id=fault_id,
+        source_sha="1" * 40,
+        api_url="http://127.0.0.1:23117",
+        mcp_url="http://127.0.0.1:23118/mcp",
+        database_url=(
+            "postgresql://isolated-user:isolated-password@"
+            "127.0.0.1:23119/forwin"
+        ),
+        sentinel_reader=sentinel_reader,
+    )
+
+    assert bound == expected
+    assert [item[0] for item in calls] == ["controller", "sentinel"]
+    assert sensitive_paths(bound) == []
+    assert "isolated-password" not in json.dumps(bound)
+
+
+@pytest.mark.parametrize(
+    ("api_url", "mcp_url", "database_url"),
+    (
+        (
+            "http://cross-stack.invalid:23117",
+            "http://127.0.0.1:23118/mcp",
+            "postgresql://u:p@127.0.0.1:23119/forwin",
+        ),
+        (
+            "http://127.0.0.1:23117",
+            "http://127.0.0.1:23118/wrong",
+            "postgresql://u:p@127.0.0.1:23119/forwin",
+        ),
+        (
+            "http://127.0.0.1:23117",
+            "http://127.0.0.1:23118/mcp",
+            "postgresql://u:p@127.0.0.1:23129/forwin",
+        ),
+    ),
+)
+def test_shared_endpoint_binding_rejects_cross_stack_values_before_db_query(
+    common: Any,
+    api_url: str,
+    mcp_url: str,
+    database_url: str,
+) -> None:
+    fault_id = "endpoint-negative-generalized"
+    expected = endpoint_identity(common, fault_id=fault_id)
+    sentinel_called = False
+
+    class Controller:
+        def bind_endpoints(self, **_kwargs: Any) -> dict[str, Any]:
+            return expected
+
+    def sentinel_reader() -> dict[str, str]:
+        nonlocal sentinel_called
+        sentinel_called = True
+        return dict(expected["sentinel"])
+
+    with pytest.raises(common.SetupBlocked):
+        common.bind_recovery_endpoints(
+            controller=Controller(),
+            fault_id=fault_id,
+            source_sha="1" * 40,
+            api_url=api_url,
+            mcp_url=mcp_url,
+            database_url=database_url,
+            sentinel_reader=sentinel_reader,
+        )
+
+    assert sentinel_called is False
+
+
+def test_shared_endpoint_binding_rejects_sentinel_or_identity_drift(
+    common: Any,
+) -> None:
+    fault_id = "endpoint-sentinel-generalized"
+    expected = endpoint_identity(common, fault_id=fault_id)
+
+    class Controller:
+        def bind_endpoints(self, **_kwargs: Any) -> dict[str, Any]:
+            return expected
+
+    for mutation in ("sentinel", "identity", "project"):
+        observed = dict(expected["sentinel"])
+        if mutation == "sentinel":
+            observed["run_id"] = "f" * 32
+        elif mutation == "identity":
+            expected["identity_sha256"] = "0" * 64
+        else:
+            expected["project_name"] = (
+                "cross-stack-prefix-" + expected["run_id"]
+            )
+            expected["identity_sha256"] = common.stable_hash(
+                {
+                    key: value
+                    for key, value in expected.items()
+                    if key != "identity_sha256"
+                }
+            )
+        with pytest.raises(common.SetupBlocked):
+            common.bind_recovery_endpoints(
+                controller=Controller(),
+                fault_id=fault_id,
+                source_sha="1" * 40,
+                api_url="http://127.0.0.1:23117",
+                mcp_url="http://127.0.0.1:23118/mcp",
+                database_url="postgresql://u:p@127.0.0.1:23119/forwin",
+                sentinel_reader=lambda observed=observed: observed,
+            )
+        expected = endpoint_identity(common, fault_id=fault_id)
+
+
 def test_shared_http_json_forwards_auth_headers_without_echoing_them(
     monkeypatch: pytest.MonkeyPatch,
     common: Any,
@@ -786,19 +991,46 @@ class FakeWriter:
 
 
 class FakeController:
-    def __init__(self, tmp_path: Path, log: list[Any]) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        log: list[Any],
+        endpoint_record: dict[str, Any],
+    ) -> None:
         self.event_log_path = tmp_path / "stack-events.jsonl"
         self.log = log
         self.inventory_count = 0
+        self.endpoint_record = endpoint_record
 
     def fresh_up(self, fault_id: str) -> None:
         self.log.append(("fresh_up", fault_id))
+
+    def bind_endpoints(self, **kwargs: Any) -> dict[str, Any]:
+        self.log.append(("bind_endpoints", kwargs["fault_id"]))
+        return self.endpoint_record
 
     def setup_hold(self, service: str, fault_id: str, hold_id: str) -> None:
         self.log.append(("setup_hold", service, fault_id, hold_id))
 
     def setup_release(self, service: str, fault_id: str, hold_id: str) -> None:
         self.log.append(("setup_release", service, fault_id, hold_id))
+
+    def setup_discard(
+        self, service: str, fault_id: str, hold_id: str
+    ) -> dict[str, Any]:
+        self.log.append(("setup_discard", service, fault_id, hold_id))
+        return {
+            "action": "setup_service_discarded",
+            "fault_id": fault_id,
+            "hold_id": hold_id,
+            "service": service,
+            "after": {
+                "service": service,
+                "exists": True,
+                "running": False,
+                "container_id": f"{service}-container-generalized",
+            },
+        }
 
     def kill(self, service: str, fault_id: str) -> None:
         self.log.append(("kill", service, fault_id))
@@ -835,11 +1067,33 @@ class FakeController:
     def destroy(self) -> None:
         self.log.append("destroy")
 
+    def abort(self, fault_id: str, stage: str, reason: str) -> None:
+        self.log.append(("abort", fault_id, stage, reason))
+
+    def interrupt_cleanup(self, fault_id: str) -> None:
+        self.log.append(("interrupt_cleanup", fault_id))
+
 
 class FakeSQLCollector:
-    def __init__(self, log: list[Any]) -> None:
+    def __init__(
+        self,
+        log: list[Any],
+        endpoint_record: dict[str, Any],
+    ) -> None:
         self.log = log
         self.current_owner = ""
+        self.endpoint_record = endpoint_record
+
+    def read_recovery_sentinel(self) -> dict[str, str]:
+        self.log.append("read_sentinel")
+        return dict(self.endpoint_record["sentinel"])
+
+    def bind_endpoint_identity(
+        self,
+        endpoint_record: dict[str, Any],
+    ) -> None:
+        assert endpoint_record == self.endpoint_record
+        self.log.append("bind_endpoint_identity")
 
     def insert_fixture(self, fixture: Any) -> None:
         self.log.append(("insert_fixture", fixture.job_id))
@@ -869,6 +1123,15 @@ class FakeSQLCollector:
     def risk_snapshot(self, *, stage: str, **kwargs: Any) -> dict[str, Any]:
         self.log.append(("snapshot", stage))
         return {"stage": stage, "fixture": kwargs["fixture"].job_id}
+
+    def risk_terminal_state(self, fixture: Any) -> dict[str, Any]:
+        self.log.append(("risk_terminal_state", fixture.job_id))
+        return {
+            "job": {"job_id": fixture.job_id},
+            "attempts": [],
+            "receipts": [],
+            "resume_actions": [],
+        }
 
     def wait_status(self, fixture: Any, expected: str) -> None:
         self.log.append(("wait_status", expected))
@@ -991,14 +1254,21 @@ def make_live_runner(
     barrier: Any | None = None,
 ) -> tuple[Any, FakeWriter]:
     writer = FakeWriter(tmp_path, log)
+    fault_id = f"fault-live-{kind}"
+    endpoint_record = endpoint_identity(
+        None,
+        fault_id=fault_id,
+    )
     return (
         runner_module.LiveRunner(
             fault_kind=kind,
-            fault_id=f"fault-live-{kind}",
+            fault_id=fault_id,
             source_sha="1" * 40,
-            database_url="postgresql://isolated.invalid/forwin",
-            controller=FakeController(tmp_path, log),
-            sql_collector=FakeSQLCollector(log),
+            database_url="postgresql://u:p@127.0.0.1:23119/forwin",
+            mcp_url="http://127.0.0.1:23118/mcp",
+            api_url="http://127.0.0.1:23117",
+            controller=FakeController(tmp_path, log, endpoint_record),
+            sql_collector=FakeSQLCollector(log, endpoint_record),
             api=FakePublisherAPI(log),
             writer=writer,
             barrier_factory=(lambda: barrier) if barrier is not None else None,
@@ -1155,8 +1425,32 @@ def test_typed_risk_live_sequences_mark_pause_resume_and_recovery_exactly_once(
         )
     )
     recovery_mark = log.index(("mark", kind, "recovery", fault_id))
+    discard = log.index(
+        (
+            "setup_discard",
+            "publisher-browser",
+            fault_id,
+            f"risk-fixture-{fault_id}",
+        )
+    )
+    after = log.index(("snapshot", "after"))
     assert pause < fault_mark < log.index(("snapshot", "during"))
-    assert log.index(("snapshot", "during")) < resume < recovery_mark
+    assert (
+        log.index(("snapshot", "during"))
+        < resume
+        < recovery_mark
+        < discard
+        < after
+    )
+    assert not any(
+        isinstance(item, tuple) and item[0] == "setup_release"
+        for item in log
+    )
+    assert not any(
+        isinstance(item, tuple)
+        and item[:2] == ("start", "publisher-browser")
+        for item in log
+    )
     assert sum(
         item == ("mark", kind, "fault", fault_id) for item in log
     ) == 1
@@ -1166,6 +1460,70 @@ def test_typed_risk_live_sequences_mark_pause_resume_and_recovery_exactly_once(
     assert writer.pass_payload is not None
 
 
+@pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
+@pytest.mark.parametrize(
+    "point",
+    ("before_fault", "during_fault", "during_cleanup"),
+)
+def test_interruptions_cleanup_and_reraise_without_emitting_report(
+    runner_module: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: type[BaseException],
+    point: str,
+) -> None:
+    log: list[Any] = []
+    live, writer = make_live_runner(
+        runner_module,
+        tmp_path,
+        "publisher_captcha",
+        log,
+    )
+
+    if point == "before_fault":
+        monkeypatch.setattr(
+            live.sql,
+            "insert_fixture",
+            lambda _fixture: (_ for _ in ()).throw(interruption()),
+        )
+    elif point == "during_fault":
+        monkeypatch.setattr(
+            live.api,
+            "pause",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(interruption()),
+        )
+    else:
+        original_discard = live.controller.setup_discard
+
+        def interrupting_discard(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            original_discard(*args, **kwargs)
+            raise interruption()
+
+        monkeypatch.setattr(
+            live.controller,
+            "setup_discard",
+            interrupting_discard,
+        )
+
+    with pytest.raises(interruption):
+        live.run()
+
+    assert ("interrupt_cleanup", live.fault_id) in log
+    assert "write_pass" not in log
+    assert "write_setup_blocked" not in log
+    assert not any(
+        isinstance(item, tuple)
+        and item[0] == "mark"
+        and item[1:3] in {
+            (live.fault_kind, "fault"),
+            (live.fault_kind, "recovery"),
+        }
+        for item in log[
+            log.index(("interrupt_cleanup", live.fault_id)) + 1 :
+        ]
+    )
+
+
 class MemoryPublisherDatabase:
     def __init__(self) -> None:
         self.jobs: list[dict[str, Any]] = []
@@ -1173,6 +1531,11 @@ class MemoryPublisherDatabase:
         self.receipts: list[dict[str, Any]] = []
         self.cover_assets: list[dict[str, Any]] = []
         self.actions: list[dict[str, Any]] = []
+        self.sentinel = endpoint_identity(
+            None,
+            fault_id="fault-memory-placeholder",
+            source_sha="3" * 40,
+        )["sentinel"]
 
     def execute(self, statement: str, parameters: dict[str, Any]) -> int:
         assert "INSERT INTO publisher_upload_jobs" in statement
@@ -1182,15 +1545,36 @@ class MemoryPublisherDatabase:
                 "logical_key": parameters["idempotency_key"],
                 "task_kind": parameters["task_kind"],
                 "project_id": parameters["project_id"],
+                "canon_commit_id": "",
+                "candidate_id": "",
+                "chapter_number": 0,
                 "platform_id": parameters["platform_id"],
                 "status": "pending",
                 "publish": parameters["publish"],
                 "book_name": parameters["book_name"],
                 "chapter_title": parameters["chapter_title"],
+                "body_text": parameters["body_text"],
                 "body_sha256": parameters["body_sha256"],
                 "owner_token": "",
+                "extension_client_id": "",
+                "upload_url": "",
+                "abort_requested": False,
+                "current_attempt_id": "",
+                "available_at": "2026-07-22T13:30:00+00:00",
+                "reconcile_after": "",
+                "claimed_at": "",
+                "started_at": "",
+                "finished_at": "",
+                "deleted_at": "",
+                "paused_at": "",
                 "pause_reason": "",
+                "current_url": "",
+                "result_message": "",
+                "error_message": "",
                 "result_payload_json": parameters["result_payload_json"],
+                "created_at": "2026-07-22T12:00:00+00:00",
+                "updated_at": "2026-07-22T12:00:00+00:00",
+                "database_now": "2026-07-22T12:30:00+00:00",
             }
         )
         return 1
@@ -1199,6 +1583,14 @@ class MemoryPublisherDatabase:
         self, statement: str, parameters: Any = ()
     ) -> list[dict[str, Any]]:
         normalized = " ".join(statement.split())
+        if "FROM forwin_recovery_run_sentinel" in normalized:
+            return [
+                {
+                    key: value
+                    for key, value in self.sentinel.items()
+                    if key != "table"
+                }
+            ]
         if "FROM publisher_upload_jobs" in normalized:
             job_id, logical_key = parameters
             return [
@@ -1267,6 +1659,13 @@ def test_backend_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         "publisher_backend_unavailable",
         "fault-memory-backend",
     )
+    bound_endpoint = endpoint_identity(
+        None,
+        fault_id=fixture.fault_id,
+        source_sha="2" * 40,
+    )
+    database.sentinel = dict(bound_endpoint["sentinel"])
+    collector.bind_endpoint_identity(bound_endpoint)
     collector.insert_fixture(fixture)
     job = database.jobs[0]
     job.update(status="running", owner_token="backend:owner-old")
@@ -1383,6 +1782,13 @@ def test_browser_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         "publisher_browser_unavailable",
         "fault-memory-browser",
     )
+    bound_endpoint = endpoint_identity(
+        None,
+        fault_id=fixture.fault_id,
+        source_sha="3" * 40,
+    )
+    database.sentinel = dict(bound_endpoint["sentinel"])
+    collector.bind_endpoint_identity(bound_endpoint)
     collector.insert_fixture(fixture)
     snapshots = {
         stage: collector.browser_snapshot(
@@ -1410,6 +1816,19 @@ def test_browser_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
     ) == []
 
 
+def test_cover_inventory_requires_the_exact_existing_controller_root(
+    runner: Any,
+) -> None:
+    with pytest.raises(runner.SetupBlocked, match="root"):
+        runner.normalize_cover_inventory(
+            {
+                "root": runner.PUBLISHER_COVER_ROOT,
+                "root_exists": False,
+                "files": [],
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("kind", "risk_reason"),
     (
@@ -1430,6 +1849,13 @@ def test_risk_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         kind,
         f"fault-memory-{risk_reason}",
     )
+    bound_endpoint = endpoint_identity(
+        None,
+        fault_id=fixture.fault_id,
+        source_sha="4" * 40,
+    )
+    database.sentinel = dict(bound_endpoint["sentinel"])
+    collector.bind_endpoint_identity(bound_endpoint)
     collector.insert_fixture(fixture)
     job = database.jobs[0]
     attempt_id = f"attempt-{risk_reason}-generalized"
@@ -1508,6 +1934,19 @@ def test_risk_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
     transition_hash = hashlib.sha256(
         f"{kind}:transition".encode()
     ).hexdigest()
+    pre_discard_state = collector.risk_terminal_state(fixture)
+    browser_terminal = {
+        "action": "setup_service_discarded",
+        "fault_id": fixture.fault_id,
+        "hold_id": f"risk-fixture-{fixture.fault_id}",
+        "service": "publisher-browser",
+        "after": {
+            "service": "publisher-browser",
+            "exists": True,
+            "running": False,
+            "container_id": f"browser-{risk_reason}-generalized",
+        },
+    }
     after = collector.risk_snapshot(
         source_sha="4" * 40,
         fault_id=fixture.fault_id,
@@ -1523,6 +1962,8 @@ def test_risk_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
             "first_disposition": "applied",
             "replay_disposition": "idempotent",
         },
+        pre_discard_state=pre_discard_state,
+        browser_hold_terminal=browser_terminal,
     )
     snapshots = {"before": before, "during": during, "after": after}
 

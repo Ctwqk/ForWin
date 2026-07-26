@@ -70,7 +70,7 @@ def fixture_identity(kind: str) -> dict[str, str]:
 
 
 def empty_state(kind: str) -> dict[str, dict[str, Any]]:
-    return {
+    state = {
         "target": {"fixture": fixture_identity(kind)},
         "mcp": {},
         "api": {},
@@ -78,6 +78,68 @@ def empty_state(kind: str) -> dict[str, dict[str, Any]]:
         "external": {},
         "barrier": {},
     }
+    if kind in PUBLISHER_KINDS:
+        state["target"]["endpoint_identity"] = endpoint_identity(kind)
+    return state
+
+
+def endpoint_identity(kind: str) -> dict[str, Any]:
+    fault_id = token(kind, "fault")
+    run_id = digest(kind, "run")[:32]
+    sentinel = {
+        "table": "forwin_recovery_run_sentinel",
+        "sentinel_id": digest(kind, "sentinel"),
+        "run_id": run_id,
+        "fault_id": fault_id,
+        "source_sha": SOURCE_SHA,
+    }
+    record = {
+        "schema_version": 1,
+        "fault_id": fault_id,
+        "run_id": run_id,
+        "source_sha": SOURCE_SHA,
+        "source_tree": "1" * 40,
+        "project_name": f"forwin-v5-recovery-{run_id}",
+        "candidate_manifest_sha256": digest(kind, "manifest"),
+        "candidate_identity_sha256": digest(kind, "candidate-identity"),
+        "sentinel": sentinel,
+        "api": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25111,
+            "endpoint_path": "",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin",
+            "container_port": 8899,
+            "container_id": token(kind, "api-container"),
+            "image_id": "sha256:" + digest(kind, "runtime-image"),
+        },
+        "mcp": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25112,
+            "endpoint_path": "/mcp",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin-mcp",
+            "container_port": 8896,
+            "container_id": token(kind, "mcp-container"),
+            "image_id": "sha256:" + digest(kind, "runtime-image"),
+        },
+        "database": {
+            "scheme": "postgresql",
+            "host": "127.0.0.1",
+            "port": 25113,
+            "database": "forwin",
+            "service": "postgres",
+            "container_port": 5432,
+            "container_id": token(kind, "postgres-container"),
+            "image_id": "sha256:" + digest(kind, "postgres-image"),
+        },
+    }
+    record["identity_sha256"] = evidence.stable_hash(record)
+    return record
 
 
 def snapshots(kind: str) -> dict[str, dict[str, Any]]:
@@ -336,12 +398,39 @@ def backend_job_record(
 def browser_job_record(
     kind: str, status: str = "pending", variant: str = "primary"
 ) -> dict[str, Any]:
-    return publisher_job_record(
+    base = publisher_job_record(
         kind,
         status=status,
         task_kind="chapter_upload",
         variant=variant,
     )
+    return {
+        **base,
+        "canon_commit_id": "",
+        "candidate_id": "",
+        "chapter_number": 0,
+        "body_text": "Generic publisher recovery fixture content.",
+        "upload_url": "",
+        "abort_requested": False,
+        "owner_token": "",
+        "extension_client_id": "",
+        "current_attempt_id": "",
+        "available_at": "2026-07-22T13:00:00+00:00",
+        "reconcile_after": "",
+        "claimed_at": "",
+        "started_at": "",
+        "finished_at": "",
+        "deleted_at": "",
+        "paused_at": "",
+        "pause_reason": "",
+        "current_url": "",
+        "result_message": "",
+        "error_message": "",
+        "result_payload": {},
+        "created_at": "2026-07-22T12:00:00+00:00",
+        "updated_at": "2026-07-22T12:00:00+00:00",
+        "database_now": "2026-07-22T12:30:00+00:00",
+    }
 
 
 def risk_job_record(
@@ -487,6 +576,18 @@ def resume_replay(kind: str) -> dict[str, str]:
         "replay_transition_sha256": digest(kind, "resume-transition"),
         "first_disposition": "applied",
         "replay_disposition": "idempotent",
+    }
+
+
+def discarded_browser_observation(kind: str) -> dict[str, Any]:
+    return {
+        "action": "setup_service_discarded",
+        "fault_id": token(kind, "fault"),
+        "hold_id": f"risk-fixture-{token(kind, 'fault')}",
+        "service": "publisher-browser",
+        "container_id": token(kind, "browser-container"),
+        "exists": True,
+        "running": False,
     }
 
 
@@ -771,12 +872,25 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
                 ],
                 "receipts": [],
                 "resume_actions": [resume_action(kind)],
+                "pre_discard_job": risk_job_record(kind, "pending"),
+                "pre_discard_attempts": [
+                    attempt_record(
+                        kind,
+                        status="paused",
+                        error_code=risk_reason,
+                    )
+                ],
+                "pre_discard_receipts": [],
+                "pre_discard_resume_actions": [resume_action(kind)],
             }
         )
         after["api"].update(
             {
                 "resume_replay": resume_replay(kind),
             }
+        )
+        after["external"]["browser_hold_terminal"] = (
+            discarded_browser_observation(kind)
         )
     return values
 
@@ -2497,6 +2611,28 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
+            "browser full row unchanged",
+            "publisher_browser_unavailable",
+            "full_job_row_unchanged",
+            set_mutation(
+                "during",
+                "database.job.current_url",
+                "https://remote.invalid/drift",
+            ),
+            False,
+        ),
+        ContractCase(
+            "browser preclaim window",
+            "publisher_browser_unavailable",
+            "preclaim_boundary_preserved",
+            set_mutation(
+                "during",
+                "database.job.database_now",
+                "2026-07-22T13:01:00+00:00",
+            ),
+            False,
+        ),
+        ContractCase(
             "browser pending job",
             "publisher_browser_unavailable",
             "pending_job_preserved",
@@ -2597,6 +2733,28 @@ def contract_cases() -> list[ContractCase]:
                         "after",
                         "api.resume_replay.replay_disposition",
                         "applied",
+                    ),
+                    False,
+                ),
+                ContractCase(
+                    f"{kind} hold discard state",
+                    kind,
+                    "hold_discard_preserved_state",
+                    set_mutation(
+                        "after",
+                        "database.pre_discard_resume_actions",
+                        [],
+                    ),
+                    False,
+                ),
+                ContractCase(
+                    f"{kind} browser stopped at discard",
+                    kind,
+                    "browser_stopped_at_discard",
+                    set_mutation(
+                        "after",
+                        "external.browser_hold_terminal.running",
+                        True,
                     ),
                     False,
                 ),
@@ -2710,6 +2868,20 @@ def schema_invariant_cases() -> list[SchemaInvariantCase]:
             "after.state.database.job fixture resource mismatch",
         ),
     ]
+    for kind in PUBLISHER_KINDS:
+        cases.append(
+            SchemaInvariantCase(
+                f"{kind} endpoint identity",
+                kind,
+                "isolated_endpoint_identity",
+                set_mutation(
+                    "during",
+                    "target.endpoint_identity.run_id",
+                    "f" * 32,
+                ),
+                f"{kind}.endpoint identity is not stable or bound",
+            )
+        )
     for kind in RISK_KINDS:
         cases.append(
             SchemaInvariantCase(
@@ -2844,8 +3016,172 @@ def test_derive_assertions_rejects_invalid_snapshot_schema() -> None:
         evidence.derive_assertions(kind, values)
 
 
+@pytest.mark.parametrize(
+    "field",
+    (
+        "available_at",
+        "current_attempt_id",
+        "owner_token",
+        "extension_client_id",
+        "abort_requested",
+        "deleted_at",
+        "upload_url",
+        "current_url",
+        "result_message",
+        "error_message",
+        "result_payload",
+        "canon_commit_id",
+        "candidate_id",
+        "chapter_number",
+        "body_text",
+        "created_at",
+        "updated_at",
+        "database_now",
+    ),
+)
+def test_browser_full_row_schema_rejects_each_omitted_risk_field(
+    field: str,
+) -> None:
+    kind = "publisher_browser_unavailable"
+    values = valid_snapshots(kind)
+    del values["during"]["state"]["database"]["job"][field]
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any(
+        f"during.state.database.job" in violation
+        and "keys missing" in violation
+        for violation in violations
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("available_at", "2026-07-22T13:30:00+00:00"),
+        ("current_attempt_id", "attempt-drift-generalized"),
+        ("owner_token", "owner-drift-generalized"),
+        ("extension_client_id", "owner-drift-generalized"),
+        ("abort_requested", True),
+        ("deleted_at", "2026-07-22T12:40:00+00:00"),
+        ("upload_url", "https://remote.invalid/upload"),
+        ("current_url", "https://remote.invalid/chapter"),
+        ("result_message", "changed"),
+        ("error_message", "changed"),
+        ("result_payload", {"unexpected": "mutation"}),
+        ("candidate_id", "candidate-drift-generalized"),
+        ("chapter_number", 9),
+    ),
+)
+def test_browser_full_row_drift_is_snapshot_derived(
+    field: str,
+    value: Any,
+) -> None:
+    kind = "publisher_browser_unavailable"
+    values = valid_snapshots(kind)
+    values["during"]["state"]["database"]["job"][field] = value
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["full_job_row_unchanged"] is False
+    assert assertions["mutation_count"] > 0
+
+
+@pytest.mark.parametrize(
+    ("stage", "field", "value"),
+    (
+        ("before", "database_now", "2026-07-22T13:00:00+00:00"),
+        ("during", "database_now", "2026-07-22T13:01:00+00:00"),
+        ("after", "available_at", "2026-07-22T12:29:59+00:00"),
+    ),
+)
+def test_browser_available_at_must_remain_future_at_every_db_observation(
+    stage: str,
+    field: str,
+    value: str,
+) -> None:
+    kind = "publisher_browser_unavailable"
+    values = valid_snapshots(kind)
+    values[stage]["state"]["database"]["job"][field] = value
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["preclaim_boundary_preserved"] is False
+
+
+@pytest.mark.parametrize("kind", PUBLISHER_KINDS)
+def test_publisher_endpoint_identity_must_be_stable_and_self_hashed(
+    kind: str,
+) -> None:
+    values = valid_snapshots(kind)
+    values["during"]["state"]["target"]["endpoint_identity"]["run_id"] = (
+        "f" * 32
+    )
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any("endpoint identity" in violation for violation in violations)
+
+
+def test_publisher_endpoint_identity_rejects_cross_stack_project_prefix() -> None:
+    kind = "publisher_browser_unavailable"
+    values = valid_snapshots(kind)
+    for stage in ("before", "during", "after"):
+        endpoint = values[stage]["state"]["target"]["endpoint_identity"]
+        endpoint["project_name"] = "cross-stack-" + endpoint["run_id"]
+        endpoint["identity_sha256"] = evidence.stable_hash(
+            {
+                key: value
+                for key, value in endpoint.items()
+                if key != "identity_sha256"
+            }
+        )
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any("endpoint identity" in violation for violation in violations)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    (
+        ("database.pre_discard_job.status", "paused"),
+        ("database.pre_discard_attempts", []),
+        (
+            "database.pre_discard_receipts",
+            [receipt_record("publisher_captcha")],
+        ),
+        ("database.pre_discard_resume_actions", []),
+    ),
+)
+def test_typed_risk_discard_must_preserve_post_resume_database_state(
+    path: str,
+    value: Any,
+) -> None:
+    kind = "publisher_captcha"
+    values = valid_snapshots(kind)
+    set_path(values["after"]["state"], path, value)
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["hold_discard_preserved_state"] is False
+
+
+def test_typed_risk_discard_must_observe_browser_still_stopped() -> None:
+    kind = "publisher_mfa"
+    values = valid_snapshots(kind)
+    values["after"]["state"]["external"]["browser_hold_terminal"][
+        "running"
+    ] = True
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["browser_stopped_at_discard"] is False
+
+
 def test_task6_publisher_contracts_require_independently_derived_terms() -> None:
     assert evidence.FAULT_CONTRACTS["publisher_backend_unavailable"] == {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_reclaimed": True,
         "terminal_write_boundary_observed": True,
@@ -2861,8 +3197,11 @@ def test_task6_publisher_contracts_require_independently_derived_terms() -> None
         "receipt_count": 0,
     }
     assert evidence.FAULT_CONTRACTS["publisher_browser_unavailable"] == {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
+        "full_job_row_unchanged": True,
+        "preclaim_boundary_preserved": True,
         "pending_job_preserved": True,
         "heartbeat_recovered": True,
         "attempt_count": 0,
@@ -2870,11 +3209,14 @@ def test_task6_publisher_contracts_require_independently_derived_terms() -> None
         "receipt_count": 0,
     }
     expected_risk = {
+        "isolated_endpoint_identity": True,
         "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
+        "hold_discard_preserved_state": True,
+        "browser_stopped_at_discard": True,
         "bypass_attempted": False,
         "attempt_count": 1,
         "receipt_count": 0,

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -88,6 +89,17 @@ DESTROY_SERVICES = frozenset(
         "qdrant",
     }
 )
+AUXILIARY_HOLD_SERVICES = frozenset(
+    {
+        "generation-worker",
+        "qdrant",
+        "minio",
+        "outbox-worker",
+        "publisher-worker",
+        "publisher-browser",
+    }
+)
+_SAFE_HOLD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def sha256_file(path: Path) -> str:
@@ -191,6 +203,177 @@ def normalized_time(value: object) -> datetime:
     return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
 
 
+def strict_normalized_time(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value or ""))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def setup_hold_violations(
+    kind: str,
+    *,
+    events: list[dict[str, Any]],
+) -> list[str]:
+    violations: list[str] = []
+    service_contract = SERVICE_FAULTS.get(kind)
+    primary_service = (
+        str(service_contract["service"]) if service_contract is not None else ""
+    )
+    used_hold_ids: set[str] = set()
+    active_by_id: dict[str, dict[str, Any]] = {}
+    active_by_service: dict[str, str] = {}
+    last_release_by_service: dict[str, datetime] = {}
+    hold_events = [
+        event
+        for event in events
+        if event.get("action")
+        in {"setup_service_held", "setup_service_released"}
+    ]
+    expected_identity = events[0].get("identity") if events else None
+    if any(
+        event.get("identity") != expected_identity
+        for event in hold_events
+    ):
+        violations.append(
+            f"{kind}.setup hold event identities mismatch"
+        )
+    fresh_completions = [
+        event for event in events if event.get("action") == "fresh_up_completed"
+    ]
+    fresh_completed_at: datetime | None = None
+    if len(fresh_completions) == 1:
+        try:
+            fresh_completed_at = strict_normalized_time(
+                fresh_completions[0].get("recorded_at")
+            )
+        except (TypeError, ValueError):
+            pass
+    for event in hold_events:
+        action = str(event.get("action") or "")
+        hold_id = str(event.get("hold_id") or "")
+        service = str(event.get("service") or "")
+        if _SAFE_HOLD_ID.fullmatch(hold_id) is None:
+            violations.append(f"{kind}.setup hold identity is invalid")
+        if service not in AUXILIARY_HOLD_SERVICES:
+            violations.append(f"{kind}.setup hold service is not allowed")
+        if service == primary_service:
+            violations.append(
+                f"{kind}.setup hold targets primary fault service"
+            )
+        confirmed_field = (
+            "hold_time"
+            if action == "setup_service_held"
+            else "release_time"
+        )
+        requested_at: datetime | None = None
+        confirmed_at: datetime | None = None
+        recorded_at: datetime | None = None
+        try:
+            requested_at = strict_normalized_time(event.get("requested_at"))
+            confirmed_at = strict_normalized_time(event.get(confirmed_field))
+            recorded_at = strict_normalized_time(event.get("recorded_at"))
+            if confirmed_at < requested_at:
+                violations.append(
+                    f"{kind}.setup hold confirmation predates request"
+                )
+            if recorded_at < confirmed_at:
+                violations.append(
+                    f"{kind}.setup hold confirmation follows recording"
+                )
+            if (
+                fresh_completed_at is not None
+                and requested_at < fresh_completed_at
+            ):
+                violations.append(
+                    f"{kind}.setup hold predates fresh-up completion"
+                )
+        except (TypeError, ValueError):
+            violations.append(f"{kind}.setup hold timestamp is invalid")
+        before = event.get("before")
+        after = event.get("after")
+        if action == "setup_service_held":
+            if (
+                not isinstance(before, dict)
+                or before.get("service") != service
+                or before.get("exists") is not True
+                or before.get("running") is not True
+                or not isinstance(after, dict)
+                or after.get("service") != service
+                or after.get("exists") is not True
+                or after.get("running") is not False
+            ):
+                violations.append(
+                    f"{kind}.setup hold non-running postcondition mismatch"
+                )
+            if hold_id in used_hold_ids:
+                violations.append(
+                    f"{kind}.hold identity is duplicated or reused"
+                )
+                continue
+            used_hold_ids.add(hold_id)
+            if service in active_by_service:
+                violations.append(
+                    f"{kind}.setup holds overlap for service"
+                )
+            else:
+                if (
+                    requested_at is not None
+                    and service in last_release_by_service
+                    and requested_at < last_release_by_service[service]
+                ):
+                    violations.append(
+                        f"{kind}.setup holds overlap in time for service"
+                    )
+                active_by_id[hold_id] = {
+                    "service": service,
+                    "hold_time": confirmed_at,
+                }
+                active_by_service[service] = hold_id
+            continue
+        if (
+            not isinstance(before, dict)
+            or before.get("service") != service
+            or before.get("exists") is not True
+            or before.get("running") is not False
+            or not isinstance(after, dict)
+            or after.get("service") != service
+            or after.get("exists") is not True
+            or after.get("running") is not True
+            or not isinstance(after.get("probe"), dict)
+            or after["probe"].get("passed") is not True
+        ):
+            violations.append(
+                f"{kind}.setup release readiness/probe postcondition mismatch"
+            )
+        held = active_by_id.get(hold_id)
+        if held is None:
+            violations.append(
+                f"{kind}.hold release has no matching hold"
+            )
+            continue
+        if held["service"] != service:
+            violations.append(
+                f"{kind}.hold release does not match held service"
+            )
+            continue
+        if (
+            requested_at is not None
+            and held["hold_time"] is not None
+            and requested_at < held["hold_time"]
+        ):
+            violations.append(
+                f"{kind}.setup release predates hold confirmation"
+            )
+        del active_by_id[hold_id]
+        del active_by_service[service]
+        if confirmed_at is not None:
+            last_release_by_service[service] = confirmed_at
+    if active_by_id:
+        violations.append(f"{kind}.setup holds are not balanced")
+    return violations
+
+
 def run_resource_violations(
     kind: str,
     *,
@@ -200,6 +383,19 @@ def run_resource_violations(
     artifact_paths: dict[str, Path],
 ) -> tuple[list[str], dict[str, str]]:
     violations: list[str] = []
+    setup_blocked = [
+        event for event in events if event.get("action") == "setup_blocked"
+    ]
+    if setup_blocked:
+        violations.append(f"{kind}.setup_blocked cannot pass")
+        if any(event is not events[-1] for event in setup_blocked):
+            violations.append(f"{kind}.setup_blocked is not terminal")
+    abort_starts = [
+        event for event in events if event.get("action") == "abort_started"
+    ]
+    if abort_starts and not setup_blocked:
+        violations.append(f"{kind}.abort lifecycle is incomplete")
+    violations.extend(setup_hold_violations(kind, events=events))
     expected_run_keys = {
         "run_id",
         "evidence_directory",
@@ -293,13 +489,44 @@ def run_resource_violations(
         for event in events
         if event.get("fault_id") == fault_id
         and event.get("action") == fault_action
+        and (
+            event.get("service") == service_contract["service"]
+            if service_contract is not None
+            else event.get("fault_kind") == kind
+        )
     ]
     recovery_events = [
         event
         for event in events
         if event.get("fault_id") == fault_id
         and event.get("action") == recovery_action
+        and (
+            event.get("service") == service_contract["service"]
+            if service_contract is not None
+            else event.get("fault_kind") == kind
+        )
     ]
+    all_primary_faults = [
+        event
+        for event in events
+        if event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+    ]
+    all_primary_recoveries = [
+        event
+        for event in events
+        if event.get("action")
+        in {"fault_service_recovered", "recovery_marked"}
+    ]
+    if (
+        len(all_primary_faults) != 1
+        or len(all_primary_recoveries) != 1
+        or fault_events != all_primary_faults
+        or recovery_events != all_primary_recoveries
+    ):
+        violations.append(
+            f"{kind}.primary fault/recovery cardinality mismatch"
+        )
     lifecycle_groups = (
         fresh_starts,
         fresh_completions,

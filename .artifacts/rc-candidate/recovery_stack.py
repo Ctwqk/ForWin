@@ -120,6 +120,8 @@ RISK_FAULT_KINDS = frozenset(
     }
 )
 _FAULT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_HOLD_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_ABORT_STAGE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 
 ISOLATED_DATABASE_URL = (
@@ -400,6 +402,39 @@ def validated_fault_id(fault_id: str) -> str:
     return value
 
 
+def validated_hold_id(hold_id: str) -> str:
+    value = str(hold_id or "")
+    if _HOLD_ID_PATTERN.fullmatch(value) is None:
+        raise StackError(
+            "hold identity must be 1-128 ASCII letters, digits, dot, "
+            "underscore, or hyphen"
+        )
+    return value
+
+
+def validated_abort_stage(stage: str) -> str:
+    value = str(stage or "")
+    if _ABORT_STAGE_PATTERN.fullmatch(value) is None:
+        raise StackError(
+            "abort stage must be 1-128 ASCII letters, digits, dot, "
+            "underscore, or hyphen"
+        )
+    return value
+
+
+def sanitized_abort_reason(reason: str) -> str:
+    printable = "".join(
+        character if character.isprintable() else " "
+        for character in str(reason or "")
+    )
+    value = " ".join(printable.split())
+    if not value:
+        raise StackError("abort reason must not be empty")
+    if len(value) > 512:
+        raise StackError("abort reason must not exceed 512 characters")
+    return value
+
+
 def new_recovery_run_identity(
     fault_id: str,
     *,
@@ -544,6 +579,71 @@ def has_incomplete_fresh_up(events: list[dict[str, Any]]) -> bool:
             for event in events
         )
     )
+
+
+def has_incomplete_abort(events: list[dict[str, Any]]) -> bool:
+    abort_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.get("action") == "abort_started"
+    ]
+    if not abort_indexes:
+        return False
+    return not any(
+        event.get("action") == "setup_blocked"
+        for event in events[abort_indexes[-1] + 1 :]
+    )
+
+
+def setup_hold_state(
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    used_hold_ids: set[str] = set()
+    active_by_id: dict[str, dict[str, str]] = {}
+    active_by_service: dict[str, str] = {}
+    for event in events:
+        action = event.get("action")
+        if action not in {"setup_service_held", "setup_service_released"}:
+            continue
+        hold_id = validated_hold_id(str(event.get("hold_id") or ""))
+        service = str(event.get("service") or "")
+        if service not in FAULT_SERVICES:
+            raise StackError(
+                f"setup hold uses a service outside the allowlist: {service}"
+            )
+        if action == "setup_service_held":
+            if hold_id in used_hold_ids:
+                raise StackError(
+                    f"setup hold identity was already used: {hold_id}"
+                )
+            if service in active_by_service:
+                raise StackError(
+                    f"service {service} already has an active setup hold"
+                )
+            used_hold_ids.add(hold_id)
+            active_by_id[hold_id] = {
+                "hold_id": hold_id,
+                "service": service,
+            }
+            active_by_service[service] = hold_id
+            continue
+        held = active_by_id.get(hold_id)
+        if held is None:
+            raise StackError(
+                f"release has no matching setup hold: {hold_id}"
+            )
+        if held["service"] != service:
+            raise StackError(
+                "setup hold release service mismatch: "
+                f"expected {held['service']}, got {service}"
+            )
+        del active_by_id[hold_id]
+        del active_by_service[service]
+    return {
+        "used_hold_ids": used_hold_ids,
+        "active_by_id": active_by_id,
+        "active_by_service": active_by_service,
+    }
 
 
 def require_new_evidence_run() -> None:
@@ -1612,6 +1712,8 @@ def append_event(
         and action not in {"fresh_up_completed", "setup_blocked"}
     ):
         raise StackError("recovery event log has an incomplete fresh-up")
+    if has_incomplete_abort(existing) and action != "setup_blocked":
+        raise StackError("recovery event log has an incomplete abort")
     event = {
         "schema_version": 2,
         "recorded_at": _recorded_at or now(),
@@ -1735,6 +1837,8 @@ def require_active_recovery_run(
         raise StackError("recovery run has no completed fresh-up")
     if has_incomplete_fresh_up(events):
         raise StackError("recovery event log has an incomplete fresh-up")
+    if has_incomplete_abort(events):
+        raise StackError("recovery event log has an incomplete abort")
     if events[-1].get("action") in TERMINAL_ACTIONS:
         raise StackError(
             "recovery event log is terminal after "
@@ -2084,6 +2188,8 @@ def reject_terminal_evidence_directory() -> None:
     events = load_verified_events()
     if has_incomplete_fresh_up(events):
         raise StackError("recovery event log has an incomplete fresh-up")
+    if has_incomplete_abort(events):
+        raise StackError("recovery event log has an incomplete abort")
     if events and events[-1].get("action") in TERMINAL_ACTIONS:
         raise StackError(
             "recovery event log is terminal after "
@@ -2345,6 +2451,9 @@ def destroy() -> None:
     fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
     context = require_active_recovery_run(fault_id)
     events = context["events"]
+    hold_state = setup_hold_state(events)
+    if hold_state["active_by_id"]:
+        raise StackError("destroy cannot run with an active setup hold")
     fault_events = [
         event
         for event in events
@@ -2579,6 +2688,279 @@ def kill_fault_service(service: str, fault_id: str) -> None:
 
 
 @mutating_controller_command
+def setup_hold_service(
+    service: str,
+    fault_id: str,
+    hold_id: str,
+) -> dict[str, Any]:
+    if service not in FAULT_SERVICES:
+        raise StackError(f"service is not an allowed setup hold: {service}")
+    validated_hold = validated_hold_id(hold_id)
+    context = require_active_recovery_run(fault_id)
+    hold_state = setup_hold_state(context["events"])
+    if validated_hold in hold_state["used_hold_ids"]:
+        raise StackError(
+            f"setup hold identity was already used: {validated_hold}"
+        )
+    if service in hold_state["active_by_service"]:
+        raise StackError(f"service {service} already has an active setup hold")
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before setup hold")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
+    if not before.get("exists") or not before.get("running"):
+        raise StackError(
+            f"service {service} is not running before setup hold"
+        )
+    requested_at = now()
+    compose(
+        "stop",
+        "--timeout",
+        "10",
+        service,
+        run_identity=run_identity,
+    )
+    after = inspect_service(service, run_identity=run_identity)
+    if not after.get("exists") or after.get("running"):
+        raise StackError(
+            f"service {service} is still running after setup hold"
+        )
+    hold_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    event = append_event(
+        "setup_service_held",
+        fault_id=fault_id,
+        hold_id=validated_hold,
+        service=service,
+        requested_at=requested_at,
+        hold_time=hold_time,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        before=before,
+        after=after,
+    )
+    print(json.dumps(event, ensure_ascii=False, indent=2))
+    return event
+
+
+@mutating_controller_command
+def setup_release_service(
+    service: str,
+    fault_id: str,
+    hold_id: str,
+) -> dict[str, Any]:
+    if service not in FAULT_SERVICES:
+        raise StackError(f"service is not an allowed setup release: {service}")
+    validated_hold = validated_hold_id(hold_id)
+    context = require_active_recovery_run(fault_id)
+    hold_state = setup_hold_state(context["events"])
+    held = hold_state["active_by_id"].get(validated_hold)
+    if held is None:
+        raise StackError(
+            f"release has no matching setup hold: {validated_hold}"
+        )
+    if held["service"] != service:
+        raise StackError(
+            "setup hold release service mismatch: "
+            f"expected {held['service']}, got {service}"
+        )
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before setup release")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    before = inspect_service(service, run_identity=run_identity)
+    if not before.get("exists") or before.get("running"):
+        raise StackError(
+            f"service {service} is running before setup release"
+        )
+    requested_at = now()
+    compose("start", service, run_identity=run_identity)
+    after = wait_service(service, run_identity=run_identity)
+    after["probe"] = functional_probe(service, run_identity=run_identity)
+    release_time = now()
+    database_volume = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    event = append_event(
+        "setup_service_released",
+        fault_id=fault_id,
+        hold_id=validated_hold,
+        service=service,
+        requested_at=requested_at,
+        release_time=release_time,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=database_volume,
+        before=before,
+        after=after,
+    )
+    print(json.dumps(event, ensure_ascii=False, indent=2))
+    return event
+
+
+def active_recovery_state(events: list[dict[str, Any]]) -> dict[str, Any]:
+    hold_state = setup_hold_state(events)
+    primary_faults = [
+        {
+            "action": str(event.get("action") or ""),
+            "service": str(event.get("service") or ""),
+            "fault_kind": str(event.get("fault_kind") or ""),
+        }
+        for event in events
+        if event.get("action")
+        in {"fault_service_stopped", "fault_service_killed", "fault_marked"}
+    ]
+    primary_recoveries = [
+        {
+            "action": str(event.get("action") or ""),
+            "service": str(event.get("service") or ""),
+            "fault_kind": str(event.get("fault_kind") or ""),
+        }
+        for event in events
+        if event.get("action")
+        in {"fault_service_recovered", "recovery_marked"}
+    ]
+    return {
+        "active_holds": sorted(
+            hold_state["active_by_id"].values(),
+            key=lambda item: (item["service"], item["hold_id"]),
+        ),
+        "primary": {
+            "faults": primary_faults,
+            "recoveries": primary_recoveries,
+        },
+    }
+
+
+def cleanup_is_confirmed(
+    cleanup: dict[str, Any],
+    run_identity: dict[str, Any],
+) -> bool:
+    services = (cleanup.get("after") or {}).get("services")
+    return (
+        bool(cleanup.get("cleanup_confirmed_at"))
+        and isinstance(services, dict)
+        and set(services) == set(SERVICES)
+        and all(
+            state == {"exists": False, "running": False}
+            for state in services.values()
+        )
+        and cleanup.get("database_volume")
+        == {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        }
+    )
+
+
+@mutating_controller_command
+def abort_recovery_run(
+    fault_id: str,
+    stage: str,
+    reason: str,
+) -> None:
+    context = require_active_recovery_run(fault_id)
+    validated_stage = validated_abort_stage(stage)
+    sanitized_reason = sanitized_abort_reason(reason)
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before abort")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    database_volume_before = confirmed_database_volume(
+        run_identity,
+        context["database_volume"],
+    )
+    timestamp_errors: list[str] = []
+    requested_at = safe_utc_now(
+        fallback=str(context["events"][0].get("requested_at") or ""),
+        errors=timestamp_errors,
+        field="abort requested_at timestamp",
+    )
+    active_state = active_recovery_state(context["events"])
+    setup_failure = f"{validated_stage}: {sanitized_reason}"
+    terminal_errors: list[str] = []
+    try:
+        append_event(
+            "abort_started",
+            _recorded_at=requested_at,
+            fault_id=fault_id,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            database_volume=database_volume_before,
+            failure_stage=validated_stage,
+            failure_reason=sanitized_reason,
+            active_state=active_state,
+        )
+    except BaseException as exc:
+        terminal_errors.append(
+            f"abort_started: {exception_text(exc)}"
+        )
+    try:
+        cleanup = cleanup_recovery_run(
+            run_identity,
+            fallback_timestamp=requested_at,
+        )
+    except BaseException as exc:
+        cleanup = failed_cleanup_result(
+            run_identity,
+            fallback_timestamp=requested_at,
+            cleanup_error=f"cleanup helper: {exception_text(exc)}",
+        )
+    if timestamp_errors:
+        timestamp_error = "; ".join(timestamp_errors)
+        existing_cleanup_error = str(cleanup.get("cleanup_error") or "")
+        cleanup["cleanup_error"] = "; ".join(
+            item for item in (existing_cleanup_error, timestamp_error) if item
+        )
+    cleanup_confirmed = cleanup_is_confirmed(cleanup, run_identity)
+    try:
+        append_event(
+            "setup_blocked",
+            _recorded_at=str(cleanup["after"]["observed_at"]),
+            fault_id=fault_id,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            database_volume_before=database_volume_before,
+            database_volume=cleanup["database_volume"],
+            failure_stage=validated_stage,
+            failure_reason=sanitized_reason,
+            setup_failure=setup_failure,
+            active_state=active_state,
+            cleanup_requested_at=cleanup["cleanup_requested_at"],
+            cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
+            cleanup_confirmed=cleanup_confirmed,
+            cleanup_error=cleanup["cleanup_error"],
+            terminal_recording_error=(
+                "; ".join(terminal_errors) if terminal_errors else None
+            ),
+            after=cleanup["after"],
+        )
+    except BaseException as exc:
+        terminal_errors.append(
+            f"setup_blocked: {exception_text(exc)}"
+        )
+    detail = (
+        "recovery abort: "
+        f"setup_failure={setup_failure}; "
+        f"cleanup_error={cleanup.get('cleanup_error') or '<none>'}; "
+        "terminal_recording_error="
+        f"{'; '.join(terminal_errors) if terminal_errors else '<none>'}"
+    )
+    raise StackError(detail)
+
+
+@mutating_controller_command
 def snapshot(label: str) -> None:
     existing = load_verified_events()
     fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
@@ -2695,6 +3077,15 @@ def parse_args() -> argparse.Namespace:
     mark_parser.add_argument("fault_kind", choices=sorted(RISK_FAULT_KINDS))
     mark_parser.add_argument("phase", choices=("fault", "recovery"))
     mark_parser.add_argument("--fault-id", required=True)
+    for name in ("setup-hold", "setup-release"):
+        child = commands.add_parser(name)
+        child.add_argument("service", choices=sorted(FAULT_SERVICES))
+        child.add_argument("--fault-id", required=True)
+        child.add_argument("--hold-id", required=True)
+    abort_parser = commands.add_parser("abort")
+    abort_parser.add_argument("--fault-id", required=True)
+    abort_parser.add_argument("--stage", required=True)
+    abort_parser.add_argument("--reason", required=True)
     return parser.parse_args()
 
 
@@ -2716,6 +3107,12 @@ def main() -> int:
         kill_fault_service(args.service, args.fault_id)
     elif args.command == "mark":
         mark_fault(args.fault_kind, args.phase, args.fault_id)
+    elif args.command == "setup-hold":
+        setup_hold_service(args.service, args.fault_id, args.hold_id)
+    elif args.command == "setup-release":
+        setup_release_service(args.service, args.fault_id, args.hold_id)
+    elif args.command == "abort":
+        abort_recovery_run(args.fault_id, args.stage, args.reason)
     else:
         start_fault_service(args.service, args.fault_id)
     return 0

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -69,6 +70,40 @@ def run_destroy_process(
         results.put(("error", str(exc)))
     else:
         results.put(("ok", "destroyed"))
+
+
+def run_setup_hold_process(
+    evidence_dir: str,
+    results: multiprocessing.Queue,
+) -> None:
+    os.environ[stack.EVIDENCE_DIR_ENV] = evidence_dir
+    try:
+        event = stack.setup_hold_service(
+            "outbox-worker",
+            "fault-1",
+            "hold-1",
+        )
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", event["action"]))
+
+
+def run_abort_process(
+    evidence_dir: str,
+    results: multiprocessing.Queue,
+) -> None:
+    os.environ[stack.EVIDENCE_DIR_ENV] = evidence_dir
+    try:
+        stack.abort_recovery_run(
+            "fault-1",
+            "preflight",
+            "operator requested abort",
+        )
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", "unexpected-success"))
 
 
 def run_lock_probe_process(
@@ -1318,7 +1353,9 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
         artifact_paths={},
     )
     assert finalizer_violations == [
-        "publisher_captcha.database volume lifecycle mismatch"
+        "publisher_captcha.setup_blocked cannot pass",
+        "publisher_captcha.primary fault/recovery cardinality mismatch",
+        "publisher_captcha.database volume lifecycle mismatch",
     ]
     assert len(cleanup_calls) == 1
     cleanup_args, cleanup_kwargs = cleanup_calls[0]
@@ -2154,6 +2191,561 @@ def test_typed_marker_rejects_an_existing_service_fault(
 
     with pytest.raises(stack.StackError, match="duplicate fault"):
         stack.mark_fault("publisher_captcha", "fault", "fault-1")
+
+
+def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    running = {service: True for service in stack.SERVICES}
+    timeline: list[str] = []
+    clock = iter(
+        f"2026-07-22T12:0{minute}:{second:02d}+00:00"
+        for minute in range(6)
+        for second in range(60)
+    )
+
+    def inspect_service(service: str, **_kwargs: object) -> dict:
+        timeline.append(f"inspect:{service}:{running[service]}")
+        return {
+            "service": service,
+            "exists": True,
+            "running": running[service],
+            "container_id": f"{service}-container",
+        }
+
+    def compose(*args: str, **_kwargs: object) -> str:
+        timeline.append("compose:" + ":".join(args))
+        if args[0] == "stop":
+            running[args[-1]] = False
+        elif args[0] == "start":
+            running[args[-1]] = True
+        return ""
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(stack, "inspect_service", inspect_service)
+    monkeypatch.setattr(stack, "compose", compose)
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda service, **_kwargs: timeline.append(f"ready:{service}")
+        or {
+            "service": service,
+            "exists": True,
+            "running": True,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "functional_probe",
+        lambda service, **_kwargs: timeline.append(f"probe:{service}")
+        or {"passed": True},
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    def fake_now() -> str:
+        value = next(clock)
+        timeline.append(f"time:{value}")
+        return value
+
+    monkeypatch.setattr(stack, "now", fake_now)
+
+    first_hold = stack.setup_hold_service(
+        "outbox-worker",
+        "fault-1",
+        "outbox-preapproval",
+    )
+    stack.append_event(
+        "fault_service_stopped",
+        fault_id="fault-1",
+        service="minio",
+        requested_at="2026-07-22T12:01:00+00:00",
+        fault_time="2026-07-22T12:01:01+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "fault_service_recovered",
+        fault_id="fault-1",
+        service="minio",
+        requested_at="2026-07-22T12:02:00+00:00",
+        recovery_time="2026-07-22T12:02:01+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    first_release = stack.setup_release_service(
+        "outbox-worker",
+        "fault-1",
+        "outbox-preapproval",
+    )
+    second_hold = stack.setup_hold_service(
+        "outbox-worker",
+        "fault-1",
+        "outbox-replay",
+    )
+    second_release = stack.setup_release_service(
+        "outbox-worker",
+        "fault-1",
+        "outbox-replay",
+    )
+
+    assert first_hold["action"] == "setup_service_held"
+    assert first_release["action"] == "setup_service_released"
+    assert second_hold["hold_id"] == "outbox-replay"
+    assert second_release["hold_id"] == "outbox-replay"
+    assert first_hold["before"]["running"] is True
+    assert first_hold["after"]["running"] is False
+    assert first_release["before"]["running"] is False
+    assert first_release["after"]["running"] is True
+    assert first_hold["identity"] == first_release["identity"] == identity
+    assert first_hold["run_identity"] == run_identity
+    assert first_hold["database_volume"] == volume
+    assert timeline.index("time:2026-07-22T12:00:00+00:00") < timeline.index(
+        "compose:stop:--timeout:10:outbox-worker"
+    )
+    assert timeline.index("inspect:outbox-worker:False") < timeline.index(
+        "time:2026-07-22T12:00:01+00:00"
+    )
+    assert timeline.index("compose:start:outbox-worker") < timeline.index(
+        "ready:outbox-worker"
+    )
+    assert timeline.index("ready:outbox-worker") < timeline.index(
+        "probe:outbox-worker"
+    )
+    assert timeline.index("probe:outbox-worker") < timeline.index(
+        f"time:{first_release['release_time']}"
+    )
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == [
+        "fresh_up_started",
+        "fresh_up_completed",
+        "setup_service_held",
+        "fault_service_stopped",
+        "fault_service_recovered",
+        "setup_service_released",
+        "setup_service_held",
+        "setup_service_released",
+    ]
+
+
+def test_setup_hold_rejects_duplicate_overlap_and_mismatched_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    running = {service: True for service in stack.SERVICES}
+
+    def inspect_service(service: str, **_kwargs: object) -> dict:
+        return {
+            "service": service,
+            "exists": True,
+            "running": running[service],
+            "container_id": f"{service}-container",
+        }
+
+    def compose(*args: str, **_kwargs: object) -> str:
+        if args[0] == "stop":
+            running[args[-1]] = False
+        elif args[0] == "start":
+            running[args[-1]] = True
+        return ""
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(stack, "inspect_service", inspect_service)
+    monkeypatch.setattr(stack, "compose", compose)
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+
+    stack.setup_hold_service("outbox-worker", "fault-1", "hold-1")
+    independent = stack.setup_hold_service(
+        "publisher-worker",
+        "fault-1",
+        "hold-2",
+    )
+    assert independent["action"] == "setup_service_held"
+
+    with pytest.raises(stack.StackError, match="already used"):
+        stack.setup_hold_service("minio", "fault-1", "hold-1")
+    with pytest.raises(stack.StackError, match="active setup hold"):
+        stack.setup_hold_service("outbox-worker", "fault-1", "hold-3")
+    with pytest.raises(stack.StackError, match="matching setup hold"):
+        stack.setup_release_service("outbox-worker", "fault-1", "wrong-id")
+    with pytest.raises(stack.StackError, match="service mismatch"):
+        stack.setup_release_service("minio", "fault-1", "hold-1")
+    with pytest.raises(stack.StackError, match="hold identity"):
+        stack.setup_hold_service("outbox-worker", "fault-1", "../unsafe")
+
+
+def test_setup_hold_cli_surface_and_post_destroy_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "fault_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        recovery_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "destroyed",
+        fault_id="fault-1",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume_before=volume,
+        database_volume={
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.setup_hold_service("outbox-worker", "fault-1", "late-hold")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(stack.__file__),
+            "setup-release",
+            "outbox-worker",
+            "--fault-id",
+            "fault-1",
+            "--hold-id",
+            "hold-1",
+        ],
+    )
+    args = stack.parse_args()
+    assert (
+        args.command,
+        args.service,
+        args.fault_id,
+        args.hold_id,
+    ) == ("setup-release", "outbox-worker", "fault-1", "hold-1")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(stack.__file__),
+            "abort",
+            "--fault-id",
+            "fault-1",
+            "--stage",
+            "preflight",
+            "--reason",
+            "failed",
+        ],
+    )
+    abort_args = stack.parse_args()
+    assert (
+        abort_args.command,
+        abort_args.fault_id,
+        abort_args.stage,
+        abort_args.reason,
+    ) == ("abort", "fault-1", "preflight", "failed")
+
+
+def test_destroy_rejects_unbalanced_setup_hold_before_compose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "setup_service_held",
+        fault_id="fault-1",
+        hold_id="hold-1",
+        service="outbox-worker",
+        requested_at="2026-07-22T12:00:00+00:00",
+        hold_time="2026-07-22T12:00:01+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+        before={"exists": True, "running": True},
+        after={"exists": True, "running": False},
+    )
+    stack.append_event(
+        "fault_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_mfa",
+        fault_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_mfa",
+        recovery_time="2026-07-22T12:02:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "assert_frozen",
+        lambda **_kwargs: pytest.fail("destroy mutated an unbalanced hold run"),
+    )
+
+    with pytest.raises(stack.StackError, match="active setup hold"):
+        stack.destroy()
+
+
+@pytest.mark.parametrize(
+    "state",
+    ("before-primary", "active-hold", "after-primary-fault"),
+)
+def test_abort_records_terminal_setup_blocked_from_any_active_state(
+    state: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    if state == "active-hold":
+        stack.append_event(
+            "setup_service_held",
+            fault_id="fault-1",
+            hold_id="hold-1",
+            service="outbox-worker",
+            requested_at="2026-07-22T12:00:00+00:00",
+            hold_time="2026-07-22T12:00:01+00:00",
+            identity=identity,
+            run_identity=run_identity,
+            database_volume=volume,
+            before={"exists": True, "running": True},
+            after={"exists": True, "running": False},
+        )
+    elif state == "after-primary-fault":
+        stack.append_event(
+            "fault_service_stopped",
+            fault_id="fault-1",
+            service="minio",
+            requested_at="2026-07-22T12:00:00+00:00",
+            fault_time="2026-07-22T12:00:01+00:00",
+            identity=identity,
+            run_identity=run_identity,
+            database_volume=volume,
+        )
+    absent = {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }
+    cleanup = {
+        "cleanup_requested_at": "2026-07-22T12:03:00+00:00",
+        "cleanup_confirmed_at": "2026-07-22T12:03:01+00:00",
+        "cleanup_error": None,
+        "database_volume": absent,
+        "after": {
+            "observed_at": "2026-07-22T12:03:01+00:00",
+            "services": {
+                service: {"exists": False, "running": False}
+                for service in stack.SERVICES
+            },
+        },
+    }
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda _run_identity, *, fallback_timestamp: cleanup,
+    )
+
+    with pytest.raises(
+        stack.StackError,
+        match="setup_failure=task5-preflight: operator requested abort",
+    ):
+        stack.abort_recovery_run(
+            "fault-1",
+            "task5-preflight",
+            "operator requested\x00\nabort",
+        )
+
+    events = stack.load_verified_events()
+    assert events[-2]["action"] == "abort_started"
+    blocked = events[-1]
+    assert blocked["action"] == "setup_blocked"
+    assert blocked["failure_stage"] == "task5-preflight"
+    assert blocked["failure_reason"] == "operator requested abort"
+    assert blocked["cleanup_confirmed"] is True
+    assert blocked["cleanup_error"] is None
+    assert blocked["active_state"]["active_holds"] == (
+        [
+            {
+                "hold_id": "hold-1",
+                "service": "outbox-worker",
+            }
+        ]
+        if state == "active-hold"
+        else []
+    )
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.setup_hold_service("outbox-worker", "fault-1", "too-late")
+
+
+def test_abort_cleanup_and_terminal_append_failures_preserve_primary_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(stack.StackError("cleanup exploded"))
+        ),
+    )
+    real_append_event = stack.append_event
+
+    def fail_terminal_append(action: str, **payload: object) -> dict:
+        if action == "setup_blocked":
+            raise OSError("terminal disk failure")
+        return real_append_event(action, **payload)
+
+    monkeypatch.setattr(stack, "append_event", fail_terminal_append)
+
+    with pytest.raises(stack.StackError) as exc_info:
+        stack.abort_recovery_run(
+            "fault-1",
+            "operator-abort",
+            "primary reason",
+        )
+
+    detail = str(exc_info.value)
+    assert "setup_failure=operator-abort: primary reason" in detail
+    assert "cleanup helper: cleanup exploded" in detail
+    assert "terminal disk failure" in detail
+    assert stack.load_verified_events()[-1]["action"] == "abort_started"
+    context = multiprocessing.get_context("fork")
+    results = context.Queue()
+    probe = context.Process(
+        target=run_lock_probe_process,
+        args=(str(stack.evidence_directory()), results),
+        name="abort-lock-release-probe",
+    )
+    probe.start()
+    assert joined_process_result(probe, results) == ("ok", "acquired")
+    with pytest.raises(stack.StackError, match="incomplete abort"):
+        stack.snapshot("sealed-after-abort")
+
+
+def test_concurrent_setup_hold_and_abort_share_controller_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    context = multiprocessing.get_context("fork")
+    hold_entered = context.Event()
+    inspection_count = {"value": 0}
+
+    def slow_assert_frozen(**_kwargs: object) -> dict:
+        hold_entered.set()
+        time.sleep(0.5)
+        return identity
+
+    monkeypatch.setattr(stack, "assert_frozen", slow_assert_frozen)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    def inspect_for_hold(service: str, **_kwargs: object) -> dict:
+        inspection_count["value"] += 1
+        return {
+            "service": service,
+            "exists": True,
+            "running": inspection_count["value"] == 1,
+            "container_id": f"{service}-container",
+        }
+
+    monkeypatch.setattr(stack, "inspect_service", inspect_for_hold)
+    monkeypatch.setattr(stack, "compose", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    results = context.Queue()
+    hold_process = context.Process(
+        target=run_setup_hold_process,
+        args=(run_identity["evidence_directory"], results),
+        name="setup-hold",
+    )
+    abort_process = context.Process(
+        target=run_abort_process,
+        args=(run_identity["evidence_directory"], results),
+        name="abort-during-hold",
+    )
+
+    hold_process.start()
+    assert hold_entered.wait(timeout=2)
+    abort_process.start()
+    outcomes = [
+        joined_process_result(hold_process, results),
+        joined_process_result(abort_process, results),
+    ]
+
+    assert ("ok", "setup_service_held") in outcomes
+    assert any(
+        status == "error"
+        and "controller transaction already active" in detail
+        for status, detail in outcomes
+    )
+    events = stack.load_verified_events()
+    assert events[-1]["action"] == "setup_service_held"
+    assert stack.load_verified_events() == events
 
 
 def test_concurrent_mark_transactions_allow_exactly_one_success(

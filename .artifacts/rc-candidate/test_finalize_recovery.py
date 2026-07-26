@@ -916,6 +916,280 @@ def test_fault_rejects_events_after_destroy(tmp_path: Path) -> None:
     assert "publisher_captcha.terminal destroy lifecycle mismatch" in violations
 
 
+def setup_hold_event(
+    template: dict,
+    *,
+    action: str,
+    hold_id: str,
+    service: str,
+    requested_at: str,
+    confirmed_at: str,
+) -> dict:
+    event = copy.deepcopy(template)
+    event["action"] = action
+    event["hold_id"] = hold_id
+    event["service"] = service
+    event["requested_at"] = requested_at
+    event["recorded_at"] = confirmed_at
+    event.pop("fault_kind", None)
+    event.pop("fault_time", None)
+    event.pop("recovery_time", None)
+    if action == "setup_service_held":
+        event["hold_time"] = confirmed_at
+        event["before"] = {
+            "service": service,
+            "exists": True,
+            "running": True,
+        }
+        event["after"] = {
+            "service": service,
+            "exists": True,
+            "running": False,
+        }
+    else:
+        event["release_time"] = confirmed_at
+        event["before"] = {
+            "service": service,
+            "exists": True,
+            "running": False,
+        }
+        event["after"] = {
+            "service": service,
+            "exists": True,
+            "running": True,
+            "probe": {"passed": True},
+        }
+    return event
+
+
+def balanced_hold_events(template: dict, *, prefix: str) -> list[dict]:
+    return [
+        setup_hold_event(
+            template,
+            action="setup_service_held",
+            hold_id=f"{prefix}-hold",
+            service="outbox-worker",
+            requested_at="2026-07-22T11:59:10+00:00",
+            confirmed_at="2026-07-22T11:59:11+00:00",
+        ),
+        setup_hold_event(
+            template,
+            action="setup_service_released",
+            hold_id=f"{prefix}-hold",
+            service="outbox-worker",
+            requested_at="2026-07-22T12:01:10+00:00",
+            confirmed_at="2026-07-22T12:01:11+00:00",
+        ),
+    ]
+
+
+def test_finalizer_allows_balanced_setup_holds_around_primary_fault(
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "minio_pre_canon_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    first_pair = balanced_hold_events(events[2], prefix="preapproval")
+    second_pair = balanced_hold_events(events[2], prefix="replay")
+    second_pair[0]["requested_at"] = "2026-07-22T12:01:20+00:00"
+    second_pair[0]["hold_time"] = "2026-07-22T12:01:21+00:00"
+    second_pair[0]["recorded_at"] = "2026-07-22T12:01:21+00:00"
+    second_pair[1]["requested_at"] = "2026-07-22T12:01:30+00:00"
+    second_pair[1]["release_time"] = "2026-07-22T12:01:31+00:00"
+    second_pair[1]["recorded_at"] = "2026-07-22T12:01:31+00:00"
+    reseal_event_log(
+        report,
+        [
+            *events[:2],
+            first_pair[0],
+            events[2],
+            events[3],
+            first_pair[1],
+            *second_pair,
+            events[4],
+        ],
+    )
+
+    assert recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("duplicate-id", "hold identity is duplicated or reused"),
+        ("wrong-service", "hold release does not match held service"),
+        ("wrong-id", "hold release has no matching hold"),
+        ("unbalanced", "setup holds are not balanced"),
+        ("same-service-overlap", "setup holds overlap for service"),
+        ("primary-service", "setup hold targets primary fault service"),
+    ),
+)
+def test_finalizer_rejects_invalid_setup_hold_lifecycles(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "minio_pre_canon_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    pair = balanced_hold_events(events[2], prefix="first")
+    extra = balanced_hold_events(events[2], prefix="second")
+    inserted: list[dict]
+    if mutation == "duplicate-id":
+        extra[0]["hold_id"] = pair[0]["hold_id"]
+        extra[1]["hold_id"] = pair[0]["hold_id"]
+        inserted = [*pair, *extra]
+    elif mutation == "wrong-service":
+        pair[1]["service"] = "qdrant"
+        inserted = pair
+    elif mutation == "wrong-id":
+        pair[1]["hold_id"] = "not-the-held-id"
+        inserted = pair
+    elif mutation == "unbalanced":
+        inserted = pair[:1]
+    elif mutation == "same-service-overlap":
+        inserted = [pair[0], extra[0], pair[1], extra[1]]
+    else:
+        pair[0]["service"] = pair[1]["service"] = "minio"
+        inserted = pair
+    reseal_event_log(
+        report,
+        [*events[:2], *inserted, *events[2:]],
+    )
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert f"minio_pre_canon_unavailable.{expected}" in violations
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("identity", "setup hold event identities mismatch"),
+        ("naive-time", "setup hold timestamp is invalid"),
+        (
+            "probe",
+            "setup release readiness/probe postcondition mismatch",
+        ),
+        (
+            "confirmation-order",
+            "setup hold confirmation predates request",
+        ),
+        (
+            "observation-service",
+            "setup hold non-running postcondition mismatch",
+        ),
+        (
+            "pair-time",
+            "setup release predates hold confirmation",
+        ),
+        (
+            "recorded-time",
+            "setup hold confirmation follows recording",
+        ),
+        (
+            "before-fresh-complete",
+            "setup hold predates fresh-up completion",
+        ),
+    ),
+)
+def test_finalizer_strictly_binds_setup_hold_evidence(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "minio_pre_canon_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    pair = balanced_hold_events(events[2], prefix="strict")
+    if mutation == "identity":
+        pair[0]["identity"] = {"source_sha": "different"}
+    elif mutation == "naive-time":
+        pair[0]["hold_time"] = "2026-07-22T11:59:11"
+    elif mutation == "probe":
+        pair[1]["after"]["probe"]["passed"] = False
+    elif mutation == "confirmation-order":
+        pair[0]["hold_time"] = "2026-07-22T11:59:09+00:00"
+    elif mutation == "observation-service":
+        pair[0]["after"]["service"] = "publisher-worker"
+    elif mutation == "pair-time":
+        pair[1]["requested_at"] = "2026-07-22T11:59:10+00:00"
+    elif mutation == "recorded-time":
+        pair[1]["recorded_at"] = "2026-07-22T12:01:10+00:00"
+    else:
+        pair[0]["requested_at"] = "2026-07-22T11:58:59+00:00"
+    reseal_event_log(report, [*events[:2], *pair, *events[2:]])
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert f"minio_pre_canon_unavailable.{expected}" in violations
+
+
+def test_finalizer_rejects_an_extra_primary_fault_pair(
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "minio_pre_canon_unavailable")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    extra_fault = copy.deepcopy(events[2])
+    extra_fault["service"] = "qdrant"
+    extra_recovery = copy.deepcopy(events[3])
+    extra_recovery["service"] = "qdrant"
+    reseal_event_log(
+        report,
+        [
+            *events[:2],
+            extra_fault,
+            extra_recovery,
+            *events[2:],
+        ],
+    )
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "minio_pre_canon_unavailable.primary fault/recovery cardinality mismatch"
+        in violations
+    )
+
+
+@pytest.mark.parametrize("terminal", (True, False))
+def test_finalizer_rejects_setup_blocked_and_requires_it_terminal(
+    terminal: bool,
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "publisher_captcha")
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    blocked = copy.deepcopy(events[2])
+    blocked["action"] = "setup_blocked"
+    blocked["failure_stage"] = "operator-abort"
+    blocked["failure_reason"] = "preflight failed"
+    blocked.pop("fault_kind", None)
+    blocked.pop("fault_time", None)
+    if terminal:
+        rewritten = [*events[:2], blocked]
+    else:
+        rewritten = [*events[:2], blocked, *events[2:]]
+    reseal_event_log(report, rewritten)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "publisher_captcha.setup_blocked cannot pass" in violations
+    if not terminal:
+        assert "publisher_captcha.setup_blocked is not terminal" in violations
+
+
 def test_destroy_requires_exact_absent_service_inventory(tmp_path: Path) -> None:
     report = fault_report(tmp_path, "publisher_mfa")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))

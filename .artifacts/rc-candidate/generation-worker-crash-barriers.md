@@ -1,63 +1,107 @@
-# Deterministic Generation Worker Crash Barriers
+# Generation and Projection Recovery Runner
 
-Both V2 crash proofs run on a fresh isolated recovery stack and use a temporary
-PostgreSQL advisory-lock trigger. The trigger is test-only and must never be
-installed on a shared or production database.
+`generation_projection_recovery.py` is the only Task 4 execution path. It
+creates one generic one-chapter fixture per invocation and supports exactly:
 
-## Shared Isolation
+- `generation_worker_precommit_crash`
+- `generation_worker_postcommit_crash`
+- `qdrant_unavailable`
+- `projection_consumer_unavailable`
 
-- Use a new database volume, project, fault ID, and evidence directory.
-- Set generation-worker lease to 30 seconds and poll interval to 1 second.
-- Stop the outbox worker before arming either barrier.
-- Record the baseline non-system trigger/function inventory.
-- Derive a signed 64-bit advisory key from the unique fault ID.
-- A dedicated PostgreSQL session holds the session advisory lock.
-- The trigger calls `pg_advisory_xact_lock` only for the exact project and
-  chapter under test.
+## CLI
 
-## Pre-Commit Crash
+```bash
+python .artifacts/rc-candidate/generation_projection_recovery.py run \
+  --fault-kind KIND \
+  --fault-id ID \
+  --candidate-manifest PATH \
+  --mcp-url URL \
+  --api-url URL \
+  --database-url-env NAME \
+  --evidence-dir PATH
+```
 
-Arm a `BEFORE INSERT` trigger on `canon_commit_records`, filtered by exact
-`NEW.project_id` and `NEW.chapter_number`.
+`NAME` identifies the environment variable containing the PostgreSQL URL. For
+`qdrant_unavailable`, also set `FORWIN_RECOVERY_QDRANT_URL` and
+`FORWIN_RECOVERY_QDRANT_COLLECTION`. The evidence directory must be new or
+empty. Every invocation uses a new fault ID and evidence directory;
+`recovery_stack.py fresh-up` creates the new run ID and database volume.
 
-1. Start one supported generation task for exactly one chapter.
-2. Wait until PostgreSQL shows the worker transaction blocked in the trigger.
-3. Require zero Canon rows and a `ready_for_canon` candidate.
-4. Disable automatic restart and SIGKILL only the generation worker.
-5. Confirm the blocked transaction rolled back and Canon remains absent.
-6. Release/drop the barrier, restore automatic restart, and start the worker.
-7. After lease expiry, require the same task ID to be reclaimed at a higher
-   lease epoch.
-8. Require exactly one accepted chapter/candidate/Canon/GraphDelta/outbox
-   identity and a completed task.
+## Supported Lifecycle
 
-## Post-Commit Crash
+The runner uses the parameterized MCP endpoint in this order:
 
-Arm a `BEFORE INSERT` trigger on `post_canon_maintenance_runs`, filtered by
-exact `NEW.project_id`, `NEW.chapter_number`, and `NEW.step_name = 'planning'`.
-This point is after `CanonAdmissionService.commit_plan` has committed and before
-the generation worker can finish post-acceptance work.
+1. `project_create` with `target_total_chapters=1`.
+2. `project_get`.
+3. For `brief`, `world`, `map`, `story_engine`, `book_blueprint`, and
+   `bootstrap`: `genesis_get`, generate, `genesis_get`, refine, `genesis_get`,
+   lock.
+4. `genesis_get` and `project_get` to confirm writing readiness.
+5. `project_get` and `task_active_generation_check`.
+6. `project_start_writing` with `auto_continue=false` and `max_chapters=1`.
 
-1. Start one supported generation task for exactly one chapter.
-2. Wait until exactly one committed Canon row exists and PostgreSQL shows the
-   worker blocked in the maintenance trigger.
-3. Freeze the accepted chapter, candidate, Canon, GraphDelta, snapshot, and
-   three deterministic outbox IDs.
-4. Disable automatic restart and SIGKILL only the generation worker.
-5. Release/drop the barrier and start the same image/service.
-6. After lease expiry, require the same task ID at a higher lease epoch.
-7. Require Canon replay to be idempotent, task completion to record the same
-   chapter, and all frozen identities/counts to remain unchanged.
-8. Start the outbox worker and require post-Canon consumers to converge.
+The runner never writes a business table and never changes chapter content to
+force a boundary. PostgreSQL and Qdrant access after handoff is read-only,
+except for the temporary advisory barrier objects described below.
 
-## Mandatory Cleanup
+## Generation Faults
 
-Run in a `finally` path:
+Both generation faults install fault-ID-derived SQL identifiers and bind the
+project ID, chapter number, and advisory key as SQL parameters. The trigger
+looks up the key from the scoped table and calls `pg_advisory_xact_lock`.
 
-1. Release the advisory lock.
-2. Drop the uniquely named trigger and function.
-3. Restore generation-worker restart policy and start it if stopped.
-4. Restore the outbox worker.
-5. Compare trigger/function inventory to baseline and require zero residue.
-6. Hash SQL, controller events, task snapshots, and before/during/after
-   identity snapshots into the corresponding independent fault report.
+| Fault kind | Trigger boundary | Additional scope |
+| --- | --- | --- |
+| `generation_worker_precommit_crash` | `BEFORE INSERT ON canon_commit_records` | exact project and chapter |
+| `generation_worker_postcommit_crash` | `BEFORE INSERT ON post_canon_maintenance_runs` | exact project, chapter, and `NEW.step_name = 'planning'` |
+
+Before SIGKILL, `pg_locks` and `pg_stat_activity` must show exactly one scoped
+holder PID and one blocked worker waiter PID, with the holder as the waiter's
+only blocker. The runner then invokes only:
+
+```text
+recovery_stack.py kill generation-worker --fault-id ID
+recovery_stack.py start generation-worker --fault-id ID
+```
+
+The same task ID must complete at a higher lease epoch. Task 1's evaluator
+requires zero during-fault Canon rows for pre-commit, stable committed and
+accepted identities for post-commit, and no duplicate authoritative identity.
+
+In `finally`, the holder lock is released and closed, then the scoped trigger,
+function, and scope table are dropped. A residue query must return zero. Any
+missing holder/waiter boundary or cleanup residue produces `setup_blocked`.
+
+## Projection Faults
+
+After the one-chapter candidate is `ready_for_canon`, the runner stops only the
+mapped service through `recovery_stack.py`, accepts the chapter through
+`POST /api/projects/{project_id}/chapters/1/review/approve`, and captures the
+fixture-bound Canon and `canon.projection.requested` outbox identity.
+
+| Fault kind | Controller service | Convergence evidence |
+| --- | --- | --- |
+| `qdrant_unavailable` | `qdrant` | project-filtered Qdrant points plus healthy `llm_kb` checkpoint |
+| `projection_consumer_unavailable` | `outbox-worker` | fixture-bound SQL projection checkpoint identities |
+
+Recovery uses `recovery_stack.py start`. The runner waits for the durable
+outbox row and all projection status components to converge, then replays the
+existing `POST /api/projects/{project_id}/projections/refresh` endpoint and
+checks convergence again. It never calls Docker or Compose directly.
+
+## Evidence
+
+`before.json`, `during.json`, and `after.json` are strict snapshot schema v2
+direct children of the evidence directory. The runner:
+
+1. validates and derives assertions with `recovery_evidence.py`;
+2. writes every artifact atomically with no clobber;
+3. reopens and hashes every written artifact;
+4. derives and validates again;
+5. validates `fault-report.json` with `finalize_recovery.py` before writing;
+6. reopens, hashes, and validates the final report again.
+
+The report binds the fault ID, source SHA, evaluator identity, controller event
+log, run identity, evidence directory, and database volume lifecycle. A run
+that does not reach its exact boundary emits an atomic `setup_blocked` report
+and cannot emit PASS.

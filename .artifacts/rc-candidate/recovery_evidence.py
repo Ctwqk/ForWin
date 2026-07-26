@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -36,6 +37,151 @@ _MUTABLE_IDENTITY_KEYS = {
     "timestamps",
     "updated",
     "updated_at",
+}
+_SOURCE_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+_FIXTURE_SCHEMA = {
+    "fixture_id": str,
+    "resource_type": str,
+    "resource_id": str,
+}
+_TASK_SCHEMA = {"task_id": str, "lease_epoch": int}
+_CANON_SCHEMA = {
+    "canon_id": str,
+    "project_id": str,
+    "chapter_id": str,
+    "canon_version": int,
+    "content_sha256": str,
+}
+_ACCEPTED_BUNDLE_SCHEMA = {
+    "bundle_id": str,
+    "candidate_id": str,
+    "project_id": str,
+    "chapter_id": str,
+    "content_sha256": str,
+}
+_CANDIDATE_SCHEMA = {
+    "candidate_id": str,
+    "project_id": str,
+    "chapter_id": str,
+    "content_sha256": str,
+}
+_AUTHORITATIVE_SCHEMA = {
+    "entity_type": str,
+    "record_id": str,
+    "project_id": str,
+    "chapter_id": str,
+    "natural_key": str,
+}
+_OUTBOX_SCHEMA = {
+    "event_id": str,
+    "aggregate_type": str,
+    "aggregate_id": str,
+    "event_type": str,
+    "idempotency_key": str,
+    "payload_sha256": str,
+    "attempt": int,
+}
+_PROJECTION_OBSERVATION_SCHEMA = {
+    "projection_type": str,
+    "canon_id": str,
+    "status": str,
+}
+_POINT_SCHEMA = {"collection": str, "point_id": str, "canon_id": str}
+_PROJECTION_IDENTITY_SCHEMA = {
+    "projection_type": str,
+    "projection_id": str,
+    "canon_id": str,
+}
+_MAINTENANCE_SCHEMA = {
+    "natural_key": str,
+    "project_id": str,
+    "canon_id": str,
+    "attempt": int,
+    "lease_epoch": int,
+}
+_ARTIFACT_SCHEMA = {
+    "key": str,
+    "etag": str,
+    "size": int,
+    "content_type": str,
+    "content_sha256": str,
+}
+_BACKEND_JOB_SCHEMA = {
+    "job_id": str,
+    "logical_key": str,
+    "status": str,
+    "owner_token": str,
+    "artifact_key": str,
+}
+_BROWSER_JOB_SCHEMA = {"job_id": str, "logical_key": str, "status": str}
+_RISK_JOB_SCHEMA = {
+    "job_id": str,
+    "logical_key": str,
+    "status": str,
+    "fence": str,
+}
+_JOB_IDENTITY_SCHEMA = {"job_id": str, "logical_key": str}
+_ATTEMPT_SCHEMA = {
+    "attempt_id": str,
+    "job_id": str,
+    "attempt_number": int,
+    "owner_token": str,
+    "status": str,
+}
+_RECEIPT_SCHEMA = {
+    "receipt_id": str,
+    "job_id": str,
+    "attempt_id": str,
+    "remote_mutation_id": str,
+}
+_STALE_TOKEN_OBSERVATION_SCHEMA = {
+    "observation_id": str,
+    "job_id": str,
+    "stale_owner_token": str,
+    "current_owner_token": str,
+    "outcome": str,
+    "error_code": str,
+}
+_SHARED_PATH_OBSERVATION_SCHEMA = {
+    "observation_id": str,
+    "job_id": str,
+    "artifact_key": str,
+    "reader_owner_token": str,
+    "outcome": str,
+    "content_sha256": str,
+}
+_HEARTBEAT_SCHEMA = {
+    "observation_id": str,
+    "browser_id": str,
+    "probe": str,
+    "status": str,
+}
+_RESUME_ACTION_SCHEMA = {
+    "action_id": str,
+    "job_id": str,
+    "fence": str,
+    "idempotency_key": str,
+    "actor_id": str,
+    "auth_method": str,
+    "authorization_scope": str,
+    "result": str,
+}
+_RESUME_REPLAY_SCHEMA = {
+    "observation_id": str,
+    "action_id": str,
+    "replayed_action_id": str,
+    "idempotency_key": str,
+    "result": str,
+}
+_MUTATION_OBSERVATION_SCHEMA = {
+    "observation_id": str,
+    "job_id": str,
+    "fault_kind": str,
+    "fence": str,
+    "bypass_attempt_count": int,
+    "external_mutation_count": int,
 }
 
 
@@ -213,8 +359,8 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.jobs",
             "state.database.attempts",
             "state.database.receipts",
-            "state.api.stale_token_rejected",
-            "state.external.shared_path_readable",
+            "state.api.stale_token_observation",
+            "state.external.shared_path_observation",
             "state.external.orphan_residue_count",
         ),
     },
@@ -241,7 +387,7 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.receipts",
             "state.api.resume_actions",
             "state.api.resume_replay",
-            "state.api.bypass_attempted",
+            "state.api.mutation_observation",
         ),
     },
     "publisher_mfa": {
@@ -252,7 +398,7 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.receipts",
             "state.api.resume_actions",
             "state.api.resume_replay",
-            "state.api.bypass_attempted",
+            "state.api.mutation_observation",
         ),
     },
     "publisher_account_risk": {
@@ -263,7 +409,7 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.receipts",
             "state.api.resume_actions",
             "state.api.resume_replay",
-            "state.api.bypass_attempted",
+            "state.api.mutation_observation",
         ),
     },
 }
@@ -372,10 +518,14 @@ def snapshot_violations(
                 )
                 if value is not None and not isinstance(value, Mapping):
                     violations.append(f"{stage}.state.{section} is not an object")
+            _capture_required(snapshot, "state.target.fixture", stage, violations)
         elif "state" in snapshot:
             violations.append(f"{stage}.state is not an object")
 
-        if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
+        if (
+            type(snapshot.get("schema_version")) is not int
+            or snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION
+        ):
             violations.append(
                 f"{stage}.schema_version={snapshot.get('schema_version')}, "
                 f"expected={SNAPSHOT_SCHEMA_VERSION}"
@@ -386,9 +536,15 @@ def snapshot_violations(
             violations.append(f"{stage}.stage mismatch")
         source_sha = snapshot.get("source_sha")
         fault_id = snapshot.get("fault_id")
-        if not isinstance(source_sha, str) or not source_sha:
-            violations.append(f"{stage}.source_sha is empty")
-        if not isinstance(fault_id, str) or not fault_id:
+        if (
+            type(source_sha) is not str
+            or _SOURCE_SHA_PATTERN.fullmatch(source_sha) is None
+        ):
+            violations.append(
+                f"{stage}.source_sha is not a canonical "
+                "40-character lowercase hex SHA"
+            )
+        if type(fault_id) is not str or not fault_id:
             violations.append(f"{stage}.fault_id is empty")
         if stage == "before":
             baseline_source_sha = source_sha
@@ -404,6 +560,7 @@ def snapshot_violations(
 
     if not violations:
         violations.extend(_shape_violations(kind, snapshots))
+    if not violations:
         violations.extend(_stable_identity_violations(kind, snapshots))
     return _deduplicated(violations)
 
@@ -452,7 +609,7 @@ def _generation_worker_precommit(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
-        "same_task_reclaimed": len({task["id"] for task in tasks}) == 1,
+        "same_task_reclaimed": len({task["task_id"] for task in tasks}) == 1,
         "lease_epoch_increased": tasks[-1]["lease_epoch"]
         > tasks[0]["lease_epoch"],
         "canon_commits_during_fault": len(during_canon),
@@ -475,7 +632,7 @@ def _generation_worker_postcommit(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
-        "same_task_reclaimed": len({task["id"] for task in tasks}) == 1,
+        "same_task_reclaimed": len({task["task_id"] for task in tasks}) == 1,
         "lease_epoch_increased": tasks[-1]["lease_epoch"]
         > tasks[0]["lease_epoch"],
         "canon_identity_unchanged": _all_stable_equal(
@@ -497,10 +654,12 @@ def _qdrant(snapshots: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
     points = _path(snapshots, "after", "external.point_identities")
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
-        "outbox_retry_observed": len({row["id"] for row in outbox}) == 1
+        "outbox_retry_observed": _all_stable_equal(
+            [_without_fields(row, {"attempt"}) for row in outbox]
+        )
         and outbox[-1]["attempt"] > outbox[0]["attempt"],
         "projection_converged": bool(projections)
-        and all(row["converged"] for row in projections),
+        and all(row["status"] == "converged" for row in projections),
         "duplicate_vector_identities": duplicate_excess(
             points, ("collection", "point_id")
         ),
@@ -516,16 +675,14 @@ def _projection_consumer(
     identities = _path(
         snapshots, "after", "external.projection_identities"
     )
-    outbox_identities = [
-        {"id": row["id"], "payload": row["payload"]} for row in outbox
-    ]
+    outbox_identities = [_without_fields(row, {"attempt"}) for row in outbox]
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
         "durable_outbox_preserved": _all_stable_equal(outbox_identities),
         "projection_converged": bool(projections)
-        and all(row["converged"] for row in projections),
+        and all(row["status"] == "converged" for row in projections),
         "duplicate_projection_identities": duplicate_excess(
-            identities, ("projection", "identity")
+            identities, ("projection_type", "projection_id")
         ),
     }
 
@@ -594,22 +751,39 @@ def _publisher_backend(
     jobs = _path(snapshots, "after", "database.jobs")
     attempts = _path(snapshots, "after", "database.attempts")
     receipts = _path(snapshots, "after", "database.receipts")
+    stale_token = _path(
+        snapshots, "after", "api.stale_token_observation"
+    )
+    shared_path = _path(
+        snapshots, "after", "external.shared_path_observation"
+    )
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
-        "same_job_reclaimed": job_during["id"] == job_after["id"]
+        "same_job_reclaimed": _same_fields(
+            job_during,
+            job_after,
+            ("job_id", "logical_key", "artifact_key"),
+        )
         and job_during["owner_token"] != job_after["owner_token"],
-        "stale_token_rejected": _path(
-            snapshots, "after", "api.stale_token_rejected"
+        "stale_token_rejected": (
+            stale_token["job_id"] == job_after["job_id"]
+            and stale_token["stale_owner_token"] == job_during["owner_token"]
+            and stale_token["current_owner_token"] == job_after["owner_token"]
+            and stale_token["outcome"] == "rejected"
+            and stale_token["error_code"] == "stale_owner_token"
         ),
-        "shared_path_readable": _path(
-            snapshots, "after", "external.shared_path_readable"
+        "shared_path_readable": (
+            shared_path["job_id"] == job_after["job_id"]
+            and shared_path["artifact_key"] == job_after["artifact_key"]
+            and shared_path["reader_owner_token"] == job_after["owner_token"]
+            and shared_path["outcome"] == "readable"
         ),
         "orphan_residue_count": _path(
             snapshots, "after", "external.orphan_residue_count"
         ),
         "duplicate_jobs": duplicate_excess(jobs, ("logical_key",)),
         "duplicate_attempts": duplicate_excess(
-            attempts, ("job_id", "attempt")
+            attempts, ("job_id", "attempt_number")
         ),
         "duplicate_receipts": duplicate_excess(
             receipts, ("job_id", "receipt_id")
@@ -628,40 +802,68 @@ def _publisher_browser(
     heartbeat_after = _path(snapshots, "after", "external.browser_heartbeat")
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
-        "same_job_identity": len({job["id"] for job in jobs}) == 1,
+        "same_job_identity": _all_stable_equal(
+            [
+                {"job_id": job["job_id"], "logical_key": job["logical_key"]}
+                for job in jobs
+            ]
+        ),
         "pending_job_preserved": all(job["status"] == "pending" for job in jobs),
-        "heartbeat_recovered": not heartbeat_during["healthy"]
-        and heartbeat_after["healthy"],
+        "heartbeat_recovered": (
+            heartbeat_during["browser_id"] == heartbeat_after["browser_id"]
+            and heartbeat_during["probe"] == heartbeat_after["probe"]
+            and heartbeat_during["status"] == "stale"
+            and heartbeat_after["status"] == "healthy"
+        ),
         "attempt_count": len(_path(snapshots, "after", "database.attempts")),
         "receipt_count": len(_path(snapshots, "after", "database.receipts")),
     }
 
 
 def _publisher_risk(
+    kind: str,
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
     jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
     paused_job = jobs[1]
     actions = _path(snapshots, "after", "api.resume_actions")
     replay = _path(snapshots, "after", "api.resume_replay")
+    mutation = _path(snapshots, "after", "api.mutation_observation")
     action = actions[0] if len(actions) == 1 else {}
     operator_action_recorded = (
         len(actions) == 1
-        and action.get("authenticated") is True
-        and action.get("job_id") == paused_job["id"]
-        and action.get("fence") == paused_job.get("fence")
+        and action.get("job_id") == paused_job["job_id"]
+        and action.get("fence") == paused_job["fence"]
+        and action.get("auth_method") == "operator_token"
+        and action.get("authorization_scope") == "publisher:risk:resume"
+        and action.get("result") == "accepted"
     )
     return {
-        "same_job_identity": len({job["id"] for job in jobs}) == 1,
-        "paused_safely": paused_job["status"] == "paused"
-        and bool(paused_job.get("fence")),
+        "same_job_identity": _all_stable_equal(
+            [
+                {"job_id": job["job_id"], "logical_key": job["logical_key"]}
+                for job in jobs
+            ]
+        ),
+        "paused_safely": (
+            paused_job["status"] == "paused"
+            and paused_job["fence"] == "pre-mutation"
+            and mutation["job_id"] == paused_job["job_id"]
+            and mutation["fault_kind"] == kind
+            and mutation["fence"] == paused_job["fence"]
+            and mutation["external_mutation_count"] == 0
+        ),
         "operator_action_recorded": operator_action_recorded,
         "resume_replay_idempotent": operator_action_recorded
         and replay["action_id"] == action["action_id"]
+        and replay["replayed_action_id"] == action["action_id"]
         and replay["idempotency_key"] == action["idempotency_key"]
-        and replay["created_new_action"] is False,
-        "bypass_attempted": _path(
-            snapshots, "after", "api.bypass_attempted"
+        and replay["result"] == "idempotent_replay",
+        "bypass_attempted": (
+            mutation["job_id"] == paused_job["job_id"]
+            and mutation["fault_kind"] == kind
+            and mutation["fence"] == paused_job["fence"]
+            and mutation["bypass_attempt_count"] > 0
         ),
         "receipt_count": len(_path(snapshots, "after", "database.receipts")),
     }
@@ -670,19 +872,19 @@ def _publisher_risk(
 def _publisher_captcha(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    return _publisher_risk(snapshots)
+    return _publisher_risk("publisher_captcha", snapshots)
 
 
 def _publisher_mfa(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    return _publisher_risk(snapshots)
+    return _publisher_risk("publisher_mfa", snapshots)
 
 
 def _publisher_account_risk(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    return _publisher_risk(snapshots)
+    return _publisher_risk("publisher_account_risk", snapshots)
 
 
 _DERIVERS: dict[
@@ -753,6 +955,20 @@ def _all_stable_equal(values: Sequence[Any]) -> bool:
     )
 
 
+def _without_fields(
+    value: Mapping[str, Any], fields: set[str]
+) -> dict[str, Any]:
+    return {key: nested for key, nested in value.items() if key not in fields}
+
+
+def _same_fields(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+    fields: tuple[str, ...],
+) -> bool:
+    return all(left[field] == right[field] for field in fields)
+
+
 def _identity_is_present(value: Any) -> bool:
     if isinstance(value, (Mapping, Sequence)) and not isinstance(
         value, (str, bytes, bytearray)
@@ -766,25 +982,56 @@ def _shape_violations(
 ) -> list[str]:
     violations: list[str] = []
 
-    def mapping(
-        stage: str, dotted: str, keys: set[str] | None = None
+    def record(
+        stage: str,
+        dotted: str,
+        schema: Mapping[str, type[Any]],
     ) -> Mapping[str, Any] | None:
         value = _path(snapshots, stage, dotted)
         path = f"{stage}.state.{dotted}"
+        return record_value(path, value, schema)
+
+    def record_value(
+        path: str,
+        value: Any,
+        schema: Mapping[str, type[Any]],
+    ) -> Mapping[str, Any] | None:
         if not isinstance(value, Mapping):
             violations.append(f"{path} is not an object")
             return None
-        if keys is not None:
-            violations.extend(_unknown_key_violations(path, value, keys))
-            missing = sorted(keys - set(value))
-            if missing:
-                violations.append(f"{path} keys missing: {missing}")
+        expected = set(schema)
+        violations.extend(_unknown_key_violations(path, value, expected))
+        missing = sorted(expected - set(value))
+        if missing:
+            violations.append(f"{path} keys missing: {missing}")
+        for field, expected_type in schema.items():
+            if field not in value:
+                continue
+            nested = value[field]
+            if type(nested) is not expected_type or (
+                expected_type is str and not nested
+            ):
+                description = (
+                    "an integer"
+                    if expected_type is int
+                    else "a nonempty string"
+                )
+                violations.append(f"{path}.{field} is not {description}")
+            elif (
+                field == "content_sha256"
+                and _SHA256_PATTERN.fullmatch(nested) is None
+            ):
+                violations.append(
+                    f"{path}.{field} is not a canonical SHA-256 digest"
+                )
+            elif expected_type is int and nested < 0:
+                violations.append(f"{path}.{field} is negative")
         return value
 
-    def sequence(
+    def records(
         stage: str,
         dotted: str,
-        row_keys: set[str] | None = None,
+        schema: Mapping[str, type[Any]],
     ) -> Sequence[Any] | None:
         value = _path(snapshots, stage, dotted)
         path = f"{stage}.state.{dotted}"
@@ -793,16 +1040,9 @@ def _shape_violations(
         ):
             violations.append(f"{path} is not an array")
             return None
-        if row_keys is not None:
-            for index, row in enumerate(value):
-                row_path = f"{path}[{index}]"
-                if not isinstance(row, Mapping):
-                    violations.append(f"{row_path} is not an object")
-                    continue
-                violations.extend(_unknown_key_violations(row_path, row, row_keys))
-                missing = sorted(row_keys - set(row))
-                if missing:
-                    violations.append(f"{row_path} keys missing: {missing}")
+        for index, row in enumerate(value):
+            row_path = f"{stage}.state.{dotted}[{index}]"
+            record_value(row_path, row, schema)
         return value
 
     def scalar(
@@ -820,176 +1060,115 @@ def _shape_violations(
             expected_type is str and not value
         ):
             violations.append(f"{path} is not {description}")
+        elif expected_type is int and value < 0:
+            violations.append(f"{path} is negative")
 
-    def sequence_scalars(
-        stage: str,
-        dotted: str,
-        fields: Mapping[str, type[Any]],
-    ) -> None:
-        try:
-            rows = _path(snapshots, stage, dotted)
-        except EvidenceContractError:
-            return
-        if not isinstance(rows, Sequence) or isinstance(
-            rows, (str, bytes, bytearray)
-        ):
-            return
-        for index, row in enumerate(rows):
-            if not isinstance(row, Mapping):
-                continue
-            for field, expected_type in fields.items():
-                if field not in row:
-                    continue
-                value = row[field]
-                if type(value) is not expected_type or (
-                    expected_type is str and not value
-                ):
-                    description = (
-                        "a boolean"
-                        if expected_type is bool
-                        else "an integer"
-                        if expected_type is int
-                        else "a nonempty string"
-                    )
-                    violations.append(
-                        f"{stage}.state.{dotted}[{index}].{field} "
-                        f"is not {description}"
-                    )
+    for stage in STAGES:
+        allowed = _allowed_state_fields(kind, stage)
+        state = snapshots[stage]["state"]
+        for section in sorted(_STATE_KEYS):
+            violations.extend(
+                _unknown_key_violations(
+                    f"{stage}.state.{section}",
+                    state[section],
+                    allowed[section],
+                )
+            )
+        record(stage, "target.fixture", _FIXTURE_SCHEMA)
 
     if kind.startswith("generation_worker_"):
         for stage in STAGES:
-            mapping(stage, "database.task", {"id", "lease_epoch"})
-            scalar(stage, "database.task.id", str, "a nonempty string")
-            scalar(stage, "database.task.lease_epoch", int, "an integer")
-        sequence("during", "database.canon_commits")
-        sequence("after", "database.canon_commits")
-        sequence(
+            record(stage, "database.task", _TASK_SCHEMA)
+        records("during", "database.canon_commits", _CANON_SCHEMA)
+        records("after", "database.canon_commits", _CANON_SCHEMA)
+        records(
             "after",
             "database.authoritative_identities",
-            {"entity_type", "natural_key"},
+            _AUTHORITATIVE_SCHEMA,
         )
         if kind == "generation_worker_postcommit_crash":
-            sequence("during", "database.accepted_bundles")
-            sequence("after", "database.accepted_bundles")
+            records(
+                "during",
+                "database.accepted_bundles",
+                _ACCEPTED_BUNDLE_SCHEMA,
+            )
+            records(
+                "after",
+                "database.accepted_bundles",
+                _ACCEPTED_BUNDLE_SCHEMA,
+            )
     elif kind == "qdrant_unavailable":
         for stage in STAGES:
-            sequence(stage, "database.canon_commits")
-            mapping(stage, "database.outbox", {"id", "attempt"})
-            scalar(stage, "database.outbox.id", str, "a nonempty string")
-            scalar(stage, "database.outbox.attempt", int, "an integer")
-        sequence(
+            records(stage, "database.canon_commits", _CANON_SCHEMA)
+            record(stage, "database.outbox", _OUTBOX_SCHEMA)
+        records(
             "after",
             "external.projections",
-            {"name", "identity", "converged"},
+            _PROJECTION_OBSERVATION_SCHEMA,
         )
-        sequence(
+        records(
             "after",
             "external.point_identities",
-            {"collection", "point_id"},
-        )
-        sequence_scalars(
-            "after",
-            "external.projections",
-            {"name": str, "identity": str, "converged": bool},
-        )
-        sequence_scalars(
-            "after",
-            "external.point_identities",
-            {"collection": str, "point_id": str},
+            _POINT_SCHEMA,
         )
     elif kind == "projection_consumer_unavailable":
         for stage in STAGES:
-            sequence(stage, "database.canon_commits")
-            mapping(stage, "database.outbox", {"id", "payload"})
-            scalar(stage, "database.outbox.id", str, "a nonempty string")
-        sequence(
+            records(stage, "database.canon_commits", _CANON_SCHEMA)
+            record(stage, "database.outbox", _OUTBOX_SCHEMA)
+        records(
             "after",
             "external.projections",
-            {"name", "identity", "converged"},
+            _PROJECTION_OBSERVATION_SCHEMA,
         )
-        sequence(
+        records(
             "after",
             "external.projection_identities",
-            {"projection", "identity"},
-        )
-        sequence_scalars(
-            "after",
-            "external.projections",
-            {"name": str, "identity": str, "converged": bool},
-        )
-        sequence_scalars(
-            "after",
-            "external.projection_identities",
-            {"projection": str, "identity": str},
+            _PROJECTION_IDENTITY_SCHEMA,
         )
     elif kind == "minio_pre_canon_unavailable":
         for stage in STAGES:
-            mapping(stage, "database.candidate")
-        sequence("during", "database.canon_commits")
-        sequence("after", "database.canon_commits")
-        sequence(
+            record(stage, "database.candidate", _CANDIDATE_SCHEMA)
+        records("during", "database.canon_commits", _CANON_SCHEMA)
+        records("after", "database.canon_commits", _CANON_SCHEMA)
+        records(
             "after",
             "database.authoritative_identities",
-            {"entity_type", "natural_key"},
+            _AUTHORITATIVE_SCHEMA,
         )
     elif kind == "minio_post_canon_unavailable":
         for stage in STAGES:
-            sequence(stage, "database.canon_commits")
-            sequence(stage, "database.accepted_bundles")
+            records(stage, "database.canon_commits", _CANON_SCHEMA)
+            records(
+                stage,
+                "database.accepted_bundles",
+                _ACCEPTED_BUNDLE_SCHEMA,
+            )
         for stage in ("during", "after"):
-            mapping(
-                stage,
-                "database.maintenance",
-                {"natural_key", "attempt", "lease_epoch"},
-            )
-            mapping(stage, "external.artifact", {"key"})
-            scalar(
-                stage,
-                "database.maintenance.natural_key",
-                str,
-                "a nonempty string",
-            )
-            scalar(
-                stage, "database.maintenance.attempt", int, "an integer"
-            )
-            scalar(
-                stage, "database.maintenance.lease_epoch", int, "an integer"
-            )
-            scalar(stage, "external.artifact.key", str, "a nonempty string")
-        sequence(
+            record(stage, "database.maintenance", _MAINTENANCE_SCHEMA)
+            record(stage, "external.artifact", _ARTIFACT_SCHEMA)
+        records(
             "after",
             "database.authoritative_identities",
-            {"entity_type", "natural_key"},
+            _AUTHORITATIVE_SCHEMA,
         )
         scalar("after", "barrier.residue_count", int, "an integer")
     elif kind == "publisher_backend_unavailable":
         for stage in STAGES:
-            sequence(stage, "database.canon_commits")
+            records(stage, "database.canon_commits", _CANON_SCHEMA)
         for stage in ("during", "after"):
-            mapping(stage, "database.job", {"id", "owner_token"})
-            scalar(stage, "database.job.id", str, "a nonempty string")
-            scalar(
-                stage, "database.job.owner_token", str, "a nonempty string"
-            )
-        sequence("after", "database.jobs", {"logical_key"})
-        sequence("after", "database.attempts", {"job_id", "attempt"})
-        sequence("after", "database.receipts", {"job_id", "receipt_id"})
-        sequence_scalars(
-            "after", "database.jobs", {"logical_key": str}
-        )
-        sequence_scalars(
-            "after", "database.attempts", {"job_id": str, "attempt": int}
-        )
-        sequence_scalars(
+            record(stage, "database.job", _BACKEND_JOB_SCHEMA)
+        records("after", "database.jobs", _JOB_IDENTITY_SCHEMA)
+        records("after", "database.attempts", _ATTEMPT_SCHEMA)
+        records("after", "database.receipts", _RECEIPT_SCHEMA)
+        record(
             "after",
-            "database.receipts",
-            {"job_id": str, "receipt_id": str},
+            "api.stale_token_observation",
+            _STALE_TOKEN_OBSERVATION_SCHEMA,
         )
-        scalar(
-            "after", "api.stale_token_rejected", bool, "a boolean"
-        )
-        scalar(
-            "after", "external.shared_path_readable", bool, "a boolean"
+        record(
+            "after",
+            "external.shared_path_observation",
+            _SHARED_PATH_OBSERVATION_SCHEMA,
         )
         scalar(
             "after",
@@ -999,72 +1178,325 @@ def _shape_violations(
         )
     elif kind == "publisher_browser_unavailable":
         for stage in STAGES:
-            sequence(stage, "database.canon_commits")
-            mapping(stage, "database.job", {"id", "status"})
-            scalar(stage, "database.job.id", str, "a nonempty string")
-            scalar(stage, "database.job.status", str, "a nonempty string")
+            records(stage, "database.canon_commits", _CANON_SCHEMA)
+            record(stage, "database.job", _BROWSER_JOB_SCHEMA)
         for stage in ("during", "after"):
-            mapping(stage, "external.browser_heartbeat", {"healthy"})
-            scalar(
-                stage,
-                "external.browser_heartbeat.healthy",
-                bool,
-                "a boolean",
-            )
-        sequence("after", "database.attempts")
-        sequence("after", "database.receipts")
+            record(stage, "external.browser_heartbeat", _HEARTBEAT_SCHEMA)
+        records("after", "database.attempts", _ATTEMPT_SCHEMA)
+        records("after", "database.receipts", _RECEIPT_SCHEMA)
     else:
-        mapping("before", "database.job", {"id", "status"})
-        mapping("during", "database.job", {"id", "status", "fence"})
-        mapping("after", "database.job", {"id", "status"})
         for stage in STAGES:
-            scalar(stage, "database.job.id", str, "a nonempty string")
-            scalar(stage, "database.job.status", str, "a nonempty string")
-        scalar("during", "database.job.fence", str, "a nonempty string")
-        sequence("after", "database.receipts")
-        sequence(
+            record(stage, "database.job", _RISK_JOB_SCHEMA)
+        records("after", "database.receipts", _RECEIPT_SCHEMA)
+        records("after", "api.resume_actions", _RESUME_ACTION_SCHEMA)
+        record("after", "api.resume_replay", _RESUME_REPLAY_SCHEMA)
+        record(
             "after",
-            "api.resume_actions",
-            {
-                "action_id",
-                "job_id",
-                "fence",
-                "authenticated",
-                "idempotency_key",
-            },
+            "api.mutation_observation",
+            _MUTATION_OBSERVATION_SCHEMA,
         )
-        mapping(
-            "after",
-            "api.resume_replay",
-            {"action_id", "idempotency_key", "created_new_action"},
+    if not violations:
+        violations.extend(_relation_violations(kind, snapshots))
+    return violations
+
+
+def _allowed_state_fields(kind: str, stage: str) -> dict[str, set[str]]:
+    allowed = {section: set() for section in _STATE_KEYS}
+    allowed["target"].add("fixture")
+    for dotted in _REQUIRED_PATHS[kind][stage]:
+        _, section, field, *_ = dotted.split(".")
+        allowed[section].add(field)
+    return allowed
+
+
+def _relation_violations(
+    kind: str, snapshots: Mapping[str, dict[str, Any]]
+) -> list[str]:
+    violations: list[str] = []
+    fixtures = [_path(snapshots, stage, "target.fixture") for stage in STAGES]
+    if not _all_stable_equal(fixtures):
+        violations.append("after.state.target.fixture mismatch")
+        return violations
+
+    fixture = fixtures[0]
+    publisher = kind.startswith("publisher_")
+    expected_resource_type = "publisher_job" if publisher else "chapter"
+    if fixture["resource_type"] != expected_resource_type:
+        violations.append(
+            "before.state.target.fixture.resource_type mismatch"
         )
-        sequence_scalars(
-            "after",
-            "api.resume_actions",
-            {
-                "action_id": str,
-                "job_id": str,
-                "fence": str,
-                "authenticated": bool,
-                "idempotency_key": str,
-            },
+
+    if publisher:
+        job_stages = (
+            ("during", "after")
+            if kind == "publisher_backend_unavailable"
+            else STAGES
         )
-        scalar(
-            "after", "api.resume_replay.action_id", str, "a nonempty string"
+        for stage in job_stages:
+            job = _path(snapshots, stage, "database.job")
+            if job["job_id"] != fixture["resource_id"]:
+                violations.append(
+                    f"{stage}.state.database.job fixture resource mismatch"
+                )
+    else:
+        for stage, dotted in _chapter_record_paths(kind):
+            value = _path(snapshots, stage, dotted)
+            rows = value if isinstance(value, Sequence) else (value,)
+            for index, row in enumerate(rows):
+                if row["chapter_id"] != fixture["resource_id"]:
+                    suffix = f"[{index}]" if isinstance(value, Sequence) else ""
+                    violations.append(
+                        f"{stage}.state.{dotted}{suffix} "
+                        "fixture resource mismatch"
+                    )
+
+    for stage, canon_path, related_path in _canon_relation_paths(kind):
+        canon_rows = _path(snapshots, stage, canon_path)
+        related_rows = _path(snapshots, stage, related_path)
+        if not canon_rows:
+            continue
+        canon = canon_rows[0]
+        rows = (
+            related_rows
+            if isinstance(related_rows, Sequence)
+            else (related_rows,)
         )
-        scalar(
-            "after",
-            "api.resume_replay.idempotency_key",
-            str,
-            "a nonempty string",
+        for index, row in enumerate(rows):
+            if (
+                row["project_id"] != canon["project_id"]
+                or row["chapter_id"] != canon["chapter_id"]
+            ):
+                suffix = (
+                    f"[{index}]"
+                    if isinstance(related_rows, Sequence)
+                    else ""
+                )
+                violations.append(
+                    f"{stage}.state.{related_path}{suffix} "
+                    "canon resource mismatch"
+                )
+            if (
+                related_path == "database.authoritative_identities"
+                and row["record_id"] != canon["canon_id"]
+            ):
+                violations.append(
+                    f"{stage}.state.{related_path}[{index}] "
+                    "canon identity mismatch"
+                )
+    violations.extend(_external_relation_violations(kind, snapshots))
+    return violations
+
+
+def _chapter_record_paths(kind: str) -> tuple[tuple[str, str], ...]:
+    if kind.startswith("generation_worker_"):
+        paths = (
+            ("during", "database.canon_commits"),
+            ("after", "database.canon_commits"),
+            ("after", "database.authoritative_identities"),
         )
-        scalar(
-            "after",
-            "api.resume_replay.created_new_action",
-            bool,
-            "a boolean",
+        if kind == "generation_worker_postcommit_crash":
+            paths += (
+                ("during", "database.accepted_bundles"),
+                ("after", "database.accepted_bundles"),
+            )
+        return paths
+    if kind in {"qdrant_unavailable", "projection_consumer_unavailable"}:
+        return tuple(
+            (stage, "database.canon_commits") for stage in STAGES
         )
-        scalar("after", "api.bypass_attempted", bool, "a boolean")
+    if kind == "minio_pre_canon_unavailable":
+        return tuple(
+            (stage, "database.candidate") for stage in STAGES
+        ) + (
+            ("during", "database.canon_commits"),
+            ("after", "database.canon_commits"),
+            ("after", "database.authoritative_identities"),
+        )
+    return tuple(
+        (stage, dotted)
+        for stage in STAGES
+        for dotted in (
+            "database.canon_commits",
+            "database.accepted_bundles",
+        )
+    ) + (("after", "database.authoritative_identities"),)
+
+
+def _canon_relation_paths(
+    kind: str,
+) -> tuple[tuple[str, str, str], ...]:
+    if kind == "generation_worker_precommit_crash":
+        return (
+            (
+                "after",
+                "database.canon_commits",
+                "database.authoritative_identities",
+            ),
+        )
+    if kind == "generation_worker_postcommit_crash":
+        return (
+            (
+                "during",
+                "database.canon_commits",
+                "database.accepted_bundles",
+            ),
+            (
+                "after",
+                "database.canon_commits",
+                "database.accepted_bundles",
+            ),
+            (
+                "after",
+                "database.canon_commits",
+                "database.authoritative_identities",
+            ),
+        )
+    if kind == "minio_pre_canon_unavailable":
+        return (
+            (
+                "after",
+                "database.canon_commits",
+                "database.authoritative_identities",
+            ),
+        )
+    if kind == "minio_post_canon_unavailable":
+        return tuple(
+            (
+                stage,
+                "database.canon_commits",
+                "database.accepted_bundles",
+            )
+            for stage in STAGES
+        ) + (
+            (
+                "after",
+                "database.canon_commits",
+                "database.authoritative_identities",
+            ),
+        )
+    return ()
+
+
+def _external_relation_violations(
+    kind: str, snapshots: Mapping[str, dict[str, Any]]
+) -> list[str]:
+    violations: list[str] = []
+    if kind in {"qdrant_unavailable", "projection_consumer_unavailable"}:
+        canon_rows = _path(snapshots, "after", "database.canon_commits")
+        if not canon_rows:
+            return violations
+        canon_id = canon_rows[0]["canon_id"]
+        outbox = _path(snapshots, "after", "database.outbox")
+        if (
+            outbox["aggregate_type"] != "canon"
+            or outbox["aggregate_id"] != canon_id
+        ):
+            violations.append(
+                "after.state.database.outbox canon identity mismatch"
+            )
+        for row in _path(snapshots, "after", "external.projections"):
+            if row["canon_id"] != canon_id:
+                violations.append(
+                    "after.state.external.projections canon identity mismatch"
+                )
+        identity_path = (
+            "external.point_identities"
+            if kind == "qdrant_unavailable"
+            else "external.projection_identities"
+        )
+        for row in _path(snapshots, "after", identity_path):
+            if row["canon_id"] != canon_id:
+                violations.append(
+                    f"after.state.{identity_path} canon identity mismatch"
+                )
+    elif kind == "minio_pre_canon_unavailable":
+        candidate = _path(snapshots, "after", "database.candidate")
+        canon_rows = _path(
+            snapshots, "after", "database.canon_commits"
+        )
+        if canon_rows and (
+            canon_rows[0]["project_id"] != candidate["project_id"]
+            or canon_rows[0]["chapter_id"] != candidate["chapter_id"]
+        ):
+            violations.append(
+                "after.state.database.canon_commits[0] "
+                "candidate resource mismatch"
+            )
+    elif kind == "minio_post_canon_unavailable":
+        for stage in ("during", "after"):
+            canon = _path(
+                snapshots, stage, "database.canon_commits"
+            )[0]
+            maintenance = _path(
+                snapshots, stage, "database.maintenance"
+            )
+            if (
+                maintenance["project_id"] != canon["project_id"]
+                or maintenance["canon_id"] != canon["canon_id"]
+            ):
+                violations.append(
+                    f"{stage}.state.database.maintenance "
+                    "canon identity mismatch"
+                )
+    elif kind == "publisher_backend_unavailable":
+        job = _path(snapshots, "after", "database.job")
+        jobs = _path(snapshots, "after", "database.jobs")
+        attempts = _path(snapshots, "after", "database.attempts")
+        receipts = _path(snapshots, "after", "database.receipts")
+        if not jobs:
+            violations.append(
+                "after.state.database.jobs target job identity is missing"
+            )
+        for index, row in enumerate(jobs):
+            if (
+                row["job_id"] != job["job_id"]
+                or row["logical_key"] != job["logical_key"]
+            ):
+                violations.append(
+                    f"after.state.database.jobs[{index}] "
+                    "job identity mismatch"
+                )
+        attempt_ids: set[str] = set()
+        for index, row in enumerate(attempts):
+            attempt_ids.add(row["attempt_id"])
+            if row["job_id"] != job["job_id"]:
+                violations.append(
+                    f"after.state.database.attempts[{index}] "
+                    "job identity mismatch"
+                )
+            if row["owner_token"] != job["owner_token"]:
+                violations.append(
+                    f"after.state.database.attempts[{index}] "
+                    "owner token mismatch"
+                )
+        for index, row in enumerate(receipts):
+            if row["job_id"] != job["job_id"]:
+                violations.append(
+                    f"after.state.database.receipts[{index}] "
+                    "job identity mismatch"
+                )
+            if row["attempt_id"] not in attempt_ids:
+                violations.append(
+                    f"after.state.database.receipts[{index}] "
+                    "attempt identity mismatch"
+                )
+    elif kind in {
+        "publisher_captcha",
+        "publisher_mfa",
+        "publisher_account_risk",
+    }:
+        paused_job = _path(snapshots, "during", "database.job")
+        mutation = _path(
+            snapshots, "after", "api.mutation_observation"
+        )
+        if (
+            mutation["job_id"] != paused_job["job_id"]
+            or mutation["fault_kind"] != kind
+            or mutation["fence"] != paused_job["fence"]
+        ):
+            violations.append(
+                "after.state.api.mutation_observation identity mismatch"
+            )
     return violations
 
 
@@ -1094,8 +1526,12 @@ def _stable_identity_violations(
             for stage in STAGES
             for dotted in (
                 "database.canon_commits",
-                "database.outbox.id",
-                "database.outbox.payload",
+                "database.outbox.event_id",
+                "database.outbox.aggregate_type",
+                "database.outbox.aggregate_id",
+                "database.outbox.event_type",
+                "database.outbox.idempotency_key",
+                "database.outbox.payload_sha256",
             )
         )
     elif kind == "minio_pre_canon_unavailable":

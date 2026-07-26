@@ -34,15 +34,16 @@ The runner uses the parameterized MCP endpoint in this order:
 1. `project_create` with `target_total_chapters=1`.
 2. `project_get`.
 3. For `brief`, `world`, `map`, `story_engine`, `book_blueprint`, and
-   `bootstrap`: `genesis_get`, generate, `genesis_get`, refine, `genesis_get`,
-   lock.
+   `bootstrap`: `genesis_get`, `genesis_stage_generate`, `genesis_get`,
+   `genesis_stage_lock`.
 4. `genesis_get` and `project_get` to confirm writing readiness.
 5. `project_get` and `task_active_generation_check`.
 6. `project_start_writing` with `auto_continue=false` and `max_chapters=1`.
 
-The runner never writes a business table and never changes chapter content to
-force a boundary. PostgreSQL and Qdrant access after handoff is read-only,
-except for the temporary advisory barrier objects described below.
+There is no refine call after generic project creation. The runner never
+writes a business table or changes story/chapter content to force a boundary.
+PostgreSQL and Qdrant evidence access after handoff is read-only, except for
+the temporary advisory barrier objects described below.
 
 ## Generation Faults
 
@@ -55,9 +56,27 @@ looks up the key from the scoped table and calls `pg_advisory_xact_lock`.
 | `generation_worker_precommit_crash` | `BEFORE INSERT ON canon_commit_records` | exact project and chapter |
 | `generation_worker_postcommit_crash` | `BEFORE INSERT ON post_canon_maintenance_runs` | exact project, chapter, and `NEW.step_name = 'planning'` |
 
-Before SIGKILL, `pg_locks` and `pg_stat_activity` must show exactly one scoped
-holder PID and one blocked worker waiter PID, with the holder as the waiter's
-only blocker. The runner then invokes only:
+The recovery Compose overlay sets distinct database session identities:
+
+```text
+generation-worker: forwin-recovery-generation-worker
+outbox-worker:      forwin-recovery-outbox-worker
+```
+
+Each is encoded in that service's `FORWIN_DATABASE_URL` `application_name`
+query parameter. The advisory-lock holder sets a separate fault-scoped
+application name.
+
+Before SIGKILL, `pg_locks` and `pg_stat_activity` must show exactly two rows:
+one scoped holder PID and one blocked waiter PID. The waiter must have the
+exact generation-worker application name and the holder must be its sole
+blocker. An outbox-worker waiter, an outbox-only race, a
+generation-plus-outbox race, extra lock rows, or a different blocker produces
+`setup_blocked`; the runner does not kill a service. The supplemental barrier
+artifact records both `waiter_application_name` and
+`target_role=generation-worker`.
+
+Only after this ownership proof does the runner invoke:
 
 ```text
 recovery_stack.py kill generation-worker --fault-id ID
@@ -84,10 +103,25 @@ fixture-bound Canon and `canon.projection.requested` outbox identity.
 | `qdrant_unavailable` | `qdrant` | project-filtered Qdrant points plus healthy `llm_kb` checkpoint |
 | `projection_consumer_unavailable` | `outbox-worker` | fixture-bound SQL projection checkpoint identities |
 
-Recovery uses `recovery_stack.py start`. The runner waits for the durable
-outbox row and all projection status components to converge, then replays the
-existing `POST /api/projects/{project_id}/projections/refresh` endpoint and
-checks convergence again. It never calls Docker or Compose directly.
+The durable outbox evidence preserves the stored
+`aggregate_type=project`, real project aggregate ID, event ID/type, strict
+Canon projection payload, payload hash, status, sanitized error, and attempt
+counter. The payload binds the event to the observed Canon, project, chapter,
+and candidate; status/error/attempt are mutable observations, not stable
+identity.
+
+For `qdrant_unavailable`, Qdrant remains stopped until the fixture event has
+been claimed by the real worker and SQL shows a later attempt in durable
+`pending` state with a nonempty sanitized error. If this transition is not
+observed, the run emits `setup_blocked` and does not perform convergence or
+refresh. Task 1 derives this during-fault requirement from the snapshots.
+
+Recovery uses `recovery_stack.py start`. The runner waits for durable
+`processed` state and all projection status components to converge. It records
+the configured Qdrant collection or the SQL checkpoint identities, replays the
+existing `POST /api/projects/{project_id}/projections/refresh` endpoint, checks
+convergence again, and requires the external identities to remain unchanged.
+It never calls Docker or Compose directly.
 
 ## Evidence
 

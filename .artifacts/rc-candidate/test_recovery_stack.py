@@ -285,6 +285,12 @@ def isolated_compose_config(
             "MINIO_ROOT_PASSWORD": stack.ISOLATED_MINIO_SECRET_KEY,
         }
     }
+    services["generation-worker"]["environment"]["FORWIN_DATABASE_URL"] = (
+        stack.GENERATION_WORKER_DATABASE_URL
+    )
+    services["outbox-worker"]["environment"]["FORWIN_DATABASE_URL"] = (
+        stack.OUTBOX_WORKER_DATABASE_URL
+    )
     identity = {
         "runtime_image": {"tag": runtime_tag},
         "browser_image": {"tag": browser_tag},
@@ -502,10 +508,40 @@ def test_recovery_override_pins_stateful_endpoints_to_isolated_services() -> Non
 
     for service in application_services:
         environment = payload["services"][service].get("environment") or {}
+        service_expected = {
+            **expected,
+            "FORWIN_DATABASE_URL": stack.SERVICE_DATABASE_URLS.get(
+                service,
+                stack.ISOLATED_DATABASE_URL,
+            ),
+        }
         assert {
             key: environment.get(key)
-            for key in expected
-        } == expected
+            for key in service_expected
+        } == service_expected
+
+
+def test_recovery_override_binds_worker_database_application_names() -> None:
+    payload = yaml.safe_load(
+        stack.COMPOSE_OVERRIDE.read_text(encoding="utf-8")
+    )
+
+    generation_url = payload["services"]["generation-worker"][
+        "environment"
+    ]["FORWIN_DATABASE_URL"]
+    outbox_url = payload["services"]["outbox-worker"]["environment"][
+        "FORWIN_DATABASE_URL"
+    ]
+
+    assert generation_url == (
+        f"{stack.ISOLATED_DATABASE_URL}"
+        "?application_name=forwin-recovery-generation-worker"
+    )
+    assert outbox_url == (
+        f"{stack.ISOLATED_DATABASE_URL}"
+        "?application_name=forwin-recovery-outbox-worker"
+    )
+    assert generation_url != outbox_url
 
 
 def test_recovery_override_parameterizes_all_container_and_database_volume_names(

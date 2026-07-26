@@ -125,6 +125,18 @@ _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 ISOLATED_DATABASE_URL = (
     "postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
 )
+GENERATION_WORKER_DATABASE_URL = (
+    f"{ISOLATED_DATABASE_URL}"
+    "?application_name=forwin-recovery-generation-worker"
+)
+OUTBOX_WORKER_DATABASE_URL = (
+    f"{ISOLATED_DATABASE_URL}"
+    "?application_name=forwin-recovery-outbox-worker"
+)
+SERVICE_DATABASE_URLS = {
+    "generation-worker": GENERATION_WORKER_DATABASE_URL,
+    "outbox-worker": OUTBOX_WORKER_DATABASE_URL,
+}
 ISOLATED_QDRANT_URL = "http://qdrant:6333"
 ISOLATED_MINIO_ENDPOINT = "minio:9000"
 ISOLATED_API_BASE_URL = "http://forwin:8899"
@@ -821,7 +833,6 @@ def validate_isolated_compose_config(
     if not isinstance(services, dict) or set(services) != set(SERVICES):
         raise StackError("effective Compose service set is not exactly isolated")
     expected_environment = {
-        "FORWIN_DATABASE_URL": ISOLATED_DATABASE_URL,
         "FORWIN_QDRANT_URL": ISOLATED_QDRANT_URL,
         "FORWIN_ARTIFACT_BACKEND": "minio",
         "FORWIN_MINIO_ENDPOINT": ISOLATED_MINIO_ENDPOINT,
@@ -838,6 +849,14 @@ def validate_isolated_compose_config(
     for service in APPLICATION_SERVICES:
         item = services.get(service) or {}
         environment = item.get("environment") or {}
+        expected_database_url = SERVICE_DATABASE_URLS.get(
+            service,
+            ISOLATED_DATABASE_URL,
+        )
+        if environment.get("FORWIN_DATABASE_URL") != expected_database_url:
+            raise StackError(
+                f"{service} effective FORWIN_DATABASE_URL is not isolated"
+            )
         for key, expected in expected_environment.items():
             if environment.get(key) != expected:
                 raise StackError(

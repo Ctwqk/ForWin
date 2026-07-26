@@ -35,14 +35,18 @@ services:
     image: *runtime-image
     container_name: ${FORWIN_RECOVERY_PROJECT_NAME:?set FORWIN_RECOVERY_PROJECT_NAME}-generation-worker
     env_file: *provider-env
-    environment: *isolated-runtime-environment
+    environment:
+      <<: *isolated-runtime-environment
+      FORWIN_DATABASE_URL: postgresql+psycopg://forwin:forwin@postgres:5432/forwin?application_name=forwin-recovery-generation-worker
     labels: *runtime-labels
 
   outbox-worker:
     image: *runtime-image
     container_name: ${FORWIN_RECOVERY_PROJECT_NAME:?set FORWIN_RECOVERY_PROJECT_NAME}-outbox-worker
     env_file: *provider-env
-    environment: *isolated-runtime-environment
+    environment:
+      <<: *isolated-runtime-environment
+      FORWIN_DATABASE_URL: postgresql+psycopg://forwin:forwin@postgres:5432/forwin?application_name=forwin-recovery-outbox-worker
     labels: *runtime-labels
 
   postgres:

@@ -95,6 +95,8 @@ def canon_record(kind: str, variant: str = "primary") -> dict[str, Any]:
         "natural_key": token(kind, f"canon-natural-{variant}"),
         "project_id": token(kind, "project"),
         "chapter_id": token(kind, "chapter"),
+        "chapter_number": 1,
+        "candidate_id": token(kind, "candidate"),
         "canon_version": 1 if variant == "primary" else 2,
         "content_sha256": digest(kind, f"canon-{variant}"),
     }
@@ -133,35 +135,67 @@ def task_record(kind: str, lease_epoch: int, variant: str = "primary") -> dict[s
     return {"task_id": token(kind, f"task-{variant}"), "lease_epoch": lease_epoch}
 
 
-def outbox_record(kind: str, attempt: int = 0) -> dict[str, Any]:
+def outbox_record(
+    kind: str,
+    attempt: int = 0,
+    *,
+    status: str = "pending",
+    error_message: str = "",
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "canon_commit_id": token(kind, "canon-primary"),
+        "canon_idempotency_key": token(kind, "canon-natural-primary"),
+        "project_id": token(kind, "project"),
+        "chapter_number": 1,
+        "candidate_id": token(kind, "candidate"),
+        "trigger": "canon_commit",
+    }
     return {
-        "event_id": token(kind, "outbox-event"),
-        "aggregate_type": "canon",
-        "aggregate_id": token(kind, "canon-primary"),
-        "event_type": "canon_committed",
-        "idempotency_key": token(kind, "outbox-idempotency"),
-        "payload_sha256": digest(kind, "outbox-payload"),
+        "event_id": (
+            f"{payload['canon_idempotency_key']}:canon.projection.requested"
+        ),
+        "aggregate_type": "project",
+        "aggregate_id": token(kind, "project"),
+        "event_type": "canon.projection.requested",
+        "payload": payload,
+        "payload_sha256": evidence.stable_hash(payload),
+        "status": status,
+        "error_message": error_message,
         "attempt": attempt,
     }
 
 
-def projection_observation(kind: str, status: str = "converged") -> dict[str, str]:
+def projection_observation(
+    kind: str,
+    status: str = "converged",
+    *,
+    collection: str = "fixture-vectors",
+) -> dict[str, str]:
     identity_label = (
         "point-primary"
         if kind == "qdrant_unavailable"
         else "projection-primary"
     )
-    return {
+    record = {
         "projection_type": "vector",
         "identity_id": token(kind, identity_label),
         "canon_id": token(kind, "canon-primary"),
         "status": status,
     }
+    if kind == "qdrant_unavailable":
+        record["collection"] = collection
+    return record
 
 
-def point_record(kind: str, variant: str = "primary") -> dict[str, str]:
+def point_record(
+    kind: str,
+    variant: str = "primary",
+    *,
+    collection: str = "fixture-vectors",
+) -> dict[str, str]:
     return {
-        "collection": "canon",
+        "collection": collection,
         "projection_type": "vector",
         "point_id": token(kind, f"point-{variant}"),
         "canon_id": token(kind, "canon-primary"),
@@ -362,26 +396,66 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
         for snapshot in values.values():
             snapshot["state"]["database"]["canon_commits"] = copy.deepcopy(canon)
         before["database"]["outbox"] = outbox_record(kind, 0)
-        during["database"]["outbox"] = outbox_record(kind, 0)
-        after["database"]["outbox"] = outbox_record(kind, 1)
+        during["database"]["outbox"] = outbox_record(
+            kind,
+            1,
+            status="pending",
+            error_message="Qdrant connection refused",
+        )
+        after["database"]["outbox"] = outbox_record(
+            kind,
+            2,
+            status="processed",
+        )
+        baseline_projections = [projection_observation(kind)]
+        baseline_points = [point_record(kind)]
         after["external"].update(
             {
-                "projections": [projection_observation(kind)],
-                "point_identities": [point_record(kind)],
+                "replay_baseline_projections": copy.deepcopy(
+                    baseline_projections
+                ),
+                "replay_baseline_point_identities": copy.deepcopy(
+                    baseline_points
+                ),
+                "projections": baseline_projections,
+                "point_identities": baseline_points,
             }
         )
     elif kind == "projection_consumer_unavailable":
-        for snapshot in values.values():
-            snapshot["state"]["database"].update(
-                {
-                    "canon_commits": copy.deepcopy(canon),
-                    "outbox": outbox_record(kind, 0),
-                }
-            )
+        before["database"].update(
+            {
+                "canon_commits": copy.deepcopy(canon),
+                "outbox": outbox_record(kind, 0),
+            }
+        )
+        during["database"].update(
+            {
+                "canon_commits": copy.deepcopy(canon),
+                "outbox": outbox_record(kind, 0),
+            }
+        )
+        after["database"].update(
+            {
+                "canon_commits": copy.deepcopy(canon),
+                "outbox": outbox_record(
+                    kind,
+                    1,
+                    status="processed",
+                ),
+            }
+        )
+        baseline_projections = [projection_observation(kind)]
+        baseline_identities = [projection_identity_record(kind)]
         after["external"].update(
             {
-                "projections": [projection_observation(kind)],
-                "projection_identities": [projection_identity_record(kind)],
+                "replay_baseline_projections": copy.deepcopy(
+                    baseline_projections
+                ),
+                "replay_baseline_projection_identities": copy.deepcopy(
+                    baseline_identities
+                ),
+                "projections": baseline_projections,
+                "projection_identities": baseline_identities,
             }
         )
     elif kind == "minio_pre_canon_unavailable":
@@ -751,6 +825,102 @@ def test_valid_snapshot_contract_derives_only_passing_assertions(kind: str) -> N
     assert evidence.snapshot_violations(kind, values) == []
     assertions = evidence.derive_assertions(kind, values)
     assert evidence.assertion_violations(kind, assertions) == []
+
+
+def test_qdrant_retry_requires_durable_failure_while_service_is_stopped() -> None:
+    kind = "qdrant_unavailable"
+    values = valid_snapshots(kind)
+    values["during"]["state"]["database"]["outbox"] = outbox_record(
+        kind,
+        0,
+    )
+    values["after"]["state"]["database"]["outbox"] = outbox_record(
+        kind,
+        1,
+        status="processed",
+    )
+
+    assert evidence.snapshot_violations(kind, values) == []
+    assertions = evidence.derive_assertions(kind, values)
+    assert assertions["outbox_retry_observed"] is False
+    assert evidence.assertion_violations(kind, assertions)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "fragment"),
+    (
+        (
+            "database.outbox.aggregate_type",
+            "canon",
+            "outbox aggregate type mismatch",
+        ),
+        (
+            "database.outbox.aggregate_id",
+            "wrong-project",
+            "outbox aggregate identity mismatch",
+        ),
+        (
+            "database.outbox.payload.canon_commit_id",
+            "wrong-canon",
+            "outbox Canon identity mismatch",
+        ),
+        (
+            "database.outbox.payload.chapter_number",
+            2,
+            "outbox chapter identity mismatch",
+        ),
+        (
+            "database.outbox.payload.candidate_id",
+            "wrong-candidate",
+            "outbox candidate identity mismatch",
+        ),
+    ),
+)
+def test_projection_outbox_preserves_production_identity_relations(
+    path: str,
+    value: Any,
+    fragment: str,
+) -> None:
+    kind = "qdrant_unavailable"
+    values = valid_snapshots(kind)
+    set_path(values["during"]["state"], path, value)
+
+    assert any(
+        fragment in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_qdrant_collection_is_configured_identity_not_hardcoded() -> None:
+    kind = "qdrant_unavailable"
+    values = valid_snapshots(kind)
+
+    assert evidence.snapshot_violations(kind, values) == []
+
+    values["after"]["state"]["external"]["point_identities"][0][
+        "collection"
+    ] = "other-vectors"
+    assert any(
+        "external.point_identities coverage mismatch" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_projection_replay_must_preserve_converged_identities() -> None:
+    kind = "projection_consumer_unavailable"
+    values = valid_snapshots(kind)
+    changed = token(kind, "projection-after-refresh")
+    values["after"]["state"]["external"]["projections"][0][
+        "identity_id"
+    ] = changed
+    values["after"]["state"]["external"]["projection_identities"][0][
+        "projection_id"
+    ] = changed
+
+    assert evidence.snapshot_violations(kind, values) == []
+    assertions = evidence.derive_assertions(kind, values)
+    assert assertions["replay_identity_unchanged"] is False
+    assert evidence.assertion_violations(kind, assertions)
 
 
 @pytest.mark.parametrize("case", RECORD_CASES, ids=lambda case: case.name)
@@ -1529,13 +1699,13 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
-            "projection outbox payload",
+            "projection outbox processing",
             "projection_consumer_unavailable",
             "durable_outbox_preserved",
             set_mutation(
                 "after",
-                "database.outbox.payload_sha256",
-                digest("projection_consumer_unavailable", "changed-payload"),
+                "database.outbox.status",
+                "pending",
             ),
             False,
         ),
@@ -1544,6 +1714,48 @@ def contract_cases() -> list[ContractCase]:
             "projection_consumer_unavailable",
             "projection_converged",
             set_mutation("after", "external.projections.0.status", "pending"),
+            False,
+        ),
+        ContractCase(
+            "qdrant replay identity",
+            "qdrant_unavailable",
+            "replay_identity_unchanged",
+            multi_mutation(
+                set_mutation(
+                    "after",
+                    "external.projections.0.identity_id",
+                    token("qdrant_unavailable", "point-after-refresh"),
+                ),
+                set_mutation(
+                    "after",
+                    "external.point_identities.0.point_id",
+                    token("qdrant_unavailable", "point-after-refresh"),
+                ),
+            ),
+            False,
+        ),
+        ContractCase(
+            "projection replay identity",
+            "projection_consumer_unavailable",
+            "replay_identity_unchanged",
+            multi_mutation(
+                set_mutation(
+                    "after",
+                    "external.projections.0.identity_id",
+                    token(
+                        "projection_consumer_unavailable",
+                        "projection-after-refresh",
+                    ),
+                ),
+                set_mutation(
+                    "after",
+                    "external.projection_identities.0.projection_id",
+                    token(
+                        "projection_consumer_unavailable",
+                        "projection-after-refresh",
+                    ),
+                ),
+            ),
             False,
         ),
         ContractCase(

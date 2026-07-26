@@ -53,6 +53,8 @@ _CANON_SCHEMA = {
     "natural_key": str,
     "project_id": str,
     "chapter_id": str,
+    "chapter_number": int,
+    "candidate_id": str,
     "canon_version": int,
     "content_sha256": str,
 }
@@ -81,15 +83,30 @@ _OUTBOX_SCHEMA = {
     "aggregate_type": str,
     "aggregate_id": str,
     "event_type": str,
-    "idempotency_key": str,
+    "payload": dict,
     "payload_sha256": str,
+    "status": str,
+    "error_message": str,
     "attempt": int,
+}
+_OUTBOX_PAYLOAD_SCHEMA = {
+    "schema_version": int,
+    "canon_commit_id": str,
+    "canon_idempotency_key": str,
+    "project_id": str,
+    "chapter_number": int,
+    "candidate_id": str,
+    "trigger": str,
 }
 _PROJECTION_OBSERVATION_SCHEMA = {
     "projection_type": str,
     "identity_id": str,
     "canon_id": str,
     "status": str,
+}
+_QDRANT_PROJECTION_OBSERVATION_SCHEMA = {
+    **_PROJECTION_OBSERVATION_SCHEMA,
+    "collection": str,
 }
 _POINT_SCHEMA = {
     "collection": str,
@@ -216,12 +233,14 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "canon_identity_unchanged": True,
         "outbox_retry_observed": True,
         "projection_converged": True,
+        "replay_identity_unchanged": True,
         "duplicate_vector_identities": 0,
     },
     "projection_consumer_unavailable": {
         "canon_identity_unchanged": True,
         "durable_outbox_preserved": True,
         "projection_converged": True,
+        "replay_identity_unchanged": True,
         "duplicate_projection_identities": 0,
     },
     "minio_pre_canon_unavailable": {
@@ -312,6 +331,8 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         "after": (
             "state.database.canon_commits",
             "state.database.outbox",
+            "state.external.replay_baseline_projections",
+            "state.external.replay_baseline_point_identities",
             "state.external.projections",
             "state.external.point_identities",
         ),
@@ -322,6 +343,8 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         "after": (
             "state.database.canon_commits",
             "state.database.outbox",
+            "state.external.replay_baseline_projections",
+            "state.external.replay_baseline_projection_identities",
             "state.external.projections",
             "state.external.projection_identities",
         ),
@@ -658,16 +681,36 @@ def _generation_worker_postcommit(
 def _qdrant(snapshots: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
     canon = [_path(snapshots, stage, "database.canon_commits") for stage in STAGES]
     outbox = [_path(snapshots, stage, "database.outbox") for stage in STAGES]
+    outbox_identities = [_outbox_identity(row) for row in outbox]
     projections = _path(snapshots, "after", "external.projections")
     points = _path(snapshots, "after", "external.point_identities")
+    baseline_projections = _path(
+        snapshots,
+        "after",
+        "external.replay_baseline_projections",
+    )
+    baseline_points = _path(
+        snapshots,
+        "after",
+        "external.replay_baseline_point_identities",
+    )
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
-        "outbox_retry_observed": _all_stable_equal(
-            [_without_fields(row, {"attempt"}) for row in outbox]
-        )
-        and outbox[-1]["attempt"] > outbox[0]["attempt"],
+        "outbox_retry_observed": (
+            _all_stable_equal(outbox_identities)
+            and outbox[1]["status"] == "pending"
+            and bool(outbox[1]["error_message"])
+            and outbox[1]["attempt"] > outbox[0]["attempt"]
+            and outbox[2]["status"] == "processed"
+            and outbox[2]["error_message"] == ""
+            and outbox[2]["attempt"] > outbox[1]["attempt"]
+        ),
         "projection_converged": bool(projections)
         and all(row["status"] == "converged" for row in projections),
+        "replay_identity_unchanged": _all_stable_equal(
+            (baseline_projections, projections)
+        )
+        and _all_stable_equal((baseline_points, points)),
         "duplicate_vector_identities": duplicate_excess(
             points, ("collection", "point_id")
         ),
@@ -683,16 +726,47 @@ def _projection_consumer(
     identities = _path(
         snapshots, "after", "external.projection_identities"
     )
-    outbox_identities = [_without_fields(row, {"attempt"}) for row in outbox]
+    baseline_projections = _path(
+        snapshots,
+        "after",
+        "external.replay_baseline_projections",
+    )
+    baseline_identities = _path(
+        snapshots,
+        "after",
+        "external.replay_baseline_projection_identities",
+    )
+    outbox_identities = [_outbox_identity(row) for row in outbox]
     return {
         "canon_identity_unchanged": _all_stable_equal(canon),
-        "durable_outbox_preserved": _all_stable_equal(outbox_identities),
+        "durable_outbox_preserved": (
+            _all_stable_equal(outbox_identities)
+            and outbox[0]["status"] == "pending"
+            and outbox[1]["status"] == "pending"
+            and outbox[2]["status"] == "processed"
+            and outbox[0]["error_message"] == ""
+            and outbox[1]["error_message"] == ""
+            and outbox[2]["error_message"] == ""
+            and outbox[1]["attempt"] == outbox[0]["attempt"]
+            and outbox[2]["attempt"] > outbox[1]["attempt"]
+        ),
         "projection_converged": bool(projections)
         and all(row["status"] == "converged" for row in projections),
+        "replay_identity_unchanged": _all_stable_equal(
+            (baseline_projections, projections)
+        )
+        and _all_stable_equal((baseline_identities, identities)),
         "duplicate_projection_identities": duplicate_excess(
             identities, ("projection_type", "projection_id")
         ),
     }
+
+
+def _outbox_identity(row: Mapping[str, Any]) -> dict[str, Any]:
+    return _without_fields(
+        row,
+        {"attempt", "error_message", "status"},
+    )
 
 
 def _minio_pre_canon(
@@ -1016,13 +1090,20 @@ def _shape_violations(
             if field not in value:
                 continue
             nested = value[field]
+            permits_empty_string = field == "error_message"
             if type(nested) is not expected_type or (
-                expected_type is str and not nested
+                expected_type is str
+                and not nested
+                and not permits_empty_string
             ):
                 description = (
                     "an integer"
                     if expected_type is int
-                    else "a nonempty string"
+                    else (
+                        "a string"
+                        if permits_empty_string
+                        else "a nonempty string"
+                    )
                 )
                 violations.append(f"{path}.{field} is not {description}")
             elif (
@@ -1108,11 +1189,30 @@ def _shape_violations(
     elif kind == "qdrant_unavailable":
         for stage in STAGES:
             records(stage, "database.canon_commits", _CANON_SCHEMA)
-            record(stage, "database.outbox", _OUTBOX_SCHEMA)
+            outbox = record(stage, "database.outbox", _OUTBOX_SCHEMA)
+            if (
+                isinstance(outbox, Mapping)
+                and isinstance(outbox.get("payload"), Mapping)
+            ):
+                record_value(
+                    f"{stage}.state.database.outbox.payload",
+                    outbox["payload"],
+                    _OUTBOX_PAYLOAD_SCHEMA,
+                )
+        records(
+            "after",
+            "external.replay_baseline_projections",
+            _QDRANT_PROJECTION_OBSERVATION_SCHEMA,
+        )
+        records(
+            "after",
+            "external.replay_baseline_point_identities",
+            _POINT_SCHEMA,
+        )
         records(
             "after",
             "external.projections",
-            _PROJECTION_OBSERVATION_SCHEMA,
+            _QDRANT_PROJECTION_OBSERVATION_SCHEMA,
         )
         records(
             "after",
@@ -1122,7 +1222,26 @@ def _shape_violations(
     elif kind == "projection_consumer_unavailable":
         for stage in STAGES:
             records(stage, "database.canon_commits", _CANON_SCHEMA)
-            record(stage, "database.outbox", _OUTBOX_SCHEMA)
+            outbox = record(stage, "database.outbox", _OUTBOX_SCHEMA)
+            if (
+                isinstance(outbox, Mapping)
+                and isinstance(outbox.get("payload"), Mapping)
+            ):
+                record_value(
+                    f"{stage}.state.database.outbox.payload",
+                    outbox["payload"],
+                    _OUTBOX_PAYLOAD_SCHEMA,
+                )
+        records(
+            "after",
+            "external.replay_baseline_projections",
+            _PROJECTION_OBSERVATION_SCHEMA,
+        )
+        records(
+            "after",
+            "external.replay_baseline_projection_identities",
+            _PROJECTION_IDENTITY_SCHEMA,
+        )
         records(
             "after",
             "external.projections",
@@ -1436,78 +1555,157 @@ def _external_relation_violations(
 ) -> list[str]:
     violations: list[str] = []
     if kind in {"qdrant_unavailable", "projection_consumer_unavailable"}:
-        projections = _path(snapshots, "after", "external.projections")
-        identity_path = (
-            "external.point_identities"
-            if kind == "qdrant_unavailable"
-            else "external.projection_identities"
-        )
-        identities = _path(snapshots, "after", identity_path)
         if kind == "qdrant_unavailable":
-            expected_coverage = [
+            projection_identity_paths = (
                 (
-                    "canon",
-                    row["projection_type"],
-                    row["canon_id"],
-                    row["identity_id"],
-                )
-                for row in projections
-            ]
-            actual_coverage = [
-                (
-                    row["collection"],
-                    row["projection_type"],
-                    row["canon_id"],
-                    row["point_id"],
-                )
-                for row in identities
-            ]
+                    "external.replay_baseline_projections",
+                    "external.replay_baseline_point_identities",
+                ),
+                ("external.projections", "external.point_identities"),
+            )
         else:
-            expected_coverage = [
+            projection_identity_paths = (
                 (
-                    row["projection_type"],
-                    row["canon_id"],
-                    row["identity_id"],
-                )
-                for row in projections
-            ]
-            actual_coverage = [
+                    "external.replay_baseline_projections",
+                    "external.replay_baseline_projection_identities",
+                ),
                 (
-                    row["projection_type"],
-                    row["canon_id"],
-                    row["projection_id"],
-                )
-                for row in identities
-            ]
-        violations.extend(
-            _coverage_violations(
-                "after",
-                identity_path,
-                expected_coverage,
-                actual_coverage,
+                    "external.projections",
+                    "external.projection_identities",
+                ),
             )
+        final_canon_rows = _path(
+            snapshots,
+            "after",
+            "database.canon_commits",
         )
-        canon_rows = _path(snapshots, "after", "database.canon_commits")
-        if not canon_rows:
+        if not final_canon_rows:
             return violations
-        canon_id = canon_rows[0]["canon_id"]
-        outbox = _path(snapshots, "after", "database.outbox")
-        if (
-            outbox["aggregate_type"] != "canon"
-            or outbox["aggregate_id"] != canon_id
-        ):
-            violations.append(
-                "after.state.database.outbox canon identity mismatch"
-            )
-        for row in projections:
-            if row["canon_id"] != canon_id:
-                violations.append(
-                    "after.state.external.projections canon identity mismatch"
+        final_canon_id = final_canon_rows[0]["canon_id"]
+        for projection_path, identity_path in projection_identity_paths:
+            projections = _path(snapshots, "after", projection_path)
+            identities = _path(snapshots, "after", identity_path)
+            if kind == "qdrant_unavailable":
+                expected_coverage = [
+                    (
+                        row["collection"],
+                        row["projection_type"],
+                        row["canon_id"],
+                        row["identity_id"],
+                    )
+                    for row in projections
+                ]
+                actual_coverage = [
+                    (
+                        row["collection"],
+                        row["projection_type"],
+                        row["canon_id"],
+                        row["point_id"],
+                    )
+                    for row in identities
+                ]
+            else:
+                expected_coverage = [
+                    (
+                        row["projection_type"],
+                        row["canon_id"],
+                        row["identity_id"],
+                    )
+                    for row in projections
+                ]
+                actual_coverage = [
+                    (
+                        row["projection_type"],
+                        row["canon_id"],
+                        row["projection_id"],
+                    )
+                    for row in identities
+                ]
+            violations.extend(
+                _coverage_violations(
+                    "after",
+                    identity_path,
+                    expected_coverage,
+                    actual_coverage,
                 )
-        for row in identities:
-            if row["canon_id"] != canon_id:
+            )
+            if any(
+                row["canon_id"] != final_canon_id
+                for row in (*projections, *identities)
+            ):
                 violations.append(
                     f"after.state.{identity_path} canon identity mismatch"
+                )
+
+        for stage in STAGES:
+            canon_rows = _path(
+                snapshots,
+                stage,
+                "database.canon_commits",
+            )
+            if len(canon_rows) != 1:
+                continue
+            canon = canon_rows[0]
+            outbox = _path(snapshots, stage, "database.outbox")
+            payload = outbox["payload"]
+            if outbox["aggregate_type"] != "project":
+                violations.append(
+                    f"{stage}.state.database.outbox aggregate type mismatch"
+                )
+            if outbox["aggregate_id"] != canon["project_id"]:
+                violations.append(
+                    f"{stage}.state.database.outbox aggregate identity mismatch"
+                )
+            if (
+                payload["canon_commit_id"] != canon["canon_id"]
+                or payload["canon_idempotency_key"] != canon["natural_key"]
+            ):
+                violations.append(
+                    f"{stage}.state.database.outbox Canon identity mismatch"
+                )
+            if payload["project_id"] != canon["project_id"]:
+                violations.append(
+                    f"{stage}.state.database.outbox project identity mismatch"
+                )
+            if payload["chapter_number"] != canon["chapter_number"]:
+                violations.append(
+                    f"{stage}.state.database.outbox chapter identity mismatch"
+                )
+            if payload["candidate_id"] != canon["candidate_id"]:
+                violations.append(
+                    f"{stage}.state.database.outbox candidate identity mismatch"
+                )
+            if (
+                payload["schema_version"] != 1
+                or payload["trigger"] != "canon_commit"
+                or outbox["event_type"] != "canon.projection.requested"
+            ):
+                violations.append(
+                    f"{stage}.state.database.outbox projection payload mismatch"
+                )
+            expected_event_id = (
+                f"{canon['natural_key']}:canon.projection.requested"
+            )
+            if outbox["event_id"] != expected_event_id:
+                violations.append(
+                    f"{stage}.state.database.outbox event identity mismatch"
+                )
+            if outbox["payload_sha256"] != stable_hash(payload):
+                violations.append(
+                    f"{stage}.state.database.outbox payload hash mismatch"
+                )
+            error = outbox["error_message"]
+            if (
+                "\x00" in error
+                or len(error) > 4000
+                or error != " ".join(error.split())
+            ):
+                violations.append(
+                    f"{stage}.state.database.outbox error is not sanitized"
+                )
+            if outbox["status"] not in {"pending", "running", "processed"}:
+                violations.append(
+                    f"{stage}.state.database.outbox status is invalid"
                 )
     elif kind == "minio_pre_canon_unavailable":
         candidate = _path(snapshots, "after", "database.candidate")
@@ -1663,9 +1861,7 @@ def _stable_identity_violations(
             for dotted in ("database.canon_commits", "database.accepted_bundles")
         )
         paths.append(("after", "database.authoritative_identities"))
-    elif kind == "qdrant_unavailable":
-        paths.extend((stage, "database.canon_commits") for stage in STAGES)
-    elif kind == "projection_consumer_unavailable":
+    elif kind in {"qdrant_unavailable", "projection_consumer_unavailable"}:
         paths.extend(
             (stage, dotted)
             for stage in STAGES
@@ -1675,7 +1871,7 @@ def _stable_identity_violations(
                 "database.outbox.aggregate_type",
                 "database.outbox.aggregate_id",
                 "database.outbox.event_type",
-                "database.outbox.idempotency_key",
+                "database.outbox.payload",
                 "database.outbox.payload_sha256",
             )
         )

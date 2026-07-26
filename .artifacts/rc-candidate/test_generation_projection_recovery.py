@@ -49,6 +49,8 @@ TASK_ID = "task-a"
 CANON_ID = "canon-a"
 CANDIDATE_ID = "candidate-a"
 BODY_SHA = hashlib.sha256(b"fixture chapter").hexdigest()
+GENERATION_WORKER_APPLICATION_NAME = "forwin-recovery-generation-worker"
+OUTBOX_WORKER_APPLICATION_NAME = "forwin-recovery-outbox-worker"
 
 
 def composed_text(statement: Any) -> str:
@@ -131,7 +133,11 @@ class FakeConnectionFactory:
         return self.connections.pop(0)
 
 
-def lock_rows(barrier: Any) -> list[dict[str, Any]]:
+def lock_rows(
+    barrier: Any,
+    *,
+    waiter_application_name: str = GENERATION_WORKER_APPLICATION_NAME,
+) -> list[dict[str, Any]]:
     return [
         {
             "pid": 401,
@@ -145,7 +151,7 @@ def lock_rows(barrier: Any) -> list[dict[str, Any]]:
         {
             "pid": 509,
             "granted": False,
-            "application_name": "",
+            "application_name": waiter_application_name,
             "query": f"INSERT INTO {barrier.target_table} (...)",
             "wait_event_type": "Lock",
             "wait_event": "advisory",
@@ -234,6 +240,11 @@ def test_barrier_requires_exactly_one_holder_and_one_blocked_waiter() -> None:
 
     assert observation.holder_pid == 401
     assert observation.waiter_pid == 509
+    assert (
+        observation.waiter_application_name
+        == GENERATION_WORKER_APPLICATION_NAME
+    )
+    assert observation.target_role == "generation-worker"
     lock_query, lock_params = next(
         (text, params)
         for text, params in admin.executions
@@ -249,6 +260,42 @@ def test_barrier_requires_exactly_one_holder_and_one_blocked_waiter() -> None:
         }
     )
     with pytest.raises(runner.SetupBlocked, match="exactly one holder and one waiter"):
+        barrier.observe_blocked_waiter()
+
+
+def test_barrier_rejects_outbox_waiter_and_generation_outbox_race() -> None:
+    admin = FakeConnection()
+    holder = FakeConnection()
+    barrier = runner.AdvisoryBarrier(
+        kind="generation_worker_postcommit_crash",
+        fault_id=FAULT_ID,
+        database_url="postgresql://fixture",
+        connect=FakeConnectionFactory(admin, holder),
+    )
+    barrier.install(project_id=PROJECT_ID, chapter_number=1)
+    admin.lock_rows = lock_rows(
+        barrier,
+        waiter_application_name=OUTBOX_WORKER_APPLICATION_NAME,
+    )
+
+    with pytest.raises(
+        runner.SetupBlocked,
+        match="generation-worker application_name",
+    ):
+        barrier.observe_blocked_waiter()
+
+    admin.lock_rows = lock_rows(barrier)
+    admin.lock_rows.append(
+        {
+            **admin.lock_rows[-1],
+            "pid": 510,
+            "application_name": OUTBOX_WORKER_APPLICATION_NAME,
+        }
+    )
+    with pytest.raises(
+        runner.SetupBlocked,
+        match="exactly one holder and one waiter",
+    ):
         barrier.observe_blocked_waiter()
 
 
@@ -375,7 +422,6 @@ def test_mcp_fixture_reads_before_writes_and_runs_all_six_stage_actions() -> Non
     assert task.task_id == TASK_ID
     writes = {
         "genesis_stage_generate",
-        "genesis_stage_refine",
         "genesis_stage_lock",
     }
     for stage in runner.GENESIS_STAGES:
@@ -386,7 +432,6 @@ def test_mcp_fixture_reads_before_writes_and_runs_all_six_stage_actions() -> Non
         ]
         assert [name for _, name, _ in stage_calls] == [
             "genesis_stage_generate",
-            "genesis_stage_refine",
             "genesis_stage_lock",
         ]
         for index, name, _ in stage_calls:
@@ -412,6 +457,7 @@ def test_mcp_fixture_reads_before_writes_and_runs_all_six_stage_actions() -> Non
     assert not any(
         name
         in {
+            "genesis_stage_refine",
             "project_update",
             "project_continue_generation",
             "chapter_review_retry",
@@ -440,6 +486,8 @@ def raw_canon() -> dict[str, Any]:
         "natural_key": "canon-idempotency-a",
         "project_id": PROJECT_ID,
         "chapter_id": CHAPTER_ID,
+        "chapter_number": 1,
+        "candidate_id": CANDIDATE_ID,
         "canon_version": 1,
         "content_sha256": BODY_SHA,
         "created_at": "ignored",
@@ -447,7 +495,12 @@ def raw_canon() -> dict[str, Any]:
     }
 
 
-def raw_outbox(attempts: int) -> dict[str, Any]:
+def raw_outbox(
+    attempts: int,
+    *,
+    status: str = "pending",
+    error_message: str = "",
+) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
         "canon_commit_id": CANON_ID,
@@ -458,13 +511,16 @@ def raw_outbox(attempts: int) -> dict[str, Any]:
         "trigger": "canon_commit",
     }
     return {
-        "event_id": "event-a",
+        "event_id": (
+            "canon-idempotency-a:canon.projection.requested"
+        ),
         "aggregate_type": "project",
         "aggregate_id": PROJECT_ID,
         "event_type": "canon.projection.requested",
         "payload_json": json.dumps(payload),
         "attempts": attempts,
-        "status": "pending",
+        "status": status,
+        "error_message": error_message,
         "updated_at": "ignored",
     }
 
@@ -479,22 +535,25 @@ def test_sql_collectors_normalize_canon_and_durable_outbox_identity() -> None:
             "natural_key": "canon-idempotency-a",
             "project_id": PROJECT_ID,
             "chapter_id": CHAPTER_ID,
+            "chapter_number": 1,
+            "candidate_id": CANDIDATE_ID,
             "canon_version": 1,
             "content_sha256": BODY_SHA,
         }
     ]
     assert outbox == {
-        "event_id": "event-a",
-        "aggregate_type": "canon",
-        "aggregate_id": CANON_ID,
+        "event_id": "canon-idempotency-a:canon.projection.requested",
+        "aggregate_type": "project",
+        "aggregate_id": PROJECT_ID,
         "event_type": "canon.projection.requested",
-        "idempotency_key": "canon-idempotency-a",
+        "payload": json.loads(raw_outbox(3)["payload_json"]),
         "payload_sha256": evidence.stable_hash(
             json.loads(raw_outbox(3)["payload_json"])
         ),
+        "status": "pending",
+        "error_message": "",
         "attempt": 3,
     }
-    assert "status" not in outbox
     assert "updated_at" not in outbox
 
 
@@ -544,6 +603,7 @@ def test_qdrant_collector_requires_project_bound_points_and_healthy_checkpoint()
         points=points,
         project_id=PROJECT_ID,
         canon_id=CANON_ID,
+        collection="fixture-vectors",
     )
 
     assert projections == [
@@ -552,11 +612,12 @@ def test_qdrant_collector_requires_project_bound_points_and_healthy_checkpoint()
             "identity_id": "point-a",
             "canon_id": CANON_ID,
             "status": "converged",
+            "collection": "fixture-vectors",
         }
     ]
     assert identities == [
         {
-            "collection": "canon",
+            "collection": "fixture-vectors",
             "projection_type": "llm_kb",
             "point_id": "point-a",
             "canon_id": CANON_ID,
@@ -571,6 +632,7 @@ def test_qdrant_collector_requires_project_bound_points_and_healthy_checkpoint()
             points=points,
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
+            collection="fixture-vectors",
         )
 
 
@@ -695,27 +757,128 @@ def valid_projection_snapshots(
     }
     for stage, snapshot in snapshots.items():
         snapshot["state"]["database"]["canon_commits"] = copy.deepcopy(canon)
+        if kind == "qdrant_unavailable":
+            attempts = {"before": 0, "during": 1, "after": 2}[stage]
+            status = "processed" if stage == "after" else "pending"
+            error_message = (
+                "Qdrant connection refused" if stage == "during" else ""
+            )
+        else:
+            attempts = 1 if stage == "after" else 0
+            status = "processed" if stage == "after" else "pending"
+            error_message = ""
         snapshot["state"]["database"]["outbox"] = runner.normalize_outbox_record(
-            raw_outbox(0 if stage != "after" else 1)
+            raw_outbox(
+                attempts,
+                status=status,
+                error_message=error_message,
+            )
         )
     status = projection_status()
-    projections, identities = runner.normalize_projection_identities(
-        status=status,
-        rows=[
-            {
-                "projection_id": "checkpoint-a",
-                "projection_type": "llm_kb",
-                "project_id": PROJECT_ID,
-                "projected_canon_commit_id": CANON_ID,
-            }
-        ],
-        project_id=PROJECT_ID,
-        canon_id=CANON_ID,
+    if kind == "qdrant_unavailable":
+        projections, identities = runner.normalize_qdrant_projection(
+            status=status,
+            points=[
+                {
+                    "id": "point-a",
+                    "payload": {
+                        "project_id": PROJECT_ID,
+                        "index_kind": "llm_kb",
+                    },
+                }
+            ],
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            collection="fixture-vectors",
+        )
+        snapshots["after"]["state"]["external"].update(
+            replay_baseline_projections=copy.deepcopy(projections),
+            replay_baseline_point_identities=copy.deepcopy(identities),
+            projections=projections,
+            point_identities=identities,
+        )
+    else:
+        projections, identities = runner.normalize_projection_identities(
+            status=status,
+            rows=[
+                {
+                    "projection_id": "checkpoint-a",
+                    "projection_type": "llm_kb",
+                    "project_id": PROJECT_ID,
+                    "projected_canon_commit_id": CANON_ID,
+                }
+            ],
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+        )
+        snapshots["after"]["state"]["external"].update(
+            replay_baseline_projections=copy.deepcopy(projections),
+            replay_baseline_projection_identities=copy.deepcopy(identities),
+            projections=projections,
+            projection_identities=identities,
+        )
+    return snapshots
+
+
+def valid_generation_snapshots(
+    kind: str = "generation_worker_postcommit_crash",
+) -> dict[str, dict[str, Any]]:
+    fixture = {
+        "fixture_id": "fixture-a",
+        "fault_id": FAULT_ID,
+        "resource_type": "chapter",
+        "resource_id": CHAPTER_ID,
+    }
+    snapshots = {
+        stage: runner.snapshot_envelope(
+            source_sha=SOURCE_SHA,
+            fault_kind=kind,
+            fault_id=FAULT_ID,
+            stage=stage,
+            fixture=fixture,
+        )
+        for stage in evidence.STAGES
+    }
+    canon = runner.normalize_canon_records([raw_canon()])
+    accepted = [
+        {
+            "bundle_id": "bundle-a",
+            "candidate_id": CANDIDATE_ID,
+            "project_id": PROJECT_ID,
+            "chapter_id": CHAPTER_ID,
+            "content_sha256": BODY_SHA,
+        }
+    ]
+    authoritative = [
+        {
+            "entity_type": "canon",
+            "record_id": CANON_ID,
+            "project_id": PROJECT_ID,
+            "chapter_id": CHAPTER_ID,
+            "natural_key": "canon-idempotency-a",
+        }
+    ]
+    for stage, snapshot in snapshots.items():
+        snapshot["state"]["database"]["task"] = {
+            "task_id": TASK_ID,
+            "lease_epoch": 5 if stage == "after" else 4,
+        }
+    snapshots["during"]["state"]["database"]["canon_commits"] = (
+        copy.deepcopy(canon)
+        if kind == "generation_worker_postcommit_crash"
+        else []
     )
-    snapshots["after"]["state"]["external"].update(
-        projections=projections,
-        projection_identities=identities,
+    snapshots["after"]["state"]["database"].update(
+        canon_commits=canon,
+        authoritative_identities=authoritative,
     )
+    if kind == "generation_worker_postcommit_crash":
+        snapshots["during"]["state"]["database"][
+            "accepted_bundles"
+        ] = copy.deepcopy(accepted)
+        snapshots["after"]["state"]["database"][
+            "accepted_bundles"
+        ] = accepted
     return snapshots
 
 
@@ -752,7 +915,12 @@ def append_event(
     events.append(event)
 
 
-def valid_event_log(evidence_dir: Path) -> Path:
+def valid_event_log(
+    evidence_dir: Path,
+    *,
+    fault_kind: str = "projection_consumer_unavailable",
+) -> Path:
+    fault_contract = finalizer.SERVICE_FAULTS[fault_kind]
     run_identity = {
         "run_id": "1" * 32,
         "evidence_directory": str(evidence_dir.resolve()),
@@ -796,13 +964,16 @@ def valid_event_log(evidence_dir: Path) -> Path:
     )
     append_event(
         events,
-        action="fault_service_stopped",
+        action=fault_contract["fault_action"],
         recorded_at="2026-07-26T12:01:00+00:00",
         identity=identity,
         run_identity=run_identity,
         volume=volume,
-        service="outbox-worker",
-        fault_time="2026-07-26T12:01:00+00:00",
+        service=fault_contract["service"],
+        **{
+            fault_contract["fault_time_field"]:
+                "2026-07-26T12:01:00+00:00"
+        },
     )
     append_event(
         events,
@@ -811,7 +982,7 @@ def valid_event_log(evidence_dir: Path) -> Path:
         identity=identity,
         run_identity=run_identity,
         volume=volume,
-        service="outbox-worker",
+        service=fault_contract["service"],
         recovery_time="2026-07-26T12:02:00+00:00",
     )
     append_event(
@@ -1192,6 +1363,48 @@ def test_sql_collector_wait_boundaries_fail_closed() -> None:
     ]
 
 
+def test_sql_collector_requires_qdrant_failure_transition() -> None:
+    class OutboxSequence:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self.rows = rows
+
+        def fetch_all(
+            self,
+            statement: str,
+            params: tuple[Any, ...] | list[Any] = (),
+        ) -> list[dict[str, Any]]:
+            assert "/* task4 projection outbox */" in statement
+            assert tuple(params) == (PROJECT_ID, 1)
+            return [copy.deepcopy(self.rows.pop(0))]
+
+    failed = raw_outbox(
+        1,
+        status="pending",
+        error_message="Qdrant connection refused",
+    )
+    collector = runner.SQLCollector(OutboxSequence([failed]))
+
+    observed = collector.wait_qdrant_failure(
+        fixture_context(),
+        baseline_attempt=0,
+        timeout_seconds=0,
+    )
+
+    assert observed["attempt"] == 1
+    assert observed["status"] == "pending"
+    assert observed["error_message"] == "Qdrant connection refused"
+
+    collector = runner.SQLCollector(
+        OutboxSequence([raw_outbox(1, status="processed")])
+    )
+    with pytest.raises(runner.SetupBlocked, match="failed Qdrant attempt"):
+        collector.wait_qdrant_failure(
+            fixture_context(),
+            baseline_attempt=0,
+            timeout_seconds=0,
+        )
+
+
 def test_api_client_uses_supported_approve_status_and_refresh_paths() -> None:
     calls: list[
         tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]
@@ -1400,22 +1613,6 @@ class FakeSetupWriter:
         return path
 
 
-class FakePassWriter(FakeSetupWriter):
-    def __init__(self, evidence_dir: Path, log: list[str] | None = None) -> None:
-        super().__init__(evidence_dir)
-        self.pass_payload: dict[str, Any] | None = None
-        self.log = log
-
-    def write_pass_report(self, **payload: Any) -> Path:
-        self.pass_payload = payload
-        if self.log is not None:
-            self.log.append("write_pass")
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        path = self.evidence_dir / runner.REPORT_NAME
-        path.write_text('{"result":"pass"}', encoding="utf-8")
-        return path
-
-
 class FakeBoundaryCollector:
     def wait_task_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
@@ -1479,13 +1676,19 @@ class SuccessfulBarrier:
     def __init__(self, log: list[str]) -> None:
         self.log = log
         self.cleanup_count = 0
+        self.last_residue_count = 0
 
     def install(self, **_kwargs: Any) -> None:
         self.log.append("barrier_install")
 
     def wait_for_blocked_waiter(self) -> Any:
         self.log.append("barrier_wait")
-        return runner.BarrierObservation(holder_pid=100, waiter_pid=200)
+        return runner.BarrierObservation(
+            holder_pid=100,
+            waiter_pid=200,
+            waiter_application_name=GENERATION_WORKER_APPLICATION_NAME,
+            target_role="generation-worker",
+        )
 
     def cleanup(self) -> None:
         self.cleanup_count += 1
@@ -1493,22 +1696,14 @@ class SuccessfulBarrier:
 
 
 class SuccessfulGenerationCollector:
+    def __init__(self, kind: str) -> None:
+        self.snapshots = valid_generation_snapshots(kind)
+
     def wait_task_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
 
     def generation_snapshot(self, **kwargs: Any) -> dict[str, Any]:
-        stage = kwargs["stage"]
-        return {
-            "stage": stage,
-            "state": {
-                "database": {
-                    "task": {
-                        "task_id": TASK_ID,
-                        "lease_epoch": 5 if stage == "after" else 4,
-                    }
-                }
-            },
-        }
+        return copy.deepcopy(self.snapshots[kwargs["stage"]])
 
     def wait_task_reclaimed(self, fixture: Any, **_kwargs: Any) -> Any:
         return fixture
@@ -1540,21 +1735,28 @@ class LoggingController(FakeControllerLifecycle):
         self.log.append("destroy")
 
 
-def test_live_generation_success_cleans_barrier_before_worker_recovery_and_report(
+def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
     tmp_path: Path,
 ) -> None:
+    kind = "generation_worker_postcommit_crash"
     log: list[str] = []
     evidence_dir = (tmp_path / "evidence").resolve()
+    evidence_dir.mkdir()
+    valid_event_log(evidence_dir, fault_kind=kind)
     controller = LoggingController(evidence_dir, log)
     barrier = SuccessfulBarrier(log)
-    writer = FakePassWriter(evidence_dir, log)
+    writer = runner.EvidenceWriter(
+        evidence_dir=evidence_dir,
+        evaluator=evidence,
+        report_validator=finalizer.fault_report_violations,
+    )
     live = runner.LiveRunner(
-        fault_kind="generation_worker_precommit_crash",
+        fault_kind=kind,
         fault_id=FAULT_ID,
         source_sha=SOURCE_SHA,
         controller=controller,
         lifecycle=FakeLifecycleProject(),
-        sql_collector=SuccessfulGenerationCollector(),
+        sql_collector=SuccessfulGenerationCollector(kind),
         api=None,
         qdrant=None,
         writer=writer,
@@ -1564,25 +1766,35 @@ def test_live_generation_success_cleans_barrier_before_worker_recovery_and_repor
     result = live.run()
 
     assert result.status == "pass"
-    assert writer.pass_payload is not None
-    assert set(writer.pass_payload["snapshots"]) == {
-        "before",
-        "during",
-        "after",
-    }
-    barrier_evidence = writer.pass_payload["supplemental_artifacts"][
-        "barrier-observation.json"
-    ]
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["result"] == "pass"
+    assert finalizer.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    ) == []
+    barrier_evidence = json.loads(
+        (evidence_dir / "barrier-observation.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert barrier_evidence["holder_pid"] == 100
     assert barrier_evidence["waiter_pid"] == 200
+    assert (
+        barrier_evidence["waiter_application_name"]
+        == GENERATION_WORKER_APPLICATION_NAME
+    )
+    assert barrier_evidence["target_role"] == "generation-worker"
     assert barrier_evidence["residue_count"] == 0
     assert log.index("barrier_wait") < log.index("kill:generation-worker")
     assert log.index("kill:generation-worker") < log.index("barrier_cleanup")
     assert log.index("barrier_cleanup") < log.index("start:generation-worker")
-    assert log.index("destroy") < log.index("write_pass")
+    assert log[-1] == "destroy"
 
 
 class SuccessfulProjectionCollector:
+    def __init__(self, kind: str) -> None:
+        self.snapshots = valid_projection_snapshots(kind)
+
     def wait_review_ready(self, **_kwargs: Any) -> Any:
         return fixture_context()
 
@@ -1599,13 +1811,20 @@ class SuccessfulProjectionCollector:
         )
 
     def projection_snapshot(self, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "stage": kwargs["stage"],
-            "state": {"external": {}},
-        }
+        return copy.deepcopy(self.snapshots[kwargs["stage"]])
 
     def wait_outbox_processed(self, _fixture: Any) -> None:
         return None
+
+    def wait_qdrant_failure(
+        self,
+        _fixture: Any,
+        *,
+        baseline_attempt: int,
+    ) -> dict[str, Any]:
+        during = self.snapshots["during"]["state"]["database"]["outbox"]
+        assert during["attempt"] > baseline_attempt
+        return copy.deepcopy(during)
 
     def projection_identity_rows(self, _fixture: Any) -> list[dict[str, Any]]:
         return [
@@ -1616,6 +1835,17 @@ class SuccessfulProjectionCollector:
                 "projected_canon_commit_id": CANON_ID,
             }
         ]
+
+
+class MissingQdrantFailureCollector(SuccessfulProjectionCollector):
+    def __init__(self) -> None:
+        self.snapshots = valid_projection_snapshots("qdrant_unavailable")
+
+    def projection_snapshot(self, **kwargs: Any) -> dict[str, Any]:
+        return copy.deepcopy(self.snapshots[kwargs["stage"]])
+
+    def wait_qdrant_failure(self, *_args: Any, **_kwargs: Any) -> None:
+        raise runner.SetupBlocked("failed Qdrant attempt was not observed")
 
 
 class SuccessfulAPI:
@@ -1638,6 +1868,8 @@ class SuccessfulAPI:
 
 
 class SuccessfulQdrant:
+    collection = "fixture-vectors"
+
     def project_points(self, _project_id: str) -> list[dict[str, Any]]:
         return [
             {
@@ -1648,6 +1880,34 @@ class SuccessfulQdrant:
                 },
             }
         ]
+
+
+def test_live_qdrant_without_during_failure_is_setup_blocked(
+    tmp_path: Path,
+) -> None:
+    log: list[str] = []
+    evidence_dir = (tmp_path / "qdrant-no-failure").resolve()
+    controller = LoggingController(evidence_dir, log)
+    writer = FakeSetupWriter(evidence_dir)
+    live = runner.LiveRunner(
+        fault_kind="qdrant_unavailable",
+        fault_id=FAULT_ID,
+        source_sha=SOURCE_SHA,
+        controller=controller,
+        lifecycle=FakeLifecycleProject(),
+        sql_collector=MissingQdrantFailureCollector(),
+        api=SuccessfulAPI(log),
+        qdrant=SuccessfulQdrant(),
+        writer=writer,
+    )
+
+    result = live.run()
+
+    assert result.status == "setup_blocked"
+    assert writer.payload is not None
+    assert writer.payload["failure_stage"] == "qdrant_failure"
+    assert "converged" not in log
+    assert "refresh" not in log
 
 
 @pytest.mark.parametrize(
@@ -1664,15 +1924,21 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
 ) -> None:
     log: list[str] = []
     evidence_dir = (tmp_path / kind).resolve()
+    evidence_dir.mkdir()
+    valid_event_log(evidence_dir, fault_kind=kind)
     controller = LoggingController(evidence_dir, log)
-    writer = FakePassWriter(evidence_dir, log)
+    writer = runner.EvidenceWriter(
+        evidence_dir=evidence_dir,
+        evaluator=evidence,
+        report_validator=finalizer.fault_report_violations,
+    )
     live = runner.LiveRunner(
         fault_kind=kind,
         fault_id=FAULT_ID,
         source_sha=SOURCE_SHA,
         controller=controller,
         lifecycle=FakeLifecycleProject(),
-        sql_collector=SuccessfulProjectionCollector(),
+        sql_collector=SuccessfulProjectionCollector(kind),
         api=SuccessfulAPI(log),
         qdrant=SuccessfulQdrant() if kind == "qdrant_unavailable" else None,
         writer=writer,
@@ -1687,15 +1953,31 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
     assert len(convergences) == 2
     assert log.index(f"start:{service}") < convergences[0]
     assert convergences[0] < log.index("refresh") < convergences[1]
-    assert log.index("destroy") < log.index("write_pass")
-    assert writer.pass_payload is not None
-    after = writer.pass_payload["snapshots"]["after"]
+    assert log[-1] == "destroy"
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["result"] == "pass"
+    assert finalizer.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    ) == []
+    after = json.loads(
+        (evidence_dir / "after.json").read_text(encoding="utf-8")
+    )
     identity_key = (
         "point_identities"
         if kind == "qdrant_unavailable"
         else "projection_identities"
     )
     assert after["state"]["external"][identity_key]
+    outbox = after["state"]["database"]["outbox"]
+    assert outbox["aggregate_type"] == "project"
+    assert outbox["aggregate_id"] == PROJECT_ID
+    assert outbox["payload"]["canon_commit_id"] == CANON_ID
+    if kind == "qdrant_unavailable":
+        assert {
+            row["collection"]
+            for row in after["state"]["external"]["point_identities"]
+        } == {"fixture-vectors"}
 
 
 def test_writer_hashes_reopens_and_binds_supplemental_artifacts(

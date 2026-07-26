@@ -77,9 +77,20 @@ FAULT_EVENT_BY_KIND = {
     ),
 }
 RECOVERY_EVENT_ACTION = "fault_service_recovered"
+GENERATION_WORKER_APPLICATION_NAME = "forwin-recovery-generation-worker"
+GENERATION_WORKER_ROLE = "generation-worker"
 FAULT_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 SQL_IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+CANON_PROJECTION_PAYLOAD_KEYS = {
+    "schema_version",
+    "canon_commit_id",
+    "canon_idempotency_key",
+    "project_id",
+    "chapter_number",
+    "candidate_id",
+    "trigger",
+}
 
 
 class RunnerError(RuntimeError):
@@ -233,6 +244,8 @@ def psycopg_connect(database_url: str) -> Any:
 class BarrierObservation:
     holder_pid: int
     waiter_pid: int
+    waiter_application_name: str
+    target_role: str
 
 
 class AdvisoryBarrier:
@@ -415,6 +428,14 @@ class AdvisoryBarrier:
             raise SetupBlocked(
                 "barrier requires exactly one holder and one waiter"
             )
+        if (
+            waiters[0].get("application_name")
+            != GENERATION_WORKER_APPLICATION_NAME
+        ):
+            raise SetupBlocked(
+                "barrier waiter does not have the exact generation-worker "
+                "application_name"
+            )
         holder_pid = int(holders[0]["pid"])
         waiter_pid = int(waiters[0]["pid"])
         blocking_pids = [int(value) for value in waiters[0].get("blocking_pids") or []]
@@ -425,6 +446,8 @@ class AdvisoryBarrier:
         return BarrierObservation(
             holder_pid=holder_pid,
             waiter_pid=waiter_pid,
+            waiter_application_name=GENERATION_WORKER_APPLICATION_NAME,
+            target_role=GENERATION_WORKER_ROLE,
         )
 
     def wait_for_blocked_waiter(
@@ -527,21 +550,10 @@ class TaskFixture:
 def decode_mcp_result(result: Any) -> dict[str, Any]:
     if isinstance(result, Mapping):
         return dict(result)
-    for attribute in ("data", "structured_content"):
-        payload = getattr(result, attribute, None)
-        if isinstance(payload, Mapping):
-            return dict(payload)
-    for item in getattr(result, "content", ()) or ():
-        text = getattr(item, "text", None)
-        if not isinstance(text, str):
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    raise SetupBlocked("MCP tool returned no JSON object")
+    payload = getattr(result, "structured_content", None)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise SetupBlocked("MCP tool returned no structured JSON object")
 
 
 class OneChapterLifecycle:
@@ -587,16 +599,10 @@ class OneChapterLifecycle:
                 "target_total_chapters": 1,
             },
         )
-        project_payload = (
-            created.get("project")
-            if isinstance(created.get("project"), Mapping)
-            else created
-        )
-        project_id = str(
-            project_payload.get("id")
-            or project_payload.get("project_id")
-            or ""
-        )
+        project_payload = created.get("project")
+        if not isinstance(project_payload, Mapping):
+            raise SetupBlocked("project_create returned no project object")
+        project_id = str(project_payload.get("id") or "")
         if not project_id:
             raise SetupBlocked("project_create returned no project identity")
         await self._call("project_get", {"project_id": project_id})
@@ -608,20 +614,6 @@ class OneChapterLifecycle:
             )
             await self._call("genesis_get", {"project_id": project_id})
             await self._require_ok(
-                "genesis_stage_refine",
-                {
-                    "project_id": project_id,
-                    "stage_key": stage,
-                    "instruction": (
-                        "Keep this one-chapter fixture concise, generic, "
-                        "and internally consistent."
-                    ),
-                    "target_path": "",
-                    "reason": "recovery evidence fixture preparation",
-                },
-            )
-            await self._call("genesis_get", {"project_id": project_id})
-            await self._require_ok(
                 "genesis_stage_lock",
                 {"project_id": project_id, "stage_key": stage},
             )
@@ -630,7 +622,6 @@ class OneChapterLifecycle:
         if not bool(
             genesis.get("can_start_writing")
             or project.get("can_start_writing")
-            or project.get("creation_status") == "genesis_ready"
         ):
             raise SetupBlocked("six locked Genesis stages are not writing-ready")
         return ProjectFixture(project_id=project_id)
@@ -658,7 +649,7 @@ class OneChapterLifecycle:
             if isinstance(started.get("task"), Mapping)
             else {}
         )
-        task_id = str(task.get("task_id") or task.get("id") or "")
+        task_id = str(task.get("task_id") or "")
         if not task_id:
             raise SetupBlocked("project_start_writing returned no task identity")
         return TaskFixture(project_id=project_id, task_id=task_id)
@@ -707,6 +698,11 @@ def normalize_canon_records(rows: Sequence[Mapping[str, Any]]) -> list[dict[str,
                 ),
                 "project_id": _required_text(row.get("project_id"), "project_id"),
                 "chapter_id": _required_text(row.get("chapter_id"), "chapter_id"),
+                "chapter_number": int(row.get("chapter_number") or 0),
+                "candidate_id": _required_text(
+                    row.get("candidate_id"),
+                    "candidate_id",
+                ),
                 "canon_version": int(row.get("canon_version") or 0),
                 "content_sha256": _canonical_digest(
                     row.get("content_sha256"),
@@ -757,21 +753,50 @@ def normalize_outbox_record(row: Mapping[str, Any]) -> dict[str, Any]:
         raise SetupBlocked("projection outbox payload is missing")
     if not isinstance(payload, dict):
         raise SetupBlocked("projection outbox payload is not an object")
+    if set(payload) != CANON_PROJECTION_PAYLOAD_KEYS:
+        raise SetupBlocked("projection outbox payload schema is not exact")
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or type(payload.get("chapter_number")) is not int
+        or payload["chapter_number"] < 1
+    ):
+        raise SetupBlocked("projection outbox payload version/chapter is invalid")
+    for key in (
+        "canon_commit_id",
+        "canon_idempotency_key",
+        "project_id",
+        "candidate_id",
+        "trigger",
+    ):
+        _required_text(payload.get(key), f"outbox payload {key}")
+    status = _required_text(row.get("status"), "outbox status")
+    if status not in {"pending", "running", "processed"}:
+        raise SetupBlocked("projection outbox status is invalid")
+    error_message = str(row.get("error_message") or "")
+    if (
+        "\x00" in error_message
+        or len(error_message) > 4000
+        or error_message != " ".join(error_message.split())
+    ):
+        raise SetupBlocked("projection outbox error is not sanitized")
     return {
         "event_id": _required_text(row.get("event_id"), "outbox event_id"),
-        "aggregate_type": "canon",
+        "aggregate_type": _required_text(
+            row.get("aggregate_type"),
+            "outbox aggregate_type",
+        ),
         "aggregate_id": _required_text(
-            payload.get("canon_commit_id"),
-            "outbox canon_commit_id",
+            row.get("aggregate_id"),
+            "outbox aggregate_id",
         ),
         "event_type": _required_text(row.get("event_type"), "outbox event_type"),
-        "idempotency_key": _required_text(
-            payload.get("canon_idempotency_key"),
-            "outbox canon idempotency key",
-        ),
+        "payload": payload,
         "payload_sha256": hashlib.sha256(
             canonical_json(payload).encode("utf-8")
         ).hexdigest(),
+        "status": status,
+        "error_message": error_message,
         "attempt": int(row.get("attempts") or 0),
     }
 
@@ -805,7 +830,9 @@ def normalize_qdrant_projection(
     points: Sequence[Mapping[str, Any]],
     project_id: str,
     canon_id: str,
+    collection: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    collection = _required_text(collection, "Qdrant collection")
     healthy = _healthy_components(status, canon_id=canon_id)
     if "llm_kb" not in healthy:
         raise SetupBlocked("Qdrant projection checkpoint is not converged")
@@ -825,12 +852,13 @@ def normalize_qdrant_projection(
             "identity_id": str(point["id"]),
             "canon_id": canon_id,
             "status": "converged",
+            "collection": collection,
         }
         for point in bound_points
     ]
     identities = [
         {
-            "collection": "canon",
+            "collection": collection,
             "projection_type": "llm_kb",
             "point_id": str(point["id"]),
             "canon_id": canon_id,
@@ -926,6 +954,8 @@ CANON_SQL = """
         commits.id AS canon_id,
         commits.idempotency_key AS natural_key,
         commits.project_id,
+        commits.chapter_number,
+        commits.candidate_id,
         candidates.chapter_plan_id AS chapter_id,
         candidates.version AS canon_version,
         candidates.body_hash AS content_sha256
@@ -965,7 +995,8 @@ PROJECTION_OUTBOX_SQL = """
         event_type,
         payload_json,
         attempts,
-        status
+        status,
+        error_message
     FROM outbox_events
     WHERE event_type = 'canon.projection.requested'
       AND payload_json::jsonb ->> 'project_id' = %s
@@ -1309,6 +1340,31 @@ class SQLCollector:
                 return
             time.sleep(poll_seconds)
         raise SetupBlocked("projection outbox did not converge to processed")
+
+    def wait_qdrant_failure(
+        self,
+        fixture: FixtureContext,
+        *,
+        baseline_attempt: int,
+        timeout_seconds: float = 300.0,
+        poll_seconds: float = 0.5,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        first = True
+        while first or time.monotonic() < deadline:
+            first = False
+            outbox = self._outbox_row(fixture)
+            if (
+                outbox["status"] == "pending"
+                and bool(outbox["error_message"])
+                and outbox["attempt"] > int(baseline_attempt)
+            ):
+                return outbox
+            if time.monotonic() < deadline:
+                time.sleep(poll_seconds)
+        raise SetupBlocked(
+            "fixture outbox did not record a failed Qdrant attempt"
+        )
 
 
 def http_json(
@@ -1686,6 +1742,8 @@ class LiveRunner:
             "fault_id": self.fault_id,
             "holder_pid": observation.holder_pid,
             "waiter_pid": observation.waiter_pid,
+            "waiter_application_name": observation.waiter_application_name,
+            "target_role": observation.target_role,
             "holder_count": 1,
             "waiter_count": 1,
             "blocking_pids": [observation.holder_pid],
@@ -1746,6 +1804,15 @@ class LiveRunner:
             stage="before",
             fixture=fixture,
         )
+        if self.fault_kind == "qdrant_unavailable":
+            self.stage = "qdrant_failure"
+            baseline_attempt = int(
+                before["state"]["database"]["outbox"]["attempt"]
+            )
+            self.sql.wait_qdrant_failure(
+                fixture,
+                baseline_attempt=baseline_attempt,
+            )
         during = self.sql.projection_snapshot(
             source_sha=self.source_sha,
             fault_kind=self.fault_kind,
@@ -1760,6 +1827,10 @@ class LiveRunner:
         status = self.api.wait_projection_converged(
             fixture.project_id,
             fixture.canon_id,
+        )
+        replay_baseline = self._collect_projection_evidence(
+            status=status,
+            fixture=fixture,
         )
         self.stage = "projection_replay"
         self.api.refresh_projection(
@@ -1776,31 +1847,49 @@ class LiveRunner:
             stage="after",
             fixture=fixture,
         )
+        final = self._collect_projection_evidence(
+            status=status,
+            fixture=fixture,
+        )
+        external = after["state"]["external"]
+        if self.fault_kind == "qdrant_unavailable":
+            external.update(
+                replay_baseline_projections=replay_baseline[0],
+                replay_baseline_point_identities=replay_baseline[1],
+                projections=final[0],
+                point_identities=final[1],
+            )
+        else:
+            external.update(
+                replay_baseline_projections=replay_baseline[0],
+                replay_baseline_projection_identities=replay_baseline[1],
+                projections=final[0],
+                projection_identities=final[1],
+            )
+        return {"before": before, "during": during, "after": after}
+
+    def _collect_projection_evidence(
+        self,
+        *,
+        status: Mapping[str, Any],
+        fixture: FixtureContext,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if self.fault_kind == "qdrant_unavailable":
             if self.qdrant is None:
                 raise SetupBlocked("Qdrant reader is missing")
-            projections, identities = normalize_qdrant_projection(
+            return normalize_qdrant_projection(
                 status=status,
                 points=self.qdrant.project_points(fixture.project_id),
                 project_id=fixture.project_id,
                 canon_id=fixture.canon_id,
+                collection=self.qdrant.collection,
             )
-            after["state"]["external"].update(
-                projections=projections,
-                point_identities=identities,
-            )
-        else:
-            projections, identities = normalize_projection_identities(
-                status=status,
-                rows=self.sql.projection_identity_rows(fixture),
-                project_id=fixture.project_id,
-                canon_id=fixture.canon_id,
-            )
-            after["state"]["external"].update(
-                projections=projections,
-                projection_identities=identities,
-            )
-        return {"before": before, "during": during, "after": after}
+        return normalize_projection_identities(
+            status=status,
+            rows=self.sql.projection_identity_rows(fixture),
+            project_id=fixture.project_id,
+            canon_id=fixture.canon_id,
+        )
 
     def _cleanup_stack(self) -> list[str]:
         if not self.stack_started:

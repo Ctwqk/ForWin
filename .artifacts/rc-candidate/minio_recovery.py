@@ -105,6 +105,7 @@ def snapshot_envelope(
     fault_id: str,
     stage: str,
     fixture: Mapping[str, Any],
+    endpoint_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if re.fullmatch(r"[0-9a-f]{40}", str(source_sha or "")) is None:
         raise RunnerError("source SHA is not canonical")
@@ -120,7 +121,14 @@ def snapshot_envelope(
         "fault_id": fault_id,
         "stage": stage,
         "state": {
-            "target": {"fixture": dict(fixture)},
+            "target": {
+                "fixture": dict(fixture),
+                **(
+                    {"endpoint_identity": dict(endpoint_identity)}
+                    if endpoint_identity is not None
+                    else {}
+                ),
+            },
             "mcp": {},
             "api": {},
             "database": {},
@@ -264,10 +272,12 @@ class MinioInventory:
         client: Any,
         bucket: str,
         prefix: str,
+        endpoint_url: str,
     ) -> None:
         self.client = client
         self.bucket = required_text(bucket, "MinIO bucket")
         self.prefix = str(prefix or "").strip("/")
+        self.endpoint_url = required_url(endpoint_url, "MinIO URL")
 
     def project_objects(self, project_id: str) -> list[dict[str, Any]]:
         project = required_text(project_id, "project_id")
@@ -1128,6 +1138,45 @@ class FixtureContext:
 class SQLCollector:
     def __init__(self, database: Database) -> None:
         self.database = database
+        self._bound_endpoint_identity: dict[str, Any] | None = None
+
+    def bind_endpoint_identity(
+        self,
+        endpoint_identity: Mapping[str, Any],
+    ) -> None:
+        if self._bound_endpoint_identity is not None:
+            raise SetupBlocked("Task 5 endpoint identity was already bound")
+        value = dict(endpoint_identity)
+        if not value:
+            raise SetupBlocked("Task 5 endpoint identity is empty")
+        self._bound_endpoint_identity = value
+
+    def _endpoint_identity(self) -> dict[str, Any]:
+        if self._bound_endpoint_identity is None:
+            raise SetupBlocked(
+                "Task 5 endpoint identity was not bound before snapshot"
+            )
+        return dict(self._bound_endpoint_identity)
+
+    def read_recovery_sentinel(self) -> dict[str, str]:
+        rows = self.database.fetch_all(
+            """
+            SELECT sentinel_id, run_id, fault_id, source_sha
+            FROM forwin_recovery_run_sentinel
+            WHERE singleton = true
+            """
+        )
+        if len(rows) != 1:
+            raise SetupBlocked(
+                "database endpoint returned no unique recovery sentinel"
+            )
+        return {
+            "table": "forwin_recovery_run_sentinel",
+            **{
+                key: str(rows[0].get(key) or "")
+                for key in ("sentinel_id", "run_id", "fault_id", "source_sha")
+            },
+        }
 
     def wait_review_ready(
         self,
@@ -1241,6 +1290,7 @@ class SQLCollector:
             fault_id=fixture.fault_id,
             stage=stage,
             fixture=fixture.evaluator_identity(),
+            endpoint_identity=self._endpoint_identity(),
         )
         database = snapshot["state"]["database"]
         database["candidate"] = self._candidate(fixture)
@@ -1274,6 +1324,7 @@ class SQLCollector:
             fault_id=fixture.fault_id,
             stage=stage,
             fixture=fixture.evaluator_identity(),
+            endpoint_identity=self._endpoint_identity(),
         )
         database = snapshot["state"]["database"]
         database["canon_commits"] = self._canon(fixture)
@@ -1665,6 +1716,10 @@ class LiveRunner:
         inventory: MinioInventory,
         writer: EvidenceWriter,
         barrier_factory: Callable[[], ReviewApprovedBarrier],
+        api_url: str,
+        mcp_url: str,
+        database_url: str,
+        minio_url: str,
     ) -> None:
         if fault_kind not in SUPPORTED_FAULTS:
             raise RunnerError(f"unsupported Task 5 fault: {fault_kind}")
@@ -1678,6 +1733,10 @@ class LiveRunner:
         self.inventory = inventory
         self.writer = writer
         self.barrier_factory = barrier_factory
+        self._configured_api_url = api_url
+        self.mcp_url = mcp_url
+        self.database_url = database_url
+        self.minio_url = minio_url
         self.stage = "initial"
         self.stack_started = False
         self.terminal = False
@@ -1691,8 +1750,38 @@ class LiveRunner:
         cleanup_errors: list[str] = []
         try:
             self.stage = "fresh_up"
-            self.controller.fresh_up(self.fault_id)
             self.stack_started = True
+            self.controller.fresh_up(self.fault_id)
+            self.stage = "bind_endpoints"
+            common.require_client_endpoint(
+                self.lifecycle,
+                attribute="mcp_url",
+                expected_url=self.mcp_url,
+                label="MCP",
+            )
+            common.require_client_endpoint(
+                self.api,
+                attribute="api_url",
+                expected_url=self._configured_api_url,
+                label="API",
+            )
+            common.require_client_endpoint(
+                self.inventory,
+                attribute="endpoint_url",
+                expected_url=self.minio_url,
+                label="MinIO",
+            )
+            endpoint_identity = common.bind_recovery_endpoints(
+                controller=self.controller,
+                fault_id=self.fault_id,
+                source_sha=self.source_sha,
+                api_url=self._configured_api_url,
+                mcp_url=self.mcp_url,
+                database_url=self.database_url,
+                minio_url=self.minio_url,
+                sentinel_reader=self.sql.read_recovery_sentinel,
+            )
+            self.sql.bind_endpoint_identity(endpoint_identity)
             snapshots = (
                 self._run_pre_canon()
                 if self.fault_kind == "minio_pre_canon_unavailable"
@@ -1704,12 +1793,25 @@ class LiveRunner:
         except BaseException as exc:
             failure = exc
         finally:
-            cleanup_errors.extend(self._cleanup_local_resources())
+            try:
+                cleanup_errors.extend(self._cleanup_local_resources())
+            except BaseException as exc:
+                failure = exc
             try:
                 self.inventory.close()
             except BaseException as exc:
                 cleanup_errors.append(f"MinIO client close: {exc}")
+                if not isinstance(exc, Exception):
+                    failure = exc
 
+        if failure is not None and not isinstance(failure, Exception):
+            if self.stack_started and not self.terminal:
+                try:
+                    self.controller.interrupt_cleanup(self.fault_id)
+                    self.terminal = True
+                except BaseException as exc:
+                    cleanup_errors.append(f"interrupt cleanup: {exc}")
+            raise failure.with_traceback(failure.__traceback__)
         if failure is None and cleanup_errors:
             failure = RunnerError("; ".join(cleanup_errors))
             self.stage = "cleanup"
@@ -1866,6 +1968,8 @@ class LiveRunner:
             OUTBOX_SERVICE,
             self.fault_id,
             PRE_APPROVAL_HOLD,
+            fault_kind=self.fault_kind,
+            purpose="auxiliary",
         )
         self.stage = "review_barrier_install"
         self.barrier = self.barrier_factory()
@@ -1923,6 +2027,8 @@ class LiveRunner:
             OUTBOX_SERVICE,
             self.fault_id,
             SAME_EVENT_REPLAY_HOLD,
+            fault_kind=self.fault_kind,
+            purpose="auxiliary",
         )
         self.stage = "same_event_release"
         replay = self.sql.release_processed_phase3_event(fixture)
@@ -2002,23 +2108,32 @@ class LiveRunner:
 
     def _cleanup_local_resources(self) -> list[str]:
         errors: list[str] = []
+        interruption: BaseException | None = None
         if self.barrier is not None:
             try:
                 self.barrier.release()
             except BaseException as exc:
                 errors.append(f"barrier release: {exc}")
+                if not isinstance(exc, Exception) and interruption is None:
+                    interruption = exc
         if self.barrier is not None:
             try:
                 self.barrier.cleanup()
             except BaseException as exc:
                 errors.append(f"barrier cleanup: {exc}")
+                if not isinstance(exc, Exception) and interruption is None:
+                    interruption = exc
             self.barrier = None
         if self.async_approval is not None:
             try:
                 self.async_approval.join(timeout_seconds=120.0)
             except BaseException as exc:
                 errors.append(f"approval thread join: {exc}")
+                if not isinstance(exc, Exception) and interruption is None:
+                    interruption = exc
             self.async_approval = None
+        if interruption is not None:
+            raise interruption.with_traceback(interruption.__traceback__)
         return errors
 
     def _abort_stage(self) -> str:
@@ -2091,6 +2206,14 @@ def resolve_run_config(
         raise RunnerError(
             "FORWIN_RECOVERY_MINIO_SECURE must be true or false"
         )
+    if secure_value == "true":
+        raise RunnerError(
+            "recovery MinIO endpoint binding requires loopback HTTP"
+        )
+    minio_endpoint = _required_environment(
+        environ,
+        "FORWIN_RECOVERY_MINIO_ENDPOINT",
+    )
     return RunConfig(
         fault_kind=fault_kind,
         fault_id=fault_id,
@@ -2100,10 +2223,7 @@ def resolve_run_config(
         api_url=required_url(args.api_url, "API URL"),
         database_url=database_url,
         evidence_dir=evidence_dir,
-        minio_endpoint=_required_environment(
-            environ,
-            "FORWIN_RECOVERY_MINIO_ENDPOINT",
-        ),
+        minio_endpoint=minio_endpoint,
         minio_access_key=_required_environment(
             environ,
             "FORWIN_RECOVERY_MINIO_ACCESS_KEY",
@@ -2145,6 +2265,7 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         ),
         bucket=config.minio_bucket,
         prefix=config.minio_prefix,
+        endpoint_url=f"http://{config.minio_endpoint}",
     )
     return LiveRunner(
         fault_kind=config.fault_kind,
@@ -2156,6 +2277,10 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         api=api,
         inventory=inventory,
         writer=EvidenceWriter(evidence_dir=config.evidence_dir),
+        api_url=config.api_url,
+        mcp_url=config.mcp_url,
+        database_url=config.database_url,
+        minio_url=f"http://{config.minio_endpoint}",
         barrier_factory=lambda: ReviewApprovedBarrier(
             fault_id=config.fault_id,
             database_url=config.database_url,

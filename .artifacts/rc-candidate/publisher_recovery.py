@@ -12,7 +12,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from psycopg import sql
@@ -34,6 +34,7 @@ from recovery_runner_common import (  # noqa: E402
     http_json,
     normalize_database_url,
     psycopg_connect,
+    require_client_endpoint,
     required_url,
     stable_hash,
     validate_fault_id,
@@ -688,10 +689,20 @@ def _json_object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, Mapping):
         return dict(raw)
     try:
-        value = json.loads(str(raw or "{}"))
-    except json.JSONDecodeError:
+        value = json.loads(str(raw))
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SetupBlocked(
+            "publisher result payload must be a valid JSON object"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise SetupBlocked("publisher result payload must be a JSON object")
+    return dict(value)
+
+
+def _optional_json_object(raw: Any) -> dict[str, Any]:
+    if raw is None or raw == "":
         return {}
-    return dict(value) if isinstance(value, Mapping) else {}
+    return _json_object(raw)
 
 
 def _unsafe_payload_paths(value: Any, prefix: str = "") -> list[str]:
@@ -1036,7 +1047,7 @@ class SQLCollector:
                 boundary = str(evidence.get("boundary") or "")
             if not boundary:
                 for attempt in self._attempt_rows(fixture):
-                    result = _json_object(attempt.get("result_json"))
+                    result = _optional_json_object(attempt.get("result_json"))
                     attempt_evidence = result.get("evidence")
                     if isinstance(attempt_evidence, Mapping):
                         boundary = str(
@@ -1072,9 +1083,25 @@ class SQLCollector:
             parsed = parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC).isoformat()
 
-    def _browser_job(self, fixture: PublisherFixture) -> dict[str, Any]:
+    def _canonical_job(self, fixture: PublisherFixture) -> dict[str, Any]:
         row = self._exact_row(fixture)
         payload = _json_object(row.get("result_payload_json"))
+        pause = payload.get("risk_pause")
+        resume = payload.get("risk_resume")
+        pause = pause if isinstance(pause, Mapping) else {}
+        resume = resume if isinstance(resume, Mapping) else {}
+        boundary = ""
+        evidence = pause.get("evidence")
+        if isinstance(evidence, Mapping):
+            boundary = str(evidence.get("boundary") or "")
+        if not boundary:
+            for attempt in self._attempt_rows(fixture):
+                result = _optional_json_object(attempt.get("result_json"))
+                attempt_evidence = result.get("evidence")
+                if isinstance(attempt_evidence, Mapping):
+                    boundary = str(attempt_evidence.get("boundary") or "")
+                    if boundary:
+                        break
         return {
             "job_id": str(row.get("job_id") or ""),
             "logical_key": str(row.get("logical_key") or ""),
@@ -1108,6 +1135,12 @@ class SQLCollector:
             "deleted_at": self._timestamp(row.get("deleted_at")),
             "paused_at": self._timestamp(row.get("paused_at")),
             "pause_reason": str(row.get("pause_reason") or ""),
+            "pause_token": str(
+                pause.get("pause_token")
+                or resume.get("pause_token")
+                or ""
+            ),
+            "risk_boundary": boundary,
             "current_url": str(row.get("current_url") or ""),
             "result_message": str(row.get("result_message") or ""),
             "error_message": str(row.get("error_message") or ""),
@@ -1190,8 +1223,8 @@ class SQLCollector:
         )
         actions: list[dict[str, str]] = []
         for row in rows:
-            old_state = _json_object(row.get("old_state_json"))
-            new_state = _json_object(row.get("new_state_json"))
+            old_state = _optional_json_object(row.get("old_state_json"))
+            new_state = _optional_json_object(row.get("new_state_json"))
             pause_token = str(row.get("pause_token") or "")
             actions.append(
                 {
@@ -1273,7 +1306,7 @@ class SQLCollector:
             endpoint_identity=self._endpoint_identity(),
         )
         snapshot["state"]["database"].update(
-            job=self._browser_job(fixture),
+            job=self._canonical_job(fixture),
             attempts=self._attempts(fixture),
             receipts=self._receipts(fixture),
         )
@@ -1310,7 +1343,7 @@ class SQLCollector:
             endpoint_identity=self._endpoint_identity(),
         )
         snapshot["state"]["database"].update(
-            job=self._job(fixture, risk=True),
+            job=self._canonical_job(fixture),
             attempts=self._attempts(fixture),
         )
         if stage == "after":
@@ -1349,6 +1382,7 @@ class SQLCollector:
                 "container_id": str(
                     after_state.get("container_id") or ""
                 ),
+                "image_id": str(after_state.get("image_id") or ""),
                 "exists": bool(after_state.get("exists")),
                 "running": bool(after_state.get("running")),
             }
@@ -1373,7 +1407,7 @@ class SQLCollector:
         fixture: PublisherFixture,
     ) -> dict[str, Any]:
         return {
-            "job": self._job(fixture, risk=True),
+            "job": self._canonical_job(fixture),
             "attempts": self._attempts(fixture),
             "receipts": self._receipts(fixture),
             "resume_actions": self._resume_actions(fixture),
@@ -1381,6 +1415,8 @@ class SQLCollector:
 
 
 def normalize_cover_inventory(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if set(payload) != {"root", "root_exists", "files"}:
+        raise SetupBlocked("publisher cover inventory field set drifted")
     if payload.get("root") != PUBLISHER_COVER_ROOT:
         raise SetupBlocked("publisher cover inventory root drifted")
     if payload.get("root_exists") is not True:
@@ -1389,23 +1425,36 @@ def normalize_cover_inventory(payload: Mapping[str, Any]) -> list[dict[str, Any]
     if not isinstance(rows, list):
         raise SetupBlocked("publisher cover inventory is malformed")
     normalized: list[dict[str, Any]] = []
+    observed_paths: set[str] = set()
     for row in rows:
-        if not isinstance(row, Mapping):
-            raise SetupBlocked("publisher cover inventory row is malformed")
-        relative = Path(str(row.get("path") or ""))
         if (
-            not str(relative)
+            not isinstance(row, Mapping)
+            or set(row) != {"path", "size", "content_sha256"}
+        ):
+            raise SetupBlocked("publisher cover inventory row is malformed")
+        raw_path = str(row.get("path") or "")
+        relative = PurePosixPath(raw_path)
+        if (
+            not raw_path
             or relative.is_absolute()
-            or ".." in relative.parts
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or relative.as_posix() != raw_path
+            or "\\" in raw_path
         ):
             raise SetupBlocked("publisher cover inventory path is unsafe")
         digest = str(row.get("content_sha256") or "")
-        size = int(row.get("size") or 0)
+        raw_size = row.get("size")
+        if type(raw_size) is not int:
+            raise SetupBlocked("publisher cover inventory metadata is invalid")
+        size = raw_size
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None or size < 0:
             raise SetupBlocked("publisher cover inventory metadata is invalid")
+        if raw_path in observed_paths:
+            raise SetupBlocked("publisher cover inventory path is duplicated")
+        observed_paths.add(raw_path)
         normalized.append(
             {
-                "path": f"{PUBLISHER_COVER_ROOT}/{relative.as_posix()}",
+                "path": raw_path,
                 "size": size,
                 "content_sha256": digest,
             }
@@ -1844,9 +1893,15 @@ class LiveRunner:
         cleanup_errors: list[str] = []
         try:
             self.stage = "fresh_up"
-            self.controller.fresh_up(self.fault_id)
             self.stack_started = True
+            self.controller.fresh_up(self.fault_id)
             self.stage = "endpoint_binding"
+            require_client_endpoint(
+                self.api,
+                attribute="api_url",
+                expected_url=self.api_url,
+                label="Publisher API",
+            )
             endpoint_identity = bind_recovery_endpoints(
                 controller=self.controller,
                 fault_id=self.fault_id,
@@ -1968,8 +2023,20 @@ class LiveRunner:
         )
         return LiveRunResult("pass", report)
 
-    def _hold(self, service: str, hold_id: str) -> None:
-        self.controller.setup_hold(service, self.fault_id, hold_id)
+    def _hold(
+        self,
+        service: str,
+        hold_id: str,
+        *,
+        purpose: str = "auxiliary",
+    ) -> None:
+        self.controller.setup_hold(
+            service,
+            self.fault_id,
+            hold_id,
+            fault_kind=self.fault_kind,
+            purpose=purpose,
+        )
         self.setup_holds.append((service, hold_id))
 
     def _release_hold(self, service: str, hold_id: str) -> None:
@@ -1999,7 +2066,11 @@ class LiveRunner:
             raise SetupBlocked("publisher terminal barrier factory is missing")
         hold_id = f"backend-fixture-{self.fault_id}"[:128]
         self.stage = "backend_setup_hold"
-        self._hold("publisher-worker", hold_id)
+        self._hold(
+            "publisher-worker",
+            hold_id,
+            purpose="pre-fault-boundary",
+        )
         self.stage = "backend_fixture_insert"
         self.sql.insert_fixture(self.fixture)
         self.stage = "terminal_barrier_install"

@@ -139,6 +139,22 @@ def required_url(value: str, label: str) -> str:
     return normalized
 
 
+def require_client_endpoint(
+    client: Any,
+    *,
+    attribute: str,
+    expected_url: str,
+    label: str,
+) -> None:
+    observed = getattr(client, attribute, None)
+    if not isinstance(observed, str) or not observed.strip():
+        raise SetupBlocked(f"{label} client endpoint identity is missing")
+    if required_url(observed, label) != required_url(expected_url, label):
+        raise SetupBlocked(
+            f"{label} client endpoint does not match the bound configuration"
+        )
+
+
 def _loopback_http_url(
     value: str,
     *,
@@ -228,7 +244,7 @@ _ENDPOINT_SENTINEL_KEYS = {
     "fault_id",
     "source_sha",
 }
-_ENDPOINT_IDENTITY_KEYS = {
+_ENDPOINT_IDENTITY_CORE_KEYS = {
     "schema_version",
     "fault_id",
     "run_id",
@@ -243,6 +259,18 @@ _ENDPOINT_IDENTITY_KEYS = {
     "database",
     "identity_sha256",
 }
+_ENDPOINT_OPTIONAL_DEFINITIONS = {
+    "qdrant": {
+        "health_path": "/readyz",
+        "service": "qdrant",
+        "container_port": 6333,
+    },
+    "minio": {
+        "health_path": "/minio/health/ready",
+        "service": "minio",
+        "container_port": 9000,
+    },
+}
 
 
 def _validated_endpoint_identity(
@@ -253,8 +281,12 @@ def _validated_endpoint_identity(
     api: Mapping[str, Any],
     mcp: Mapping[str, Any],
     database: Mapping[str, Any],
+    optional_endpoints: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != _ENDPOINT_IDENTITY_KEYS:
+    expected_record_keys = _ENDPOINT_IDENTITY_CORE_KEYS | set(
+        optional_endpoints
+    )
+    if not isinstance(value, Mapping) or set(value) != expected_record_keys:
         raise SetupBlocked("endpoint identity has an invalid field set")
     record = dict(value)
     if (
@@ -311,7 +343,12 @@ def _validated_endpoint_identity(
             "container_port": 5432,
         },
     }
-    for name in ("api", "mcp", "database"):
+    for name, endpoint in optional_endpoints.items():
+        expected_endpoints[name] = {
+            **endpoint,
+            **_ENDPOINT_OPTIONAL_DEFINITIONS[name],
+        }
+    for name in ("api", "mcp", "database", *optional_endpoints):
         endpoint = record.get(name)
         expected_keys = (
             _ENDPOINT_DATABASE_KEYS
@@ -351,6 +388,8 @@ def bind_recovery_endpoints(
     mcp_url: str,
     database_url: str,
     sentinel_reader: Callable[[], Mapping[str, Any]],
+    qdrant_url: str | None = None,
+    minio_url: str | None = None,
 ) -> dict[str, Any]:
     validated_fault = validate_fault_id(fault_id)
     if SHA_PATTERN.fullmatch(str(source_sha or "")) is None:
@@ -366,6 +405,22 @@ def bind_recovery_endpoints(
         expected_path="/mcp",
     )
     database = _loopback_database_url(database_url)
+    optional_urls = {
+        name: value
+        for name, value in {
+            "qdrant": qdrant_url,
+            "minio": minio_url,
+        }.items()
+        if value is not None
+    }
+    optional_endpoints = {
+        name: _loopback_http_url(
+            value,
+            label=name.capitalize(),
+            expected_path="",
+        )
+        for name, value in optional_urls.items()
+    }
     record = _validated_endpoint_identity(
         controller.bind_endpoints(
             fault_id=validated_fault,
@@ -374,12 +429,17 @@ def bind_recovery_endpoints(
             database_host=str(database["host"]),
             database_port=int(database["port"]),
             database_name=str(database["database"]),
+            **{
+                f"{name}_url": value
+                for name, value in optional_urls.items()
+            },
         ),
         fault_id=validated_fault,
         source_sha=source_sha,
         api=api,
         mcp=mcp,
         database=database,
+        optional_endpoints=optional_endpoints,
     )
     observed_sentinel = sentinel_reader()
     if (
@@ -689,7 +749,15 @@ class RecoveryController:
         return payload if isinstance(payload, dict) else {"output": payload}
 
     def fresh_up(self, fault_id: str) -> dict[str, Any]:
-        return self._run("fresh-up", "--fault-id", validate_fault_id(fault_id))
+        validated = validate_fault_id(fault_id)
+        try:
+            return self._run("fresh-up", "--fault-id", validated)
+        except BaseException:
+            try:
+                self.interrupt_cleanup(validated)
+            except BaseException:
+                pass
+            raise
 
     def kill(self, service: str, fault_id: str) -> dict[str, Any]:
         return self._run("kill", service, "--fault-id", validate_fault_id(fault_id))
@@ -705,6 +773,9 @@ class RecoveryController:
         service: str,
         fault_id: str,
         hold_id: str,
+        *,
+        fault_kind: str,
+        purpose: str = "auxiliary",
     ) -> dict[str, Any]:
         return self._run(
             "setup-hold",
@@ -713,6 +784,10 @@ class RecoveryController:
             validate_fault_id(fault_id),
             "--hold-id",
             validate_fault_id(hold_id),
+            "--fault-kind",
+            str(fault_kind),
+            "--purpose",
+            str(purpose),
         )
 
     def setup_release(
@@ -754,8 +829,10 @@ class RecoveryController:
         database_host: str,
         database_port: int,
         database_name: str,
+        qdrant_url: str | None = None,
+        minio_url: str | None = None,
     ) -> dict[str, Any]:
-        return self._run(
+        arguments = [
             "bind-endpoints",
             "--fault-id",
             validate_fault_id(fault_id),
@@ -769,7 +846,14 @@ class RecoveryController:
             str(database_port),
             "--database-name",
             str(database_name),
-        )
+        ]
+        for option, value in (
+            ("--qdrant-url", qdrant_url),
+            ("--minio-url", minio_url),
+        ):
+            if value is not None:
+                arguments.extend((option, str(value)))
+        return self._run(*arguments)
 
     def mark(
         self,

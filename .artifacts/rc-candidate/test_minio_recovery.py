@@ -33,6 +33,109 @@ BODY = b'{"schema_version":"post-canon-trace-v1"}'
 BODY_SHA = hashlib.sha256(BODY).hexdigest()
 EVENT_TYPE = "canon.phase3.requested"
 EVENT_ID = f"{CANON_KEY}:{EVENT_TYPE}"
+API_URL = "http://127.0.0.1:25111"
+MCP_URL = "http://127.0.0.1:25112/mcp"
+DATABASE_URL = "postgresql://fixture:secret@127.0.0.1:25113/forwin"
+MINIO_URL = "http://127.0.0.1:25115"
+
+
+def stable_hash(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def endpoint_identity() -> dict[str, Any]:
+    digest = lambda label: hashlib.sha256(  # noqa: E731
+        f"{FAULT_ID}:{label}".encode()
+    ).hexdigest()
+    run_id = digest("run")[:32]
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "fault_id": FAULT_ID,
+        "run_id": run_id,
+        "source_sha": SOURCE_SHA,
+        "source_tree": "1" * 40,
+        "project_name": f"forwin-v5-recovery-{run_id}",
+        "candidate_manifest_sha256": digest("manifest"),
+        "candidate_identity_sha256": "",
+        "sentinel": {
+            "table": "forwin_recovery_run_sentinel",
+            "sentinel_id": digest("sentinel"),
+            "run_id": run_id,
+            "fault_id": FAULT_ID,
+            "source_sha": SOURCE_SHA,
+        },
+        "api": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25111,
+            "endpoint_path": "",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin",
+            "container_port": 8899,
+            "container_id": f"{FAULT_ID}-api",
+            "image_id": "sha256:" + digest("runtime-image"),
+        },
+        "mcp": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25112,
+            "endpoint_path": "/mcp",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin-mcp",
+            "container_port": 8896,
+            "container_id": f"{FAULT_ID}-mcp",
+            "image_id": "sha256:" + digest("runtime-image"),
+        },
+        "database": {
+            "scheme": "postgresql",
+            "host": "127.0.0.1",
+            "port": 25113,
+            "database": "forwin",
+            "service": "postgres",
+            "container_port": 5432,
+            "container_id": f"{FAULT_ID}-postgres",
+            "image_id": "sha256:" + digest("postgres-image"),
+        },
+        "minio": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25115,
+            "endpoint_path": "",
+            "health_path": "/minio/health/ready",
+            "health_status": 200,
+            "service": "minio",
+            "container_port": 9000,
+            "container_id": f"{FAULT_ID}-minio",
+            "image_id": "sha256:" + digest("minio-image"),
+        },
+    }
+    candidate_identity = {
+        "source_sha": SOURCE_SHA,
+        "source_tree": record["source_tree"],
+        "runtime_image": {"image_id": record["api"]["image_id"]},
+        "browser_image": {
+            "image_id": "sha256:" + digest("publisher-browser-image")
+        },
+        "dependency_images": {
+            "postgres": {"image_id": record["database"]["image_id"]},
+            "qdrant": {},
+            "minio": {"image_id": record["minio"]["image_id"]},
+        },
+        "candidate_manifest": {
+            "sha256": record["candidate_manifest_sha256"]
+        },
+    }
+    record["candidate_identity_sha256"] = stable_hash(candidate_identity)
+    record["identity_sha256"] = stable_hash(record)
+    return record
 
 
 def load_local_module(name: str, path: Path) -> Any:
@@ -147,6 +250,7 @@ def test_minio_inventory_uses_list_head_and_independent_byte_hash(
         client=client,
         bucket="fixture-bucket",
         prefix="artifacts",
+        endpoint_url=MINIO_URL,
     )
 
     observed = inventory.project_objects(PROJECT_ID)
@@ -760,6 +864,7 @@ def valid_snapshots(
             fault_id=FAULT_ID,
             stage=stage,
             fixture=target,
+            endpoint_identity=endpoint_identity(),
         )
         for stage in ("before", "during", "after")
     }
@@ -889,10 +994,13 @@ def valid_event_log(
     *,
     kind: str,
 ) -> Path:
+    endpoint = endpoint_identity()
     run_identity = {
-        "run_id": "1" * 32,
+        "run_id": endpoint["run_id"],
         "evidence_directory": str(evidence_dir.resolve()),
-        "database_volume_name": f"forwin-v5-recovery-{'1' * 32}-postgres-data",
+        "database_volume_name": (
+            f"forwin-v5-recovery-{endpoint['run_id']}-postgres-data"
+        ),
     }
     created_at = "2026-07-26T12:00:00+00:00"
     volume = {
@@ -904,7 +1012,39 @@ def valid_event_log(
         ),
     }
     absent = {"name": run_identity["database_volume_name"], "exists": False}
-    identity = {"source_sha": SOURCE_SHA}
+    identity = {
+        "source_sha": SOURCE_SHA,
+        "source_tree": endpoint["source_tree"],
+        "runtime_image": {"image_id": endpoint["api"]["image_id"]},
+        "browser_image": {
+            "image_id": "sha256:"
+            + hashlib.sha256(
+                f"{FAULT_ID}:publisher-browser-image".encode()
+            ).hexdigest()
+        },
+        "dependency_images": {
+            "postgres": {"image_id": endpoint["database"]["image_id"]},
+            "qdrant": {},
+            "minio": {"image_id": endpoint["minio"]["image_id"]},
+        },
+        "candidate_manifest": {
+            "sha256": endpoint["candidate_manifest_sha256"]
+        },
+    }
+    worker_image = endpoint["api"]["image_id"]
+
+    def worker_state(running: bool, *, probe: bool = False) -> dict[str, Any]:
+        state = {
+            "service": "outbox-worker",
+            "exists": True,
+            "running": running,
+            "container_id": f"{FAULT_ID}-outbox-worker",
+            "image_id": worker_image,
+        }
+        if probe:
+            state["probe"] = {"passed": True}
+        return state
+
     events: list[dict[str, Any]] = []
     append_event(
         finalizer,
@@ -925,6 +1065,36 @@ def valid_event_log(
         run_identity=run_identity,
         volume=volume,
         requested_at="2026-07-26T11:59:00+00:00",
+        sentinel=copy.deepcopy(endpoint["sentinel"]),
+        after={
+            "services": {
+                **{
+                    published["service"]: {
+                        "exists": True,
+                        "running": True,
+                        "container_id": published["container_id"],
+                        "image_id": published["image_id"],
+                    }
+                    for published in (
+                        endpoint["api"],
+                        endpoint["mcp"],
+                        endpoint["database"],
+                        endpoint["minio"],
+                    )
+                },
+                "outbox-worker": worker_state(True),
+            }
+        },
+    )
+    append_event(
+        finalizer,
+        events,
+        action="endpoints_bound",
+        recorded_at="2026-07-26T12:00:01+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        volume=volume,
+        endpoint_identity=copy.deepcopy(endpoint),
     )
     if kind == "minio_post_canon_unavailable":
         append_event(
@@ -937,10 +1107,12 @@ def valid_event_log(
             volume=volume,
             service="outbox-worker",
             hold_id="pre-approval",
+            fault_kind=kind,
+            purpose="auxiliary",
             requested_at="2026-07-26T12:00:10+00:00",
             hold_time="2026-07-26T12:00:20+00:00",
-            before={"service": "outbox-worker", "exists": True, "running": True},
-            after={"service": "outbox-worker", "exists": True, "running": False},
+            before=worker_state(True),
+            after=worker_state(False),
         )
     append_event(
         finalizer,
@@ -977,15 +1149,12 @@ def valid_event_log(
             volume=volume,
             service="outbox-worker",
             hold_id="pre-approval",
+            fault_kind=kind,
+            purpose="auxiliary",
             requested_at="2026-07-26T12:02:10+00:00",
             release_time="2026-07-26T12:02:20+00:00",
-            before={"service": "outbox-worker", "exists": True, "running": False},
-            after={
-                "service": "outbox-worker",
-                "exists": True,
-                "running": True,
-                "probe": {"passed": True},
-            },
+            before=worker_state(False),
+            after=worker_state(True, probe=True),
         )
         append_event(
             finalizer,
@@ -997,10 +1166,12 @@ def valid_event_log(
             volume=volume,
             service="outbox-worker",
             hold_id="same-event-replay",
+            fault_kind=kind,
+            purpose="auxiliary",
             requested_at="2026-07-26T12:02:30+00:00",
             hold_time="2026-07-26T12:02:40+00:00",
-            before={"service": "outbox-worker", "exists": True, "running": True},
-            after={"service": "outbox-worker", "exists": True, "running": False},
+            before=worker_state(True),
+            after=worker_state(False),
         )
         append_event(
             finalizer,
@@ -1012,15 +1183,12 @@ def valid_event_log(
             volume=volume,
             service="outbox-worker",
             hold_id="same-event-replay",
+            fault_kind=kind,
+            purpose="auxiliary",
             requested_at="2026-07-26T12:02:50+00:00",
             release_time="2026-07-26T12:03:00+00:00",
-            before={"service": "outbox-worker", "exists": True, "running": False},
-            after={
-                "service": "outbox-worker",
-                "exists": True,
-                "running": True,
-                "probe": {"passed": True},
-            },
+            before=worker_state(False),
+            after=worker_state(True, probe=True),
         )
     destroyed_services = {
         service: {"exists": False, "running": False}
@@ -1133,6 +1301,8 @@ def test_task5_success_uses_real_writer_evaluator_and_finalizer(
 
 
 class FakeLifecycle:
+    mcp_url = MCP_URL
+
     async def create_genesis_project(self) -> Any:
         return SimpleNamespace(project_id=PROJECT_ID)
 
@@ -1163,6 +1333,12 @@ class LiveController:
         self.evidence_dir.mkdir()
         self.calls.append("fresh-up")
 
+    def bind_endpoints(self, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["fault_id"] == FAULT_ID
+        assert kwargs["minio_url"] == MINIO_URL
+        self.calls.append("bind-endpoints")
+        return endpoint_identity()
+
     def stop(self, service: str, fault_id: str) -> None:
         assert fault_id == FAULT_ID
         self.calls.append(f"stop:{service}")
@@ -1171,8 +1347,18 @@ class LiveController:
         assert fault_id == FAULT_ID
         self.calls.append(f"start:{service}")
 
-    def setup_hold(self, service: str, fault_id: str, hold_id: str) -> None:
+    def setup_hold(
+        self,
+        service: str,
+        fault_id: str,
+        hold_id: str,
+        *,
+        fault_kind: str,
+        purpose: str = "auxiliary",
+    ) -> None:
         assert fault_id == FAULT_ID
+        assert fault_kind == self.kind
+        assert purpose == "auxiliary"
         self.calls.append(f"hold:{service}:{hold_id}")
 
     def setup_release(
@@ -1196,12 +1382,16 @@ class LiveController:
     def abort(self, fault_id: str, stage: str, reason: str) -> None:
         self.calls.append(f"abort:{fault_id}:{stage}:{reason}")
 
+    def interrupt_cleanup(self, fault_id: str) -> None:
+        self.calls.append(f"interrupt-cleanup:{fault_id}")
+
 
 class FakeInventory:
     def __init__(self, calls: list[str], artifact: dict[str, Any]) -> None:
         self.calls = calls
         self.artifact = artifact
         self.prefix = "artifacts"
+        self.endpoint_url = MINIO_URL
 
     def close(self) -> None:
         self.calls.append("inventory-close")
@@ -1211,7 +1401,7 @@ class SequencedApprovalAPI:
     def __init__(self, runner: Any, calls: list[str]) -> None:
         self.runner = runner
         self.calls = calls
-        self.api_url = "https://api.example"
+        self.api_url = API_URL
         self.identities: list[str] = []
 
     def send(self, request: Any) -> dict[str, Any]:
@@ -1236,6 +1426,12 @@ class PreCanonSQL:
         self.snapshots = snapshots
         self.api = api
         self.artifact = artifact
+
+    def read_recovery_sentinel(self) -> dict[str, Any]:
+        return copy.deepcopy(endpoint_identity()["sentinel"])
+
+    def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
+        self.endpoint_identity = copy.deepcopy(identity)
 
     def wait_review_ready(self, **_kwargs: Any) -> Any:
         self.calls.append("review-ready")
@@ -1320,6 +1516,10 @@ def test_live_pre_canon_replays_the_identical_request_and_uses_real_pipeline(
             finalizer=finalizer,
         ),
         barrier_factory=lambda: pytest.fail("pre-Canon installed a barrier"),
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        minio_url=MINIO_URL,
     )
 
     result = live.run()
@@ -1328,6 +1528,7 @@ def test_live_pre_canon_replays_the_identical_request_and_uses_real_pipeline(
     assert api.identities == [api.identities[0], api.identities[0]]
     assert calls == [
         "fresh-up",
+        "bind-endpoints",
         "review-ready",
         "snapshot:before",
         "stop:minio",
@@ -1349,7 +1550,7 @@ def test_live_pre_canon_replays_the_identical_request_and_uses_real_pipeline(
 class BlockingApprovalAPI:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
-        self.api_url = "https://api.example"
+        self.api_url = API_URL
         self.release_event = threading.Event()
 
     def send(self, _request: Any) -> dict[str, Any]:
@@ -1408,6 +1609,12 @@ class PostCanonSQL:
         self.snapshots = snapshots
         self.artifact = artifact
         self.convergence_count = 0
+
+    def read_recovery_sentinel(self) -> dict[str, Any]:
+        return copy.deepcopy(endpoint_identity()["sentinel"])
+
+    def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
+        self.endpoint_identity = copy.deepcopy(identity)
 
     def wait_review_ready(self, **_kwargs: Any) -> Any:
         self.calls.append("review-ready")
@@ -1546,6 +1753,10 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
             finalizer=finalizer,
         ),
         barrier_factory=lambda: FakeReviewBarrier(runner, api, calls),
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        minio_url=MINIO_URL,
     )
 
     result = live.run()
@@ -1553,6 +1764,7 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
     assert result.status == "pass"
     assert calls == [
         "fresh-up",
+        "bind-endpoints",
         "review-ready",
         "hold:outbox-worker:pre-approval",
         "barrier:install",
@@ -1587,7 +1799,7 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
 
 
 class UnexpectedApprovalAPI:
-    api_url = "https://api.example"
+    api_url = API_URL
 
     def send(self, _request: Any) -> dict[str, Any]:
         return {"ok": True, "status": "accepted"}
@@ -1646,6 +1858,10 @@ def test_unobserved_fault_aborts_and_can_only_report_setup_blocked(
             finalizer=finalizer,
         ),
         barrier_factory=lambda: pytest.fail("pre-Canon installed a barrier"),
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        minio_url=MINIO_URL,
     )
 
     result = live.run()
@@ -1693,6 +1909,61 @@ def test_failure_cleanup_closes_barrier_before_joining_async_request(
     assert live.async_approval is None
 
 
+@pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
+def test_task5_caller_owns_stack_before_fresh_up_returns(
+    runner: Any,
+    interruption: type[BaseException],
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    class InterruptingController:
+        event_log_path = tmp_path / "events.jsonl"
+
+        def fresh_up(self, _fault_id: str) -> None:
+            calls.append("fresh-up")
+            raise interruption()
+
+        def interrupt_cleanup(self, fault_id: str) -> None:
+            assert fault_id == FAULT_ID
+            calls.append("interrupt-cleanup")
+
+    class ClosingInventory:
+        def close(self) -> None:
+            calls.append("inventory-close")
+
+    class NoReportWriter:
+        def write_setup_blocked(self, **_kwargs: Any) -> Path:
+            pytest.fail("interruption emitted setup_blocked")
+
+        def write_pass_report(self, **_kwargs: Any) -> Path:
+            pytest.fail("interruption emitted PASS")
+
+    live = runner.LiveRunner(
+        fault_kind="minio_pre_canon_unavailable",
+        fault_id=FAULT_ID,
+        source_sha=SOURCE_SHA,
+        controller=InterruptingController(),
+        lifecycle=SimpleNamespace(),
+        sql_collector=SimpleNamespace(),
+        api=SimpleNamespace(),
+        inventory=ClosingInventory(),
+        writer=NoReportWriter(),
+        barrier_factory=lambda: pytest.fail(
+            "fresh-up interruption installed a barrier"
+        ),
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        minio_url=MINIO_URL,
+    )
+
+    with pytest.raises(interruption):
+        live.run()
+
+    assert calls == ["fresh-up", "inventory-close", "interrupt-cleanup"]
+
+
 def test_controller_client_uses_hold_release_abort_and_never_docker(
     runner: Any,
     tmp_path: Path,
@@ -1721,7 +1992,12 @@ def test_controller_client_uses_hold_release_abort_and_never_docker(
         python_executable="/python",
     )
 
-    controller.setup_hold("outbox-worker", FAULT_ID, "pre-approval")
+    controller.setup_hold(
+        "outbox-worker",
+        FAULT_ID,
+        "pre-approval",
+        fault_kind="minio_post_canon_unavailable",
+    )
     controller.setup_release("outbox-worker", FAULT_ID, "pre-approval")
     controller.stop("minio", FAULT_ID)
     controller.start("minio", FAULT_ID)
@@ -1736,6 +2012,10 @@ def test_controller_client_uses_hold_release_abort_and_never_docker(
             FAULT_ID,
             "--hold-id",
             "pre-approval",
+            "--fault-kind",
+            "minio_post_canon_unavailable",
+            "--purpose",
+            "auxiliary",
         ],
         [
             "setup-release",
@@ -1778,9 +2058,9 @@ def test_cli_accepts_only_task5_faults_and_parameterizes_endpoints(
         "--candidate-manifest",
         str(candidate),
         "--mcp-url",
-        "https://mcp.example/mcp",
+        MCP_URL,
         "--api-url",
-        "https://api.example",
+        API_URL,
         "--database-url-env",
         "FIXTURE_DATABASE_URL",
         "--evidence-dir",
@@ -1790,13 +2070,13 @@ def test_cli_accepts_only_task5_faults_and_parameterizes_endpoints(
     config = runner.resolve_run_config(
         parsed,
         environ={
-            "FIXTURE_DATABASE_URL": "postgresql://db.example/fixture",
-            "FORWIN_RECOVERY_MINIO_ENDPOINT": "minio.example:9000",
+            "FIXTURE_DATABASE_URL": DATABASE_URL,
+            "FORWIN_RECOVERY_MINIO_ENDPOINT": "127.0.0.1:25115",
             "FORWIN_RECOVERY_MINIO_ACCESS_KEY": "access",
             "FORWIN_RECOVERY_MINIO_SECRET_KEY": "secret",
             "FORWIN_RECOVERY_MINIO_BUCKET": "bucket",
             "FORWIN_RECOVERY_MINIO_PREFIX": "prefix",
-            "FORWIN_RECOVERY_MINIO_SECURE": "true",
+            "FORWIN_RECOVERY_MINIO_SECURE": "false",
         },
     )
 
@@ -1804,11 +2084,11 @@ def test_cli_accepts_only_task5_faults_and_parameterizes_endpoints(
         "minio_pre_canon_unavailable",
         "minio_post_canon_unavailable",
     }
-    assert config.mcp_url == "https://mcp.example/mcp"
-    assert config.api_url == "https://api.example"
-    assert config.database_url == "postgresql://db.example/fixture"
-    assert config.minio_endpoint == "minio.example:9000"
-    assert config.minio_secure is True
+    assert config.mcp_url == MCP_URL
+    assert config.api_url == API_URL
+    assert config.database_url == DATABASE_URL
+    assert config.minio_endpoint == "127.0.0.1:25115"
+    assert config.minio_secure is False
     with pytest.raises(SystemExit):
         runner.parse_args(
             [

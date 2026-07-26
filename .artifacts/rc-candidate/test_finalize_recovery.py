@@ -99,7 +99,7 @@ def fault_report(
         "database_volume_name": volume_name,
     }
     publisher_event_identity: dict | None = None
-    if kind.startswith("publisher_"):
+    if kind in recovery.FAULT_CONTRACTS:
         endpoint = copy.deepcopy(
             snapshots["before"]["state"]["target"]["endpoint_identity"]
         )
@@ -139,6 +139,13 @@ def fault_report(
             endpoint["database"]["image_id"] = publisher_event_identity[
                 "dependency_images"
             ]["postgres"]["image_id"]
+            for endpoint_key in ("qdrant", "minio"):
+                if endpoint_key in endpoint:
+                    endpoint[endpoint_key]["image_id"] = (
+                        publisher_event_identity["dependency_images"][
+                            endpoint_key
+                        ]["image_id"]
+                    )
         else:
             publisher_event_identity = {
                 "source_sha": SOURCE_SHA,
@@ -155,8 +162,16 @@ def fault_report(
                     "postgres": {
                         "image_id": endpoint["database"]["image_id"],
                     },
-                    "qdrant": {},
-                    "minio": {},
+                    "qdrant": (
+                        {"image_id": endpoint["qdrant"]["image_id"]}
+                        if "qdrant" in endpoint
+                        else {}
+                    ),
+                    "minio": (
+                        {"image_id": endpoint["minio"]["image_id"]}
+                        if "minio" in endpoint
+                        else {}
+                    ),
                 },
                 "candidate_manifest": {
                     "sha256": endpoint["candidate_manifest_sha256"],
@@ -304,7 +319,24 @@ def fault_report(
                         "",
                     )
                 ]
-                if publisher_event_identity is not None
+                if publisher_event_identity is not None else []
+            ),
+            *(
+                [
+                    (
+                        "setup_service_held",
+                        "2026-07-22T11:59:10+00:00",
+                        "",
+                        "",
+                    ),
+                    (
+                        "setup_service_released",
+                        "2026-07-22T11:59:20+00:00",
+                        "",
+                        "",
+                    ),
+                ]
+                if kind == "publisher_backend_unavailable"
                 else []
             ),
             *(
@@ -377,33 +409,97 @@ def fault_report(
                 and publisher_event_identity is not None
             ):
                 event["sentinel"] = copy.deepcopy(endpoint["sentinel"])
-                event["after"] = {
-                    "services": {
-                        service: {
-                            "exists": True,
-                            "running": True,
-                            "container_id": published["container_id"],
-                            "image_id": published["image_id"],
-                        }
-                        for service, published in (
-                            ("forwin", endpoint["api"]),
-                            ("forwin-mcp", endpoint["mcp"]),
-                            ("postgres", endpoint["database"]),
-                        )
+                runtime_image_id = publisher_event_identity[
+                    "runtime_image"
+                ]["image_id"]
+                browser_image_id = publisher_event_identity[
+                    "browser_image"
+                ]["image_id"]
+                dependency_images = publisher_event_identity[
+                    "dependency_images"
+                ]
+                service_image_ids = {
+                    "forwin": runtime_image_id,
+                    "forwin-mcp": runtime_image_id,
+                    "generation-worker": runtime_image_id,
+                    "minio": (
+                        dependency_images.get("minio") or {}
+                    ).get("image_id"),
+                    "outbox-worker": runtime_image_id,
+                    "postgres": dependency_images["postgres"]["image_id"],
+                    "publisher-browser": browser_image_id,
+                    "publisher-worker": runtime_image_id,
+                    "qdrant": (
+                        dependency_images.get("qdrant") or {}
+                    ).get("image_id"),
+                }
+                fresh_services = {
+                    service: {
+                        "exists": True,
+                        "running": True,
+                        "container_id": f"{fault_id}-{service}",
+                        "image_id": image_id
+                        or "sha256:"
+                        + evidence.stable_hash(
+                            {
+                                "fault_id": fault_id,
+                                "service": service,
+                                "role": "dependency-image",
+                            }
+                        ),
                     }
+                    for service, image_id in service_image_ids.items()
+                }
+                endpoint_services = (
+                    ("forwin", endpoint["api"]),
+                    ("forwin-mcp", endpoint["mcp"]),
+                    ("postgres", endpoint["database"]),
+                )
+                endpoint_services += tuple(
+                    (name, endpoint[name])
+                    for name in ("qdrant", "minio")
+                    if name in endpoint
+                )
+                for service, published in endpoint_services:
+                    fresh_services[service] = {
+                        "exists": True,
+                        "running": True,
+                        "container_id": published["container_id"],
+                        "image_id": published["image_id"],
+                    }
+                if kind in recovery.PUBLISHER_RISK_FAULTS:
+                    terminal = snapshots["after"]["state"]["external"][
+                        "browser_hold_terminal"
+                    ]
+                    fresh_services["publisher-browser"].update(
+                        container_id=terminal["container_id"],
+                        image_id=terminal["image_id"],
+                    )
+                if kind == "publisher_backend_unavailable":
+                    fresh_services["publisher-worker"].update(
+                        container_id="publisher-worker-boundary-container",
+                    )
+                event["after"] = {
+                    "services": fresh_services
                 }
             if action == "endpoints_bound":
                 event["endpoint_identity"] = copy.deepcopy(endpoint)
-            if action in {
+            if (
+                action
+                in {
                 "setup_service_held",
                 "setup_service_discarded",
-            }:
+                }
+                and kind in recovery.PUBLISHER_RISK_FAULTS
+            ):
                 terminal = snapshots["after"]["state"]["external"][
                     "browser_hold_terminal"
                 ]
                 event.update(
                     hold_id=terminal["hold_id"],
                     service="publisher-browser",
+                    fault_kind=kind,
+                    purpose="auxiliary",
                     requested_at=(
                         "2026-07-22T11:59:10+00:00"
                         if action == "setup_service_held"
@@ -416,11 +512,15 @@ def fault_report(
                         "service": "publisher-browser",
                         "exists": True,
                         "running": True,
+                        "container_id": terminal["container_id"],
+                        "image_id": terminal["image_id"],
                     }
                     event["after"] = {
                         "service": "publisher-browser",
                         "exists": True,
                         "running": False,
+                        "container_id": terminal["container_id"],
+                        "image_id": terminal["image_id"],
                     }
                 else:
                     event["discard_time"] = event["recorded_at"]
@@ -429,9 +529,43 @@ def fault_report(
                         "exists": True,
                         "running": False,
                         "container_id": terminal["container_id"],
+                        "image_id": terminal["image_id"],
                     }
                     event["before"] = copy.deepcopy(stopped)
                     event["after"] = copy.deepcopy(stopped)
+            if (
+                kind == "publisher_backend_unavailable"
+                and action
+                in {"setup_service_held", "setup_service_released"}
+            ):
+                held = {
+                    "service": "publisher-worker",
+                    "exists": True,
+                    "running": action == "setup_service_released",
+                    "container_id": "publisher-worker-boundary-container",
+                    "image_id": publisher_event_identity[
+                        "runtime_image"
+                    ]["image_id"],
+                }
+                event.update(
+                    hold_id=f"backend-fixture-{fault_id}",
+                    service="publisher-worker",
+                    fault_kind=kind,
+                    purpose="pre-fault-boundary",
+                    requested_at=event["recorded_at"],
+                )
+                if action == "setup_service_held":
+                    event["hold_time"] = event["recorded_at"]
+                    event["before"] = {**held, "running": True}
+                    event["after"] = {**held, "running": False}
+                else:
+                    event["release_time"] = event["recorded_at"]
+                    event["before"] = {**held, "running": False}
+                    event["after"] = {
+                        **held,
+                        "running": True,
+                        "probe": {"passed": True},
+                    }
             if action == "destroyed":
                 event["after"] = {"services": copy.deepcopy(DESTROY_SERVICES)}
                 event["database_volume_before"] = copy.deepcopy(volume_present)
@@ -1142,7 +1276,21 @@ def test_service_fault_requires_fresh_stack_lifecycle(tmp_path: Path) -> None:
 def test_service_fault_requires_fault_before_recovery(tmp_path: Path) -> None:
     report = fault_report(tmp_path, "qdrant_unavailable")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    reseal_event_log(report, [*events[:2], events[3], events[2]])
+    fault_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["action"] == "fault_service_stopped"
+    )
+    recovery_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["action"] == "fault_service_recovered"
+    )
+    events[fault_index], events[recovery_index] = (
+        events[recovery_index],
+        events[fault_index],
+    )
+    reseal_event_log(report, events)
 
     violations = recovery.fault_report_violations(
         report,
@@ -1186,6 +1334,7 @@ def test_fault_rejects_events_after_destroy(tmp_path: Path) -> None:
 def setup_hold_event(
     template: dict,
     *,
+    fault_kind: str,
     action: str,
     hold_id: str,
     service: str,
@@ -1198,20 +1347,28 @@ def setup_hold_event(
     event["service"] = service
     event["requested_at"] = requested_at
     event["recorded_at"] = confirmed_at
-    event.pop("fault_kind", None)
+    event["fault_kind"] = fault_kind
+    event["purpose"] = "auxiliary"
     event.pop("fault_time", None)
     event.pop("recovery_time", None)
+    fresh_services = template["after"]["services"]
+    container_id = fresh_services[service]["container_id"]
+    image_id = fresh_services[service]["image_id"]
     if action == "setup_service_held":
         event["hold_time"] = confirmed_at
         event["before"] = {
             "service": service,
             "exists": True,
             "running": True,
+            "container_id": container_id,
+            "image_id": image_id,
         }
         event["after"] = {
             "service": service,
             "exists": True,
             "running": False,
+            "container_id": container_id,
+            "image_id": image_id,
         }
     elif action == "setup_service_released":
         event["release_time"] = confirmed_at
@@ -1219,11 +1376,15 @@ def setup_hold_event(
             "service": service,
             "exists": True,
             "running": False,
+            "container_id": container_id,
+            "image_id": image_id,
         }
         event["after"] = {
             "service": service,
             "exists": True,
             "running": True,
+            "container_id": container_id,
+            "image_id": image_id,
             "probe": {"passed": True},
         }
     else:
@@ -1232,21 +1393,29 @@ def setup_hold_event(
             "service": service,
             "exists": True,
             "running": False,
-            "container_id": f"{service}-container-generalized",
+            "container_id": container_id,
+            "image_id": image_id,
         }
         event["after"] = {
             "service": service,
             "exists": True,
             "running": False,
-            "container_id": f"{service}-container-generalized",
+            "container_id": container_id,
+            "image_id": image_id,
         }
     return event
 
 
-def balanced_hold_events(template: dict, *, prefix: str) -> list[dict]:
+def balanced_hold_events(
+    template: dict,
+    *,
+    prefix: str,
+    fault_kind: str = "minio_pre_canon_unavailable",
+) -> list[dict]:
     return [
         setup_hold_event(
             template,
+            fault_kind=fault_kind,
             action="setup_service_held",
             hold_id=f"{prefix}-hold",
             service="outbox-worker",
@@ -1255,6 +1424,7 @@ def balanced_hold_events(template: dict, *, prefix: str) -> list[dict]:
         ),
         setup_hold_event(
             template,
+            fault_kind=fault_kind,
             action="setup_service_released",
             hold_id=f"{prefix}-hold",
             service="outbox-worker",
@@ -1333,12 +1503,22 @@ def test_finalizer_rejects_invalid_setup_discard_lifecycle(
         ("malformed", "endpoint published container mismatch: forwin"),
     ),
 )
-def test_finalizer_rejects_unbound_publisher_endpoint_identity(
+@pytest.mark.parametrize(
+    "kind",
+    (
+        "generation_worker_precommit_crash",
+        "qdrant_unavailable",
+        "minio_post_canon_unavailable",
+        "publisher_backend_unavailable",
+    ),
+)
+def test_finalizer_rejects_unbound_recovery_endpoint_identity(
+    kind: str,
     mutation: str,
     expected: str,
     tmp_path: Path,
 ) -> None:
-    report = fault_report(tmp_path, "publisher_backend_unavailable")
+    report = fault_report(tmp_path, kind)
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
     endpoint = next(
         event for event in events if event["action"] == "endpoints_bound"
@@ -1376,9 +1556,7 @@ def test_finalizer_rejects_unbound_publisher_endpoint_identity(
         source_sha=SOURCE_SHA,
     )
 
-    assert (
-        f"publisher_backend_unavailable.{expected}" in violations
-    )
+    assert f"{kind}.{expected}" in violations
 
 
 def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
@@ -1406,13 +1584,78 @@ def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
     )
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("purpose", "setup hold targets primary fault service"),
+        ("discard", "pre-fault primary hold lifecycle mismatch"),
+        ("order", "pre-fault primary hold order mismatch"),
+        (
+            "container",
+            "setup hold terminal identity continuity mismatch",
+        ),
+        ("image", "setup hold terminal identity continuity mismatch"),
+        ("duplicate-terminal", "hold release has no matching hold"),
+    ),
+)
+def test_publisher_backend_primary_hold_is_narrowly_ordered_and_bound(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    kind = "publisher_backend_unavailable"
+    report = fault_report(tmp_path, kind)
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    held = next(
+        event for event in events if event["action"] == "setup_service_held"
+    )
+    released = next(
+        event
+        for event in events
+        if event["action"] == "setup_service_released"
+    )
+    if mutation == "purpose":
+        held["purpose"] = released["purpose"] = "auxiliary"
+    elif mutation == "discard":
+        released["action"] = "setup_service_discarded"
+        released["discard_time"] = released.pop("release_time")
+        released["after"]["running"] = False
+        released["after"].pop("probe")
+    elif mutation == "order":
+        fault = next(
+            event
+            for event in events
+            if event["action"] == "fault_service_killed"
+        )
+        release_index = events.index(released)
+        fault_index = events.index(fault)
+        events[release_index], events[fault_index] = (
+            events[fault_index],
+            events[release_index],
+        )
+    elif mutation == "container":
+        released["after"]["container_id"] = "different-container"
+    elif mutation == "image":
+        released["before"]["image_id"] = "sha256:" + "e" * 64
+    else:
+        events.insert(events.index(released) + 1, copy.deepcopy(released))
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert f"{kind}.{expected}" in violations
+
+
 def test_finalizer_allows_balanced_setup_holds_around_primary_fault(
     tmp_path: Path,
 ) -> None:
     report = fault_report(tmp_path, "minio_pre_canon_unavailable")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    first_pair = balanced_hold_events(events[2], prefix="preapproval")
-    second_pair = balanced_hold_events(events[2], prefix="replay")
+    first_pair = balanced_hold_events(events[1], prefix="preapproval")
+    second_pair = balanced_hold_events(events[1], prefix="replay")
     second_pair[0]["requested_at"] = "2026-07-22T12:01:20+00:00"
     second_pair[0]["hold_time"] = "2026-07-22T12:01:21+00:00"
     second_pair[0]["recorded_at"] = "2026-07-22T12:01:21+00:00"
@@ -1422,13 +1665,13 @@ def test_finalizer_allows_balanced_setup_holds_around_primary_fault(
     reseal_event_log(
         report,
         [
-            *events[:2],
+            *events[:3],
             first_pair[0],
-            events[2],
             events[3],
+            events[4],
             first_pair[1],
             *second_pair,
-            events[4],
+            events[5],
         ],
     )
 
@@ -1456,8 +1699,8 @@ def test_finalizer_rejects_invalid_setup_hold_lifecycles(
 ) -> None:
     report = fault_report(tmp_path, "minio_pre_canon_unavailable")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    pair = balanced_hold_events(events[2], prefix="first")
-    extra = balanced_hold_events(events[2], prefix="second")
+    pair = balanced_hold_events(events[1], prefix="first")
+    extra = balanced_hold_events(events[1], prefix="second")
     inserted: list[dict]
     if mutation == "duplicate-id":
         extra[0]["hold_id"] = pair[0]["hold_id"]
@@ -1478,7 +1721,7 @@ def test_finalizer_rejects_invalid_setup_hold_lifecycles(
         inserted = pair
     reseal_event_log(
         report,
-        [*events[:2], *inserted, *events[2:]],
+        [*events[:3], *inserted, *events[3:]],
     )
 
     violations = recovery.fault_report_violations(
@@ -1515,6 +1758,10 @@ def test_finalizer_rejects_invalid_setup_hold_lifecycles(
             "setup hold confirmation follows recording",
         ),
         (
+            "active-run-identity",
+            "setup hold active-run identity mismatch",
+        ),
+        (
             "before-fresh-complete",
             "setup hold predates fresh-up completion",
         ),
@@ -1527,7 +1774,7 @@ def test_finalizer_strictly_binds_setup_hold_evidence(
 ) -> None:
     report = fault_report(tmp_path, "minio_pre_canon_unavailable")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    pair = balanced_hold_events(events[2], prefix="strict")
+    pair = balanced_hold_events(events[1], prefix="strict")
     if mutation == "identity":
         pair[0]["identity"] = {"source_sha": "different"}
     elif mutation == "naive-time":
@@ -1542,9 +1789,13 @@ def test_finalizer_strictly_binds_setup_hold_evidence(
         pair[1]["requested_at"] = "2026-07-22T11:59:10+00:00"
     elif mutation == "recorded-time":
         pair[1]["recorded_at"] = "2026-07-22T12:01:10+00:00"
+    elif mutation == "active-run-identity":
+        for event in pair:
+            event["before"]["container_id"] = "different-run-container"
+            event["after"]["container_id"] = "different-run-container"
     else:
         pair[0]["requested_at"] = "2026-07-22T11:58:59+00:00"
-    reseal_event_log(report, [*events[:2], *pair, *events[2:]])
+    reseal_event_log(report, [*events[:3], *pair, *events[3:]])
 
     violations = recovery.fault_report_violations(
         report,

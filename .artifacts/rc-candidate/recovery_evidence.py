@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 
@@ -204,6 +204,8 @@ _BROWSER_JOB_SCHEMA = {
     "deleted_at": str,
     "paused_at": str,
     "pause_reason": str,
+    "pause_token": str,
+    "risk_boundary": str,
     "current_url": str,
     "result_message": str,
     "error_message": str,
@@ -212,12 +214,7 @@ _BROWSER_JOB_SCHEMA = {
     "updated_at": str,
     "database_now": str,
 }
-_RISK_JOB_SCHEMA = {
-    **_PUBLISHER_JOB_SCHEMA,
-    "pause_reason": str,
-    "pause_token": str,
-    "risk_boundary": str,
-}
+_RISK_JOB_SCHEMA = dict(_BROWSER_JOB_SCHEMA)
 _JOB_IDENTITY_SCHEMA = {
     "job_id": str,
     "logical_key": str,
@@ -330,12 +327,40 @@ _ENDPOINT_IDENTITY_SCHEMA = {
     "database": dict,
     "identity_sha256": str,
 }
+_OPTIONAL_ENDPOINTS_BY_KIND = {
+    "qdrant_unavailable": ("qdrant",),
+    "minio_pre_canon_unavailable": ("minio",),
+    "minio_post_canon_unavailable": ("minio",),
+}
+_ENDPOINT_HTTP_KEYS = {
+    "scheme",
+    "host",
+    "port",
+    "endpoint_path",
+    "health_path",
+    "health_status",
+    "service",
+    "container_port",
+    "container_id",
+    "image_id",
+}
+_ENDPOINT_DATABASE_KEYS = {
+    "scheme",
+    "host",
+    "port",
+    "database",
+    "service",
+    "container_port",
+    "container_id",
+    "image_id",
+}
 _PRE_DISCARD_BROWSER_SCHEMA = {
     "action": str,
     "fault_id": str,
     "hold_id": str,
     "service": str,
     "container_id": str,
+    "image_id": str,
     "exists": bool,
     "running": bool,
 }
@@ -351,6 +376,7 @@ _EMPTY_STRING_FIELDS = {
     "error_code",
     "extension_client_id",
     "finished_at",
+    "owner_token",
     "pause_reason",
     "pause_token",
     "paused_at",
@@ -369,6 +395,7 @@ class EvidenceContractError(RuntimeError):
 
 FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
     "generation_worker_precommit_crash": {
+        "isolated_endpoint_identity": True,
         "same_task_reclaimed": True,
         "lease_epoch_increased": True,
         "canon_commits_during_fault": 0,
@@ -376,6 +403,7 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_authoritative_identities": 0,
     },
     "generation_worker_postcommit_crash": {
+        "isolated_endpoint_identity": True,
         "same_task_reclaimed": True,
         "lease_epoch_increased": True,
         "canon_identity_unchanged": True,
@@ -383,6 +411,7 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_authoritative_identities": 0,
     },
     "qdrant_unavailable": {
+        "isolated_endpoint_identity": True,
         "canon_identity_unchanged": True,
         "outbox_retry_observed": True,
         "projection_converged": True,
@@ -390,6 +419,7 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_vector_identities": 0,
     },
     "projection_consumer_unavailable": {
+        "isolated_endpoint_identity": True,
         "canon_identity_unchanged": True,
         "durable_outbox_preserved": True,
         "projection_converged": True,
@@ -397,12 +427,14 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_projection_identities": 0,
     },
     "minio_pre_canon_unavailable": {
+        "isolated_endpoint_identity": True,
         "canon_commits_during_fault": 0,
         "same_candidate_retried": True,
         "canon_commits_after_recovery": 1,
         "duplicate_authoritative_identities": 0,
     },
     "minio_post_canon_unavailable": {
+        "isolated_endpoint_identity": True,
         "canon_identity_unchanged": True,
         "accepted_identity_unchanged": True,
         "phase3_retry_same_identity": True,
@@ -802,6 +834,12 @@ def snapshot_violations(
                 if value is not None and not isinstance(value, Mapping):
                     violations.append(f"{stage}.state.{section} is not an object")
             _capture_required(snapshot, "state.target.fixture", stage, violations)
+            _capture_required(
+                snapshot,
+                "state.target.endpoint_identity",
+                stage,
+                violations,
+            )
         elif "state" in snapshot:
             violations.append(f"{stage}.state is not an object")
 
@@ -892,6 +930,9 @@ def _generation_worker_precommit(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "generation_worker_precommit_crash", snapshots
+        ),
         "same_task_reclaimed": len({task["task_id"] for task in tasks}) == 1,
         "lease_epoch_increased": tasks[-1]["lease_epoch"]
         > tasks[0]["lease_epoch"],
@@ -915,6 +956,9 @@ def _generation_worker_postcommit(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "generation_worker_postcommit_crash", snapshots
+        ),
         "same_task_reclaimed": len({task["task_id"] for task in tasks}) == 1,
         "lease_epoch_increased": tasks[-1]["lease_epoch"]
         > tasks[0]["lease_epoch"],
@@ -947,6 +991,9 @@ def _qdrant(snapshots: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
         "external.replay_baseline_point_identities",
     )
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "qdrant_unavailable", snapshots
+        ),
         "canon_identity_unchanged": _all_stable_equal(canon),
         "outbox_retry_observed": (
             _all_stable_equal(outbox_identities)
@@ -990,6 +1037,9 @@ def _projection_consumer(
     )
     outbox_identities = [_outbox_identity(row) for row in outbox]
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "projection_consumer_unavailable", snapshots
+        ),
         "canon_identity_unchanged": _all_stable_equal(canon),
         "durable_outbox_preserved": (
             _all_stable_equal(outbox_identities)
@@ -1033,6 +1083,9 @@ def _minio_pre_canon(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "minio_pre_canon_unavailable", snapshots
+        ),
         "canon_commits_during_fault": len(during_canon),
         "same_candidate_retried": _all_stable_equal(candidates),
         "canon_commits_after_recovery": len(after_canon),
@@ -1086,6 +1139,9 @@ def _minio_post_canon(
         snapshots, "after", "database.authoritative_identities"
     )
     return {
+        "isolated_endpoint_identity": _endpoint_identity(
+            "minio_post_canon_unavailable", snapshots
+        ),
         "canon_identity_unchanged": _all_stable_equal(canon),
         "accepted_identity_unchanged": _all_stable_equal(accepted),
         "phase3_retry_same_identity": (
@@ -1185,7 +1241,8 @@ def _publisher_fixture_safe(
     )
 
 
-def _publisher_endpoint_identity(
+def _endpoint_identity(
+    kind: str,
     snapshots: Mapping[str, dict[str, Any]],
 ) -> bool:
     records = [
@@ -1199,10 +1256,12 @@ def _publisher_endpoint_identity(
     api = record["api"]
     mcp = record["mcp"]
     database = record["database"]
+    optional_names = _OPTIONAL_ENDPOINTS_BY_KIND.get(kind, ())
+    optional = [record[name] for name in optional_names]
     try:
         addresses = [
             ipaddress.ip_address(endpoint["host"])
-            for endpoint in (api, mcp, database)
+            for endpoint in (api, mcp, database, *optional)
         ]
     except ValueError:
         return False
@@ -1247,12 +1306,62 @@ def _publisher_endpoint_identity(
         and database["service"] == "postgres"
         and database["container_port"] == 5432
         and all(
+            endpoint["scheme"] == "http"
+            and endpoint["endpoint_path"] == ""
+            and endpoint["health_status"] == 200
+            and endpoint["service"] == name
+            and endpoint["container_port"]
+            == {"qdrant": 6333, "minio": 9000}[name]
+            and endpoint["health_path"]
+            == {
+                "qdrant": "/readyz",
+                "minio": "/minio/health/ready",
+            }[name]
+            for name, endpoint in zip(optional_names, optional, strict=True)
+        )
+        and all(
             1 <= endpoint["port"] <= 65535
             and bool(endpoint["container_id"])
             and endpoint["image_id"].startswith("sha256:")
-            for endpoint in (api, mcp, database)
+            for endpoint in (api, mcp, database, *optional)
         )
     )
+
+
+def _publisher_cover_relative_path(value: Any) -> str:
+    root = PurePosixPath("/app/data/publisher_covers")
+    raw = str(value or "")
+    path = PurePosixPath(raw)
+    if not path.is_absolute():
+        return ""
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return ""
+    normalized = relative.as_posix()
+    if (
+        not normalized
+        or normalized == "."
+        or path.as_posix() != raw
+        or "\\" in raw
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        return ""
+    return normalized
+
+
+def _publisher_inventory_relative_path(value: Any) -> str:
+    raw = str(value or "")
+    path = PurePosixPath(raw)
+    if (
+        not raw
+        or path.is_absolute()
+        or path.as_posix() != raw
+        or "\\" in raw
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        return ""
+    return raw
 
 
 def _publisher_backend(
@@ -1276,10 +1385,17 @@ def _publisher_backend(
     residue = _path(snapshots, "after", "barrier.residue")
     asset = cover_assets_after[0] if len(cover_assets_after) == 1 else {}
     file_by_path = {row["path"]: row for row in files_after}
-    shared_file = file_by_path.get(asset.get("file_path"), {})
+    expected_asset_paths = {
+        row["asset_id"]: _publisher_cover_relative_path(row["file_path"])
+        for row in cover_assets_after
+    }
+    shared_file = file_by_path.get(
+        expected_asset_paths.get(str(asset.get("asset_id") or ""), ""),
+        {},
+    )
     after_paths = set(file_by_path)
     during_paths = {row["path"] for row in files_during}
-    referenced_paths = {row["file_path"] for row in cover_assets_after}
+    referenced_paths = set(expected_asset_paths.values())
     orphan_after = after_paths - referenced_paths
     barrier_bound = (
         len(terminal_writes) == 2
@@ -1311,7 +1427,9 @@ def _publisher_backend(
         )
     )
     return {
-        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
+        "isolated_endpoint_identity": _endpoint_identity(
+            "publisher_backend_unavailable", snapshots
+        ),
         "fixture_safe": _publisher_fixture_safe(
             "publisher_backend_unavailable", snapshots
         ),
@@ -1340,7 +1458,9 @@ def _publisher_backend(
             len(cover_assets_after) == 1
             and asset.get("job_id") == job_after["job_id"]
             and asset.get("asset_id") == job_after["artifact_id"]
-            and shared_file.get("path") == asset.get("file_path")
+            and bool(expected_asset_paths.get(str(asset.get("asset_id") or "")))
+            and shared_file.get("path")
+            == expected_asset_paths.get(str(asset.get("asset_id") or ""))
             and shared_file.get("size") == asset.get("file_size")
             and isinstance(shared_file.get("content_sha256"), str)
             and _SHA256_PATTERN.fullmatch(
@@ -1417,7 +1537,9 @@ def _publisher_browser(
             and receipt_rows == []
         )
     return {
-        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
+        "isolated_endpoint_identity": _endpoint_identity(
+            "publisher_browser_unavailable", snapshots
+        ),
         "fixture_safe": _publisher_fixture_safe(
             "publisher_browser_unavailable", snapshots
         ),
@@ -1521,7 +1643,7 @@ def _publisher_risk(
         and paused_job["pause_token"] == attempt.get("attempt_id")
     )
     return {
-        "isolated_endpoint_identity": _publisher_endpoint_identity(snapshots),
+        "isolated_endpoint_identity": _endpoint_identity(kind, snapshots),
         "fixture_safe": _publisher_fixture_safe(kind, snapshots),
         "same_job_identity": _all_stable_equal(
             [
@@ -1547,7 +1669,8 @@ def _publisher_risk(
         and replay["first_disposition"] == "applied"
         and replay["replay_disposition"] == "idempotent",
         "hold_discard_preserved_state": (
-            pre_discard_job == jobs[2]
+            _without_fields(pre_discard_job, {"database_now"})
+            == _without_fields(jobs[2], {"database_now"})
             and pre_discard_attempts == attempts_after
             and pre_discard_receipts == receipts
             and pre_discard_actions == actions
@@ -1559,6 +1682,7 @@ def _publisher_risk(
             and browser_terminal["service"] == "publisher-browser"
             and bool(browser_terminal["hold_id"])
             and bool(browser_terminal["container_id"])
+            and str(browser_terminal["image_id"]).startswith("sha256:")
             and browser_terminal["exists"] is True
             and browser_terminal["running"] is False
         ),
@@ -1807,60 +1931,44 @@ def _shape_violations(
             else _FIXTURE_SCHEMA
         )
         record(stage, "target.fixture", fixture_schema)
-        if kind.startswith("publisher_"):
-            endpoint = record(
-                stage,
-                "target.endpoint_identity",
-                _ENDPOINT_IDENTITY_SCHEMA,
-            )
-            if isinstance(endpoint, Mapping):
-                sentinel = endpoint.get("sentinel")
-                api_endpoint = endpoint.get("api")
-                mcp_endpoint = endpoint.get("mcp")
-                database_endpoint = endpoint.get("database")
-                if (
-                    not isinstance(sentinel, Mapping)
-                    or set(sentinel)
-                    != {
-                        "table",
-                        "sentinel_id",
-                        "run_id",
-                        "fault_id",
-                        "source_sha",
-                    }
-                    or not isinstance(api_endpoint, Mapping)
-                    or set(api_endpoint)
-                    != {
-                        "scheme",
-                        "host",
-                        "port",
-                        "endpoint_path",
-                        "health_path",
-                        "health_status",
-                        "service",
-                        "container_port",
-                        "container_id",
-                        "image_id",
-                    }
-                    or not isinstance(mcp_endpoint, Mapping)
-                    or set(mcp_endpoint) != set(api_endpoint)
-                    or not isinstance(database_endpoint, Mapping)
-                    or set(database_endpoint)
-                    != {
-                        "scheme",
-                        "host",
-                        "port",
-                        "database",
-                        "service",
-                        "container_port",
-                        "container_id",
-                        "image_id",
-                    }
-                ):
-                    violations.append(
-                        f"{stage}.state.target.endpoint identity nested "
-                        "field set mismatch"
-                    )
+        optional_endpoint_names = _OPTIONAL_ENDPOINTS_BY_KIND.get(kind, ())
+        endpoint = record(
+            stage,
+            "target.endpoint_identity",
+            {
+                **_ENDPOINT_IDENTITY_SCHEMA,
+                **{name: dict for name in optional_endpoint_names},
+            },
+        )
+        if isinstance(endpoint, Mapping):
+            sentinel = endpoint.get("sentinel")
+            http_endpoints = [
+                endpoint.get(name)
+                for name in ("api", "mcp", *optional_endpoint_names)
+            ]
+            database_endpoint = endpoint.get("database")
+            if (
+                not isinstance(sentinel, Mapping)
+                or set(sentinel)
+                != {
+                    "table",
+                    "sentinel_id",
+                    "run_id",
+                    "fault_id",
+                    "source_sha",
+                }
+                or any(
+                    not isinstance(item, Mapping)
+                    or set(item) != _ENDPOINT_HTTP_KEYS
+                    for item in http_endpoints
+                )
+                or not isinstance(database_endpoint, Mapping)
+                or set(database_endpoint) != _ENDPOINT_DATABASE_KEYS
+            ):
+                violations.append(
+                    f"{stage}.state.target.endpoint identity nested "
+                    "field set mismatch"
+                )
 
     if kind.startswith("generation_worker_"):
         for stage in STAGES:
@@ -2065,7 +2173,7 @@ def _shape_violations(
 
 def _allowed_state_fields(kind: str, stage: str) -> dict[str, set[str]]:
     allowed = {section: set() for section in _STATE_KEYS}
-    allowed["target"].add("fixture")
+    allowed["target"].update(("fixture", "endpoint_identity"))
     for dotted in _REQUIRED_PATHS[kind][stage]:
         _, section, field, *_ = dotted.split(".")
         allowed[section].add(field)
@@ -2124,6 +2232,25 @@ def _relation_violations(
                 violations.append(
                     f"{stage}.state.database.job fixture logical key mismatch"
                 )
+        if kind == "publisher_backend_unavailable":
+            for stage in ("during", "after"):
+                files = _path(
+                    snapshots,
+                    stage,
+                    "external.cover_files",
+                )
+                paths = [
+                    _publisher_inventory_relative_path(row["path"])
+                    for row in files
+                ]
+                if any(not path for path in paths):
+                    violations.append(
+                        f"{stage}.state.external.cover_files path is unsafe"
+                    )
+                if len(paths) != len(set(paths)):
+                    violations.append(
+                        f"{stage}.state.external.cover_files path is duplicated"
+                    )
     else:
         for stage, dotted in _chapter_record_paths(kind):
             value = _path(snapshots, stage, dotted)
@@ -2599,9 +2726,7 @@ def _external_relation_violations(
             violations.append(
                 "after.state.api.resume_replay job identity mismatch"
             )
-    if kind.startswith("publisher_") and not _publisher_endpoint_identity(
-        snapshots
-    ):
+    if not _endpoint_identity(kind, snapshots):
         violations.append(f"{kind}.endpoint identity is not stable or bound")
     return violations
 

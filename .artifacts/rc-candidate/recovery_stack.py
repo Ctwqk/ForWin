@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -123,6 +123,20 @@ RISK_FAULT_KINDS = frozenset(
         "publisher_account_risk",
     }
 )
+PRIMARY_FAULT_SERVICE = {
+    "generation_worker_precommit_crash": "generation-worker",
+    "generation_worker_postcommit_crash": "generation-worker",
+    "qdrant_unavailable": "qdrant",
+    "projection_consumer_unavailable": "outbox-worker",
+    "minio_pre_canon_unavailable": "minio",
+    "minio_post_canon_unavailable": "minio",
+    "publisher_backend_unavailable": "publisher-worker",
+    "publisher_browser_unavailable": "publisher-browser",
+}
+SUPPORTED_RECOVERY_FAULTS = frozenset(
+    {*PRIMARY_FAULT_SERVICE, *RISK_FAULT_KINDS}
+)
+SETUP_HOLD_PURPOSES = frozenset({"auxiliary", "pre-fault-boundary"})
 _FAULT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _HOLD_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _ABORT_STAGE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -641,9 +655,16 @@ def setup_hold_state(
                     f"service {service} already has an active setup hold"
                 )
             used_hold_ids.add(hold_id)
+            after = event.get("after")
+            if not isinstance(after, dict):
+                raise StackError("setup hold has no service identity")
             active_by_id[hold_id] = {
                 "hold_id": hold_id,
                 "service": service,
+                "fault_kind": str(event.get("fault_kind") or ""),
+                "purpose": str(event.get("purpose") or ""),
+                "container_id": str(after.get("container_id") or ""),
+                "image_id": str(after.get("image_id") or ""),
             }
             active_by_service[service] = hold_id
             continue
@@ -1589,9 +1610,19 @@ def published_endpoint_identity(
     *,
     run_identity: dict[str, Any],
 ) -> dict[str, Any]:
-    if service not in {"forwin", "forwin-mcp", "postgres"}:
+    allowed_ports = {
+        "forwin": {8899},
+        "forwin-mcp": {8896},
+        "postgres": {5432},
+        "qdrant": {6333},
+        "minio": {9000, 9001},
+    }
+    if service not in allowed_ports:
         raise StackError("endpoint service is not allowed")
-    if type(container_port) is not int or container_port <= 0:
+    if (
+        type(container_port) is not int
+        or container_port not in allowed_ports[service]
+    ):
         raise StackError("endpoint container port is invalid")
     container_id = compose_container_id(service, run_identity=run_identity)
     if not container_id:
@@ -1624,10 +1655,28 @@ def published_endpoint_identity(
         if isinstance(value, list) and value
     }
     expected_key = f"{container_port}/tcp"
-    if set(published) != {expected_key} or len(published[expected_key]) != 1:
+    expected_published = {
+        f"{port}/tcp" for port in allowed_ports[service]
+    }
+    if (
+        set(published) != expected_published
+        or any(len(value) != 1 for value in published.values())
+    ):
         raise StackError(
             f"endpoint published mapping is not exact for {service}"
         )
+    for values in published.values():
+        published_host = str(values[0].get("HostIp") or "")
+        try:
+            published_address = ipaddress.ip_address(published_host)
+        except ValueError as exc:
+            raise StackError(
+                f"endpoint published host is invalid for {service}"
+            ) from exc
+        if not published_address.is_loopback:
+            raise StackError(
+                f"endpoint published host is not loopback for {service}"
+            )
     mapping = published[expected_key][0]
     host = str(mapping.get("HostIp") or "")
     try:
@@ -1650,13 +1699,19 @@ def published_endpoint_identity(
         raise StackError(
             f"endpoint published port is invalid for {service}"
         )
+    inspected_container = str(item.get("Id") or "")
+    image_id = str(item.get("Image") or "")
+    if inspected_container != container_id or not image_id.startswith("sha256:"):
+        raise StackError(
+            f"endpoint container identity is incomplete for {service}"
+        )
     return {
         "service": service,
         "host": address.compressed,
         "host_port": host_port,
         "container_port": container_port,
-        "container_id": str(item.get("Id") or ""),
-        "image_id": str(item.get("Image") or ""),
+        "container_id": inspected_container,
+        "image_id": image_id,
     }
 
 
@@ -1814,6 +1869,9 @@ def bind_recovery_endpoints(
     database_host: str,
     database_port: int,
     database_name: str,
+    *,
+    qdrant_url: str | None = None,
+    minio_url: str | None = None,
 ) -> dict[str, Any]:
     context = require_active_recovery_run(fault_id)
     if any(
@@ -1836,6 +1894,28 @@ def bind_recovery_endpoints(
         label="MCP",
         path="/mcp",
     )
+    optional_specs = {
+        "qdrant": {
+            "url": qdrant_url,
+            "service": "qdrant",
+            "container_port": 6333,
+            "health_path": "/readyz",
+        },
+        "minio": {
+            "url": minio_url,
+            "service": "minio",
+            "container_port": 9000,
+            "health_path": "/minio/health/ready",
+        },
+    }
+    optional_requested: dict[str, tuple[str, str, int]] = {}
+    for name, spec in optional_specs.items():
+        if spec["url"] is not None:
+            optional_requested[name] = _loopback_http_endpoint(
+                str(spec["url"]),
+                label=name.capitalize(),
+                path="",
+            )
     try:
         database_address = ipaddress.ip_address(database_host)
     except ValueError as exc:
@@ -1857,11 +1937,24 @@ def bind_recovery_endpoints(
             "postgres", 5432, run_identity=run_identity
         ),
     }
+    for name in optional_requested:
+        spec = optional_specs[name]
+        mappings[name] = published_endpoint_identity(
+            str(spec["service"]),
+            int(spec["container_port"]),
+            run_identity=run_identity,
+        )
     requested = {
         "api": (api_host, api_port),
         "mcp": (mcp_host, mcp_port),
         "database": (database_address.compressed, int(database_port)),
     }
+    requested.update(
+        {
+            name: (host, port)
+            for name, (_scheme, host, port) in optional_requested.items()
+        }
+    )
     for name, (host, port) in requested.items():
         mapping = mappings[name]
         if (mapping["host"], mapping["host_port"]) != (host, port):
@@ -1942,6 +2035,24 @@ def bind_recovery_endpoints(
             },
         },
     }
+    for name, (scheme, host, port) in optional_requested.items():
+        spec = optional_specs[name]
+        health_path = str(spec["health_path"])
+        record[name] = {
+            "scheme": scheme,
+            "host": host,
+            "port": port,
+            "endpoint_path": "",
+            "health_path": health_path,
+            "health_status": probe_loopback_health(
+                f"{scheme}://{host}:{port}{health_path}"
+            ),
+            **{
+                key: value
+                for key, value in mappings[name].items()
+                if key not in {"host", "host_port"}
+            },
+        }
     record["identity_sha256"] = stable_hash(record)
     database_volume = confirmed_database_volume(
         run_identity,
@@ -2742,6 +2853,11 @@ def fresh_up(fault_id: str) -> None:
             sentinel=sentinel,
             after=after,
         )
+        failure_stage = "response_serialization"
+        serialized = json.dumps(after, ensure_ascii=False, indent=2)
+        failure_stage = "response_print"
+        print(serialized)
+        return
     except BaseException as failure:
         if not isinstance(failure, Exception):
             try:
@@ -2798,7 +2914,6 @@ def fresh_up(fault_id: str) -> None:
             f"{terminal_recording_error or '<none>'}"
         )
         raise StackError(detail) from failure
-    print(json.dumps(after, ensure_ascii=False, indent=2))
 
 
 @mutating_controller_command
@@ -3128,10 +3243,26 @@ def setup_hold_service(
     service: str,
     fault_id: str,
     hold_id: str,
+    fault_kind: str,
+    purpose: str,
 ) -> dict[str, Any]:
     if service not in FAULT_SERVICES:
         raise StackError(f"service is not an allowed setup hold: {service}")
     validated_hold = validated_hold_id(hold_id)
+    if fault_kind not in SUPPORTED_RECOVERY_FAULTS:
+        raise StackError("setup hold fault kind is unsupported")
+    if purpose not in SETUP_HOLD_PURPOSES:
+        raise StackError("setup hold purpose is unsupported")
+    primary_service = PRIMARY_FAULT_SERVICE.get(fault_kind)
+    primary_boundary = (
+        fault_kind == "publisher_backend_unavailable"
+        and service == "publisher-worker"
+        and purpose == "pre-fault-boundary"
+    )
+    if purpose == "pre-fault-boundary" and not primary_boundary:
+        raise StackError("setup hold pre-fault purpose is not allowed")
+    if service == primary_service and not primary_boundary:
+        raise StackError(f"setup hold targets primary fault service: {service}")
     context = require_active_recovery_run(fault_id)
     if any(
         event.get("service") == service
@@ -3169,9 +3300,14 @@ def setup_hold_service(
         run_identity=run_identity,
     )
     after = inspect_service(service, run_identity=run_identity)
-    if not after.get("exists") or after.get("running"):
+    if (
+        not after.get("exists")
+        or after.get("running")
+        or after.get("container_id") != before.get("container_id")
+        or after.get("image_id") != before.get("image_id")
+    ):
         raise StackError(
-            f"service {service} is still running after setup hold"
+            f"service {service} identity changed during setup hold"
         )
     hold_time = now()
     database_volume = confirmed_database_volume(
@@ -3181,6 +3317,8 @@ def setup_hold_service(
     event = append_event(
         "setup_service_held",
         fault_id=fault_id,
+        fault_kind=fault_kind,
+        purpose=purpose,
         hold_id=validated_hold,
         service=service,
         requested_at=requested_at,
@@ -3228,20 +3366,34 @@ def setup_release_service(
             "setup hold release service mismatch: "
             f"expected {held['service']}, got {service}"
         )
+    if not held["container_id"] or not held["image_id"]:
+        raise StackError("setup hold service identity is incomplete")
     run_identity = context["run_identity"]
     identity = assert_frozen()
     if identity != context["identity"]:
         raise StackError("recovery harness identity changed before setup release")
     assert_isolated_compose(identity, run_identity=run_identity)
     before = inspect_service(service, run_identity=run_identity)
-    if not before.get("exists") or before.get("running"):
+    if (
+        not before.get("exists")
+        or before.get("running")
+        or before.get("container_id") != held["container_id"]
+        or before.get("image_id") != held["image_id"]
+    ):
         raise StackError(
-            f"service {service} is running before setup release"
+            f"service {service} identity drifted before setup release"
         )
     requested_at = now()
     compose("start", service, run_identity=run_identity)
     after = wait_service(service, run_identity=run_identity)
     after["probe"] = functional_probe(service, run_identity=run_identity)
+    if (
+        after.get("container_id") != held["container_id"]
+        or after.get("image_id") != held["image_id"]
+    ):
+        raise StackError(
+            f"service {service} identity drifted during setup release"
+        )
     release_time = now()
     database_volume = confirmed_database_volume(
         run_identity,
@@ -3250,6 +3402,8 @@ def setup_release_service(
     event = append_event(
         "setup_service_released",
         fault_id=fault_id,
+        fault_kind=held["fault_kind"],
+        purpose=held["purpose"],
         hold_id=validated_hold,
         service=service,
         requested_at=requested_at,
@@ -3297,18 +3451,32 @@ def setup_discard_service(
             "setup hold discard service mismatch: "
             f"expected {held['service']}, got {service}"
         )
+    if held["purpose"] != "auxiliary":
+        raise StackError(
+            "setup discard is allowed only for an auxiliary hold"
+        )
+    if not held["container_id"] or not held["image_id"]:
+        raise StackError("setup hold service identity is incomplete")
     run_identity = context["run_identity"]
     identity = assert_frozen()
     if identity != context["identity"]:
         raise StackError("recovery harness identity changed before setup discard")
     assert_isolated_compose(identity, run_identity=run_identity)
     before = inspect_service(service, run_identity=run_identity)
-    if (
-        not before.get("exists")
-        or before.get("running")
-    ):
+    if not before.get("exists"):
+        raise StackError(
+            f"service {service} is missing before setup discard"
+        )
+    if before.get("running"):
         raise StackError(
             f"service {service} is running before setup discard"
+        )
+    if (
+        before.get("container_id") != held["container_id"]
+        or before.get("image_id") != held["image_id"]
+    ):
+        raise StackError(
+            f"service {service} identity drifted before setup discard"
         )
     requested_at = now()
     after = inspect_service(service, run_identity=run_identity)
@@ -3316,6 +3484,7 @@ def setup_discard_service(
         not after.get("exists")
         or after.get("running")
         or after.get("container_id") != before.get("container_id")
+        or after.get("image_id") != before.get("image_id")
     ):
         raise StackError(
             f"service {service} changed while discarding setup hold"
@@ -3328,6 +3497,8 @@ def setup_discard_service(
     event = append_event(
         "setup_service_discarded",
         fault_id=fault_id,
+        fault_kind=held["fault_kind"],
+        purpose=held["purpose"],
         hold_id=validated_hold,
         service=service,
         requested_at=requested_at,
@@ -3653,14 +3824,22 @@ def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
         or not isinstance(payload.get("files"), list)
     ):
         raise StackError("file inventory returned an invalid object")
+    seen_paths: set[str] = set()
     for row in payload["files"]:
+        raw_path = row.get("path") if isinstance(row, dict) else None
+        relative = (
+            PurePosixPath(raw_path)
+            if isinstance(raw_path, str) and raw_path
+            else None
+        )
         if (
             not isinstance(row, dict)
             or set(row) != {"path", "size", "content_sha256"}
-            or not isinstance(row.get("path"), str)
-            or not row["path"]
-            or Path(row["path"]).is_absolute()
-            or ".." in Path(row["path"]).parts
+            or relative is None
+            or "\\" in raw_path
+            or relative.is_absolute()
+            or relative.as_posix() != raw_path
+            or any(part in {"", ".", ".."} for part in relative.parts)
             or type(row.get("size")) is not int
             or row["size"] < 0
             or re.fullmatch(
@@ -3670,6 +3849,9 @@ def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
             is None
         ):
             raise StackError("file inventory returned an unsafe file row")
+        if raw_path in seen_paths:
+            raise StackError("file inventory returned a duplicate file path")
+        seen_paths.add(raw_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return payload
 
@@ -3775,11 +3957,24 @@ def parse_args() -> argparse.Namespace:
     endpoint_parser.add_argument("--database-host", required=True)
     endpoint_parser.add_argument("--database-port", type=int, required=True)
     endpoint_parser.add_argument("--database-name", required=True)
+    endpoint_parser.add_argument("--qdrant-url")
+    endpoint_parser.add_argument("--minio-url")
     for name in ("setup-hold", "setup-release", "setup-discard"):
         child = commands.add_parser(name)
         child.add_argument("service", choices=sorted(FAULT_SERVICES))
         child.add_argument("--fault-id", required=True)
         child.add_argument("--hold-id", required=True)
+        if name == "setup-hold":
+            child.add_argument(
+                "--fault-kind",
+                choices=sorted(SUPPORTED_RECOVERY_FAULTS),
+                required=True,
+            )
+            child.add_argument(
+                "--purpose",
+                choices=sorted(SETUP_HOLD_PURPOSES),
+                default="auxiliary",
+            )
     abort_parser = commands.add_parser("abort")
     abort_parser.add_argument("--fault-id", required=True)
     abort_parser.add_argument("--stage", required=True)
@@ -3817,9 +4012,17 @@ def main() -> int:
             args.database_host,
             args.database_port,
             args.database_name,
+            qdrant_url=args.qdrant_url,
+            minio_url=args.minio_url,
         )
     elif args.command == "setup-hold":
-        setup_hold_service(args.service, args.fault_id, args.hold_id)
+        setup_hold_service(
+            args.service,
+            args.fault_id,
+            args.hold_id,
+            args.fault_kind,
+            args.purpose,
+        )
     elif args.command == "setup-release":
         setup_release_service(args.service, args.fault_id, args.hold_id)
     elif args.command == "setup-discard":

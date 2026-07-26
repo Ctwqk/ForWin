@@ -78,8 +78,7 @@ def empty_state(kind: str) -> dict[str, dict[str, Any]]:
         "external": {},
         "barrier": {},
     }
-    if kind in PUBLISHER_KINDS:
-        state["target"]["endpoint_identity"] = endpoint_identity(kind)
+    state["target"]["endpoint_identity"] = endpoint_identity(kind)
     return state
 
 
@@ -138,6 +137,35 @@ def endpoint_identity(kind: str) -> dict[str, Any]:
             "image_id": "sha256:" + digest(kind, "postgres-image"),
         },
     }
+    if kind == "qdrant_unavailable":
+        record["qdrant"] = {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25114,
+            "endpoint_path": "",
+            "health_path": "/readyz",
+            "health_status": 200,
+            "service": "qdrant",
+            "container_port": 6333,
+            "container_id": token(kind, "qdrant-container"),
+            "image_id": "sha256:" + digest(kind, "qdrant-image"),
+        }
+    if kind in {
+        "minio_pre_canon_unavailable",
+        "minio_post_canon_unavailable",
+    }:
+        record["minio"] = {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25115,
+            "endpoint_path": "",
+            "health_path": "/minio/health/ready",
+            "health_status": 200,
+            "service": "minio",
+            "container_port": 9000,
+            "container_id": token(kind, "minio-container"),
+            "image_id": "sha256:" + digest(kind, "minio-image"),
+        }
     record["identity_sha256"] = evidence.stable_hash(record)
     return record
 
@@ -423,6 +451,8 @@ def browser_job_record(
         "deleted_at": "",
         "paused_at": "",
         "pause_reason": "",
+        "pause_token": "",
+        "risk_boundary": "",
         "current_url": "",
         "result_message": "",
         "error_message": "",
@@ -442,17 +472,23 @@ def risk_job_record(
     risk_boundary: str = "",
     variant: str = "primary",
 ) -> dict[str, Any]:
-    return {
-        **publisher_job_record(
-            kind,
-            status=status,
-            task_kind="chapter_upload",
-            variant=variant,
+    value = browser_job_record(kind, status=status, variant=variant)
+    value.update(
+        pause_reason=pause_reason,
+        pause_token=pause_token,
+        risk_boundary=risk_boundary,
+        result_payload=(
+            {
+                "risk_pause": {
+                    "pause_token": pause_token,
+                    "evidence": {"boundary": risk_boundary},
+                }
+            }
+            if pause_token
+            else {}
         ),
-        "pause_reason": pause_reason,
-        "pause_token": pause_token,
-        "risk_boundary": risk_boundary,
-    }
+    )
+    return value
 
 
 def job_identity_record(kind: str, variant: str = "primary") -> dict[str, str]:
@@ -521,9 +557,9 @@ def cover_asset_record(kind: str) -> dict[str, Any]:
 
 def cover_file_record(kind: str, variant: str = "final") -> dict[str, Any]:
     path = (
-        cover_asset_record(kind)["file_path"]
+        f"{token(kind, 'cover-asset')}.png"
         if variant == "final"
-        else f"/app/data/publisher_covers/.staging/{token(kind, variant)}.part"
+        else f".staging/{token(kind, variant)}.part"
     )
     return {
         "path": path,
@@ -586,6 +622,7 @@ def discarded_browser_observation(kind: str) -> dict[str, Any]:
         "hold_id": f"risk-fixture-{token(kind, 'fault')}",
         "service": "publisher-browser",
         "container_id": token(kind, "browser-container"),
+        "image_id": "sha256:" + digest(kind, "browser-image"),
         "exists": True,
         "running": False,
     }
@@ -1653,7 +1690,7 @@ def test_fault_local_fixtures_are_distinct_and_publisher_jobs_are_projectless() 
     fixtures = [fixture_identity(kind) for kind in FAULT_KINDS]
 
     assert len({item["fixture_id"] for item in fixtures}) == len(FAULT_KINDS)
-    for kind in PUBLISHER_KINDS:
+    for kind in FAULT_KINDS:
         values = valid_snapshots(kind)
         assert "project_id" not in values["before"]["state"]["target"]["fixture"]
         for snapshot in values.values():
@@ -1901,7 +1938,7 @@ def test_copied_publisher_booleans_are_not_snapshot_schema_fields() -> None:
         ),
         (
             "external.cover_files.0.path",
-            "/app/data/publisher_covers/other.png",
+            "other.png",
             "shared_path_readable",
         ),
         (
@@ -2868,7 +2905,7 @@ def schema_invariant_cases() -> list[SchemaInvariantCase]:
             "after.state.database.job fixture resource mismatch",
         ),
     ]
-    for kind in PUBLISHER_KINDS:
+    for kind in FAULT_KINDS:
         cases.append(
             SchemaInvariantCase(
                 f"{kind} endpoint identity",
@@ -3143,6 +3180,68 @@ def test_publisher_endpoint_identity_rejects_cross_stack_project_prefix() -> Non
 
 
 @pytest.mark.parametrize(
+    "kind",
+    (
+        "generation_worker_precommit_crash",
+        "projection_consumer_unavailable",
+        "qdrant_unavailable",
+        "minio_pre_canon_unavailable",
+        "minio_post_canon_unavailable",
+    ),
+)
+def test_task4_and_task5_reject_mixed_stack_endpoint_snapshots(
+    kind: str,
+) -> None:
+    values = valid_snapshots(kind)
+    endpoint = values["during"]["state"]["target"]["endpoint_identity"]
+    endpoint["api"]["container_id"] = token(kind, "cross-stack-api")
+    endpoint["identity_sha256"] = evidence.stable_hash(
+        {
+            key: value
+            for key, value in endpoint.items()
+            if key != "identity_sha256"
+        }
+    )
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any("endpoint identity" in violation for violation in violations)
+
+
+@pytest.mark.parametrize(
+    ("kind", "dependency"),
+    (
+        ("qdrant_unavailable", "qdrant"),
+        ("minio_pre_canon_unavailable", "minio"),
+        ("minio_post_canon_unavailable", "minio"),
+    ),
+)
+def test_consumed_optional_endpoint_cannot_be_missing_or_wrong_service(
+    kind: str,
+    dependency: str,
+) -> None:
+    for mutation in ("missing", "wrong-service"):
+        values = valid_snapshots(kind)
+        for stage in evidence.STAGES:
+            endpoint = values[stage]["state"]["target"]["endpoint_identity"]
+            if mutation == "missing":
+                endpoint.pop(dependency)
+            else:
+                endpoint[dependency]["service"] = "forwin"
+            endpoint["identity_sha256"] = evidence.stable_hash(
+                {
+                    key: value
+                    for key, value in endpoint.items()
+                    if key != "identity_sha256"
+                }
+            )
+
+        violations = evidence.snapshot_violations(kind, values)
+
+        assert any("endpoint identity" in violation for violation in violations)
+
+
+@pytest.mark.parametrize(
     ("path", "value"),
     (
         ("database.pre_discard_job.status", "paused"),
@@ -3167,6 +3266,37 @@ def test_typed_risk_discard_must_preserve_post_resume_database_state(
     assert assertions["hold_discard_preserved_state"] is False
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("available_at", "2026-07-22T14:00:00+00:00"),
+        ("current_attempt_id", "attempt-drift-generalized"),
+        ("owner_token", "owner-drift-generalized"),
+        ("extension_client_id", "client-drift-generalized"),
+        ("abort_requested", True),
+        ("deleted_at", "2026-07-22T13:00:00+00:00"),
+        ("upload_url", "https://remote.invalid/upload"),
+        ("current_url", "https://remote.invalid/chapter"),
+        ("result_message", "changed"),
+        ("error_message", "changed"),
+        ("result_payload", {"changed": True}),
+        ("created_at", "2026-07-22T11:00:00+00:00"),
+        ("updated_at", "2026-07-22T13:00:00+00:00"),
+    ),
+)
+def test_typed_risk_discard_compares_every_canonical_job_risk_class(
+    field: str,
+    value: Any,
+) -> None:
+    kind = "publisher_account_risk"
+    values = valid_snapshots(kind)
+    values["after"]["state"]["database"]["pre_discard_job"][field] = value
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["hold_discard_preserved_state"] is False
+
+
 def test_typed_risk_discard_must_observe_browser_still_stopped() -> None:
     kind = "publisher_mfa"
     values = valid_snapshots(kind)
@@ -3177,6 +3307,26 @@ def test_typed_risk_discard_must_observe_browser_still_stopped() -> None:
     assertions = evidence.derive_assertions(kind, values)
 
     assert assertions["browser_stopped_at_discard"] is False
+
+
+@pytest.mark.parametrize("mutation", ("duplicate", "normalization"))
+def test_publisher_cover_inventory_evidence_is_unique_and_canonical_relative(
+    mutation: str,
+) -> None:
+    kind = "publisher_backend_unavailable"
+    values = valid_snapshots(kind)
+    files = values["after"]["state"]["external"]["cover_files"]
+    if mutation == "duplicate":
+        files.append(copy.deepcopy(files[0]))
+    else:
+        files[0]["path"] = f"manual//{files[0]['path']}"
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any(
+        "external.cover_files path" in violation
+        for violation in violations
+    )
 
 
 def test_task6_publisher_contracts_require_independently_derived_terms() -> None:

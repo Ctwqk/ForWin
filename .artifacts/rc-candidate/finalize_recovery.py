@@ -253,6 +253,7 @@ def setup_hold_violations(
         event for event in events if event.get("action") == "fresh_up_completed"
     ]
     fresh_completed_at: datetime | None = None
+    terminal_identity_by_service: dict[str, dict[str, str]] = {}
     if len(fresh_completions) == 1:
         try:
             fresh_completed_at = strict_normalized_time(
@@ -260,15 +261,49 @@ def setup_hold_violations(
             )
         except (TypeError, ValueError):
             pass
+        fresh_after = fresh_completions[0].get("after")
+        fresh_services = (
+            fresh_after.get("services")
+            if isinstance(fresh_after, dict)
+            else None
+        )
+        if isinstance(fresh_services, dict):
+            for service, state in fresh_services.items():
+                if isinstance(state, dict):
+                    terminal_identity_by_service[str(service)] = {
+                        "container_id": str(
+                            state.get("container_id") or ""
+                        ),
+                        "image_id": str(state.get("image_id") or ""),
+                    }
     for event in hold_events:
         action = str(event.get("action") or "")
         hold_id = str(event.get("hold_id") or "")
         service = str(event.get("service") or "")
+        purpose = str(event.get("purpose") or "")
+        event_fault_kind = str(event.get("fault_kind") or "")
+        primary_boundary = (
+            kind == "publisher_backend_unavailable"
+            and service == "publisher-worker"
+            and purpose == "pre-fault-boundary"
+        )
         if _SAFE_HOLD_ID.fullmatch(hold_id) is None:
             violations.append(f"{kind}.setup hold identity is invalid")
         if service not in AUXILIARY_HOLD_SERVICES:
             violations.append(f"{kind}.setup hold service is not allowed")
-        if service == primary_service:
+        if event_fault_kind != kind:
+            violations.append(f"{kind}.setup hold fault kind mismatch")
+        if purpose not in {"auxiliary", "pre-fault-boundary"}:
+            violations.append(f"{kind}.setup hold purpose is invalid")
+        if purpose == "pre-fault-boundary" and not primary_boundary:
+            violations.append(
+                f"{kind}.setup hold pre-fault purpose is not allowed"
+            )
+        if action == "setup_service_discarded" and purpose != "auxiliary":
+            violations.append(
+                f"{kind}.setup discard is not an auxiliary hold"
+            )
+        if service == primary_service and not primary_boundary:
             violations.append(
                 f"{kind}.setup hold targets primary fault service"
             )
@@ -308,6 +343,27 @@ def setup_hold_violations(
         before = event.get("before")
         after = event.get("after")
         if action == "setup_service_held":
+            expected_identity = terminal_identity_by_service.get(service)
+            if (
+                not expected_identity
+                or expected_identity["container_id"]
+                != str(
+                    (
+                        before if isinstance(before, dict) else {}
+                    ).get("container_id")
+                    or ""
+                )
+                or expected_identity["image_id"]
+                != str(
+                    (
+                        before if isinstance(before, dict) else {}
+                    ).get("image_id")
+                    or ""
+                )
+            ):
+                violations.append(
+                    f"{kind}.setup hold active-run identity mismatch"
+                )
             if (
                 not isinstance(before, dict)
                 or before.get("service") != service
@@ -317,6 +373,10 @@ def setup_hold_violations(
                 or after.get("service") != service
                 or after.get("exists") is not True
                 or after.get("running") is not False
+                or not str(before.get("container_id") or "")
+                or before.get("container_id") != after.get("container_id")
+                or not str(before.get("image_id") or "")
+                or before.get("image_id") != after.get("image_id")
             ):
                 violations.append(
                     f"{kind}.setup hold non-running postcondition mismatch"
@@ -343,6 +403,11 @@ def setup_hold_violations(
                 active_by_id[hold_id] = {
                     "service": service,
                     "hold_time": confirmed_at,
+                    "purpose": purpose,
+                    "fault_kind": event_fault_kind,
+                    "container_id": str(after.get("container_id") or ""),
+                    "image_id": str(after.get("image_id") or ""),
+                    "index": events.index(event),
                 }
                 active_by_service[service] = hold_id
             continue
@@ -358,6 +423,10 @@ def setup_hold_violations(
                 or after.get("running") is not True
                 or not isinstance(after.get("probe"), dict)
                 or after["probe"].get("passed") is not True
+                or not str(before.get("container_id") or "")
+                or before.get("container_id") != after.get("container_id")
+                or not str(before.get("image_id") or "")
+                or before.get("image_id") != after.get("image_id")
             ):
                 violations.append(
                     f"{kind}.setup release readiness/probe postcondition mismatch"
@@ -373,6 +442,8 @@ def setup_hold_violations(
             or after.get("running") is not False
             or not str(before.get("container_id") or "")
             or after.get("container_id") != before.get("container_id")
+            or not str(before.get("image_id") or "")
+            or after.get("image_id") != before.get("image_id")
         ):
             violations.append(
                 f"{kind}.setup discard stopped postcondition mismatch"
@@ -393,6 +464,21 @@ def setup_hold_violations(
             )
             continue
         if (
+            held["purpose"] != purpose
+            or held["fault_kind"] != event_fault_kind
+            or held["container_id"]
+            != str((before if isinstance(before, dict) else {}).get("container_id") or "")
+            or held["container_id"]
+            != str((after if isinstance(after, dict) else {}).get("container_id") or "")
+            or held["image_id"]
+            != str((before if isinstance(before, dict) else {}).get("image_id") or "")
+            or held["image_id"]
+            != str((after if isinstance(after, dict) else {}).get("image_id") or "")
+        ):
+            violations.append(
+                f"{kind}.setup hold terminal identity continuity mismatch"
+            )
+        if (
             requested_at is not None
             and held["hold_time"] is not None
             and requested_at < held["hold_time"]
@@ -404,10 +490,63 @@ def setup_hold_violations(
             )
         del active_by_id[hold_id]
         del active_by_service[service]
+        terminal_identity_by_service[service] = {
+            "container_id": str(
+                (after if isinstance(after, dict) else {}).get(
+                    "container_id"
+                )
+                or ""
+            ),
+            "image_id": str(
+                (after if isinstance(after, dict) else {}).get("image_id")
+                or ""
+            ),
+        }
         if confirmed_at is not None:
             last_release_by_service[service] = confirmed_at
     if active_by_id:
         violations.append(f"{kind}.setup holds are not balanced")
+    primary_holds = [
+        event
+        for event in hold_events
+        if event.get("service") == primary_service
+    ]
+    if kind == "publisher_backend_unavailable":
+        if [event.get("action") for event in primary_holds] != [
+            "setup_service_held",
+            "setup_service_released",
+        ]:
+            violations.append(
+                f"{kind}.pre-fault primary hold lifecycle mismatch"
+            )
+        else:
+            fault_events = [
+                event
+                for event in events
+                if event.get("action") == "fault_service_killed"
+                and event.get("service") == primary_service
+            ]
+            recovery_events = [
+                event
+                for event in events
+                if event.get("action") == "fault_service_recovered"
+                and event.get("service") == primary_service
+            ]
+            if (
+                len(fault_events) != 1
+                or len(recovery_events) != 1
+                or not (
+                    events.index(primary_holds[0])
+                    < events.index(primary_holds[1])
+                    < events.index(fault_events[0])
+                    < events.index(recovery_events[0])
+                )
+            ):
+                violations.append(
+                    f"{kind}.pre-fault primary hold order mismatch"
+                )
+    elif primary_holds:
+        violations.append(f"{kind}.primary service hold is not allowed")
     return violations
 
 
@@ -600,14 +739,12 @@ def run_resource_violations(
     }
 
 
-def publisher_endpoint_violations(
+def endpoint_violations(
     kind: str,
     *,
     events: list[dict[str, Any]],
     snapshots: dict[str, dict[str, Any]],
 ) -> list[str]:
-    if not kind.startswith("publisher_"):
-        return []
     violations: list[str] = []
 
     def mapping(value: object) -> dict[str, Any]:
@@ -696,12 +833,22 @@ def publisher_endpoint_violations(
         "mcp": runtime_image,
         "database": postgres_image,
     }
+    optional_endpoints = {
+        "qdrant_unavailable": {"qdrant": "qdrant"},
+        "minio_pre_canon_unavailable": {"minio": "minio"},
+        "minio_post_canon_unavailable": {"minio": "minio"},
+    }.get(kind, {})
+    for endpoint_key, dependency_key in optional_endpoints.items():
+        expected_images[endpoint_key] = mapping(
+            dependency_images.get(dependency_key)
+        ).get("image_id")
     fresh_after = mapping(fresh_completion.get("after"))
     fresh_services = mapping(fresh_after.get("services"))
     service_keys = {
         "api": "forwin",
         "mcp": "forwin-mcp",
         "database": "postgres",
+        **optional_endpoints,
     }
     for endpoint_key, service in service_keys.items():
         published = mapping(endpoint.get(endpoint_key))
@@ -764,6 +911,7 @@ def publisher_risk_discard_violations(
         "hold_id": discarded.get("hold_id"),
         "service": discarded.get("service"),
         "container_id": discarded_after.get("container_id"),
+        "image_id": discarded_after.get("image_id"),
         "exists": discarded_after.get("exists"),
         "running": discarded_after.get("running"),
     }
@@ -952,7 +1100,7 @@ def fault_report_violations(
         )
         violations.extend(run_violations)
         violations.extend(
-            publisher_endpoint_violations(
+            endpoint_violations(
                 kind,
                 events=events,
                 snapshots=snapshots,

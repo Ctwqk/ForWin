@@ -52,6 +52,10 @@ CANDIDATE_ID = "candidate-a"
 BODY_SHA = hashlib.sha256(b"fixture chapter").hexdigest()
 GENERATION_WORKER_APPLICATION_NAME = "forwin-recovery-generation-worker"
 OUTBOX_WORKER_APPLICATION_NAME = "forwin-recovery-outbox-worker"
+API_URL = "http://127.0.0.1:25111"
+MCP_URL = "http://127.0.0.1:25112/mcp"
+DATABASE_URL = "postgresql://fixture:secret@127.0.0.1:25113/forwin"
+QDRANT_URL = "http://127.0.0.1:25114"
 
 
 def test_task4_reuses_the_single_runner_common_implementation() -> None:
@@ -750,6 +754,102 @@ def token(kind: str, label: str) -> str:
     return f"{kind}-{label}"
 
 
+def endpoint_identity(*, qdrant: bool = False) -> dict[str, Any]:
+    run_id = hashlib.sha256(f"{FAULT_ID}:run".encode()).hexdigest()[:32]
+    digest = lambda label: hashlib.sha256(  # noqa: E731
+        f"{FAULT_ID}:{label}".encode()
+    ).hexdigest()
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "fault_id": FAULT_ID,
+        "run_id": run_id,
+        "source_sha": SOURCE_SHA,
+        "source_tree": "1" * 40,
+        "project_name": f"forwin-v5-recovery-{run_id}",
+        "candidate_manifest_sha256": digest("manifest"),
+        "candidate_identity_sha256": "",
+        "sentinel": {
+            "table": "forwin_recovery_run_sentinel",
+            "sentinel_id": digest("sentinel"),
+            "run_id": run_id,
+            "fault_id": FAULT_ID,
+            "source_sha": SOURCE_SHA,
+        },
+        "api": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25111,
+            "endpoint_path": "",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin",
+            "container_port": 8899,
+            "container_id": f"{FAULT_ID}-api",
+            "image_id": "sha256:" + digest("runtime-image"),
+        },
+        "mcp": {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25112,
+            "endpoint_path": "/mcp",
+            "health_path": "/health",
+            "health_status": 200,
+            "service": "forwin-mcp",
+            "container_port": 8896,
+            "container_id": f"{FAULT_ID}-mcp",
+            "image_id": "sha256:" + digest("runtime-image"),
+        },
+        "database": {
+            "scheme": "postgresql",
+            "host": "127.0.0.1",
+            "port": 25113,
+            "database": "forwin",
+            "service": "postgres",
+            "container_port": 5432,
+            "container_id": f"{FAULT_ID}-postgres",
+            "image_id": "sha256:" + digest("postgres-image"),
+        },
+    }
+    if qdrant:
+        record["qdrant"] = {
+            "scheme": "http",
+            "host": "127.0.0.1",
+            "port": 25114,
+            "endpoint_path": "",
+            "health_path": "/readyz",
+            "health_status": 200,
+            "service": "qdrant",
+            "container_port": 6333,
+            "container_id": f"{FAULT_ID}-qdrant",
+            "image_id": "sha256:" + digest("qdrant-image"),
+        }
+    record["candidate_identity_sha256"] = evidence.stable_hash(
+        {
+            "source_sha": SOURCE_SHA,
+            "source_tree": record["source_tree"],
+            "runtime_image": {"image_id": record["api"]["image_id"]},
+            "browser_image": {
+                "image_id": "sha256:"
+                + hashlib.sha256(b"publisher-browser").hexdigest()
+            },
+            "dependency_images": {
+                "postgres": {"image_id": record["database"]["image_id"]},
+                "qdrant": (
+                    {"image_id": record["qdrant"]["image_id"]}
+                    if qdrant
+                    else {}
+                ),
+                "minio": {},
+            },
+            "candidate_manifest": {
+                "sha256": record["candidate_manifest_sha256"]
+            },
+        }
+    )
+    record["identity_sha256"] = evidence.stable_hash(record)
+    return record
+
+
 def valid_projection_snapshots(
     kind: str = "projection_consumer_unavailable",
 ) -> dict[str, dict[str, Any]]:
@@ -767,6 +867,9 @@ def valid_projection_snapshots(
             fault_id=FAULT_ID,
             stage=stage,
             fixture=fixture,
+            endpoint_identity=endpoint_identity(
+                qdrant=kind == "qdrant_unavailable"
+            ),
         )
         for stage in evidence.STAGES
     }
@@ -851,6 +954,7 @@ def valid_generation_snapshots(
             fault_id=FAULT_ID,
             stage=stage,
             fixture=fixture,
+            endpoint_identity=endpoint_identity(),
         )
         for stage in evidence.STAGES
     }
@@ -959,7 +1063,53 @@ def valid_event_log(
         "name": run_identity["database_volume_name"],
         "exists": False,
     }
-    identity = {"source_sha": SOURCE_SHA}
+    endpoint = endpoint_identity(qdrant=fault_kind == "qdrant_unavailable")
+    run_identity["run_id"] = endpoint["run_id"]
+    run_identity["database_volume_name"] = (
+        f"forwin-v5-recovery-{endpoint['run_id']}-postgres-data"
+    )
+    volume["name"] = run_identity["database_volume_name"]
+    volume["fingerprint"] = evidence.stable_hash(
+        {"created_at": created_at, "name": volume["name"]}
+    )
+    absent["name"] = run_identity["database_volume_name"]
+    identity = {
+        "source_sha": SOURCE_SHA,
+        "source_tree": endpoint["source_tree"],
+        "runtime_image": {"image_id": endpoint["api"]["image_id"]},
+        "browser_image": {
+            "image_id": "sha256:"
+            + hashlib.sha256(b"publisher-browser").hexdigest()
+        },
+        "dependency_images": {
+            "postgres": {"image_id": endpoint["database"]["image_id"]},
+            "qdrant": (
+                {"image_id": endpoint["qdrant"]["image_id"]}
+                if "qdrant" in endpoint
+                else {}
+            ),
+            "minio": {},
+        },
+        "candidate_manifest": {
+            "sha256": endpoint["candidate_manifest_sha256"]
+        },
+    }
+    endpoint["candidate_identity_sha256"] = evidence.stable_hash(
+        {
+            key: identity[key]
+            for key in (
+                "source_sha",
+                "source_tree",
+                "runtime_image",
+                "browser_image",
+                "dependency_images",
+                "candidate_manifest",
+            )
+        }
+    )
+    endpoint["identity_sha256"] = evidence.stable_hash(
+        {key: value for key, value in endpoint.items() if key != "identity_sha256"}
+    )
     events: list[dict[str, Any]] = []
     append_event(
         events,
@@ -976,6 +1126,28 @@ def valid_event_log(
         identity=identity,
         run_identity=run_identity,
         volume=volume,
+        sentinel=copy.deepcopy(endpoint["sentinel"]),
+        after={
+            "services": {
+                value["service"]: {
+                    "exists": True,
+                    "running": True,
+                    "container_id": value["container_id"],
+                    "image_id": value["image_id"],
+                }
+                for key, value in endpoint.items()
+                if key in {"api", "mcp", "database", "qdrant"}
+            }
+        },
+    )
+    append_event(
+        events,
+        action="endpoints_bound",
+        recorded_at="2026-07-26T12:00:01+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        volume=volume,
+        endpoint_identity=copy.deepcopy(endpoint),
     )
     append_event(
         events,
@@ -1255,6 +1427,7 @@ def test_sql_collector_binds_fixture_identity_and_builds_generation_snapshot() -
         }
     )
     collector = runner.SQLCollector(source)
+    collector.bind_endpoint_identity(endpoint_identity())
 
     snapshot = collector.generation_snapshot(
         source_sha=SOURCE_SHA,
@@ -1326,6 +1499,7 @@ def test_sql_collector_normalizes_projection_outbox_and_checkpoint_rows() -> Non
         }
     )
     collector = runner.SQLCollector(source)
+    collector.bind_endpoint_identity(endpoint_identity())
     fixture = fixture_context()
 
     snapshot = collector.projection_snapshot(
@@ -1574,6 +1748,10 @@ class FakeControllerLifecycle:
     def fresh_up(self, fault_id: str) -> None:
         self.calls.append(("fresh_up", fault_id))
 
+    def bind_endpoints(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("bind_endpoints", kwargs["fault_id"]))
+        return endpoint_identity(qdrant=bool(kwargs.get("qdrant_url")))
+
     def kill(self, service: str, fault_id: str) -> None:
         self.calls.append(("kill", service, fault_id))
 
@@ -1586,8 +1764,13 @@ class FakeControllerLifecycle:
     def destroy(self) -> None:
         self.calls.append(("destroy",))
 
+    def interrupt_cleanup(self, fault_id: str) -> None:
+        self.calls.append(("interrupt_cleanup", fault_id))
+
 
 class FakeLifecycleProject:
+    mcp_url = MCP_URL
+
     async def create_genesis_project(self) -> Any:
         return runner.ProjectFixture(PROJECT_ID)
 
@@ -1629,6 +1812,12 @@ class FakeSetupWriter:
 
 
 class FakeBoundaryCollector:
+    def read_recovery_sentinel(self) -> dict[str, Any]:
+        return copy.deepcopy(endpoint_identity()["sentinel"])
+
+    def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
+        self.endpoint_identity = copy.deepcopy(identity)
+
     def wait_task_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
 
@@ -1665,6 +1854,9 @@ def test_live_runner_missing_barrier_is_setup_blocked_and_cleans_in_finally(
         qdrant=None,
         writer=writer,
         barrier_factory=lambda: barrier,
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
     )
 
     result = live.run()
@@ -1675,6 +1867,7 @@ def test_live_runner_missing_barrier_is_setup_blocked_and_cleans_in_finally(
     assert writer.payload["failure_stage"] == "barrier_wait"
     assert controller.calls == [
         ("fresh_up", FAULT_ID),
+        ("bind_endpoints", FAULT_ID),
         ("stop", "generation-worker", FAULT_ID),
         ("start", "generation-worker", FAULT_ID),
         ("destroy",),
@@ -1685,6 +1878,43 @@ def test_live_runner_missing_barrier_is_setup_blocked_and_cleans_in_finally(
         < log.index("barrier_cleanup")
         < log.index("start:generation-worker")
     )
+
+
+@pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
+def test_task4_caller_owns_stack_before_fresh_up_returns(
+    interruption: type[BaseException],
+    tmp_path: Path,
+) -> None:
+    evidence_dir = (tmp_path / interruption.__name__).resolve()
+    log: list[str] = []
+    controller = LoggingController(evidence_dir, log)
+    controller.fresh_up = lambda _fault_id: (  # type: ignore[method-assign]
+        (_ for _ in ()).throw(interruption())
+    )
+    writer = FakeSetupWriter(evidence_dir)
+    live = runner.LiveRunner(
+        fault_kind="generation_worker_precommit_crash",
+        fault_id=FAULT_ID,
+        source_sha=SOURCE_SHA,
+        controller=controller,
+        lifecycle=FakeLifecycleProject(),
+        sql_collector=FakeBoundaryCollector(),
+        api=None,
+        qdrant=None,
+        writer=writer,
+        barrier_factory=lambda: pytest.fail(
+            "fresh-up interruption installed a barrier"
+        ),
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+    )
+
+    with pytest.raises(interruption):
+        live.run()
+
+    assert controller.calls == [("interrupt_cleanup", FAULT_ID)]
+    assert writer.payload is None
 
 
 class SuccessfulBarrier:
@@ -1713,6 +1943,12 @@ class SuccessfulBarrier:
 class SuccessfulGenerationCollector:
     def __init__(self, kind: str) -> None:
         self.snapshots = valid_generation_snapshots(kind)
+
+    def read_recovery_sentinel(self) -> dict[str, Any]:
+        return copy.deepcopy(endpoint_identity()["sentinel"])
+
+    def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
+        self.endpoint_identity = copy.deepcopy(identity)
 
     def wait_task_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
@@ -1776,6 +2012,9 @@ def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
         qdrant=None,
         writer=writer,
         barrier_factory=lambda: barrier,
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
     )
 
     result = live.run()
@@ -1808,7 +2047,18 @@ def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
 
 class SuccessfulProjectionCollector:
     def __init__(self, kind: str) -> None:
+        self.kind = kind
         self.snapshots = valid_projection_snapshots(kind)
+
+    def read_recovery_sentinel(self) -> dict[str, Any]:
+        return copy.deepcopy(
+            endpoint_identity(qdrant=self.kind == "qdrant_unavailable")[
+                "sentinel"
+            ]
+        )
+
+    def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
+        self.endpoint_identity = copy.deepcopy(identity)
 
     def wait_review_ready(self, **_kwargs: Any) -> Any:
         return fixture_context()
@@ -1854,6 +2104,7 @@ class SuccessfulProjectionCollector:
 
 class MissingQdrantFailureCollector(SuccessfulProjectionCollector):
     def __init__(self) -> None:
+        self.kind = "qdrant_unavailable"
         self.snapshots = valid_projection_snapshots("qdrant_unavailable")
 
     def projection_snapshot(self, **kwargs: Any) -> dict[str, Any]:
@@ -1864,6 +2115,8 @@ class MissingQdrantFailureCollector(SuccessfulProjectionCollector):
 
 
 class SuccessfulAPI:
+    api_url = API_URL
+
     def __init__(self, log: list[str]) -> None:
         self.log = log
 
@@ -1884,6 +2137,7 @@ class SuccessfulAPI:
 
 class SuccessfulQdrant:
     collection = "fixture-vectors"
+    qdrant_url = QDRANT_URL
 
     def project_points(self, _project_id: str) -> list[dict[str, Any]]:
         return [
@@ -1914,6 +2168,10 @@ def test_live_qdrant_without_during_failure_is_setup_blocked(
         api=SuccessfulAPI(log),
         qdrant=SuccessfulQdrant(),
         writer=writer,
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        qdrant_url=QDRANT_URL,
     )
 
     result = live.run()
@@ -1957,6 +2215,10 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
         api=SuccessfulAPI(log),
         qdrant=SuccessfulQdrant() if kind == "qdrant_unavailable" else None,
         writer=writer,
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        qdrant_url=QDRANT_URL if kind == "qdrant_unavailable" else "",
     )
 
     result = live.run()

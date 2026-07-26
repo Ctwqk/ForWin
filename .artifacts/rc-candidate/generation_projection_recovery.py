@@ -667,6 +667,7 @@ def snapshot_envelope(
     fault_id: str,
     stage: str,
     fixture: Mapping[str, Any],
+    endpoint_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if SHA_PATTERN.fullmatch(str(source_sha or "")) is None:
         raise RunnerError("source SHA is not canonical")
@@ -682,7 +683,14 @@ def snapshot_envelope(
         "fault_id": fault_id,
         "stage": stage,
         "state": {
-            "target": {"fixture": dict(fixture)},
+            "target": {
+                "fixture": dict(fixture),
+                **(
+                    {"endpoint_identity": dict(endpoint_identity)}
+                    if endpoint_identity is not None
+                    else {}
+                ),
+            },
             "mcp": {},
             "api": {},
             "database": {},
@@ -855,6 +863,45 @@ class FixtureContext:
 class SQLCollector:
     def __init__(self, source: RowSource) -> None:
         self.source = source
+        self._bound_endpoint_identity: dict[str, Any] | None = None
+
+    def bind_endpoint_identity(
+        self,
+        endpoint_identity: Mapping[str, Any],
+    ) -> None:
+        if self._bound_endpoint_identity is not None:
+            raise SetupBlocked("Task 4 endpoint identity was already bound")
+        value = dict(endpoint_identity)
+        if not value:
+            raise SetupBlocked("Task 4 endpoint identity is empty")
+        self._bound_endpoint_identity = value
+
+    def _endpoint_identity(self) -> dict[str, Any]:
+        if self._bound_endpoint_identity is None:
+            raise SetupBlocked(
+                "Task 4 endpoint identity was not bound before snapshot"
+            )
+        return dict(self._bound_endpoint_identity)
+
+    def read_recovery_sentinel(self) -> dict[str, str]:
+        rows = self.source.fetch_all(
+            """
+            SELECT sentinel_id, run_id, fault_id, source_sha
+            FROM forwin_recovery_run_sentinel
+            WHERE singleton = true
+            """
+        )
+        if len(rows) != 1:
+            raise SetupBlocked(
+                "database endpoint returned no unique recovery sentinel"
+            )
+        return {
+            "table": "forwin_recovery_run_sentinel",
+            **{
+                key: str(rows[0].get(key) or "")
+                for key in ("sentinel_id", "run_id", "fault_id", "source_sha")
+            },
+        }
 
     def _task_row(self, fixture: FixtureContext) -> dict[str, Any]:
         rows = self.source.fetch_all(
@@ -906,6 +953,7 @@ class SQLCollector:
             fault_id=fixture.fault_id,
             stage=stage,
             fixture=fixture.evaluator_identity(),
+            endpoint_identity=self._endpoint_identity(),
         )
         database = snapshot["state"]["database"]
         database["task"] = normalize_task(self._task_row(fixture))
@@ -943,6 +991,7 @@ class SQLCollector:
             fault_id=fixture.fault_id,
             stage=stage,
             fixture=fixture.evaluator_identity(),
+            endpoint_identity=self._endpoint_identity(),
         )
         database = snapshot["state"]["database"]
         database["canon_commits"] = self._canon_rows(fixture)
@@ -1292,6 +1341,10 @@ class LiveRunner:
         api: Any,
         qdrant: Any,
         writer: Any,
+        api_url: str,
+        mcp_url: str,
+        database_url: str,
+        qdrant_url: str = "",
         barrier_factory: Callable[[], Any] | None = None,
     ) -> None:
         if fault_kind not in SUPPORTED_FAULTS:
@@ -1305,6 +1358,10 @@ class LiveRunner:
         self.api = api
         self.qdrant = qdrant
         self.writer = writer
+        self.api_url = api_url
+        self.mcp_url = mcp_url
+        self.database_url = database_url
+        self.qdrant_url = qdrant_url
         self.barrier_factory = barrier_factory
         self.stage = "initial"
         self.stack_started = False
@@ -1321,8 +1378,48 @@ class LiveRunner:
         cleanup_errors: list[str] = []
         try:
             self.stage = "fresh_up"
-            self.controller.fresh_up(self.fault_id)
             self.stack_started = True
+            self.controller.fresh_up(self.fault_id)
+            self.stage = "bind_endpoints"
+            common.require_client_endpoint(
+                self.lifecycle,
+                attribute="mcp_url",
+                expected_url=self.mcp_url,
+                label="MCP",
+            )
+            if self.fault_kind in PROJECTION_FAULTS:
+                common.require_client_endpoint(
+                    self.api,
+                    attribute="api_url",
+                    expected_url=self.api_url,
+                    label="API",
+                )
+            if self.fault_kind == "qdrant_unavailable" and not self.qdrant_url:
+                raise SetupBlocked(
+                    "Qdrant client endpoint is missing from endpoint binding"
+                )
+            if self.fault_kind == "qdrant_unavailable":
+                common.require_client_endpoint(
+                    self.qdrant,
+                    attribute="qdrant_url",
+                    expected_url=self.qdrant_url,
+                    label="Qdrant",
+                )
+            endpoint_identity = common.bind_recovery_endpoints(
+                controller=self.controller,
+                fault_id=self.fault_id,
+                source_sha=self.source_sha,
+                api_url=self.api_url,
+                mcp_url=self.mcp_url,
+                database_url=self.database_url,
+                sentinel_reader=self.sql.read_recovery_sentinel,
+                qdrant_url=(
+                    self.qdrant_url
+                    if self.fault_kind == "qdrant_unavailable"
+                    else None
+                ),
+            )
+            self.sql.bind_endpoint_identity(endpoint_identity)
             if self.fault_kind in GENERATION_FAULTS:
                 snapshots = self._run_generation_fault()
             else:
@@ -1330,8 +1427,12 @@ class LiveRunner:
         except BaseException as exc:
             failure = exc
         finally:
+            interrupted = failure is not None and not isinstance(
+                failure, Exception
+            )
             if (
-                self.barrier is not None
+                not interrupted
+                and self.barrier is not None
                 and self.stack_started
                 and not self.faulted
             ):
@@ -1342,20 +1443,35 @@ class LiveRunner:
                     cleanup_errors.append(
                         f"generation worker quiesce: {exc}"
                     )
+                    if not isinstance(exc, Exception):
+                        failure = exc
             if self.barrier is not None:
                 try:
                     self.barrier.cleanup()
                 except BaseException as exc:
                     cleanup_errors.append(f"barrier cleanup: {exc}")
+                    if not isinstance(exc, Exception):
+                        failure = exc
                 else:
-                    try:
-                        self._capture_barrier_evidence()
-                    except BaseException as exc:
-                        cleanup_errors.append(
-                            f"barrier evidence: {exc}"
-                        )
-            cleanup_errors.extend(self._cleanup_stack())
+                    if failure is None or isinstance(failure, Exception):
+                        try:
+                            self._capture_barrier_evidence()
+                        except BaseException as exc:
+                            cleanup_errors.append(
+                                f"barrier evidence: {exc}"
+                            )
+                            if not isinstance(exc, Exception):
+                                failure = exc
+            if failure is not None and not isinstance(failure, Exception):
+                try:
+                    self.controller.interrupt_cleanup(self.fault_id)
+                except BaseException as exc:
+                    cleanup_errors.append(f"interrupt cleanup: {exc}")
+            else:
+                cleanup_errors.extend(self._cleanup_stack())
 
+        if failure is not None and not isinstance(failure, Exception):
+            raise failure.with_traceback(failure.__traceback__)
         if failure is None and cleanup_errors:
             failure = RunnerError("; ".join(cleanup_errors))
             self.stage = "cleanup"
@@ -1741,6 +1857,10 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         api=api,
         qdrant=qdrant,
         writer=EvidenceWriter(evidence_dir=config.evidence_dir),
+        api_url=config.api_url,
+        mcp_url=config.mcp_url,
+        database_url=config.database_url,
+        qdrant_url=config.qdrant_url,
         barrier_factory=barrier_factory,
     )
 

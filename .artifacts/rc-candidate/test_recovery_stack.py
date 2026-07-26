@@ -82,6 +82,8 @@ def run_setup_hold_process(
             "outbox-worker",
             "fault-1",
             "hold-1",
+            "minio_post_canon_unavailable",
+            "auxiliary",
         )
     except Exception as exc:
         results.put(("error", str(exc)))
@@ -548,6 +550,22 @@ def test_endpoint_binding_uses_verified_dynamic_published_mappings(
             "container_id": "postgres-container-dynamic",
             "image_id": "sha256:" + "d" * 64,
         },
+        ("qdrant", 6333): {
+            "service": "qdrant",
+            "host": "127.0.0.1",
+            "host_port": 24114,
+            "container_port": 6333,
+            "container_id": "qdrant-container-dynamic",
+            "image_id": "sha256:" + "e" * 64,
+        },
+        ("minio", 9000): {
+            "service": "minio",
+            "host": "127.0.0.1",
+            "host_port": 24115,
+            "container_port": 9000,
+            "container_id": "minio-container-dynamic",
+            "image_id": "sha256:" + "f" * 64,
+        },
     }
     sentinel = {
         "table": stack.RECOVERY_SENTINEL_TABLE,
@@ -605,14 +623,20 @@ def test_endpoint_binding_uses_verified_dynamic_published_mappings(
         "127.0.0.1",
         24113,
         "forwin",
+        qdrant_url="http://127.0.0.1:24114",
+        minio_url="http://127.0.0.1:24115",
     )
 
     assert record["api"]["container_id"] == "api-container-dynamic"
     assert record["mcp"]["endpoint_path"] == "/mcp"
     assert record["database"]["port"] == 24113
+    assert record["qdrant"]["service"] == "qdrant"
+    assert record["minio"]["service"] == "minio"
     assert probes == [
         "http://127.0.0.1:24111/health",
         "http://127.0.0.1:24112/health",
+        "http://127.0.0.1:24114/readyz",
+        "http://127.0.0.1:24115/minio/health/ready",
     ]
     assert record["identity_sha256"] == stack.stable_hash(
         {
@@ -621,6 +645,72 @@ def test_endpoint_binding_uses_verified_dynamic_published_mappings(
             if key != "identity_sha256"
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("missing-console", "published mapping"),
+        ("extra-port", "published mapping"),
+        ("public-console", "not loopback"),
+        ("image", "container identity"),
+    ),
+)
+def test_minio_endpoint_identity_requires_exact_active_published_mapping(
+    mutation: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity = {"run_id": "4" * 32}
+    container_id = "minio-container-exact"
+    ports: dict[str, Any] = {
+        "9000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "24115"}],
+        "9001/tcp": [{"HostIp": "127.0.0.1", "HostPort": "24116"}],
+    }
+    image_id = "sha256:" + "f" * 64
+    if mutation == "missing-console":
+        ports.pop("9001/tcp")
+    elif mutation == "extra-port":
+        ports["9999/tcp"] = [
+            {"HostIp": "127.0.0.1", "HostPort": "24117"}
+        ]
+    elif mutation == "public-console":
+        ports["9001/tcp"][0]["HostIp"] = "0.0.0.0"
+    else:
+        image_id = ""
+    payload = [
+        {
+            "Id": container_id,
+            "Image": image_id,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": (
+                        stack.recovery_project_name(run_identity)
+                    ),
+                    "com.docker.compose.service": "minio",
+                }
+            },
+            "State": {"Running": True},
+            "NetworkSettings": {"Ports": ports},
+        }
+    ]
+    monkeypatch.setattr(
+        stack,
+        "compose_container_id",
+        lambda *_args, **_kwargs: container_id,
+    )
+    monkeypatch.setattr(
+        stack,
+        "command",
+        lambda *_args: json.dumps(payload),
+    )
+
+    with pytest.raises(stack.StackError, match=expected):
+        stack.published_endpoint_identity(
+            "minio",
+            9000,
+            run_identity=run_identity,
+        )
 
 
 @pytest.mark.parametrize(
@@ -849,6 +939,33 @@ def test_file_inventory_is_read_only_identity_checked_and_data_scoped(
                     "size": 1,
                     "content_sha256": "0" * 64,
                 }
+            ],
+        },
+        {
+            "root": "/app/data/publisher_covers",
+            "root_exists": True,
+            "files": [
+                {
+                    "path": "manual//cover.png",
+                    "size": 1,
+                    "content_sha256": "0" * 64,
+                }
+            ],
+        },
+        {
+            "root": "/app/data/publisher_covers",
+            "root_exists": True,
+            "files": [
+                {
+                    "path": "manual/cover.png",
+                    "size": 1,
+                    "content_sha256": "0" * 64,
+                },
+                {
+                    "path": "manual/cover.png",
+                    "size": 1,
+                    "content_sha256": "0" * 64,
+                },
             ],
         },
         {
@@ -1815,6 +1932,143 @@ def test_fresh_up_interrupt_cleans_and_reraises_without_setup_blocked(
     }.intersection(event["action"] for event in events)
 
 
+@pytest.mark.parametrize(
+    ("boundary", "expected_stage"),
+    (
+        ("serialization", "response_serialization"),
+        ("print", "response_print"),
+    ),
+)
+def test_fresh_up_response_boundary_interrupt_is_terminal_and_propagates(
+    boundary: str,
+    expected_stage: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / boundary).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "8" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "8" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "2026-07-22T12:00:00+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T12:00:00+00:00",
+                "name": volume_name,
+            }
+        ),
+    }
+    destroyed = {
+        service: {"exists": False, "running": False}
+        for service in stack.SERVICES
+    }
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda *_args, **_kwargs: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_fresh_database_volume",
+        lambda *_args, **_kwargs: present,
+    )
+    monkeypatch.setattr(
+        stack,
+        "initialize_recovery_sentinel",
+        lambda **_kwargs: {
+            "table": "forwin_recovery_run_sentinel",
+            "sentinel_id": "f" * 64,
+            "run_id": "8" * 32,
+            "fault_id": "fault-response-boundary",
+            "source_sha": SOURCE_SHA,
+        },
+    )
+    monkeypatch.setattr(stack, "compose", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda service, **_kwargs: {
+            "service": service,
+            "exists": True,
+            "running": True,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda _run_identity, *, fallback_timestamp: {
+            "cleanup_requested_at": fallback_timestamp,
+            "cleanup_confirmed_at": fallback_timestamp,
+            "cleanup_error": None,
+            "database_volume": absent,
+            "after": {
+                "observed_at": fallback_timestamp,
+                "services": destroyed,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+    if boundary == "serialization":
+        real_dumps = stack.json.dumps
+
+        def interrupt_response_serialization(
+            value: object, **kwargs: object
+        ) -> str:
+            if kwargs.get("indent") == 2:
+                raise KeyboardInterrupt
+            return real_dumps(value, **kwargs)
+
+        monkeypatch.setattr(
+            stack.json,
+            "dumps",
+            interrupt_response_serialization,
+        )
+    else:
+        monkeypatch.setattr(
+            stack,
+            "print",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                KeyboardInterrupt()
+            ),
+            raising=False,
+        )
+
+    with pytest.raises(KeyboardInterrupt):
+        stack.fresh_up("fault-response-boundary")
+
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "fresh_up_completed",
+        "interrupted_cleanup",
+    ]
+    assert events[-1]["interrupted_stage"] == expected_stage
+    assert events[-1]["cleanup_confirmed"] is True
+    assert events[-1]["database_volume"] == absent
+    assert not any(
+        event["action"] == "setup_blocked" for event in events
+    )
+
+
 def test_fresh_up_cleanup_interruption_preserves_original_interrupt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2711,6 +2965,7 @@ def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
             "exists": True,
             "running": running[service],
             "container_id": f"{service}-container",
+            "image_id": f"sha256:{service}-image",
         }
 
     def compose(*args: str, **_kwargs: object) -> str:
@@ -2737,6 +2992,8 @@ def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
             "service": service,
             "exists": True,
             "running": True,
+            "container_id": f"{service}-container",
+            "image_id": f"sha256:{service}-image",
         },
     )
     monkeypatch.setattr(
@@ -2761,6 +3018,8 @@ def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
         "outbox-worker",
         "fault-1",
         "outbox-preapproval",
+        "minio_post_canon_unavailable",
+        "auxiliary",
     )
     stack.append_event(
         "fault_service_stopped",
@@ -2791,6 +3050,8 @@ def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
         "outbox-worker",
         "fault-1",
         "outbox-replay",
+        "minio_post_canon_unavailable",
+        "auxiliary",
     )
     second_release = stack.setup_release_service(
         "outbox-worker",
@@ -2838,6 +3099,121 @@ def test_setup_hold_pairs_are_serial_and_can_overlap_primary_fault(
     ]
 
 
+def test_publisher_backend_primary_hold_requires_exact_pre_fault_purpose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    running = {"publisher-worker": True}
+
+    def service_state(service: str, **_kwargs: object) -> dict:
+        return {
+            "service": service,
+            "exists": True,
+            "running": running[service],
+            "container_id": f"{service}-boundary-container",
+            "image_id": "sha256:" + "b" * 64,
+        }
+
+    def compose(*args: str, **_kwargs: object) -> str:
+        running[args[-1]] = args[0] == "start"
+        return ""
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(stack, "inspect_service", service_state)
+    monkeypatch.setattr(stack, "wait_service", service_state)
+    monkeypatch.setattr(stack, "compose", compose)
+    monkeypatch.setattr(
+        stack,
+        "functional_probe",
+        lambda *_args, **_kwargs: {"passed": True},
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+
+    held = stack.setup_hold_service(
+        "publisher-worker",
+        "fault-1",
+        "backend-boundary",
+        "publisher_backend_unavailable",
+        "pre-fault-boundary",
+    )
+    with pytest.raises(stack.StackError, match="only for an auxiliary hold"):
+        stack.setup_discard_service(
+            "publisher-worker",
+            "fault-1",
+            "backend-boundary",
+        )
+    released = stack.setup_release_service(
+        "publisher-worker",
+        "fault-1",
+        "backend-boundary",
+    )
+
+    assert held["purpose"] == released["purpose"] == "pre-fault-boundary"
+    assert held["after"]["container_id"] == released["before"]["container_id"]
+    assert held["after"]["image_id"] == released["after"]["image_id"]
+    with pytest.raises(stack.StackError, match="already used"):
+        stack.setup_hold_service(
+            "publisher-worker",
+            "fault-1",
+            "backend-boundary",
+            "publisher_backend_unavailable",
+            "pre-fault-boundary",
+        )
+
+
+@pytest.mark.parametrize(
+    ("service", "fault_kind", "purpose", "expected"),
+    (
+        (
+            "publisher-worker",
+            "publisher_backend_unavailable",
+            "auxiliary",
+            "primary fault service",
+        ),
+        (
+            "outbox-worker",
+            "publisher_backend_unavailable",
+            "pre-fault-boundary",
+            "pre-fault purpose",
+        ),
+        (
+            "publisher-worker",
+            "publisher_captcha",
+            "pre-fault-boundary",
+            "pre-fault purpose",
+        ),
+    ),
+)
+def test_controller_rejects_every_other_pre_fault_primary_hold(
+    service: str,
+    fault_kind: str,
+    purpose: str,
+    expected: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_lifecycle(tmp_path, monkeypatch)
+
+    with pytest.raises(stack.StackError, match=expected):
+        stack.setup_hold_service(
+            service,
+            "fault-1",
+            f"wrong-boundary-{service}",
+            fault_kind,
+            purpose,
+        )
+
+
 def test_setup_hold_rejects_duplicate_overlap_and_mismatched_release(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2851,6 +3227,7 @@ def test_setup_hold_rejects_duplicate_overlap_and_mismatched_release(
             "exists": True,
             "running": running[service],
             "container_id": f"{service}-container",
+            "image_id": f"sha256:{service}-image",
         }
 
     def compose(*args: str, **_kwargs: object) -> str:
@@ -2874,24 +3251,50 @@ def test_setup_hold_rejects_duplicate_overlap_and_mismatched_release(
         lambda _run_identity, _expected: volume,
     )
 
-    stack.setup_hold_service("outbox-worker", "fault-1", "hold-1")
+    stack.setup_hold_service(
+        "outbox-worker",
+        "fault-1",
+        "hold-1",
+        "minio_post_canon_unavailable",
+        "auxiliary",
+    )
     independent = stack.setup_hold_service(
         "publisher-worker",
         "fault-1",
         "hold-2",
+        "minio_post_canon_unavailable",
+        "auxiliary",
     )
     assert independent["action"] == "setup_service_held"
 
     with pytest.raises(stack.StackError, match="already used"):
-        stack.setup_hold_service("minio", "fault-1", "hold-1")
+        stack.setup_hold_service(
+            "qdrant",
+            "fault-1",
+            "hold-1",
+            "minio_post_canon_unavailable",
+            "auxiliary",
+        )
     with pytest.raises(stack.StackError, match="active setup hold"):
-        stack.setup_hold_service("outbox-worker", "fault-1", "hold-3")
+        stack.setup_hold_service(
+            "outbox-worker",
+            "fault-1",
+            "hold-3",
+            "minio_post_canon_unavailable",
+            "auxiliary",
+        )
     with pytest.raises(stack.StackError, match="matching setup hold"):
         stack.setup_release_service("outbox-worker", "fault-1", "wrong-id")
     with pytest.raises(stack.StackError, match="service mismatch"):
         stack.setup_release_service("minio", "fault-1", "hold-1")
     with pytest.raises(stack.StackError, match="hold identity"):
-        stack.setup_hold_service("outbox-worker", "fault-1", "../unsafe")
+        stack.setup_hold_service(
+            "outbox-worker",
+            "fault-1",
+            "../unsafe",
+            "minio_post_canon_unavailable",
+            "auxiliary",
+        )
 
 
 def test_setup_hold_cli_surface_and_post_destroy_rejection(
@@ -2929,7 +3332,13 @@ def test_setup_hold_cli_surface_and_post_destroy_rejection(
         },
     )
     with pytest.raises(stack.StackError, match="terminal"):
-        stack.setup_hold_service("outbox-worker", "fault-1", "late-hold")
+        stack.setup_hold_service(
+            "outbox-worker",
+            "fault-1",
+            "late-hold",
+            "publisher_captcha",
+            "auxiliary",
+        )
 
     monkeypatch.setattr(
         sys,
@@ -2985,13 +3394,25 @@ def test_destroy_rejects_unbalanced_setup_hold_before_compose(
         fault_id="fault-1",
         hold_id="hold-1",
         service="outbox-worker",
+        fault_kind="minio_post_canon_unavailable",
+        purpose="auxiliary",
         requested_at="2026-07-22T12:00:00+00:00",
         hold_time="2026-07-22T12:00:01+00:00",
         identity=identity,
         run_identity=run_identity,
         database_volume=volume,
-        before={"exists": True, "running": True},
-        after={"exists": True, "running": False},
+        before={
+            "exists": True,
+            "running": True,
+            "container_id": "outbox-worker-container",
+            "image_id": "sha256:outbox-worker-image",
+        },
+        after={
+            "exists": True,
+            "running": False,
+            "container_id": "outbox-worker-container",
+            "image_id": "sha256:outbox-worker-image",
+        },
     )
     stack.append_event(
         "fault_marked",
@@ -3035,6 +3456,7 @@ def test_setup_discard_balances_only_an_active_hold_without_starting_service(
             "exists": True,
             "running": running[service],
             "container_id": f"{service}-container-generalized",
+            "image_id": f"sha256:{service}-image-generalized",
         }
 
     def compose(*args: str, **_kwargs: object) -> str:
@@ -3061,6 +3483,8 @@ def test_setup_discard_balances_only_an_active_hold_without_starting_service(
         "publisher-browser",
         "fault-1",
         "risk-fixture-generalized",
+        "publisher_captcha",
+        "auxiliary",
     )
     discarded = stack.setup_discard_service(
         "publisher-browser",
@@ -3106,6 +3530,7 @@ def test_setup_discard_rejects_service_drift_and_running_held_service(
             "exists": True,
             "running": running[service],
             "container_id": f"{service}-container",
+            "image_id": f"sha256:{service}-image",
         }
 
     def compose(*args: str, **_kwargs: object) -> str:
@@ -3130,6 +3555,8 @@ def test_setup_discard_rejects_service_drift_and_running_held_service(
         "publisher-browser",
         "fault-1",
         "risk-hold-generic",
+        "publisher_captcha",
+        "auxiliary",
     )
 
     with pytest.raises(stack.StackError, match="service mismatch"):
@@ -3180,13 +3607,25 @@ def test_abort_records_terminal_setup_blocked_from_any_active_state(
             fault_id="fault-1",
             hold_id="hold-1",
             service="outbox-worker",
+            fault_kind="minio_post_canon_unavailable",
+            purpose="auxiliary",
             requested_at="2026-07-22T12:00:00+00:00",
             hold_time="2026-07-22T12:00:01+00:00",
             identity=identity,
             run_identity=run_identity,
             database_volume=volume,
-            before={"exists": True, "running": True},
-            after={"exists": True, "running": False},
+            before={
+                "exists": True,
+                "running": True,
+                "container_id": "outbox-worker-container",
+                "image_id": "sha256:outbox-worker-image",
+            },
+            after={
+                "exists": True,
+                "running": False,
+                "container_id": "outbox-worker-container",
+                "image_id": "sha256:outbox-worker-image",
+            },
         )
     elif state == "after-primary-fault":
         stack.append_event(
@@ -3254,7 +3693,11 @@ def test_abort_records_terminal_setup_blocked_from_any_active_state(
     assert blocked["active_state"]["active_holds"] == (
         [
             {
+                "container_id": "outbox-worker-container",
+                "fault_kind": "minio_post_canon_unavailable",
                 "hold_id": "hold-1",
+                "image_id": "sha256:outbox-worker-image",
+                "purpose": "auxiliary",
                 "service": "outbox-worker",
             }
         ]
@@ -3262,7 +3705,13 @@ def test_abort_records_terminal_setup_blocked_from_any_active_state(
         else []
     )
     with pytest.raises(stack.StackError, match="terminal"):
-        stack.setup_hold_service("outbox-worker", "fault-1", "too-late")
+        stack.setup_hold_service(
+            "outbox-worker",
+            "fault-1",
+            "too-late",
+            "minio_post_canon_unavailable",
+            "auxiliary",
+        )
 
 
 def test_abort_cleanup_and_terminal_append_failures_preserve_primary_reason(
@@ -3349,6 +3798,7 @@ def test_concurrent_setup_hold_and_abort_share_controller_lock(
             "exists": True,
             "running": inspection_count["value"] == 1,
             "container_id": f"{service}-container",
+            "image_id": f"sha256:{service}-image",
         }
 
     monkeypatch.setattr(stack, "inspect_service", inspect_for_hold)

@@ -298,6 +298,127 @@ def endpoint_identity(
     return record
 
 
+def endpoint_with_dependency(
+    common: Any,
+    *,
+    fault_id: str,
+    dependency: str,
+) -> dict[str, Any]:
+    record = endpoint_identity(common, fault_id=fault_id)
+    definitions = {
+        "qdrant": {
+            "port": 23120,
+            "health_path": "/readyz",
+            "service": "qdrant",
+            "container_port": 6333,
+            "image": "7",
+        },
+        "minio": {
+            "port": 23121,
+            "health_path": "/minio/health/ready",
+            "service": "minio",
+            "container_port": 9000,
+            "image": "8",
+        },
+    }
+    definition = definitions[dependency]
+    record[dependency] = {
+        "scheme": "http",
+        "host": "127.0.0.1",
+        "port": definition["port"],
+        "endpoint_path": "",
+        "health_path": definition["health_path"],
+        "health_status": 200,
+        "service": definition["service"],
+        "container_port": definition["container_port"],
+        "container_id": f"{dependency}-container-generalized",
+        "image_id": "sha256:" + definition["image"] * 64,
+    }
+    record["identity_sha256"] = common.stable_hash(
+        {
+            key: value
+            for key, value in record.items()
+            if key != "identity_sha256"
+        }
+    )
+    return record
+
+
+@pytest.mark.parametrize(
+    ("dependency", "url"),
+    (
+        ("qdrant", "http://127.0.0.1:23120"),
+        ("minio", "http://127.0.0.1:23121"),
+    ),
+)
+def test_shared_endpoint_binding_supports_exact_typed_optional_dependency(
+    common: Any,
+    dependency: str,
+    url: str,
+) -> None:
+    fault_id = f"optional-{dependency}-generalized"
+    expected = endpoint_with_dependency(
+        common,
+        fault_id=fault_id,
+        dependency=dependency,
+    )
+
+    class Controller:
+        def bind_endpoints(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs[f"{dependency}_url"] == url
+            return expected
+
+    kwargs = {f"{dependency}_url": url}
+    bound = common.bind_recovery_endpoints(
+        controller=Controller(),
+        fault_id=fault_id,
+        source_sha="1" * 40,
+        api_url="http://127.0.0.1:23117",
+        mcp_url="http://127.0.0.1:23118/mcp",
+        database_url="postgresql://u:p@127.0.0.1:23119/forwin",
+        sentinel_reader=lambda: dict(expected["sentinel"]),
+        **kwargs,
+    )
+
+    assert bound == expected
+    assert sensitive_paths(bound) == []
+
+
+def test_shared_endpoint_binding_rejects_wrong_optional_service_identity(
+    common: Any,
+) -> None:
+    fault_id = "wrong-qdrant-service-generalized"
+    expected = endpoint_with_dependency(
+        common,
+        fault_id=fault_id,
+        dependency="qdrant",
+    )
+    expected["qdrant"]["service"] = "minio"
+    expected["identity_sha256"] = common.stable_hash(
+        {
+            key: value
+            for key, value in expected.items()
+            if key != "identity_sha256"
+        }
+    )
+
+    class Controller:
+        def bind_endpoints(self, **_kwargs: Any) -> dict[str, Any]:
+            return expected
+
+    with pytest.raises(common.SetupBlocked, match="qdrant endpoint"):
+        common.bind_recovery_endpoints(
+            controller=Controller(),
+            fault_id=fault_id,
+            source_sha="1" * 40,
+            api_url="http://127.0.0.1:23117",
+            mcp_url="http://127.0.0.1:23118/mcp",
+            database_url="postgresql://u:p@127.0.0.1:23119/forwin",
+            qdrant_url="http://127.0.0.1:23120",
+            sentinel_reader=lambda: dict(expected["sentinel"]),
+        )
+
+
 def test_shared_endpoint_binding_requires_exact_loopback_run_and_db_sentinel(
     common: Any,
 ) -> None:
@@ -331,6 +452,57 @@ def test_shared_endpoint_binding_requires_exact_loopback_run_and_db_sentinel(
     assert [item[0] for item in calls] == ["controller", "sentinel"]
     assert sensitive_paths(bound) == []
     assert "isolated-password" not in json.dumps(bound)
+
+
+@pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
+def test_shared_controller_owns_fresh_up_interrupt_through_return_boundary(
+    common: Any,
+    interruption: type[BaseException],
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def execute(args: list[str], **_kwargs: Any) -> Any:
+        calls.append(list(args))
+        if "fresh-up" in args:
+            raise interruption()
+        return SimpleNamespace(returncode=0, stdout="{}\n", stderr="")
+
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text("{}", encoding="utf-8")
+    controller = common.RecoveryController(
+        candidate_manifest=candidate,
+        evidence_dir=tmp_path / "evidence",
+        execute=execute,
+        python_executable="/python",
+    )
+
+    with pytest.raises(interruption):
+        controller.fresh_up("fresh-return-boundary")
+
+    assert [call[2] for call in calls] == [
+        "fresh-up",
+        "interrupt-cleanup",
+    ]
+
+
+@pytest.mark.parametrize(
+    "observed",
+    ("", "http://127.0.0.1:23999"),
+)
+def test_shared_client_endpoint_must_match_bound_configuration(
+    common: Any,
+    observed: str,
+) -> None:
+    client = SimpleNamespace(api_url=observed)
+
+    with pytest.raises(common.SetupBlocked, match="client endpoint"):
+        common.require_client_endpoint(
+            client,
+            attribute="api_url",
+            expected_url="http://127.0.0.1:23117",
+            label="API",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1001,6 +1173,7 @@ class FakeController:
         self.log = log
         self.inventory_count = 0
         self.endpoint_record = endpoint_record
+        self.holds: dict[tuple[str, str], tuple[str, str]] = {}
 
     def fresh_up(self, fault_id: str) -> None:
         self.log.append(("fresh_up", fault_id))
@@ -1009,26 +1182,49 @@ class FakeController:
         self.log.append(("bind_endpoints", kwargs["fault_id"]))
         return self.endpoint_record
 
-    def setup_hold(self, service: str, fault_id: str, hold_id: str) -> None:
-        self.log.append(("setup_hold", service, fault_id, hold_id))
+    def setup_hold(
+        self,
+        service: str,
+        fault_id: str,
+        hold_id: str,
+        *,
+        fault_kind: str,
+        purpose: str = "auxiliary",
+    ) -> None:
+        self.holds[(service, hold_id)] = (fault_kind, purpose)
+        self.log.append(
+            (
+                "setup_hold",
+                service,
+                fault_id,
+                hold_id,
+                fault_kind,
+                purpose,
+            )
+        )
 
     def setup_release(self, service: str, fault_id: str, hold_id: str) -> None:
+        self.holds.pop((service, hold_id))
         self.log.append(("setup_release", service, fault_id, hold_id))
 
     def setup_discard(
         self, service: str, fault_id: str, hold_id: str
     ) -> dict[str, Any]:
         self.log.append(("setup_discard", service, fault_id, hold_id))
+        fault_kind, purpose = self.holds.pop((service, hold_id))
         return {
             "action": "setup_service_discarded",
             "fault_id": fault_id,
             "hold_id": hold_id,
             "service": service,
+            "fault_kind": fault_kind,
+            "purpose": purpose,
             "after": {
                 "service": service,
                 "exists": True,
                 "running": False,
                 "container_id": f"{service}-container-generalized",
+                "image_id": "sha256:" + "f" * 64,
             },
         }
 
@@ -1186,6 +1382,8 @@ class FakeBarrier:
 
 
 class FakePublisherAPI:
+    api_url = "http://127.0.0.1:23117"
+
     def __init__(self, log: list[Any]) -> None:
         self.log = log
 
@@ -1463,7 +1661,7 @@ def test_typed_risk_live_sequences_mark_pause_resume_and_recovery_exactly_once(
 @pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
 @pytest.mark.parametrize(
     "point",
-    ("before_fault", "during_fault", "during_cleanup"),
+    ("fresh_up", "before_fault", "during_fault", "during_cleanup"),
 )
 def test_interruptions_cleanup_and_reraise_without_emitting_report(
     runner_module: Any,
@@ -1480,7 +1678,13 @@ def test_interruptions_cleanup_and_reraise_without_emitting_report(
         log,
     )
 
-    if point == "before_fault":
+    if point == "fresh_up":
+        monkeypatch.setattr(
+            live.controller,
+            "fresh_up",
+            lambda _fault_id: (_ for _ in ()).throw(interruption()),
+        )
+    elif point == "before_fault":
         monkeypatch.setattr(
             live.sql,
             "insert_fixture",
@@ -1675,7 +1879,7 @@ def test_backend_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         stage="before",
         fixture=fixture,
     )
-    orphan_path = f"{runner.PUBLISHER_COVER_ROOT}/.staging/orphan.part"
+    orphan_path = ".staging/orphan.part"
     during = collector.backend_snapshot(
         source_sha="2" * 40,
         fault_id=fixture.fault_id,
@@ -1690,7 +1894,8 @@ def test_backend_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         ],
     )
     asset_id = "cover-asset-generalized"
-    final_path = f"{runner.PUBLISHER_COVER_ROOT}/manual/qidian/{asset_id}.png"
+    final_relative_path = f"manual/qidian/{asset_id}.png"
+    final_path = f"{runner.PUBLISHER_COVER_ROOT}/{final_relative_path}"
     payload = json.loads(job["result_payload_json"])
     payload.update(
         cover_asset_ids=[asset_id],
@@ -1748,7 +1953,7 @@ def test_backend_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         fixture=fixture,
         cover_files=[
             {
-                "path": final_path,
+                "path": final_relative_path,
                 "size": 67,
                 "content_sha256": hashlib.sha256(b"final").hexdigest(),
             }
@@ -1827,6 +2032,94 @@ def test_cover_inventory_requires_the_exact_existing_controller_root(
                 "files": [],
             }
         )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        "{not-json",
+        "[]",
+        '"scalar"',
+        "null",
+    ),
+)
+def test_publisher_result_payload_requires_a_json_object(
+    runner: Any,
+    raw: str,
+) -> None:
+    with pytest.raises(runner.SetupBlocked, match="JSON object"):
+        runner._json_object(raw)
+
+
+def test_cover_inventory_stays_relative_and_rejects_duplicate_normalized_paths(
+    runner: Any,
+) -> None:
+    digest = hashlib.sha256(b"cover").hexdigest()
+    payload = {
+        "root": runner.PUBLISHER_COVER_ROOT,
+        "root_exists": True,
+        "files": [
+            {"path": "manual/qidian/cover.png", "size": 5, "content_sha256": digest},
+        ],
+    }
+
+    assert runner.normalize_cover_inventory(payload) == payload["files"]
+
+    for unsafe_path in (
+        "/app/data/publisher_covers/manual/qidian/cover.png",
+        "manual//qidian/cover.png",
+        "manual/./qidian/cover.png",
+        "manual/qidian/../cover.png",
+        r"manual\qidian\cover.png",
+    ):
+        changed = dict(payload)
+        changed["files"] = [
+            {"path": unsafe_path, "size": 5, "content_sha256": digest}
+        ]
+        with pytest.raises(runner.SetupBlocked, match="inventory"):
+            runner.normalize_cover_inventory(changed)
+
+    duplicated = dict(payload)
+    duplicated["files"] = [dict(payload["files"][0]), dict(payload["files"][0])]
+    with pytest.raises(runner.SetupBlocked, match="duplicate"):
+        runner.normalize_cover_inventory(duplicated)
+
+
+def test_risk_and_browser_use_one_full_canonical_job_projection(
+    runner: Any,
+) -> None:
+    database = MemoryPublisherDatabase()
+    browser_fixture = runner.publisher_fixture(
+        "publisher_browser_unavailable",
+        "canonical-browser-generalized",
+    )
+    risk_fixture = runner.publisher_fixture(
+        "publisher_captcha",
+        "canonical-risk-generalized",
+    )
+    collector = runner.SQLCollector(database)
+    collector.insert_fixture(browser_fixture)
+    collector.insert_fixture(risk_fixture)
+
+    browser_job = collector._canonical_job(browser_fixture)
+    risk_job = collector.risk_terminal_state(risk_fixture)["job"]
+
+    assert set(risk_job) == set(browser_job)
+    assert {
+        "available_at",
+        "owner_token",
+        "current_attempt_id",
+        "abort_requested",
+        "deleted_at",
+        "upload_url",
+        "current_url",
+        "result_message",
+        "error_message",
+        "result_payload",
+        "created_at",
+        "updated_at",
+        "database_now",
+    } <= set(risk_job)
 
 
 @pytest.mark.parametrize(
@@ -1943,9 +2236,10 @@ def test_risk_sql_snapshots_satisfy_strict_evaluator_from_raw_rows(
         "after": {
             "service": "publisher-browser",
             "exists": True,
-            "running": False,
-            "container_id": f"browser-{risk_reason}-generalized",
-        },
+                "running": False,
+                "container_id": f"browser-{risk_reason}-generalized",
+                "image_id": "sha256:" + "d" * 64,
+            },
     }
     after = collector.risk_snapshot(
         source_sha="4" * 40,

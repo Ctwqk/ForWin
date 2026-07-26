@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import functools
 import hashlib
 import ipaddress
 import json
@@ -74,6 +76,17 @@ SERVICES = (
     "publisher-worker",
     "publisher-browser",
 )
+CONTAINER_NAME_SUFFIXES = {
+    "forwin": "api",
+    "generation-worker": "generation-worker",
+    "outbox-worker": "outbox-worker",
+    "postgres": "postgres",
+    "qdrant": "qdrant",
+    "forwin-mcp": "mcp",
+    "publisher-worker": "publisher-worker",
+    "publisher-browser": "publisher-browser",
+    "minio": "minio",
+}
 APPLICATION_SERVICES = (
     "forwin",
     "generation-worker",
@@ -97,6 +110,8 @@ FAULT_SERVICES = {
 }
 
 CRASH_SERVICES = {"generation-worker", "publisher-worker"}
+TERMINAL_ACTIONS = frozenset({"destroyed", "setup_blocked"})
+CLEANUP_TIMEOUT_SECONDS = 60
 RISK_FAULT_KINDS = frozenset(
     {
         "publisher_captcha",
@@ -289,6 +304,21 @@ def stable_hash(value: Any) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+def normalized_utc_time(value: object, *, field: str) -> datetime:
+    raw = str(value or "")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise StackError(f"{field} is not a valid timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise StackError(f"{field} must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def normalized_utc_timestamp(value: object, *, field: str) -> str:
+    return normalized_utc_time(value, field=field).isoformat()
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -476,6 +506,39 @@ def require_new_evidence_run() -> None:
         )
 
 
+def controller_lock_path(directory: Path | None = None) -> Path:
+    canonical_directory = (directory or evidence_directory()).resolve()
+    lock_name = (
+        ".forwin-recovery-controller-"
+        f"{stable_hash(str(canonical_directory))[:24]}.lock"
+    )
+    return canonical_directory.parent / lock_name
+
+
+def mutating_controller_command(function: Any) -> Any:
+    @functools.wraps(function)
+    def locked(*args: Any, **kwargs: Any) -> Any:
+        directory = evidence_directory()
+        path = controller_lock_path(directory)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as handle:
+            try:
+                fcntl.flock(
+                    handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+            except BlockingIOError as exc:
+                raise StackError(
+                    "controller transaction already active for evidence directory"
+                ) from exc
+            try:
+                return function(*args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    return locked
+
+
 def command(
     *args: str,
     check: bool = True,
@@ -635,31 +698,40 @@ def compose(
 def compose_process(
     *args: str,
     run_identity: dict[str, Any] | None = None,
+    timeout_seconds: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = compose_environment(run_identity=run_identity)
     project_name, _database_volume_name = compose_resource_identity(run_identity)
-    return subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            environment["FORWIN_RECOVERY_ENV_FILE"],
-            "--project-name",
-            project_name,
-            "--file",
-            str(COMPOSE_FILE),
-            "--file",
-            str(COMPOSE_OVERRIDE),
-            "--profile",
-            "publisher",
-            *args,
-        ],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    command_args = [
+        "docker",
+        "compose",
+        "--env-file",
+        environment["FORWIN_RECOVERY_ENV_FILE"],
+        "--project-name",
+        project_name,
+        "--file",
+        str(COMPOSE_FILE),
+        "--file",
+        str(COMPOSE_OVERRIDE),
+        "--profile",
+        "publisher",
+        *args,
+    ]
+    try:
+        return subprocess.run(
+            command_args,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StackError(
+            "Compose command timed out after "
+            f"{timeout_seconds} seconds ({' '.join(args)})"
+        ) from exc
 
 
 def validate_isolated_compose_config(
@@ -725,6 +797,26 @@ def validate_isolated_compose_config(
         "MINIO_ROOT_USER": ISOLATED_MINIO_ACCESS_KEY,
     }:
         raise StackError("effective MinIO credentials are not isolated")
+    for service, suffix in CONTAINER_NAME_SUFFIXES.items():
+        expected_container_name = f"{project_name}-{suffix}"
+        if (
+            (services.get(service) or {}).get("container_name")
+            != expected_container_name
+        ):
+            raise StackError(
+                f"{service} effective container name is not run-isolated"
+            )
+    postgres_mounts = (services.get("postgres") or {}).get("volumes") or []
+    expected_postgres_mount = {
+        "type": "volume",
+        "source": "forwin-postgres",
+        "target": "/var/lib/postgresql/data",
+    }
+    if (
+        not isinstance(postgres_mounts, list)
+        or expected_postgres_mount not in postgres_mounts
+    ):
+        raise StackError("effective PostgreSQL volume mount is not isolated")
     volumes = payload.get("volumes") or {}
     postgres_volume = volumes.get("forwin-postgres") or {}
     if postgres_volume.get("name") != database_volume_name:
@@ -1387,8 +1479,11 @@ def append_event(action: str, **payload: Any) -> dict[str, Any]:
     path = events_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_verified_events()
-    if existing and existing[-1].get("action") == "destroyed":
-        raise StackError("recovery event log is terminal after destroyed")
+    if existing and existing[-1].get("action") in TERMINAL_ACTIONS:
+        raise StackError(
+            "recovery event log is terminal after "
+            f"{existing[-1].get('action')}"
+        )
     event = {
         "schema_version": 2,
         "recorded_at": now(),
@@ -1430,7 +1525,11 @@ def database_volume_observation(
         raise StackError(
             f"docker returned invalid JSON for volume {volume_name}"
         ) from exc
-    if len(payload) != 1:
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 1
+        or not isinstance(payload[0], dict)
+    ):
         raise StackError(f"expected one Docker volume for {volume_name}")
     item = payload[0]
     labels = item.get("Labels") or {}
@@ -1443,15 +1542,10 @@ def database_volume_observation(
         raise StackError(
             f"refusing database volume with mismatched identity: {volume_name}"
         )
-    created_at = str(item.get("CreatedAt") or "")
-    if not created_at:
-        raise StackError(f"database volume creation time is missing: {volume_name}")
-    try:
-        datetime.fromisoformat(created_at)
-    except ValueError as exc:
-        raise StackError(
-            f"database volume creation time is invalid: {volume_name}"
-        ) from exc
+    created_at = normalized_utc_timestamp(
+        item.get("CreatedAt"),
+        field=f"database volume creation time for {volume_name}",
+    )
     return {
         "name": volume_name,
         "exists": True,
@@ -1472,6 +1566,27 @@ def confirmed_database_volume(
     return actual
 
 
+def confirmed_fresh_database_volume(
+    run_identity: dict[str, Any],
+    *,
+    requested_at: str,
+) -> dict[str, Any]:
+    observation = database_volume_observation(run_identity)
+    if observation.get("exists") is not True:
+        raise StackError("fresh-up did not create its database volume")
+    created_at = normalized_utc_time(
+        observation.get("created_at"),
+        field="database volume creation time",
+    )
+    request_time = normalized_utc_time(
+        requested_at,
+        field="fresh-up requested_at",
+    )
+    if created_at < request_time:
+        raise StackError("database volume creation time predates fresh-up request")
+    return observation
+
+
 def require_active_recovery_run(
     fault_id: str,
 ) -> dict[str, Any]:
@@ -1479,8 +1594,11 @@ def require_active_recovery_run(
     events = load_verified_events()
     if not events:
         raise StackError("recovery run has no completed fresh-up")
-    if events[-1].get("action") == "destroyed":
-        raise StackError("recovery event log is terminal after destroyed")
+    if events[-1].get("action") in TERMINAL_ACTIONS:
+        raise StackError(
+            "recovery event log is terminal after "
+            f"{events[-1].get('action')}"
+        )
     if any(event.get("schema_version") != 2 for event in events):
         raise StackError("recovery event schema version mismatch")
     event_fault_ids = {str(event.get("fault_id") or "") for event in events}
@@ -1515,14 +1633,19 @@ def require_active_recovery_run(
         if isinstance(database_volume, dict)
         else None
     )
-    try:
-        if not isinstance(created_at, str) or not created_at:
-            raise ValueError
-        datetime.fromisoformat(created_at)
-    except ValueError as exc:
-        raise StackError(
-            "fresh-up database volume creation time is invalid"
-        ) from exc
+    created_time = normalized_utc_time(
+        created_at,
+        field="fresh-up database volume creation time",
+    )
+    requested_at = starts[0].get("requested_at")
+    request_time = normalized_utc_time(
+        requested_at,
+        field="fresh-up requested_at",
+    )
+    if completions[0].get("requested_at") != requested_at:
+        raise StackError("fresh-up requested_at changed within event log")
+    if created_time < request_time:
+        raise StackError("database volume creation time predates fresh-up request")
     if (
         not isinstance(database_volume, dict)
         or set(database_volume)
@@ -1569,10 +1692,114 @@ def destroyed_service_inventory(
     return inventory
 
 
+def cleanup_recovery_run(
+    run_identity: dict[str, Any],
+) -> dict[str, Any]:
+    cleanup_requested_at = now()
+    cleanup_errors: list[str] = []
+    try:
+        completed = compose_process(
+            "down",
+            "--volumes",
+            "--remove-orphans",
+            run_identity=run_identity,
+            timeout_seconds=CLEANUP_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        cleanup_errors.append(f"teardown command: {exc}")
+    else:
+        if completed.returncode:
+            cleanup_errors.append(
+                "teardown command: "
+                + (_completed_output(completed) or f"exit {completed.returncode}")
+            )
+
+    try:
+        services = destroyed_service_inventory(run_identity)
+    except Exception as exc:
+        services = {}
+        cleanup_errors.append(f"service absence: {exc}")
+
+    try:
+        database_volume = database_volume_observation(run_identity)
+    except Exception as exc:
+        database_volume = {
+            "name": str(run_identity.get("database_volume_name") or ""),
+            "exists": None,
+        }
+        cleanup_errors.append(f"database volume absence: {exc}")
+
+    expected_volume = {
+        "name": str(run_identity.get("database_volume_name") or ""),
+        "exists": False,
+    }
+    services_absent = (
+        set(services) == set(SERVICES)
+        and all(
+            state == {"exists": False, "running": False}
+            for state in services.values()
+        )
+    )
+    volume_absent = database_volume == expected_volume
+    if not services_absent and not any(
+        error.startswith("service absence:") for error in cleanup_errors
+    ):
+        cleanup_errors.append("service absence: inventory is not fully absent")
+    if not volume_absent and not any(
+        error.startswith("database volume absence:")
+        for error in cleanup_errors
+    ):
+        cleanup_errors.append("database volume absence: volume still exists")
+    cleanup_confirmed_at = (
+        now() if services_absent and volume_absent else None
+    )
+    return {
+        "cleanup_requested_at": cleanup_requested_at,
+        "cleanup_confirmed_at": cleanup_confirmed_at,
+        "cleanup_error": (
+            "; ".join(cleanup_errors) if cleanup_errors else None
+        ),
+        "database_volume": database_volume,
+        "after": {
+            "observed_at": cleanup_confirmed_at or now(),
+            "services": services,
+        },
+    }
+
+
+def append_setup_blocked(
+    *,
+    fault_id: str,
+    requested_at: str,
+    identity: dict[str, Any],
+    run_identity: dict[str, Any],
+    failure_stage: str,
+    failure: BaseException,
+) -> dict[str, Any]:
+    cleanup = cleanup_recovery_run(run_identity)
+    return append_event(
+        "setup_blocked",
+        fault_id=fault_id,
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        failure_stage=failure_stage,
+        failure_reason=str(failure) or type(failure).__name__,
+        cleanup_requested_at=cleanup["cleanup_requested_at"],
+        cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
+        cleanup_error=cleanup["cleanup_error"],
+        database_volume=cleanup["database_volume"],
+        after=cleanup["after"],
+    )
+
+
 def reject_terminal_evidence_directory() -> None:
     events = load_verified_events()
-    if events and events[-1].get("action") == "destroyed":
-        raise StackError("recovery event log is terminal after destroyed")
+    if events and events[-1].get("action") in TERMINAL_ACTIONS:
+        raise StackError(
+            "recovery event log is terminal after "
+            f"{events[-1].get('action')}"
+        )
 
 
 def wait_service(
@@ -1619,6 +1846,7 @@ def validate_config() -> None:
     )
 
 
+@mutating_controller_command
 def fresh_up(fault_id: str) -> None:
     reject_terminal_evidence_directory()
     validated_fault = validated_fault_id(fault_id)
@@ -1647,62 +1875,90 @@ def fresh_up(fault_id: str) -> None:
         database_volume=database_volume,
         before=before,
     )
-    compose(
-        "down",
-        "--volumes",
-        "--remove-orphans",
-        run_identity=run_identity,
-    )
-    compose(
-        "up",
-        "--detach",
-        "postgres",
-        "qdrant",
-        "minio",
-        run_identity=run_identity,
-    )
-    wait_service("postgres", run_identity=run_identity)
-    wait_service("qdrant", run_identity=run_identity)
-    wait_service("minio", run_identity=run_identity)
-    compose(
-        "run",
-        "--rm",
-        "--no-deps",
-        "forwin",
-        "alembic",
-        "upgrade",
-        "head",
-        run_identity=run_identity,
-    )
-    compose(
-        "up",
-        "--detach",
-        "forwin",
-        "generation-worker",
-        "outbox-worker",
-        "forwin-mcp",
-        "publisher-worker",
-        "publisher-browser",
-        run_identity=run_identity,
-    )
-    for service in SERVICES:
-        wait_service(service, run_identity=run_identity)
-    after = stack_snapshot(probe=True, run_identity=run_identity)
-    database_volume = database_volume_observation(run_identity)
-    if database_volume.get("exists") is not True:
-        raise StackError("fresh-up did not create its database volume")
-    append_event(
-        "fresh_up_completed",
-        fault_id=validated_fault,
-        requested_at=requested_at,
-        identity=identity,
-        run_identity=run_identity,
-        database_volume=database_volume,
-        after=after,
-    )
+    failure_stage = "initial_down"
+    try:
+        compose(
+            "down",
+            "--volumes",
+            "--remove-orphans",
+            run_identity=run_identity,
+        )
+        failure_stage = "dependency_up"
+        compose(
+            "up",
+            "--detach",
+            "postgres",
+            "qdrant",
+            "minio",
+            run_identity=run_identity,
+        )
+        failure_stage = "dependency_readiness"
+        wait_service("postgres", run_identity=run_identity)
+        wait_service("qdrant", run_identity=run_identity)
+        wait_service("minio", run_identity=run_identity)
+        failure_stage = "migration"
+        compose(
+            "run",
+            "--rm",
+            "--no-deps",
+            "forwin",
+            "alembic",
+            "upgrade",
+            "head",
+            run_identity=run_identity,
+        )
+        failure_stage = "application_up"
+        compose(
+            "up",
+            "--detach",
+            "forwin",
+            "generation-worker",
+            "outbox-worker",
+            "forwin-mcp",
+            "publisher-worker",
+            "publisher-browser",
+            run_identity=run_identity,
+        )
+        failure_stage = "application_readiness"
+        for service in SERVICES:
+            wait_service(service, run_identity=run_identity)
+        failure_stage = "functional_probe"
+        after = stack_snapshot(probe=True, run_identity=run_identity)
+        failure_stage = "database_volume_postcondition"
+        database_volume = confirmed_fresh_database_volume(
+            run_identity,
+            requested_at=requested_at,
+        )
+        failure_stage = "completion_event"
+        append_event(
+            "fresh_up_completed",
+            fault_id=validated_fault,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            database_volume=database_volume,
+            after=after,
+        )
+    except BaseException as failure:
+        blocked = append_setup_blocked(
+            fault_id=validated_fault,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            failure_stage=failure_stage,
+            failure=failure,
+        )
+        detail = (
+            f"fresh-up setup_blocked at {failure_stage}: "
+            f"{blocked['failure_reason']}"
+        )
+        if blocked.get("cleanup_error"):
+            detail += f"; cleanup error: {blocked['cleanup_error']}"
+        raise StackError(detail) from failure
     print(json.dumps(after, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def v1_up() -> None:
     reject_terminal_evidence_directory()
     identity = assert_frozen(harness_mode="v1")
@@ -1750,6 +2006,7 @@ def v1_up() -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def destroy() -> None:
     reject_terminal_evidence_directory()
     existing = load_verified_events()
@@ -1859,6 +2116,7 @@ def destroy() -> None:
     print(json.dumps(after, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def stop_fault_service(service: str, fault_id: str) -> None:
     if service not in FAULT_SERVICES:
         raise StackError(f"service is not an allowed fault boundary: {service}")
@@ -1908,6 +2166,7 @@ def stop_fault_service(service: str, fault_id: str) -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def start_fault_service(service: str, fault_id: str) -> None:
     if service not in FAULT_SERVICES:
         raise StackError(f"service is not an allowed recovery boundary: {service}")
@@ -1971,6 +2230,7 @@ def start_fault_service(service: str, fault_id: str) -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def kill_fault_service(service: str, fault_id: str) -> None:
     if service not in CRASH_SERVICES:
         raise StackError(f"service is not an allowed crash boundary: {service}")
@@ -2017,6 +2277,7 @@ def kill_fault_service(service: str, fault_id: str) -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def snapshot(label: str) -> None:
     existing = load_verified_events()
     fault_id = str((existing[0] if existing else {}).get("fault_id") or "")
@@ -2043,6 +2304,7 @@ def snapshot(label: str) -> None:
     print(json.dumps(event, ensure_ascii=False, indent=2))
 
 
+@mutating_controller_command
 def mark_fault(fault_kind: str, phase: str, fault_id: str) -> dict[str, Any]:
     if fault_kind not in RISK_FAULT_KINDS:
         raise StackError(

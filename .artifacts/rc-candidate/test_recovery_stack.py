@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import multiprocessing
+import os
 from pathlib import Path
+import subprocess
+import time
 
 import pytest
 import yaml
@@ -14,7 +18,69 @@ assert SPEC is not None and SPEC.loader is not None
 stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
+FINALIZER_PATH = Path(__file__).with_name("finalize_recovery.py")
+FINALIZER_SPEC = importlib.util.spec_from_file_location(
+    "finalize_recovery_contract",
+    FINALIZER_PATH,
+)
+assert FINALIZER_SPEC is not None and FINALIZER_SPEC.loader is not None
+finalizer = importlib.util.module_from_spec(FINALIZER_SPEC)
+FINALIZER_SPEC.loader.exec_module(finalizer)
+
 SOURCE_SHA = "f" * 40
+
+
+def run_mark_process(
+    evidence_dir: str,
+    phase: str,
+    results: multiprocessing.Queue,
+) -> None:
+    os.environ[stack.EVIDENCE_DIR_ENV] = evidence_dir
+    try:
+        event = stack.mark_fault("publisher_captcha", phase, "fault-1")
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", event["action"]))
+
+
+def run_fresh_up_process(
+    evidence_dir: str,
+    results: multiprocessing.Queue,
+) -> None:
+    os.environ[stack.EVIDENCE_DIR_ENV] = evidence_dir
+    try:
+        stack.fresh_up("fault-1")
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", "fresh_up_completed"))
+
+
+def run_destroy_process(
+    evidence_dir: str,
+    results: multiprocessing.Queue,
+) -> None:
+    os.environ[stack.EVIDENCE_DIR_ENV] = evidence_dir
+    try:
+        stack.destroy()
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", "destroyed"))
+
+
+def joined_process_result(
+    process: multiprocessing.Process,
+    results: multiprocessing.Queue,
+) -> tuple[str, str]:
+    process.join(timeout=5)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2)
+        pytest.fail(f"child process did not finish: {process.name}")
+    assert process.exitcode == 0
+    return results.get(timeout=2)
 
 
 def recovery_lifecycle(
@@ -56,6 +122,7 @@ def recovery_lifecycle(
     stack.append_event(
         "fresh_up_started",
         fault_id=fault_id,
+        requested_at="2026-07-22T11:58:00+00:00",
         identity=identity,
         run_identity=run_identity,
         database_volume=volume_absent,
@@ -63,6 +130,7 @@ def recovery_lifecycle(
     stack.append_event(
         "fresh_up_completed",
         fault_id=fault_id,
+        requested_at="2026-07-22T11:58:00+00:00",
         identity=identity,
         run_identity=run_identity,
         database_volume=volume_present,
@@ -70,7 +138,10 @@ def recovery_lifecycle(
     return run_identity, volume_present, identity
 
 
-def isolated_compose_config() -> tuple[dict, dict]:
+def isolated_compose_config(
+    *,
+    run_identity: dict | None = None,
+) -> tuple[dict, dict]:
     runtime_tag = "forwin-runtime:v1"
     browser_tag = "forwin-browser:v1"
     dependency_tags = {
@@ -109,6 +180,13 @@ def isolated_compose_config() -> tuple[dict, dict]:
     }
     services["postgres"] = {
         "image": dependency_tags["postgres"],
+        "volumes": [
+            {
+                "type": "volume",
+                "source": "forwin-postgres",
+                "target": "/var/lib/postgresql/data",
+            }
+        ],
         "environment": {
             "POSTGRES_USER": "forwin",
             "POSTGRES_PASSWORD": "forwin",
@@ -131,12 +209,35 @@ def isolated_compose_config() -> tuple[dict, dict]:
             for service, tag in dependency_tags.items()
         },
     }
+    project_name = (
+        stack.PROJECT
+        if run_identity is None
+        else stack.recovery_project_name(run_identity)
+    )
+    database_volume_name = (
+        f"{stack.PROJECT}_forwin-postgres"
+        if run_identity is None
+        else run_identity["database_volume_name"]
+    )
+    container_suffixes = {
+        "forwin": "api",
+        "generation-worker": "generation-worker",
+        "outbox-worker": "outbox-worker",
+        "postgres": "postgres",
+        "qdrant": "qdrant",
+        "forwin-mcp": "mcp",
+        "publisher-worker": "publisher-worker",
+        "publisher-browser": "publisher-browser",
+        "minio": "minio",
+    }
+    for service, suffix in container_suffixes.items():
+        services[service]["container_name"] = f"{project_name}-{suffix}"
     return {
-        "name": stack.PROJECT,
+        "name": project_name,
         "services": services,
         "volumes": {
             "forwin-postgres": {
-                "name": f"{stack.PROJECT}_forwin-postgres",
+                "name": database_volume_name,
             }
         },
     }, identity
@@ -159,6 +260,86 @@ def test_effective_compose_validator_rejects_extra_service() -> None:
 
     with pytest.raises(stack.StackError, match="service set"):
         stack.validate_isolated_compose_config(payload, identity=identity)
+
+
+def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "dynamic-config").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "dynamic-config",
+        run_id="2" * 32,
+        directory=evidence_dir,
+    )
+    payload, identity = isolated_compose_config(run_identity=run_identity)
+    render_calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def fake_compose_process(
+        *args: str,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        render_calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            json.dumps(payload),
+            "",
+        )
+
+    monkeypatch.setattr(stack, "compose_process", fake_compose_process)
+    stack.assert_isolated_compose(identity, run_identity=run_identity)
+
+    project_name = stack.recovery_project_name(run_identity)
+    assert render_calls == [
+        (
+            ("config", "--format", "json"),
+            {"run_identity": run_identity},
+        )
+    ]
+    assert payload["name"] == project_name
+    assert payload["volumes"]["forwin-postgres"]["name"] == (
+        run_identity["database_volume_name"]
+    )
+    assert {
+        service: item["container_name"]
+        for service, item in payload["services"].items()
+    } == {
+        "forwin": f"{project_name}-api",
+        "generation-worker": f"{project_name}-generation-worker",
+        "outbox-worker": f"{project_name}-outbox-worker",
+        "postgres": f"{project_name}-postgres",
+        "qdrant": f"{project_name}-qdrant",
+        "forwin-mcp": f"{project_name}-mcp",
+        "publisher-worker": f"{project_name}-publisher-worker",
+        "publisher-browser": f"{project_name}-publisher-browser",
+        "minio": f"{project_name}-minio",
+    }
+    assert payload["services"]["postgres"]["volumes"] == [
+        {
+            "type": "volume",
+            "source": "forwin-postgres",
+            "target": "/var/lib/postgresql/data",
+        }
+    ]
+
+    payload["services"]["qdrant"]["container_name"] = "forwin-v5-recovery-qdrant"
+    with pytest.raises(stack.StackError, match="qdrant.*container"):
+        stack.validate_isolated_compose_config(
+            payload,
+            identity=identity,
+            run_identity=run_identity,
+        )
+
+    payload, identity = isolated_compose_config(run_identity=run_identity)
+    payload["services"]["postgres"]["volumes"][0]["source"] = "shared-postgres"
+    with pytest.raises(stack.StackError, match="PostgreSQL volume mount"):
+        stack.validate_isolated_compose_config(
+            payload,
+            identity=identity,
+            run_identity=run_identity,
+        )
 
 
 def test_recovery_override_pins_stateful_endpoints_to_isolated_services() -> None:
@@ -477,6 +658,252 @@ def test_recovery_harness_binds_v1_and_recovery_finalizers_unambiguously() -> No
     assert "finalizer" not in harness
 
 
+def test_database_volume_observation_normalizes_real_docker_inspect_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "volume-observation").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "volume-observation",
+        run_id="3" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    project_name = stack.recovery_project_name(run_identity)
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command == (
+            "docker",
+            "volume",
+            "ls",
+            "--format",
+            "{{.Name}}",
+        ):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            return json.dumps(
+                [
+                    {
+                        "Name": volume_name,
+                        "CreatedAt": "2026-07-22T20:58:30+09:00",
+                        "Labels": {
+                            "com.docker.compose.project": project_name,
+                            "com.docker.compose.volume": "forwin-postgres",
+                        },
+                    }
+                ]
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    observation = stack.database_volume_observation(run_identity)
+
+    assert observation == {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "2026-07-22T11:58:30+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T11:58:30+00:00",
+                "name": volume_name,
+            }
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "inspect_output",
+    [
+        "not-json",
+        "{}",
+        "[]",
+        "[{}]",
+        '[{"Name":"wrong-volume","CreatedAt":"2026-07-22T12:00:00Z"}]',
+        '[{"Name":"placeholder","Labels":{}}]',
+    ],
+)
+def test_database_volume_observation_rejects_malformed_or_missing_inspect(
+    inspect_output: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "malformed-volume").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "malformed-volume",
+        run_id="4" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    rendered_output = inspect_output.replace("placeholder", volume_name)
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command[1:3] == ("volume", "ls"):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            return rendered_output
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    with pytest.raises(stack.StackError, match="volume|inspect|identity|creation"):
+        stack.database_volume_observation(run_identity)
+
+
+@pytest.mark.parametrize(
+    "created_at",
+    [None, "not-a-time", "2026-07-22T12:00:00"],
+)
+def test_database_volume_observation_requires_aware_created_at(
+    created_at: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "invalid-created-at").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "invalid-created-at",
+        run_id="d" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    project_name = stack.recovery_project_name(run_identity)
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command[1:3] == ("volume", "ls"):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            return json.dumps(
+                [
+                    {
+                        "Name": volume_name,
+                        "CreatedAt": created_at,
+                        "Labels": {
+                            "com.docker.compose.project": project_name,
+                            "com.docker.compose.volume": "forwin-postgres",
+                        },
+                    }
+                ]
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    with pytest.raises(stack.StackError, match="creation time"):
+        stack.database_volume_observation(run_identity)
+
+
+def test_database_volume_observation_rejects_missing_inspect_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "missing-inspect").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "missing-inspect",
+        run_id="e" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command[1:3] == ("volume", "ls"):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            raise stack.StackError("Docker volume inspect result is missing")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    with pytest.raises(stack.StackError, match="inspect result is missing"):
+        stack.database_volume_observation(run_identity)
+
+
+def test_fresh_volume_rejects_created_at_before_requested_at_from_inspect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "old-volume").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "old-volume",
+        run_id="5" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    project_name = stack.recovery_project_name(run_identity)
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command[1:3] == ("volume", "ls"):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            return json.dumps(
+                [
+                    {
+                        "Name": volume_name,
+                        "CreatedAt": "2026-07-22T11:59:59Z",
+                        "Labels": {
+                            "com.docker.compose.project": project_name,
+                            "com.docker.compose.volume": "forwin-postgres",
+                        },
+                    }
+                ]
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    with pytest.raises(stack.StackError, match="predates fresh-up request"):
+        stack.confirmed_fresh_database_volume(
+            run_identity,
+            requested_at="2026-07-22T12:00:00+00:00",
+        )
+
+
+def test_active_run_rejects_volume_created_before_fresh_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "old-event-volume").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "old-event-volume",
+        run_id="6" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    identity = {"source_sha": SOURCE_SHA}
+    stack.append_event(
+        "fresh_up_started",
+        fault_id="old-event-volume",
+        requested_at="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume={"name": volume_name, "exists": False},
+    )
+    created_at = "2026-07-22T11:59:59+00:00"
+    stack.append_event(
+        "fresh_up_completed",
+        fault_id="old-event-volume",
+        requested_at="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume={
+            "name": volume_name,
+            "exists": True,
+            "created_at": created_at,
+            "fingerprint": stack.stable_hash(
+                {"created_at": created_at, "name": volume_name}
+            ),
+        },
+    )
+
+    with pytest.raises(stack.StackError, match="predates fresh-up request"):
+        stack.require_active_recovery_run("old-event-volume")
+
+
 def test_fresh_up_records_stable_run_identity_and_database_volume_lifecycle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -574,6 +1001,243 @@ def test_fresh_up_records_stable_run_identity_and_database_volume_lifecycle(
 
 
 @pytest.mark.parametrize(
+    "failure_stage",
+    [
+        "initial_down",
+        "dependency_up",
+        "dependency_readiness",
+        "migration",
+        "application_up",
+        "application_readiness",
+        "functional_probe",
+        "database_volume_postcondition",
+    ],
+)
+def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
+    failure_stage: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / failure_stage).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "8" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "8" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "2026-07-22T12:00:01+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T12:00:01+00:00",
+                "name": volume_name,
+            }
+        ),
+    }
+    state = {
+        "volume_calls": 0,
+        "cleanup_started": False,
+    }
+    cleanup_calls: list[
+        tuple[tuple[str, ...], dict[str, object]]
+    ] = []
+
+    def fake_volume_observation(_run_identity: dict) -> dict:
+        state["volume_calls"] += 1
+        if state["cleanup_started"]:
+            return absent
+        if state["volume_calls"] == 1:
+            return absent
+        if failure_stage == "database_volume_postcondition":
+            raise stack.StackError("volume postcondition failed")
+        return present
+
+    def fake_compose(*args: str, **_kwargs: object) -> str:
+        if failure_stage == "initial_down" and args[:1] == ("down",):
+            raise stack.StackError("initial down failed")
+        if (
+            failure_stage == "dependency_up"
+            and args[:2] == ("up", "--detach")
+            and "postgres" in args
+        ):
+            raise stack.StackError("dependency up failed")
+        if failure_stage == "migration" and args[:1] == ("run",):
+            raise stack.StackError("migration failed")
+        if (
+            failure_stage == "application_up"
+            and args[:2] == ("up", "--detach")
+            and "forwin" in args
+        ):
+            raise stack.StackError("application up failed")
+        return ""
+
+    def fake_wait_service(service: str, **_kwargs: object) -> dict:
+        if failure_stage == "dependency_readiness" and service == "postgres":
+            raise stack.StackError("dependency readiness failed")
+        if failure_stage == "application_readiness" and service == "forwin":
+            raise stack.StackError("application readiness failed")
+        return {"running": True}
+
+    def fake_stack_snapshot(**kwargs: object) -> dict:
+        if failure_stage == "functional_probe" and kwargs.get("probe"):
+            raise stack.StackError("functional probe failed")
+        return {
+            "stage": "after" if kwargs.get("probe") else "before",
+            "services": {},
+        }
+
+    def fake_compose_process(
+        *args: str,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        cleanup_calls.append((tuple(args), kwargs))
+        state["cleanup_started"] = True
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(stack, "database_volume_observation", fake_volume_observation)
+    monkeypatch.setattr(stack, "compose", fake_compose)
+    monkeypatch.setattr(stack, "compose_process", fake_compose_process)
+    monkeypatch.setattr(stack, "wait_service", fake_wait_service)
+    monkeypatch.setattr(stack, "stack_snapshot", fake_stack_snapshot)
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity: {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+
+    with pytest.raises(stack.StackError, match=failure_stage):
+        stack.fresh_up("fault-1")
+
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    blocked = events[-1]
+    assert blocked["failure_stage"] == failure_stage
+    assert blocked["failure_reason"]
+    assert blocked["cleanup_requested_at"]
+    assert blocked["cleanup_confirmed_at"]
+    assert blocked["cleanup_error"] is None
+    assert blocked["database_volume"] == absent
+    assert blocked["after"]["services"] == {
+        service: {"exists": False, "running": False}
+        for service in stack.SERVICES
+    }
+    finalizer_violations, _run_summary = finalizer.run_resource_violations(
+        "publisher_captcha",
+        fault_id="fault-1",
+        events=events,
+        event_path=stack.events_path(),
+        artifact_paths={},
+    )
+    assert finalizer_violations == [
+        "publisher_captcha.database volume lifecycle mismatch"
+    ]
+    assert cleanup_calls == [
+        (
+            ("down", "--volumes", "--remove-orphans"),
+            {
+                "run_identity": blocked["run_identity"],
+                "timeout_seconds": stack.CLEANUP_TIMEOUT_SECONDS,
+            },
+        )
+    ]
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.append_event("snapshot", label="retry-not-allowed")
+
+
+def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "cleanup-failed").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "9" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "9" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"stage": "before", "services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, **_kwargs: (
+            (_ for _ in ()).throw(stack.StackError("original dependency failure"))
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose_process",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            1,
+            "",
+            "cleanup down failed",
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity: (
+            (_ for _ in ()).throw(stack.StackError("service residue remains"))
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+
+    with pytest.raises(stack.StackError, match="original dependency failure"):
+        stack.fresh_up("fault-1")
+
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    blocked = events[-1]
+    assert blocked["failure_reason"] == "original dependency failure"
+    assert "cleanup down failed" in blocked["cleanup_error"]
+    assert "service residue remains" in blocked["cleanup_error"]
+    assert blocked["cleanup_confirmed_at"] is None
+    assert all(event["action"] != "destroyed" for event in events)
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.destroy()
+
+
+@pytest.mark.parametrize(
     ("method_name", "service", "fault_action", "time_field"),
     [
         (
@@ -595,8 +1259,10 @@ def test_fault_timestamp_is_captured_after_non_running_inspection(
     service: str,
     fault_action: str,
     time_field: str,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str((tmp_path / "fault").resolve()))
     timeline: list[str] = []
     times = iter(
         [
@@ -699,8 +1365,10 @@ def test_fault_timestamp_is_captured_after_non_running_inspection(
 
 
 def test_recovery_timestamp_is_captured_after_readiness_and_probe(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str((tmp_path / "fault").resolve()))
     timeline: list[str] = []
     times = iter(
         [
@@ -869,6 +1537,363 @@ def test_typed_marker_rejects_an_existing_service_fault(
         stack.mark_fault("publisher_captcha", "fault", "fault-1")
 
 
+def test_concurrent_mark_transactions_allow_exactly_one_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    evidence_dir = run_identity["evidence_directory"]
+    context = multiprocessing.get_context("fork")
+    first_entered = context.Event()
+
+    def slow_assert_frozen(**_kwargs: object) -> dict:
+        first_entered.set()
+        time.sleep(0.5)
+        return identity
+
+    monkeypatch.setattr(stack, "assert_frozen", slow_assert_frozen)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    results = context.Queue()
+    first = context.Process(
+        target=run_mark_process,
+        args=(evidence_dir, "fault", results),
+        name="first-mark",
+    )
+    second = context.Process(
+        target=run_mark_process,
+        args=(evidence_dir, "fault", results),
+        name="second-mark",
+    )
+
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second.start()
+
+    outcomes = [
+        joined_process_result(first, results),
+        joined_process_result(second, results),
+    ]
+    assert [status for status, _detail in outcomes].count("ok") == 1
+    assert [status for status, _detail in outcomes].count("error") == 1
+    assert any(
+        "controller transaction already active" in detail
+        for status, detail in outcomes
+        if status == "error"
+    )
+    events = stack.load_verified_events()
+    assert [
+        event["action"] for event in events
+    ] == ["fresh_up_started", "fresh_up_completed", "fault_marked"]
+
+
+def test_concurrent_fresh_up_transactions_allow_exactly_one_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "concurrent-fresh").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    context = multiprocessing.get_context("fork")
+    first_entered = context.Event()
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "7" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": "2026-07-22T12:00:01+00:00",
+        "fingerprint": stack.stable_hash(
+            {
+                "created_at": "2026-07-22T12:00:01+00:00",
+                "name": volume_name,
+            }
+        ),
+    }
+    volume_calls = {"count": 0}
+
+    def slow_isolated_compose(
+        _identity: dict,
+        *,
+        run_identity: dict,
+    ) -> None:
+        first_entered.set()
+        time.sleep(0.5)
+
+    def fake_volume_observation(_run_identity: dict) -> dict:
+        volume_calls["count"] += 1
+        return absent if volume_calls["count"] == 1 else present
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(stack, "assert_isolated_compose", slow_isolated_compose)
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "7" * 32)
+    monkeypatch.setattr(stack, "database_volume_observation", fake_volume_observation)
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda _service, **_kwargs: {"running": True},
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **kwargs: {
+            "stage": "after" if kwargs.get("probe") else "before",
+            "services": {},
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+    results = context.Queue()
+    first = context.Process(
+        target=run_fresh_up_process,
+        args=(str(evidence_dir), results),
+        name="first-fresh-up",
+    )
+    second = context.Process(
+        target=run_fresh_up_process,
+        args=(str(evidence_dir), results),
+        name="second-fresh-up",
+    )
+
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second.start()
+
+    outcomes = [
+        joined_process_result(first, results),
+        joined_process_result(second, results),
+    ]
+    assert [status for status, _detail in outcomes].count("ok") == 1
+    assert [status for status, _detail in outcomes].count("error") == 1
+    assert any(
+        "controller transaction already active" in detail
+        for status, detail in outcomes
+        if status == "error"
+    )
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started", "fresh_up_completed"]
+
+
+def test_marker_cannot_enter_while_destroy_transaction_is_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_identity, volume, identity = recovery_lifecycle(tmp_path, monkeypatch)
+    stack.append_event(
+        "fault_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        recovery_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+    context = multiprocessing.get_context("fork")
+    destroy_entered = context.Event()
+
+    def slow_assert_frozen(**_kwargs: object) -> dict:
+        destroy_entered.set()
+        time.sleep(0.5)
+        return identity
+
+    monkeypatch.setattr(stack, "assert_frozen", slow_assert_frozen)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, _expected: volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"observed_at": "before", "services": {}},
+    )
+    monkeypatch.setattr(stack, "compose", lambda *args, **_kwargs: "")
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity: {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity: {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    results = context.Queue()
+    destroy_process = context.Process(
+        target=run_destroy_process,
+        args=(run_identity["evidence_directory"], results),
+        name="destroy",
+    )
+    marker_process = context.Process(
+        target=run_mark_process,
+        args=(run_identity["evidence_directory"], "recovery", results),
+        name="marker-during-destroy",
+    )
+
+    destroy_process.start()
+    assert destroy_entered.wait(timeout=2)
+    marker_process.start()
+
+    outcomes = [
+        joined_process_result(destroy_process, results),
+        joined_process_result(marker_process, results),
+    ]
+    assert ("ok", "destroyed") in outcomes
+    assert any(
+        status == "error"
+        and "controller transaction already active" in detail
+        for status, detail in outcomes
+    )
+    assert stack.load_verified_events()[-1]["action"] == "destroyed"
+
+
+def test_active_transaction_does_not_block_unrelated_recovery_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_run, first_volume, identity = recovery_lifecycle(
+        tmp_path,
+        monkeypatch,
+        fault_id="fault-1",
+    )
+    stack.append_event(
+        "fault_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        fault_time="2026-07-22T12:00:00+00:00",
+        identity=identity,
+        run_identity=first_run,
+        database_volume=first_volume,
+    )
+    stack.append_event(
+        "recovery_marked",
+        fault_id="fault-1",
+        fault_kind="publisher_captcha",
+        recovery_time="2026-07-22T12:01:00+00:00",
+        identity=identity,
+        run_identity=first_run,
+        database_volume=first_volume,
+    )
+    second_run, second_volume, _identity = recovery_lifecycle(
+        tmp_path,
+        monkeypatch,
+        fault_id="fault-2",
+    )
+    context = multiprocessing.get_context("fork")
+    destroy_entered = context.Event()
+
+    def conditional_slow_assert_frozen(**_kwargs: object) -> dict:
+        if stack.evidence_directory() == Path(
+            first_run["evidence_directory"]
+        ):
+            destroy_entered.set()
+            time.sleep(0.5)
+        return identity
+
+    monkeypatch.setattr(stack, "assert_frozen", conditional_slow_assert_frozen)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_database_volume",
+        lambda _run_identity, expected: expected,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"observed_at": "before", "services": {}},
+    )
+    monkeypatch.setattr(stack, "compose", lambda *args, **_kwargs: "")
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity: {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda run_identity: {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    results = context.Queue()
+    destroy_process = context.Process(
+        target=run_destroy_process,
+        args=(first_run["evidence_directory"], results),
+        name="unrelated-run-destroy",
+    )
+
+    destroy_process.start()
+    assert destroy_entered.wait(timeout=2)
+    monkeypatch.setenv(
+        stack.EVIDENCE_DIR_ENV,
+        second_run["evidence_directory"],
+    )
+    marker = stack.mark_fault("publisher_captcha", "fault", "fault-2")
+
+    assert marker["action"] == "fault_marked"
+    assert joined_process_result(destroy_process, results) == ("ok", "destroyed")
+    first_lock = stack.controller_lock_path(
+        Path(first_run["evidence_directory"])
+    )
+    second_lock = stack.controller_lock_path(
+        Path(second_run["evidence_directory"])
+    )
+    assert first_lock != second_lock
+    assert first_lock.parent == Path(first_run["evidence_directory"]).parent
+    assert second_lock.parent == Path(second_run["evidence_directory"]).parent
+    assert not first_lock.is_relative_to(first_run["evidence_directory"])
+    assert not second_lock.is_relative_to(second_run["evidence_directory"])
+    assert {
+        path.name
+        for path in Path(second_run["evidence_directory"]).iterdir()
+    } == {"stack-events.jsonl"}
+    assert second_volume["exists"] is True
+
+
 @pytest.mark.parametrize(
     "fault_kind",
     [
@@ -879,7 +1904,10 @@ def test_typed_marker_rejects_an_existing_service_fault(
 )
 def test_typed_marker_rejects_non_risk_fault_kind(
     fault_kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str((tmp_path / "fault").resolve()))
     with pytest.raises(stack.StackError, match="typed publisher risk"):
         stack.mark_fault(fault_kind, "fault", "fault-1")
 
@@ -980,6 +2008,7 @@ def test_destroy_refuses_missing_fresh_completion_without_compose(
     stack.append_event(
         "fresh_up_started",
         fault_id="fault-1",
+        requested_at="2026-07-22T11:58:00+00:00",
         identity={"source_sha": SOURCE_SHA},
         run_identity=run_identity,
         database_volume={
@@ -1048,6 +2077,7 @@ def test_active_run_rejects_unparseable_database_volume_creation_time(
     stack.append_event(
         "fresh_up_started",
         fault_id="fault-1",
+        requested_at="2026-07-22T11:58:00+00:00",
         identity={"source_sha": SOURCE_SHA},
         run_identity=run_identity,
         database_volume={"name": volume_name, "exists": False},
@@ -1055,6 +2085,7 @@ def test_active_run_rejects_unparseable_database_volume_creation_time(
     stack.append_event(
         "fresh_up_completed",
         fault_id="fault-1",
+        requested_at="2026-07-22T11:58:00+00:00",
         identity={"source_sha": SOURCE_SHA},
         run_identity=run_identity,
         database_volume={
@@ -1072,8 +2103,10 @@ def test_active_run_rejects_unparseable_database_volume_creation_time(
 
 
 def test_v1_up_records_migration_schema_role_and_embedding_evidence(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str((tmp_path / "v1").resolve()))
     identity = {"source_sha": SOURCE_SHA}
     snapshots = [
         {"stage": "before", "services": {}},

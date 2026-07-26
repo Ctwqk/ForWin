@@ -5,6 +5,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 
@@ -68,6 +69,24 @@ def run_destroy_process(
         results.put(("error", str(exc)))
     else:
         results.put(("ok", "destroyed"))
+
+
+def run_lock_probe_process(
+    evidence_dir: str,
+    results: multiprocessing.Queue,
+) -> None:
+    path = stack.controller_lock_path(Path(evidence_dir))
+    try:
+        with path.open("a+", encoding="utf-8") as handle:
+            stack.fcntl.flock(
+                handle.fileno(),
+                stack.fcntl.LOCK_EX | stack.fcntl.LOCK_NB,
+            )
+            stack.fcntl.flock(handle.fileno(), stack.fcntl.LOCK_UN)
+    except Exception as exc:
+        results.put(("error", str(exc)))
+    else:
+        results.put(("ok", "acquired"))
 
 
 def joined_process_result(
@@ -136,6 +155,71 @@ def recovery_lifecycle(
         database_volume=volume_present,
     )
     return run_identity, volume_present, identity
+
+
+def configure_primary_fresh_up_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    run_digit: str,
+) -> tuple[Path, dict, dict]:
+    evidence_dir = (tmp_path / f"fresh-failure-{run_digit}").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: run_digit * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = (
+        f"forwin-v5-recovery-{run_digit * 32}-postgres-data"
+    )
+    absent = {"name": volume_name, "exists": False}
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"stage": "before", "services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *args, **_kwargs: (
+            (_ for _ in ()).throw(
+                stack.StackError("primary dependency setup failure")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose_process",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            0,
+            "",
+            "",
+        ),
+    )
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        lambda _run_identity, **_kwargs: {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+    return evidence_dir, identity, absent
 
 
 def isolated_compose_config(
@@ -266,6 +350,19 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable")
+    compose_version = subprocess.run(
+        [docker, "compose", "version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if compose_version.returncode:
+        pytest.skip("Docker Compose CLI is unavailable")
+
     evidence_dir = (tmp_path / "dynamic-config").resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     run_identity = stack.new_recovery_run_identity(
@@ -273,31 +370,61 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         run_id="2" * 32,
         directory=evidence_dir,
     )
-    payload, identity = isolated_compose_config(run_identity=run_identity)
-    render_calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
-
-    def fake_compose_process(
-        *args: str,
-        **kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
-        render_calls.append((args, kwargs))
-        return subprocess.CompletedProcess(
-            args,
-            0,
-            json.dumps(payload),
-            "",
-        )
-
-    monkeypatch.setattr(stack, "compose_process", fake_compose_process)
-    stack.assert_isolated_compose(identity, run_identity=run_identity)
+    runtime_env = tmp_path / "runtime.env"
+    provider_env = tmp_path / "provider.env"
+    runtime_env.write_text("", encoding="utf-8")
+    provider_env.write_text("", encoding="utf-8")
+    manifest = tmp_path / "candidate.json"
+    runtime_tag = "forwin-v5-runtime:dynamic-config-test"
+    browser_tag = "forwin-v5-browser:dynamic-config-test"
+    dependency_tags = {
+        "postgres": "postgres:16-alpine",
+        "qdrant": "qdrant/qdrant:v1.17.1",
+        "minio": "minio/minio:dynamic-config-test",
+    }
+    manifest.write_text(
+        json.dumps(
+            {
+                "source": {"sha": SOURCE_SHA},
+                "images": {
+                    "runtime": {"tag": runtime_tag},
+                    "publisher_browser": {"tag": browser_tag},
+                    **{
+                        service: {"tag": tag}
+                        for service, tag in dependency_tags.items()
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(stack.CANDIDATE_MANIFEST_ENV, str(manifest))
+    monkeypatch.setenv(stack.RUNTIME_ENV_FILE_ENV, str(runtime_env))
+    monkeypatch.setenv(stack.PROVIDER_ENV_FILE_ENV, str(provider_env))
+    completed = stack.compose_process(
+        "config",
+        "--format",
+        "json",
+        run_identity=run_identity,
+        timeout_seconds=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    identity = {
+        "runtime_image": {"tag": runtime_tag},
+        "browser_image": {"tag": browser_tag},
+        "dependency_images": {
+            service: {"tag": tag}
+            for service, tag in dependency_tags.items()
+        },
+    }
+    stack.validate_isolated_compose_config(
+        payload,
+        identity=identity,
+        run_identity=run_identity,
+    )
 
     project_name = stack.recovery_project_name(run_identity)
-    assert render_calls == [
-        (
-            ("config", "--format", "json"),
-            {"run_identity": run_identity},
-        )
-    ]
     assert payload["name"] == project_name
     assert payload["volumes"]["forwin-postgres"]["name"] == (
         run_identity["database_volume_name"]
@@ -316,13 +443,16 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         "publisher-browser": f"{project_name}-publisher-browser",
         "minio": f"{project_name}-minio",
     }
-    assert payload["services"]["postgres"]["volumes"] == [
-        {
-            "type": "volume",
-            "source": "forwin-postgres",
-            "target": "/var/lib/postgresql/data",
-        }
-    ]
+    postgres_mounts = payload["services"]["postgres"]["volumes"]
+    assert len(postgres_mounts) == 1
+    assert {
+        key: postgres_mounts[0][key]
+        for key in ("type", "source", "target")
+    } == {
+        "type": "volume",
+        "source": "forwin-postgres",
+        "target": "/var/lib/postgresql/data",
+    }
 
     payload["services"]["qdrant"]["container_name"] = "forwin-v5-recovery-qdrant"
     with pytest.raises(stack.StackError, match="qdrant.*container"):
@@ -332,7 +462,9 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
             run_identity=run_identity,
         )
 
-    payload, identity = isolated_compose_config(run_identity=run_identity)
+    payload["services"]["qdrant"]["container_name"] = (
+        f"{project_name}-qdrant"
+    )
     payload["services"]["postgres"]["volumes"][0]["source"] = "shared-postgres"
     with pytest.raises(stack.StackError, match="PostgreSQL volume mount"):
         stack.validate_isolated_compose_config(
@@ -1043,7 +1175,10 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
         tuple[tuple[str, ...], dict[str, object]]
     ] = []
 
-    def fake_volume_observation(_run_identity: dict) -> dict:
+    def fake_volume_observation(
+        _run_identity: dict,
+        **_kwargs: object,
+    ) -> dict:
         state["volume_calls"] += 1
         if state["cleanup_started"]:
             return absent
@@ -1109,7 +1244,7 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
     monkeypatch.setattr(
         stack,
         "destroyed_service_inventory",
-        lambda _run_identity: {
+        lambda _run_identity, **_kwargs: {
             service: {"exists": False, "running": False}
             for service in stack.SERVICES
         },
@@ -1149,15 +1284,14 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
     assert finalizer_violations == [
         "publisher_captcha.database volume lifecycle mismatch"
     ]
-    assert cleanup_calls == [
-        (
-            ("down", "--volumes", "--remove-orphans"),
-            {
-                "run_identity": blocked["run_identity"],
-                "timeout_seconds": stack.CLEANUP_TIMEOUT_SECONDS,
-            },
-        )
-    ]
+    assert len(cleanup_calls) == 1
+    cleanup_args, cleanup_kwargs = cleanup_calls[0]
+    assert cleanup_args == ("down", "--volumes", "--remove-orphans")
+    assert cleanup_kwargs["run_identity"] == blocked["run_identity"]
+    assert cleanup_kwargs["timeout_stage"] == "teardown command"
+    assert 0 < (
+        cleanup_kwargs["deadline"] - stack.time.monotonic()
+    ) <= stack.CLEANUP_TIMEOUT_SECONDS
     with pytest.raises(stack.StackError, match="terminal"):
         stack.append_event("snapshot", label="retry-not-allowed")
 
@@ -1182,7 +1316,7 @@ def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
     monkeypatch.setattr(
         stack,
         "database_volume_observation",
-        lambda _run_identity: absent,
+        lambda _run_identity, **_kwargs: absent,
     )
     monkeypatch.setattr(
         stack,
@@ -1209,7 +1343,7 @@ def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
     monkeypatch.setattr(
         stack,
         "destroyed_service_inventory",
-        lambda _run_identity: (
+        lambda _run_identity, **_kwargs: (
             (_ for _ in ()).throw(stack.StackError("service residue remains"))
         ),
     )
@@ -1235,6 +1369,455 @@ def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
     assert all(event["action"] != "destroyed" for event in events)
     with pytest.raises(stack.StackError, match="terminal"):
         stack.destroy()
+
+
+def test_fresh_up_preserves_primary_error_when_cleanup_helper_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _evidence_dir, _identity, _absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit="1",
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda *_args, **_kwargs: (
+            (_ for _ in ()).throw(RuntimeError("cleanup helper exploded"))
+        ),
+    )
+
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up("fault-cleanup-helper")
+
+    message = str(captured.value)
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "cleanup_error=cleanup helper: cleanup helper exploded" in message
+    assert "terminal_recording_error=<none>" in message
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    blocked = events[-1]
+    assert blocked["setup_failure"] == (
+        "initial_down: primary dependency setup failure"
+    )
+    assert "cleanup helper exploded" in blocked["cleanup_error"]
+    assert blocked["terminal_recording_error"] is None
+    assert blocked["cleanup_confirmed_at"] is None
+    assert all(
+        event["action"] not in {"fresh_up_completed", "destroyed"}
+        for event in events
+    )
+
+
+def test_fresh_up_uses_safe_timestamp_when_cleanup_clock_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _evidence_dir, _identity, absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit="2",
+    )
+    timestamps = iter(
+        [
+            "2026-07-22T12:00:00+00:00",
+            "2026-07-22T12:00:00+00:00",
+        ]
+    )
+
+    def failing_now() -> str:
+        try:
+            return next(timestamps)
+        except StopIteration as exc:
+            raise RuntimeError("cleanup clock unavailable") from exc
+
+    monkeypatch.setattr(stack, "now", failing_now)
+
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up("fault-cleanup-clock")
+
+    message = str(captured.value)
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "cleanup clock unavailable" in message
+    assert "terminal_recording_error=<none>" in message
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    blocked = events[-1]
+    assert blocked["database_volume"] == absent
+    assert blocked["cleanup_requested_at"] == (
+        "2026-07-22T12:00:00+00:00"
+    )
+    assert "cleanup clock unavailable" in blocked["cleanup_error"]
+    assert blocked["terminal_recording_error"] is None
+    assert all(
+        event["action"] not in {"fresh_up_completed", "destroyed"}
+        for event in events
+    )
+
+
+def test_fresh_up_falls_back_when_setup_blocked_helper_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _evidence_dir, _identity, _absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit="3",
+    )
+    monkeypatch.setattr(
+        stack,
+        "append_setup_blocked",
+        lambda **_kwargs: (
+            (_ for _ in ()).throw(OSError("blocked helper failed"))
+        ),
+    )
+
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up("fault-terminal-helper")
+
+    message = str(captured.value)
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "terminal_recording_error=blocked helper failed" in message
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    assert events[-1]["terminal_recording_error"] == "blocked helper failed"
+    assert all(
+        event["action"] not in {"fresh_up_completed", "destroyed"}
+        for event in events
+    )
+
+
+def test_fresh_up_combines_terminal_append_error_and_seals_incomplete_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _evidence_dir, _identity, _absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit="4",
+    )
+    original_append_event = stack.append_event
+
+    def fail_terminal_append(action: str, **payload: object) -> dict:
+        if action == "setup_blocked":
+            raise OSError("terminal append failed")
+        return original_append_event(action, **payload)
+
+    monkeypatch.setattr(stack, "append_event", fail_terminal_append)
+
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up("fault-terminal-append")
+
+    message = str(captured.value)
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "cleanup_error=<none>" in message
+    assert "terminal_recording_error=" in message
+    assert "terminal append failed" in message
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == ["fresh_up_started"]
+    assert all(
+        event["action"] not in {"fresh_up_completed", "destroyed"}
+        for event in events
+    )
+
+    commands = {
+        "config": stack.validate_config,
+        "fresh-up": lambda: stack.fresh_up("another-fault"),
+        "v1-up": stack.v1_up,
+        "destroy": stack.destroy,
+        "snapshot": lambda: stack.snapshot("after-failure"),
+        "stop": lambda: stack.stop_fault_service(
+            "qdrant",
+            "fault-terminal-append",
+        ),
+        "start": lambda: stack.start_fault_service(
+            "qdrant",
+            "fault-terminal-append",
+        ),
+        "kill": lambda: stack.kill_fault_service(
+            "generation-worker",
+            "fault-terminal-append",
+        ),
+        "mark": lambda: stack.mark_fault(
+            "publisher_captcha",
+            "fault",
+            "fault-terminal-append",
+        ),
+    }
+    for command_name, invoke in commands.items():
+        with pytest.raises(
+            stack.StackError,
+            match="incomplete fresh-up",
+        ):
+            invoke()
+        assert command_name
+    assert stack.load_verified_events() == events
+
+
+def test_fresh_up_primary_survives_terminal_recording_coordinator_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _evidence_dir, _identity, _absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit="9",
+    )
+    monkeypatch.setattr(
+        stack,
+        "record_setup_blocked",
+        lambda **_kwargs: (
+            (_ for _ in ()).throw(
+                RuntimeError("terminal coordinator exploded")
+            )
+        ),
+    )
+
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up("fault-terminal-coordinator")
+
+    message = str(captured.value)
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "cleanup_error=cleanup status unavailable" in message
+    assert (
+        "terminal_recording_error=record_setup_blocked: "
+        "terminal coordinator exploded"
+    ) in message
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started"]
+    with pytest.raises(stack.StackError, match="incomplete fresh-up"):
+        stack.validate_config()
+
+
+@pytest.mark.parametrize(
+    ("timeout_boundary", "expected_operations"),
+    [
+        ("before_down_launch", []),
+        ("down", ["down"]),
+        (
+            "service_inspect",
+            [
+                "down",
+                "service_ps:postgres",
+                "service_inspect:postgres",
+            ],
+        ),
+        (
+            "volume_inspect",
+            [
+                "down",
+                *[f"service_ps:{service}" for service in stack.SERVICES],
+                "volume_ls",
+                "volume_inspect",
+            ],
+        ),
+    ],
+)
+def test_cleanup_deadline_bounds_all_docker_confirmation_and_releases_lock(
+    timeout_boundary: str,
+    expected_operations: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_compose = stack.compose
+    real_compose_process = stack.compose_process
+    real_volume_observation = stack.database_volume_observation
+    real_destroyed_inventory = stack.destroyed_service_inventory
+    evidence_dir, _identity, absent = configure_primary_fresh_up_failure(
+        tmp_path,
+        monkeypatch,
+        run_digit={
+            "before_down_launch": "8",
+            "down": "5",
+            "service_inspect": "6",
+            "volume_inspect": "7",
+        }[timeout_boundary],
+    )
+    run_identity = stack.new_recovery_run_identity(
+        f"fault-{timeout_boundary}",
+        run_id={
+            "before_down_launch": "8",
+            "down": "5",
+            "service_inspect": "6",
+            "volume_inspect": "7",
+        }[timeout_boundary]
+        * 32,
+        directory=evidence_dir,
+    )
+    clock = {"value": 0.0}
+    operations: list[str] = []
+    timeouts: list[tuple[str, float | None]] = []
+    initial_volume_observed = {"done": False}
+    setup_compose_failed = {"done": False}
+
+    def initial_then_real_volume(
+        checked_run_identity: dict,
+        **kwargs: object,
+    ) -> dict:
+        if not initial_volume_observed["done"] and "deadline" not in kwargs:
+            initial_volume_observed["done"] = True
+            return absent
+        return real_volume_observation(checked_run_identity, **kwargs)
+
+    def setup_then_real_compose(
+        *args: str,
+        **kwargs: object,
+    ) -> str:
+        if not setup_compose_failed["done"]:
+            setup_compose_failed["done"] = True
+            raise stack.StackError("primary dependency setup failure")
+        return real_compose(*args, **kwargs)
+
+    def fake_subprocess_run(
+        command: list[str] | tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        timeout = kwargs.get("timeout")
+        operation: str
+        if command_tuple[:2] == ("docker", "compose"):
+            if "down" in command_tuple:
+                operation = "down"
+            elif "ps" in command_tuple:
+                operation = f"service_ps:{command_tuple[-1]}"
+            else:
+                raise AssertionError(command_tuple)
+        elif command_tuple[:3] == ("docker", "volume", "ls"):
+            operation = "volume_ls"
+        elif command_tuple[:3] == ("docker", "volume", "inspect"):
+            operation = "volume_inspect"
+        elif command_tuple[:3] == ("docker", "container", "inspect"):
+            operation = (
+                "service_inspect:"
+                + command_tuple[-1].removeprefix("container-")
+            )
+        else:
+            raise AssertionError(command_tuple)
+        operations.append(operation)
+        timeouts.append(
+            (
+                operation,
+                float(timeout) if timeout is not None else None,
+            )
+        )
+        if (
+            timeout_boundary == "down"
+            and operation == "down"
+        ) or (
+            timeout_boundary == "service_inspect"
+            and operation == "service_inspect:postgres"
+        ) or (
+            timeout_boundary == "volume_inspect"
+            and operation == "volume_inspect"
+        ):
+            clock["value"] = float(stack.CLEANUP_TIMEOUT_SECONDS)
+            raise subprocess.TimeoutExpired(
+                command_tuple,
+                timeout=float(timeout or 0),
+            )
+        if operation == "down":
+            clock["value"] = 1.0
+            return subprocess.CompletedProcess(command_tuple, 0, "", "")
+        if operation.startswith("service_ps:"):
+            if timeout_boundary == "service_inspect":
+                service = operation.partition(":")[2]
+                return subprocess.CompletedProcess(
+                    command_tuple,
+                    0,
+                    f"container-{service}",
+                    "",
+                )
+            return subprocess.CompletedProcess(command_tuple, 0, "", "")
+        if operation == "volume_ls":
+            return subprocess.CompletedProcess(
+                command_tuple,
+                0,
+                run_identity["database_volume_name"],
+                "",
+            )
+        return subprocess.CompletedProcess(command_tuple, 0, "[]", "")
+
+    monkeypatch.setattr(stack, "compose", setup_then_real_compose)
+    monkeypatch.setattr(stack, "compose_process", real_compose_process)
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        initial_then_real_volume,
+    )
+    monkeypatch.setattr(
+        stack,
+        "destroyed_service_inventory",
+        real_destroyed_inventory,
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose_environment",
+        lambda **_kwargs: (
+            clock.update(
+                {
+                    "value": float(stack.CLEANUP_TIMEOUT_SECONDS),
+                }
+            )
+            if timeout_boundary == "before_down_launch"
+            else None
+        )
+        or {
+            "FORWIN_RECOVERY_ENV_FILE": str(tmp_path / "unused.env"),
+        },
+    )
+    monkeypatch.setattr(stack.time, "monotonic", lambda: clock["value"])
+    monkeypatch.setattr(stack.subprocess, "run", fake_subprocess_run)
+
+    started = time.perf_counter()
+    with pytest.raises(stack.StackError) as captured:
+        stack.fresh_up(f"fault-{timeout_boundary}")
+    elapsed = time.perf_counter() - started
+
+    message = str(captured.value)
+    assert elapsed < 1
+    assert "setup_failure=initial_down: primary dependency setup failure" in message
+    assert "cleanup_error=" in message
+    assert "timed out" in message
+    assert "terminal_recording_error=<none>" in message
+    assert operations == expected_operations
+    assert all(timeout is not None and timeout > 0 for _name, timeout in timeouts)
+    assert all(
+        timeout <= stack.CLEANUP_TIMEOUT_SECONDS
+        for _name, timeout in timeouts
+        if timeout is not None
+    )
+    events = stack.load_verified_events()
+    assert [event["action"] for event in events] == [
+        "fresh_up_started",
+        "setup_blocked",
+    ]
+    assert events[-1]["cleanup_confirmed_at"] is None
+    assert "timed out" in events[-1]["cleanup_error"]
+    assert all(
+        event["action"] not in {"fresh_up_completed", "destroyed"}
+        for event in events
+    )
+
+    context = multiprocessing.get_context("fork")
+    results = context.Queue()
+    probe = context.Process(
+        target=run_lock_probe_process,
+        args=(str(evidence_dir), results),
+        name=f"lock-probe-{timeout_boundary}",
+    )
+    probe.start()
+    assert joined_process_result(probe, results) == ("ok", "acquired")
 
 
 @pytest.mark.parametrize(
@@ -2023,7 +2606,7 @@ def test_destroy_refuses_missing_fresh_completion_without_compose(
         lambda *args, **_kwargs: compose_calls.append(tuple(args)) or "",
     )
 
-    with pytest.raises(stack.StackError, match="completed fresh-up"):
+    with pytest.raises(stack.StackError, match="incomplete fresh-up"):
         stack.destroy()
 
     assert compose_calls == []

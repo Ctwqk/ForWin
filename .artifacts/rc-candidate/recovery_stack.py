@@ -290,6 +290,31 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def exception_text(error: BaseException) -> str:
+    try:
+        detail = str(error)
+    except BaseException:
+        detail = ""
+    return detail or type(error).__name__
+
+
+def safe_utc_now(
+    *,
+    fallback: str,
+    errors: list[str],
+    field: str,
+) -> str:
+    try:
+        return normalized_utc_timestamp(now(), field=field)
+    except BaseException as exc:
+        errors.append(f"{field}: {exception_text(exc)}")
+    try:
+        return normalized_utc_timestamp(fallback, field=f"{field} fallback")
+    except BaseException as exc:
+        errors.append(f"{field} fallback: {exception_text(exc)}")
+        return datetime.now(UTC).isoformat()
+
+
 def stable_hash(value: Any) -> str:
     try:
         body = json.dumps(
@@ -498,6 +523,17 @@ def load_verified_events() -> list[dict[str, Any]]:
     return events
 
 
+def has_incomplete_fresh_up(events: list[dict[str, Any]]) -> bool:
+    return (
+        any(event.get("action") == "fresh_up_started" for event in events)
+        and not any(
+            event.get("action")
+            in {"fresh_up_completed", "setup_blocked", "destroyed"}
+            for event in events
+        )
+    )
+
+
 def require_new_evidence_run() -> None:
     directory = evidence_directory()
     if directory.exists() and any(directory.iterdir()):
@@ -543,19 +579,39 @@ def command(
     *args: str,
     check: bool = True,
     env: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+    deadline: float | None = None,
+    timeout_stage: str = "command",
 ) -> str:
     if args and args[0] in {"docker", "git"}:
         assert_no_control_environment()
         if env is None:
             env = host_command_environment()
-    completed = subprocess.run(
-        args,
-        cwd=ROOT,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    if deadline is not None:
+        remaining = cleanup_remaining_timeout(
+            deadline,
+            stage=timeout_stage,
+        )
+        timeout_seconds = (
+            remaining
+            if timeout_seconds is None
+            else min(timeout_seconds, remaining)
+        )
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise StackError(
+            "command timed out after "
+            f"{timeout_seconds} seconds ({' '.join(args)})"
+        ) from exc
     if check and completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise StackError(f"command failed ({' '.join(args)}): {detail}")
@@ -674,6 +730,9 @@ def docker_execution_identity() -> dict[str, str]:
 def compose(
     *args: str,
     run_identity: dict[str, Any] | None = None,
+    timeout_seconds: float | None = None,
+    deadline: float | None = None,
+    timeout_stage: str = "Compose command",
 ) -> str:
     environment = compose_environment(run_identity=run_identity)
     project_name, _database_volume_name = compose_resource_identity(run_identity)
@@ -692,6 +751,9 @@ def compose(
         "publisher",
         *args,
         env=environment,
+        timeout_seconds=timeout_seconds,
+        deadline=deadline,
+        timeout_stage=timeout_stage,
     )
 
 
@@ -699,6 +761,8 @@ def compose_process(
     *args: str,
     run_identity: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
+    deadline: float | None = None,
+    timeout_stage: str = "Compose command",
 ) -> subprocess.CompletedProcess[str]:
     environment = compose_environment(run_identity=run_identity)
     project_name, _database_volume_name = compose_resource_identity(run_identity)
@@ -717,6 +781,16 @@ def compose_process(
         "publisher",
         *args,
     ]
+    if deadline is not None:
+        remaining = cleanup_remaining_timeout(
+            deadline,
+            stage=timeout_stage,
+        )
+        timeout_seconds = (
+            remaining
+            if timeout_seconds is None
+            else min(timeout_seconds, remaining)
+        )
     try:
         return subprocess.run(
             command_args,
@@ -814,7 +888,15 @@ def validate_isolated_compose_config(
     }
     if (
         not isinstance(postgres_mounts, list)
-        or expected_postgres_mount not in postgres_mounts
+        or not any(
+            isinstance(mount, dict)
+            and {
+                key: mount.get(key)
+                for key in expected_postgres_mount
+            }
+            == expected_postgres_mount
+            for mount in postgres_mounts
+        )
     ):
         raise StackError("effective PostgreSQL volume mount is not isolated")
     volumes = payload.get("volumes") or {}
@@ -1287,6 +1369,7 @@ def compose_container_id(
     service: str,
     *,
     run_identity: dict[str, Any] | None = None,
+    deadline: float | None = None,
 ) -> str:
     return compose(
         "ps",
@@ -1294,6 +1377,8 @@ def compose_container_id(
         "--quiet",
         service,
         run_identity=run_identity,
+        deadline=deadline,
+        timeout_stage=f"service {service} Compose inspection",
     )
 
 
@@ -1301,12 +1386,26 @@ def inspect_service(
     service: str,
     *,
     run_identity: dict[str, Any] | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
-    container_id = compose_container_id(service, run_identity=run_identity)
+    container_id = compose_container_id(
+        service,
+        run_identity=run_identity,
+        deadline=deadline,
+    )
     if not container_id:
         return {"service": service, "exists": False}
     try:
-        payload = json.loads(command("docker", "container", "inspect", container_id))
+        payload = json.loads(
+            command(
+                "docker",
+                "container",
+                "inspect",
+                container_id,
+                deadline=deadline,
+                timeout_stage=f"service {service} container inspection",
+            )
+        )
     except json.JSONDecodeError as exc:
         raise StackError(f"docker returned invalid JSON for service {service}") from exc
     if len(payload) != 1:
@@ -1475,7 +1574,12 @@ def stack_snapshot(
     }
 
 
-def append_event(action: str, **payload: Any) -> dict[str, Any]:
+def append_event(
+    action: str,
+    *,
+    _recorded_at: str | None = None,
+    **payload: Any,
+) -> dict[str, Any]:
     path = events_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_verified_events()
@@ -1484,9 +1588,14 @@ def append_event(action: str, **payload: Any) -> dict[str, Any]:
             "recovery event log is terminal after "
             f"{existing[-1].get('action')}"
         )
+    if (
+        has_incomplete_fresh_up(existing)
+        and action not in {"fresh_up_completed", "setup_blocked"}
+    ):
+        raise StackError("recovery event log has an incomplete fresh-up")
     event = {
         "schema_version": 2,
-        "recorded_at": now(),
+        "recorded_at": _recorded_at or now(),
         "action": action,
         "previous_event_sha256": (
             str(existing[-1]["event_sha256"]) if existing else "0" * 64
@@ -1503,6 +1612,8 @@ def append_event(action: str, **payload: Any) -> dict[str, Any]:
 
 def database_volume_observation(
     run_identity: dict[str, Any],
+    *,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     validated = validate_run_identity(run_identity)
     volume_name = validated["database_volume_name"]
@@ -1513,13 +1624,22 @@ def database_volume_observation(
             "ls",
             "--format",
             "{{.Name}}",
+            deadline=deadline,
+            timeout_stage="database volume list",
         ).splitlines()
     )
     if volume_name not in volume_names:
         return {"name": volume_name, "exists": False}
     try:
         payload = json.loads(
-            command("docker", "volume", "inspect", volume_name)
+            command(
+                "docker",
+                "volume",
+                "inspect",
+                volume_name,
+                deadline=deadline,
+                timeout_stage="database volume inspection",
+            )
         )
     except json.JSONDecodeError as exc:
         raise StackError(
@@ -1594,6 +1714,8 @@ def require_active_recovery_run(
     events = load_verified_events()
     if not events:
         raise StackError("recovery run has no completed fresh-up")
+    if has_incomplete_fresh_up(events):
+        raise StackError("recovery event log has an incomplete fresh-up")
     if events[-1].get("action") in TERMINAL_ACTIONS:
         raise StackError(
             "recovery event log is terminal after "
@@ -1680,10 +1802,16 @@ def require_active_recovery_run(
 
 def destroyed_service_inventory(
     run_identity: dict[str, Any],
+    *,
+    deadline: float | None = None,
 ) -> dict[str, dict[str, bool]]:
     inventory: dict[str, dict[str, bool]] = {}
     for service in SERVICES:
-        state = inspect_service(service, run_identity=run_identity)
+        state = inspect_service(
+            service,
+            run_identity=run_identity,
+            deadline=deadline,
+        )
         if state.get("exists") or state.get("running"):
             raise StackError(
                 f"service {service} still exists after recovery destroy"
@@ -1692,18 +1820,39 @@ def destroyed_service_inventory(
     return inventory
 
 
+def cleanup_remaining_timeout(
+    deadline: float,
+    *,
+    stage: str,
+) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise StackError(
+            f"cleanup transaction timed out before {stage}"
+        )
+    return remaining
+
+
 def cleanup_recovery_run(
     run_identity: dict[str, Any],
+    *,
+    fallback_timestamp: str,
 ) -> dict[str, Any]:
-    cleanup_requested_at = now()
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
     cleanup_errors: list[str] = []
+    cleanup_requested_at = safe_utc_now(
+        fallback=fallback_timestamp,
+        errors=cleanup_errors,
+        field="cleanup_requested_at timestamp",
+    )
     try:
         completed = compose_process(
             "down",
             "--volumes",
             "--remove-orphans",
             run_identity=run_identity,
-            timeout_seconds=CLEANUP_TIMEOUT_SECONDS,
+            deadline=deadline,
+            timeout_stage="teardown command",
         )
     except Exception as exc:
         cleanup_errors.append(f"teardown command: {exc}")
@@ -1715,13 +1864,19 @@ def cleanup_recovery_run(
             )
 
     try:
-        services = destroyed_service_inventory(run_identity)
+        services = destroyed_service_inventory(
+            run_identity,
+            deadline=deadline,
+        )
     except Exception as exc:
         services = {}
         cleanup_errors.append(f"service absence: {exc}")
 
     try:
-        database_volume = database_volume_observation(run_identity)
+        database_volume = database_volume_observation(
+            run_identity,
+            deadline=deadline,
+        )
     except Exception as exc:
         database_volume = {
             "name": str(run_identity.get("database_volume_name") or ""),
@@ -1751,8 +1906,26 @@ def cleanup_recovery_run(
     ):
         cleanup_errors.append("database volume absence: volume still exists")
     cleanup_confirmed_at = (
-        now() if services_absent and volume_absent else None
+        safe_utc_now(
+            fallback=cleanup_requested_at,
+            errors=cleanup_errors,
+            field="cleanup_confirmed_at timestamp",
+        )
+        if services_absent and volume_absent
+        else None
     )
+    observed_at = cleanup_confirmed_at or safe_utc_now(
+        fallback=cleanup_requested_at,
+        errors=cleanup_errors,
+        field="cleanup observation timestamp",
+    )
+    try:
+        cleanup_remaining_timeout(
+            deadline,
+            stage="setup_blocked event preparation completion",
+        )
+    except Exception as exc:
+        cleanup_errors.append(f"blocked event preparation: {exc}")
     return {
         "cleanup_requested_at": cleanup_requested_at,
         "cleanup_confirmed_at": cleanup_confirmed_at,
@@ -1761,8 +1934,36 @@ def cleanup_recovery_run(
         ),
         "database_volume": database_volume,
         "after": {
-            "observed_at": cleanup_confirmed_at or now(),
+            "observed_at": observed_at,
             "services": services,
+        },
+    }
+
+
+def failed_cleanup_result(
+    run_identity: dict[str, Any],
+    *,
+    fallback_timestamp: str,
+    cleanup_error: str,
+) -> dict[str, Any]:
+    timestamp_errors: list[str] = []
+    timestamp = safe_utc_now(
+        fallback=fallback_timestamp,
+        errors=timestamp_errors,
+        field="cleanup fallback timestamp",
+    )
+    errors = [cleanup_error, *timestamp_errors]
+    return {
+        "cleanup_requested_at": timestamp,
+        "cleanup_confirmed_at": None,
+        "cleanup_error": "; ".join(error for error in errors if error),
+        "database_volume": {
+            "name": str(run_identity.get("database_volume_name") or ""),
+            "exists": None,
+        },
+        "after": {
+            "observed_at": timestamp,
+            "services": {},
         },
     }
 
@@ -1774,27 +1975,96 @@ def append_setup_blocked(
     identity: dict[str, Any],
     run_identity: dict[str, Any],
     failure_stage: str,
-    failure: BaseException,
+    setup_failure: str,
+    cleanup: dict[str, Any],
+    terminal_recording_error: str | None,
 ) -> dict[str, Any]:
-    cleanup = cleanup_recovery_run(run_identity)
     return append_event(
         "setup_blocked",
+        _recorded_at=str(cleanup["after"]["observed_at"]),
         fault_id=fault_id,
         requested_at=requested_at,
         identity=identity,
         run_identity=run_identity,
         failure_stage=failure_stage,
-        failure_reason=str(failure) or type(failure).__name__,
+        failure_reason=setup_failure.partition(": ")[2] or setup_failure,
+        setup_failure=setup_failure,
         cleanup_requested_at=cleanup["cleanup_requested_at"],
         cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
         cleanup_error=cleanup["cleanup_error"],
+        terminal_recording_error=terminal_recording_error,
         database_volume=cleanup["database_volume"],
         after=cleanup["after"],
     )
 
 
+def record_setup_blocked(
+    *,
+    fault_id: str,
+    requested_at: str,
+    identity: dict[str, Any],
+    run_identity: dict[str, Any],
+    failure_stage: str,
+    failure: BaseException,
+) -> tuple[dict[str, Any] | None, str, str | None]:
+    setup_failure = f"{failure_stage}: {exception_text(failure)}"
+    try:
+        cleanup = cleanup_recovery_run(
+            run_identity,
+            fallback_timestamp=requested_at,
+        )
+    except BaseException as exc:
+        cleanup = failed_cleanup_result(
+            run_identity,
+            fallback_timestamp=requested_at,
+            cleanup_error=f"cleanup helper: {exception_text(exc)}",
+        )
+
+    terminal_errors: list[str] = []
+    try:
+        blocked = append_setup_blocked(
+            fault_id=fault_id,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            failure_stage=failure_stage,
+            setup_failure=setup_failure,
+            cleanup=cleanup,
+            terminal_recording_error=None,
+        )
+    except BaseException as exc:
+        terminal_errors.append(exception_text(exc))
+        terminal_recording_error = "; ".join(terminal_errors)
+        try:
+            blocked = append_event(
+                "setup_blocked",
+                _recorded_at=str(cleanup["after"]["observed_at"]),
+                fault_id=fault_id,
+                requested_at=requested_at,
+                identity=identity,
+                run_identity=run_identity,
+                failure_stage=failure_stage,
+                failure_reason=exception_text(failure),
+                setup_failure=setup_failure,
+                cleanup_requested_at=cleanup["cleanup_requested_at"],
+                cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
+                cleanup_error=cleanup["cleanup_error"],
+                terminal_recording_error=terminal_recording_error,
+                database_volume=cleanup["database_volume"],
+                after=cleanup["after"],
+            )
+        except BaseException as fallback_exc:
+            terminal_errors.append(exception_text(fallback_exc))
+            blocked = None
+    return blocked, str(cleanup.get("cleanup_error") or ""), (
+        "; ".join(terminal_errors) if terminal_errors else None
+    )
+
+
 def reject_terminal_evidence_directory() -> None:
     events = load_verified_events()
+    if has_incomplete_fresh_up(events):
+        raise StackError("recovery event log has an incomplete fresh-up")
     if events and events[-1].get("action") in TERMINAL_ACTIONS:
         raise StackError(
             "recovery event log is terminal after "
@@ -1940,20 +2210,32 @@ def fresh_up(fault_id: str) -> None:
             after=after,
         )
     except BaseException as failure:
-        blocked = append_setup_blocked(
-            fault_id=validated_fault,
-            requested_at=requested_at,
-            identity=identity,
-            run_identity=run_identity,
-            failure_stage=failure_stage,
-            failure=failure,
-        )
+        try:
+            (
+                _blocked,
+                cleanup_error,
+                terminal_recording_error,
+            ) = record_setup_blocked(
+                fault_id=validated_fault,
+                requested_at=requested_at,
+                identity=identity,
+                run_identity=run_identity,
+                failure_stage=failure_stage,
+                failure=failure,
+            )
+        except BaseException as coordinator_error:
+            cleanup_error = "cleanup status unavailable"
+            terminal_recording_error = (
+                "record_setup_blocked: "
+                f"{exception_text(coordinator_error)}"
+            )
         detail = (
-            f"fresh-up setup_blocked at {failure_stage}: "
-            f"{blocked['failure_reason']}"
+            "fresh-up failed: "
+            f"setup_failure={failure_stage}: {exception_text(failure)}; "
+            f"cleanup_error={cleanup_error or '<none>'}; "
+            "terminal_recording_error="
+            f"{terminal_recording_error or '<none>'}"
         )
-        if blocked.get("cleanup_error"):
-            detail += f"; cleanup error: {blocked['cleanup_error']}"
         raise StackError(detail) from failure
     print(json.dumps(after, ensure_ascii=False, indent=2))
 

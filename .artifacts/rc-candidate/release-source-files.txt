@@ -14,6 +14,7 @@
 .artifacts/rc-candidate/rc-freeze-runbook.md
 .artifacts/rc-candidate/recovery-evidence-runbook.md
 .artifacts/rc-candidate/recovery-evidence-hardening-design.md
+.artifacts/rc-candidate/recovery-evidence-hardening-plan.md
 .artifacts/rc-candidate/recovery_stack.py
 .artifacts/rc-candidate/release-evidence-ledger.md
 .artifacts/rc-candidate/release-source-files.txt

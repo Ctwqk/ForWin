@@ -254,6 +254,7 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "accepted_identity_unchanged": True,
         "phase3_retry_same_identity": True,
         "artifact_key_unchanged": True,
+        "artifact_content_sha256_unchanged": True,
         "barrier_residue_count": 0,
         "duplicate_authoritative_identities": 0,
     },
@@ -370,13 +371,13 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.canon_commits",
             "state.database.accepted_bundles",
             "state.database.maintenance",
-            "state.external.artifact",
         ),
         "after": (
             "state.database.canon_commits",
             "state.database.accepted_bundles",
             "state.database.maintenance",
             "state.database.authoritative_identities",
+            "state.external.replay_baseline_artifact",
             "state.external.artifact",
             "state.barrier.residue_count",
         ),
@@ -799,7 +800,11 @@ def _minio_post_canon(
     ]
     maintenance_during = _path(snapshots, "during", "database.maintenance")
     maintenance_after = _path(snapshots, "after", "database.maintenance")
-    artifact_during = _path(snapshots, "during", "external.artifact")
+    artifact_baseline = _path(
+        snapshots,
+        "after",
+        "external.replay_baseline_artifact",
+    )
     artifact_after = _path(snapshots, "after", "external.artifact")
     identities = _path(
         snapshots, "after", "database.authoritative_identities"
@@ -814,7 +819,13 @@ def _minio_post_canon(
             and maintenance_after["lease_epoch"]
             > maintenance_during["lease_epoch"]
         ),
-        "artifact_key_unchanged": artifact_during["key"] == artifact_after["key"],
+        "artifact_key_unchanged": (
+            artifact_baseline["key"] == artifact_after["key"]
+        ),
+        "artifact_content_sha256_unchanged": (
+            artifact_baseline["content_sha256"]
+            == artifact_after["content_sha256"]
+        ),
         "barrier_residue_count": _path(
             snapshots, "after", "barrier.residue_count"
         ),
@@ -1272,7 +1283,12 @@ def _shape_violations(
             )
         for stage in ("during", "after"):
             record(stage, "database.maintenance", _MAINTENANCE_SCHEMA)
-            record(stage, "external.artifact", _ARTIFACT_SCHEMA)
+        record(
+            "after",
+            "external.replay_baseline_artifact",
+            _ARTIFACT_SCHEMA,
+        )
+        record("after", "external.artifact", _ARTIFACT_SCHEMA)
         records(
             "after",
             "database.authoritative_identities",
@@ -1894,7 +1910,12 @@ def _stable_identity_violations(
             for stage in ("during", "after")
         )
         paths.extend(
-            (stage, "external.artifact.key") for stage in ("during", "after")
+            (
+                ("after", "external.replay_baseline_artifact.key"),
+                ("after", "external.replay_baseline_artifact.content_sha256"),
+                ("after", "external.artifact.key"),
+                ("after", "external.artifact.content_sha256"),
+            )
         )
         paths.append(("after", "database.authoritative_identities"))
     elif kind in {

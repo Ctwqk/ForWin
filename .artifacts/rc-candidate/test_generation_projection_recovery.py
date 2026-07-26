@@ -40,6 +40,7 @@ assert FINALIZER_SPEC is not None and FINALIZER_SPEC.loader is not None
 finalizer = importlib.util.module_from_spec(FINALIZER_SPEC)
 FINALIZER_SPEC.loader.exec_module(finalizer)
 
+COMMON_PATH = Path(__file__).with_name("recovery_runner_common.py")
 
 SOURCE_SHA = "0123456789abcdef0123456789abcdef01234567"
 FAULT_ID = "task4-fault-a"
@@ -51,6 +52,20 @@ CANDIDATE_ID = "candidate-a"
 BODY_SHA = hashlib.sha256(b"fixture chapter").hexdigest()
 GENERATION_WORKER_APPLICATION_NAME = "forwin-recovery-generation-worker"
 OUTBOX_WORKER_APPLICATION_NAME = "forwin-recovery-outbox-worker"
+
+
+def test_task4_reuses_the_single_runner_common_implementation() -> None:
+    assert COMMON_PATH.is_file()
+    shared = runner.common
+    assert runner.OneChapterLifecycle is shared.OneChapterLifecycle
+    assert runner.RecoveryController is shared.RecoveryController
+    assert runner.EvidenceWriter is shared.EvidenceWriter
+    assert runner.atomic_write_json_new is shared.atomic_write_json_new
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert "class OneChapterLifecycle" not in source
+    assert "class RecoveryController" not in source
+    assert "class EvidenceWriter" not in source
+    assert "def atomic_write_new" not in source
 
 
 def composed_text(statement: Any) -> str:

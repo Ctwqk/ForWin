@@ -483,7 +483,7 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
                 "authoritative_identities": [authoritative_record(kind)],
             }
         )
-        during["external"]["artifact"] = artifact_record(kind)
+        after["external"]["replay_baseline_artifact"] = artifact_record(kind)
         after["external"]["artifact"] = artifact_record(kind)
         after["barrier"]["residue_count"] = 0
     elif kind == "publisher_backend_unavailable":
@@ -674,10 +674,10 @@ RECORD_CASES = (
         7,
     ),
     RecordCase(
-        "artifact",
+        "replay baseline artifact",
         "minio_post_canon_unavailable",
-        "during",
-        "external.artifact",
+        "after",
+        "external.replay_baseline_artifact",
         artifact_record("minio_post_canon_unavailable"),
         "key",
         7,
@@ -1085,9 +1085,9 @@ def test_identity_inventory_rejects_wrong_binding(
         ),
         (
             "minio_post_canon_unavailable",
-            "during",
-            "external.artifact.content_sha256",
-            "external.artifact.content_sha256",
+            "after",
+            "external.replay_baseline_artifact.content_sha256",
+            "external.replay_baseline_artifact.content_sha256",
         ),
         (
             "publisher_backend_unavailable",
@@ -1144,9 +1144,9 @@ def test_sha256_evidence_requires_canonical_digest(
         ),
         (
             "minio_post_canon_unavailable",
-            "during",
-            "external.artifact.size",
-            "external.artifact.size",
+            "after",
+            "external.replay_baseline_artifact.size",
+            "external.replay_baseline_artifact.size",
         ),
         (
             "publisher_backend_unavailable",
@@ -1295,6 +1295,26 @@ def test_stable_identity_rejects_mutable_timestamp_substitution() -> None:
     assert any(
         "accepted_bundles[0]" in item and "updated_at" in item
         for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_minio_post_inventory_is_after_only_and_rejects_timestamps() -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    assert values["during"]["state"]["external"] == {}
+    values["during"]["state"]["external"]["artifact"] = artifact_record(kind)
+    values["after"]["state"]["external"]["replay_baseline_artifact"][
+        "last_modified"
+    ] = "2026-07-26T00:00:00Z"
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert (
+        "during.state.external has unknown keys: ['artifact']" in violations
+    )
+    assert any(
+        "replay_baseline_artifact" in item and "last_modified" in item
+        for item in violations
     )
 
 
@@ -1847,6 +1867,17 @@ def contract_cases() -> list[ContractCase]:
                 "after",
                 "external.artifact.key",
                 artifact_record("minio_post_canon_unavailable", "other")["key"],
+            ),
+            False,
+        ),
+        ContractCase(
+            "minio artifact content hash",
+            "minio_post_canon_unavailable",
+            "artifact_content_sha256_unchanged",
+            set_mutation(
+                "after",
+                "external.artifact.content_sha256",
+                digest("minio_post_canon_unavailable", "changed-artifact"),
             ),
             False,
         ),

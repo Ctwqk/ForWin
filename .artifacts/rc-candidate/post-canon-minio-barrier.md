@@ -1,86 +1,131 @@
-# Deterministic Post-Canon MinIO Fault Barrier
+# MinIO Recovery Runner
 
-## Why A Barrier Is Needed
+`minio_recovery.py` is the only MinIO recovery proof path. Each invocation
+creates one generic one-chapter fixture through the supported MCP lifecycle and
+supports exactly:
 
-Manual chapter approval commits Canon first, records the review approval event,
-then runs phase 3. Stopping MinIO before the request reaches Canon proves the
-pre-Canon failure contract instead. Racing a service stop after observing the
-Canon row is not repeatable enough for release evidence.
+- `minio_pre_canon_unavailable`
+- `minio_post_canon_unavailable`
 
-Canon admission already emits one durable `canon.phase3.requested` outbox
-event. The fault harness therefore needs only a deterministic pause between the
-Canon transaction and direct phase 3; it does not need a production recovery
-API, mode, service, or schema change.
+## CLI
 
-## Isolation
+```bash
+export FIXTURE_DATABASE_URL=postgresql://...
+export FORWIN_RECOVERY_MINIO_ENDPOINT=minio.example:9000
+export FORWIN_RECOVERY_MINIO_ACCESS_KEY=...
+export FORWIN_RECOVERY_MINIO_SECRET_KEY=...
+export FORWIN_RECOVERY_MINIO_BUCKET=...
+export FORWIN_RECOVERY_MINIO_PREFIX=artifacts
+export FORWIN_RECOVERY_MINIO_SECURE=false
 
-- Run only on the disposable `forwin-v5-recovery` database.
-- Use one fresh project and one review-ready chapter.
-- Confirm there is no active generation task through the supported API/MCP.
-- Stop the isolated outbox worker before approval so the durable event cannot
-  race the direct phase 3 path.
-- Record the baseline list of non-system triggers/functions before injection.
+python .artifacts/rc-candidate/minio_recovery.py run \
+  --fault-kind minio_pre_canon_unavailable \
+  --fault-id ID \
+  --candidate-manifest PATH \
+  --mcp-url URL \
+  --api-url URL \
+  --database-url-env FIXTURE_DATABASE_URL \
+  --evidence-dir NEW_EMPTY_PATH
+```
 
-## Barrier
+Use `minio_post_canon_unavailable` for the post-Canon proof. The database must
+be the disposable recovery database. Every run requires a new fault ID and
+evidence directory.
 
-1. Open a dedicated PostgreSQL session and acquire one session-level advisory
-   lock derived from the fault ID.
-2. In a separate transaction, create a uniquely named temporary PL/pgSQL
-   function and `BEFORE INSERT` trigger on `decision_events`.
-3. The trigger calls `pg_advisory_xact_lock` only when all conditions match:
-   - exact target `project_id`
-   - exact target `chapter_number`
-   - `event_type = 'review_approved'`
-4. Start the supported chapter review approval request asynchronously.
-5. Poll read-only state until both are true:
-   - exactly one Canon commit exists for the target chapter
-   - the approval backend is waiting on the advisory lock
-6. Stop only `forwin-v5-recovery-minio` and record the service transition.
-7. Release the session advisory lock. The review event transaction completes,
-   then direct phase 3 reaches the real unavailable MinIO backend.
-8. Require the approval response to report accepted Canon with deferred or
-   pending maintenance, never a rolled-back Canon.
+The shared `recovery_runner_common.py` owns the Task 4/Task 5 one-chapter MCP
+lifecycle, candidate identity, controller client, and atomic evidence writer.
+The MinIO runner contains only its own SQL, barrier, MinIO inventory, approval,
+and replay behavior. It never calls Docker or writes a business table except
+for the exact post-Canon replay operation below.
 
-The trigger is a disposable test barrier, not a product feature. It must never
-be installed in a shared or production database.
+## Pre-Canon
 
-## During-Fault Assertions
+1. Create and start one chapter through MCP, then read SQL until the candidate
+   is `ready_for_canon`.
+2. Capture the candidate identity and invoke controller `stop minio`.
+3. Send
+   `POST /api/projects/{project_id}/chapters/{chapter_number}/review/approve`
+   with `continue_generation=false` and the fault/candidate-scoped reason.
+4. Require that exact request to fail while SQL still shows zero Canon commits
+   and the same candidate identity. A successful request is `setup_blocked`.
+5. Invoke controller `start minio`, replay the same immutable request object,
+   and wait for one Canon, one processed phase-3 event, four succeeded
+   maintenance steps, and the expected world object.
 
-- Chapter and candidate are accepted.
-- Exactly one `CanonCommitRecord` exists and its ID is unchanged.
-- Exactly three deterministic Canon outbox identities exist.
-- `canon.phase3.requested` remains retryable, not duplicated.
-- The phase 3 world step is failed or pending under the same maintenance row.
-- The expected stable trace key is
-  `post_canon/{canon_commit_id}/world/llm_trace.json`.
-- No second candidate, Canon commit, GraphDelta, outbox event, maintenance row,
-  publisher job, or artifact identity is created.
+The request identity hashes its method, URL, body, and candidate ID. Both
+attempts record the same hash.
 
-If the world step produces no LLM attempt and therefore performs no MinIO
-write, the run does not prove this fault and must be discarded rather than
-reported as a pass.
+## Post-Canon Boundary
 
-## Recovery
+The runner executes this order:
 
-1. Start MinIO and require `/minio/health/ready` from the API container.
-2. Start the outbox worker.
-3. Wait for the existing phase 3 event to become processed and all expected
-   maintenance steps to become succeeded.
-4. Verify the world step uses the same run ID, incremented lease epoch, and the
-   same deterministic artifact key.
-5. Verify accepted Canon identity and all counts are unchanged.
-6. Replay the phase 3 event handler once more through its normal idempotent
-   path and verify there is no new external or database identity.
+1. `setup-hold outbox-worker --hold-id pre-approval`
+2. Install the fault-ID-scoped `decision_events` barrier.
+3. Send the supported approval asynchronously.
+4. Require exactly one advisory holder and one blocked waiter. The waiter must
+   be the approval API client backend under the observed database role, blocked
+   only by the scoped holder. SQL must already show exactly one committed Canon
+   and one fixture-bound pending `canon.phase3.requested` event.
+5. `stop minio`, release the database barrier, join the approval request, and
+   require the response status `maintenance_pending`.
+6. Require the world maintenance row to be `pending` or `failed`, under its
+   unchanged natural key, while the held phase-3 event remains pending.
+7. Drop the scoped trigger, function, and scope table and require zero object
+   and advisory-lock residue.
+8. `start minio`, then
+   `setup-release outbox-worker --hold-id pre-approval`.
+9. Wait for the real worker to process the exact phase-3 event and for all four
+   maintenance steps and the MinIO object to converge.
 
-## Mandatory Cleanup
+The trigger matches the exact project, chapter, approval reason,
+`event_type='review_approved'`, and `actor_type='api'`. Missing or ambiguous
+holder, waiter, role, Canon count, event identity, or residue is
+`setup_blocked`.
 
-In a `finally` path:
+## Same-Event Replay
 
-1. Release the advisory lock if still held.
-2. Drop the uniquely named trigger.
-3. Drop the uniquely named function.
-4. Restore MinIO and the outbox worker if either is stopped.
-5. Compare non-system trigger/function inventories to the baseline and require
-   zero test-barrier residue.
-6. Hash the barrier script, SQL text, service event log, API bodies, and all
-   before/during/after snapshots into the fault report.
+After initial convergence:
+
+1. `setup-hold outbox-worker --hold-id same-event-replay`.
+2. Read the sole processed fixture-bound `canon.phase3.requested` row.
+3. Execute one conditional `UPDATE outbox_events SET status='pending', ...`
+   whose `WHERE` binds the exact row ID, event ID, processed status, attempts,
+   availability, worker and lease fields, processed/error fields, raw payload,
+   aggregate type/ID, event type, and payload Canon idempotency key.
+4. Require `rowcount = 1`, reread the row, and require event ID, payload hash,
+   aggregate identity, and Canon idempotency identity to be unchanged.
+5. Write the before hash, predicate hash, rowcount, after hash, and stable event
+   identity as `same-event-replay.json`.
+6. `setup-release outbox-worker --hold-id same-event-replay` and let the real
+   worker replay the event.
+7. Require the maintenance natural-key inventory and complete MinIO object
+   inventory to equal their pre-replay baselines.
+
+The operation never inserts an event and never changes its ID, payload,
+aggregate, idempotency identity, attempts, or lease epoch.
+
+## MinIO Evidence
+
+The expected world key is derived from production composition:
+
+```text
+{prefix}/projects/{project_id}/keyed/post_canon/{canon_id}/world/llm_trace.json
+```
+
+Inventory uses recursive list, HEAD, and object GET. Each normalized object is
+exactly `{key, etag, size, content_type, content_sha256}`. The SHA-256 is
+computed independently from downloaded bytes; timestamps and metadata are
+excluded. List/HEAD disagreement, byte/HEAD size disagreement, duplicate keys,
+or a missing expected key fails closed.
+
+## Evidence And Cleanup
+
+All success snapshots run through Task 1's strict evaluator. The shared writer
+atomically creates direct-child artifacts without clobbering, reopens and
+rehashes them, rederives assertions, and validates the report with Task 2's
+finalizer before and after writing.
+
+Barrier sessions and asynchronous approval are released, joined, and closed in
+`finally`; the MinIO client is closed as well. Success invokes controller
+`destroy`. Any `SetupBlocked` or `RunnerError` invokes controller `abort` and
+writes only a non-PASS `setup_blocked` report.

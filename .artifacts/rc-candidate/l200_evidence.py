@@ -144,6 +144,7 @@ def direct_mcp_http_client(
     headers: dict[str, str] | None = None,
     timeout: httpx.Timeout | None = None,
     auth: httpx.Auth | None = None,
+    follow_redirects: bool = True,
 ) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         headers=headers,

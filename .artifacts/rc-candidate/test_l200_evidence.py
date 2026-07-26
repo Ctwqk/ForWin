@@ -1168,6 +1168,7 @@ def test_release_http_client_factories_disable_env_and_redirects(
             headers={"X-Test": "1"},
             timeout=timeout,
             auth=None,
+            follow_redirects=True,
         )
         is async_sentinel
     )

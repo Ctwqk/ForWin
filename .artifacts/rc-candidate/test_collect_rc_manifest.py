@@ -151,6 +151,7 @@ def test_candidate_mcp_client_disables_env_and_redirects(
             headers={"X-Test": "1"},
             timeout=timeout,
             auth=None,
+            follow_redirects=True,
         )
         is sentinel
     )

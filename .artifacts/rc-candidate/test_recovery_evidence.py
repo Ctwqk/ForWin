@@ -58,6 +58,7 @@ def fixture_identity(kind: str) -> dict[str, str]:
     )
     return {
         "fixture_id": token(kind, "fixture"),
+        "fault_id": token(kind, "fault"),
         "resource_type": resource_type,
         "resource_id": resource_id,
     }
@@ -91,6 +92,7 @@ def snapshots(kind: str) -> dict[str, dict[str, Any]]:
 def canon_record(kind: str, variant: str = "primary") -> dict[str, Any]:
     return {
         "canon_id": token(kind, f"canon-{variant}"),
+        "natural_key": token(kind, f"canon-natural-{variant}"),
         "project_id": token(kind, "project"),
         "chapter_id": token(kind, "chapter"),
         "canon_version": 1 if variant == "primary" else 2,
@@ -144,8 +146,14 @@ def outbox_record(kind: str, attempt: int = 0) -> dict[str, Any]:
 
 
 def projection_observation(kind: str, status: str = "converged") -> dict[str, str]:
+    identity_label = (
+        "point-primary"
+        if kind == "qdrant_unavailable"
+        else "projection-primary"
+    )
     return {
         "projection_type": "vector",
+        "identity_id": token(kind, identity_label),
         "canon_id": token(kind, "canon-primary"),
         "status": status,
     }
@@ -154,6 +162,7 @@ def projection_observation(kind: str, status: str = "converged") -> dict[str, st
 def point_record(kind: str, variant: str = "primary") -> dict[str, str]:
     return {
         "collection": "canon",
+        "projection_type": "vector",
         "point_id": token(kind, f"point-{variant}"),
         "canon_id": token(kind, "canon-primary"),
     }
@@ -243,7 +252,7 @@ def receipt_record(kind: str, variant: str = "primary") -> dict[str, str]:
     return {
         "receipt_id": token(kind, f"receipt-{variant}"),
         "job_id": token(kind, "job-primary"),
-        "attempt_id": token(kind, "attempt-primary"),
+        "attempt_id": token(kind, f"attempt-{variant}"),
         "remote_mutation_id": token(kind, f"remote-mutation-{variant}"),
     }
 
@@ -412,7 +421,7 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
                 "job": backend_job_record(kind, "owner-new"),
                 "jobs": [job_identity_record(kind)],
                 "attempts": [attempt_record(kind)],
-                "receipts": [],
+                "receipts": [receipt_record(kind)],
             }
         )
         after["api"]["stale_token_observation"] = stale_token_observation(kind)
@@ -778,6 +787,242 @@ def test_every_normalized_record_has_a_strict_schema(
 
 
 @pytest.mark.parametrize(
+    ("kind", "path"),
+    (
+        (
+            "generation_worker_precommit_crash",
+            "database.authoritative_identities",
+        ),
+        (
+            "generation_worker_postcommit_crash",
+            "database.authoritative_identities",
+        ),
+        ("minio_pre_canon_unavailable", "database.authoritative_identities"),
+        ("minio_post_canon_unavailable", "database.authoritative_identities"),
+        ("qdrant_unavailable", "external.point_identities"),
+        (
+            "projection_consumer_unavailable",
+            "external.projection_identities",
+        ),
+        ("publisher_backend_unavailable", "database.jobs"),
+        ("publisher_backend_unavailable", "database.attempts"),
+        ("publisher_backend_unavailable", "database.receipts"),
+    ),
+)
+def test_required_identity_inventories_reject_empty_coverage(
+    kind: str, path: str
+) -> None:
+    values = valid_snapshots(kind)
+    set_path(values["after"]["state"], path, [])
+
+    assert any(
+        f"{path} coverage mismatch" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "path"),
+    (
+        (
+            "generation_worker_precommit_crash",
+            "database.authoritative_identities",
+        ),
+        ("qdrant_unavailable", "external.point_identities"),
+        (
+            "projection_consumer_unavailable",
+            "external.projection_identities",
+        ),
+    ),
+)
+def test_identity_inventory_rejects_extra_coverage(kind: str, path: str) -> None:
+    values = valid_snapshots(kind)
+    rows = path_value(values["after"]["state"], path)
+    rows.append(copy.deepcopy(rows[0]))
+
+    assert any(
+        f"{path} coverage mismatch" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "field"),
+    (
+        (
+            "generation_worker_precommit_crash",
+            "database.authoritative_identities",
+            "record_id",
+        ),
+        (
+            "generation_worker_precommit_crash",
+            "database.authoritative_identities",
+            "natural_key",
+        ),
+        ("qdrant_unavailable", "external.point_identities", "canon_id"),
+        ("qdrant_unavailable", "external.point_identities", "point_id"),
+        (
+            "projection_consumer_unavailable",
+            "external.projection_identities",
+            "canon_id",
+        ),
+        (
+            "projection_consumer_unavailable",
+            "external.projection_identities",
+            "projection_id",
+        ),
+    ),
+)
+def test_identity_inventory_rejects_wrong_binding(
+    kind: str, path: str, field: str
+) -> None:
+    values = valid_snapshots(kind)
+    rows = path_value(values["after"]["state"], path)
+    rows[0][field] = token(kind, "wrong-binding")
+
+    assert any(
+        f"{path} coverage mismatch" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "stage", "path", "violation_path"),
+    (
+        (
+            "generation_worker_postcommit_crash",
+            "during",
+            "database.canon_commits.0.content_sha256",
+            "database.canon_commits[0].content_sha256",
+        ),
+        (
+            "generation_worker_postcommit_crash",
+            "during",
+            "database.accepted_bundles.0.content_sha256",
+            "database.accepted_bundles[0].content_sha256",
+        ),
+        (
+            "minio_pre_canon_unavailable",
+            "before",
+            "database.candidate.content_sha256",
+            "database.candidate.content_sha256",
+        ),
+        (
+            "projection_consumer_unavailable",
+            "before",
+            "database.outbox.payload_sha256",
+            "database.outbox.payload_sha256",
+        ),
+        (
+            "minio_post_canon_unavailable",
+            "during",
+            "external.artifact.content_sha256",
+            "external.artifact.content_sha256",
+        ),
+        (
+            "publisher_backend_unavailable",
+            "after",
+            "external.shared_path_observation.content_sha256",
+            "external.shared_path_observation.content_sha256",
+        ),
+    ),
+)
+def test_sha256_evidence_requires_canonical_digest(
+    kind: str, stage: str, path: str, violation_path: str
+) -> None:
+    values = valid_snapshots(kind)
+    set_path(values[stage]["state"], path, "not-a-sha256")
+
+    assert any(
+        f"{violation_path} is not a canonical SHA-256 digest" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "stage", "path", "violation_path"),
+    (
+        (
+            "generation_worker_precommit_crash",
+            "before",
+            "database.task.lease_epoch",
+            "database.task.lease_epoch",
+        ),
+        (
+            "generation_worker_postcommit_crash",
+            "during",
+            "database.canon_commits.0.canon_version",
+            "database.canon_commits[0].canon_version",
+        ),
+        (
+            "qdrant_unavailable",
+            "before",
+            "database.outbox.attempt",
+            "database.outbox.attempt",
+        ),
+        (
+            "minio_post_canon_unavailable",
+            "during",
+            "database.maintenance.attempt",
+            "database.maintenance.attempt",
+        ),
+        (
+            "minio_post_canon_unavailable",
+            "during",
+            "database.maintenance.lease_epoch",
+            "database.maintenance.lease_epoch",
+        ),
+        (
+            "minio_post_canon_unavailable",
+            "during",
+            "external.artifact.size",
+            "external.artifact.size",
+        ),
+        (
+            "publisher_backend_unavailable",
+            "after",
+            "database.attempts.0.attempt_number",
+            "database.attempts[0].attempt_number",
+        ),
+        (
+            "publisher_captcha",
+            "after",
+            "api.mutation_observation.bypass_attempt_count",
+            "api.mutation_observation.bypass_attempt_count",
+        ),
+        (
+            "publisher_captcha",
+            "after",
+            "api.mutation_observation.external_mutation_count",
+            "api.mutation_observation.external_mutation_count",
+        ),
+        (
+            "minio_post_canon_unavailable",
+            "after",
+            "barrier.residue_count",
+            "barrier.residue_count",
+        ),
+        (
+            "publisher_backend_unavailable",
+            "after",
+            "external.orphan_residue_count",
+            "external.orphan_residue_count",
+        ),
+    ),
+)
+def test_integer_evidence_cannot_be_negative(
+    kind: str, stage: str, path: str, violation_path: str
+) -> None:
+    values = valid_snapshots(kind)
+    set_path(values[stage]["state"], path, -1)
+
+    assert any(
+        f"{violation_path} is negative" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
     "bad_sha",
     (
         "a" * 39,
@@ -811,6 +1056,21 @@ def test_fixture_identity_must_be_stable_across_all_stages() -> None:
     )
 
 
+def test_fixture_identity_must_match_each_snapshot_fault_id() -> None:
+    kind = "qdrant_unavailable"
+    values = valid_snapshots(kind)
+    for snapshot in values.values():
+        snapshot["fault_id"] = token(kind, "replacement-fault")
+
+    violations = evidence.snapshot_violations(kind, values)
+
+    for stage in evidence.STAGES:
+        assert (
+            f"{stage}.state.target.fixture.fault_id mismatch"
+            in violations
+        )
+
+
 def test_fault_local_fixtures_are_distinct_and_publisher_jobs_are_projectless() -> None:
     fixtures = [fixture_identity(kind) for kind in FAULT_KINDS]
 
@@ -822,6 +1082,25 @@ def test_fault_local_fixtures_are_distinct_and_publisher_jobs_are_projectless() 
             job = snapshot["state"]["database"].get("job")
             if job is not None:
                 assert "project_id" not in job
+
+
+@pytest.mark.parametrize(
+    "kind",
+    (
+        "publisher_browser_unavailable",
+        "publisher_captcha",
+        "publisher_mfa",
+        "publisher_account_risk",
+    ),
+)
+def test_no_mutation_faults_allow_empty_attempt_and_receipt_inventories(
+    kind: str,
+) -> None:
+    values = valid_snapshots(kind)
+
+    assert values["after"]["state"]["database"].get("attempts", []) == []
+    assert values["after"]["state"]["database"]["receipts"] == []
+    assert evidence.snapshot_violations(kind, values) == []
 
 
 def test_unknown_snapshot_and_state_keys_are_rejected() -> None:
@@ -1020,7 +1299,7 @@ def test_risk_action_and_replay_assertions_are_identity_derived(
             "publisher_backend_unavailable",
             "database.attempts.0.owner_token",
             "wrong-owner",
-            "database.attempts[0] owner token mismatch",
+            "database.attempts coverage mismatch",
         ),
     ),
 )
@@ -1046,6 +1325,25 @@ def test_receipt_identity_must_reference_the_reclaimed_job_and_attempt() -> None
         "database.receipts[0] attempt identity mismatch" in item
         for item in evidence.snapshot_violations(kind, values)
     )
+
+
+def test_backend_attempt_history_allows_failed_stale_attempt_without_receipt() -> None:
+    kind = "publisher_backend_unavailable"
+    values = valid_snapshots(kind)
+    stale_attempt = attempt_record(kind)
+    stale_attempt["owner_token"] = token(kind, "owner-old")
+    stale_attempt["status"] = "failed"
+    values["after"]["state"]["database"]["attempts"] = [
+        stale_attempt,
+        attempt_record(kind, "secondary"),
+    ]
+    values["after"]["state"]["database"]["receipts"] = [
+        receipt_record(kind, "secondary")
+    ]
+
+    assert evidence.snapshot_violations(kind, values) == []
+    assertions = evidence.derive_assertions(kind, values)
+    assert evidence.assertion_violations(kind, assertions) == []
 
 
 def set_mutation(stage: str, path: str, value: Any) -> Callable[[dict[str, Any]], None]:
@@ -1081,8 +1379,16 @@ class ContractCase:
     kind: str
     assertion: str
     mutate: Callable[[dict[str, Any]], None]
-    actual: Any | None = None
-    schema_fragment: str | None = None
+    actual: Any
+
+
+@dataclass(frozen=True)
+class SchemaInvariantCase:
+    name: str
+    kind: str
+    assertion: str
+    mutate: Callable[[dict[str, Any]], None]
+    violation_fragment: str
 
 
 def contract_cases() -> list[ContractCase]:
@@ -1120,15 +1426,31 @@ def contract_cases() -> list[ContractCase]:
             "precommit one canon after",
             "generation_worker_precommit_crash",
             "canon_commits_after_recovery",
-            set_mutation("after", "database.canon_commits", []),
-            0,
-        ),
-        ContractCase(
-            "precommit authoritative duplicate",
-            "generation_worker_precommit_crash",
-            "duplicate_authoritative_identities",
-            duplicate_mutation("after", "database.authoritative_identities"),
-            1,
+            multi_mutation(
+                set_mutation(
+                    "after",
+                    "database.canon_commits",
+                    [
+                        canon_record("generation_worker_precommit_crash"),
+                        canon_record(
+                            "generation_worker_precommit_crash", "secondary"
+                        ),
+                    ],
+                ),
+                set_mutation(
+                    "after",
+                    "database.authoritative_identities",
+                    [
+                        authoritative_record(
+                            "generation_worker_precommit_crash"
+                        ),
+                        authoritative_record(
+                            "generation_worker_precommit_crash", "secondary"
+                        ),
+                    ],
+                ),
+            ),
+            2,
         ),
         ContractCase(
             "postcommit same task",
@@ -1171,13 +1493,6 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
-            "postcommit authoritative duplicate",
-            "generation_worker_postcommit_crash",
-            "duplicate_authoritative_identities",
-            duplicate_mutation("after", "database.authoritative_identities"),
-            1,
-        ),
-        ContractCase(
             "qdrant canon identity",
             "qdrant_unavailable",
             "canon_identity_unchanged",
@@ -1201,13 +1516,6 @@ def contract_cases() -> list[ContractCase]:
             "projection_converged",
             set_mutation("after", "external.projections.0.status", "pending"),
             False,
-        ),
-        ContractCase(
-            "qdrant point duplicate",
-            "qdrant_unavailable",
-            "duplicate_vector_identities",
-            duplicate_mutation("after", "external.point_identities"),
-            1,
         ),
         ContractCase(
             "projection canon identity",
@@ -1239,13 +1547,6 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
-            "projection identity duplicate",
-            "projection_consumer_unavailable",
-            "duplicate_projection_identities",
-            duplicate_mutation("after", "external.projection_identities"),
-            1,
-        ),
-        ContractCase(
             "minio pre zero canon",
             "minio_pre_canon_unavailable",
             "canon_commits_during_fault",
@@ -1271,15 +1572,31 @@ def contract_cases() -> list[ContractCase]:
             "minio pre one canon",
             "minio_pre_canon_unavailable",
             "canon_commits_after_recovery",
-            set_mutation("after", "database.canon_commits", []),
-            0,
-        ),
-        ContractCase(
-            "minio pre authoritative duplicate",
-            "minio_pre_canon_unavailable",
-            "duplicate_authoritative_identities",
-            duplicate_mutation("after", "database.authoritative_identities"),
-            1,
+            multi_mutation(
+                set_mutation(
+                    "after",
+                    "database.canon_commits",
+                    [
+                        canon_record("minio_pre_canon_unavailable"),
+                        canon_record(
+                            "minio_pre_canon_unavailable", "secondary"
+                        ),
+                    ],
+                ),
+                set_mutation(
+                    "after",
+                    "database.authoritative_identities",
+                    [
+                        authoritative_record(
+                            "minio_pre_canon_unavailable"
+                        ),
+                        authoritative_record(
+                            "minio_pre_canon_unavailable", "secondary"
+                        ),
+                    ],
+                ),
+            ),
+            2,
         ),
         ContractCase(
             "minio post canon identity",
@@ -1326,13 +1643,6 @@ def contract_cases() -> list[ContractCase]:
             "minio_post_canon_unavailable",
             "barrier_residue_count",
             set_mutation("after", "barrier.residue_count", 1),
-            1,
-        ),
-        ContractCase(
-            "minio post authoritative duplicate",
-            "minio_post_canon_unavailable",
-            "duplicate_authoritative_identities",
-            duplicate_mutation("after", "database.authoritative_identities"),
             1,
         ),
         ContractCase(
@@ -1390,34 +1700,6 @@ def contract_cases() -> list[ContractCase]:
             1,
         ),
         ContractCase(
-            "backend duplicate jobs",
-            "publisher_backend_unavailable",
-            "duplicate_jobs",
-            duplicate_mutation("after", "database.jobs"),
-            1,
-        ),
-        ContractCase(
-            "backend duplicate attempts",
-            "publisher_backend_unavailable",
-            "duplicate_attempts",
-            duplicate_mutation("after", "database.attempts"),
-            1,
-        ),
-        ContractCase(
-            "backend duplicate receipts",
-            "publisher_backend_unavailable",
-            "duplicate_receipts",
-            set_mutation(
-                "after",
-                "database.receipts",
-                [
-                    receipt_record("publisher_backend_unavailable"),
-                    receipt_record("publisher_backend_unavailable"),
-                ],
-            ),
-            1,
-        ),
-        ContractCase(
             "browser canon identity",
             "publisher_browser_unavailable",
             "canon_identity_unchanged",
@@ -1427,17 +1709,6 @@ def contract_cases() -> list[ContractCase]:
                 digest("publisher_browser_unavailable", "changed-canon"),
             ),
             False,
-        ),
-        ContractCase(
-            "browser same job",
-            "publisher_browser_unavailable",
-            "same_job_identity",
-            set_mutation(
-                "after",
-                "database.job.job_id",
-                token("publisher_browser_unavailable", "job-other"),
-            ),
-            schema_fragment="fixture resource mismatch",
         ),
         ContractCase(
             "browser pending job",
@@ -1479,15 +1750,6 @@ def contract_cases() -> list[ContractCase]:
     for kind in RISK_KINDS:
         cases.extend(
             (
-                ContractCase(
-                    f"{kind} same job",
-                    kind,
-                    "same_job_identity",
-                    set_mutation(
-                        "after", "database.job.job_id", token(kind, "job-other")
-                    ),
-                    schema_fragment="fixture resource mismatch",
-                ),
                 ContractCase(
                     f"{kind} paused fence",
                     kind,
@@ -1559,17 +1821,109 @@ def contract_cases() -> list[ContractCase]:
     return cases
 
 
+def schema_invariant_cases() -> list[SchemaInvariantCase]:
+    cases = [
+        SchemaInvariantCase(
+            "precommit authoritative coverage",
+            "generation_worker_precommit_crash",
+            "duplicate_authoritative_identities",
+            duplicate_mutation("after", "database.authoritative_identities"),
+            "after.state.database.authoritative_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "postcommit authoritative coverage",
+            "generation_worker_postcommit_crash",
+            "duplicate_authoritative_identities",
+            duplicate_mutation("after", "database.authoritative_identities"),
+            "after.state.database.authoritative_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "qdrant point coverage",
+            "qdrant_unavailable",
+            "duplicate_vector_identities",
+            duplicate_mutation("after", "external.point_identities"),
+            "after.state.external.point_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "projection identity coverage",
+            "projection_consumer_unavailable",
+            "duplicate_projection_identities",
+            duplicate_mutation("after", "external.projection_identities"),
+            "after.state.external.projection_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "minio pre authoritative coverage",
+            "minio_pre_canon_unavailable",
+            "duplicate_authoritative_identities",
+            duplicate_mutation("after", "database.authoritative_identities"),
+            "after.state.database.authoritative_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "minio post authoritative coverage",
+            "minio_post_canon_unavailable",
+            "duplicate_authoritative_identities",
+            duplicate_mutation("after", "database.authoritative_identities"),
+            "after.state.database.authoritative_identities coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "backend job coverage",
+            "publisher_backend_unavailable",
+            "duplicate_jobs",
+            duplicate_mutation("after", "database.jobs"),
+            "after.state.database.jobs coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "backend attempt coverage",
+            "publisher_backend_unavailable",
+            "duplicate_attempts",
+            duplicate_mutation("after", "database.attempts"),
+            "after.state.database.attempts coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "backend receipt coverage",
+            "publisher_backend_unavailable",
+            "duplicate_receipts",
+            duplicate_mutation("after", "database.receipts"),
+            "after.state.database.receipts coverage mismatch",
+        ),
+        SchemaInvariantCase(
+            "browser same job",
+            "publisher_browser_unavailable",
+            "same_job_identity",
+            set_mutation(
+                "after",
+                "database.job.job_id",
+                token("publisher_browser_unavailable", "job-other"),
+            ),
+            "after.state.database.job fixture resource mismatch",
+        ),
+    ]
+    for kind in RISK_KINDS:
+        cases.append(
+            SchemaInvariantCase(
+                f"{kind} same job",
+                kind,
+                "same_job_identity",
+                set_mutation(
+                    "after",
+                    "database.job.job_id",
+                    token(kind, "job-other"),
+                ),
+                "after.state.database.job fixture resource mismatch",
+            )
+        )
+    return cases
+
+
 @pytest.mark.parametrize(
     "case", contract_cases(), ids=lambda case: case.name
 )
-def test_each_derived_contract_term_has_a_causal_negative(case: ContractCase) -> None:
+def test_each_reachable_derived_term_has_a_causal_negative(
+    case: ContractCase,
+) -> None:
     values = valid_snapshots(case.kind)
     case.mutate(values)
     violations = evidence.snapshot_violations(case.kind, values)
-
-    if case.schema_fragment is not None:
-        assert any(case.schema_fragment in item for item in violations)
-        return
 
     assert violations == []
     assertions = evidence.derive_assertions(case.kind, values)
@@ -1578,6 +1932,35 @@ def test_each_derived_contract_term_has_a_causal_negative(case: ContractCase) ->
         item.startswith(f"{case.kind}.{case.assertion}=")
         for item in evidence.assertion_violations(case.kind, assertions)
     )
+
+
+@pytest.mark.parametrize(
+    "case", schema_invariant_cases(), ids=lambda case: case.name
+)
+def test_schema_enforced_contract_invariants(
+    case: SchemaInvariantCase,
+) -> None:
+    values = valid_snapshots(case.kind)
+    case.mutate(values)
+
+    violations = evidence.snapshot_violations(case.kind, values)
+
+    assert case.violation_fragment in violations
+    assert case.assertion in evidence.FAULT_CONTRACTS[case.kind]
+
+
+def test_each_report_assertion_has_causal_or_schema_invariant_coverage() -> None:
+    covered = {
+        (case.kind, case.assertion)
+        for case in (*contract_cases(), *schema_invariant_cases())
+    }
+    expected = {
+        (kind, assertion)
+        for kind, contract in evidence.FAULT_CONTRACTS.items()
+        for assertion in contract
+    }
+
+    assert covered == expected
 
 
 def test_cross_fault_snapshot_identities_are_rejected() -> None:

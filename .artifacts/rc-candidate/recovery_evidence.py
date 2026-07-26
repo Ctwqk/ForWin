@@ -43,12 +43,14 @@ _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 _FIXTURE_SCHEMA = {
     "fixture_id": str,
+    "fault_id": str,
     "resource_type": str,
     "resource_id": str,
 }
 _TASK_SCHEMA = {"task_id": str, "lease_epoch": int}
 _CANON_SCHEMA = {
     "canon_id": str,
+    "natural_key": str,
     "project_id": str,
     "chapter_id": str,
     "canon_version": int,
@@ -85,10 +87,16 @@ _OUTBOX_SCHEMA = {
 }
 _PROJECTION_OBSERVATION_SCHEMA = {
     "projection_type": str,
+    "identity_id": str,
     "canon_id": str,
     "status": str,
 }
-_POINT_SCHEMA = {"collection": str, "point_id": str, "canon_id": str}
+_POINT_SCHEMA = {
+    "collection": str,
+    "projection_type": str,
+    "point_id": str,
+    "canon_id": str,
+}
 _PROJECTION_IDENTITY_SCHEMA = {
     "projection_type": str,
     "projection_id": str,
@@ -1018,7 +1026,7 @@ def _shape_violations(
                 )
                 violations.append(f"{path}.{field} is not {description}")
             elif (
-                field == "content_sha256"
+                field.endswith("_sha256")
                 and _SHA256_PATTERN.fullmatch(nested) is None
             ):
                 violations.append(
@@ -1209,6 +1217,25 @@ def _allowed_state_fields(kind: str, stage: str) -> dict[str, set[str]]:
     return allowed
 
 
+def _coverage_violations(
+    stage: str,
+    dotted: str,
+    expected: Sequence[tuple[str, ...]],
+    actual: Sequence[tuple[str, ...]],
+) -> list[str]:
+    expected_counts = Counter(expected)
+    actual_counts = Counter(actual)
+    complete = (
+        bool(expected_counts)
+        and expected_counts == actual_counts
+        and all(count == 1 for count in expected_counts.values())
+        and all(count == 1 for count in actual_counts.values())
+    )
+    if complete:
+        return []
+    return [f"{stage}.state.{dotted} coverage mismatch"]
+
+
 def _relation_violations(
     kind: str, snapshots: Mapping[str, dict[str, Any]]
 ) -> list[str]:
@@ -1219,6 +1246,11 @@ def _relation_violations(
         return violations
 
     fixture = fixtures[0]
+    for stage, stage_fixture in zip(STAGES, fixtures):
+        if stage_fixture["fault_id"] != snapshots[stage]["fault_id"]:
+            violations.append(
+                f"{stage}.state.target.fixture.fault_id mismatch"
+            )
     publisher = kind.startswith("publisher_")
     expected_resource_type = "publisher_job" if publisher else "chapter"
     if fixture["resource_type"] != expected_resource_type:
@@ -1253,6 +1285,36 @@ def _relation_violations(
     for stage, canon_path, related_path in _canon_relation_paths(kind):
         canon_rows = _path(snapshots, stage, canon_path)
         related_rows = _path(snapshots, stage, related_path)
+        if related_path == "database.authoritative_identities":
+            expected = [
+                (
+                    "canon",
+                    row["canon_id"],
+                    row["natural_key"],
+                    row["project_id"],
+                    row["chapter_id"],
+                )
+                for row in canon_rows
+            ]
+            actual = [
+                (
+                    row["entity_type"],
+                    row["record_id"],
+                    row["natural_key"],
+                    row["project_id"],
+                    row["chapter_id"],
+                )
+                for row in related_rows
+            ]
+            violations.extend(
+                _coverage_violations(
+                    stage,
+                    related_path,
+                    expected,
+                    actual,
+                )
+            )
+            continue
         if not canon_rows:
             continue
         canon = canon_rows[0]
@@ -1274,14 +1336,6 @@ def _relation_violations(
                 violations.append(
                     f"{stage}.state.{related_path}{suffix} "
                     "canon resource mismatch"
-                )
-            if (
-                related_path == "database.authoritative_identities"
-                and row["record_id"] != canon["canon_id"]
-            ):
-                violations.append(
-                    f"{stage}.state.{related_path}[{index}] "
-                    "canon identity mismatch"
                 )
     violations.extend(_external_relation_violations(kind, snapshots))
     return violations
@@ -1382,6 +1436,57 @@ def _external_relation_violations(
 ) -> list[str]:
     violations: list[str] = []
     if kind in {"qdrant_unavailable", "projection_consumer_unavailable"}:
+        projections = _path(snapshots, "after", "external.projections")
+        identity_path = (
+            "external.point_identities"
+            if kind == "qdrant_unavailable"
+            else "external.projection_identities"
+        )
+        identities = _path(snapshots, "after", identity_path)
+        if kind == "qdrant_unavailable":
+            expected_coverage = [
+                (
+                    "canon",
+                    row["projection_type"],
+                    row["canon_id"],
+                    row["identity_id"],
+                )
+                for row in projections
+            ]
+            actual_coverage = [
+                (
+                    row["collection"],
+                    row["projection_type"],
+                    row["canon_id"],
+                    row["point_id"],
+                )
+                for row in identities
+            ]
+        else:
+            expected_coverage = [
+                (
+                    row["projection_type"],
+                    row["canon_id"],
+                    row["identity_id"],
+                )
+                for row in projections
+            ]
+            actual_coverage = [
+                (
+                    row["projection_type"],
+                    row["canon_id"],
+                    row["projection_id"],
+                )
+                for row in identities
+            ]
+        violations.extend(
+            _coverage_violations(
+                "after",
+                identity_path,
+                expected_coverage,
+                actual_coverage,
+            )
+        )
         canon_rows = _path(snapshots, "after", "database.canon_commits")
         if not canon_rows:
             return violations
@@ -1394,17 +1499,12 @@ def _external_relation_violations(
             violations.append(
                 "after.state.database.outbox canon identity mismatch"
             )
-        for row in _path(snapshots, "after", "external.projections"):
+        for row in projections:
             if row["canon_id"] != canon_id:
                 violations.append(
                     "after.state.external.projections canon identity mismatch"
                 )
-        identity_path = (
-            "external.point_identities"
-            if kind == "qdrant_unavailable"
-            else "external.projection_identities"
-        )
-        for row in _path(snapshots, "after", identity_path):
+        for row in identities:
             if row["canon_id"] != canon_id:
                 violations.append(
                     f"after.state.{identity_path} canon identity mismatch"
@@ -1443,9 +1543,59 @@ def _external_relation_violations(
         jobs = _path(snapshots, "after", "database.jobs")
         attempts = _path(snapshots, "after", "database.attempts")
         receipts = _path(snapshots, "after", "database.receipts")
-        if not jobs:
+        violations.extend(
+            _coverage_violations(
+                "after",
+                "database.jobs",
+                [(job["job_id"], job["logical_key"])],
+                [
+                    (row["job_id"], row["logical_key"])
+                    for row in jobs
+                ],
+            )
+        )
+        attempt_natural_keys = [
+            (row["job_id"], str(row["attempt_number"]))
+            for row in attempts
+        ]
+        attempt_ids = [row["attempt_id"] for row in attempts]
+        attempt_coverage_complete = (
+            bool(attempts)
+            and all(row["job_id"] == job["job_id"] for row in attempts)
+            and any(
+                row["owner_token"] == job["owner_token"]
+                for row in attempts
+            )
+            and len(set(attempt_natural_keys)) == len(attempt_natural_keys)
+            and len(set(attempt_ids)) == len(attempt_ids)
+        )
+        if not attempt_coverage_complete:
             violations.append(
-                "after.state.database.jobs target job identity is missing"
+                "after.state.database.attempts coverage mismatch"
+            )
+        completed_attempts = [
+            row for row in attempts if row["status"] == "completed"
+        ]
+        violations.extend(
+            _coverage_violations(
+                "after",
+                "database.receipts",
+                [
+                    (row["job_id"], row["attempt_id"])
+                    for row in completed_attempts
+                ],
+                [
+                    (row["job_id"], row["attempt_id"])
+                    for row in receipts
+                ],
+            )
+        )
+        receipt_natural_keys = [
+            (row["job_id"], row["receipt_id"]) for row in receipts
+        ]
+        if len(set(receipt_natural_keys)) != len(receipt_natural_keys):
+            violations.append(
+                "after.state.database.receipts coverage mismatch"
             )
         for index, row in enumerate(jobs):
             if (
@@ -1456,18 +1606,13 @@ def _external_relation_violations(
                     f"after.state.database.jobs[{index}] "
                     "job identity mismatch"
                 )
-        attempt_ids: set[str] = set()
+        known_attempt_ids: set[str] = set()
         for index, row in enumerate(attempts):
-            attempt_ids.add(row["attempt_id"])
+            known_attempt_ids.add(row["attempt_id"])
             if row["job_id"] != job["job_id"]:
                 violations.append(
                     f"after.state.database.attempts[{index}] "
                     "job identity mismatch"
-                )
-            if row["owner_token"] != job["owner_token"]:
-                violations.append(
-                    f"after.state.database.attempts[{index}] "
-                    "owner token mismatch"
                 )
         for index, row in enumerate(receipts):
             if row["job_id"] != job["job_id"]:
@@ -1475,7 +1620,7 @@ def _external_relation_violations(
                     f"after.state.database.receipts[{index}] "
                     "job identity mismatch"
                 )
-            if row["attempt_id"] not in attempt_ids:
+            if row["attempt_id"] not in known_attempt_ids:
                 violations.append(
                     f"after.state.database.receipts[{index}] "
                     "attempt identity mismatch"

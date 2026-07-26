@@ -73,6 +73,7 @@ RELEASE_HARNESS_PATHS = (
     Path(__file__).with_name("finalize_v1.py").resolve(),
     Path(__file__).with_name("l200_evidence.py").resolve(),
     Path(__file__).with_name("recovery_stack.py").resolve(),
+    Path(__file__).with_name("recovery_evidence.py").resolve(),
     Path(__file__).with_name("release-source-files.txt").resolve(),
     Path(__file__).with_name("run_rc_gates.py").resolve(),
     Path(__file__).with_name("smoke_lifecycle.py").resolve(),

@@ -17,85 +17,17 @@ class RecoveryEvidenceError(RuntimeError):
     pass
 
 
-FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
-    "generation_worker_precommit_crash": {
-        "same_task_reclaimed": True,
-        "lease_epoch_increased": True,
-        "canon_commits_during_fault": 0,
-        "canon_commits_after_recovery": 1,
-        "duplicate_authoritative_identities": 0,
-    },
-    "generation_worker_postcommit_crash": {
-        "same_task_reclaimed": True,
-        "lease_epoch_increased": True,
-        "canon_identity_unchanged": True,
-        "accepted_identity_unchanged": True,
-        "duplicate_authoritative_identities": 0,
-    },
-    "qdrant_unavailable": {
-        "canon_identity_unchanged": True,
-        "outbox_retry_observed": True,
-        "projection_converged": True,
-        "duplicate_vector_identities": 0,
-    },
-    "projection_consumer_unavailable": {
-        "canon_identity_unchanged": True,
-        "durable_outbox_preserved": True,
-        "projection_converged": True,
-        "duplicate_projection_identities": 0,
-    },
-    "minio_pre_canon_unavailable": {
-        "canon_commits_during_fault": 0,
-        "same_candidate_retried": True,
-        "canon_commits_after_recovery": 1,
-        "duplicate_authoritative_identities": 0,
-    },
-    "minio_post_canon_unavailable": {
-        "canon_identity_unchanged": True,
-        "accepted_identity_unchanged": True,
-        "phase3_retry_same_identity": True,
-        "artifact_key_unchanged": True,
-        "barrier_residue_count": 0,
-        "duplicate_authoritative_identities": 0,
-    },
-    "publisher_backend_unavailable": {
-        "canon_identity_unchanged": True,
-        "same_job_reclaimed": True,
-        "orphaned_running_jobs": 0,
-        "duplicate_jobs": 0,
-        "duplicate_attempts": 0,
-        "duplicate_receipts": 0,
-    },
-    "publisher_browser_unavailable": {
-        "canon_identity_unchanged": True,
-        "same_job_identity": True,
-        "uncertain_mutation_reconciled": True,
-        "duplicate_jobs": 0,
-        "duplicate_attempts": 0,
-        "duplicate_receipts": 0,
-    },
-    "publisher_captcha": {
-        "same_job_identity": True,
-        "paused_safely": True,
-        "operator_action_recorded": True,
-        "bypass_attempted": False,
-        "duplicate_receipts": 0,
-    },
-    "publisher_mfa": {
-        "same_job_identity": True,
-        "paused_safely": True,
-        "operator_action_recorded": True,
-        "bypass_attempted": False,
-        "duplicate_receipts": 0,
-    },
-    "publisher_account_risk": {
-        "same_job_identity": True,
-        "paused_safely": True,
-        "operator_action_recorded": True,
-        "bypass_attempted": False,
-        "duplicate_receipts": 0,
-    },
-}
+EVALUATOR_PATH = Path(__file__).with_name("recovery_evidence.py").resolve()
+_EVALUATOR_SPEC = importlib.util.spec_from_file_location(
+    "forwin_recovery_evidence", EVALUATOR_PATH
+)
+if _EVALUATOR_SPEC is None or _EVALUATOR_SPEC.loader is None:
+    raise RecoveryEvidenceError(f"cannot load semantic evaluator: {EVALUATOR_PATH}")
+evaluator = importlib.util.module_from_spec(_EVALUATOR_SPEC)
+_EVALUATOR_SPEC.loader.exec_module(evaluator)
+
+# Compatibility alias for readers that enumerate fault kinds only.
+FAULT_CONTRACTS = {kind: {} for kind in evaluator.FAULT_CONTRACTS}
 
 SERVICE_FAULTS: dict[str, dict[str, str]] = {
     "generation_worker_precommit_crash": {
@@ -143,6 +75,19 @@ SERVICE_FAULTS: dict[str, dict[str, str]] = {
 ROOT = Path(__file__).resolve().parents[2]
 GATE_HELPER_PATH = Path(__file__).with_name("run_rc_gates.py")
 RECOVERY_CONTROLLER_PATH = Path(__file__).with_name("recovery_stack.py")
+DESTROY_SERVICES = frozenset(
+    {
+        "forwin",
+        "forwin-mcp",
+        "generation-worker",
+        "minio",
+        "outbox-worker",
+        "postgres",
+        "publisher-browser",
+        "publisher-worker",
+        "qdrant",
+    }
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -254,8 +199,8 @@ def fault_report_violations(
 ) -> list[str]:
     violations: list[str] = []
     kind = str(report.get("fault_kind") or "")
-    if int(report.get("schema_version") or 0) != 1:
-        violations.append(f"{kind or 'unknown'}.schema_version is not 1")
+    if int(report.get("schema_version") or 0) != 2:
+        violations.append(f"{kind or 'unknown'}.schema_version is not 2")
     if kind not in FAULT_CONTRACTS:
         violations.append(f"unknown fault kind: {kind or '<missing>'}")
         return violations
@@ -283,19 +228,30 @@ def fault_report_violations(
     except ValueError:
         violations.append(f"{kind}.fault/recovery timestamp is invalid")
 
-    assertions = report.get("assertions")
-    if not isinstance(assertions, dict):
-        assertions = {}
-        violations.append(f"{kind}.assertions are missing")
-    for key, expected in FAULT_CONTRACTS[kind].items():
-        actual = assertions.get(key)
-        if actual != expected:
-            violations.append(f"{kind}.{key}={actual}, expected={expected}")
+    evaluator_identity = report.get("evaluator") or {}
+    if (
+        Path(str(evaluator_identity.get("path") or "")).resolve()
+        != EVALUATOR_PATH
+        or evaluator_identity.get("sha256") != sha256_file(EVALUATOR_PATH)
+    ):
+        violations.append(f"{kind}.semantic evaluator identity mismatch")
+    if candidate is not None:
+        release_files = {
+            str(item.get("path") or ""): str(item.get("sha256") or "")
+            for item in (candidate.get("release_harness") or {}).get("files") or []
+            if isinstance(item, dict)
+        }
+        evaluator_source_path = EVALUATOR_PATH.relative_to(ROOT).as_posix()
+        if release_files.get(evaluator_source_path) != sha256_file(EVALUATOR_PATH):
+            violations.append(
+                f"{kind}.semantic evaluator is not bound by candidate source"
+            )
 
     artifacts = report.get("artifacts")
     if not isinstance(artifacts, list):
         artifacts = []
     stages: set[str] = set()
+    snapshots: dict[str, dict[str, Any]] = {}
     for index, item in enumerate(artifacts):
         if not isinstance(item, dict):
             violations.append(f"{kind}.artifacts[{index}] is not an object")
@@ -312,25 +268,49 @@ def fault_report_violations(
             violations.append(f"{kind}.{stage or index} artifact hash mismatch")
         else:
             try:
-                snapshot = load_json(path)
-            except RecoveryEvidenceError as exc:
+                snapshot = evaluator.load_snapshot(path)
+            except evaluator.EvidenceContractError as exc:
                 violations.append(f"{kind}.{stage or index} artifact is invalid: {exc}")
             else:
-                if (
-                    int(snapshot.get("schema_version") or 0) != 1
-                    or snapshot.get("source_sha") != source_sha
-                    or snapshot.get("fault_kind") != kind
-                    or snapshot.get("fault_id") != report.get("fault_id")
-                    or snapshot.get("stage") != stage
-                    or not isinstance(snapshot.get("state"), dict)
-                ):
+                if sha256_file(path) != expected_hash:
                     violations.append(
-                        f"{kind}.{stage or index} artifact identity mismatch"
+                        f"{kind}.{stage or index} artifact changed while loading"
                     )
+                else:
+                    snapshots[stage] = snapshot
     missing_stages = {"before", "during", "after"} - stages
     if missing_stages:
         violations.append(f"{kind}.artifact stages missing: {sorted(missing_stages)}")
-    if kind in SERVICE_FAULTS:
+    snapshot_contract = evaluator.snapshot_violations(kind, snapshots)
+    if snapshot_contract:
+        violations.extend(
+            f"{kind}.snapshot contract: {item}" for item in snapshot_contract
+        )
+    else:
+        if any(
+            snapshot.get("source_sha") != source_sha
+            or snapshot.get("fault_id") != report.get("fault_id")
+            for snapshot in snapshots.values()
+        ):
+            violations.append(f"{kind}.snapshot identity mismatch")
+        try:
+            derived = evaluator.derive_assertions(kind, snapshots)
+        except evaluator.EvidenceContractError as exc:
+            violations.append(f"{kind}.snapshot contract: {exc}")
+        else:
+            try:
+                report_assertion_hash = evaluator.stable_hash(
+                    report.get("assertions")
+                )
+            except evaluator.EvidenceContractError:
+                report_assertion_hash = ""
+            if report_assertion_hash != evaluator.stable_hash(derived):
+                violations.append(
+                    f"{kind}.report assertions do not match derived assertions"
+                )
+            violations.extend(evaluator.assertion_violations(kind, derived))
+
+    if kind in FAULT_CONTRACTS:
         event_identity = report.get("event_log")
         if not isinstance(event_identity, dict):
             violations.append(f"{kind}.independent event log is missing")
@@ -353,10 +333,11 @@ def fault_report_violations(
             or event_identity.get("chain_head") != events[-1].get("event_sha256")
         ):
             violations.append(f"{kind}.independent event log summary mismatch")
+        if any(event.get("schema_version") != 2 for event in events):
+            violations.append(f"{kind}.event schema version mismatch")
         event_fault_ids = {
             str(event.get("fault_id") or "")
             for event in events
-            if str(event.get("fault_id") or "")
         }
         if event_fault_ids != {str(report.get("fault_id") or "")}:
             violations.append(
@@ -377,23 +358,50 @@ def fault_report_violations(
         )
         if not fresh_lifecycle_valid:
             violations.append(f"{kind}.fresh stack lifecycle mismatch")
-        contract = SERVICE_FAULTS[kind]
+        service_contract = SERVICE_FAULTS.get(kind)
+        contract = service_contract or {
+            "service": "",
+            "fault_action": "fault_marked",
+            "recovery_action": "recovery_marked",
+            "fault_time_field": "fault_time",
+        }
+        recovery_action = (
+            "fault_service_recovered"
+            if service_contract is not None
+            else contract["recovery_action"]
+        )
         fault_events = [
             event
             for event in events
             if event.get("fault_id") == report.get("fault_id")
-            and event.get("service") == contract["service"]
             and event.get("action") == contract["fault_action"]
+            and (
+                (
+                    event.get("service") == contract["service"]
+                    if service_contract is not None
+                    else event.get("fault_kind") == kind
+                )
+            )
         ]
         recovery_events = [
             event
             for event in events
             if event.get("fault_id") == report.get("fault_id")
-            and event.get("service") == contract["service"]
-            and event.get("action") == "fault_service_recovered"
+            and event.get("action") == recovery_action
+            and (
+                (
+                    event.get("service") == contract["service"]
+                    if service_contract is not None
+                    else event.get("fault_kind") == kind
+                )
+            )
+        ]
+        destroyed_events = [
+            event for event in events if event.get("action") == "destroyed"
         ]
         if len(fault_events) != 1 or len(recovery_events) != 1:
             violations.append(f"{kind}.service fault/recovery event pair mismatch")
+            identity_events: list[dict[str, Any]] = []
         else:
             if (
                 events.index(fault_events[0]) >= events.index(recovery_events[0])
@@ -418,6 +426,33 @@ def fault_report_violations(
                     fresh_completions[0],
                     *identity_events,
                 ]
+        terminal_destroy_valid = (
+            len(destroyed_events) == 1
+            and events[-1] is destroyed_events[0]
+            and len(recovery_events) == 1
+            and events.index(recovery_events[0]) < events.index(destroyed_events[0])
+        )
+        if not terminal_destroy_valid:
+            violations.append(f"{kind}.terminal destroy lifecycle mismatch")
+        else:
+            services = (
+                (destroyed_events[0].get("after") or {}).get("services")
+                or {}
+            )
+            if (
+                not isinstance(services, dict)
+                or set(services) != DESTROY_SERVICES
+                or any(
+                    not isinstance(state, dict)
+                    or set(state) != {"exists", "running"}
+                    or state.get("exists") is not False
+                    or state.get("running") is not False
+                    for state in services.values()
+                )
+            ):
+                violations.append(f"{kind}.destroyed service inventory mismatch")
+            identity_events.append(destroyed_events[0])
+        if identity_events:
             event_identities = [
                 event.get("identity") or {} for event in identity_events
             ]
@@ -550,7 +585,7 @@ def recovery_manifest_violations(
 ) -> list[str]:
     violations: list[str] = []
     if (
-        int(manifest.get("schema_version") or 0) != 1
+        int(manifest.get("schema_version") or 0) != 2
         or manifest.get("source_sha") != source_sha
         or manifest.get("result") != "pass"
         or manifest.get("violations") != []
@@ -635,6 +670,15 @@ def recovery_manifest_violations(
             violations.append(
                 f"recovery auditor is not bound by candidate source: {path_key}"
             )
+    manifest_evaluator = manifest.get("evaluator") or {}
+    if (
+        Path(str(manifest_evaluator.get("path") or "")).resolve()
+        != EVALUATOR_PATH
+        or manifest_evaluator.get("sha256") != sha256_file(EVALUATOR_PATH)
+        or release_files.get(EVALUATOR_PATH.relative_to(ROOT).as_posix())
+        != sha256_file(EVALUATOR_PATH)
+    ):
+        violations.append("recovery semantic evaluator identity mismatch")
 
     refs = manifest.get("faults")
     if not isinstance(refs, dict) or set(refs) != set(FAULT_CONTRACTS):
@@ -662,6 +706,8 @@ def recovery_manifest_violations(
             report.get("fault_kind") != kind
             or item.get("fault_id") != report.get("fault_id")
             or item.get("result") != report.get("result")
+            or item.get("evaluator") != report.get("evaluator")
+            or item.get("evaluator") != manifest_evaluator
         ):
             violations.append(f"{kind}.report identity mismatch")
         violations.extend(
@@ -676,20 +722,23 @@ def recovery_manifest_violations(
     fault_id_owners: dict[str, list[str]] = {}
     event_path_owners: dict[str, set[str]] = {}
     event_hash_owners: dict[str, set[str]] = {}
+    evidence_dir_owners: dict[str, set[str]] = {}
     for kind, report in reports.items():
         fault_id = str(report.get("fault_id") or "")
         if fault_id:
             fault_id_owners.setdefault(fault_id, []).append(kind)
-        if kind not in SERVICE_FAULTS:
-            continue
         event_identity = report.get("event_log") or {}
         if not isinstance(event_identity, dict):
             continue
         raw_event_path = str(event_identity.get("path") or "")
         event_sha256 = str(event_identity.get("sha256") or "")
         if raw_event_path:
-            event_path = str(Path(raw_event_path).resolve())
+            resolved_event_path = Path(raw_event_path).resolve()
+            event_path = str(resolved_event_path)
             event_path_owners.setdefault(event_path, set()).add(kind)
+            evidence_dir_owners.setdefault(
+                str(resolved_event_path.parent), set()
+            ).add(kind)
         if event_sha256:
             event_hash_owners.setdefault(event_sha256, set()).add(kind)
     for fault_id, owners in sorted(fault_id_owners.items()):
@@ -706,6 +755,14 @@ def recovery_manifest_violations(
     for owners in sorted(reused_event_logs):
         violations.append(
             "recovery service event log is reused: " + ", ".join(owners)
+        )
+    for owners in sorted(
+        tuple(sorted(owners))
+        for owners in evidence_dir_owners.values()
+        if len(owners) > 1
+    ):
+        violations.append(
+            "recovery evidence directory is reused: " + ", ".join(owners)
         )
 
     if require_final_report:
@@ -769,9 +826,13 @@ def finalize(args: argparse.Namespace) -> int:
             "fault_id": str(report.get("fault_id") or ""),
             "result": str(report.get("result") or ""),
             "event_log": report.get("event_log"),
+            "evaluator": {
+                "path": str(EVALUATOR_PATH),
+                "sha256": sha256_file(EVALUATOR_PATH),
+            },
         }
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_sha": source_sha,
         "result": "pass",
         "violations": [],
@@ -784,6 +845,10 @@ def finalize(args: argparse.Namespace) -> int:
             "recovery_controller_sha256": sha256_file(RECOVERY_CONTROLLER_PATH),
             "gate_helper_path": str(GATE_HELPER_PATH),
             "gate_helper_sha256": sha256_file(GATE_HELPER_PATH),
+        },
+        "evaluator": {
+            "path": str(EVALUATOR_PATH),
+            "sha256": sha256_file(EVALUATOR_PATH),
         },
     }
     violations = recovery_manifest_violations(

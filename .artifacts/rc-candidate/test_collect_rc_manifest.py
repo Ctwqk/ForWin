@@ -27,6 +27,7 @@ RELEASE_SOURCE_MANIFEST_PATH = Path(__file__).with_name(
 )
 MATRIX_FIXTURES_PATH = Path(__file__).with_name("test_finalize_matrix.py")
 RECOVERY_FIXTURES_PATH = Path(__file__).with_name("test_finalize_recovery.py")
+RECOVERY_EVALUATOR_PATH = Path(__file__).with_name("recovery_evidence.py")
 V1_FIXTURES_PATH = Path(__file__).with_name("test_finalize_v1.py")
 SOURCE_TREE = "c" * 40
 RUNTIME_IMAGE = {
@@ -1092,6 +1093,32 @@ def test_recovery_evidence_rejects_tampered_fault_report(tmp_path: Path) -> None
     (tmp_path / "publisher_mfa-report.json").write_text("{}", encoding="utf-8")
 
     with pytest.raises(collector.ManifestError, match="recovery evidence invalid"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_evidence_rejects_swapped_semantic_evaluator(
+    tmp_path: Path,
+) -> None:
+    assert RECOVERY_EVALUATOR_PATH.resolve() in collector.RELEASE_HARNESS_PATHS
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    swapped = tmp_path / "recovery_evidence.py"
+    swapped.write_text("# replacement evaluator\n", encoding="utf-8")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["evaluator"] = {
+        "path": str(swapped),
+        "sha256": collector.sha256_file(swapped),
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="semantic evaluator identity mismatch",
+    ):
         collector.load_release_evidence(
             path,
             source_sha=SOURCE_SHA,

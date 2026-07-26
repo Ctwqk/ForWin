@@ -326,6 +326,9 @@ def isolated_compose_config(
     services["outbox-worker"]["environment"]["FORWIN_DATABASE_URL"] = (
         stack.OUTBOX_WORKER_DATABASE_URL
     )
+    services["publisher-worker"]["environment"]["FORWIN_DATABASE_URL"] = (
+        stack.PUBLISHER_WORKER_DATABASE_URL
+    )
     identity = {
         "runtime_image": {"tag": runtime_tag},
         "browser_image": {"tag": browser_tag},
@@ -567,6 +570,9 @@ def test_recovery_override_binds_worker_database_application_names() -> None:
     outbox_url = payload["services"]["outbox-worker"]["environment"][
         "FORWIN_DATABASE_URL"
     ]
+    publisher_url = payload["services"]["publisher-worker"]["environment"][
+        "FORWIN_DATABASE_URL"
+    ]
 
     assert generation_url == (
         f"{stack.ISOLATED_DATABASE_URL}"
@@ -576,7 +582,68 @@ def test_recovery_override_binds_worker_database_application_names() -> None:
         f"{stack.ISOLATED_DATABASE_URL}"
         "?application_name=forwin-recovery-outbox-worker"
     )
-    assert generation_url != outbox_url
+    assert publisher_url == (
+        f"{stack.ISOLATED_DATABASE_URL}"
+        "?application_name=forwin-recovery-publisher-worker"
+    )
+    assert len({generation_url, outbox_url, publisher_url}) == 3
+
+
+def test_file_inventory_is_read_only_identity_checked_and_data_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = {"source_sha": SOURCE_SHA}
+    run_identity = {"run_id": "3" * 32}
+    calls: list[tuple[tuple[str, ...], dict]] = []
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda fault_id: {
+            "identity": identity,
+            "run_identity": run_identity,
+        },
+    )
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def compose(*args: str, **kwargs: object) -> str:
+        calls.append((args, dict(kwargs)))
+        return json.dumps(
+            {
+                "root": "/app/data/publisher_covers",
+                "root_exists": True,
+                "files": [],
+            }
+        )
+
+    monkeypatch.setattr(stack, "compose", compose)
+    payload = stack.file_inventory.__wrapped__(
+        "publisher-browser",
+        "fault-inventory",
+        "/app/data/publisher_covers",
+    )
+
+    assert payload["files"] == []
+    args, kwargs = calls[0]
+    assert args[:4] == (
+        "exec",
+        "-T",
+        "publisher-browser",
+        "python",
+    )
+    assert "not path.is_symlink()" in args[5]
+    assert args[-1] == "/app/data/publisher_covers"
+    assert kwargs == {"run_identity": run_identity}
+    with pytest.raises(stack.StackError, match="beneath /app/data"):
+        stack.file_inventory.__wrapped__(
+            "publisher-browser",
+            "fault-inventory",
+            "/etc",
+        )
 
 
 def test_recovery_override_parameterizes_all_container_and_database_volume_names(

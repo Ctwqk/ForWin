@@ -47,6 +47,10 @@ _FIXTURE_SCHEMA = {
     "resource_type": str,
     "resource_id": str,
 }
+_PUBLISHER_FIXTURE_SCHEMA = {
+    **_FIXTURE_SCHEMA,
+    "logical_key": str,
+}
 _TASK_SCHEMA = {"task_id": str, "lease_epoch": int}
 _CANON_SCHEMA = {
     "canon_id": str,
@@ -161,49 +165,96 @@ _PHASE3_RELEASE_SCHEMA = {
     "before_row_sha256": str,
     "after_row_sha256": str,
 }
+_PUBLISHER_JOB_SCHEMA = {
+    "job_id": str,
+    "logical_key": str,
+    "task_kind": str,
+    "project_id": str,
+    "platform_id": str,
+    "status": str,
+    "publish": bool,
+    "book_name": str,
+    "chapter_title": str,
+    "body_sha256": str,
+    "unsafe_payload_paths": list,
+}
 _BACKEND_JOB_SCHEMA = {
-    "job_id": str,
-    "logical_key": str,
-    "status": str,
+    **_PUBLISHER_JOB_SCHEMA,
     "owner_token": str,
-    "artifact_key": str,
+    "artifact_id": str,
 }
-_BROWSER_JOB_SCHEMA = {"job_id": str, "logical_key": str, "status": str}
+_BROWSER_JOB_SCHEMA = dict(_PUBLISHER_JOB_SCHEMA)
 _RISK_JOB_SCHEMA = {
+    **_PUBLISHER_JOB_SCHEMA,
+    "pause_reason": str,
+    "pause_token": str,
+    "risk_boundary": str,
+}
+_JOB_IDENTITY_SCHEMA = {
     "job_id": str,
     "logical_key": str,
-    "status": str,
-    "fence": str,
+    "task_kind": str,
 }
-_JOB_IDENTITY_SCHEMA = {"job_id": str, "logical_key": str}
 _ATTEMPT_SCHEMA = {
     "attempt_id": str,
     "job_id": str,
     "attempt_number": int,
+    "attempt_kind": str,
     "owner_token": str,
+    "lease_epoch": int,
     "status": str,
+    "phase": str,
+    "content_sha256": str,
+    "error_code": str,
 }
 _RECEIPT_SCHEMA = {
     "receipt_id": str,
     "job_id": str,
     "attempt_id": str,
-    "remote_mutation_id": str,
+    "natural_key": str,
+}
+_COVER_ASSET_SCHEMA = {
+    "asset_id": str,
+    "job_id": str,
+    "file_path": str,
+    "file_size": int,
+    "mime_type": str,
 }
 _STALE_TOKEN_OBSERVATION_SCHEMA = {
     "observation_id": str,
     "job_id": str,
     "stale_owner_token": str,
     "current_owner_token": str,
-    "outcome": str,
-    "error_code": str,
+    "response": dict,
 }
-_SHARED_PATH_OBSERVATION_SCHEMA = {
+_STALE_TOKEN_RESPONSE_SCHEMA = {
+    "ok": bool,
+    "stale_claim": bool,
+}
+_COVER_FILE_SCHEMA = {
+    "path": str,
+    "size": int,
+    "content_sha256": str,
+}
+_TERMINAL_WRITE_OBSERVATION_SCHEMA = {
     "observation_id": str,
     "job_id": str,
-    "artifact_key": str,
-    "reader_owner_token": str,
-    "outcome": str,
-    "content_sha256": str,
+    "owner_token": str,
+    "holder_pid": int,
+    "waiter_pid": int,
+    "waiter_application_name": str,
+    "waiter_role": str,
+    "blocking_pids": list,
+    "trigger_name": str,
+    "function_name": str,
+    "scope_table": str,
+    "advisory_key": int,
+}
+_BARRIER_RESIDUE_SCHEMA = {
+    "trigger_count": int,
+    "function_count": int,
+    "scope_table_count": int,
+    "advisory_lock_count": int,
 }
 _HEARTBEAT_SCHEMA = {
     "observation_id": str,
@@ -214,27 +265,36 @@ _HEARTBEAT_SCHEMA = {
 _RESUME_ACTION_SCHEMA = {
     "action_id": str,
     "job_id": str,
-    "fence": str,
-    "idempotency_key": str,
+    "natural_key": str,
+    "action": str,
+    "pause_token": str,
     "actor_id": str,
     "auth_method": str,
-    "authorization_scope": str,
-    "result": str,
+    "reason_sha256": str,
+    "old_status": str,
+    "new_status": str,
 }
 _RESUME_REPLAY_SCHEMA = {
     "observation_id": str,
-    "action_id": str,
-    "replayed_action_id": str,
-    "idempotency_key": str,
-    "result": str,
-}
-_MUTATION_OBSERVATION_SCHEMA = {
-    "observation_id": str,
     "job_id": str,
-    "fault_kind": str,
-    "fence": str,
-    "bypass_attempt_count": int,
-    "external_mutation_count": int,
+    "action_id": str,
+    "pause_token": str,
+    "pause_reason": str,
+    "request_sha256": str,
+    "replay_request_sha256": str,
+    "first_transition_sha256": str,
+    "replay_transition_sha256": str,
+    "first_disposition": str,
+    "replay_disposition": str,
+}
+_EMPTY_STRING_FIELDS = {
+    "artifact_id",
+    "chapter_title",
+    "error_code",
+    "pause_reason",
+    "pause_token",
+    "project_id",
+    "risk_boundary",
 }
 
 
@@ -291,45 +351,57 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "duplicate_authoritative_identities": 0,
     },
     "publisher_backend_unavailable": {
-        "canon_identity_unchanged": True,
+        "fixture_safe": True,
         "same_job_reclaimed": True,
+        "terminal_write_boundary_observed": True,
         "stale_token_rejected": True,
         "shared_path_readable": True,
+        "orphan_cleanup_observed": True,
         "orphan_residue_count": 0,
+        "barrier_residue_count": 0,
         "duplicate_jobs": 0,
         "duplicate_attempts": 0,
         "duplicate_receipts": 0,
+        "attempt_count": 0,
+        "receipt_count": 0,
     },
     "publisher_browser_unavailable": {
-        "canon_identity_unchanged": True,
+        "fixture_safe": True,
         "same_job_identity": True,
         "pending_job_preserved": True,
         "heartbeat_recovered": True,
         "attempt_count": 0,
+        "mutation_count": 0,
         "receipt_count": 0,
     },
     "publisher_captcha": {
+        "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
         "bypass_attempted": False,
+        "attempt_count": 1,
         "receipt_count": 0,
     },
     "publisher_mfa": {
+        "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
         "bypass_attempted": False,
+        "attempt_count": 1,
         "receipt_count": 0,
     },
     "publisher_account_risk": {
+        "fixture_safe": True,
         "same_job_identity": True,
         "paused_safely": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
         "bypass_attempted": False,
+        "attempt_count": 1,
         "receipt_count": 0,
     },
 }
@@ -418,28 +490,46 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "publisher_backend_unavailable": {
-        "before": ("state.database.canon_commits",),
-        "during": ("state.database.canon_commits", "state.database.job"),
-        "after": (
-            "state.database.canon_commits",
+        "before": (
             "state.database.job",
             "state.database.jobs",
             "state.database.attempts",
             "state.database.receipts",
+        ),
+        "during": (
+            "state.database.job",
+            "state.database.jobs",
+            "state.database.attempts",
+            "state.database.receipts",
+            "state.database.cover_assets",
+            "state.external.cover_files",
+        ),
+        "after": (
+            "state.database.job",
+            "state.database.jobs",
+            "state.database.attempts",
+            "state.database.receipts",
+            "state.database.cover_assets",
             "state.api.stale_token_observation",
-            "state.external.shared_path_observation",
-            "state.external.orphan_residue_count",
+            "state.external.cover_files",
+            "state.barrier.terminal_writes",
+            "state.barrier.residue",
         ),
     },
     "publisher_browser_unavailable": {
-        "before": ("state.database.canon_commits", "state.database.job"),
-        "during": (
-            "state.database.canon_commits",
+        "before": (
             "state.database.job",
+            "state.database.attempts",
+            "state.database.receipts",
+            "state.external.browser_heartbeat",
+        ),
+        "during": (
+            "state.database.job",
+            "state.database.attempts",
+            "state.database.receipts",
             "state.external.browser_heartbeat",
         ),
         "after": (
-            "state.database.canon_commits",
             "state.database.job",
             "state.database.attempts",
             "state.database.receipts",
@@ -447,36 +537,36 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "publisher_captcha": {
-        "before": ("state.database.job",),
-        "during": ("state.database.job",),
+        "before": ("state.database.job", "state.database.attempts"),
+        "during": ("state.database.job", "state.database.attempts"),
         "after": (
             "state.database.job",
+            "state.database.attempts",
             "state.database.receipts",
-            "state.api.resume_actions",
+            "state.database.resume_actions",
             "state.api.resume_replay",
-            "state.api.mutation_observation",
         ),
     },
     "publisher_mfa": {
-        "before": ("state.database.job",),
-        "during": ("state.database.job",),
+        "before": ("state.database.job", "state.database.attempts"),
+        "during": ("state.database.job", "state.database.attempts"),
         "after": (
             "state.database.job",
+            "state.database.attempts",
             "state.database.receipts",
-            "state.api.resume_actions",
+            "state.database.resume_actions",
             "state.api.resume_replay",
-            "state.api.mutation_observation",
         ),
     },
     "publisher_account_risk": {
-        "before": ("state.database.job",),
-        "during": ("state.database.job",),
+        "before": ("state.database.job", "state.database.attempts"),
+        "during": ("state.database.job", "state.database.attempts"),
         "after": (
             "state.database.job",
+            "state.database.attempts",
             "state.database.receipts",
-            "state.api.resume_actions",
+            "state.database.resume_actions",
             "state.api.resume_replay",
-            "state.api.mutation_observation",
         ),
     },
 }
@@ -909,81 +999,214 @@ def _minio_post_canon(
     }
 
 
+_PUBLISHER_BOOK_NAME = "Publisher Recovery Fixture"
+_PUBLISHER_CHAPTER_TITLE = "Recovery Chapter"
+_PUBLISHER_BODY_SHA256 = hashlib.sha256(
+    b"Generic publisher recovery fixture content."
+).hexdigest()
+_EMPTY_BODY_SHA256 = hashlib.sha256(b"").hexdigest()
+_PUBLISHER_JOB_IDENTITY_FIELDS = (
+    "job_id",
+    "logical_key",
+    "task_kind",
+    "project_id",
+    "platform_id",
+    "publish",
+    "book_name",
+    "chapter_title",
+    "body_sha256",
+    "unsafe_payload_paths",
+)
+_RISK_REASONS = {
+    "publisher_captcha": "captcha",
+    "publisher_mfa": "mfa",
+    "publisher_account_risk": "account_risk",
+}
+
+
+def _publisher_fixture_safe(
+    kind: str,
+    snapshots: Mapping[str, dict[str, Any]],
+) -> bool:
+    fixtures = [_path(snapshots, stage, "target.fixture") for stage in STAGES]
+    jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
+    backend = kind == "publisher_backend_unavailable"
+    expected_task_kind = "cover_generate" if backend else "chapter_upload"
+    expected_title = "" if backend else _PUBLISHER_CHAPTER_TITLE
+    expected_body_sha256 = _EMPTY_BODY_SHA256 if backend else _PUBLISHER_BODY_SHA256
+    return (
+        _all_stable_equal(fixtures)
+        and all(
+            fixture["resource_type"] == "publisher_job"
+            and fixture["resource_id"] == job["job_id"]
+            and fixture["logical_key"] == job["logical_key"]
+            and fixture["logical_key"]
+            == f"publisher-recovery:v1:{fixture['fault_id']}"
+            and fixture["fault_id"] == snapshots[stage]["fault_id"]
+            for stage, fixture, job in zip(STAGES, fixtures, jobs)
+        )
+        and all(
+            job["task_kind"] == expected_task_kind
+            and job["project_id"] == ""
+            and job["platform_id"] == "qidian"
+            and job["publish"] is False
+            and job["book_name"] == _PUBLISHER_BOOK_NAME
+            and job["chapter_title"] == expected_title
+            and job["body_sha256"] == expected_body_sha256
+            and job["unsafe_payload_paths"] == []
+            for job in jobs
+        )
+    )
+
+
 def _publisher_backend(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    canon = [_path(snapshots, stage, "database.canon_commits") for stage in STAGES]
+    job_before = _path(snapshots, "before", "database.job")
     job_during = _path(snapshots, "during", "database.job")
     job_after = _path(snapshots, "after", "database.job")
     jobs = _path(snapshots, "after", "database.jobs")
     attempts = _path(snapshots, "after", "database.attempts")
     receipts = _path(snapshots, "after", "database.receipts")
-    stale_token = _path(
-        snapshots, "after", "api.stale_token_observation"
+    cover_assets_during = _path(
+        snapshots, "during", "database.cover_assets"
     )
-    shared_path = _path(
-        snapshots, "after", "external.shared_path_observation"
+    cover_assets_after = _path(snapshots, "after", "database.cover_assets")
+    files_during = _path(snapshots, "during", "external.cover_files")
+    files_after = _path(snapshots, "after", "external.cover_files")
+    stale_token = _path(snapshots, "after", "api.stale_token_observation")
+    stale_response = stale_token["response"]
+    terminal_writes = _path(snapshots, "after", "barrier.terminal_writes")
+    residue = _path(snapshots, "after", "barrier.residue")
+    asset = cover_assets_after[0] if len(cover_assets_after) == 1 else {}
+    file_by_path = {row["path"]: row for row in files_after}
+    shared_file = file_by_path.get(asset.get("file_path"), {})
+    after_paths = set(file_by_path)
+    during_paths = {row["path"] for row in files_during}
+    referenced_paths = {row["file_path"] for row in cover_assets_after}
+    orphan_after = after_paths - referenced_paths
+    barrier_bound = (
+        len(terminal_writes) == 2
+        and all(
+            observation["job_id"] == job_after["job_id"]
+            and observation["waiter_application_name"]
+            == "forwin-recovery-publisher-worker"
+            and observation["waiter_role"] == "forwin"
+            and observation["holder_pid"] != observation["waiter_pid"]
+            and observation["blocking_pids"]
+            == [observation["holder_pid"]]
+            and observation["holder_pid"] > 0
+            and observation["waiter_pid"] > 0
+            for observation in terminal_writes
+        )
+        and terminal_writes[0]["owner_token"] == job_during["owner_token"]
+        and terminal_writes[1]["owner_token"] == job_after["owner_token"]
+        and terminal_writes[0]["owner_token"]
+        != terminal_writes[1]["owner_token"]
+        and all(
+            terminal_writes[0][field] == terminal_writes[1][field]
+            for field in (
+                "trigger_name",
+                "function_name",
+                "scope_table",
+                "advisory_key",
+                "holder_pid",
+            )
+        )
     )
     return {
-        "canon_identity_unchanged": _all_stable_equal(canon),
+        "fixture_safe": _publisher_fixture_safe(
+            "publisher_backend_unavailable", snapshots
+        ),
         "same_job_reclaimed": _same_fields(
             job_during,
             job_after,
-            ("job_id", "logical_key", "artifact_key"),
+            _PUBLISHER_JOB_IDENTITY_FIELDS,
         )
+        and _same_fields(
+            job_before,
+            job_during,
+            (*_PUBLISHER_JOB_IDENTITY_FIELDS, "owner_token"),
+        )
+        and job_before["status"] == "running"
+        and job_during["status"] == "running"
+        and job_after["status"] == "succeeded"
         and job_during["owner_token"] != job_after["owner_token"],
+        "terminal_write_boundary_observed": barrier_bound,
         "stale_token_rejected": (
             stale_token["job_id"] == job_after["job_id"]
             and stale_token["stale_owner_token"] == job_during["owner_token"]
             and stale_token["current_owner_token"] == job_after["owner_token"]
-            and stale_token["outcome"] == "rejected"
-            and stale_token["error_code"] == "stale_owner_token"
+            and stale_response == {"ok": False, "stale_claim": True}
         ),
         "shared_path_readable": (
-            shared_path["job_id"] == job_after["job_id"]
-            and shared_path["artifact_key"] == job_after["artifact_key"]
-            and shared_path["reader_owner_token"] == job_after["owner_token"]
-            and shared_path["outcome"] == "readable"
+            len(cover_assets_after) == 1
+            and asset.get("job_id") == job_after["job_id"]
+            and asset.get("asset_id") == job_after["artifact_id"]
+            and shared_file.get("path") == asset.get("file_path")
+            and shared_file.get("size") == asset.get("file_size")
+            and isinstance(shared_file.get("content_sha256"), str)
+            and _SHA256_PATTERN.fullmatch(
+                str(shared_file.get("content_sha256") or "")
+            )
+            is not None
+            and int(shared_file.get("size") or 0) > 0
         ),
-        "orphan_residue_count": _path(
-            snapshots, "after", "external.orphan_residue_count"
+        "orphan_cleanup_observed": (
+            cover_assets_during == []
+            and bool(during_paths)
+            and during_paths.isdisjoint(after_paths)
         ),
+        "orphan_residue_count": len(orphan_after),
+        "barrier_residue_count": sum(residue.values()),
         "duplicate_jobs": duplicate_excess(jobs, ("logical_key",)),
         "duplicate_attempts": duplicate_excess(
             attempts, ("job_id", "attempt_number")
         ),
         "duplicate_receipts": duplicate_excess(
-            receipts, ("job_id", "receipt_id")
+            receipts, ("job_id", "natural_key")
         ),
+        "attempt_count": len(attempts),
+        "receipt_count": len(receipts),
     }
 
 
 def _publisher_browser(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    canon = [_path(snapshots, stage, "database.canon_commits") for stage in STAGES]
     jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
-    heartbeat_during = _path(
-        snapshots, "during", "external.browser_heartbeat"
-    )
-    heartbeat_after = _path(snapshots, "after", "external.browser_heartbeat")
+    heartbeats = [
+        _path(snapshots, stage, "external.browser_heartbeat")
+        for stage in STAGES
+    ]
+    attempts = [
+        _path(snapshots, stage, "database.attempts")
+        for stage in STAGES
+    ]
+    receipts = [
+        _path(snapshots, stage, "database.receipts")
+        for stage in STAGES
+    ]
     return {
-        "canon_identity_unchanged": _all_stable_equal(canon),
-        "same_job_identity": _all_stable_equal(
-            [
-                {"job_id": job["job_id"], "logical_key": job["logical_key"]}
-                for job in jobs
-            ]
+        "fixture_safe": _publisher_fixture_safe(
+            "publisher_browser_unavailable", snapshots
         ),
+        "same_job_identity": _all_stable_equal(jobs),
         "pending_job_preserved": all(job["status"] == "pending" for job in jobs),
         "heartbeat_recovered": (
-            heartbeat_during["browser_id"] == heartbeat_after["browser_id"]
-            and heartbeat_during["probe"] == heartbeat_after["probe"]
-            and heartbeat_during["status"] == "stale"
-            and heartbeat_after["status"] == "healthy"
+            len({heartbeat["browser_id"] for heartbeat in heartbeats}) == 1
+            and all(
+                heartbeat["probe"] == "extension_heartbeat_status"
+                for heartbeat in heartbeats
+            )
+            and [heartbeat["status"] for heartbeat in heartbeats]
+            == ["healthy", "stale", "healthy"]
         ),
-        "attempt_count": len(_path(snapshots, "after", "database.attempts")),
-        "receipt_count": len(_path(snapshots, "after", "database.receipts")),
+        "attempt_count": max(len(rows) for rows in attempts),
+        "mutation_count": sum(
+            stable_hash(job) != stable_hash(jobs[0]) for job in jobs[1:]
+        ),
+        "receipt_count": max(len(rows) for rows in receipts),
     }
 
 
@@ -993,46 +1216,93 @@ def _publisher_risk(
 ) -> dict[str, Any]:
     jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
     paused_job = jobs[1]
-    actions = _path(snapshots, "after", "api.resume_actions")
+    attempts_by_stage = [
+        _path(snapshots, stage, "database.attempts")
+        for stage in STAGES
+    ]
+    attempts_after = attempts_by_stage[2]
+    receipts = _path(snapshots, "after", "database.receipts")
+    actions = _path(snapshots, "after", "database.resume_actions")
     replay = _path(snapshots, "after", "api.resume_replay")
-    mutation = _path(snapshots, "after", "api.mutation_observation")
     action = actions[0] if len(actions) == 1 else {}
+    attempt = attempts_after[0] if len(attempts_after) == 1 else {}
+    expected_reason = _RISK_REASONS[kind]
     operator_action_recorded = (
         len(actions) == 1
         and action.get("job_id") == paused_job["job_id"]
-        and action.get("fence") == paused_job["fence"]
-        and action.get("auth_method") == "operator_token"
-        and action.get("authorization_scope") == "publisher:risk:resume"
-        and action.get("result") == "accepted"
+        and action.get("natural_key")
+        == (
+            f"{paused_job['job_id']}:resume:"
+            f"{paused_job['pause_token']}"
+        )
+        and action.get("action") == "resume"
+        and action.get("pause_token") == paused_job["pause_token"]
+        and action.get("auth_method") in {"basic", "trusted_proxy"}
+        and bool(action.get("actor_id"))
+        and action.get("old_status") == "paused"
+        and action.get("new_status") == "pending"
+    )
+    stable_attempt_fields = (
+        "attempt_id",
+        "job_id",
+        "attempt_number",
+        "attempt_kind",
+        "owner_token",
+        "lease_epoch",
+        "phase",
+        "content_sha256",
+    )
+    stable_attempt = (
+        all(len(rows) == 1 for rows in attempts_by_stage)
+        and all(
+            _same_fields(
+                attempts_by_stage[0][0],
+                rows[0],
+                stable_attempt_fields,
+            )
+            for rows in attempts_by_stage[1:]
+        )
+    )
+    pre_mutation = (
+        stable_attempt
+        and attempt.get("phase") == "claimed"
+        and attempt.get("status") == "paused"
+        and attempt.get("error_code") == expected_reason
+        and paused_job["risk_boundary"] == "pre-mutation"
+        and paused_job["pause_reason"] == expected_reason
+        and paused_job["pause_token"] == attempt.get("attempt_id")
     )
     return {
+        "fixture_safe": _publisher_fixture_safe(kind, snapshots),
         "same_job_identity": _all_stable_equal(
             [
-                {"job_id": job["job_id"], "logical_key": job["logical_key"]}
+                {field: job[field] for field in _PUBLISHER_JOB_IDENTITY_FIELDS}
                 for job in jobs
             ]
         ),
         "paused_safely": (
-            paused_job["status"] == "paused"
-            and paused_job["fence"] == "pre-mutation"
-            and mutation["job_id"] == paused_job["job_id"]
-            and mutation["fault_kind"] == kind
-            and mutation["fence"] == paused_job["fence"]
-            and mutation["external_mutation_count"] == 0
+            jobs[0]["status"] == "running"
+            and paused_job["status"] == "paused"
+            and jobs[2]["status"] == "pending"
+            and pre_mutation
         ),
         "operator_action_recorded": operator_action_recorded,
         "resume_replay_idempotent": operator_action_recorded
+        and replay["job_id"] == paused_job["job_id"]
         and replay["action_id"] == action["action_id"]
-        and replay["replayed_action_id"] == action["action_id"]
-        and replay["idempotency_key"] == action["idempotency_key"]
-        and replay["result"] == "idempotent_replay",
-        "bypass_attempted": (
-            mutation["job_id"] == paused_job["job_id"]
-            and mutation["fault_kind"] == kind
-            and mutation["fence"] == paused_job["fence"]
-            and mutation["bypass_attempt_count"] > 0
+        and replay["pause_token"] == paused_job["pause_token"]
+        and replay["pause_reason"] == expected_reason
+        and replay["request_sha256"] == replay["replay_request_sha256"]
+        and replay["first_transition_sha256"]
+        == replay["replay_transition_sha256"]
+        and replay["first_disposition"] == "applied"
+        and replay["replay_disposition"] == "idempotent",
+        "bypass_attempted": not (
+            pre_mutation
+            and receipts == []
         ),
-        "receipt_count": len(_path(snapshots, "after", "database.receipts")),
+        "attempt_count": len(attempts_after),
+        "receipt_count": len(receipts),
     }
 
 
@@ -1175,7 +1445,9 @@ def _shape_violations(
             if field not in value:
                 continue
             nested = value[field]
-            permits_empty_string = field == "error_message"
+            permits_empty_string = (
+                field == "error_message" or field in _EMPTY_STRING_FIELDS
+            )
             if type(nested) is not expected_type or (
                 expected_type is str
                 and not nested
@@ -1200,6 +1472,17 @@ def _shape_violations(
                 )
             elif expected_type is int and nested < 0:
                 violations.append(f"{path}.{field} is negative")
+            elif expected_type is list:
+                item_type = int if field == "blocking_pids" else str
+                if any(type(item) is not item_type for item in nested):
+                    violations.append(
+                        f"{path}.{field} contains a non-"
+                        f"{item_type.__name__} value"
+                    )
+                if field == "blocking_pids" and not nested:
+                    violations.append(
+                        f"{path}.{field} is empty"
+                    )
         return value
 
     def records(
@@ -1248,7 +1531,12 @@ def _shape_violations(
                     allowed[section],
                 )
             )
-        record(stage, "target.fixture", _FIXTURE_SCHEMA)
+        fixture_schema = (
+            _PUBLISHER_FIXTURE_SCHEMA
+            if kind.startswith("publisher_")
+            else _FIXTURE_SCHEMA
+        )
+        record(stage, "target.fixture", fixture_schema)
 
     if kind.startswith("generation_worker_"):
         for stage in STAGES:
@@ -1386,47 +1674,45 @@ def _shape_violations(
         scalar("after", "barrier.residue_count", int, "an integer")
     elif kind == "publisher_backend_unavailable":
         for stage in STAGES:
-            records(stage, "database.canon_commits", _CANON_SCHEMA)
-        for stage in ("during", "after"):
             record(stage, "database.job", _BACKEND_JOB_SCHEMA)
-        records("after", "database.jobs", _JOB_IDENTITY_SCHEMA)
-        records("after", "database.attempts", _ATTEMPT_SCHEMA)
-        records("after", "database.receipts", _RECEIPT_SCHEMA)
-        record(
+            records(stage, "database.jobs", _JOB_IDENTITY_SCHEMA)
+            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
+            records(stage, "database.receipts", _RECEIPT_SCHEMA)
+        for stage in ("during", "after"):
+            records(stage, "database.cover_assets", _COVER_ASSET_SCHEMA)
+            records(stage, "external.cover_files", _COVER_FILE_SCHEMA)
+        stale = record(
             "after",
             "api.stale_token_observation",
             _STALE_TOKEN_OBSERVATION_SCHEMA,
         )
-        record(
+        if isinstance(stale, Mapping) and isinstance(
+            stale.get("response"), Mapping
+        ):
+            record_value(
+                "after.state.api.stale_token_observation.response",
+                stale["response"],
+                _STALE_TOKEN_RESPONSE_SCHEMA,
+            )
+        records(
             "after",
-            "external.shared_path_observation",
-            _SHARED_PATH_OBSERVATION_SCHEMA,
+            "barrier.terminal_writes",
+            _TERMINAL_WRITE_OBSERVATION_SCHEMA,
         )
-        scalar(
-            "after",
-            "external.orphan_residue_count",
-            int,
-            "an integer",
-        )
+        record("after", "barrier.residue", _BARRIER_RESIDUE_SCHEMA)
     elif kind == "publisher_browser_unavailable":
         for stage in STAGES:
-            records(stage, "database.canon_commits", _CANON_SCHEMA)
             record(stage, "database.job", _BROWSER_JOB_SCHEMA)
-        for stage in ("during", "after"):
+            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
+            records(stage, "database.receipts", _RECEIPT_SCHEMA)
             record(stage, "external.browser_heartbeat", _HEARTBEAT_SCHEMA)
-        records("after", "database.attempts", _ATTEMPT_SCHEMA)
-        records("after", "database.receipts", _RECEIPT_SCHEMA)
     else:
         for stage in STAGES:
             record(stage, "database.job", _RISK_JOB_SCHEMA)
+            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
         records("after", "database.receipts", _RECEIPT_SCHEMA)
-        records("after", "api.resume_actions", _RESUME_ACTION_SCHEMA)
+        records("after", "database.resume_actions", _RESUME_ACTION_SCHEMA)
         record("after", "api.resume_replay", _RESUME_REPLAY_SCHEMA)
-        record(
-            "after",
-            "api.mutation_observation",
-            _MUTATION_OBSERVATION_SCHEMA,
-        )
     if not violations:
         violations.extend(_relation_violations(kind, snapshots))
     return violations
@@ -1483,16 +1769,15 @@ def _relation_violations(
         )
 
     if publisher:
-        job_stages = (
-            ("during", "after")
-            if kind == "publisher_backend_unavailable"
-            else STAGES
-        )
-        for stage in job_stages:
+        for stage in STAGES:
             job = _path(snapshots, stage, "database.job")
             if job["job_id"] != fixture["resource_id"]:
                 violations.append(
                     f"{stage}.state.database.job fixture resource mismatch"
+                )
+            if job["logical_key"] != fixture["logical_key"]:
+                violations.append(
+                    f"{stage}.state.database.job fixture logical key mismatch"
                 )
     else:
         for stage, dotted in _chapter_record_paths(kind):
@@ -1895,108 +2180,79 @@ def _external_relation_violations(
                         f"after.state.{dotted} status is invalid"
                     )
     elif kind == "publisher_backend_unavailable":
-        job = _path(snapshots, "after", "database.job")
-        jobs = _path(snapshots, "after", "database.jobs")
-        attempts = _path(snapshots, "after", "database.attempts")
-        receipts = _path(snapshots, "after", "database.receipts")
-        violations.extend(
-            _coverage_violations(
-                "after",
-                "database.jobs",
-                [(job["job_id"], job["logical_key"])],
-                [
-                    (row["job_id"], row["logical_key"])
-                    for row in jobs
-                ],
+        for stage in STAGES:
+            job = _path(snapshots, stage, "database.job")
+            jobs = _path(snapshots, stage, "database.jobs")
+            attempts = _path(snapshots, stage, "database.attempts")
+            receipts = _path(snapshots, stage, "database.receipts")
+            violations.extend(
+                _coverage_violations(
+                    stage,
+                    "database.jobs",
+                    [(job["job_id"], job["logical_key"], job["task_kind"])],
+                    [
+                        (row["job_id"], row["logical_key"], row["task_kind"])
+                        for row in jobs
+                    ],
+                )
             )
-        )
-        attempt_natural_keys = [
-            (row["job_id"], str(row["attempt_number"]))
-            for row in attempts
-        ]
-        attempt_ids = [row["attempt_id"] for row in attempts]
-        attempt_coverage_complete = (
-            bool(attempts)
-            and all(row["job_id"] == job["job_id"] for row in attempts)
-            and any(
-                row["owner_token"] == job["owner_token"]
+            known_attempt_ids = {
+                row["attempt_id"]
                 for row in attempts
-            )
-            and len(set(attempt_natural_keys)) == len(attempt_natural_keys)
-            and len(set(attempt_ids)) == len(attempt_ids)
-        )
-        if not attempt_coverage_complete:
+                if row["job_id"] == job["job_id"]
+            }
+            for index, row in enumerate(attempts):
+                if row["job_id"] != job["job_id"]:
+                    violations.append(
+                        f"{stage}.state.database.attempts[{index}] "
+                        "job identity mismatch"
+                    )
+            for index, row in enumerate(receipts):
+                if row["job_id"] != job["job_id"]:
+                    violations.append(
+                        f"{stage}.state.database.receipts[{index}] "
+                        "job identity mismatch"
+                    )
+                if row["attempt_id"] not in known_attempt_ids:
+                    violations.append(
+                        f"{stage}.state.database.receipts[{index}] "
+                        "attempt identity mismatch"
+                    )
+        after_job = _path(snapshots, "after", "database.job")
+        cover_assets = _path(snapshots, "after", "database.cover_assets")
+        if len(cover_assets) == 1 and (
+            cover_assets[0]["job_id"] != after_job["job_id"]
+            or cover_assets[0]["asset_id"] != after_job["artifact_id"]
+        ):
             violations.append(
-                "after.state.database.attempts coverage mismatch"
+                "after.state.database.cover_assets job identity mismatch"
             )
-        completed_attempts = [
-            row for row in attempts if row["status"] == "completed"
-        ]
-        violations.extend(
-            _coverage_violations(
-                "after",
-                "database.receipts",
-                [
-                    (row["job_id"], row["attempt_id"])
-                    for row in completed_attempts
-                ],
-                [
-                    (row["job_id"], row["attempt_id"])
-                    for row in receipts
-                ],
-            )
-        )
-        receipt_natural_keys = [
-            (row["job_id"], row["receipt_id"]) for row in receipts
-        ]
-        if len(set(receipt_natural_keys)) != len(receipt_natural_keys):
-            violations.append(
-                "after.state.database.receipts coverage mismatch"
-            )
-        for index, row in enumerate(jobs):
-            if (
-                row["job_id"] != job["job_id"]
-                or row["logical_key"] != job["logical_key"]
-            ):
-                violations.append(
-                    f"after.state.database.jobs[{index}] "
-                    "job identity mismatch"
-                )
-        known_attempt_ids: set[str] = set()
-        for index, row in enumerate(attempts):
-            known_attempt_ids.add(row["attempt_id"])
-            if row["job_id"] != job["job_id"]:
-                violations.append(
-                    f"after.state.database.attempts[{index}] "
-                    "job identity mismatch"
-                )
-        for index, row in enumerate(receipts):
-            if row["job_id"] != job["job_id"]:
-                violations.append(
-                    f"after.state.database.receipts[{index}] "
-                    "job identity mismatch"
-                )
-            if row["attempt_id"] not in known_attempt_ids:
-                violations.append(
-                    f"after.state.database.receipts[{index}] "
-                    "attempt identity mismatch"
-                )
     elif kind in {
         "publisher_captcha",
         "publisher_mfa",
         "publisher_account_risk",
     }:
         paused_job = _path(snapshots, "during", "database.job")
-        mutation = _path(
-            snapshots, "after", "api.mutation_observation"
-        )
-        if (
-            mutation["job_id"] != paused_job["job_id"]
-            or mutation["fault_kind"] != kind
-            or mutation["fence"] != paused_job["fence"]
+        for stage in STAGES:
+            attempts = _path(snapshots, stage, "database.attempts")
+            for index, row in enumerate(attempts):
+                if row["job_id"] != paused_job["job_id"]:
+                    violations.append(
+                        f"{stage}.state.database.attempts[{index}] "
+                        "job identity mismatch"
+                    )
+        for index, action in enumerate(
+            _path(snapshots, "after", "database.resume_actions")
         ):
+            if action["job_id"] != paused_job["job_id"]:
+                violations.append(
+                    f"after.state.database.resume_actions[{index}] "
+                    "job identity mismatch"
+                )
+        replay = _path(snapshots, "after", "api.resume_replay")
+        if replay["job_id"] != paused_job["job_id"]:
             violations.append(
-                "after.state.api.mutation_observation identity mismatch"
+                "after.state.api.resume_replay job identity mismatch"
             )
     return violations
 
@@ -2076,12 +2332,6 @@ def _stable_identity_violations(
                 )
             )
         paths.append(("after", "database.authoritative_identities"))
-    elif kind in {
-        "publisher_backend_unavailable",
-        "publisher_browser_unavailable",
-    }:
-        paths.extend((stage, "database.canon_commits") for stage in STAGES)
-
     violations: list[str] = []
     for stage, dotted in paths:
         value = _path(snapshots, stage, dotted)

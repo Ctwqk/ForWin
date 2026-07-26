@@ -138,21 +138,72 @@ uv run python -m pytest -q \
   --tb=short
 ```
 
-## Live Proof
+## Automated Live Proof
 
-On the isolated recovery stack:
+Task 6 adds the independently finalizable runner:
 
-1. Create one `cover_generate` job through the supported publisher API.
-2. Wait until the backend worker has claimed it and status is `running`.
-3. `SIGKILL` only `forwin-v5-recovery-publisher-worker` with automatic restart
-   temporarily disabled by the recovery controller.
-4. Restart the same service/image.
-5. Prove startup recovery returns the same job to `pending`, then the normal
-   worker completes or fails it; it must never remain orphaned `running`.
-6. Prove no duplicate job, attempt, or receipt identity was created.
-7. Prove the recovered claim has a new owner token and that a delayed result
-   carrying the pre-crash token cannot mutate the job.
-8. Prove the generated cover path is under the shared `/app/data` mount and is
-   readable from the publisher browser container.
-9. Leave one unreferenced staging/final file before restart and prove startup
-   recovery removes it while preserving every DB-referenced cover.
+```bash
+python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_backend_unavailable \
+  --fault-id <unique-fault-id> \
+  --candidate-manifest <candidate-manifest.json> \
+  --mcp-url <isolated-mcp-url> \
+  --api-url <isolated-api-url> \
+  --database-url-env <isolated-database-url-environment-name> \
+  --evidence-dir <new-empty-evidence-directory>
+```
+
+Use a new fault ID and empty evidence directory for every invocation. The
+runner reads the production extension key and operator Basic credentials from
+`FORWIN_PUBLISHER_EXTENSION_API_KEY`, `FORWIN_HTTP_BASIC_USER`, and
+`FORWIN_HTTP_BASIC_PASSWORD`; those values are sent only as request headers and
+are never written to fixture or evidence payloads.
+
+Backend sequence:
+
+1. Setup-hold `publisher-worker`, insert one fixed projectless/unpublished
+   `cover_generate` fixture with a fault-derived natural key, and install a
+   fault/job-scoped terminal-update advisory barrier.
+2. Release the hold, require a durable `backend:<uuid>` owner, and prove the
+   exact `forwin-recovery-publisher-worker` transaction is the sole blocked
+   terminal writer before `SIGKILL`.
+3. Snapshot the rolled-back DB state and the resulting unreferenced shared
+   cover file from `publisher-browser`.
+4. Restart the real worker, require the same job with one new owner token and a
+   second exact blocked terminal write, then call production
+   `PublisherCoverService.generate_for_job()` with the stale token and require
+   exactly `{"ok": false, "stale_claim": true}`.
+5. Release and remove the barrier, require terminal success, shared cover
+   readability, orphan cleanup, zero barrier residue, and exact
+   job/attempt/receipt natural-key inventories.
+
+Browser sequence (`--fault-kind publisher_browser_unavailable`):
+
+1. Insert one future-available, projectless, unpublished chapter fixture so the
+   boundary is explicitly pre-claim.
+2. Prove healthy extension heartbeat, stop only `publisher-browser`, prove the
+   same browser identity stale while the job is byte-for-byte unchanged, then
+   restart and prove it healthy.
+3. Require the unchanged pending job and zero attempts, mutations, and
+   receipts. No uncertain remote mutation is synthesized without a real
+   platform.
+
+Typed-risk sequences use independent invocations with
+`publisher_captcha`, `publisher_mfa`, or `publisher_account_risk`:
+
+1. Read the healthy browser identity, setup-hold the browser, insert the fixed
+   chapter fixture, and claim it through
+   `/api/publishers/extension/upload-jobs/claim`.
+2. Pause the exact attempt/lease fence at `phase=claimed` with
+   `boundary=pre-mutation` and the exact typed reason.
+3. Mark the confirmed typed fault, snapshot it, resume through the
+   authenticated operator API, replay the identical request, and require one
+   `applied` plus one `idempotent` disposition for one stored operator action.
+4. Mark recovery, release the setup hold, and require the same job, one paused
+   attempt, no bypass, and zero receipts.
+
+Every PASS is derived from reopened immutable before/during/after snapshots and
+one verified controller event chain ending in terminal stack destruction.
+Missing barriers, token/identity drift, duplicate actions or natural keys,
+unexpected attempts/receipts, unsafe fixture data, and cleanup residue fail
+closed as `setup_blocked` or evaluator rejection.

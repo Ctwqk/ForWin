@@ -334,6 +334,7 @@ def http_json(
     *,
     query: Mapping[str, Any] | None = None,
     json_body: Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     target = url
@@ -356,7 +357,13 @@ def http_json(
         target,
         data=body,
         method=method,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            **{
+                str(key): str(value)
+                for key, value in (headers or {}).items()
+            },
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -467,6 +474,35 @@ class RecoveryController:
             validate_fault_id(fault_id),
             "--hold-id",
             validate_fault_id(hold_id),
+        )
+
+    def mark(
+        self,
+        fault_kind: str,
+        phase: str,
+        fault_id: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            "mark",
+            str(fault_kind),
+            str(phase),
+            "--fault-id",
+            validate_fault_id(fault_id),
+        )
+
+    def file_inventory(
+        self,
+        service: str,
+        fault_id: str,
+        root: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            "file-inventory",
+            str(service),
+            "--fault-id",
+            validate_fault_id(fault_id),
+            "--root",
+            str(root),
         )
 
     def abort(self, fault_id: str, stage: str, reason: str) -> dict[str, Any]:
@@ -758,24 +794,44 @@ class EvidenceWriter:
         events: Sequence[Mapping[str, Any]],
     ) -> tuple[str, str]:
         contract = self.finalizer.SERVICE_FAULTS.get(fault_kind)
-        if not isinstance(contract, Mapping):
-            raise RunnerError(f"fault has no service event contract: {fault_kind}")
-        action = str(contract["fault_action"])
-        time_field = str(contract["fault_time_field"])
-        service = str(contract["service"])
+        service_fault = isinstance(contract, Mapping)
+        action = (
+            str(contract["fault_action"])
+            if service_fault
+            else "fault_marked"
+        )
+        recovery_action = (
+            "fault_service_recovered"
+            if service_fault
+            else "recovery_marked"
+        )
+        time_field = (
+            str(contract["fault_time_field"])
+            if service_fault
+            else "fault_time"
+        )
+        service = str(contract["service"]) if service_fault else ""
         faults = [
             event
             for event in events
             if event.get("fault_id") == fault_id
             and event.get("action") == action
-            and event.get("service") == service
+            and (
+                event.get("service") == service
+                if service_fault
+                else event.get("fault_kind") == fault_kind
+            )
         ]
         recoveries = [
             event
             for event in events
             if event.get("fault_id") == fault_id
-            and event.get("action") == "fault_service_recovered"
-            and event.get("service") == service
+            and event.get("action") == recovery_action
+            and (
+                event.get("service") == service
+                if service_fault
+                else event.get("fault_kind") == fault_kind
+            )
         ]
         if len(faults) != 1 or len(recoveries) != 1:
             raise RunnerError("controller event log has no unique fault/recovery pair")

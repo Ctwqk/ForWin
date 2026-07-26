@@ -135,9 +135,14 @@ OUTBOX_WORKER_DATABASE_URL = (
     f"{ISOLATED_DATABASE_URL}"
     "?application_name=forwin-recovery-outbox-worker"
 )
+PUBLISHER_WORKER_DATABASE_URL = (
+    f"{ISOLATED_DATABASE_URL}"
+    "?application_name=forwin-recovery-publisher-worker"
+)
 SERVICE_DATABASE_URLS = {
     "generation-worker": GENERATION_WORKER_DATABASE_URL,
     "outbox-worker": OUTBOX_WORKER_DATABASE_URL,
+    "publisher-worker": PUBLISHER_WORKER_DATABASE_URL,
 }
 ISOLATED_QDRANT_URL = "http://qdrant:6333"
 ISOLATED_MINIO_ENDPOINT = "minio:9000"
@@ -2988,6 +2993,61 @@ def snapshot(label: str) -> None:
 
 
 @mutating_controller_command
+def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
+    if service not in APPLICATION_SERVICES:
+        raise StackError("file inventory service is not an application service")
+    normalized_root = str(root or "").rstrip("/")
+    if (
+        not normalized_root.startswith("/app/data/")
+        or normalized_root in {"/app/data", "/app/data/"}
+        or ".." in Path(normalized_root).parts
+    ):
+        raise StackError("file inventory root must be beneath /app/data")
+    context = require_active_recovery_run(fault_id)
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError("recovery harness identity changed before file inventory")
+    assert_isolated_compose(identity, run_identity=run_identity)
+    script = (
+        "import hashlib,json,sys;"
+        "from pathlib import Path;"
+        "root=Path(sys.argv[1]);"
+        "files=[];"
+        "[(files.append({'path':str(path.relative_to(root)),"
+        "'size':path.stat().st_size,"
+        "'content_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}))"
+        " for path in sorted(root.rglob('*'))"
+        " if path.is_file() and not path.is_symlink()];"
+        "print(json.dumps({'root':str(root),'root_exists':root.is_dir(),"
+        "'files':files},sort_keys=True))"
+    )
+    output = compose(
+        "exec",
+        "-T",
+        service,
+        "python",
+        "-c",
+        script,
+        normalized_root,
+        run_identity=run_identity,
+    )
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise StackError("file inventory returned invalid JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("root") != normalized_root
+        or not isinstance(payload.get("root_exists"), bool)
+        or not isinstance(payload.get("files"), list)
+    ):
+        raise StackError("file inventory returned an invalid object")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
+
+
+@mutating_controller_command
 def mark_fault(fault_kind: str, phase: str, fault_id: str) -> dict[str, Any]:
     if fault_kind not in RISK_FAULT_KINDS:
         raise StackError(
@@ -3077,6 +3137,13 @@ def parse_args() -> argparse.Namespace:
     mark_parser.add_argument("fault_kind", choices=sorted(RISK_FAULT_KINDS))
     mark_parser.add_argument("phase", choices=("fault", "recovery"))
     mark_parser.add_argument("--fault-id", required=True)
+    inventory_parser = commands.add_parser("file-inventory")
+    inventory_parser.add_argument(
+        "service",
+        choices=sorted(APPLICATION_SERVICES),
+    )
+    inventory_parser.add_argument("--fault-id", required=True)
+    inventory_parser.add_argument("--root", required=True)
     for name in ("setup-hold", "setup-release"):
         child = commands.add_parser(name)
         child.add_argument("service", choices=sorted(FAULT_SERVICES))
@@ -3107,6 +3174,8 @@ def main() -> int:
         kill_fault_service(args.service, args.fault_id)
     elif args.command == "mark":
         mark_fault(args.fault_kind, args.phase, args.fault_id)
+    elif args.command == "file-inventory":
+        file_inventory(args.service, args.fault_id, args.root)
     elif args.command == "setup-hold":
         setup_hold_service(args.service, args.fault_id, args.hold_id)
     elif args.command == "setup-release":

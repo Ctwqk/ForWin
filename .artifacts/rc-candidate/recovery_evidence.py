@@ -133,6 +133,34 @@ _ARTIFACT_SCHEMA = {
     "content_type": str,
     "content_sha256": str,
 }
+_PHASE3_PAYLOAD_SCHEMA = {
+    "schema_version": int,
+    "canon_commit_id": str,
+    "canon_idempotency_key": str,
+    "project_id": str,
+    "chapter_number": int,
+    "candidate_id": str,
+}
+_PHASE3_REPLAY_SCHEMA = {
+    "row_id": str,
+    "event_id": str,
+    "aggregate_type": str,
+    "aggregate_id": str,
+    "event_type": str,
+    "payload": dict,
+    "payload_sha256": str,
+    "canon_idempotency_key": str,
+    "status": str,
+    "attempts": int,
+    "lease_epoch": int,
+}
+_PHASE3_RELEASE_SCHEMA = {
+    **_PHASE3_REPLAY_SCHEMA,
+    "conditional_rowcount": int,
+    "predicate_sha256": str,
+    "before_row_sha256": str,
+    "after_row_sha256": str,
+}
 _BACKEND_JOB_SCHEMA = {
     "job_id": str,
     "logical_key": str,
@@ -253,8 +281,12 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "canon_identity_unchanged": True,
         "accepted_identity_unchanged": True,
         "phase3_retry_same_identity": True,
-        "artifact_key_unchanged": True,
-        "artifact_content_sha256_unchanged": True,
+        "phase3_replay_identity_unchanged": True,
+        "phase3_release_rowcount": 1,
+        "phase3_release_preserved_claim": True,
+        "phase3_worker_claim_advanced": True,
+        "phase3_replay_final_processed": True,
+        "artifact_identity_unchanged": True,
         "barrier_residue_count": 0,
         "duplicate_authoritative_identities": 0,
     },
@@ -377,6 +409,9 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.accepted_bundles",
             "state.database.maintenance",
             "state.database.authoritative_identities",
+            "state.database.phase3_replay_baseline",
+            "state.database.phase3_replay_release",
+            "state.database.phase3_replay_final",
             "state.external.replay_baseline_artifact",
             "state.external.artifact",
             "state.barrier.residue_count",
@@ -806,6 +841,31 @@ def _minio_post_canon(
         "external.replay_baseline_artifact",
     )
     artifact_after = _path(snapshots, "after", "external.artifact")
+    replay_baseline = _path(
+        snapshots,
+        "after",
+        "database.phase3_replay_baseline",
+    )
+    replay_release = _path(
+        snapshots,
+        "after",
+        "database.phase3_replay_release",
+    )
+    replay_final = _path(
+        snapshots,
+        "after",
+        "database.phase3_replay_final",
+    )
+    replay_identity_fields = (
+        "row_id",
+        "event_id",
+        "aggregate_type",
+        "aggregate_id",
+        "event_type",
+        "payload",
+        "payload_sha256",
+        "canon_idempotency_key",
+    )
     identities = _path(
         snapshots, "after", "database.authoritative_identities"
     )
@@ -819,13 +879,27 @@ def _minio_post_canon(
             and maintenance_after["lease_epoch"]
             > maintenance_during["lease_epoch"]
         ),
-        "artifact_key_unchanged": (
-            artifact_baseline["key"] == artifact_after["key"]
+        "phase3_replay_identity_unchanged": all(
+            replay_baseline[field]
+            == replay_release[field]
+            == replay_final[field]
+            for field in replay_identity_fields
         ),
-        "artifact_content_sha256_unchanged": (
-            artifact_baseline["content_sha256"]
-            == artifact_after["content_sha256"]
+        "phase3_release_rowcount": replay_release["conditional_rowcount"],
+        "phase3_release_preserved_claim": (
+            replay_baseline["status"] == "processed"
+            and replay_release["status"] == "pending"
+            and replay_release["attempts"] == replay_baseline["attempts"]
+            and replay_release["lease_epoch"]
+            == replay_baseline["lease_epoch"]
         ),
+        "phase3_worker_claim_advanced": (
+            replay_final["attempts"] == replay_release["attempts"] + 1
+            and replay_final["lease_epoch"]
+            == replay_release["lease_epoch"] + 1
+        ),
+        "phase3_replay_final_processed": replay_final["status"] == "processed",
+        "artifact_identity_unchanged": artifact_baseline == artifact_after,
         "barrier_residue_count": _path(
             snapshots, "after", "barrier.residue_count"
         ),
@@ -1289,6 +1363,21 @@ def _shape_violations(
             _ARTIFACT_SCHEMA,
         )
         record("after", "external.artifact", _ARTIFACT_SCHEMA)
+        for dotted, schema in (
+            ("database.phase3_replay_baseline", _PHASE3_REPLAY_SCHEMA),
+            ("database.phase3_replay_release", _PHASE3_RELEASE_SCHEMA),
+            ("database.phase3_replay_final", _PHASE3_REPLAY_SCHEMA),
+        ):
+            replay = record("after", dotted, schema)
+            if (
+                isinstance(replay, Mapping)
+                and isinstance(replay.get("payload"), Mapping)
+            ):
+                record_value(
+                    f"after.state.{dotted}.payload",
+                    replay["payload"],
+                    _PHASE3_PAYLOAD_SCHEMA,
+                )
         records(
             "after",
             "database.authoritative_identities",
@@ -1752,6 +1841,59 @@ def _external_relation_violations(
                     f"{stage}.state.database.maintenance "
                     "canon identity mismatch"
                 )
+        canon_rows = _path(
+            snapshots,
+            "after",
+            "database.canon_commits",
+        )
+        if len(canon_rows) == 1:
+            canon = canon_rows[0]
+            for dotted in (
+                "database.phase3_replay_baseline",
+                "database.phase3_replay_release",
+                "database.phase3_replay_final",
+            ):
+                replay = _path(snapshots, "after", dotted)
+                payload = replay["payload"]
+                if (
+                    replay["aggregate_type"] != "project"
+                    or replay["aggregate_id"] != canon["project_id"]
+                    or replay["event_type"] != "canon.phase3.requested"
+                    or replay["event_id"]
+                    != (
+                        f"{canon['natural_key']}:"
+                        "canon.phase3.requested"
+                    )
+                ):
+                    violations.append(
+                        f"after.state.{dotted} event identity mismatch"
+                    )
+                if (
+                    payload["schema_version"] != 1
+                    or payload["canon_commit_id"] != canon["canon_id"]
+                    or payload["canon_idempotency_key"]
+                    != canon["natural_key"]
+                    or payload["project_id"] != canon["project_id"]
+                    or payload["chapter_number"] != canon["chapter_number"]
+                    or payload["candidate_id"] != canon["candidate_id"]
+                    or replay["canon_idempotency_key"]
+                    != payload["canon_idempotency_key"]
+                ):
+                    violations.append(
+                        f"after.state.{dotted} Canon identity mismatch"
+                    )
+                if replay["payload_sha256"] != stable_hash(payload):
+                    violations.append(
+                        f"after.state.{dotted} payload hash mismatch"
+                    )
+                if replay["status"] not in {
+                    "pending",
+                    "running",
+                    "processed",
+                }:
+                    violations.append(
+                        f"after.state.{dotted} status is invalid"
+                    )
     elif kind == "publisher_backend_unavailable":
         job = _path(snapshots, "after", "database.job")
         jobs = _path(snapshots, "after", "database.jobs")
@@ -1911,12 +2053,28 @@ def _stable_identity_violations(
         )
         paths.extend(
             (
-                ("after", "external.replay_baseline_artifact.key"),
-                ("after", "external.replay_baseline_artifact.content_sha256"),
-                ("after", "external.artifact.key"),
-                ("after", "external.artifact.content_sha256"),
+                ("after", "external.replay_baseline_artifact"),
+                ("after", "external.artifact"),
             )
         )
+        for dotted in (
+            "database.phase3_replay_baseline",
+            "database.phase3_replay_release",
+            "database.phase3_replay_final",
+        ):
+            paths.extend(
+                ("after", f"{dotted}.{field}")
+                for field in (
+                    "row_id",
+                    "event_id",
+                    "aggregate_type",
+                    "aggregate_id",
+                    "event_type",
+                    "payload",
+                    "payload_sha256",
+                    "canon_idempotency_key",
+                )
+            )
         paths.append(("after", "database.authoritative_identities"))
     elif kind in {
         "publisher_backend_unavailable",

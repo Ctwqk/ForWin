@@ -346,6 +346,66 @@ def test_modified_snapshot_cannot_reuse_passing_report_assertions(
     )
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("absent-replay", "snapshot contract"),
+        ("copied-boolean", "snapshot contract"),
+        (
+            "identity-drift",
+            "report assertions do not match derived assertions",
+        ),
+        (
+            "wrong-rowcount",
+            "report assertions do not match derived assertions",
+        ),
+        (
+            "wrong-final-state",
+            "report assertions do not match derived assertions",
+        ),
+        (
+            "wrong-claim-advancement",
+            "report assertions do not match derived assertions",
+        ),
+    ),
+)
+def test_finalizer_independently_requires_same_event_replay(
+    mutation: str,
+    expected: str,
+    tmp_path: Path,
+) -> None:
+    kind = "minio_post_canon_unavailable"
+    report = fault_report(tmp_path, kind)
+    after = next(item for item in report["artifacts"] if item["stage"] == "after")
+    path = Path(after["path"])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    database = payload["state"]["database"]
+    if mutation == "absent-replay":
+        del database["phase3_replay_release"]
+    elif mutation == "copied-boolean":
+        database["replay_observed"] = True
+    elif mutation == "identity-drift":
+        database["phase3_replay_final"]["row_id"] = "other-row"
+    elif mutation == "wrong-rowcount":
+        database["phase3_replay_release"]["conditional_rowcount"] = 0
+    elif mutation == "wrong-final-state":
+        database["phase3_replay_final"]["status"] = "pending"
+    else:
+        database["phase3_replay_final"]["attempts"] += 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    after["sha256"] = recovery.sha256_file(path)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert any(
+        f"{kind}.{expected}" in item
+        for item in violations
+    )
+
+
 def test_recovery_event_log_rejects_tampered_chain(tmp_path: Path) -> None:
     path = tmp_path / "stack-events.jsonl"
     first = {

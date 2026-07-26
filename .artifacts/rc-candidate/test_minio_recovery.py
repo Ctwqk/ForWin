@@ -251,6 +251,24 @@ def test_approval_request_replay_preserves_exact_identity(runner: Any) -> None:
     )
 
 
+def test_approval_transport_does_not_swallow_keyboard_interrupt(
+    runner: Any,
+) -> None:
+    request = runner.ApprovalRequest.for_fixture(
+        api_url="https://api.example",
+        project_id=PROJECT_ID,
+        chapter_number=1,
+        fault_id=FAULT_ID,
+        candidate_id=CANDIDATE_ID,
+    )
+
+    def interrupting_transport(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.ApprovalAPI(transport=interrupting_transport).send(request)
+
+
 def composed_text(statement: Any) -> str:
     as_string = getattr(statement, "as_string", None)
     return as_string() if callable(as_string) else str(statement)
@@ -446,6 +464,8 @@ def phase3_row(
     status: str = "processed",
     event_id: str = EVENT_ID,
     payload: dict[str, Any] | None = None,
+    attempts: int = 3,
+    lease_epoch: int = 4,
 ) -> dict[str, Any]:
     return {
         "id": "outbox-row-a",
@@ -463,10 +483,10 @@ def phase3_row(
             "candidate_id": CANDIDATE_ID,
         },
         "status": status,
-        "attempts": 3,
+        "attempts": attempts,
         "available_at": None,
         "worker_id": "outbox-worker-a",
-        "lease_epoch": 4,
+        "lease_epoch": lease_epoch,
         "lease_expires_at": None,
         "heartbeat_at": None,
         "processed_at": "2026-07-26T12:00:00+00:00",
@@ -591,10 +611,14 @@ def test_same_event_replay_is_one_exact_conditional_update(runner: Any) -> None:
 
     artifact = collector.release_processed_phase3_event(fixture(runner))
 
-    assert artifact["update"]["rowcount"] == 1
-    assert artifact["identity_unchanged"] is True
-    assert artifact["before"]["row_sha256"]
-    assert artifact["after"]["row_sha256"]
+    assert artifact["release"]["conditional_rowcount"] == 1
+    assert artifact["baseline"]["attempts"] == 3
+    assert artifact["baseline"]["lease_epoch"] == 4
+    assert artifact["release"]["attempts"] == 3
+    assert artifact["release"]["lease_epoch"] == 4
+    assert artifact["release"]["before_row_sha256"]
+    assert artifact["release"]["after_row_sha256"]
+    assert "identity_unchanged" not in artifact
     assert len(database.mutations) == 1
     statement, params = database.mutations[0]
     assert statement.lstrip().startswith("UPDATE outbox_events")
@@ -632,6 +656,8 @@ def test_same_event_replay_is_one_exact_conditional_update(runner: Any) -> None:
             },
             "identity changed",
         ),
+        (1, {"attempts": 4}, "claim counters changed"),
+        (1, {"lease_epoch": 5}, "claim counters changed"),
     ],
 )
 def test_same_event_replay_rejects_rowcount_or_identity_drift(
@@ -654,6 +680,43 @@ def test_same_event_replay_rejects_rowcount_or_identity_drift(
 
     with pytest.raises(runner.RunnerError, match=match):
         collector.release_processed_phase3_event(fixture(runner))
+
+
+def test_phase3_final_observation_exposes_real_worker_claim_advancement(
+    runner: Any,
+) -> None:
+    final = phase3_row(status="processed", attempts=4, lease_epoch=5)
+    collector = runner.SQLCollector(BoundaryDatabase(final))
+
+    observation = collector.phase3_replay_observation(fixture(runner))
+
+    assert observation["status"] == "processed"
+    assert observation["attempts"] == 4
+    assert observation["lease_epoch"] == 5
+    assert observation["event_id"] == EVENT_ID
+
+
+class InterruptDatabase:
+    def fetch_all(
+        self,
+        _statement: str,
+        _params: tuple[Any, ...] = (),
+    ) -> list[dict[str, Any]]:
+        raise KeyboardInterrupt
+
+
+def test_convergence_poll_does_not_swallow_keyboard_interrupt(
+    runner: Any,
+) -> None:
+    collector = runner.SQLCollector(InterruptDatabase())
+
+    with pytest.raises(KeyboardInterrupt):
+        collector.wait_converged(
+            fixture(runner),
+            SimpleNamespace(),
+            timeout_seconds=1,
+            poll_seconds=0,
+        )
 
 
 def canon_record() -> dict[str, Any]:
@@ -752,6 +815,36 @@ def valid_snapshots(
                 "natural_key": CANON_KEY,
             }
         ],
+        phase3_replay_baseline={
+            **runner.SQLCollector._event_identity(phase3_row()),
+            "status": "processed",
+            "attempts": 3,
+            "lease_epoch": 4,
+        },
+        phase3_replay_release={
+            **runner.SQLCollector._event_identity(
+                phase3_row(status="pending")
+            ),
+            "status": "pending",
+            "attempts": 3,
+            "lease_epoch": 4,
+            "conditional_rowcount": 1,
+            "predicate_sha256": hashlib.sha256(b"predicate").hexdigest(),
+            "before_row_sha256": hashlib.sha256(b"before").hexdigest(),
+            "after_row_sha256": hashlib.sha256(b"after").hexdigest(),
+        },
+        phase3_replay_final={
+            **runner.SQLCollector._event_identity(
+                phase3_row(
+                    status="processed",
+                    attempts=4,
+                    lease_epoch=5,
+                )
+            ),
+            "status": "processed",
+            "attempts": 4,
+            "lease_epoch": 5,
+        },
     )
     snapshots["after"]["state"]["external"][
         "replay_baseline_artifact"
@@ -993,8 +1086,16 @@ def test_task5_success_uses_real_writer_evaluator_and_finalizer(
     if kind == "minio_post_canon_unavailable":
         supplemental["same-event-replay.json"] = {
             "schema_version": 1,
-            "update": {"rowcount": 1},
-            "identity_unchanged": True,
+            "baseline": copy.deepcopy(
+                snapshots["after"]["state"]["database"][
+                    "phase3_replay_baseline"
+                ]
+            ),
+            "release": copy.deepcopy(
+                snapshots["after"]["state"]["database"][
+                    "phase3_replay_release"
+                ]
+            ),
         }
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
@@ -1331,8 +1432,16 @@ class PostCanonSQL:
             canon_natural_key=CANON_KEY,
         )
 
-    def post_snapshot(self, *, stage: str, **_kwargs: Any) -> dict[str, Any]:
+    def post_snapshot(self, *, stage: str, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(f"snapshot:{stage}")
+        if stage == "after":
+            database = self.snapshots[stage]["state"]["database"]
+            for field in (
+                "phase3_replay_baseline",
+                "phase3_replay_release",
+                "phase3_replay_final",
+            ):
+                assert kwargs[field] == database[field]
         return copy.deepcopy(self.snapshots[stage])
 
     def require_maintenance_pending(self, _fixture: Any) -> None:
@@ -1369,12 +1478,24 @@ class PostCanonSQL:
             "schema_version": 1,
             "fault_id": FAULT_ID,
             "fixture": fixture(self.runner).evaluator_identity(),
-            "event_identity": {"event_id": EVENT_ID},
-            "before": {"row_sha256": "a" * 64},
-            "update": {"rowcount": 1},
-            "after": {"row_sha256": "b" * 64},
-            "identity_unchanged": True,
+            "baseline": copy.deepcopy(
+                self.snapshots["after"]["state"]["database"][
+                    "phase3_replay_baseline"
+                ]
+            ),
+            "release": copy.deepcopy(
+                self.snapshots["after"]["state"]["database"][
+                    "phase3_replay_release"
+                ]
+            ),
         }
+
+    def phase3_replay_observation(self, _fixture: Any) -> dict[str, Any]:
+        return copy.deepcopy(
+            self.snapshots["after"]["state"]["database"][
+                "phase3_replay_final"
+            ]
+        )
 
 
 def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(

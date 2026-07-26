@@ -92,6 +92,12 @@ def _json_safe(value: Any) -> Any:
     return isoformat() if callable(isoformat) else str(value)
 
 
+def _required_counter(value: Any, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise SetupBlocked(f"{field} is not a nonnegative integer")
+    return value
+
+
 def snapshot_envelope(
     *,
     source_sha: str,
@@ -424,7 +430,7 @@ class ApprovalAPI:
             )
         except ApprovalTransportFailure:
             raise
-        except BaseException as exc:
+        except Exception as exc:
             raise ApprovalTransportFailure(
                 f"supported approval request failed: {exc}"
             ) from exc
@@ -448,7 +454,7 @@ class AsyncApproval:
         self.api = api
         self.request = request
         self.result: dict[str, Any] | None = None
-        self.error: BaseException | None = None
+        self.error: Exception | None = None
         self.thread = threading.Thread(
             target=self._target,
             name=f"task5-approval-{request.identity_sha256[:12]}",
@@ -458,7 +464,7 @@ class AsyncApproval:
     def _target(self) -> None:
         try:
             self.result = self.api.send(self.request)
-        except BaseException as exc:
+        except Exception as exc:
             self.error = exc
 
     def start(self) -> None:
@@ -630,10 +636,10 @@ class ReviewApprovedBarrier:
                     "SELECT pg_advisory_lock(%s)",
                     (self.advisory_key,),
                 )
-        except BaseException:
+        except Exception:
             try:
                 self.cleanup()
-            except BaseException:
+            except Exception:
                 pass
             raise
 
@@ -764,7 +770,7 @@ class ReviewApprovedBarrier:
         poll_seconds: float = 0.5,
     ) -> BarrierObservation:
         deadline = time.monotonic() + timeout_seconds
-        last_error: BaseException | None = None
+        last_error: Exception | None = None
         while time.monotonic() < deadline:
             try:
                 return self.observe_blocked_waiter()
@@ -835,12 +841,12 @@ class ReviewApprovedBarrier:
         if self._holder is not None:
             try:
                 self.release()
-            except BaseException as exc:
+            except Exception as exc:
                 errors.append(f"barrier release: {exc}")
             finally:
                 try:
                     self._holder.close()
-                except BaseException as exc:
+                except Exception as exc:
                     errors.append(f"holder close: {exc}")
                 self._holder = None
         if self._admin is not None:
@@ -867,12 +873,12 @@ class ReviewApprovedBarrier:
                 }
                 if any(self.residue.values()):
                     errors.append(f"review barrier residue: {self.residue}")
-            except BaseException as exc:
+            except Exception as exc:
                 errors.append(f"barrier object cleanup: {exc}")
             finally:
                 try:
                     self._admin.close()
-                except BaseException as exc:
+                except Exception as exc:
                     errors.append(f"admin close: {exc}")
                 self._admin = None
         if errors:
@@ -934,7 +940,7 @@ class PsycopgDatabase:
                 rowcount = int(cursor.rowcount)
             connection.commit()
             return rowcount
-        except BaseException:
+        except Exception:
             connection.rollback()
             raise
         finally:
@@ -1257,6 +1263,9 @@ class SQLCollector:
         fixture: FixtureContext,
         artifact: Mapping[str, Any] | None = None,
         replay_baseline_artifact: Mapping[str, Any] | None = None,
+        phase3_replay_baseline: Mapping[str, Any] | None = None,
+        phase3_replay_release: Mapping[str, Any] | None = None,
+        phase3_replay_final: Mapping[str, Any] | None = None,
         barrier_residue_count: int = 0,
     ) -> dict[str, Any]:
         snapshot = snapshot_envelope(
@@ -1281,12 +1290,29 @@ class SQLCollector:
                 )
             database["maintenance"] = normalize_maintenance(maintenance[0])
         if stage == "after":
-            if artifact is None or replay_baseline_artifact is None:
-                raise SetupBlocked("post-replay MinIO artifacts are missing")
+            if (
+                artifact is None
+                or replay_baseline_artifact is None
+                or phase3_replay_baseline is None
+                or phase3_replay_release is None
+                or phase3_replay_final is None
+            ):
+                raise SetupBlocked(
+                    "post-replay MinIO artifact or phase3 evidence is missing"
+                )
             snapshot["state"]["external"]["replay_baseline_artifact"] = dict(
                 replay_baseline_artifact
             )
             snapshot["state"]["external"]["artifact"] = dict(artifact)
+            database["phase3_replay_baseline"] = copy.deepcopy(
+                phase3_replay_baseline
+            )
+            database["phase3_replay_release"] = copy.deepcopy(
+                phase3_replay_release
+            )
+            database["phase3_replay_final"] = copy.deepcopy(
+                phase3_replay_final
+            )
             database["authoritative_identities"] = normalize_authoritative(
                 self.database.fetch_all(
                     AUTHORITATIVE_SQL,
@@ -1377,7 +1403,7 @@ class SQLCollector:
         poll_seconds: float = 1.0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         deadline = time.monotonic() + timeout_seconds
-        last_error: BaseException | None = None
+        last_error: Exception | None = None
         while time.monotonic() < deadline:
             try:
                 canon = self._canon(fixture)
@@ -1401,7 +1427,7 @@ class SQLCollector:
                         project_id=fixture.project_id,
                         canon_id=fixture.canon_id or canon[0]["canon_id"],
                     )
-            except BaseException as exc:
+            except Exception as exc:
                 last_error = exc
             time.sleep(poll_seconds)
         raise SetupBlocked(
@@ -1442,6 +1468,35 @@ class SQLCollector:
             ),
         }
 
+    @classmethod
+    def _phase3_observation(
+        cls,
+        row: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            **cls._event_identity(row),
+            "status": required_text(row.get("status"), "phase3 status"),
+            "attempts": _required_counter(
+                row.get("attempts"),
+                "phase3 attempts",
+            ),
+            "lease_epoch": _required_counter(
+                row.get("lease_epoch"),
+                "phase3 lease_epoch",
+            ),
+        }
+
+    def phase3_replay_observation(
+        self,
+        fixture: FixtureContext,
+    ) -> dict[str, Any]:
+        rows = self._phase3_rows(fixture)
+        if len(rows) != 1:
+            raise RunnerError(
+                "same-event replay requires exactly one phase3 row"
+            )
+        return self._phase3_observation(rows[0])
+
     def release_processed_phase3_event(
         self,
         fixture: FixtureContext,
@@ -1452,13 +1507,13 @@ class SQLCollector:
         before = before_rows[0]
         if before.get("status") != "processed":
             raise RunnerError("same-event replay phase3 row is not processed")
-        identity = self._event_identity(before)
+        baseline = self._phase3_observation(before)
         if (
-            identity["event_type"] != PHASE3_EVENT_TYPE
-            or identity["aggregate_type"] != "project"
-            or identity["aggregate_id"] != fixture.project_id
-            or identity["payload"]["canon_commit_id"] != fixture.canon_id
-            or identity["canon_idempotency_key"]
+            baseline["event_type"] != PHASE3_EVENT_TYPE
+            or baseline["aggregate_type"] != "project"
+            or baseline["aggregate_id"] != fixture.project_id
+            or baseline["payload"]["canon_commit_id"] != fixture.canon_id
+            or baseline["canon_idempotency_key"]
             != fixture.canon_natural_key
         ):
             raise RunnerError("same-event replay identity is not fixture-bound")
@@ -1482,7 +1537,7 @@ class SQLCollector:
             payload_text,
             before.get("aggregate_type"),
             before.get("aggregate_id"),
-            identity["canon_idempotency_key"],
+            baseline["canon_idempotency_key"],
         )
         rowcount = self.database.execute_conditional(
             REPLAY_UPDATE_SQL,
@@ -1496,40 +1551,47 @@ class SQLCollector:
         if len(after_rows) != 1:
             raise RunnerError("same-event replay changed phase3 row cardinality")
         after = after_rows[0]
-        after_identity = self._event_identity(after)
-        if after_identity != identity:
+        release = self._phase3_observation(after)
+        identity_fields = (
+            "row_id",
+            "event_id",
+            "aggregate_type",
+            "aggregate_id",
+            "event_type",
+            "payload",
+            "payload_sha256",
+            "canon_idempotency_key",
+        )
+        if any(release[field] != baseline[field] for field in identity_fields):
             raise RunnerError("same-event replay identity changed")
-        if after.get("status") != "pending":
+        if release["status"] != "pending":
             raise RunnerError("same-event replay row was not released to pending")
+        if (
+            release["attempts"] != baseline["attempts"]
+            or release["lease_epoch"] != baseline["lease_epoch"]
+        ):
+            raise RunnerError(
+                "same-event replay conditional mutation claim counters changed"
+            )
         before_safe = _json_safe(before)
         after_safe = _json_safe(after)
         return {
             "schema_version": 1,
             "fault_id": fixture.fault_id,
             "fixture": fixture.evaluator_identity(),
-            "event_identity": identity,
-            "before": {
-                "row_sha256": stable_hash(before_safe),
-                "status": before.get("status"),
-                "attempt": int(before.get("attempts") or 0),
-                "lease_epoch": int(before.get("lease_epoch") or 0),
-            },
-            "update": {
-                "rowcount": rowcount,
+            "baseline": baseline,
+            "release": {
+                **release,
+                "conditional_rowcount": rowcount,
                 "predicate_sha256": stable_hash(
                     {
                         "statement": "task5 exact same-event replay",
                         "params": _json_safe(params),
                     }
                 ),
+                "before_row_sha256": stable_hash(before_safe),
+                "after_row_sha256": stable_hash(after_safe),
             },
-            "after": {
-                "row_sha256": stable_hash(after_safe),
-                "status": after.get("status"),
-                "attempt": int(after.get("attempts") or 0),
-                "lease_epoch": int(after.get("lease_epoch") or 0),
-            },
-            "identity_unchanged": True,
         }
 
     def identity_world(
@@ -1875,6 +1937,7 @@ class LiveRunner:
             fixture,
             self.inventory,
         )
+        replay_final = self.sql.phase3_replay_observation(fixture)
         final_world = self.sql.identity_world(fixture, final_objects)
         if final_world != baseline_world:
             raise RunnerError(
@@ -1886,6 +1949,9 @@ class LiveRunner:
             fixture=fixture,
             replay_baseline_artifact=baseline_artifact,
             artifact=final_artifact,
+            phase3_replay_baseline=replay["baseline"],
+            phase3_replay_release=replay["release"],
+            phase3_replay_final=replay_final,
             barrier_residue_count=sum(residue.values()),
         )
         self.supplemental["barrier-observation.json"] = {
@@ -1910,6 +1976,7 @@ class LiveRunner:
         }
         self.supplemental["same-event-replay.json"] = {
             **replay,
+            "final": replay_final,
             "baseline_world_sha256": stable_hash(baseline_world),
             "final_world_sha256": stable_hash(final_world),
             "maintenance_identity_unchanged": (

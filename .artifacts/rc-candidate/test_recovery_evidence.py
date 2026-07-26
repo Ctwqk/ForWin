@@ -232,6 +232,49 @@ def artifact_record(kind: str, variant: str = "primary") -> dict[str, Any]:
     }
 
 
+def phase3_replay_observation(
+    kind: str,
+    *,
+    status: str,
+    attempts: int,
+    lease_epoch: int,
+    release_operation: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "canon_commit_id": token(kind, "canon-primary"),
+        "canon_idempotency_key": token(kind, "canon-natural-primary"),
+        "project_id": token(kind, "project"),
+        "chapter_number": 1,
+        "candidate_id": token(kind, "candidate"),
+    }
+    observation = {
+        "row_id": token(kind, "phase3-row"),
+        "event_id": (
+            f"{payload['canon_idempotency_key']}:canon.phase3.requested"
+        ),
+        "aggregate_type": "project",
+        "aggregate_id": payload["project_id"],
+        "event_type": "canon.phase3.requested",
+        "payload": payload,
+        "payload_sha256": evidence.stable_hash(payload),
+        "canon_idempotency_key": payload["canon_idempotency_key"],
+        "status": status,
+        "attempts": attempts,
+        "lease_epoch": lease_epoch,
+    }
+    if release_operation:
+        observation.update(
+            {
+                "conditional_rowcount": 1,
+                "predicate_sha256": digest(kind, "phase3-predicate"),
+                "before_row_sha256": digest(kind, "phase3-before-row"),
+                "after_row_sha256": digest(kind, "phase3-after-row"),
+            }
+        )
+    return observation
+
+
 def backend_job_record(
     kind: str, owner: str, variant: str = "primary"
 ) -> dict[str, str]:
@@ -481,6 +524,25 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
             {
                 "maintenance": maintenance_record(kind, 2, 9),
                 "authoritative_identities": [authoritative_record(kind)],
+                "phase3_replay_baseline": phase3_replay_observation(
+                    kind,
+                    status="processed",
+                    attempts=3,
+                    lease_epoch=4,
+                ),
+                "phase3_replay_release": phase3_replay_observation(
+                    kind,
+                    status="pending",
+                    attempts=3,
+                    lease_epoch=4,
+                    release_operation=True,
+                ),
+                "phase3_replay_final": phase3_replay_observation(
+                    kind,
+                    status="processed",
+                    attempts=4,
+                    lease_epoch=5,
+                ),
             }
         )
         after["external"]["replay_baseline_artifact"] = artifact_record(kind)
@@ -680,6 +742,49 @@ RECORD_CASES = (
         "external.replay_baseline_artifact",
         artifact_record("minio_post_canon_unavailable"),
         "key",
+        7,
+    ),
+    RecordCase(
+        "phase3 replay baseline",
+        "minio_post_canon_unavailable",
+        "after",
+        "database.phase3_replay_baseline",
+        phase3_replay_observation(
+            "minio_post_canon_unavailable",
+            status="processed",
+            attempts=3,
+            lease_epoch=4,
+        ),
+        "row_id",
+        7,
+    ),
+    RecordCase(
+        "phase3 replay release",
+        "minio_post_canon_unavailable",
+        "after",
+        "database.phase3_replay_release",
+        phase3_replay_observation(
+            "minio_post_canon_unavailable",
+            status="pending",
+            attempts=3,
+            lease_epoch=4,
+            release_operation=True,
+        ),
+        "conditional_rowcount",
+        "one",
+    ),
+    RecordCase(
+        "phase3 replay final",
+        "minio_post_canon_unavailable",
+        "after",
+        "database.phase3_replay_final",
+        phase3_replay_observation(
+            "minio_post_canon_unavailable",
+            status="processed",
+            attempts=4,
+            lease_epoch=5,
+        ),
+        "status",
         7,
     ),
     RecordCase(
@@ -1318,6 +1423,128 @@ def test_minio_post_inventory_is_after_only_and_rejects_timestamps() -> None:
     )
 
 
+def test_minio_post_requires_immutable_replay_observations() -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+
+    assertions = evidence.derive_assertions(kind, values)
+
+    assert assertions["phase3_replay_identity_unchanged"] is True
+    assert assertions["phase3_release_rowcount"] == 1
+    assert assertions["phase3_release_preserved_claim"] is True
+    assert assertions["phase3_worker_claim_advanced"] is True
+    assert assertions["phase3_replay_final_processed"] is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "phase3_replay_baseline",
+        "phase3_replay_release",
+        "phase3_replay_final",
+    ),
+)
+def test_minio_post_rejects_missing_replay_observation(path: str) -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    del values["after"]["state"]["database"][path]
+
+    assert any(
+        f"after.state.database.{path} is missing" in item
+        for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_minio_post_rejects_copied_replay_boolean() -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    values["after"]["state"]["database"]["replay_observed"] = True
+
+    assert (
+        "after.state.database has unknown keys: ['replay_observed']"
+        in evidence.snapshot_violations(kind, values)
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "assertion"),
+    (
+        (
+            "database.phase3_replay_final.row_id",
+            "other-row",
+            "phase3_replay_identity_unchanged",
+        ),
+        (
+            "database.phase3_replay_release.conditional_rowcount",
+            0,
+            "phase3_release_rowcount",
+        ),
+        (
+            "database.phase3_replay_release.attempts",
+            4,
+            "phase3_release_preserved_claim",
+        ),
+        (
+            "database.phase3_replay_release.lease_epoch",
+            5,
+            "phase3_release_preserved_claim",
+        ),
+        (
+            "database.phase3_replay_final.attempts",
+            5,
+            "phase3_worker_claim_advanced",
+        ),
+        (
+            "database.phase3_replay_final.lease_epoch",
+            6,
+            "phase3_worker_claim_advanced",
+        ),
+        (
+            "database.phase3_replay_final.status",
+            "pending",
+            "phase3_replay_final_processed",
+        ),
+    ),
+)
+def test_minio_post_replay_derived_negatives(
+    path: str,
+    value: Any,
+    assertion: str,
+) -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    set_path(values["after"]["state"], path, value)
+
+    derived = evidence.derive_assertions(kind, values)
+
+    assert derived[assertion] != evidence.FAULT_CONTRACTS[kind][assertion]
+    assert evidence.assertion_violations(kind, derived)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("key", "other/world.json"),
+        ("etag", "different-etag"),
+        ("size", 4097),
+        ("content_type", "application/octet-stream"),
+        ("content_sha256", "a" * 64),
+    ),
+)
+def test_minio_post_compares_complete_artifact_identity(
+    field: str,
+    value: Any,
+) -> None:
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    values["after"]["state"]["external"]["artifact"][field] = value
+
+    derived = evidence.derive_assertions(kind, values)
+
+    assert derived["artifact_identity_unchanged"] is False
+    assert evidence.assertion_violations(kind, derived)
+
+
 def test_copied_publisher_booleans_are_not_snapshot_schema_fields() -> None:
     backend = valid_snapshots("publisher_backend_unavailable")
     risk = valid_snapshots("publisher_captcha")
@@ -1860,20 +2087,64 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
-            "minio artifact key",
+            "minio phase3 replay identity",
             "minio_post_canon_unavailable",
-            "artifact_key_unchanged",
+            "phase3_replay_identity_unchanged",
             set_mutation(
                 "after",
-                "external.artifact.key",
-                artifact_record("minio_post_canon_unavailable", "other")["key"],
+                "database.phase3_replay_final.row_id",
+                token("minio_post_canon_unavailable", "other-phase3-row"),
             ),
             False,
         ),
         ContractCase(
-            "minio artifact content hash",
+            "minio phase3 release rowcount",
             "minio_post_canon_unavailable",
-            "artifact_content_sha256_unchanged",
+            "phase3_release_rowcount",
+            set_mutation(
+                "after",
+                "database.phase3_replay_release.conditional_rowcount",
+                0,
+            ),
+            0,
+        ),
+        ContractCase(
+            "minio phase3 release preserves claim counters",
+            "minio_post_canon_unavailable",
+            "phase3_release_preserved_claim",
+            set_mutation(
+                "after",
+                "database.phase3_replay_release.attempts",
+                4,
+            ),
+            False,
+        ),
+        ContractCase(
+            "minio phase3 worker claim advancement",
+            "minio_post_canon_unavailable",
+            "phase3_worker_claim_advanced",
+            set_mutation(
+                "after",
+                "database.phase3_replay_final.lease_epoch",
+                6,
+            ),
+            False,
+        ),
+        ContractCase(
+            "minio phase3 final processed",
+            "minio_post_canon_unavailable",
+            "phase3_replay_final_processed",
+            set_mutation(
+                "after",
+                "database.phase3_replay_final.status",
+                "pending",
+            ),
+            False,
+        ),
+        ContractCase(
+            "minio artifact identity",
+            "minio_post_canon_unavailable",
+            "artifact_identity_unchanged",
             set_mutation(
                 "after",
                 "external.artifact.content_sha256",

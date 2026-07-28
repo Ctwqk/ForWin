@@ -158,7 +158,43 @@ def recovery_runner_contracts(
     return contracts
 
 
-def live_recovery_command_block(runbook: str) -> str:
+def controller_recovery_endpoints() -> tuple[str, str]:
+    api_url = (
+        f"http://{stack.COMPOSE_ENV['FORWIN_HTTP_BIND']}:"
+        f"{stack.COMPOSE_ENV['FORWIN_HTTP_PORT']}"
+    )
+    mcp_url = (
+        f"http://{stack.COMPOSE_ENV['FORWIN_MCP_DEBUG_BIND']}/mcp"
+    )
+    return api_url, mcp_url
+
+
+def controller_recovery_database_url() -> str:
+    service_url = urlsplit(stack.ISOLATED_DATABASE_URL)
+    database_host, database_port = stack.COMPOSE_ENV[
+        "FORWIN_RECOVERY_POSTGRES_BIND"
+    ].rsplit(":", 1)
+    scheme = service_url.scheme.split("+", 1)[0]
+    literal_parts = (
+        scheme,
+        service_url.username,
+        service_url.password,
+        database_host,
+        database_port,
+        service_url.path.removeprefix("/"),
+    )
+    assert all(
+        isinstance(part, str)
+        and re.fullmatch(r"[A-Za-z0-9._~-]+", part)
+        for part in literal_parts
+    ), "controller database identity must be statically shell-safe"
+    return (
+        f"{scheme}://{service_url.username}:{service_url.password}"
+        f"@{database_host}:{database_port}{service_url.path}"
+    )
+
+
+def live_recovery_bash_blocks(runbook: str) -> tuple[str, str]:
     sections = re.findall(
         r"^## Live Recovery Faults[ \t]*\n(.*?)(?=^## |\Z)",
         runbook,
@@ -173,32 +209,200 @@ def live_recovery_command_block(runbook: str) -> str:
     assert len(bash_blocks) == 2, (
         "live recovery section must contain setup and command bash blocks"
     )
-    return bash_blocks[1]
+    return bash_blocks[0], bash_blocks[1]
+
+
+def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
+    assert "\r" not in setup_block, (
+        "carriage return is forbidden in recovery setup block"
+    )
+    assert "\0" not in setup_block, (
+        "NUL is forbidden in recovery setup block"
+    )
+    assert setup_block.endswith("\n"), (
+        "recovery setup block must end with a newline"
+    )
+
+    qdrant_bind = stack.COMPOSE_ENV["FORWIN_QDRANT_DEBUG_BIND"]
+    minio_bind = stack.COMPOSE_ENV["FORWIN_RECOVERY_MINIO_API_BIND"]
+    expected_literals = {
+        "FORWIN_RECOVERY_DATABASE_URL": (
+            controller_recovery_database_url()
+        ),
+        "FORWIN_RECOVERY_QDRANT_URL": f"http://{qdrant_bind}",
+        "FORWIN_RECOVERY_QDRANT_COLLECTION": "chapter_memories",
+        "FORWIN_RECOVERY_MINIO_ENDPOINT": minio_bind,
+        "FORWIN_RECOVERY_MINIO_ACCESS_KEY": (
+            stack.ISOLATED_MINIO_ACCESS_KEY
+        ),
+        "FORWIN_RECOVERY_MINIO_SECRET_KEY": (
+            stack.ISOLATED_MINIO_SECRET_KEY
+        ),
+        "FORWIN_RECOVERY_MINIO_BUCKET": stack.COMPOSE_ENV[
+            "FORWIN_MINIO_BUCKET"
+        ],
+        "FORWIN_RECOVERY_MINIO_PREFIX": stack.COMPOSE_ENV[
+            "FORWIN_MINIO_PREFIX"
+        ],
+        "FORWIN_RECOVERY_MINIO_SECURE": stack.COMPOSE_ENV[
+            "FORWIN_MINIO_SECURE"
+        ],
+    }
+    special_exports = (
+        (
+            "FORWIN_RECOVERY_CANDIDATE_MANIFEST",
+            (
+                'export FORWIN_RECOVERY_CANDIDATE_MANIFEST="$(',
+                "  realpath .artifacts/v5-rc/candidate-draft.json",
+                ')"',
+            ),
+            "$(realpath .artifacts/v5-rc/candidate-draft.json)",
+        ),
+        (
+            "RECOVERY_RUN_ID",
+            ('export RECOVERY_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"',),
+            "$(date -u +%Y%m%dT%H%M%SZ)-$$",
+        ),
+        (
+            "RECOVERY_EVIDENCE_ROOT",
+            (
+                'export RECOVERY_EVIDENCE_ROOT="$(',
+                "  pwd -P",
+                ")/.artifacts/v5-recovery-live/$RECOVERY_RUN_ID\"",
+            ),
+            (
+                "$(pwd -P)/.artifacts/v5-recovery-live/"
+                "$RECOVERY_RUN_ID"
+            ),
+        ),
+    )
+
+    lines = setup_block[:-1].split("\n")
+    exports = {}
+    test_seen = False
+    index = 0
+    while index < len(lines):
+        matched_special = False
+        for name, physical_lines, value in special_exports:
+            width = len(physical_lines)
+            if tuple(lines[index : index + width]) != physical_lines:
+                continue
+            assert name not in exports, f"duplicate setup export: {name}"
+            exports[name] = value
+            index += width
+            matched_special = True
+            break
+        if matched_special:
+            continue
+
+        line = lines[index]
+        if line == 'test ! -e "$RECOVERY_EVIDENCE_ROOT"':
+            assert not test_seen, "duplicate recovery setup existence test"
+            assert index == len(lines) - 1, (
+                "recovery setup existence test must be terminal"
+            )
+            test_seen = True
+            index += 1
+            continue
+
+        match = re.fullmatch(
+            r'export ([A-Z][A-Z0-9_]*)="([^"$`\\]*)"',
+            line,
+        )
+        assert match is not None, (
+            "setup export must use the canonical literal grammar"
+        )
+        name, value = match.groups()
+        assert name in expected_literals, f"unknown setup export: {name}"
+        assert name not in exports, f"duplicate setup export: {name}"
+        assert value == expected_literals[name], (
+            f"setup export {name} must match the controller contract"
+        )
+        exports[name] = value
+        index += 1
+
+    expected_names = set(expected_literals) | {
+        name for name, _, _ in special_exports
+    }
+    assert set(exports) == expected_names, (
+        "recovery setup exports must match the strict allowlist"
+    )
+    assert test_seen, "recovery setup existence test is required"
+    return exports
+
+
+def normalize_live_recovery_command(paragraph: str) -> str:
+    assert "\r" not in paragraph, (
+        "carriage return is forbidden in runner command block"
+    )
+    assert "\0" not in paragraph, (
+        "NUL is forbidden in runner command block"
+    )
+    lines = paragraph.split("\n")
+    assert lines and all(lines), "empty physical runner command line"
+    assert all(
+        line.endswith("\\") and not line.endswith("\\\\")
+        for line in lines[:-1]
+    ), "malformed command continuation"
+    assert not lines[-1].endswith("\\"), (
+        "malformed terminal command continuation"
+    )
+    normalized = paragraph.replace("\\\n", "")
+    assert "\n" not in normalized, (
+        "noncanonical command continuation"
+    )
+    return normalized
+
+
+def assert_canonical_option_source(
+    normalized: str,
+    option: str,
+    source_value: str,
+) -> None:
+    pattern = (
+        rf"(?:^|[ \t]){re.escape(option)}[ \t]+"
+        rf"{re.escape(source_value)}(?=$|[ \t])"
+    )
+    assert re.search(pattern, normalized) is not None, (
+        f"{option} must use its canonical shell value"
+    )
 
 
 def parse_live_recovery_commands(
     runbook: str,
 ) -> list[tuple[str, dict[str, str]]]:
     contracts = recovery_runner_contracts()
-    command_block = live_recovery_command_block(runbook)
+    setup_block, command_block = live_recovery_bash_blocks(runbook)
+    setup_exports = parse_live_recovery_setup(setup_block)
+    assert "\r" not in command_block, (
+        "carriage return is forbidden in runner command block"
+    )
+    assert "\0" not in command_block, (
+        "NUL is forbidden in runner command block"
+    )
+    assert command_block.endswith("\n"), (
+        "runner command block must end with a newline"
+    )
+    api_url, mcp_url = controller_recovery_endpoints()
+    database_url_env = "FORWIN_RECOVERY_DATABASE_URL"
+    assert setup_exports[database_url_env] == (
+        controller_recovery_database_url()
+    )
+
     commands = []
-    for paragraph in re.split(r"\n\s*\n", command_block):
-        lines = paragraph.splitlines()
-        if not lines or all(
+    command_body = command_block[:-1]
+    for paragraph in re.split(r"\n[ \t]*\n", command_body):
+        lines = paragraph.split("\n")
+        if all(
             line.lstrip().startswith("#") for line in lines
         ):
             continue
-        assert all(line.endswith("\\") for line in lines[:-1]), (
-            "malformed command continuation"
-        )
-        assert not lines[-1].endswith("\\"), (
-            "malformed terminal command continuation"
-        )
-        assert re.search(r"\$\(|[`;&|<>]", paragraph) is None, (
+        normalized = normalize_live_recovery_command(paragraph)
+        assert re.search(r"\$\(|[`;&|<>]", normalized) is None, (
             "shell metacharacter is forbidden in runner command block"
         )
         try:
-            tokens = shlex.split(paragraph.replace("\\\n", " "))
+            tokens = shlex.split(normalized)
         except ValueError as exc:
             raise AssertionError("malformed shell invocation") from exc
         assert tokens, "empty command paragraph"
@@ -212,7 +416,7 @@ def parse_live_recovery_commands(
             "runner path must be one of the three canonical runner paths"
         )
         assert tokens[4] == "run", "runner must use the run subcommand"
-        _, option_arity = contracts[runner]
+        supported_faults, option_arity = contracts[runner]
         options = {}
         index = 5
         while index < len(tokens):
@@ -234,19 +438,106 @@ def parse_live_recovery_commands(
         assert not missing_options, (
             "missing required options: " + ", ".join(sorted(missing_options))
         )
+
+        fault_kind = options["--fault-kind"]
+        assert fault_kind in supported_faults, (
+            "--fault-kind must be supported by its AST-derived runner"
+        )
+        fault_id = options["--fault-id"]
+        fault_id_match = re.fullmatch(
+            r"\$\{RECOVERY_RUN_ID\}-"
+            r"(?P<child>(?P<ordinal>[0-9]{2})-"
+            r"(?P<slug>[a-z0-9]+(?:-[a-z0-9]+)*))",
+            fault_id,
+        )
+        assert fault_id_match is not None, (
+            "--fault-id must use the canonical recovery run ID grammar"
+        )
+        child = fault_id_match.group("child")
+        assert fault_id_match.group("ordinal") == (
+            f"{len(commands) + 1:02d}"
+        ), "--fault-id ordinal must match command order"
+
+        evidence_dir = options["--evidence-dir"]
+        assert evidence_dir == f"$RECOVERY_EVIDENCE_ROOT/{child}", (
+            "fault/evidence suffix must match one-to-one"
+        )
+        assert options["--candidate-manifest"] == (
+            "$FORWIN_RECOVERY_CANDIDATE_MANIFEST"
+        ), "--candidate-manifest must use the canonical setup variable"
+        assert options["--mcp-url"] == mcp_url, (
+            "--mcp-url must match the controller-derived endpoint"
+        )
+        assert options["--api-url"] == api_url, (
+            "--api-url must match the controller-derived endpoint"
+        )
+        assert options["--database-url-env"] == database_url_env, (
+            "--database-url-env must name the canonical setup export"
+        )
+
+        canonical_sources = {
+            "--fault-kind": fault_kind,
+            "--fault-id": f'"{fault_id}"',
+            "--candidate-manifest": (
+                '"$FORWIN_RECOVERY_CANDIDATE_MANIFEST"'
+            ),
+            "--mcp-url": mcp_url,
+            "--api-url": api_url,
+            "--database-url-env": database_url_env,
+            "--evidence-dir": f'"{evidence_dir}"',
+        }
+        for option, source_value in canonical_sources.items():
+            assert_canonical_option_source(
+                normalized,
+                option,
+                source_value,
+            )
         commands.append((runner, options))
 
     assert len(commands) == 11, (
         "designated live recovery block must contain exactly 11 commands"
     )
+    expected_runner_faults = {
+        (runner, fault_kind)
+        for runner, (fault_kinds, _) in contracts.items()
+        for fault_kind in fault_kinds
+    }
+    observed_runner_faults = {
+        (runner, options["--fault-kind"])
+        for runner, options in commands
+    }
+    assert observed_runner_faults == expected_runner_faults, (
+        "runner commands must cover every AST-derived fault exactly once"
+    )
     return commands
 
 
 def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
-    api_option = "  --api-url http://127.0.0.1:19099 \\\n"
-    mcp_option = "  --mcp-url http://127.0.0.1:19096/mcp \\\n"
+    api_url, mcp_url = controller_recovery_endpoints()
+    parsed_api_url = urlsplit(api_url)
+    parsed_mcp_url = urlsplit(mcp_url)
+    assert parsed_api_url.hostname is not None
+    assert parsed_mcp_url.port is not None
+    expanded_api_url = (
+        f"{parsed_api_url.scheme}://{parsed_api_url.hostname}:"
+        f"${{FORWIN_HTTP_PORT}}{parsed_api_url.path}"
+    )
+    wrong_mcp_url = mcp_url.replace(
+        f":{parsed_mcp_url.port}",
+        f":{parsed_mcp_url.port - 1}",
+    )
+    api_option = f"  --api-url {api_url} \\\n"
+    mcp_option = f"  --mcp-url {mcp_url} \\\n"
+    database_export = (
+        'export FORWIN_RECOVERY_DATABASE_URL="'
+        f'{controller_recovery_database_url()}"\n'
+    )
     first_fault_id = (
         '  --fault-id "${RECOVERY_RUN_ID}-01-generation-precommit" \\\n'
+    )
+    candidate_manifest_option = (
+        '  --candidate-manifest '
+        '"$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \\\n'
     )
     first_evidence_dir = (
         '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
@@ -282,9 +573,78 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
             mcp_option,
             mcp_option.removesuffix("\\\n") + "\n",
         ),
+        "command_substitution_continuation": (
+            first_fault_id,
+            (
+                '  --fault-id "${RECOVERY_RUN_ID}-'
+                "01-generation-precommit$\\\n"
+                "(uv run python .artifacts/rc-candidate/"
+                'unexpected_recovery.py run)" \\\n'
+            ),
+        ),
+        "carriage_return_in_option": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit\rother"',
+            ),
+        ),
+        "nul_in_option": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit\0other"',
+            ),
+        ),
         "extra_positional": (
             first_evidence_dir,
             first_evidence_dir + " unexpected positional",
+        ),
+        "wrong_run_id_expansion": (
+            first_fault_id,
+            first_fault_id.replace(
+                "${RECOVERY_RUN_ID}",
+                "${OTHER_RUN_ID}",
+            ),
+        ),
+        "mismatched_fault_evidence_suffix": (
+            first_evidence_dir,
+            first_evidence_dir.replace(
+                "01-generation-precommit",
+                "02-generation-postcommit",
+            ),
+        ),
+        "unsafe_database_export": (
+            database_export,
+            (
+                'export FORWIN_RECOVERY_DATABASE_URL="'
+                f"{controller_recovery_database_url()}"
+                '$(uv run python unexpected_recovery.py)"\n'
+            ),
+        ),
+        "candidate_manifest_parameter_expansion": (
+            first_fault_id + candidate_manifest_option,
+            first_fault_id + candidate_manifest_option.replace(
+                '"$FORWIN_RECOVERY_CANDIDATE_MANIFEST"',
+                '"${FORWIN_RECOVERY_CANDIDATE_MANIFEST:-/tmp/other.json}"',
+            ),
+        ),
+        "candidate_manifest_command_substitution_continuation": (
+            first_fault_id + candidate_manifest_option,
+            (
+                first_fault_id
+                + '  --candidate-manifest "$\\\n'
+                + "(uv run python .artifacts/rc-candidate/"
+                + 'unexpected_recovery.py run)" \\\n'
+            ),
+        ),
+        "api_url_shell_expansion": (
+            api_option,
+            api_option.replace(api_url, expanded_api_url),
+        ),
+        "wrong_mcp_endpoint": (
+            mcp_option,
+            mcp_option.replace(mcp_url, wrong_mcp_url),
         ),
         "extra_command": (
             command_block_end,
@@ -358,7 +718,26 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
         ("missing_option", "missing required options"),
         ("duplicate_option", "duplicate option"),
         ("malformed_continuation", "continuation"),
+        ("command_substitution_continuation", "shell metacharacter"),
+        ("carriage_return_in_option", "carriage return"),
+        ("nul_in_option", "NUL"),
         ("extra_positional", "unexpected positional"),
+        ("wrong_run_id_expansion", "fault-id"),
+        (
+            "mismatched_fault_evidence_suffix",
+            "fault/evidence suffix",
+        ),
+        ("unsafe_database_export", "setup export"),
+        (
+            "candidate_manifest_parameter_expansion",
+            "candidate-manifest",
+        ),
+        (
+            "candidate_manifest_command_substitution_continuation",
+            "shell metacharacter",
+        ),
+        ("api_url_shell_expansion", "api-url"),
+        ("wrong_mcp_endpoint", "mcp-url"),
         ("extra_command", "runner command shape"),
         ("export_command_substitution", "shell metacharacter"),
         ("export_backtick_substitution", "shell metacharacter"),

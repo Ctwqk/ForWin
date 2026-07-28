@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR_VERSION = 5
 MANIFEST_SCHEMA_VERSION = 3
-MATRIX_AUDIT_SCHEMA_VERSION = 2
+MATRIX_AUDIT_SCHEMA_VERSION = 3
 DEFAULT_DEPENDENCY_IMAGES = {
     "postgres": "postgres:16-alpine",
     "qdrant": "qdrant/qdrant:v1.17.1",

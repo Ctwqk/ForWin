@@ -24,6 +24,10 @@ matrix = load_module("matrix_finalizer", ROOT / "finalize_matrix.py")
 fixtures = load_module("l200_test_fixtures", ROOT / "test_l200_evidence.py")
 
 
+def test_request_level_spark_evidence_uses_matrix_schema_v3() -> None:
+    assert matrix.MATRIX_AUDIT_SCHEMA_VERSION == 3
+
+
 def test_matrix_command_uses_l200_host_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -64,6 +68,332 @@ def test_matrix_finalizer_refuses_nonempty_output_directory(
     assert stale_manifest.read_text(encoding="utf-8") == '{"result":"pass"}\n'
 
 
+def gate_outcome(
+    *,
+    gate_kind: str,
+    scope: str,
+    related_object_id: str,
+    chapter_number: int,
+    band_id: str,
+    evaluated: bool,
+    decision: str,
+    blocked: bool,
+    trace_id: str = "",
+    overridden_by: str = "",
+) -> dict:
+    return {
+        "schema_version": 1,
+        "gate_id": "delegation",
+        "gate_version": "v1",
+        "responsibility_domain": gate_kind,
+        "scope": scope,
+        "candidate_id": related_object_id,
+        "chapter_number": chapter_number,
+        "band_id": band_id,
+        "policy_version": 0,
+        "evaluated": evaluated,
+        "fired": True,
+        "decision": decision,
+        "blocked": blocked,
+        "overridden_by": overridden_by,
+        "issue_keys": [],
+        "issue_groups": [],
+        "evidence_refs": [],
+        "trace_ids": [trace_id] if trace_id else [],
+    }
+
+
+def spark_chain(
+    project_id: str,
+    *,
+    suffix: str = "1",
+    terminal_type: str = "gate_delegation_decided",
+) -> dict:
+    request_id = f"request-{suffix}"
+    trace_id = f"trace-{suffix}"
+    trace_event_id = f"trace-event-{suffix}"
+    terminal_id = f"terminal-{suffix}"
+    approval_id = f"approval-{suffix}"
+    checkpoint_id = f"checkpoint-{suffix}"
+    task_id = f"task-{suffix}"
+    causal_root_id = f"root-{suffix}"
+    band_id = f"band-{suffix}"
+    chapter_number = 10
+    gate_kind = "band_checkpoint_pause"
+    requested_model = "spark-model"
+    backend = "codex_bridge"
+    decided = terminal_type == "gate_delegation_decided"
+    terminal_decision = "approve" if decided else "error"
+    terminal_payload = {
+        "gate_kind": gate_kind,
+        "decision": "approve" if decided else "reject",
+        "failure_reason": "" if decided else "llm_call_failed",
+        "trace_id": trace_id,
+        "requested_model": requested_model,
+        "actual_model": requested_model if decided else "",
+        "backend": backend if decided else "",
+        "risk_level": "low" if decided else "",
+        "findings": [],
+        "evidence": [],
+        "gate_related_object_type": "band_checkpoint",
+        "gate_related_object_id": checkpoint_id,
+        "gate_outcome": gate_outcome(
+            gate_kind=gate_kind,
+            scope="band",
+            related_object_id=checkpoint_id,
+            chapter_number=chapter_number,
+            band_id=band_id,
+            evaluated=True,
+            decision=terminal_decision,
+            blocked=not decided,
+            trace_id=trace_id,
+            overridden_by="spark" if decided else "",
+        ),
+    }
+    common = {
+        "project_id": project_id,
+        "task_id": task_id,
+        "band_id": band_id,
+        "chapter_number": chapter_number,
+        "scope": "band",
+        "causal_root_id": causal_root_id,
+    }
+    events = [
+        {
+            **common,
+            "id": request_id,
+            "event_type": "gate_delegation_requested",
+            "actor_type": "system",
+            "actor_id": "",
+            "related_object_type": "band_checkpoint",
+            "related_object_id": checkpoint_id,
+            "parent_event_id": "",
+            "payload": {
+                "gate_kind": gate_kind,
+                "requested_model": requested_model,
+                "related_object_type": "band_checkpoint",
+                "related_object_id": checkpoint_id,
+                "gate_outcome": gate_outcome(
+                    gate_kind=gate_kind,
+                    scope="band",
+                    related_object_id=checkpoint_id,
+                    chapter_number=chapter_number,
+                    band_id=band_id,
+                    evaluated=False,
+                    decision="reject",
+                    blocked=False,
+                ),
+            },
+            "payload_error": "",
+        },
+        {
+            **common,
+            "id": trace_event_id,
+            "event_type": "prompt_trace_recorded",
+            "actor_type": "system",
+            "actor_id": "",
+            "related_object_type": "prompt_trace",
+            "related_object_id": trace_id,
+            "parent_event_id": request_id,
+            "payload": {
+                "gate_kind": gate_kind,
+                "trace_id": trace_id,
+                "requested_model": requested_model,
+                "actual_model": requested_model if decided else "",
+                "backend": backend if decided else "",
+            },
+            "payload_error": "",
+        },
+        {
+            **common,
+            "id": terminal_id,
+            "event_type": terminal_type,
+            "actor_type": "worker",
+            "actor_id": requested_model if decided else "spark-gate-router",
+            "related_object_type": "prompt_trace",
+            "related_object_id": trace_id,
+            "parent_event_id": trace_event_id,
+            "payload": terminal_payload,
+            "payload_error": "",
+        },
+    ]
+    if decided:
+        events.append(
+            {
+                **common,
+                "id": approval_id,
+                "event_type": "gate_delegation_approved",
+                "actor_type": "worker",
+                "actor_id": requested_model,
+                "related_object_type": "band_checkpoint",
+                "related_object_id": checkpoint_id,
+                "parent_event_id": terminal_id,
+                "payload": {
+                    "gate_kind": gate_kind,
+                    "trace_id": trace_id,
+                    "requested_model": requested_model,
+                    "actual_model": requested_model,
+                    "backend": backend,
+                    "gate_outcome": terminal_payload["gate_outcome"],
+                },
+                "payload_error": "",
+            }
+        )
+    return {
+        "events": events,
+        "prompt_traces": [
+            {
+                "id": trace_id,
+                "project_id": project_id,
+                "decision_event_id": request_id,
+                "trace_scope": "gate_delegation",
+                "stage_key": f"gate_{gate_kind}",
+                "template_id": "spark_pause_gate",
+                "template_version": "v1",
+                "backend": backend if decided else "",
+                "permission_profile": "prompt_only_readonly",
+                "fallback_used": False,
+                "input_snapshot": {
+                    "checkpoint": {
+                        "id": checkpoint_id,
+                        "project_id": project_id,
+                        "arc_id": f"arc-{suffix}",
+                        "band_id": band_id,
+                        "chapter_start": 1,
+                        "chapter_end": chapter_number,
+                        "trigger_source": "auto_band_end",
+                        "boundary_kind": "band_end",
+                        "boundary_chapter": chapter_number,
+                        "status": "warn",
+                    },
+                    "pause_policy": {"gate_delegate": "spark"},
+                },
+                "input_snapshot_error": "",
+                "model_profile": {
+                    "requested_model": requested_model,
+                    "actual_model": requested_model if decided else "",
+                    "backend": backend if decided else "",
+                    "permission_profile": "prompt_only_readonly",
+                    "fallback_used": False,
+                },
+                "model_profile_error": "",
+                "output_summary": {
+                    "gate_kind": gate_kind,
+                    "parsed_decision": (
+                        {
+                            "decision": "approve",
+                            "reason": "eligible checkpoint",
+                            "risk_level": "low",
+                            "findings": [],
+                            "evidence": [],
+                        }
+                        if decided
+                        else None
+                    ),
+                    "failure_reason": "" if decided else "llm_call_failed",
+                    "requested_model": requested_model,
+                    "actual_model": requested_model if decided else "",
+                    "backend": backend if decided else "",
+                },
+                "output_summary_error": "",
+            }
+        ],
+        "related_gate_objects": [
+            {
+                "request_event_id": request_id,
+                "object_type": "band_checkpoint",
+                "object_id": checkpoint_id,
+                "exists": True,
+                "project_id": project_id,
+                "band_id": band_id,
+                "boundary_kind": "band_end",
+                "boundary_chapter": chapter_number,
+                "status": "overridden" if decided else "warn",
+            }
+        ],
+    }
+
+
+def empty_spark_evidence() -> dict:
+    return {
+        "events": [],
+        "prompt_traces": [],
+        "related_gate_objects": [],
+    }
+
+
+def chapter_spark_chain(project_id: str) -> dict:
+    chain = spark_chain(project_id, suffix="chapter")
+    request_id = "request-chapter"
+    trace_id = "trace-chapter"
+    chapter_number = 20
+    gate_kind = "chapter_review_interval"
+    review_id = "review-chapter"
+    plan_id = "plan-chapter"
+    draft_id = "draft-chapter"
+    for event in chain["events"]:
+        event["band_id"] = ""
+        event["chapter_number"] = chapter_number
+        event["scope"] = "chapter"
+        payload = event["payload"]
+        payload["gate_kind"] = gate_kind
+        if "gate_outcome" in payload:
+            outcome = payload["gate_outcome"]
+            outcome["responsibility_domain"] = gate_kind
+            outcome["scope"] = "chapter"
+            outcome["candidate_id"] = review_id
+            outcome["chapter_number"] = chapter_number
+            outcome["band_id"] = ""
+        if event["event_type"] == "gate_delegation_requested":
+            event["related_object_type"] = "chapter_review"
+            event["related_object_id"] = review_id
+            payload["related_object_type"] = "chapter_review"
+            payload["related_object_id"] = review_id
+        elif event["event_type"] == "gate_delegation_decided":
+            payload["gate_related_object_type"] = "chapter_review"
+            payload["gate_related_object_id"] = review_id
+        elif event["event_type"] == "gate_delegation_approved":
+            event["related_object_type"] = "chapter_review"
+            event["related_object_id"] = review_id
+    trace = chain["prompt_traces"][0]
+    trace["stage_key"] = f"gate_{gate_kind}"
+    trace["input_snapshot"] = {
+        "gate_reason": "review interval 10 reached",
+        "chapter_plan": {
+            "id": plan_id,
+            "chapter_number": chapter_number,
+            "title": "Interval chapter",
+            "one_line": "Review the interval boundary.",
+            "status": "planned",
+        },
+        "draft_id": draft_id,
+        "review_id": review_id,
+        "review_verdict": {
+            "verdict": "warn",
+            "final_residual_decision": None,
+            "repair_verification": None,
+            "residual_review_issues": [],
+        },
+        "review_interval_chapters": 10,
+        "pause_policy": {"gate_delegate": "spark"},
+    }
+    trace["output_summary"]["gate_kind"] = gate_kind
+    chain["related_gate_objects"] = [
+        {
+            "request_event_id": request_id,
+            "object_type": "chapter_review",
+            "object_id": review_id,
+            "exists": True,
+            "project_id": project_id,
+            "chapter_plan_id": plan_id,
+            "chapter_number": chapter_number,
+            "draft_id": draft_id,
+            "verdict": "warn",
+        }
+    ]
+    return chain
+
+
 def evidence(name: str) -> dict:
     expected = matrix.EXPECTED_CELLS[name]
     target = expected["target"]
@@ -100,12 +430,53 @@ def evidence(name: str) -> dict:
     database["maintenance"]["step_counts"] = {
         step: target for step in matrix.l200.EXPECTED_MAINTENANCE_STEPS
     }
-    spark = {
-        "gate_delegation_requested": 1 if delegate == "spark" else 0,
-        "gate_delegation_decided": 1 if delegate == "spark" else 0,
-        "gate_delegation_approved": 1 if delegate == "spark" else 0,
-        "gate_delegation_failed": 0,
-    }
+    spark = (
+        spark_chain(mcp["project"]["id"])
+        if delegate == "spark"
+        else empty_spark_evidence()
+    )
+    if delegate == "spark":
+        mcp["gate_ledger"]["metrics"].append(
+            {
+                "gate_id": "delegation",
+                "gate_versions": ["v1"],
+                "responsibility_domains": ["band_checkpoint_pause"],
+                "opportunities": 1,
+                "evaluations": 1,
+                "fires": 1,
+                "blocks": 0,
+                "pauses": 0,
+                "approvals": 1,
+                "overrides": 1,
+                "post_override_incident_proxy": 0,
+                "post_pass_incident_proxy": 0,
+                "unknown_legacy_count": 0,
+                "fire_rate": 1.0,
+                "block_rate": 0.0,
+                "override_rate": 1.0,
+            }
+        )
+        mcp["cost_report"]["gate_costs"].append(
+            {
+                "gate_id": "delegation",
+                "metrics": {
+                    "attempts": 1,
+                    "successes": 1,
+                    "retries": 0,
+                    "fallbacks": 0,
+                    "input_chars": 100,
+                    "output_chars": 50,
+                    "prompt_tokens": 25,
+                    "completion_tokens": 10,
+                    "total_tokens": 35,
+                    "duration_ms": 10,
+                    "provider_usage_attempts": 0,
+                    "codex_usage_attempts": 1,
+                    "estimated_usage_attempts": 0,
+                    "missing_usage_attempts": 0,
+                },
+            }
+        )
     return {
         "manifest_cell": {
             "project_id": mcp["project"]["id"],
@@ -129,6 +500,87 @@ def evidence(name: str) -> dict:
     }
 
 
+def replace_spark_evidence(item: dict, spark: dict) -> None:
+    item["operational"]["spark"] = spark
+    events = spark["events"]
+    requests = [
+        event
+        for event in events
+        if event["event_type"] == "gate_delegation_requested"
+    ]
+    terminals = [
+        event
+        for event in events
+        if event["event_type"]
+        in {"gate_delegation_decided", "gate_delegation_failed"}
+    ]
+    approvals = [
+        event
+        for event in events
+        if event["event_type"] == "gate_delegation_approved"
+    ]
+    blocked = sum(
+        bool(event["payload"]["gate_outcome"]["blocked"])
+        for event in terminals
+    )
+    overridden = sum(
+        bool(event["payload"]["gate_outcome"]["overridden_by"])
+        for event in terminals
+    )
+    metrics = [
+        metric
+        for metric in item["gate_ledger"]["metrics"]
+        if metric["gate_id"] != "delegation"
+    ]
+    metrics.append(
+        {
+            "gate_id": "delegation",
+            "gate_versions": ["v1"],
+            "responsibility_domains": (
+                sorted(
+                    {
+                        event["payload"]["gate_kind"]
+                        for event in requests
+                    }
+                )
+                or ["delegated_gate_resolution"]
+            ),
+            "opportunities": len(requests),
+            "evaluations": len(terminals),
+            "fires": len(terminals),
+            "blocks": blocked,
+            "pauses": 0,
+            "approvals": len(approvals),
+            "overrides": overridden,
+            "post_override_incident_proxy": 0,
+            "post_pass_incident_proxy": 0,
+            "unknown_legacy_count": 0,
+            "fire_rate": 0.0,
+            "block_rate": 0.0,
+            "override_rate": 0.0,
+        }
+    )
+    item["gate_ledger"]["metrics"] = metrics
+    item["cost_report"]["gate_costs"] = [
+        cost
+        for cost in item["cost_report"]["gate_costs"]
+        if cost["gate_id"] != "delegation"
+    ]
+    if spark["prompt_traces"]:
+        item["cost_report"]["gate_costs"].append(
+            {
+                "gate_id": "delegation",
+                "metrics": {
+                    "attempts": len(spark["prompt_traces"]),
+                    "successes": sum(
+                        event["event_type"] == "gate_delegation_decided"
+                        for event in terminals
+                    ),
+                },
+            }
+        )
+
+
 def test_human_cell_complete_fixture_passes() -> None:
     assert matrix.validate_cell("L30", evidence("L30")) == []
 
@@ -136,19 +588,196 @@ def test_human_cell_complete_fixture_passes() -> None:
 def test_spark_cell_requires_terminal_delegation_for_every_request() -> None:
     item = evidence("L60S")
     assert matrix.validate_cell("L60S", item) == []
-    item["operational"]["spark"]["gate_delegation_requested"] = 2
+
+    second = spark_chain(item["project"]["id"], suffix="2")
+    item["operational"]["spark"]["events"].extend(second["events"])
+    item["operational"]["spark"]["prompt_traces"].extend(
+        second["prompt_traces"]
+    )
+    item["operational"]["spark"]["related_gate_objects"].extend(
+        second["related_gate_objects"]
+    )
+    second_trace_event = next(
+        event
+        for event in item["operational"]["spark"]["events"]
+        if event["id"] == "trace-event-2"
+    )
+    second_terminal = next(
+        event
+        for event in item["operational"]["spark"]["events"]
+        if event["id"] == "terminal-2"
+    )
+    second_terminal["parent_event_id"] = "trace-event-1"
+
     violations = matrix.validate_cell("L60S", item)
-    assert "Spark delegation terminal count=1, requested=2" in violations
+
+    assert any(
+        "request request-1 has 2 terminal events" in violation
+        for violation in violations
+    )
+    assert any(
+        "request request-2 has 0 terminal events" in violation
+        for violation in violations
+    )
+    assert second_trace_event["parent_event_id"] == "request-2"
+
+
+def test_balanced_aggregate_counts_without_request_chains_fail_closed() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"] = {
+        "gate_delegation_requested": 1,
+        "gate_delegation_decided": 1,
+        "gate_delegation_approved": 1,
+        "gate_delegation_failed": 0,
+    }
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert "Spark evidence events must be a list" in violations
+    assert "Spark evidence prompt_traces must be a list" in violations
+
+
+def test_spark_request_requires_exact_prompt_trace_linkage() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["prompt_traces"][0][
+        "decision_event_id"
+    ] = "different-request"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 has 0 PromptTrace rows" in violation
+        for violation in violations
+    )
+    assert any(
+        "PromptTrace trace-1 references unknown request different-request"
+        in violation
+        for violation in violations
+    )
+
+
+def test_spark_trace_event_must_preserve_model_route_identity() -> None:
+    item = evidence("L60S")
+    trace_event = next(
+        event
+        for event in item["operational"]["spark"]["events"]
+        if event["event_type"] == "prompt_trace_recorded"
+    )
+    trace_event["payload"]["requested_model"] = "different-model"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 prompt trace requested_model mismatch"
+        in violation
+        for violation in violations
+    )
+
+
+def test_spark_request_gate_outcome_must_be_unevaluated_reject() -> None:
+    item = evidence("L60S")
+    request = next(
+        event
+        for event in item["operational"]["spark"]["events"]
+        if event["event_type"] == "gate_delegation_requested"
+    )
+    request["payload"]["gate_outcome"]["decision"] = "approve"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 unevaluated outcome is invalid" in violation
+        for violation in violations
+    )
+
+
+def test_spark_request_requires_eligible_optional_pause_snapshot() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["prompt_traces"][0]["input_snapshot"][
+        "checkpoint"
+    ]["status"] = "fail"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 checkpoint status=fail is not delegation-eligible"
+        in violation
+        for violation in violations
+    )
+
+
+def test_spark_request_requires_existing_authoritative_gate_object() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["related_gate_objects"][0]["exists"] = False
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 related gate object does not exist" in violation
+        for violation in violations
+    )
+
+
+def test_spark_chains_are_bound_to_gate_ledger_counts() -> None:
+    item = evidence("L60S")
+    delegation = next(
+        metric
+        for metric in item["gate_ledger"]["metrics"]
+        if metric["gate_id"] == "delegation"
+    )
+    delegation["opportunities"] = 2
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert (
+        "delegation gate ledger opportunities=2, expected=1"
+        in violations
+    )
+
+
+def test_spark_chains_require_delegation_cost_trace_evidence() -> None:
+    item = evidence("L60S")
+    item["cost_report"]["gate_costs"] = []
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert "delegation cost report metric is missing" in violations
+
+
+def test_chapter_interval_spark_chain_uses_general_eligibility_contract() -> None:
+    item = evidence("L60S")
+    replace_spark_evidence(
+        item,
+        chapter_spark_chain(item["project"]["id"]),
+    )
+
+    assert matrix.validate_cell("L60S", item) == []
+
+
+def test_chapter_interval_rejects_ineligible_review_snapshot() -> None:
+    item = evidence("L60S")
+    replace_spark_evidence(
+        item,
+        chapter_spark_chain(item["project"]["id"]),
+    )
+    item["operational"]["spark"]["prompt_traces"][0]["input_snapshot"][
+        "review_verdict"
+    ]["residual_review_issues"] = [
+        {"severity": "error", "blocking": True}
+    ]
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-chapter review verdict is not Canon-eligible"
+        in violation
+        for violation in violations
+    )
 
 
 def test_spark_cell_without_eligible_pause_opportunity_can_complete() -> None:
     item = evidence("L60S")
-    item["operational"]["spark"] = {
-        "gate_delegation_requested": 0,
-        "gate_delegation_decided": 0,
-        "gate_delegation_approved": 0,
-        "gate_delegation_failed": 0,
-    }
+    replace_spark_evidence(item, empty_spark_evidence())
 
     assert matrix.validate_cell("L60S", item) == []
 
@@ -160,12 +789,10 @@ def test_matrix_requires_live_delegation_from_at_least_one_spark_cell() -> None:
     }
     for item in results.values():
         if item["evidence"]["manifest_cell"]["delegate"] == "spark":
-            item["evidence"]["operational"]["spark"] = {
-                "gate_delegation_requested": 0,
-                "gate_delegation_decided": 0,
-                "gate_delegation_approved": 0,
-                "gate_delegation_failed": 0,
-            }
+            replace_spark_evidence(
+                item["evidence"],
+                empty_spark_evidence(),
+            )
 
     assert matrix.matrix_operational_violations(results) == [
         "matrix has no live Spark delegation request evidence"
@@ -177,12 +804,10 @@ def test_matrix_accepts_delegation_from_any_spark_cell() -> None:
         name: {"evidence": evidence(name), "violations": []}
         for name in matrix.EXPECTED_CELLS
     }
-    results["L60S"]["evidence"]["operational"]["spark"] = {
-        "gate_delegation_requested": 0,
-        "gate_delegation_decided": 0,
-        "gate_delegation_approved": 0,
-        "gate_delegation_failed": 0,
-    }
+    replace_spark_evidence(
+        results["L60S"]["evidence"],
+        empty_spark_evidence(),
+    )
 
     assert matrix.matrix_operational_violations(results) == []
 
@@ -205,12 +830,7 @@ def test_finalizer_fails_without_matrix_level_live_spark_evidence(
     ) -> dict:
         item = evidence(name)
         if item["manifest_cell"]["delegate"] == "spark":
-            item["operational"]["spark"] = {
-                "gate_delegation_requested": 0,
-                "gate_delegation_decided": 0,
-                "gate_delegation_approved": 0,
-                "gate_delegation_failed": 0,
-            }
+            replace_spark_evidence(item, empty_spark_evidence())
         return item
 
     monkeypatch.setattr(matrix, "collect_cell", fake_collect_cell)

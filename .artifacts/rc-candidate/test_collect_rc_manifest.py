@@ -1568,16 +1568,18 @@ def test_final_rc_rejects_matrix_without_live_spark_evidence(
 ) -> None:
     audit_path = tmp_path / "matrix-audit.json"
     write_matrix_audit(audit_path)
+    matrix_fixtures = load_module(
+        "collector_matrix_empty_spark_fixtures",
+        MATRIX_FIXTURES_PATH,
+    )
     payload = json.loads(audit_path.read_text(encoding="utf-8"))
     for name in ("L60S", "L100"):
         evidence_path = Path(payload["cells"][name]["evidence_path"])
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        evidence["operational"]["spark"] = {
-            "gate_delegation_requested": 0,
-            "gate_delegation_decided": 0,
-            "gate_delegation_approved": 0,
-            "gate_delegation_failed": 0,
-        }
+        matrix_fixtures.replace_spark_evidence(
+            evidence,
+            matrix_fixtures.empty_spark_evidence(),
+        )
         evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
         payload["cells"][name]["evidence_sha256"] = collector.sha256_file(
             evidence_path
@@ -1585,6 +1587,37 @@ def test_final_rc_rejects_matrix_without_live_spark_evidence(
     audit_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(collector.ManifestError, match="live Spark delegation"):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
+
+
+def test_final_rc_rejects_rehashed_balanced_spark_counts_without_chains(
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    evidence_path = Path(payload["cells"]["L100"]["evidence_path"])
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["operational"]["spark"] = {
+        "gate_delegation_requested": 1,
+        "gate_delegation_decided": 1,
+        "gate_delegation_approved": 1,
+        "gate_delegation_failed": 0,
+    }
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    payload["cells"]["L100"]["evidence_sha256"] = collector.sha256_file(
+        evidence_path
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="cell evidence fails revalidation: L100",
+    ):
         collector.load_matrix_manifest(
             audit_path,
             SOURCE_SHA,

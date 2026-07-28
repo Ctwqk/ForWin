@@ -29,6 +29,13 @@ RELEASE_SOURCE_MANIFEST_PATH = Path(__file__).with_name(
 MATRIX_FIXTURES_PATH = Path(__file__).with_name("test_finalize_matrix.py")
 RECOVERY_FIXTURES_PATH = Path(__file__).with_name("test_finalize_recovery.py")
 RECOVERY_EVALUATOR_PATH = Path(__file__).with_name("recovery_evidence.py")
+GENERATION_RECOVERY_RUNNER_PATH = Path(__file__).with_name(
+    "generation_projection_recovery.py"
+)
+MINIO_RECOVERY_RUNNER_PATH = Path(__file__).with_name("minio_recovery.py")
+PUBLISHER_RECOVERY_RUNNER_PATH = Path(__file__).with_name(
+    "publisher_recovery.py"
+)
 V1_FIXTURES_PATH = Path(__file__).with_name("test_finalize_v1.py")
 SOURCE_TREE = "c" * 40
 RUNTIME_IMAGE = {
@@ -52,6 +59,19 @@ GATE_STEPS = (
     "diff-check",
 )
 PYTEST_STEPS = set(GATE_STEPS[:5])
+RECOVERY_RUNNER_BY_FAULT = {
+    "generation_worker_precommit_crash": GENERATION_RECOVERY_RUNNER_PATH,
+    "generation_worker_postcommit_crash": GENERATION_RECOVERY_RUNNER_PATH,
+    "qdrant_unavailable": GENERATION_RECOVERY_RUNNER_PATH,
+    "projection_consumer_unavailable": GENERATION_RECOVERY_RUNNER_PATH,
+    "minio_pre_canon_unavailable": MINIO_RECOVERY_RUNNER_PATH,
+    "minio_post_canon_unavailable": MINIO_RECOVERY_RUNNER_PATH,
+    "publisher_backend_unavailable": PUBLISHER_RECOVERY_RUNNER_PATH,
+    "publisher_browser_unavailable": PUBLISHER_RECOVERY_RUNNER_PATH,
+    "publisher_captcha": PUBLISHER_RECOVERY_RUNNER_PATH,
+    "publisher_mfa": PUBLISHER_RECOVERY_RUNNER_PATH,
+    "publisher_account_risk": PUBLISHER_RECOVERY_RUNNER_PATH,
+}
 
 
 def test_rc_manifest_write_refuses_existing_output(tmp_path: Path) -> None:
@@ -437,11 +457,53 @@ def write_recovery_evidence(
 ) -> None:
     fixtures = load_module("collector_recovery_fixtures", RECOVERY_FIXTURES_PATH)
     fixtures.SOURCE_SHA = SOURCE_SHA
+    candidate_path = candidate_path or path.parent / "candidate.json"
+    if not candidate_path.is_file():
+        shared_candidate(candidate_path)
     payload = fixtures.recovery_manifest(
         path.parent,
         candidate_path=candidate_path,
     )
+    for kind, item in payload["faults"].items():
+        report_path = Path(item["path"])
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        runner_path = RECOVERY_RUNNER_BY_FAULT[kind].resolve()
+        report["runner"] = {
+            "path": str(runner_path),
+            "sha256": collector.sha256_file(runner_path),
+        }
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        item["sha256"] = collector.sha256_file(report_path)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def rewrite_recovery_report(
+    payload: dict,
+    kind: str,
+    mutate,
+) -> dict:
+    item = payload["faults"][kind]
+    report_path = Path(item["path"])
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate(report)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    item["sha256"] = collector.sha256_file(report_path)
+    item["result"] = report["result"]
+    return report
+
+
+def expected_recovery_candidate_identity(payload: dict) -> dict:
+    candidate_path = Path(payload["identity"]["rc_manifest"]["path"])
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    return {
+        "source_tree": candidate["source"]["tree"],
+        "runtime_image": candidate["images"]["runtime"],
+        "browser_image": candidate["images"]["publisher_browser"],
+        "dependency_images": {
+            key: candidate["images"][key]
+            for key in ("postgres", "qdrant", "minio")
+        },
+    }
 
 
 def write_v1_evidence(
@@ -1098,6 +1160,259 @@ def test_recovery_evidence_rejects_tampered_fault_report(tmp_path: Path) -> None
     )
 
     with pytest.raises(collector.ManifestError, match="recovery evidence invalid"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_evidence_rejects_wrong_family_runner(tmp_path: Path) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    def swap_runner(report: dict) -> None:
+        report["runner"] = {
+            "path": str(MINIO_RECOVERY_RUNNER_PATH.resolve()),
+            "sha256": collector.sha256_file(MINIO_RECOVERY_RUNNER_PATH),
+        }
+
+    rewrite_recovery_report(payload, "qdrant_unavailable", swap_runner)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="runner path mismatch"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_runner_rejects_modified_bytes_with_copied_hash(
+    tmp_path: Path,
+) -> None:
+    runner_path = tmp_path / "generation_projection_recovery.py"
+    runner_path.write_text("original runner\n", encoding="utf-8")
+    copied_hash = collector.sha256_file(runner_path)
+    runner_identity = {
+        "path": str(runner_path),
+        "sha256": copied_hash,
+    }
+    release_files = {
+        collector.relative(runner_path): copied_hash,
+    }
+    runner_path.write_text("modified runner\n", encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="runner artifact hash mismatch",
+    ):
+        collector.validate_recovery_runner_identity(
+            runner_identity,
+            expected_runner=runner_path,
+            release_files=release_files,
+            fault_kind="generation_worker_precommit_crash",
+        )
+
+
+def test_recovery_evidence_rejects_runner_missing_from_candidate_source(
+    tmp_path: Path,
+) -> None:
+    candidate_path = tmp_path / "candidate.json"
+    candidate = shared_candidate(candidate_path)
+    missing = GENERATION_RECOVERY_RUNNER_PATH.relative_to(
+        MODULE_PATH.parents[2]
+    ).as_posix()
+    candidate["release_harness"]["files"] = [
+        item
+        for item in candidate["release_harness"]["files"]
+        if item["path"] != missing
+    ]
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path, candidate_path=candidate_path)
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="runner is not bound by candidate source",
+    ):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+@pytest.mark.parametrize(
+    ("identity_key", "image_key"),
+    (
+        ("source_tree", ""),
+        ("runtime_image", "runtime"),
+        ("browser_image", "publisher_browser"),
+        ("dependency_images", "postgres"),
+        ("dependency_images", "qdrant"),
+        ("dependency_images", "minio"),
+    ),
+)
+def test_recovery_evidence_rejects_collector_candidate_identity_mismatch(
+    tmp_path: Path,
+    identity_key: str,
+    image_key: str,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    expected = expected_recovery_candidate_identity(payload)
+    if identity_key == "source_tree":
+        expected["source_tree"] = "f" * 40
+    elif identity_key == "dependency_images":
+        expected[identity_key][image_key] = {
+            **expected[identity_key][image_key],
+            "image_id": "sha256:" + "f" * 64,
+        }
+    else:
+        expected[identity_key] = {
+            **expected[identity_key],
+            "image_id": "sha256:" + "f" * 64,
+        }
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="recovery candidate .* mismatch",
+    ):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+            expected_candidate_identity=expected,
+        )
+
+
+def test_recovery_evidence_rejects_source_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["source_sha"] = "f" * 40
+    payload["identity"]["source_sha"] = "f" * 40
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="source_sha"):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_evidence_rejects_candidate_manifest_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    candidate_path = Path(payload["identity"]["rc_manifest"]["path"])
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    candidate["tampered"] = True
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="candidate manifest artifact hash mismatch",
+    ):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_evidence_rejects_endpoint_cross_binding_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    def detach_endpoint(report: dict) -> None:
+        before = next(
+            item for item in report["artifacts"] if item["stage"] == "before"
+        )
+        snapshot_path = Path(before["path"])
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        snapshot["state"]["target"]["endpoint_identity"]["run_id"] = "f" * 32
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        before["sha256"] = collector.sha256_file(snapshot_path)
+
+    rewrite_recovery_report(payload, "qdrant_unavailable", detach_endpoint)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="endpoint identity is not event-bound",
+    ):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+def test_recovery_evidence_rejects_cross_fault_docker_identity(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    fixtures = load_module(
+        "collector_docker_identity_fixtures",
+        RECOVERY_FIXTURES_PATH,
+    )
+
+    def swap_docker_daemon(report: dict) -> None:
+        events = fixtures.recovery.load_verified_events(
+            Path(report["event_log"]["path"])
+        )
+        for event in events:
+            event["identity"]["docker"]["daemon_id"] = "daemon-2"
+        fixtures.reseal_event_log(report, events)
+
+    rewrite_recovery_report(
+        payload,
+        "publisher_browser_unavailable",
+        swap_docker_daemon,
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="Docker identity mismatch",
+    ):
+        collector.load_release_evidence(
+            path,
+            source_sha=SOURCE_SHA,
+            kind="live_recovery",
+        )
+
+
+@pytest.mark.parametrize("result", ("setup_blocked", "fail"))
+def test_recovery_evidence_rejects_nonpassing_fault_report(
+    tmp_path: Path,
+    result: str,
+) -> None:
+    path = tmp_path / "recovery.json"
+    write_recovery_evidence(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rewrite_recovery_report(
+        payload,
+        "publisher_mfa",
+        lambda report: report.update(result=result),
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="expected=pass"):
         collector.load_release_evidence(
             path,
             source_sha=SOURCE_SHA,

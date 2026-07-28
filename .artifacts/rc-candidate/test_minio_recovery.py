@@ -1267,6 +1267,7 @@ def test_task5_success_uses_real_writer_evaluator_and_finalizer(
         }
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1512,6 +1513,7 @@ def test_live_pre_canon_replays_the_identical_request_and_uses_real_pipeline(
         inventory=FakeInventory(calls, artifact),
         writer=runner.EvidenceWriter(
             evidence_dir=evidence_dir,
+            runner_path=MODULE_PATH,
             evaluator=evidence,
             finalizer=finalizer,
         ),
@@ -1749,6 +1751,7 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
         inventory=FakeInventory(calls, artifact),
         writer=runner.EvidenceWriter(
             evidence_dir=evidence_dir,
+            runner_path=MODULE_PATH,
             evaluator=evidence,
             finalizer=finalizer,
         ),
@@ -1854,6 +1857,7 @@ def test_unobserved_fault_aborts_and_can_only_report_setup_blocked(
         inventory=FakeInventory(calls, artifact),
         writer=runner.EvidenceWriter(
             evidence_dir=evidence_dir,
+            runner_path=MODULE_PATH,
             evaluator=evidence,
             finalizer=finalizer,
         ),

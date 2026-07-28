@@ -1,6 +1,6 @@
 # ForWin v5 Release Evidence Ledger
 
-Updated: 2026-07-23
+Updated: 2026-07-28
 Matrix candidate source: `80af1c83323b90f8d69321c0cabe4c98f9185f48`
 Integration source: resolved from Git by the collector at execution time. This
 ledger intentionally does not self-pin the commit that contains it.
@@ -45,14 +45,14 @@ intent, memory, or a narrower check than the stated release requirement.
 
 | Fault | Status | Existing evidence | Exact RC evidence still required |
 | --- | --- | --- | --- |
-| Qdrant unavailable | REPEAT | `docs/operations/v5-recovery-rollback.md`; deterministic lazy-index retry test | Isolated real Qdrant process stop/start, Canon identity snapshot, pending/replay/converged projection evidence, no duplicate vector identity |
-| Projection consumer unavailable | REPEAT | Deterministic outbox retry test and durability commits | Stop/restart outbox worker, durable event snapshot, lease/replay evidence, lag returns to zero |
-| MinIO pre-Canon unavailable | MISSING | Contract described in runbook | Real MinIO stop before required candidate artifact; admission remains non-Canon; supported retry after restore |
-| MinIO post-Canon unavailable | RUNNING | Deterministic phase 3 retry test; isolated advisory-lock barrier design in `.artifacts/rc-candidate/post-canon-minio-barrier.md` | Execute real MinIO stop after Canon, accepted identity unchanged, same artifact key and maintenance row after restore, and prove barrier cleanup |
-| Publisher worker/backend unavailable | RUNNING | Commits `1bf43f668fdd969d03e103913af93b47c9dc936b` and `e17ed39` are integrated with single-owner startup recovery, unique claim fencing, atomic/shared cover storage, orphan scavenging, duplicate API-owner deletion, and structured stale-schema classification; follow-up convergence removed the remaining synchronous/test-only publisher paths; focused publisher recovery tests and Ruff pass | Build the exact candidate images, then kill/restart the real worker and prove same-job reclaim, stale-token rejection, shared-path readability, and orphan cleanup |
-| Publisher browser unavailable | MISSING | Recovery contract described in runbook | Stop/restart real browser process; existing job/attempt survives and resumes without duplicate mutation |
-| CAPTCHA/MFA/account-risk | REPEAT | Deterministic fenced pause/resume tests | Isolated deployed API/browser evidence for all risk classes, operator action audit, no bypass, same job identity |
-| Recovery runbook matches observed behavior | MISSING | The tracked finalizer now requires one fresh-stack lifecycle per service fault, fault-before-recovery event order, globally unique fault IDs, and non-reused event-log paths/content; live evidence remains outstanding | Update only after every live fault report is complete |
+| Qdrant unavailable | RUNNING | Source-bound `generation_projection_recovery.py` implements the isolated real Qdrant stop/start proof; no exact-candidate live report exists | Execute the documented command and retain Canon identity, pending/replay/converged projection, endpoint, event-chain, and no-duplicate-vector evidence |
+| Projection consumer unavailable | RUNNING | Source-bound `generation_projection_recovery.py` implements the outbox-worker stop/start proof; no exact-candidate live report exists | Execute the documented command and retain durable event, lease/replay, lag-zero, endpoint, and event-chain evidence |
+| MinIO pre-Canon unavailable | RUNNING | Source-bound `minio_recovery.py` implements the pre-Canon object-store fault; no exact-candidate live report exists | Execute the documented command and prove admission remains non-Canon before supported retry after restore |
+| MinIO post-Canon unavailable | RUNNING | Source-bound `minio_recovery.py` implements the scoped advisory-lock barrier and same-event replay proof; no exact-candidate live report exists | Execute the documented command and prove unchanged Canon/artifact/maintenance identity plus zero barrier residue |
+| Publisher worker/backend unavailable | RUNNING | Source-bound `publisher_recovery.py` implements deterministic same-job reclaim, stale-token rejection, shared-path readability, and orphan cleanup without external mutation; no exact-candidate live report exists | Build the exact candidate images and execute the documented backend command |
+| Publisher browser unavailable | RUNNING | Source-bound `publisher_recovery.py` implements durable browser journal/reconciliation recovery; no exact-candidate live report exists | Execute the documented browser command and prove the existing job/attempt resumes without duplicate mutation |
+| CAPTCHA/MFA/account-risk | RUNNING | Source-bound `publisher_recovery.py` implements typed pause, authenticated idempotent resume, no bypass, and no receipt duplication; no exact-candidate live reports exist | Execute all three documented risk commands against the isolated candidate API/browser |
+| Recovery runbook matches executable ownership | RUNNING | The tracked runbook now gives all eleven exact runner commands; runners own fresh-up/fault/recovery/destroy, and `setup_blocked` or reused identities cannot finalize | Confirm behavior with eleven new exact-candidate live directories and fault IDs |
 
 ## R9 - Release Candidate Freeze
 
@@ -66,13 +66,13 @@ intent, memory, or a narrower check than the stated release requirement.
 | V1 deployed all-role health and image identity | MISSING | Strict V1 preflight requires exact IDs for runtime, browser, PostgreSQL, Qdrant, and MinIO plus a passing functional probe for all nine services; no live manifest exists yet |
 | V1 LAN embedding integration smoke | MISSING | V1 preflight disables proxy inheritance, records the actual private-LAN TCP peer, and requires configured, metadata, and returned vector dimensions to match; no live manifest exists yet |
 | V1 supported HTTP/MCP lifecycle through accepted Canon | MISSING | The exact RC post-decision fresh-30 must carry the tracked HTTP/MCP operation chain and handoff task, then prove locked Genesis, immutable task policy, candidate, Canon, BookState/GraphDelta/Snapshot, and outbox |
-| V2 real generation-worker pre/post-commit crash reclaim | MISSING | Deterministic DB-state fixtures exist; isolated controller can now SIGKILL the real worker with a 30-second lease |
+| V2 real generation-worker pre/post-commit crash reclaim | RUNNING | The source-bound generation runner and deterministic advisory barriers are code-ready; exact-candidate pre/post-commit live reports do not yet exist |
 | V3 fail-closed and no-direct-Canon boundary | REPEAT | Focused tests plus `GateAuditWriter` object-capability boundary; final matrix must retain real Spark model/trace evidence |
 | Annotated RC tag or immutable commit record | MISSING | Final collector requires a true annotated tag object pointing at the exact tested SHA |
-| Release harness tracked at candidate SHA | PROVEN | The integration tree tracks the exact 31-file promotion inventory; `tracked_source_revision` verifies all 13 executable/Compose inputs against the candidate commit, while drafts, logs, and live evidence remain excluded |
-| One candidate identity across all evidence | MISSING | Final collector now cross-binds source tree, five image IDs, candidate stack/endpoints, and one candidate-manifest hash across V1, gates, recovery, and fresh-30; no live final set exists |
+| Release harness tracked at candidate SHA | RUNNING | The reviewed 42-file promotion inventory and explicit 18-file executable/Compose harness are code-ready; the immutable RC candidate still must be collected from the final commit |
+| One candidate identity across all evidence | RUNNING | Final collector code now recomputes source/tree, five image IDs, candidate hash, evaluator and family runner hashes, endpoint/run identity, and one Docker daemon identity; no live final set exists |
 | External signed provenance | MISSING | Local hash chains are tamper-evident only under the tracked-candidate/operator-honesty model; no externally signed CI or attestation artifact exists |
-| RC manifest complete | RUNNING | Collector v5 and freeze runbook are ready; final mode revalidates V1, bounded matrix predecessor/report, exact gate runner/argv/JUnit, eleven independent recovery reports/event identities, fresh-30 state/operation chain and candidate-stack endpoints, annotated tag, and exact source/tree/five-image identity; final manifests use atomic no-clobber writes |
+| RC manifest complete | RUNNING | Collector v5 and freeze runbook are code-ready; final mode revalidates V1, bounded matrix predecessor/report, exact gate runner/argv/JUnit, eleven source-bound recovery reports/runners/event identities, fresh-30 state/operation chain and candidate-stack endpoints, annotated tag, and exact source/tree/five-image identity; no final live manifest exists |
 | SHA and image tags recorded | REPEAT | Earlier draft validates runtime/browser revisions; schema v3 must be recollected after integration with exact PostgreSQL/Qdrant/MinIO IDs and tracked harness |
 | Baseline schema hash recorded | PROVEN | Draft RC manifest |
 | RuntimePolicy schema version recorded | PROVEN | Draft RC manifest records schema version 2 and source hash |

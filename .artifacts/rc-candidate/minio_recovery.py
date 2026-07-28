@@ -2276,7 +2276,10 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         sql_collector=SQLCollector(PsycopgDatabase(config.database_url)),
         api=api,
         inventory=inventory,
-        writer=EvidenceWriter(evidence_dir=config.evidence_dir),
+        writer=EvidenceWriter(
+            evidence_dir=config.evidence_dir,
+            runner_path=Path(__file__),
+        ),
         api_url=config.api_url,
         mcp_url=config.mcp_url,
         database_url=config.database_url,

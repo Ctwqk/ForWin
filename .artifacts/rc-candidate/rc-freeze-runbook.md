@@ -51,6 +51,13 @@ Execute the eleven independent fault reports and finalize them with
 fresh post-decision 30-chapter project and finalize it with
 `finalize_smoke.py`.
 
+Use the eleven exact commands in `recovery-evidence-runbook.md`. Each recovery
+runner owns fresh-up, fault injection, recovery, and terminal destroy; do not
+manually pre-run `recovery_stack.py fresh-up`. Every invocation requires a new
+absolute evidence directory and unique fault ID. A reused directory or fault
+ID, `setup_blocked`, or any other non-pass report cannot satisfy
+`finalize_recovery.py`.
+
 The gate runner uses a minimal child environment, rejects Git/Docker/Compose,
 Python, pytest, coverage, and uv control variables, disables ambient pytest
 plugin discovery, explicitly loads `pytest_asyncio.plugin`, and runs uv
@@ -147,11 +154,13 @@ uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
 
 Final mode revalidates the V1 event chain/report, matrix cells and deterministic
 report, exact gate runner/argv/JUnit results, every independent recovery
-report/event chain, and the full fresh-30 state plus its HTTP/MCP operation
-transcript. It also requires the annotated tag object, identical effective
-routing across the three model-execution roles, credential-free
-MCP/publisher-worker routing, all five image identities, and one shared
-candidate-manifest hash across every release artifact.
+report/event chain and exact family runner, and the full fresh-30 state plus its
+HTTP/MCP operation transcript. It also requires the annotated tag object,
+identical effective routing across the three model-execution roles,
+credential-free MCP/publisher-worker routing, one source tree, all five image
+identities, one candidate-manifest hash, one evaluator hash, source-bound
+runner hashes, exact endpoint bindings, and one Docker daemon identity across
+the recovery set.
 
 The local hash chains are tamper-evident under the tracked-candidate model; they
 are not proof against a malicious operator who controls both execution and

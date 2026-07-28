@@ -920,11 +920,15 @@ class EvidenceWriter:
         self,
         *,
         evidence_dir: Path,
+        runner_path: Path,
         evaluator: Any | None = None,
         report_validator: Callable[..., list[str]] | None = None,
         finalizer: Any | None = None,
     ) -> None:
         self.evidence_dir = evidence_dir.resolve()
+        self.runner_path = runner_path.resolve()
+        if not self.runner_path.is_file():
+            raise RunnerError(f"recovery runner is missing: {self.runner_path}")
         self.evaluator = evaluator or load_module(
             f"recovery_runner_evaluator_{secrets.token_hex(4)}",
             EVALUATOR_PATH,
@@ -1076,6 +1080,10 @@ class EvidenceWriter:
                 "path": str(evaluator_path),
                 "sha256": sha256_file(evaluator_path),
             },
+            "runner": {
+                "path": str(self.runner_path),
+                "sha256": sha256_file(self.runner_path),
+            },
             "supplemental_artifacts": supplemental_refs,
         }
         prewrite_violations = self.report_validator(
@@ -1131,6 +1139,10 @@ class EvidenceWriter:
             "evaluator": {
                 "path": str(evaluator_path),
                 "sha256": sha256_file(evaluator_path),
+            },
+            "runner": {
+                "path": str(self.runner_path),
+                "sha256": sha256_file(self.runner_path),
             },
         }
         path = self.evidence_dir / REPORT_NAME

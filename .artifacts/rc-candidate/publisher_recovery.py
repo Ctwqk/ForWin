@@ -2331,7 +2331,10 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
             operator_username=config.operator_username,
             operator_password=config.operator_password,
         ),
-        writer=EvidenceWriter(evidence_dir=config.evidence_dir),
+        writer=EvidenceWriter(
+            evidence_dir=config.evidence_dir,
+            runner_path=Path(__file__),
+        ),
         barrier_factory=(
             (
                 lambda: TerminalWriteBarrier(

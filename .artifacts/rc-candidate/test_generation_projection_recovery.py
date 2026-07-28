@@ -1209,6 +1209,7 @@ def test_writer_derives_before_write_then_reopens_hashes_and_revalidates(
     monkeypatch.setattr(evidence, "derive_assertions", count_derive)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1224,6 +1225,10 @@ def test_writer_derives_before_write_then_reopens_hashes_and_revalidates(
     assert derive_calls >= 2
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["result"] == "pass"
+    assert report.get("runner") == {
+        "path": str(MODULE_PATH.resolve()),
+        "sha256": runner.sha256_file(MODULE_PATH),
+    }
     assert report["assertions"] == original_derive(
         "projection_consumer_unavailable",
         snapshots,
@@ -1255,6 +1260,7 @@ def test_writer_is_atomic_no_clobber_for_snapshots_and_report(
     events = valid_event_log(evidence_dir)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1293,6 +1299,7 @@ def test_writer_rejects_reopened_evaluator_mismatch(
     monkeypatch.setattr(evidence, "derive_assertions", mismatch)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1315,6 +1322,7 @@ def test_setup_blocked_report_is_atomic_and_cannot_validate_as_pass(
     evidence_dir = (tmp_path / "evidence").resolve()
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1332,6 +1340,10 @@ def test_setup_blocked_report_is_atomic_and_cannot_validate_as_pass(
     assert report["schema_version"] == 2
     assert report["result"] == "setup_blocked"
     assert report["failure_stage"] == "barrier_wait"
+    assert report["runner"] == {
+        "path": str(MODULE_PATH.resolve()),
+        "sha256": runner.sha256_file(MODULE_PATH),
+    }
     assert finalizer.fault_report_violations(
         report,
         source_sha=SOURCE_SHA,
@@ -1354,6 +1366,7 @@ def test_setup_blocked_report_rejects_byte_change_while_reopening(
     evidence_dir = (tmp_path / "evidence").resolve()
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -1998,6 +2011,7 @@ def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
     barrier = SuccessfulBarrier(log)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -2202,6 +2216,7 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
     controller = LoggingController(evidence_dir, log)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
@@ -2265,6 +2280,7 @@ def test_writer_hashes_reopens_and_binds_supplemental_artifacts(
     events = valid_event_log(evidence_dir)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
+        runner_path=MODULE_PATH,
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )

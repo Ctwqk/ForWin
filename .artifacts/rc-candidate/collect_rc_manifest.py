@@ -64,20 +64,59 @@ CONTROL_ENV_KEYS = frozenset(
 )
 RELEASE_HARNESS_PATHS = (
     (ROOT / "docker-compose.yml").resolve(),
-    Path(__file__).resolve(),
     Path(__file__).with_name("candidate_mcp_call.py").resolve(),
+    Path(__file__).resolve(),
     Path(__file__).with_name("docker-compose.recovery.yml").resolve(),
     Path(__file__).with_name("finalize_matrix.py").resolve(),
     Path(__file__).with_name("finalize_recovery.py").resolve(),
     Path(__file__).with_name("finalize_smoke.py").resolve(),
     Path(__file__).with_name("finalize_v1.py").resolve(),
+    Path(__file__).with_name("generation_projection_recovery.py").resolve(),
     Path(__file__).with_name("l200_evidence.py").resolve(),
-    Path(__file__).with_name("recovery_stack.py").resolve(),
+    Path(__file__).with_name("minio_recovery.py").resolve(),
+    Path(__file__).with_name("publisher_recovery.py").resolve(),
     Path(__file__).with_name("recovery_evidence.py").resolve(),
+    Path(__file__).with_name("recovery_runner_common.py").resolve(),
+    Path(__file__).with_name("recovery_stack.py").resolve(),
     Path(__file__).with_name("release-source-files.txt").resolve(),
     Path(__file__).with_name("run_rc_gates.py").resolve(),
     Path(__file__).with_name("smoke_lifecycle.py").resolve(),
 )
+RECOVERY_RUNNER_PATHS = {
+    "generation_worker_postcommit_crash": Path(__file__).with_name(
+        "generation_projection_recovery.py"
+    ).resolve(),
+    "generation_worker_precommit_crash": Path(__file__).with_name(
+        "generation_projection_recovery.py"
+    ).resolve(),
+    "minio_post_canon_unavailable": Path(__file__).with_name(
+        "minio_recovery.py"
+    ).resolve(),
+    "minio_pre_canon_unavailable": Path(__file__).with_name(
+        "minio_recovery.py"
+    ).resolve(),
+    "projection_consumer_unavailable": Path(__file__).with_name(
+        "generation_projection_recovery.py"
+    ).resolve(),
+    "publisher_account_risk": Path(__file__).with_name(
+        "publisher_recovery.py"
+    ).resolve(),
+    "publisher_backend_unavailable": Path(__file__).with_name(
+        "publisher_recovery.py"
+    ).resolve(),
+    "publisher_browser_unavailable": Path(__file__).with_name(
+        "publisher_recovery.py"
+    ).resolve(),
+    "publisher_captcha": Path(__file__).with_name(
+        "publisher_recovery.py"
+    ).resolve(),
+    "publisher_mfa": Path(__file__).with_name(
+        "publisher_recovery.py"
+    ).resolve(),
+    "qdrant_unavailable": Path(__file__).with_name(
+        "generation_projection_recovery.py"
+    ).resolve(),
+}
 MATRIX_SUCCESSOR_ALLOWED_PREFIXES = (
     ".artifacts/rc-candidate/",
     "forwin/application/publisher/",
@@ -1413,10 +1452,141 @@ def validate_smoke_evidence(
         raise ManifestError("post-decision smoke report content mismatch")
 
 
+def validate_recovery_runner_identity(
+    identity: object,
+    *,
+    expected_runner: Path,
+    release_files: Mapping[str, str],
+    fault_kind: str,
+) -> None:
+    runner = identity if isinstance(identity, dict) else {}
+    actual_path = resolve_evidence_path(runner.get("path")).resolve()
+    if actual_path != expected_runner:
+        raise ManifestError(f"{fault_kind}.runner path mismatch")
+    runner_hash = str(runner.get("sha256") or "")
+    if (
+        not expected_runner.is_file()
+        or not runner_hash
+        or sha256_file(expected_runner) != runner_hash
+    ):
+        raise ManifestError(f"{fault_kind}.runner artifact hash mismatch")
+    if release_files.get(relative(expected_runner)) != runner_hash:
+        raise ManifestError(
+            f"{fault_kind}.runner is not bound by candidate source"
+        )
+
+
+def validate_recovery_candidate_bindings(
+    payload: dict[str, Any],
+    *,
+    finalizer: Any,
+    expected_candidate_identity: dict[str, Any] | None,
+) -> None:
+    identity = payload.get("identity") or {}
+    candidate_artifact = identity.get("rc_manifest") or {}
+    candidate_path = resolve_evidence_path(candidate_artifact.get("path"))
+    try:
+        candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError("recovery candidate manifest is unreadable") from exc
+    if not isinstance(candidate, dict):
+        raise ManifestError("recovery candidate manifest is not an object")
+
+    if expected_candidate_identity is not None:
+        candidate_source = candidate.get("source") or {}
+        if candidate_source.get("tree") != expected_candidate_identity.get(
+            "source_tree"
+        ):
+            raise ManifestError("recovery candidate source tree mismatch")
+        candidate_images = candidate.get("images") or {}
+        expected_images = {
+            "runtime": expected_candidate_identity.get("runtime_image"),
+            "publisher_browser": expected_candidate_identity.get(
+                "browser_image"
+            ),
+            **(
+                expected_candidate_identity.get("dependency_images")
+                if isinstance(
+                    expected_candidate_identity.get("dependency_images"),
+                    dict,
+                )
+                else {}
+            ),
+        }
+        for key in (
+            "runtime",
+            "publisher_browser",
+            "postgres",
+            "qdrant",
+            "minio",
+        ):
+            if image_identity_subset(
+                candidate_images.get(key)
+            ) != image_identity_subset(expected_images.get(key)):
+                raise ManifestError(
+                    f"recovery candidate image mismatch: {key}"
+                )
+
+    release_files = {
+        str(item.get("path") or ""): str(item.get("sha256") or "")
+        for item in (candidate.get("release_harness") or {}).get("files") or []
+        if isinstance(item, dict)
+    }
+    docker_identity: dict[str, Any] | None = None
+    faults = payload.get("faults") or {}
+    for kind, expected_runner in RECOVERY_RUNNER_PATHS.items():
+        item = faults.get(kind) or {}
+        report_path = resolve_evidence_path(item.get("path"))
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ManifestError(
+                f"{kind}.report is unreadable during candidate binding"
+            ) from exc
+        if not isinstance(report, dict):
+            raise ManifestError(
+                f"{kind}.report is not an object during candidate binding"
+            )
+        validate_recovery_runner_identity(
+            report.get("runner"),
+            expected_runner=expected_runner,
+            release_files=release_files,
+            fault_kind=kind,
+        )
+        event_identity = report.get("event_log") or {}
+        event_path = resolve_evidence_path(event_identity.get("path"))
+        try:
+            events = finalizer.load_verified_events(event_path)
+        except finalizer.RecoveryEvidenceError as exc:
+            raise ManifestError(
+                f"{kind}.event chain changed during candidate binding"
+            ) from exc
+        chain_docker_identities = {
+            canonical_hash((event.get("identity") or {}).get("docker") or {})
+            for event in events
+        }
+        if len(chain_docker_identities) != 1:
+            raise ManifestError(
+                f"{kind}.event-chain Docker identity mismatch"
+            )
+        current_docker = (events[0].get("identity") or {}).get("docker")
+        if not isinstance(current_docker, dict) or not current_docker:
+            raise ManifestError(
+                f"{kind}.event-chain Docker identity mismatch"
+            )
+        if docker_identity is None:
+            docker_identity = current_docker
+        elif current_docker != docker_identity:
+            raise ManifestError(
+                f"{kind}.event-chain Docker identity mismatch"
+            )
+
+
 def validate_recovery_evidence(
     payload: dict[str, Any],
     *,
     source_sha: str,
+    expected_candidate_identity: dict[str, Any] | None = None,
 ) -> None:
     finalizer_path = Path(__file__).with_name("finalize_recovery.py").resolve()
     if not finalizer_path.is_file():
@@ -1435,6 +1605,11 @@ def validate_recovery_evidence(
     )
     if violations:
         raise ManifestError("recovery evidence invalid: " + "; ".join(violations))
+    validate_recovery_candidate_bindings(
+        payload,
+        finalizer=module,
+        expected_candidate_identity=expected_candidate_identity,
+    )
 
 
 def validate_v1_evidence(
@@ -1507,7 +1682,11 @@ def load_release_evidence(
             expected_candidate_identity=expected_candidate_identity,
         )
     elif kind == "live_recovery":
-        validate_recovery_evidence(payload, source_sha=source_sha)
+        validate_recovery_evidence(
+            payload,
+            source_sha=source_sha,
+            expected_candidate_identity=expected_candidate_identity,
+        )
     identity = payload.get("identity") or {}
     candidate_artifact = (
         identity.get("rc_manifest")
@@ -1582,6 +1761,7 @@ def collect_release_candidate(
             args.recovery_manifest,
             source_sha=source_sha,
             kind="live_recovery",
+            expected_candidate_identity=expected_candidate_identity,
         ),
         "post_decision_smoke": load_release_evidence(
             args.smoke_manifest,

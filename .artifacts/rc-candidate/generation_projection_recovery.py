@@ -1856,7 +1856,10 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         sql_collector=collector,
         api=api,
         qdrant=qdrant,
-        writer=EvidenceWriter(evidence_dir=config.evidence_dir),
+        writer=EvidenceWriter(
+            evidence_dir=config.evidence_dir,
+            runner_path=Path(__file__),
+        ),
         api_url=config.api_url,
         mcp_url=config.mcp_url,
         database_url=config.database_url,

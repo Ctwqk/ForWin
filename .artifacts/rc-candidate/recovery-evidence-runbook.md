@@ -60,86 +60,185 @@ and revalidates both artifacts.
 
 ## Live Recovery Faults
 
-For each fault, set a new empty directory:
+The three runners own fresh-up, fault injection, recovery, and terminal
+destroy. Do not run `recovery_stack.py fresh-up` before a runner; that would
+conflict with the runner's isolated lifecycle and evidence ownership.
+
+Set the fixed isolated endpoints and choose one new absolute evidence root.
+The root must not exist before the first command. `RECOVERY_RUN_ID` makes every
+fault ID and child directory unique for this eleven-run set.
 
 ```bash
-export FORWIN_RECOVERY_EVIDENCE_DIR=<absolute-new-fault-directory>
-
-uv run python .artifacts/rc-candidate/recovery_stack.py config
-uv run python .artifacts/rc-candidate/recovery_stack.py fresh-up
+export FORWIN_RECOVERY_CANDIDATE_MANIFEST="$(
+  realpath .artifacts/v5-rc/candidate-draft.json
+)"
+export FORWIN_RECOVERY_DATABASE_URL="postgresql://forwin:forwin@127.0.0.1:55434/forwin"
+export FORWIN_RECOVERY_QDRANT_URL="http://127.0.0.1:16337"
+export FORWIN_RECOVERY_QDRANT_COLLECTION="chapter_memories"
+export FORWIN_RECOVERY_MINIO_ENDPOINT="127.0.0.1:19100"
+export FORWIN_RECOVERY_MINIO_ACCESS_KEY="forwin-recovery"
+export FORWIN_RECOVERY_MINIO_SECRET_KEY="forwin-recovery-secret"
+export FORWIN_RECOVERY_MINIO_BUCKET="forwin-recovery-artifacts"
+export FORWIN_RECOVERY_MINIO_PREFIX="artifacts"
+export FORWIN_RECOVERY_MINIO_SECURE="false"
+export RECOVERY_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+export RECOVERY_EVIDENCE_ROOT="$(
+  pwd -P
+)/.artifacts/v5-recovery-live/$RECOVERY_RUN_ID"
+test ! -e "$RECOVERY_EVIDENCE_ROOT"
 ```
 
-`fresh-up` destroys only the isolated `forwin-v5-recovery` volumes. It refuses
-to append to an existing evidence directory. Controller events form a
-SHA-256 chain under `stack-events.jsonl`.
+Export `FORWIN_PUBLISHER_EXTENSION_API_KEY`, `FORWIN_HTTP_BASIC_USER`, and
+`FORWIN_HTTP_BASIC_PASSWORD` from the exact candidate's secured operator
+configuration before the five publisher commands. Do not write those values
+into an evidence file.
 
-## Independent Fault Set
+Run all eleven commands. Each command uses the runner's real CLI, a new
+absolute evidence directory, and a unique fault ID.
 
-Execute exactly these contracts:
+```bash
+uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
+  --fault-kind generation_worker_precommit_crash \
+  --fault-id "${RECOVERY_RUN_ID}-01-generation-precommit" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/01-generation-precommit"
 
-```text
-generation_worker_precommit_crash
-generation_worker_postcommit_crash
-qdrant_unavailable
-projection_consumer_unavailable
-minio_pre_canon_unavailable
-minio_post_canon_unavailable
-publisher_backend_unavailable
-publisher_browser_unavailable
-publisher_captcha
-publisher_mfa
-publisher_account_risk
+uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
+  --fault-kind generation_worker_postcommit_crash \
+  --fault-id "${RECOVERY_RUN_ID}-02-generation-postcommit" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/02-generation-postcommit"
+
+uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
+  --fault-kind qdrant_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-03-qdrant" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/03-qdrant"
+
+uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
+  --fault-kind projection_consumer_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-04-projection-consumer" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/04-projection-consumer"
+
+uv run python .artifacts/rc-candidate/minio_recovery.py run \
+  --fault-kind minio_pre_canon_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-05-minio-pre-canon" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/05-minio-pre-canon"
+
+uv run python .artifacts/rc-candidate/minio_recovery.py run \
+  --fault-kind minio_post_canon_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-06-minio-post-canon" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/06-minio-post-canon"
+
+uv run python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_backend_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-07-publisher-backend" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/07-publisher-backend"
+
+uv run python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_browser_unavailable \
+  --fault-id "${RECOVERY_RUN_ID}-08-publisher-browser" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/08-publisher-browser"
+
+uv run python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_captcha \
+  --fault-id "${RECOVERY_RUN_ID}-09-publisher-captcha" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/09-publisher-captcha"
+
+uv run python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_mfa \
+  --fault-id "${RECOVERY_RUN_ID}-10-publisher-mfa" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/10-publisher-mfa"
+
+uv run python .artifacts/rc-candidate/publisher_recovery.py run \
+  --fault-kind publisher_account_risk \
+  --fault-id "${RECOVERY_RUN_ID}-11-publisher-account-risk" \
+  --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
+  --mcp-url http://127.0.0.1:19096/mcp \
+  --api-url http://127.0.0.1:8899 \
+  --database-url-env FORWIN_RECOVERY_DATABASE_URL \
+  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/11-publisher-account-risk"
 ```
-
-Use `recovery_stack.py stop/start` for service outages and `kill/start` for
-generation-worker or publisher-worker process crashes. Risk faults use the
-supported publisher operator APIs; never bypass CAPTCHA, MFA, or risk control.
-The post-Canon MinIO fault must follow
-`post-canon-minio-barrier.md` and prove zero temporary trigger/function residue.
 
 ## Fault Report
 
-Each fault produces one JSON report with:
+Each command must exit zero and write `fault-report.json` with schema version
+2, `result = pass`, three hashed snapshots, one hashed terminal event chain,
+the source-bound semantic evaluator, and the exact family runner identity.
+`setup_blocked` is a non-pass result. It cannot satisfy finalization.
 
-```text
-schema_version = 1
-fault_kind / fault_id / source_sha
-result = pass
-fault_time / recovery_time
-nonempty expected[] / actual[]
-replay_result = pass
-assertions = exact contract values from finalize_recovery.py
-artifacts = before, during, after snapshots
-```
-
-Every snapshot is a JSON object containing the same `source_sha`, `fault_kind`,
-`fault_id`, and `stage`, plus a `state` object. Service faults also embed the
-identity and hash of their own `stack-events.jsonl`. A report from one fault
-cannot satisfy another fault.
+Never retry with an existing directory or fault ID. A `setup_blocked`, failed,
+interrupted, or otherwise non-pass run remains evidence of that attempt; use a
+new `RECOVERY_RUN_ID` and eleven new child directories for the retry. A reused
+directory or fault ID cannot finalize.
 
 ## Finalize
 
-After all eleven independent reports pass:
+After all eleven independent commands return PASS, run this exact finalizer:
 
 ```bash
+export RECOVERY_FINAL_DIR="$(
+  pwd -P
+)/.artifacts/v5-recovery-final/$RECOVERY_RUN_ID"
+test ! -e "$RECOVERY_FINAL_DIR"
+
 uv run python .artifacts/rc-candidate/finalize_recovery.py \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
-  --fault-report <generation-precommit-report> \
-  --fault-report <generation-postcommit-report> \
-  --fault-report <qdrant-report> \
-  --fault-report <projection-consumer-report> \
-  --fault-report <minio-pre-canon-report> \
-  --fault-report <minio-post-canon-report> \
-  --fault-report <publisher-backend-report> \
-  --fault-report <publisher-browser-report> \
-  --fault-report <captcha-report> \
-  --fault-report <mfa-report> \
-  --fault-report <account-risk-report> \
-  --output .artifacts/v5-recovery-final/manifest.json
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/01-generation-precommit/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/02-generation-postcommit/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/03-qdrant/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/04-projection-consumer/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/05-minio-pre-canon/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/06-minio-post-canon/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/07-publisher-backend/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/08-publisher-browser/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/09-publisher-captcha/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/10-publisher-mfa/fault-report.json" \
+  --fault-report "$RECOVERY_EVIDENCE_ROOT/11-publisher-account-risk/fault-report.json" \
+  --output "$RECOVERY_FINAL_DIR/manifest.json"
 ```
 
 The finalizer reloads every report, snapshot, independent event chain, source
 identity, candidate-manifest hash, exact image set, Docker identity, tracked
-harness, and auditor hash. Any missing fault, duplicate identity, altered
-artifact, cross-candidate swap, mismatched timestamp, or failed invariant
-makes the final result `fail`.
+harness, evaluator, and auditor hash. The final RC collector then recomputes
+and source-binds the exact family runner and requires one Docker daemon
+identity across the eleven event chains. Any missing fault, duplicate
+identity, altered artifact, cross-candidate or cross-fault swap, mismatched
+timestamp, `setup_blocked`, or failed invariant makes the evidence unusable.

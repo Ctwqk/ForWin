@@ -109,6 +109,80 @@ def test_l200_command_uses_minimal_environment(
     assert captured["env"] == {"SAFE": "1"}
 
 
+def test_collect_mcp_state_unwraps_report_tool_result_envelopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClientContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    project = {"id": "project-200"}
+    chapters = [{"chapter_number": 1, "status": "accepted"}]
+    active = {"has_active_generation_task": False}
+    tasks = {"tasks": [{"project_id": "project-200", "id": "task-1"}]}
+    reports = {
+        "gate_ledger_report": gate_report(),
+        "cost_report": cost_report(),
+        "rule_provenance_report": rule_report(),
+    }
+
+    async def fake_call_mcp(
+        _client: object,
+        name: str,
+        _arguments: dict,
+    ) -> object:
+        direct = {
+            "project_get": project,
+            "chapter_list": chapters,
+            "task_active_generation_check": active,
+            "task_list": tasks,
+        }
+        if name in reports:
+            return {"result": reports[name]}
+        return direct[name]
+
+    monkeypatch.setattr(
+        l200,
+        "direct_mcp_client",
+        lambda _url: FakeClientContext(),
+    )
+    monkeypatch.setattr(l200, "call_mcp", fake_call_mcp)
+
+    state = asyncio.run(
+        l200.collect_mcp_state(
+            argparse.Namespace(
+                mcp_url="http://127.0.0.1:18897/mcp",
+                project_id="project-200",
+            )
+        )
+    )
+
+    assert state["project"] == project
+    assert state["chapters"] == chapters
+    assert state["active_task_check"] == active
+    assert state["tasks"] == tasks["tasks"]
+    assert state["gate_ledger"] == reports["gate_ledger_report"]
+    assert state["cost_report"] == reports["cost_report"]
+    assert state["rule_provenance"] == reports["rule_provenance_report"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {},
+        {"result": None},
+        {"result": []},
+        {"result": {}, "copied": {}},
+    ),
+)
+def test_mcp_report_result_rejects_noncanonical_envelopes(payload: object) -> None:
+    with pytest.raises(l200.EvidenceError, match="report result envelope"):
+        l200.mcp_report_result(payload, tool_name="cost_report")
+
+
 def gate_report(*, scope: str = "project", band_id: str = "") -> dict:
     return {
         "schema_version": 1,
@@ -199,6 +273,68 @@ def rule_report() -> dict:
         "project_rules": [],
         "recommendations": [],
     }
+
+
+def test_collect_completed_band_reports_unwraps_report_tool_result_envelopes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeClientContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    band_id = "band-1"
+    reports = {
+        "gate_ledger_report": gate_report(scope="band", band_id=band_id),
+        "cost_report": cost_report(band_id=band_id),
+        "rule_provenance_report": rule_report(),
+    }
+
+    async def fake_call_mcp(
+        _client: object,
+        name: str,
+        _arguments: dict,
+    ) -> object:
+        return {"result": reports[name]}
+
+    monkeypatch.setattr(
+        l200,
+        "direct_mcp_client",
+        lambda _url: FakeClientContext(),
+    )
+    monkeypatch.setattr(l200, "call_mcp", fake_call_mcp)
+
+    entries = asyncio.run(
+        l200.collect_completed_band_reports(
+            argparse.Namespace(
+                mcp_url="http://127.0.0.1:18897/mcp",
+                project_id="project-200",
+            ),
+            bands=[
+                {
+                    "band_id": band_id,
+                    "chapter_start": 1,
+                    "chapter_end": 25,
+                    "status": "pass",
+                }
+            ],
+            output_dir=tmp_path,
+        )
+    )
+
+    evidence_dir = Path(entries[0]["directory"])
+    assert json.loads(
+        (evidence_dir / "gate-ledger.json").read_text(encoding="utf-8")
+    ) == reports["gate_ledger_report"]
+    assert json.loads(
+        (evidence_dir / "cost-report.json").read_text(encoding="utf-8")
+    ) == reports["cost_report"]
+    assert json.loads(
+        (evidence_dir / "rule-provenance.json").read_text(encoding="utf-8")
+    ) == reports["rule_provenance_report"]
 
 
 def run_manifest(directory: Path) -> dict:

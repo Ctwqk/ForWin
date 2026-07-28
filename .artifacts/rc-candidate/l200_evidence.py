@@ -1080,6 +1080,27 @@ async def call_mcp(client: Client, name: str, arguments: dict[str, Any]) -> Any:
     return result_payload(result)
 
 
+def mcp_report_result(payload: Any, *, tool_name: str) -> dict[str, Any]:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"result"}
+        or not isinstance(payload["result"], dict)
+    ):
+        raise EvidenceError(f"{tool_name} returned an invalid report result envelope")
+    return payload["result"]
+
+
+async def call_mcp_report(
+    client: Client,
+    name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return mcp_report_result(
+        await call_mcp(client, name, arguments),
+        tool_name=name,
+    )
+
+
 def image_identity(tag: str) -> dict[str, Any]:
     try:
         payload = json.loads(command("docker", "image", "inspect", tag))
@@ -2297,7 +2318,7 @@ async def collect_completed_band_reports(
             elif any(path.exists() for path in paths):
                 raise EvidenceError(f"partial band evidence exists: {directory}")
             else:
-                gate = await call_mcp(
+                gate = await call_mcp_report(
                     client,
                     "gate_ledger_report",
                     {
@@ -2307,7 +2328,7 @@ async def collect_completed_band_reports(
                         "format": "json",
                     },
                 )
-                cost = await call_mcp(
+                cost = await call_mcp_report(
                     client,
                     "cost_report",
                     {
@@ -2316,7 +2337,7 @@ async def collect_completed_band_reports(
                         "format": "json",
                     },
                 )
-                rule = await call_mcp(
+                rule = await call_mcp_report(
                     client,
                     "rule_provenance_report",
                     {"project_id": args.project_id, "format": "json"},
@@ -2388,17 +2409,17 @@ async def collect_mcp_state(args: argparse.Namespace) -> dict[str, Any]:
             if isinstance(item, dict)
             and str(item.get("project_id") or "") == args.project_id
         ]
-        gate_ledger = await call_mcp(
+        gate_ledger = await call_mcp_report(
             client,
             "gate_ledger_report",
             {"scope": "project", "project_id": args.project_id, "format": "json"},
         )
-        cost_report = await call_mcp(
+        cost_report = await call_mcp_report(
             client,
             "cost_report",
             {"project_id": args.project_id, "format": "json"},
         )
-        rule_report = await call_mcp(
+        rule_report = await call_mcp_report(
             client,
             "rule_provenance_report",
             {"project_id": args.project_id, "format": "json"},

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
 import json
 import multiprocessing
 import os
+import re
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -30,6 +34,14 @@ assert FINALIZER_SPEC is not None and FINALIZER_SPEC.loader is not None
 finalizer = importlib.util.module_from_spec(FINALIZER_SPEC)
 FINALIZER_SPEC.loader.exec_module(finalizer)
 
+RECOVERY_RUNBOOK_PATH = Path(__file__).with_name(
+    "recovery-evidence-runbook.md"
+)
+RECOVERY_RUNNER_PATHS = (
+    Path(__file__).with_name("generation_projection_recovery.py"),
+    Path(__file__).with_name("minio_recovery.py"),
+    Path(__file__).with_name("publisher_recovery.py"),
+)
 SOURCE_SHA = "f" * 40
 TEST_CONTAINER_SUFFIXES = {
     "postgres": "postgres",
@@ -42,6 +54,131 @@ TEST_CONTAINER_SUFFIXES = {
     "publisher-worker": "publisher-worker",
     "publisher-browser": "publisher-browser",
 }
+
+
+def test_live_recovery_runbook_commands_match_controller_contract() -> None:
+    runbook = RECOVERY_RUNBOOK_PATH.read_text(encoding="utf-8")
+    bash_blocks = re.findall(r"```bash\n(.*?)\n```", runbook, re.DOTALL)
+    command_paragraphs = [
+        paragraph
+        for block in bash_blocks
+        for paragraph in re.split(r"\n\s*\n", block)
+        if re.match(
+            r"uv run python \.artifacts/rc-candidate/\w+_recovery\.py run",
+            paragraph,
+        )
+    ]
+
+    commands = []
+    for paragraph in command_paragraphs:
+        tokens = shlex.split(paragraph.replace("\\\n", " "))
+        assert tokens[:3] == ["uv", "run", "python"]
+        assert tokens[4] == "run"
+        option_tokens = tokens[5:]
+        assert len(option_tokens) % 2 == 0
+        options = dict(zip(option_tokens[::2], option_tokens[1::2]))
+        assert len(options) == len(option_tokens) // 2
+        commands.append((tokens[3], options))
+
+    expected_runner_by_fault = {}
+    root = Path(__file__).parents[2]
+    for runner_path in RECOVERY_RUNNER_PATHS:
+        tree = ast.parse(
+            runner_path.read_text(encoding="utf-8"),
+            filename=str(runner_path),
+        )
+        supported_faults = next(
+            ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id == "SUPPORTED_FAULTS"
+                for target in node.targets
+            )
+        )
+        runner = runner_path.relative_to(root).as_posix()
+        for fault_kind in supported_faults:
+            assert fault_kind not in expected_runner_by_fault
+            expected_runner_by_fault[fault_kind] = runner
+
+    observed_runner_by_fault = {}
+    for runner, options in commands:
+        fault_kind = options["--fault-kind"]
+        assert fault_kind not in observed_runner_by_fault
+        observed_runner_by_fault[fault_kind] = runner
+
+    assert len(commands) == 11
+    assert observed_runner_by_fault == expected_runner_by_fault
+
+    api_endpoint = (
+        "http",
+        stack.COMPOSE_ENV["FORWIN_HTTP_BIND"],
+        int(stack.COMPOSE_ENV["FORWIN_HTTP_PORT"]),
+        "",
+    )
+    mcp_host, mcp_port = stack.COMPOSE_ENV[
+        "FORWIN_MCP_DEBUG_BIND"
+    ].rsplit(":", 1)
+    mcp_endpoint = ("http", mcp_host, int(mcp_port), "/mcp")
+    for _, options in commands:
+        api_url = urlsplit(options["--api-url"])
+        assert (
+            api_url.scheme,
+            api_url.hostname,
+            api_url.port,
+            api_url.path,
+        ) == api_endpoint
+        mcp_url = urlsplit(options["--mcp-url"])
+        assert (
+            mcp_url.scheme,
+            mcp_url.hostname,
+            mcp_url.port,
+            mcp_url.path,
+        ) == mcp_endpoint
+
+    exports = dict(
+        re.findall(
+            r'^export ([A-Z][A-Z0-9_]*)="([^"\n]*)"$',
+            runbook,
+            re.MULTILINE,
+        )
+    )
+    database_envs = {
+        options["--database-url-env"] for _, options in commands
+    }
+    assert len(database_envs) == 1
+    database_url = urlsplit(exports[database_envs.pop()])
+    database_host, database_port = stack.COMPOSE_ENV[
+        "FORWIN_RECOVERY_POSTGRES_BIND"
+    ].rsplit(":", 1)
+    service_database_url = urlsplit(stack.ISOLATED_DATABASE_URL)
+    assert (
+        database_url.hostname,
+        database_url.port,
+        database_url.username,
+        database_url.password,
+        database_url.path,
+    ) == (
+        database_host,
+        int(database_port),
+        service_database_url.username,
+        service_database_url.password,
+        service_database_url.path,
+    )
+
+    fault_ids = [options["--fault-id"] for _, options in commands]
+    evidence_dirs = [options["--evidence-dir"] for _, options in commands]
+    assert len(set(fault_ids)) == len(commands)
+    assert len(set(evidence_dirs)) == len(commands)
+    assert all(
+        fault_id.startswith("${RECOVERY_RUN_ID}-")
+        for fault_id in fault_ids
+    )
+    assert all(
+        evidence_dir.startswith("$RECOVERY_EVIDENCE_ROOT/")
+        for evidence_dir in evidence_dirs
+    )
 
 
 def run_mark_process(

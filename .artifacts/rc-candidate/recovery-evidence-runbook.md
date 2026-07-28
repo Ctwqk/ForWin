@@ -102,7 +102,7 @@ uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-01-generation-precommit" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/01-generation-precommit"
 
@@ -111,7 +111,7 @@ uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-02-generation-postcommit" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/02-generation-postcommit"
 
@@ -120,7 +120,7 @@ uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-03-qdrant" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/03-qdrant"
 
@@ -129,7 +129,7 @@ uv run python .artifacts/rc-candidate/generation_projection_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-04-projection-consumer" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/04-projection-consumer"
 
@@ -138,7 +138,7 @@ uv run python .artifacts/rc-candidate/minio_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-05-minio-pre-canon" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/05-minio-pre-canon"
 
@@ -147,7 +147,7 @@ uv run python .artifacts/rc-candidate/minio_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-06-minio-post-canon" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/06-minio-post-canon"
 
@@ -156,7 +156,7 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-07-publisher-backend" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/07-publisher-backend"
 
@@ -165,7 +165,7 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-08-publisher-browser" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/08-publisher-browser"
 
@@ -174,7 +174,7 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-09-publisher-captcha" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/09-publisher-captcha"
 
@@ -183,7 +183,7 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-10-publisher-mfa" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/10-publisher-mfa"
 
@@ -192,7 +192,7 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --fault-id "${RECOVERY_RUN_ID}-11-publisher-account-risk" \
   --candidate-manifest "$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \
   --mcp-url http://127.0.0.1:19096/mcp \
-  --api-url http://127.0.0.1:8899 \
+  --api-url http://127.0.0.1:19099 \
   --database-url-env FORWIN_RECOVERY_DATABASE_URL \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/11-publisher-account-risk"
 ```

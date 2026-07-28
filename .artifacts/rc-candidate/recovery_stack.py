@@ -2535,6 +2535,229 @@ def interrupt_cleanup_volume_observation(
     return actual
 
 
+def interrupt_cleanup_container_names(
+    run_identity: dict[str, Any],
+) -> dict[str, str]:
+    if set(CONTAINER_NAME_SUFFIXES) != set(SERVICES):
+        raise StackError(
+            "interrupt cleanup container name contract is incomplete"
+        )
+    project_name = recovery_project_name(run_identity)
+    return {
+        service: f"{project_name}-{CONTAINER_NAME_SUFFIXES[service]}"
+        for service in SERVICES
+    }
+
+
+def interrupt_cleanup_container_ids(
+    selector: str,
+    *,
+    deadline: float,
+) -> set[str]:
+    output = command(
+        "docker",
+        "container",
+        "ls",
+        "--all",
+        "--no-trunc",
+        "--filter",
+        selector,
+        "--format",
+        "json",
+        deadline=deadline,
+        timeout_stage="interrupt cleanup container discovery",
+    )
+    container_ids: set[str] = set()
+    for line_number, raw in enumerate(output.splitlines(), start=1):
+        try:
+            item = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise StackError(
+                "interrupt cleanup container discovery returned invalid "
+                f"JSON at line {line_number}"
+            ) from exc
+        container_id = item.get("ID") if isinstance(item, dict) else None
+        if not isinstance(container_id, str) or not container_id:
+            raise StackError(
+                "interrupt cleanup container discovery returned an "
+                "invalid container identity"
+            )
+        container_ids.add(container_id)
+    return container_ids
+
+
+def interrupt_cleanup_expected_container_identities(
+    context: dict[str, Any],
+    *,
+    expected_names: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    if context.get("fresh_up_completed") is not True:
+        return {}
+    completions = [
+        event
+        for event in context["events"]
+        if event.get("action") == "fresh_up_completed"
+    ]
+    if len(completions) != 1:
+        raise StackError(
+            "interrupt cleanup completed service identity is unavailable"
+        )
+    after = completions[0].get("after")
+    services = after.get("services") if isinstance(after, dict) else None
+    if not isinstance(services, dict) or set(services) != set(SERVICES):
+        raise StackError(
+            "interrupt cleanup completed service inventory is invalid"
+        )
+    expected: dict[str, dict[str, str]] = {}
+    for service in SERVICES:
+        state = services.get(service)
+        if not isinstance(state, dict):
+            raise StackError(
+                f"interrupt cleanup completed identity is invalid for {service}"
+            )
+        container_id = state.get("container_id")
+        image_id = state.get("image_id")
+        if (
+            state.get("service") != service
+            or state.get("exists") is not True
+            or state.get("name") != expected_names[service]
+            or not isinstance(container_id, str)
+            or not container_id
+            or not isinstance(image_id, str)
+            or not image_id
+        ):
+            raise StackError(
+                f"interrupt cleanup completed identity is invalid for {service}"
+            )
+        expected[service] = {
+            "container_id": container_id,
+            "image_id": image_id,
+        }
+    return expected
+
+
+def require_interrupt_cleanup_namespace(
+    context: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    run_identity = context["run_identity"]
+    project_name = recovery_project_name(run_identity)
+    expected_names = interrupt_cleanup_container_names(run_identity)
+    expected_identities = interrupt_cleanup_expected_container_identities(
+        context,
+        expected_names=expected_names,
+    )
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
+    selectors = [
+        f"label=com.docker.compose.project={project_name}",
+        *[
+            f"name=^{expected_names[service]}$"
+            for service in SERVICES
+        ],
+    ]
+    container_ids: set[str] = set()
+    for selector in selectors:
+        container_ids.update(
+            interrupt_cleanup_container_ids(
+                selector,
+                deadline=deadline,
+            )
+        )
+    if not container_ids:
+        return {}
+    try:
+        payload = json.loads(
+            command(
+                "docker",
+                "container",
+                "inspect",
+                *sorted(container_ids),
+                deadline=deadline,
+                timeout_stage="interrupt cleanup container inspection",
+            )
+        )
+    except json.JSONDecodeError as exc:
+        raise StackError(
+            "interrupt cleanup container inspection returned invalid JSON"
+        ) from exc
+    if (
+        not isinstance(payload, list)
+        or len(payload) != len(container_ids)
+        or not all(isinstance(item, dict) for item in payload)
+    ):
+        raise StackError(
+            "interrupt cleanup container inspection returned an invalid "
+            "inventory"
+        )
+
+    observed: dict[str, dict[str, str]] = {}
+    inspected_ids: set[str] = set()
+    for item in payload:
+        container_id = item.get("Id")
+        image_id = item.get("Image")
+        if (
+            not isinstance(container_id, str)
+            or not container_id
+            or container_id not in container_ids
+            or container_id in inspected_ids
+            or not isinstance(image_id, str)
+            or not image_id
+        ):
+            raise StackError(
+                "interrupt cleanup container inspection returned an "
+                "invalid identity"
+            )
+        inspected_ids.add(container_id)
+        config = item.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        if not isinstance(labels, dict):
+            raise StackError(
+                "interrupt cleanup container service label is missing"
+            )
+        actual_project = labels.get("com.docker.compose.project")
+        if actual_project != project_name:
+            raise StackError(
+                "interrupt cleanup container project label mismatch"
+            )
+        service = labels.get("com.docker.compose.service")
+        if not isinstance(service, str) or not service:
+            raise StackError(
+                "interrupt cleanup container service label is missing"
+            )
+        if service not in SERVICES:
+            raise StackError(
+                f"interrupt cleanup container has unknown service: {service}"
+            )
+        if service in observed:
+            raise StackError(
+                f"interrupt cleanup has duplicate containers for {service}"
+            )
+        expected_name = expected_names[service]
+        if item.get("Name") != f"/{expected_name}":
+            raise StackError(
+                f"interrupt cleanup container name mismatch for {service}"
+            )
+        durable_identity = expected_identities.get(service)
+        if durable_identity is not None:
+            if container_id != durable_identity["container_id"]:
+                raise StackError(
+                    f"interrupt cleanup container identity drift for {service}"
+                )
+            if image_id != durable_identity["image_id"]:
+                raise StackError(
+                    f"interrupt cleanup image identity drift for {service}"
+                )
+        observed[service] = {
+            "container_id": container_id,
+            "image_id": image_id,
+            "name": expected_name,
+        }
+    if inspected_ids != container_ids:
+        raise StackError(
+            "interrupt cleanup container inspection was incomplete"
+        )
+    return observed
+
+
 def destroyed_service_inventory(
     run_identity: dict[str, Any],
     *,
@@ -3782,6 +4005,7 @@ def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
         )
     assert_isolated_compose(identity, run_identity=run_identity)
     database_volume_before = interrupt_cleanup_volume_observation(context)
+    require_interrupt_cleanup_namespace(context)
     requested_at = now()
     active_state = active_recovery_state(context["events"])
     cleanup = cleanup_recovery_run(

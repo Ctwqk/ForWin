@@ -31,6 +31,17 @@ finalizer = importlib.util.module_from_spec(FINALIZER_SPEC)
 FINALIZER_SPEC.loader.exec_module(finalizer)
 
 SOURCE_SHA = "f" * 40
+TEST_CONTAINER_SUFFIXES = {
+    "postgres": "postgres",
+    "qdrant": "qdrant",
+    "minio": "minio",
+    "forwin": "api",
+    "generation-worker": "generation-worker",
+    "outbox-worker": "outbox-worker",
+    "forwin-mcp": "mcp",
+    "publisher-worker": "publisher-worker",
+    "publisher-browser": "publisher-browser",
+}
 
 
 def run_mark_process(
@@ -2069,6 +2080,134 @@ def test_fresh_up_partial_interrupt_cleanup_stays_nonterminal_and_preserves_sign
     ] == expected_actions
 
 
+def interrupt_namespace_container(
+    run_identity: dict,
+    service: str,
+    *,
+    container_id: str | None = None,
+    image_id: str | None = None,
+    name: str | None = None,
+    project_label: str | None = None,
+    service_label: str | None = None,
+    include_service_label: bool = True,
+) -> dict:
+    project_name = (
+        f"forwin-v5-recovery-{run_identity['run_id']}"
+    )
+    expected_name = (
+        f"{project_name}-{TEST_CONTAINER_SUFFIXES[service]}"
+        if service in TEST_CONTAINER_SUFFIXES
+        else f"{project_name}-{service}"
+    )
+    labels = {
+        "com.docker.compose.project": (
+            project_name if project_label is None else project_label
+        ),
+    }
+    if include_service_label:
+        labels["com.docker.compose.service"] = (
+            service if service_label is None else service_label
+        )
+    return {
+        "Id": container_id or f"container-{service}",
+        "Image": image_id or f"sha256:image-{service}",
+        "Name": f"/{name or expected_name}",
+        "Config": {"Labels": labels},
+        "State": {"Running": True},
+    }
+
+
+def install_interrupt_namespace_docker(
+    monkeypatch: pytest.MonkeyPatch,
+    run_identity: dict,
+    containers: list[dict],
+    *,
+    malformed: str | None = None,
+) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+    containers_by_id = {
+        container["Id"]: copy.deepcopy(container)
+        for container in containers
+    }
+    project_name = (
+        f"forwin-v5-recovery-{run_identity['run_id']}"
+    )
+
+    def fake_command(*args: str, **_kwargs: object) -> str:
+        calls.append(tuple(args))
+        if args[:5] == (
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--no-trunc",
+        ):
+            if malformed == "list-json":
+                return "{not-json"
+            selector = args[args.index("--filter") + 1]
+            if selector == (
+                "label=com.docker.compose.project="
+                f"{project_name}"
+            ):
+                selected = [
+                    container
+                    for container in containers
+                    if (
+                        (container.get("Config") or {})
+                        .get("Labels", {})
+                        .get("com.docker.compose.project")
+                        == project_name
+                    )
+                ]
+            elif selector.startswith("name=^") and selector.endswith("$"):
+                selected_name = selector.removeprefix("name=^").removesuffix(
+                    "$"
+                )
+                selected = [
+                    container
+                    for container in containers
+                    if container.get("Name") == f"/{selected_name}"
+                ]
+            else:
+                raise AssertionError(f"unexpected Docker selector: {selector}")
+            return "\n".join(
+                json.dumps({"ID": container["Id"]})
+                for container in selected
+            )
+        if args[:3] == ("docker", "container", "inspect"):
+            if malformed == "inspect-json":
+                return "[not-json"
+            if malformed == "inspect-shape":
+                return json.dumps({"Id": args[3]})
+            return json.dumps(
+                [containers_by_id[container_id] for container_id in args[3:]]
+            )
+        raise AssertionError(f"unexpected Docker command: {args}")
+
+    monkeypatch.setattr(stack, "command", fake_command)
+    return calls
+
+
+def confirmed_interrupt_cleanup(run_identity: dict) -> dict:
+    timestamp = "2026-07-22T12:02:01+00:00"
+    return {
+        "cleanup_requested_at": "2026-07-22T12:02:00+00:00",
+        "cleanup_confirmed_at": timestamp,
+        "cleanup_error": None,
+        "database_volume": {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+        "after": {
+            "observed_at": timestamp,
+            "services": {
+                service: {"exists": False, "running": False}
+                for service in stack.SERVICES
+            },
+        },
+    }
+
+
 def interrupt_cleanup_prefix(
     stack_module: object,
     *,
@@ -2104,6 +2243,20 @@ def interrupt_cleanup_prefix(
         ),
     }
     if completed:
+        project_name = f"forwin-v5-recovery-{run_id}"
+        completed_services = {
+            service: {
+                "service": service,
+                "exists": True,
+                "container_id": f"container-{service}",
+                "name": (
+                    f"{project_name}-{TEST_CONTAINER_SUFFIXES[service]}"
+                ),
+                "image_id": f"sha256:image-{service}",
+                "running": True,
+            }
+            for service in TEST_CONTAINER_SUFFIXES
+        }
         stack_module.append_event(
             "fresh_up_completed",
             fault_id=fault_id,
@@ -2118,7 +2271,7 @@ def interrupt_cleanup_prefix(
                 "fault_id": fault_id,
                 "source_sha": SOURCE_SHA,
             },
-            after={"services": {}},
+            after={"services": completed_services},
         )
     return run_identity, identity, present
 
@@ -2201,6 +2354,19 @@ def test_interrupt_cleanup_retries_partial_exact_run_until_one_terminal_event(
     }
     cleanup_results = iter((partial, confirmed))
     cleanup_calls: list[dict] = []
+    live_services = (
+        ("publisher-browser",)
+        if partial_shape == "volume-removed-services-remain"
+        else ()
+    )
+    install_interrupt_namespace_docker(
+        monkeypatch,
+        run_identity,
+        [
+            interrupt_namespace_container(run_identity, service)
+            for service in live_services
+        ],
+    )
 
     def cleanup(
         observed_run_identity: dict,
@@ -2260,6 +2426,314 @@ def test_interrupt_cleanup_retries_partial_exact_run_until_one_terminal_event(
         event["action"] == "interrupted_cleanup"
         for event in stack.load_verified_events()
     ) == 1
+
+
+@pytest.mark.parametrize(
+    ("rejection", "expected_error"),
+    (
+        ("foreign-same-project-orphan", "service label"),
+        ("unknown-service", "unknown service"),
+        ("duplicate-service", "duplicate.*postgres"),
+        ("wrong-project-name-squatter", "project label"),
+        ("service-name-mismatch", "container name"),
+    ),
+)
+def test_interrupt_cleanup_rejects_unproved_live_namespace_before_teardown(
+    rejection: str,
+    expected_error: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fault_id = f"namespace-reject-{rejection}"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, _present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id="1" * 32,
+        evidence_dir=evidence_dir,
+        completed=False,
+    )
+    project_name = f"forwin-v5-recovery-{'1' * 32}"
+    postgres_name = f"{project_name}-postgres"
+    qdrant_name = f"{project_name}-qdrant"
+    if rejection == "foreign-same-project-orphan":
+        containers = [
+            interrupt_namespace_container(
+                run_identity,
+                "retired-worker",
+                name=f"{project_name}-retired-worker",
+                include_service_label=False,
+            )
+        ]
+    elif rejection == "unknown-service":
+        containers = [
+            interrupt_namespace_container(
+                run_identity,
+                "retired-worker",
+                name=f"{project_name}-retired-worker",
+            )
+        ]
+    elif rejection == "duplicate-service":
+        containers = [
+            interrupt_namespace_container(run_identity, "postgres"),
+            interrupt_namespace_container(
+                run_identity,
+                "postgres",
+                container_id="container-postgres-duplicate",
+                name=f"{postgres_name}-duplicate",
+            ),
+        ]
+    elif rejection == "wrong-project-name-squatter":
+        containers = [
+            interrupt_namespace_container(
+                run_identity,
+                "postgres",
+                name=postgres_name,
+                project_label="foreign-compose-project",
+            )
+        ]
+    else:
+        containers = [
+            interrupt_namespace_container(
+                run_identity,
+                "postgres",
+                name=qdrant_name,
+            )
+        ]
+    install_interrupt_namespace_docker(
+        monkeypatch,
+        run_identity,
+        containers,
+    )
+    cleanup_calls: list[dict] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda observed, **_kwargs: (
+            cleanup_calls.append(copy.deepcopy(observed))
+            or confirmed_interrupt_cleanup(run_identity)
+        ),
+    )
+
+    with pytest.raises(stack.StackError, match=expected_error):
+        stack.interrupt_cleanup_recovery_run(fault_id)
+
+    assert cleanup_calls == []
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started"]
+
+
+@pytest.mark.parametrize("drift", ("container", "image"))
+def test_interrupt_cleanup_rejects_completed_container_identity_drift_before_teardown(
+    drift: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fault_id = f"completed-{drift}-drift"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id="2" * 32,
+        evidence_dir=evidence_dir,
+        completed=True,
+    )
+    container = interrupt_namespace_container(run_identity, "postgres")
+    if drift == "container":
+        container["Id"] = "replacement-postgres-container"
+    else:
+        container["Image"] = "sha256:replacement-postgres-image"
+    install_interrupt_namespace_docker(
+        monkeypatch,
+        run_identity,
+        [container],
+    )
+    cleanup_calls: list[dict] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: copy.deepcopy(present),
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda observed, **_kwargs: (
+            cleanup_calls.append(copy.deepcopy(observed))
+            or confirmed_interrupt_cleanup(run_identity)
+        ),
+    )
+
+    with pytest.raises(stack.StackError, match=f"{drift} identity drift"):
+        stack.interrupt_cleanup_recovery_run(fault_id)
+
+    assert cleanup_calls == []
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started", "fresh_up_completed"]
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    ("list-json", "inspect-json", "inspect-shape"),
+)
+def test_interrupt_cleanup_fails_closed_on_malformed_docker_namespace_json(
+    malformed: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fault_id = f"malformed-namespace-{malformed}"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, _present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id="3" * 32,
+        evidence_dir=evidence_dir,
+        completed=False,
+    )
+    install_interrupt_namespace_docker(
+        monkeypatch,
+        run_identity,
+        [interrupt_namespace_container(run_identity, "postgres")],
+        malformed=malformed,
+    )
+    cleanup_calls: list[dict] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda observed, **_kwargs: (
+            cleanup_calls.append(copy.deepcopy(observed))
+            or confirmed_interrupt_cleanup(run_identity)
+        ),
+    )
+
+    with pytest.raises(stack.StackError):
+        stack.interrupt_cleanup_recovery_run(fault_id)
+
+    assert cleanup_calls == []
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started"]
+
+
+@pytest.mark.parametrize(
+    "present_services",
+    (
+        (),
+        ("postgres",),
+        ("postgres", "minio", "forwin-mcp", "publisher-browser"),
+    ),
+)
+def test_interrupt_cleanup_accepts_legitimate_start_only_service_subsets(
+    present_services: tuple[str, ...],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subset_name = "none" if not present_services else "-".join(present_services)
+    fault_id = f"legitimate-start-subset-{subset_name}"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, _present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id="4" * 32,
+        evidence_dir=evidence_dir,
+        completed=False,
+    )
+    docker_calls = install_interrupt_namespace_docker(
+        monkeypatch,
+        run_identity,
+        [
+            interrupt_namespace_container(run_identity, service)
+            for service in present_services
+        ],
+    )
+    cleanup_calls: list[dict] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda observed, **_kwargs: (
+            cleanup_calls.append(copy.deepcopy(observed))
+            or confirmed_interrupt_cleanup(run_identity)
+        ),
+    )
+
+    terminal = stack.interrupt_cleanup_recovery_run(fault_id)
+
+    assert terminal["action"] == "interrupted_cleanup"
+    assert cleanup_calls == [run_identity]
+    project_name = f"forwin-v5-recovery-{'4' * 32}"
+    selectors = [
+        call[call.index("--filter") + 1]
+        for call in docker_calls
+        if call[:5]
+        == ("docker", "container", "ls", "--all", "--no-trunc")
+    ]
+    assert set(selectors) == {
+        (
+            "label=com.docker.compose.project="
+            f"{project_name}"
+        ),
+        *{
+            f"name=^{project_name}-{suffix}$"
+            for suffix in TEST_CONTAINER_SUFFIXES.values()
+        },
+    }
+    assert len(selectors) == 1 + len(TEST_CONTAINER_SUFFIXES)
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == ["fresh_up_started", "interrupted_cleanup"]
 
 
 @pytest.mark.parametrize(

@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR_VERSION = 5
 MANIFEST_SCHEMA_VERSION = 3
-MATRIX_AUDIT_SCHEMA_VERSION = 3
+MATRIX_AUDIT_SCHEMA_VERSION = 4
 DEFAULT_DEPENDENCY_IMAGES = {
     "postgres": "postgres:16-alpine",
     "qdrant": "qdrant/qdrant:v1.17.1",
@@ -981,6 +981,29 @@ def load_matrix_manifest(
             ):
                 raise ManifestError(
                     f"matrix final audit cell evidence fails revalidation: {name}"
+                )
+            evidence_project_id = str(
+                (evidence.get("project") or {}).get("id") or ""
+            )
+            if str(item.get("project_id") or "") != evidence_project_id:
+                raise ManifestError(
+                    f"matrix final audit cell project mismatch: {name}"
+                )
+            candidate_spark_model = str(
+                (
+                    (identity.get("candidate_stack") or {}).get(
+                        "spark_model"
+                    )
+                    or ""
+                )
+            )
+            if (
+                not candidate_spark_model
+                or evidence.get("candidate_spark_model")
+                != candidate_spark_model
+            ):
+                raise ManifestError(
+                    f"matrix final audit Spark model mismatch: {name}"
                 )
             report_results[name] = {
                 "violations": [],

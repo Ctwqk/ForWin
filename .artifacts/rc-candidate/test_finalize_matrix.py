@@ -24,8 +24,8 @@ matrix = load_module("matrix_finalizer", ROOT / "finalize_matrix.py")
 fixtures = load_module("l200_test_fixtures", ROOT / "test_l200_evidence.py")
 
 
-def test_request_level_spark_evidence_uses_matrix_schema_v3() -> None:
-    assert matrix.MATRIX_AUDIT_SCHEMA_VERSION == 3
+def test_request_level_spark_evidence_uses_matrix_schema_v4() -> None:
+    assert matrix.MATRIX_AUDIT_SCHEMA_VERSION == 4
 
 
 def test_matrix_command_uses_l200_host_environment(
@@ -120,7 +120,7 @@ def spark_chain(
     band_id = f"band-{suffix}"
     chapter_number = 10
     gate_kind = "band_checkpoint_pause"
-    requested_model = "spark-model"
+    requested_model = "gpt-5.6-sol"
     backend = "codex_bridge"
     decided = terminal_type == "gate_delegation_decided"
     terminal_decision = "approve" if decided else "error"
@@ -266,7 +266,12 @@ def spark_chain(
                         "boundary_chapter": chapter_number,
                         "status": "warn",
                     },
-                    "pause_policy": {"gate_delegate": "spark"},
+                    "pause_policy": {
+                        "review_interval_chapters": 0,
+                        "manual_checkpoints": True,
+                        "band_checkpoint_action": "pause_on_warn",
+                        "gate_delegate": "spark",
+                    },
                 },
                 "input_snapshot_error": "",
                 "model_profile": {
@@ -308,7 +313,21 @@ def spark_chain(
                 "band_id": band_id,
                 "boundary_kind": "band_end",
                 "boundary_chapter": chapter_number,
+                "trigger_source": "auto_band_end",
                 "status": "overridden" if decided else "warn",
+            }
+        ],
+        "causal_roots": [
+            {
+                "id": causal_root_id,
+                "project_id": project_id,
+                "task_id": task_id,
+                "scope": "task",
+                "event_type": "continue_requested",
+                "related_object_type": "generation_task",
+                "related_object_id": task_id,
+                "parent_event_id": "",
+                "causal_root_id": causal_root_id,
             }
         ],
     }
@@ -319,6 +338,7 @@ def empty_spark_evidence() -> dict:
         "events": [],
         "prompt_traces": [],
         "related_gate_objects": [],
+        "causal_roots": [],
     }
 
 
@@ -375,7 +395,12 @@ def chapter_spark_chain(project_id: str) -> dict:
             "residual_review_issues": [],
         },
         "review_interval_chapters": 10,
-        "pause_policy": {"gate_delegate": "spark"},
+        "pause_policy": {
+            "review_interval_chapters": 10,
+            "manual_checkpoints": True,
+            "band_checkpoint_action": "pause_on_warn",
+            "gate_delegate": "spark",
+        },
     }
     trace["output_summary"]["gate_kind"] = gate_kind
     chain["related_gate_objects"] = [
@@ -405,7 +430,14 @@ def evidence(name: str) -> dict:
     mcp["chapters"] = mcp["chapters"][:target]
     policy = {
         "quality_profile": profile,
-        "pause": {"gate_delegate": delegate},
+        "pause": {
+            "review_interval_chapters": 0,
+            "manual_checkpoints": profile == "standard",
+            "band_checkpoint_action": (
+                "pause_on_warn" if profile == "standard" else "continue"
+            ),
+            "gate_delegate": delegate,
+        },
     }
     database = fixtures.database_state()
     database["canon"].update(
@@ -490,18 +522,37 @@ def evidence(name: str) -> dict:
         "project": mcp["project"],
         "chapters": mcp["chapters"],
         "active_task_check": mcp["active_task_check"],
-        "tasks": [],
+        "tasks": (
+            [
+                {
+                    "task_id": "task-1",
+                    "project_id": mcp["project"]["id"],
+                    "run_until_chapter": target,
+                    "status": "completed",
+                }
+            ]
+            if delegate == "spark"
+            else []
+        ),
         "gate_ledger": mcp["gate_ledger"],
         "cost_report": mcp["cost_report"],
         "rule_provenance": mcp["rule_provenance"],
         "policy": {"version": 1, "policy": policy},
         "database": database,
+        "candidate_spark_model": "gpt-5.6-sol",
         "operational": {"spark": spark},
     }
 
 
 def replace_spark_evidence(item: dict, spark: dict) -> None:
     item["operational"]["spark"] = spark
+    if spark["prompt_traces"]:
+        item["policy"]["policy"]["pause"] = dict(
+            spark["prompt_traces"][0]["input_snapshot"]["pause_policy"]
+        )
+        item["manifest_cell"]["policy_hash"] = matrix.l200.canonical_hash(
+            item["policy"]["policy"]
+        )
     events = spark["events"]
     requests = [
         event
@@ -518,6 +569,15 @@ def replace_spark_evidence(item: dict, spark: dict) -> None:
         event
         for event in events
         if event["event_type"] == "gate_delegation_approved"
+    ]
+    item["tasks"] = [
+        {
+            "task_id": request["task_id"],
+            "project_id": request["project_id"],
+            "run_until_chapter": item["manifest_cell"]["target"],
+            "status": "completed",
+        }
+        for request in requests
     ]
     blocked = sum(
         bool(event["payload"]["gate_outcome"]["blocked"])
@@ -700,8 +760,121 @@ def test_spark_request_requires_eligible_optional_pause_snapshot() -> None:
     violations = matrix.validate_cell("L60S", item)
 
     assert any(
-        "request request-1 checkpoint status=fail is not delegation-eligible"
+        "request request-1 automatic checkpoint status=fail, expected=warn"
         in violation
+        for violation in violations
+    )
+
+
+def test_automatic_checkpoint_pass_is_not_an_optional_pause() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["prompt_traces"][0]["input_snapshot"][
+        "checkpoint"
+    ]["status"] = "pass"
+    item["operational"]["spark"]["related_gate_objects"][0][
+        "status"
+    ] = "pass"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 automatic checkpoint status=pass, expected=warn"
+        in violation
+        for violation in violations
+    )
+
+
+def test_automatic_checkpoint_requires_pause_policy_action() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["prompt_traces"][0]["input_snapshot"][
+        "pause_policy"
+    ]["band_checkpoint_action"] = "continue"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 automatic checkpoint policy action=continue "
+        "is not pausing"
+        in violation
+        for violation in violations
+    )
+
+
+def test_automatic_checkpoint_requires_emitter_trigger_source() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["prompt_traces"][0]["input_snapshot"][
+        "checkpoint"
+    ]["trigger_source"] = "unrelated_source"
+    item["operational"]["spark"]["related_gate_objects"][0][
+        "trigger_source"
+    ] = "unrelated_source"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 automatic checkpoint trigger_source="
+        "unrelated_source, expected=auto_band_end"
+        in violation
+        for violation in violations
+    )
+
+
+def test_automatic_checkpoint_source_status_must_preserve_pause_state() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"]["related_gate_objects"][0][
+        "status"
+    ] = "pass"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 automatic checkpoint source status=pass "
+        "is inconsistent with a delegated warning"
+        in violation
+        for violation in violations
+    )
+
+
+def test_spark_model_must_match_candidate_generation_worker_route() -> None:
+    item = evidence("L60S")
+    for event in item["operational"]["spark"]["events"]:
+        payload = event["payload"]
+        if "requested_model" in payload:
+            payload["requested_model"] = "different-codex-model"
+        if payload.get("actual_model"):
+            payload["actual_model"] = "different-codex-model"
+        if event["actor_id"] == "gpt-5.6-sol":
+            event["actor_id"] = "different-codex-model"
+    trace = item["operational"]["spark"]["prompt_traces"][0]
+    trace["model_profile"]["requested_model"] = "different-codex-model"
+    trace["model_profile"]["actual_model"] = "different-codex-model"
+    trace["output_summary"]["requested_model"] = "different-codex-model"
+    trace["output_summary"]["actual_model"] = "different-codex-model"
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 requested model=different-codex-model, "
+        "candidate=gpt-5.6-sol"
+        in violation
+        for violation in violations
+    )
+
+
+def test_spark_request_requires_task_and_causal_root_provenance() -> None:
+    item = evidence("L60S")
+    item["tasks"] = []
+    item["operational"]["spark"]["causal_roots"] = []
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-1 task task-1 is not in collected tasks"
+        in violation
+        for violation in violations
+    )
+    assert any(
+        "request request-1 has 0 causal root events" in violation
         for violation in violations
     )
 
@@ -775,6 +948,23 @@ def test_chapter_interval_rejects_ineligible_review_snapshot() -> None:
     )
 
 
+def test_chapter_interval_excludes_task_last_requested_chapter() -> None:
+    item = evidence("L60S")
+    replace_spark_evidence(
+        item,
+        chapter_spark_chain(item["project"]["id"]),
+    )
+    item["tasks"][0]["run_until_chapter"] = 20
+
+    violations = matrix.validate_cell("L60S", item)
+
+    assert any(
+        "request request-chapter is at task last requested chapter 20"
+        in violation
+        for violation in violations
+    )
+
+
 def test_spark_cell_without_eligible_pause_opportunity_can_complete() -> None:
     item = evidence("L60S")
     replace_spark_evidence(item, empty_spark_evidence())
@@ -809,6 +999,30 @@ def test_matrix_accepts_delegation_from_any_spark_cell() -> None:
         empty_spark_evidence(),
     )
 
+    assert matrix.matrix_operational_violations(results) == []
+
+
+def test_matrix_accepts_live_failed_terminal_chain() -> None:
+    results = {
+        name: {"evidence": evidence(name), "violations": []}
+        for name in matrix.EXPECTED_CELLS
+    }
+    replace_spark_evidence(
+        results["L60S"]["evidence"],
+        empty_spark_evidence(),
+    )
+    replace_spark_evidence(
+        results["L100"]["evidence"],
+        spark_chain(
+            results["L100"]["evidence"]["project"]["id"],
+            terminal_type="gate_delegation_failed",
+        ),
+    )
+
+    assert matrix.validate_cell(
+        "L100",
+        results["L100"]["evidence"],
+    ) == []
     assert matrix.matrix_operational_violations(results) == []
 
 
@@ -981,6 +1195,11 @@ def test_candidate_stack_binds_endpoints_to_verified_compose_services(
         return {"compose_project": "candidate", "api": {"compose_service": "forwin"}}
 
     monkeypatch.setattr(matrix.l200, "connection_bindings", fake_bindings)
+    monkeypatch.setattr(
+        matrix,
+        "candidate_spark_model",
+        lambda _containers: "gpt-5.6-sol",
+    )
     args = argparse.Namespace(
         runtime_container=sorted(matrix.l200.EXPECTED_RUNTIME_SERVICES),
         browser_container=["publisher-browser"],
@@ -1002,6 +1221,7 @@ def test_candidate_stack_binds_endpoints_to_verified_compose_services(
         ("dependency", ""),
     ]
     assert stack["compose_project"] == "candidate"
+    assert stack["spark_model"] == "gpt-5.6-sol"
     assert stack["connection_bindings"]["api"]["compose_service"] == "forwin"
 
 

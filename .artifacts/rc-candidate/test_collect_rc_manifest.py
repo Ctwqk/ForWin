@@ -583,6 +583,9 @@ def write_matrix_audit(
                 "identity": {
                     "source_sha": SOURCE_SHA,
                     "code_changes_during_run": 0,
+                    "candidate_stack": {
+                        "spark_model": "gpt-5.6-sol",
+                    },
                     "matrix_manifest": {
                         "path": str(raw_path),
                         "sha256": collector.sha256_file(raw_path),
@@ -1561,6 +1564,26 @@ def test_final_rc_accepts_revalidated_matrix_audit(
     assert result["source_sha"] == SOURCE_SHA
     assert result["current_rc_source_sha"] == "b" * 40
     assert result["predecessor_delta"]["mode"] == "bounded_successor"
+
+
+def test_final_rc_rejects_outer_matrix_cell_project_mismatch(
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["cells"]["L100"]["project_id"] = "forged-project-id"
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="matrix final audit cell project mismatch: L100",
+    ):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
 
 
 def test_final_rc_rejects_matrix_without_live_spark_evidence(

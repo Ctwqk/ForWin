@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX_ROOT = ROOT / ".artifacts/v4-matrix-candidate"
 DEFAULT_OUTPUT = MATRIX_ROOT / "final-audit"
 L200_MODULE_PATH = Path(__file__).with_name("l200_evidence.py")
-MATRIX_AUDIT_SCHEMA_VERSION = 3
+MATRIX_AUDIT_SCHEMA_VERSION = 4
 EXPECTED_CELLS = {
     "L30": {"target": 30, "profile": "standard", "delegate": "human"},
     "L60S": {"target": 60, "profile": "standard", "delegate": "spark"},
@@ -37,14 +37,6 @@ SPARK_EVENT_TYPES = frozenset(
 )
 SPARK_TERMINAL_TYPES = frozenset(
     {"gate_delegation_decided", "gate_delegation_failed"}
-)
-CHECKPOINT_GATE_KINDS = frozenset(
-    {
-        "band_checkpoint_pause",
-        "manual_checkpoint_chapter_start",
-        "manual_checkpoint_chapter_accepted",
-        "manual_checkpoint_band_end",
-    }
 )
 SPARK_PERMISSION_PROFILE = "prompt_only_readonly"
 
@@ -182,9 +174,48 @@ def candidate_stack_identity(
         "runtime_containers": runtime_containers,
         "publisher_browser_containers": browser_containers,
         "dependency_containers": dependency_containers,
+        "spark_model": candidate_spark_model(args.runtime_container),
     }
     identity["connection_bindings"] = l200.connection_bindings(args, identity)
     return identity
+
+
+def candidate_spark_model(runtime_containers: list[str]) -> str:
+    discovered: list[str] = []
+    for name in runtime_containers:
+        try:
+            payload = json.loads(
+                command("docker", "container", "inspect", name)
+            )
+        except json.JSONDecodeError as exc:
+            raise MatrixAuditError(
+                f"docker returned invalid JSON for runtime container {name}"
+            ) from exc
+        if len(payload) != 1:
+            raise MatrixAuditError(
+                f"expected one runtime container for {name}"
+            )
+        item = payload[0]
+        config = item.get("Config") or {}
+        labels = config.get("Labels") or {}
+        if labels.get("com.docker.compose.service") != "generation-worker":
+            continue
+        environment: dict[str, str] = {}
+        for raw in config.get("Env") or []:
+            key, separator, value = str(raw).partition("=")
+            if separator:
+                environment[key] = value
+        model = str(
+            environment.get("FORWIN_CODEX_DEFAULT_MODEL") or ""
+        ).strip()
+        if model:
+            discovered.append(model)
+    if len(discovered) != 1:
+        raise MatrixAuditError(
+            "candidate generation-worker must expose exactly one "
+            "FORWIN_CODEX_DEFAULT_MODEL"
+        )
+    return discovered[0]
 
 
 def parsed_json_object(value: Any) -> tuple[dict[str, Any], str]:
@@ -204,7 +235,13 @@ def selected_gate_snapshot(value: dict[str, Any]) -> dict[str, Any]:
     selected: dict[str, Any] = {
         "pause_policy": (
             {
-                "gate_delegate": pause_policy.get("gate_delegate"),
+                key: pause_policy.get(key)
+                for key in (
+                    "review_interval_chapters",
+                    "manual_checkpoints",
+                    "band_checkpoint_action",
+                    "gate_delegate",
+                )
             }
             if isinstance(pause_policy, dict)
             else pause_policy
@@ -300,8 +337,8 @@ def _related_gate_object(
         row = connection.execute(
             text(
                 """
-                SELECT id,project_id,band_id,boundary_kind,
-                       boundary_chapter,status
+                SELECT id,project_id,band_id,trigger_source,
+                       boundary_kind,boundary_chapter,status
                 FROM band_checkpoints WHERE id=:object_id
                 """
             ),
@@ -429,6 +466,27 @@ def collect_spark_evidence(connection, project_id: str) -> dict[str, Any]:
         for event in events
         if event.get("event_type") == "gate_delegation_requested"
     ]
+    causal_roots = [
+        dict(row)
+        for row in connection.execute(
+            text(
+                """
+                SELECT id,project_id,task_id,scope,event_type,
+                       related_object_type,related_object_id,
+                       parent_event_id,causal_root_id
+                FROM decision_events
+                WHERE project_id=:project_id
+                  AND id IN (
+                    SELECT causal_root_id FROM decision_events
+                    WHERE project_id=:project_id
+                      AND event_type='gate_delegation_requested'
+                  )
+                ORDER BY created_at,id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings()
+    ]
     return {
         "events": events,
         "prompt_traces": traces,
@@ -436,6 +494,7 @@ def collect_spark_evidence(connection, project_id: str) -> dict[str, Any]:
             _related_gate_object(connection, request)
             for request in requests
         ],
+        "causal_roots": causal_roots,
     }
 
 
@@ -642,6 +701,9 @@ async def collect_cell(
         "rule_provenance": mcp["rule_provenance"],
         "policy": policy,
         "database": database,
+        "candidate_spark_model": str(
+            getattr(args, "candidate_spark_model", "") or ""
+        ),
         "operational": operational,
     }
 
@@ -761,6 +823,8 @@ def _eligibility_violations(
     request: dict[str, Any],
     trace: dict[str, Any],
     source: dict[str, Any] | None,
+    task: dict[str, Any] | None,
+    frozen_pause_policy: dict[str, Any],
 ) -> list[str]:
     request_id = str(request.get("id") or "")
     gate_kind = str((request.get("payload") or {}).get("gate_kind") or "")
@@ -768,11 +832,18 @@ def _eligibility_violations(
     violations: list[str] = []
     if not isinstance(snapshot, dict):
         return [f"request {request_id} has no eligibility snapshot"]
-    pause_policy = snapshot.get("pause_policy")
-    if (
-        not isinstance(pause_policy, dict)
-        or pause_policy.get("gate_delegate") != "spark"
-    ):
+    snapshot_pause_policy = snapshot.get("pause_policy")
+    if not isinstance(snapshot_pause_policy, dict):
+        violations.append(
+            f"request {request_id} has no pause policy snapshot"
+        )
+        snapshot_pause_policy = {}
+    if snapshot_pause_policy != frozen_pause_policy:
+        violations.append(
+            f"request {request_id} pause policy snapshot differs "
+            "from frozen project policy"
+        )
+    if snapshot_pause_policy.get("gate_delegate") != "spark":
         violations.append(
             f"request {request_id} snapshot is not Spark-delegated"
         )
@@ -804,21 +875,43 @@ def _eligibility_violations(
                 f"request {request_id} has no checkpoint eligibility snapshot",
             ]
         status = str(checkpoint.get("status") or "")
-        if status not in {"pass", "warn"}:
+        if status != "warn":
             violations.append(
-                f"request {request_id} checkpoint status={status} "
-                "is not delegation-eligible"
+                f"request {request_id} automatic checkpoint status="
+                f"{status}, expected=warn"
             )
-        if gate_kind not in CHECKPOINT_GATE_KINDS:
+        if gate_kind != "band_checkpoint_pause":
             violations.append(
-                f"request {request_id} unsupported checkpoint gate_kind="
-                f"{gate_kind}"
+                f"request {request_id} checkpoint gate_kind={gate_kind}, "
+                "expected=band_checkpoint_pause"
             )
-        expected_scope = (
-            "band"
-            if checkpoint.get("boundary_kind") == "band_end"
-            else "chapter"
+        trigger_source = str(checkpoint.get("trigger_source") or "")
+        if trigger_source != "auto_band_end":
+            violations.append(
+                f"request {request_id} automatic checkpoint "
+                f"trigger_source={trigger_source}, expected=auto_band_end"
+            )
+        if checkpoint.get("boundary_kind") != "band_end":
+            violations.append(
+                f"request {request_id} automatic checkpoint "
+                f"boundary_kind={checkpoint.get('boundary_kind')}, "
+                "expected=band_end"
+            )
+        action = str(
+            snapshot_pause_policy.get("band_checkpoint_action") or ""
         )
+        if action not in {"pause_on_warn", "pause_always"}:
+            violations.append(
+                f"request {request_id} automatic checkpoint policy "
+                f"action={action} is not pausing"
+            )
+        source_status = str(source.get("status") or "")
+        if source_status not in {"warn", "overridden"}:
+            violations.append(
+                f"request {request_id} automatic checkpoint source "
+                f"status={source_status} is inconsistent with a "
+                "delegated warning"
+            )
         for key, expected in (
             ("id", object_id),
             ("project_id", request.get("project_id")),
@@ -830,12 +923,17 @@ def _eligibility_violations(
                     f"request {request_id} checkpoint.{key}="
                     f"{checkpoint.get(key)!r}, expected={expected!r}"
                 )
-        if request.get("scope") != expected_scope:
+        if request.get("scope") != "band":
             violations.append(
                 f"request {request_id} checkpoint scope="
-                f"{request.get('scope')}, expected={expected_scope}"
+                f"{request.get('scope')}, expected=band"
             )
-        for key in ("band_id", "boundary_kind", "boundary_chapter"):
+        for key in (
+            "band_id",
+            "trigger_source",
+            "boundary_kind",
+            "boundary_chapter",
+        ):
             if source.get(key) != checkpoint.get(key):
                 violations.append(
                     f"request {request_id} checkpoint source {key} mismatch"
@@ -866,6 +964,10 @@ def _eligibility_violations(
         ]
     chapter_number = int(request.get("chapter_number") or 0)
     interval = int(snapshot.get("review_interval_chapters") or 0)
+    if snapshot_pause_policy.get("review_interval_chapters") != interval:
+        violations.append(
+            f"request {request_id} review interval policy mismatch"
+        )
     if interval <= 0 or chapter_number <= 0 or chapter_number % interval:
         violations.append(
             f"request {request_id} chapter {chapter_number} is not on "
@@ -882,6 +984,19 @@ def _eligibility_violations(
     if not _review_snapshot_is_eligible(snapshot.get("review_verdict")):
         violations.append(
             f"request {request_id} review verdict is not Canon-eligible"
+        )
+    last_requested = int(
+        (task or {}).get("run_until_chapter") or 0
+    )
+    if last_requested <= 0:
+        violations.append(
+            f"request {request_id} task has no deterministic last "
+            "requested chapter"
+        )
+    elif chapter_number == last_requested:
+        violations.append(
+            f"request {request_id} is at task last requested chapter "
+            f"{last_requested}"
         )
     if source.get("chapter_number") != chapter_number:
         violations.append(
@@ -925,6 +1040,9 @@ def spark_delegation_violations(
     *,
     project_id: str,
     delegate: str,
+    tasks: Any,
+    frozen_pause_policy: Any,
+    candidate_spark_model: str,
 ) -> list[str]:
     if not isinstance(spark, dict):
         return ["Spark evidence must be an object"]
@@ -936,16 +1054,32 @@ def spark_delegation_violations(
         "related_gate_objects",
         violations,
     )
+    roots = _evidence_rows(spark, "causal_roots", violations)
     if violations:
         return violations
     if delegate == "human":
-        if events or traces or sources:
+        if events or traces or sources or roots:
             violations.append(
                 "human cell unexpectedly contains Spark delegation evidence"
             )
         return violations
     if delegate != "spark":
         return [f"unsupported gate delegate={delegate}"]
+    if not isinstance(tasks, list):
+        violations.append("collected tasks must be a list")
+        task_rows: list[dict[str, Any]] = []
+    else:
+        task_rows = [
+            task for task in tasks if isinstance(task, dict)
+        ]
+        if len(task_rows) != len(tasks):
+            violations.append("collected tasks contain a non-object row")
+    if not isinstance(frozen_pause_policy, dict):
+        violations.append("frozen pause policy must be an object")
+        frozen_pause_policy = {}
+    candidate_spark_model = str(candidate_spark_model or "").strip()
+    if not candidate_spark_model:
+        violations.append("candidate Spark model is empty")
 
     _unique_rows(
         events,
@@ -963,6 +1097,18 @@ def spark_delegation_violations(
         sources,
         key="request_event_id",
         label="related gate object",
+        violations=violations,
+    )
+    _unique_rows(
+        roots,
+        key="id",
+        label="causal root event",
+        violations=violations,
+    )
+    tasks_by_id = _unique_rows(
+        task_rows,
+        key="task_id",
+        label="generation task",
         violations=violations,
     )
     for event in events:
@@ -1041,6 +1187,7 @@ def spark_delegation_violations(
     consumed_trace_events: set[str] = set()
     consumed_terminals: set[str] = set()
     consumed_approvals: set[str] = set()
+    consumed_roots: set[str] = set()
     for request in requests:
         request_id = str(request.get("id") or "")
         payload = request.get("payload")
@@ -1052,6 +1199,11 @@ def spark_delegation_violations(
             violations.append(f"request {request_id} has no gate_kind")
         if not requested_model:
             violations.append(f"request {request_id} has no requested_model")
+        elif requested_model != candidate_spark_model:
+            violations.append(
+                f"request {request_id} requested model={requested_model}, "
+                f"candidate={candidate_spark_model}"
+            )
         if payload.get("related_object_type") != request.get(
             "related_object_type"
         ):
@@ -1064,8 +1216,53 @@ def spark_delegation_violations(
             violations.append(
                 f"request {request_id} related object id payload mismatch"
             )
-        if not request.get("causal_root_id"):
+        task_id = str(request.get("task_id") or "")
+        task = tasks_by_id.get(task_id)
+        if task is None:
+            violations.append(
+                f"request {request_id} task {task_id} is not in "
+                "collected tasks"
+            )
+        elif task.get("project_id") != project_id:
+            violations.append(
+                f"request {request_id} task project identity mismatch"
+            )
+        causal_root_id = str(request.get("causal_root_id") or "")
+        if not causal_root_id:
             violations.append(f"request {request_id} has no causal root")
+        matching_roots = [
+            root for root in roots if root.get("id") == causal_root_id
+        ]
+        if len(matching_roots) != 1:
+            violations.append(
+                f"request {request_id} has {len(matching_roots)} "
+                "causal root events"
+            )
+        else:
+            root = matching_roots[0]
+            consumed_roots.add(causal_root_id)
+            expected_root = {
+                "project_id": project_id,
+                "task_id": task_id,
+                "scope": "task",
+                "related_object_type": "generation_task",
+                "related_object_id": task_id,
+                "parent_event_id": "",
+                "causal_root_id": causal_root_id,
+            }
+            if root.get("event_type") not in {
+                "generation_requested",
+                "continue_requested",
+            }:
+                violations.append(
+                    f"request {request_id} causal root event_type="
+                    f"{root.get('event_type')} is invalid"
+                )
+            for key, expected in expected_root.items():
+                if root.get(key) != expected:
+                    violations.append(
+                        f"request {request_id} causal root {key} mismatch"
+                    )
         violations.extend(
             _gate_outcome_violations(
                 payload,
@@ -1397,6 +1594,8 @@ def spark_delegation_violations(
                 request,
                 trace,
                 sources_by_request.get(request_id),
+                task,
+                frozen_pause_policy,
             )
         )
 
@@ -1414,10 +1613,14 @@ def spark_delegation_violations(
         approval_id = str(approval.get("id") or "")
         if approval_id not in consumed_approvals:
             violations.append(f"orphan Spark approval event {approval_id}")
+    for root in roots:
+        root_id = str(root.get("id") or "")
+        if root_id not in consumed_roots:
+            violations.append(f"orphan causal root event {root_id}")
     return violations
 
 
-def verified_spark_decision_count(
+def verified_spark_request_count(
     evidence: dict[str, Any],
 ) -> int:
     cell = evidence.get("manifest_cell") or {}
@@ -1428,6 +1631,13 @@ def verified_spark_decision_count(
         spark,
         project_id=str(project.get("id") or ""),
         delegate=delegate,
+        tasks=evidence.get("tasks"),
+        frozen_pause_policy=(
+            (evidence.get("policy") or {}).get("policy") or {}
+        ).get("pause"),
+        candidate_spark_model=str(
+            evidence.get("candidate_spark_model") or ""
+        ),
     ):
         return 0
     if not isinstance(spark, dict):
@@ -1439,7 +1649,7 @@ def verified_spark_decision_count(
         1
         for event in events
         if isinstance(event, dict)
-        and event.get("event_type") == "gate_delegation_decided"
+        and event.get("event_type") == "gate_delegation_requested"
     )
 
 
@@ -1669,6 +1879,11 @@ def validate_completed_run(
             evidence["operational"].get("spark"),
             project_id=str(project["id"]),
             delegate=delegate,
+            tasks=evidence.get("tasks"),
+            frozen_pause_policy=pause,
+            candidate_spark_model=str(
+                evidence.get("candidate_spark_model") or ""
+            ),
         )
     )
     violations.extend(
@@ -1682,12 +1897,12 @@ def validate_completed_run(
 
 
 def matrix_operational_violations(results: dict[str, Any]) -> list[str]:
-    decided = sum(
-        verified_spark_decision_count(item["evidence"])
+    requested = sum(
+        verified_spark_request_count(item["evidence"])
         for item in results.values()
         if (item["evidence"].get("manifest_cell") or {}).get("delegate") == "spark"
     )
-    if decided <= 0:
+    if requested <= 0:
         return ["matrix has no live Spark delegation request evidence"]
     return []
 
@@ -1758,6 +1973,9 @@ async def run(args: argparse.Namespace) -> int:
         args,
         runtime_image_id=str(identity["runtime_image"]["image_id"]),
         browser_image_id=str(identity["browser_image"]["image_id"]),
+    )
+    args.candidate_spark_model = str(
+        identity["candidate_stack"].get("spark_model") or ""
     )
     output = args.output_dir.resolve()
     prepare_output_directory(output)

@@ -56,48 +56,269 @@ TEST_CONTAINER_SUFFIXES = {
 }
 
 
-def test_live_recovery_runbook_commands_match_controller_contract() -> None:
-    runbook = RECOVERY_RUNBOOK_PATH.read_text(encoding="utf-8")
-    bash_blocks = re.findall(r"```bash\n(.*?)\n```", runbook, re.DOTALL)
-    command_paragraphs = [
-        paragraph
-        for block in bash_blocks
-        for paragraph in re.split(r"\n\s*\n", block)
-        if re.match(
-            r"uv run python \.artifacts/rc-candidate/\w+_recovery\.py run",
-            paragraph,
+def module_assignment_literal(tree: ast.Module, name: str):
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
         )
     ]
+    assert len(assignments) == 1, f"expected one {name} assignment"
+    return ast.literal_eval(assignments[0].value)
 
-    commands = []
-    for paragraph in command_paragraphs:
-        tokens = shlex.split(paragraph.replace("\\\n", " "))
-        assert tokens[:3] == ["uv", "run", "python"]
-        assert tokens[4] == "run"
-        option_tokens = tokens[5:]
-        assert len(option_tokens) % 2 == 0
-        options = dict(zip(option_tokens[::2], option_tokens[1::2]))
-        assert len(options) == len(option_tokens) // 2
-        commands.append((tokens[3], options))
 
-    expected_runner_by_fault = {}
+def recovery_runner_contracts(
+) -> dict[str, tuple[tuple[str, ...], dict[str, int]]]:
+    contracts = {}
     root = Path(__file__).parents[2]
     for runner_path in RECOVERY_RUNNER_PATHS:
         tree = ast.parse(
             runner_path.read_text(encoding="utf-8"),
             filename=str(runner_path),
         )
-        supported_faults = next(
-            ast.literal_eval(node.value)
+        parse_args_functions = [
+            node
             for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "parse_args"
+        ]
+        assert len(parse_args_functions) == 1
+        parse_args_function = parse_args_functions[0]
+        run_parser_assignments = [
+            node
+            for node in ast.walk(parse_args_function)
             if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name)
-                and target.id == "SUPPORTED_FAULTS"
-                for target in node.targets
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "add_parser"
+            and node.value.args
+            and isinstance(node.value.args[0], ast.Constant)
+            and node.value.args[0].value == "run"
+        ]
+        assert len(run_parser_assignments) == 1
+        run_parser_assignment = run_parser_assignments[0]
+        assert len(run_parser_assignment.targets) == 1
+        run_parser_target = run_parser_assignment.targets[0]
+        assert isinstance(run_parser_target, ast.Name)
+
+        option_arity = {}
+        fault_choices_name = None
+        for node in ast.walk(parse_args_function):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == run_parser_target.id
+            ):
+                continue
+            option_names = tuple(
+                argument.value
+                for argument in node.args
+                if isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
             )
+            assert len(option_names) == len(node.args) == 1
+            option = option_names[0]
+            assert option.startswith("--")
+            keywords = {
+                keyword.arg: keyword.value
+                for keyword in node.keywords
+                if keyword.arg is not None
+            }
+            assert ast.literal_eval(keywords["required"]) is True
+            if option == "--fault-kind":
+                choices = keywords.get("choices")
+                assert isinstance(choices, ast.Name)
+                fault_choices_name = choices.id
+            assert "action" not in keywords
+            arity = (
+                ast.literal_eval(keywords["nargs"])
+                if "nargs" in keywords
+                else 1
+            )
+            assert arity == 1, f"{option} must accept exactly one value"
+            assert option not in option_arity
+            option_arity[option] = arity
+
+        assert fault_choices_name is not None
+        supported_faults = module_assignment_literal(
+            tree,
+            fault_choices_name,
         )
+        assert isinstance(supported_faults, tuple)
+        assert all(isinstance(fault, str) for fault in supported_faults)
         runner = runner_path.relative_to(root).as_posix()
+        contracts[runner] = (supported_faults, option_arity)
+
+    assert len(contracts) == 3
+    return contracts
+
+
+def live_recovery_command_block(runbook: str) -> str:
+    sections = re.findall(
+        r"^## Live Recovery Faults[ \t]*\n(.*?)(?=^## |\Z)",
+        runbook,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert len(sections) == 1, "expected one Live Recovery Faults section"
+    bash_blocks = re.findall(
+        r"^```bash[ \t]*\n(.*?)^```[ \t]*$",
+        sections[0],
+        re.DOTALL | re.MULTILINE,
+    )
+    assert len(bash_blocks) == 2, (
+        "live recovery section must contain setup and command bash blocks"
+    )
+    return bash_blocks[1]
+
+
+def parse_live_recovery_commands(
+    runbook: str,
+) -> list[tuple[str, dict[str, str]]]:
+    contracts = recovery_runner_contracts()
+    command_block = live_recovery_command_block(runbook)
+    commands = []
+    for paragraph in re.split(r"\n\s*\n", command_block):
+        lines = paragraph.splitlines()
+        if not lines or all(
+            line.lstrip().startswith("#") for line in lines
+        ):
+            continue
+        assert all(line.endswith("\\") for line in lines[:-1]), (
+            "malformed command continuation"
+        )
+        assert not lines[-1].endswith("\\"), (
+            "malformed terminal command continuation"
+        )
+        try:
+            tokens = shlex.split(paragraph.replace("\\\n", " "))
+        except ValueError as exc:
+            raise AssertionError("malformed shell invocation") from exc
+        assert tokens, "empty command paragraph"
+        if tokens[0] == "export":
+            assert len(tokens) > 1 and all(
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token)
+                for token in tokens[1:]
+            ), "malformed export invocation"
+            continue
+
+        assert len(tokens) >= 5 and tokens[:3] == [
+            "uv",
+            "run",
+            "python",
+        ], "runner command shape must start with uv run python"
+        runner = tokens[3]
+        assert runner in contracts, (
+            "runner path must be one of the three canonical runner paths"
+        )
+        assert tokens[4] == "run", "runner must use the run subcommand"
+        _, option_arity = contracts[runner]
+        options = {}
+        index = 5
+        while index < len(tokens):
+            option = tokens[index]
+            assert option.startswith("--"), (
+                f"unexpected positional token: {option}"
+            )
+            assert option in option_arity, f"unknown option: {option}"
+            assert option not in options, f"duplicate option: {option}"
+            arity = option_arity[option]
+            values = tokens[index + 1 : index + 1 + arity]
+            assert len(values) == arity and not any(
+                value.startswith("--") for value in values
+            ), f"missing value for option: {option}"
+            options[option] = values[0]
+            index += arity + 1
+
+        missing_options = set(option_arity) - set(options)
+        assert not missing_options, (
+            "missing required options: " + ", ".join(sorted(missing_options))
+        )
+        commands.append((runner, options))
+
+    assert len(commands) == 11, (
+        "designated live recovery block must contain exactly 11 commands"
+    )
+    return commands
+
+
+def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
+    api_option = "  --api-url http://127.0.0.1:19099 \\\n"
+    mcp_option = "  --mcp-url http://127.0.0.1:19096/mcp \\\n"
+    first_evidence_dir = (
+        '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
+        '01-generation-precommit"'
+    )
+
+    replacements = {
+        "wrong_subcommand": (
+            "generation_projection_recovery.py run \\",
+            "generation_projection_recovery.py recover \\",
+        ),
+        "unsupported_runner_path": (
+            "generation_projection_recovery.py run \\",
+            "unexpected_recovery.py run \\",
+        ),
+        "unknown_option": (
+            api_option,
+            f"{api_option}  --unexpected value \\\n",
+        ),
+        "missing_option": (api_option, ""),
+        "duplicate_option": (api_option, api_option * 2),
+        "malformed_continuation": (
+            mcp_option,
+            mcp_option.removesuffix("\\\n") + "\n",
+        ),
+        "extra_positional": (
+            first_evidence_dir,
+            first_evidence_dir + " unexpected positional",
+        ),
+        "extra_command": (
+            '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
+            '11-publisher-account-risk"\n```',
+            '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
+            '11-publisher-account-risk"\n\n'
+            "echo unexpected\n```",
+        ),
+    }
+    old, new = replacements[mutation]
+    assert runbook.count(old) >= 1
+    return runbook.replace(old, new, 1)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("wrong_subcommand", "run subcommand"),
+        ("unsupported_runner_path", "canonical runner path"),
+        ("unknown_option", "unknown option"),
+        ("missing_option", "missing required options"),
+        ("duplicate_option", "duplicate option"),
+        ("malformed_continuation", "continuation"),
+        ("extra_positional", "unexpected positional"),
+        ("extra_command", "runner command shape"),
+    ],
+)
+def test_live_recovery_runbook_parser_rejects_mutations(
+    mutation: str,
+    message: str,
+) -> None:
+    runbook = RECOVERY_RUNBOOK_PATH.read_text(encoding="utf-8")
+    mutated = mutate_live_recovery_runbook(runbook, mutation)
+
+    with pytest.raises(AssertionError, match=message):
+        parse_live_recovery_commands(mutated)
+
+
+def test_live_recovery_runbook_commands_match_controller_contract() -> None:
+    runbook = RECOVERY_RUNBOOK_PATH.read_text(encoding="utf-8")
+    commands = parse_live_recovery_commands(runbook)
+    expected_runner_by_fault = {}
+    for runner, (supported_faults, _) in recovery_runner_contracts().items():
         for fault_kind in supported_faults:
             assert fault_kind not in expected_runner_by_fault
             expected_runner_by_fault[fault_kind] = runner

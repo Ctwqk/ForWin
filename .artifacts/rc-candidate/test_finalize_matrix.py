@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -137,6 +139,127 @@ def test_spark_cell_requires_terminal_delegation_for_every_request() -> None:
     item["operational"]["spark"]["gate_delegation_requested"] = 2
     violations = matrix.validate_cell("L60S", item)
     assert "Spark delegation terminal count=1, requested=2" in violations
+
+
+def test_spark_cell_without_eligible_pause_opportunity_can_complete() -> None:
+    item = evidence("L60S")
+    item["operational"]["spark"] = {
+        "gate_delegation_requested": 0,
+        "gate_delegation_decided": 0,
+        "gate_delegation_approved": 0,
+        "gate_delegation_failed": 0,
+    }
+
+    assert matrix.validate_cell("L60S", item) == []
+
+
+def test_matrix_requires_live_delegation_from_at_least_one_spark_cell() -> None:
+    results = {
+        name: {"evidence": evidence(name), "violations": []}
+        for name in matrix.EXPECTED_CELLS
+    }
+    for item in results.values():
+        if item["evidence"]["manifest_cell"]["delegate"] == "spark":
+            item["evidence"]["operational"]["spark"] = {
+                "gate_delegation_requested": 0,
+                "gate_delegation_decided": 0,
+                "gate_delegation_approved": 0,
+                "gate_delegation_failed": 0,
+            }
+
+    assert matrix.matrix_operational_violations(results) == [
+        "matrix has no live Spark delegation request evidence"
+    ]
+
+
+def test_matrix_accepts_delegation_from_any_spark_cell() -> None:
+    results = {
+        name: {"evidence": evidence(name), "violations": []}
+        for name in matrix.EXPECTED_CELLS
+    }
+    results["L60S"]["evidence"]["operational"]["spark"] = {
+        "gate_delegation_requested": 0,
+        "gate_delegation_decided": 0,
+        "gate_delegation_approved": 0,
+        "gate_delegation_failed": 0,
+    }
+
+    assert matrix.matrix_operational_violations(results) == []
+
+
+def test_finalizer_fails_without_matrix_level_live_spark_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    matrix_manifest = tmp_path / "matrix.json"
+    matrix_manifest.write_text(
+        json.dumps({"cells": {name: {} for name in matrix.EXPECTED_CELLS}}),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "audit"
+
+    async def fake_collect_cell(
+        _args: argparse.Namespace,
+        name: str,
+        _cell: dict,
+    ) -> dict:
+        item = evidence(name)
+        if item["manifest_cell"]["delegate"] == "spark":
+            item["operational"]["spark"] = {
+                "gate_delegation_requested": 0,
+                "gate_delegation_decided": 0,
+                "gate_delegation_approved": 0,
+                "gate_delegation_failed": 0,
+            }
+        return item
+
+    monkeypatch.setattr(matrix, "collect_cell", fake_collect_cell)
+    monkeypatch.setattr(
+        matrix,
+        "assert_matrix_identity",
+        lambda _manifest, _path: {
+            "source_sha": "a" * 40,
+            "code_changes_during_run": 0,
+            "runtime_image": {"image_id": "runtime-id"},
+            "browser_image": {"image_id": "browser-id"},
+        },
+    )
+    monkeypatch.setattr(
+        matrix,
+        "candidate_stack_identity",
+        lambda *_args, **_kwargs: {"compose_project": "candidate"},
+    )
+    monkeypatch.setenv(
+        "FORWIN_MATRIX_TEST_DATABASE_URL",
+        "postgresql://user:secret@127.0.0.1:5432/forwin",
+    )
+
+    status = asyncio.run(
+        matrix.run(
+            argparse.Namespace(
+                database_url_env="FORWIN_MATRIX_TEST_DATABASE_URL",
+                matrix_manifest=matrix_manifest,
+                output_dir=output_dir,
+                mcp_url="http://127.0.0.1:8896/mcp",
+                api_url="http://127.0.0.1:8899",
+                runtime_container=[],
+                browser_container=[],
+                dependency_container=[],
+            )
+        )
+    )
+
+    manifest = json.loads(
+        (output_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    report = (output_dir / "final-report.md").read_text(encoding="utf-8")
+    assert status == 1
+    assert manifest["result"] == "fail"
+    assert manifest["violations"] == [
+        "matrix has no live Spark delegation request evidence"
+    ]
+    assert "- Result: FAIL" in report
+    assert "- `matrix`: matrix has no live Spark delegation request evidence" in report
 
 
 def test_projection_and_canon_identity_fail_closed() -> None:

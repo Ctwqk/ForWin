@@ -986,6 +986,13 @@ def load_matrix_manifest(
                 "violations": [],
                 "evidence": evidence,
             }
+        matrix_violations = module.matrix_operational_violations(report_results)
+        if matrix_violations:
+            raise ManifestError(
+                "matrix final audit lacks live Spark delegation evidence"
+            )
+        if payload.get("violations") != matrix_violations:
+            raise ManifestError("matrix final audit violation ledger mismatch")
         final_report = payload.get("final_report") or {}
         report_path = Path(str(final_report.get("path") or ""))
         if not report_path.is_absolute():
@@ -995,7 +1002,11 @@ def load_matrix_manifest(
             or sha256_file(report_path) != final_report.get("sha256")
         ):
             raise ManifestError("matrix final audit report hash mismatch")
-        expected_report = module.final_report(identity, report_results)
+        expected_report = module.final_report(
+            identity,
+            report_results,
+            matrix_violations,
+        )
         if report_path.read_text(encoding="utf-8") != expected_report:
             raise ManifestError("matrix final audit report content mismatch")
         return {

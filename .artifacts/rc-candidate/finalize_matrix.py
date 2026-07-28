@@ -464,8 +464,6 @@ def validate_completed_run(
         spark.get("gate_delegation_failed") or 0
     )
     if delegate == "spark":
-        if requested <= 0:
-            violations.append("Spark cell has no delegation request evidence")
         if terminal != requested:
             violations.append(
                 f"Spark delegation terminal count={terminal}, requested={requested}"
@@ -473,6 +471,22 @@ def validate_completed_run(
     elif requested:
         violations.append(f"human cell unexpectedly requested Spark {requested} times")
     return violations
+
+
+def matrix_operational_violations(results: dict[str, Any]) -> list[str]:
+    requested = sum(
+        int(
+            (
+                (item["evidence"].get("operational") or {}).get("spark") or {}
+            ).get("gate_delegation_requested")
+            or 0
+        )
+        for item in results.values()
+        if (item["evidence"].get("manifest_cell") or {}).get("delegate") == "spark"
+    )
+    if requested <= 0:
+        return ["matrix has no live Spark delegation request evidence"]
+    return []
 
 
 def validate_cell(name: str, evidence: dict[str, Any]) -> list[str]:
@@ -485,8 +499,15 @@ def validate_cell(name: str, evidence: dict[str, Any]) -> list[str]:
     )
 
 
-def final_report(identity: dict[str, Any], results: dict[str, Any]) -> str:
-    all_passed = all(not item["violations"] for item in results.values())
+def final_report(
+    identity: dict[str, Any],
+    results: dict[str, Any],
+    matrix_violations: list[str] | None = None,
+) -> str:
+    matrix_violations = matrix_violations or []
+    all_passed = not matrix_violations and all(
+        not item["violations"] for item in results.values()
+    )
     lines = [
         "# ForWin v5 R6 Matrix Final Audit",
         "",
@@ -510,6 +531,8 @@ def final_report(identity: dict[str, Any], results: dict[str, Any]) -> str:
     if all_passed:
         lines.append("- All four matrix cells satisfy the R6 release invariants.")
     else:
+        for violation in matrix_violations:
+            lines.append(f"- `matrix`: {violation}")
         for name, item in results.items():
             for violation in item["violations"]:
                 lines.append(f"- `{name}`: {violation}")
@@ -547,13 +570,20 @@ async def run(args: argparse.Namespace) -> int:
             "evidence_path": str(cell_dir / "evidence.json"),
             "evidence_sha256": l200.sha256_file(cell_dir / "evidence.json"),
         }
-    passed = all(not item["violations"] for item in results.values())
+    matrix_violations = matrix_operational_violations(results)
+    passed = not matrix_violations and all(
+        not item["violations"] for item in results.values()
+    )
     report_path = output / "final-report.md"
-    l200.atomic_write(report_path, final_report(identity, results))
+    l200.atomic_write(
+        report_path,
+        final_report(identity, results, matrix_violations),
+    )
     audit_manifest = {
         "schema_version": MATRIX_AUDIT_SCHEMA_VERSION,
         "audited_at": now(),
         "result": "pass" if passed else "fail",
+        "violations": matrix_violations,
         "identity": identity,
         "auditor": {
             "path": str(Path(__file__).resolve()),

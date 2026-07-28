@@ -579,6 +579,7 @@ def write_matrix_audit(
             {
                 "schema_version": fixtures.matrix.MATRIX_AUDIT_SCHEMA_VERSION,
                 "result": "pass",
+                "violations": [],
                 "identity": {
                     "source_sha": SOURCE_SHA,
                     "code_changes_during_run": 0,
@@ -1560,6 +1561,35 @@ def test_final_rc_accepts_revalidated_matrix_audit(
     assert result["source_sha"] == SOURCE_SHA
     assert result["current_rc_source_sha"] == "b" * 40
     assert result["predecessor_delta"]["mode"] == "bounded_successor"
+
+
+def test_final_rc_rejects_matrix_without_live_spark_evidence(
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    for name in ("L60S", "L100"):
+        evidence_path = Path(payload["cells"][name]["evidence_path"])
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence["operational"]["spark"] = {
+            "gate_delegation_requested": 0,
+            "gate_delegation_decided": 0,
+            "gate_delegation_approved": 0,
+            "gate_delegation_failed": 0,
+        }
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        payload["cells"][name]["evidence_sha256"] = collector.sha256_file(
+            evidence_path
+        )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(collector.ManifestError, match="live Spark delegation"):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
 
 
 def test_final_rc_accepts_matrix_tools_executed_from_frozen_worktree(

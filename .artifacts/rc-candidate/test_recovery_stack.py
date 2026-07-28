@@ -212,6 +212,24 @@ def live_recovery_bash_blocks(runbook: str) -> tuple[str, str]:
     return bash_blocks[0], bash_blocks[1]
 
 
+def recovery_finalizer_bash_block(runbook: str) -> str:
+    sections = re.findall(
+        r"^## Finalize[ \t]*\n(.*?)(?=^## |\Z)",
+        runbook,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert len(sections) == 1, "expected one recovery Finalize section"
+    bash_blocks = re.findall(
+        r"^```bash[ \t]*\n(.*?)^```[ \t]*$",
+        sections[0],
+        re.DOTALL | re.MULTILINE,
+    )
+    assert len(bash_blocks) == 1, (
+        "recovery Finalize section must contain one finalizer Bash block"
+    )
+    return bash_blocks[0]
+
+
 def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
     assert "\r" not in setup_block, (
         "carriage return is forbidden in recovery setup block"
@@ -225,30 +243,7 @@ def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
 
     qdrant_bind = stack.COMPOSE_ENV["FORWIN_QDRANT_DEBUG_BIND"]
     minio_bind = stack.COMPOSE_ENV["FORWIN_RECOVERY_MINIO_API_BIND"]
-    expected_literals = {
-        "FORWIN_RECOVERY_DATABASE_URL": (
-            controller_recovery_database_url()
-        ),
-        "FORWIN_RECOVERY_QDRANT_URL": f"http://{qdrant_bind}",
-        "FORWIN_RECOVERY_QDRANT_COLLECTION": "chapter_memories",
-        "FORWIN_RECOVERY_MINIO_ENDPOINT": minio_bind,
-        "FORWIN_RECOVERY_MINIO_ACCESS_KEY": (
-            stack.ISOLATED_MINIO_ACCESS_KEY
-        ),
-        "FORWIN_RECOVERY_MINIO_SECRET_KEY": (
-            stack.ISOLATED_MINIO_SECRET_KEY
-        ),
-        "FORWIN_RECOVERY_MINIO_BUCKET": stack.COMPOSE_ENV[
-            "FORWIN_MINIO_BUCKET"
-        ],
-        "FORWIN_RECOVERY_MINIO_PREFIX": stack.COMPOSE_ENV[
-            "FORWIN_MINIO_PREFIX"
-        ],
-        "FORWIN_RECOVERY_MINIO_SECURE": stack.COMPOSE_ENV[
-            "FORWIN_MINIO_SECURE"
-        ],
-    }
-    special_exports = (
+    canonical_sequence = (
         (
             "FORWIN_RECOVERY_CANDIDATE_MANIFEST",
             (
@@ -257,6 +252,78 @@ def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
                 ')"',
             ),
             "$(realpath .artifacts/v5-rc/candidate-draft.json)",
+        ),
+        (
+            "FORWIN_RECOVERY_DATABASE_URL",
+            (
+                'export FORWIN_RECOVERY_DATABASE_URL="'
+                f'{controller_recovery_database_url()}"',
+            ),
+            controller_recovery_database_url(),
+        ),
+        (
+            "FORWIN_RECOVERY_QDRANT_URL",
+            (
+                'export FORWIN_RECOVERY_QDRANT_URL="'
+                f'http://{qdrant_bind}"',
+            ),
+            f"http://{qdrant_bind}",
+        ),
+        (
+            "FORWIN_RECOVERY_QDRANT_COLLECTION",
+            (
+                'export FORWIN_RECOVERY_QDRANT_COLLECTION='
+                '"chapter_memories"',
+            ),
+            "chapter_memories",
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_ENDPOINT",
+            (
+                'export FORWIN_RECOVERY_MINIO_ENDPOINT='
+                f'"{minio_bind}"',
+            ),
+            minio_bind,
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_ACCESS_KEY",
+            (
+                'export FORWIN_RECOVERY_MINIO_ACCESS_KEY="'
+                f'{stack.ISOLATED_MINIO_ACCESS_KEY}"',
+            ),
+            stack.ISOLATED_MINIO_ACCESS_KEY,
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_SECRET_KEY",
+            (
+                'export FORWIN_RECOVERY_MINIO_SECRET_KEY="'
+                f'{stack.ISOLATED_MINIO_SECRET_KEY}"',
+            ),
+            stack.ISOLATED_MINIO_SECRET_KEY,
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_BUCKET",
+            (
+                'export FORWIN_RECOVERY_MINIO_BUCKET="'
+                f'{stack.COMPOSE_ENV["FORWIN_MINIO_BUCKET"]}"',
+            ),
+            stack.COMPOSE_ENV["FORWIN_MINIO_BUCKET"],
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_PREFIX",
+            (
+                'export FORWIN_RECOVERY_MINIO_PREFIX="'
+                f'{stack.COMPOSE_ENV["FORWIN_MINIO_PREFIX"]}"',
+            ),
+            stack.COMPOSE_ENV["FORWIN_MINIO_PREFIX"],
+        ),
+        (
+            "FORWIN_RECOVERY_MINIO_SECURE",
+            (
+                'export FORWIN_RECOVERY_MINIO_SECURE="'
+                f'{stack.COMPOSE_ENV["FORWIN_MINIO_SECURE"]}"',
+            ),
+            stack.COMPOSE_ENV["FORWIN_MINIO_SECURE"],
         ),
         (
             "RECOVERY_RUN_ID",
@@ -275,81 +342,61 @@ def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
                 "$RECOVERY_RUN_ID"
             ),
         ),
+        (
+            None,
+            ('test ! -e "$RECOVERY_EVIDENCE_ROOT"',),
+            None,
+        ),
     )
 
     lines = setup_block[:-1].split("\n")
     exports = {}
-    test_seen = False
     index = 0
-    while index < len(lines):
-        matched_special = False
-        for name, physical_lines, value in special_exports:
-            width = len(physical_lines)
-            if tuple(lines[index : index + width]) != physical_lines:
-                continue
-            assert name not in exports, f"duplicate setup export: {name}"
+    for name, physical_lines, value in canonical_sequence:
+        width = len(physical_lines)
+        assert tuple(lines[index : index + width]) == physical_lines, (
+            "recovery setup export/test paragraphs must match the "
+            "canonical sequence"
+        )
+        if name is not None:
             exports[name] = value
-            index += width
-            matched_special = True
-            break
-        if matched_special:
-            continue
-
-        line = lines[index]
-        if line == 'test ! -e "$RECOVERY_EVIDENCE_ROOT"':
-            assert not test_seen, "duplicate recovery setup existence test"
-            assert index == len(lines) - 1, (
-                "recovery setup existence test must be terminal"
-            )
-            test_seen = True
-            index += 1
-            continue
-
-        match = re.fullmatch(
-            r'export ([A-Z][A-Z0-9_]*)="([^"$`\\]*)"',
-            line,
-        )
-        assert match is not None, (
-            "setup export must use the canonical literal grammar"
-        )
-        name, value = match.groups()
-        assert name in expected_literals, f"unknown setup export: {name}"
-        assert name not in exports, f"duplicate setup export: {name}"
-        assert value == expected_literals[name], (
-            f"setup export {name} must match the controller contract"
-        )
-        exports[name] = value
-        index += 1
-
-    expected_names = set(expected_literals) | {
-        name for name, _, _ in special_exports
-    }
-    assert set(exports) == expected_names, (
-        "recovery setup exports must match the strict allowlist"
+        index += width
+    assert index == len(lines), (
+        "recovery setup export/test sequence must contain no extra command"
     )
-    assert test_seen, "recovery setup existence test is required"
     return exports
 
 
-def normalize_live_recovery_command(paragraph: str) -> str:
+def normalize_restricted_shell_command(
+    paragraph: str,
+    command_kind: str,
+) -> str:
     assert "\r" not in paragraph, (
-        "carriage return is forbidden in runner command block"
+        f"carriage return is forbidden in {command_kind} command block"
     )
     assert "\0" not in paragraph, (
-        "NUL is forbidden in runner command block"
+        f"NUL is forbidden in {command_kind} command block"
+    )
+    assert "'" not in paragraph, (
+        f"single quote is forbidden in {command_kind} command block"
     )
     lines = paragraph.split("\n")
-    assert lines and all(lines), "empty physical runner command line"
+    assert lines and all(lines), (
+        f"empty physical {command_kind} command line"
+    )
     assert all(
         line.endswith("\\") and not line.endswith("\\\\")
         for line in lines[:-1]
-    ), "malformed command continuation"
+    ), f"malformed {command_kind} command continuation"
     assert not lines[-1].endswith("\\"), (
-        "malformed terminal command continuation"
+        f"malformed terminal {command_kind} command continuation"
     )
     normalized = paragraph.replace("\\\n", "")
     assert "\n" not in normalized, (
-        "noncanonical command continuation"
+        f"noncanonical {command_kind} command continuation"
+    )
+    assert "'" not in normalized, (
+        f"single quote is forbidden in normalized {command_kind} command"
     )
     return normalized
 
@@ -365,6 +412,139 @@ def assert_canonical_option_source(
     )
     assert re.search(pattern, normalized) is not None, (
         f"{option} must use its canonical shell value"
+    )
+
+
+def parse_recovery_finalizer_command(
+    runbook: str,
+    runner_commands: list[tuple[str, dict[str, str]]],
+) -> None:
+    finalizer_block = recovery_finalizer_bash_block(runbook)
+    assert "\r" not in finalizer_block, (
+        "carriage return is forbidden in recovery finalizer block"
+    )
+    assert "\0" not in finalizer_block, (
+        "NUL is forbidden in recovery finalizer block"
+    )
+    assert "'" not in finalizer_block, (
+        "single quote is forbidden in recovery finalizer block"
+    )
+    assert finalizer_block.endswith("\n"), (
+        "recovery finalizer block must end with a newline"
+    )
+    paragraphs = re.split(
+        r"\n[ \t]*\n",
+        finalizer_block[:-1],
+    )
+    assert len(paragraphs) == 2, (
+        "recovery finalizer block must contain exact setup and command "
+        "paragraphs"
+    )
+    setup_paragraph, command_paragraph = paragraphs
+    canonical_setup_lines = (
+        'export RECOVERY_FINAL_DIR="$(',
+        "  pwd -P",
+        ')/.artifacts/v5-recovery-final/$RECOVERY_RUN_ID"',
+        'test ! -e "$RECOVERY_FINAL_DIR"',
+    )
+    assert tuple(setup_paragraph.split("\n")) == canonical_setup_lines, (
+        "recovery finalizer setup must create and test one new final directory"
+    )
+
+    normalized = normalize_restricted_shell_command(
+        command_paragraph,
+        "finalizer",
+    )
+    assert re.search(r"\$\(|[`;&|<>]", normalized) is None, (
+        "shell metacharacter is forbidden in finalizer command block"
+    )
+    try:
+        tokens = shlex.split(normalized)
+    except ValueError as exc:
+        raise AssertionError("malformed finalizer shell invocation") from exc
+
+    root = Path(__file__).parents[2]
+    finalizer_path = FINALIZER_PATH.relative_to(root).as_posix()
+    assert len(tokens) >= 4 and tokens[:4] == [
+        "uv",
+        "run",
+        "python",
+        finalizer_path,
+    ], "finalizer command must use the one canonical finalizer path"
+    assert len(runner_commands) == 11, (
+        "finalizer contract requires exactly eleven runner commands"
+    )
+    expected_options = (
+        "--candidate-manifest",
+        *(("--fault-report",) * len(runner_commands)),
+        "--output",
+    )
+    option_tokens = tokens[4:]
+    assert len(option_tokens) == len(expected_options) * 2, (
+        "finalizer command must contain one value at every exact option "
+        "position"
+    )
+    observed_options = tuple(option_tokens[::2])
+    option_values = tuple(option_tokens[1::2])
+    assert observed_options == expected_options, (
+        "finalizer options must be one candidate manifest, eleven fault "
+        "reports, and one output in canonical order"
+    )
+    assert not any(value.startswith("--") for value in option_values), (
+        "finalizer option value is missing"
+    )
+
+    candidate_manifest = option_values[0]
+    fault_reports = option_values[1:-1]
+    output = option_values[-1]
+    assert candidate_manifest == "$FORWIN_RECOVERY_CANDIDATE_MANIFEST", (
+        "finalizer candidate manifest must use the canonical setup variable"
+    )
+    assert output == "$RECOVERY_FINAL_DIR/manifest.json", (
+        "finalizer output must lie in the new recovery final directory"
+    )
+
+    finalizer_children = []
+    for report in fault_reports:
+        match = re.fullmatch(
+            r"\$RECOVERY_EVIDENCE_ROOT/"
+            r"(?P<child>[0-9]{2}-[a-z0-9]+(?:-[a-z0-9]+)*)/"
+            r"fault-report\.json",
+            report,
+        )
+        assert match is not None, (
+            "finalizer fault report must be a canonical runner child report"
+        )
+        finalizer_children.append(match.group("child"))
+
+    runner_children = []
+    for _, options in runner_commands:
+        evidence_dir = options["--evidence-dir"]
+        prefix = "$RECOVERY_EVIDENCE_ROOT/"
+        assert evidence_dir.startswith(prefix)
+        runner_children.append(evidence_dir.removeprefix(prefix))
+
+    assert len(set(finalizer_children)) == len(runner_commands), (
+        "finalizer fault reports must cover every runner child exactly once"
+    )
+    assert finalizer_children == runner_children, (
+        "finalizer fault reports must match runner evidence children in order"
+    )
+
+    canonical_command_lines = [
+        f"uv run python {finalizer_path} \\",
+        (
+            '  --candidate-manifest '
+            '"$FORWIN_RECOVERY_CANDIDATE_MANIFEST" \\'
+        ),
+        *(
+            f'  --fault-report "{report}" \\'
+            for report in fault_reports
+        ),
+        '  --output "$RECOVERY_FINAL_DIR/manifest.json"',
+    ]
+    assert command_paragraph.split("\n") == canonical_command_lines, (
+        "finalizer command lines must use the exact restricted shell grammar"
     )
 
 
@@ -397,7 +577,10 @@ def parse_live_recovery_commands(
             line.lstrip().startswith("#") for line in lines
         ):
             continue
-        normalized = normalize_live_recovery_command(paragraph)
+        normalized = normalize_restricted_shell_command(
+            paragraph,
+            "runner",
+        )
         assert re.search(r"\$\(|[`;&|<>]", normalized) is None, (
             "shell metacharacter is forbidden in runner command block"
         )
@@ -416,6 +599,9 @@ def parse_live_recovery_commands(
             "runner path must be one of the three canonical runner paths"
         )
         assert tokens[4] == "run", "runner must use the run subcommand"
+        assert lines[0] == f"uv run python {runner} run \\", (
+            "runner command first line must use its exact canonical path"
+        )
         supported_faults, option_arity = contracts[runner]
         options = {}
         index = 5
@@ -492,6 +678,23 @@ def parse_live_recovery_commands(
                 option,
                 source_value,
             )
+        expected_option_order = tuple(option_arity)
+        assert tuple(options) == expected_option_order, (
+            "runner options must use their AST-derived order"
+        )
+        canonical_command_lines = [
+            f"uv run python {runner} run \\",
+            *(
+                (
+                    f"  {option} {canonical_sources[option]}"
+                    + (" \\" if position < len(expected_option_order) - 1 else "")
+                )
+                for position, option in enumerate(expected_option_order)
+            ),
+        ]
+        assert lines == canonical_command_lines, (
+            "runner option lines must use the exact restricted shell grammar"
+        )
         commands.append((runner, options))
 
     assert len(commands) == 11, (
@@ -509,6 +712,7 @@ def parse_live_recovery_commands(
     assert observed_runner_faults == expected_runner_faults, (
         "runner commands must cover every AST-derived fault exactly once"
     )
+    parse_recovery_finalizer_command(runbook, commands)
     return commands
 
 
@@ -532,6 +736,31 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
         'export FORWIN_RECOVERY_DATABASE_URL="'
         f'{controller_recovery_database_url()}"\n'
     )
+    candidate_manifest_export = (
+        'export FORWIN_RECOVERY_CANDIDATE_MANIFEST="$(\n'
+        "  realpath .artifacts/v5-rc/candidate-draft.json\n"
+        ')"\n'
+    )
+    qdrant_url_export = (
+        'export FORWIN_RECOVERY_QDRANT_URL="'
+        f'http://{stack.COMPOSE_ENV["FORWIN_QDRANT_DEBUG_BIND"]}"\n'
+    )
+    qdrant_collection_export = (
+        'export FORWIN_RECOVERY_QDRANT_COLLECTION="chapter_memories"\n'
+    )
+    minio_secure_export = (
+        'export FORWIN_RECOVERY_MINIO_SECURE="'
+        f'{stack.COMPOSE_ENV["FORWIN_MINIO_SECURE"]}"\n'
+    )
+    recovery_run_id_export = (
+        'export RECOVERY_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"\n'
+    )
+    recovery_evidence_root_export = (
+        'export RECOVERY_EVIDENCE_ROOT="$(\n'
+        "  pwd -P\n"
+        ')/.artifacts/v5-recovery-live/$RECOVERY_RUN_ID"\n'
+    )
+    setup_test_end = 'test ! -e "$RECOVERY_EVIDENCE_ROOT"\n```'
     first_fault_id = (
         '  --fault-id "${RECOVERY_RUN_ID}-01-generation-precommit" \\\n'
     )
@@ -543,10 +772,39 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
         '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
         '01-generation-precommit"'
     )
+    first_runner_line = (
+        "uv run python .artifacts/rc-candidate/"
+        "generation_projection_recovery.py run \\\n"
+    )
+    database_url_env_option = (
+        "  --database-url-env FORWIN_RECOVERY_DATABASE_URL \\\n"
+    )
+    first_runner_tail = (
+        first_fault_id
+        + candidate_manifest_option
+        + mcp_option
+        + api_option
+        + database_url_env_option
+        + first_evidence_dir
+    )
     command_block_end = (
         '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
         '11-publisher-account-risk"\n```'
     )
+    root = Path(__file__).parents[2]
+    finalizer_path = FINALIZER_PATH.relative_to(root).as_posix()
+    finalizer_command_line = f"uv run python {finalizer_path} \\\n"
+    first_finalizer_report = (
+        '  --fault-report "$RECOVERY_EVIDENCE_ROOT/'
+        '01-generation-precommit/fault-report.json" \\\n'
+    )
+    second_finalizer_report = (
+        '  --fault-report "$RECOVERY_EVIDENCE_ROOT/'
+        '02-generation-postcommit/fault-report.json" \\\n'
+    )
+    finalizer_output = '  --output "$RECOVERY_FINAL_DIR/manifest.json"'
+    finalizer_block_end = finalizer_output + "\n```"
+    finalizer_test = 'test ! -e "$RECOVERY_FINAL_DIR"\n'
 
     def append_command(paragraph: str) -> str:
         return command_block_end.replace(
@@ -563,12 +821,46 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
             "generation_projection_recovery.py run \\",
             "unexpected_recovery.py run \\",
         ),
+        "single_quoted_split_runner_path": (
+            first_runner_line,
+            (
+                "uv run python '.artifacts/rc-candidate/"
+                "generation_projection_reco\\\n"
+                "very.py' run \\\n"
+            ),
+        ),
+        "single_quoted_uv": (
+            first_runner_line,
+            first_runner_line.replace("uv run", "'uv' run", 1),
+        ),
+        "single_quoted_runner_path": (
+            first_runner_line,
+            first_runner_line.replace(
+                ".artifacts/rc-candidate/"
+                "generation_projection_recovery.py",
+                "'.artifacts/rc-candidate/"
+                "generation_projection_recovery.py'",
+            ),
+        ),
+        "single_quoted_run_subcommand": (
+            first_runner_line,
+            first_runner_line.replace(" run \\\n", " 'run' \\\n"),
+        ),
         "unknown_option": (
             api_option,
             f"{api_option}  --unexpected value \\\n",
         ),
         "missing_option": (api_option, ""),
         "duplicate_option": (api_option, api_option * 2),
+        "reordered_runner_options": (
+            mcp_option + api_option,
+            api_option + mcp_option,
+        ),
+        "collapsed_runner_option_lines": (
+            mcp_option + api_option,
+            mcp_option.removesuffix("\\\n")
+            + api_option.removeprefix("  "),
+        ),
         "malformed_continuation": (
             mcp_option,
             mcp_option.removesuffix("\\\n") + "\n",
@@ -614,6 +906,105 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
                 "02-generation-postcommit",
             ),
         ),
+        "candidate_manifest_not_first": (
+            candidate_manifest_export + database_export,
+            database_export + candidate_manifest_export,
+        ),
+        "evidence_root_before_run_id": (
+            recovery_run_id_export + recovery_evidence_root_export,
+            recovery_evidence_root_export + recovery_run_id_export,
+        ),
+        "swapped_plain_setup_exports": (
+            qdrant_url_export + qdrant_collection_export,
+            qdrant_collection_export + qdrant_url_export,
+        ),
+        "duplicate_setup_paragraph": (
+            database_export,
+            database_export * 2,
+        ),
+        "missing_setup_paragraph": (minio_secure_export, ""),
+        "setup_command_before_terminal_test": (
+            setup_test_end,
+            setup_test_end.replace(
+                "test ! -e",
+                "echo unexpected\n"
+                "test ! -e",
+            ),
+        ),
+        "setup_command_after_terminal_test": (
+            setup_test_end,
+            setup_test_end.replace(
+                "\n```",
+                "\necho unexpected\n```",
+            ),
+        ),
+        "renamed_paired_runner_child": (
+            first_runner_tail,
+            first_runner_tail.replace(
+                "01-generation-precommit",
+                "01-renamed",
+            ),
+        ),
+        "reordered_finalizer_inputs": (
+            first_finalizer_report + second_finalizer_report,
+            second_finalizer_report + first_finalizer_report,
+        ),
+        "renamed_finalizer_input": (
+            first_finalizer_report,
+            first_finalizer_report.replace(
+                "01-generation-precommit",
+                "01-renamed",
+            ),
+        ),
+        "missing_finalizer_input": (first_finalizer_report, ""),
+        "duplicate_finalizer_input": (
+            first_finalizer_report + second_finalizer_report,
+            first_finalizer_report * 2,
+        ),
+        "wrong_finalizer_path": (
+            finalizer_command_line,
+            finalizer_command_line.replace(
+                finalizer_path,
+                ".artifacts/rc-candidate/unexpected_finalizer.py",
+            ),
+        ),
+        "wrong_finalizer_subcommand": (
+            finalizer_command_line,
+            finalizer_command_line.replace(" \\\n", " run \\\n"),
+        ),
+        "single_quoted_finalizer_path": (
+            finalizer_command_line,
+            finalizer_command_line.replace(
+                finalizer_path,
+                f"'{finalizer_path}'",
+            ),
+        ),
+        "unknown_finalizer_option": (
+            finalizer_output,
+            "  --unexpected value \\\n" + finalizer_output,
+        ),
+        "extra_finalizer_command": (
+            finalizer_block_end,
+            finalizer_block_end.replace(
+                "\n```",
+                "\necho unexpected\n```",
+            ),
+        ),
+        "unsafe_finalizer_shell_expansion": (
+            finalizer_output,
+            finalizer_output.replace(
+                "manifest.json",
+                "manifest$\\\n(echo unsafe).json",
+            ),
+        ),
+        "wrong_finalizer_output": (
+            finalizer_output,
+            finalizer_output.replace(
+                "$RECOVERY_FINAL_DIR",
+                "$RECOVERY_EVIDENCE_ROOT",
+            ),
+        ),
+        "missing_finalizer_existence_test": (finalizer_test, ""),
         "unsafe_database_export": (
             database_export,
             (
@@ -714,9 +1105,15 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
     [
         ("wrong_subcommand", "run subcommand"),
         ("unsupported_runner_path", "canonical runner path"),
+        ("single_quoted_split_runner_path", "single quote"),
+        ("single_quoted_uv", "single quote"),
+        ("single_quoted_runner_path", "single quote"),
+        ("single_quoted_run_subcommand", "single quote"),
         ("unknown_option", "unknown option"),
         ("missing_option", "missing required options"),
         ("duplicate_option", "duplicate option"),
+        ("reordered_runner_options", "runner option"),
+        ("collapsed_runner_option_lines", "runner option"),
         ("malformed_continuation", "continuation"),
         ("command_substitution_continuation", "shell metacharacter"),
         ("carriage_return_in_option", "carriage return"),
@@ -727,6 +1124,26 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
             "mismatched_fault_evidence_suffix",
             "fault/evidence suffix",
         ),
+        ("candidate_manifest_not_first", "setup"),
+        ("evidence_root_before_run_id", "setup"),
+        ("swapped_plain_setup_exports", "setup"),
+        ("duplicate_setup_paragraph", "setup"),
+        ("missing_setup_paragraph", "setup"),
+        ("setup_command_before_terminal_test", "setup"),
+        ("setup_command_after_terminal_test", "setup"),
+        ("renamed_paired_runner_child", "finalizer"),
+        ("reordered_finalizer_inputs", "finalizer"),
+        ("renamed_finalizer_input", "finalizer"),
+        ("missing_finalizer_input", "finalizer"),
+        ("duplicate_finalizer_input", "finalizer"),
+        ("wrong_finalizer_path", "finalizer"),
+        ("wrong_finalizer_subcommand", "finalizer"),
+        ("single_quoted_finalizer_path", "finalizer"),
+        ("unknown_finalizer_option", "finalizer"),
+        ("extra_finalizer_command", "finalizer"),
+        ("unsafe_finalizer_shell_expansion", "finalizer"),
+        ("wrong_finalizer_output", "finalizer"),
+        ("missing_finalizer_existence_test", "finalizer"),
         ("unsafe_database_export", "setup export"),
         (
             "candidate_manifest_parameter_expansion",

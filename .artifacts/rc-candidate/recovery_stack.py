@@ -2435,6 +2435,106 @@ def require_active_recovery_run(
     }
 
 
+def require_interrupt_cleanup_run(
+    fault_id: str,
+) -> dict[str, Any]:
+    validated_fault = validated_fault_id(fault_id)
+    events = load_verified_events()
+    if not events:
+        raise StackError("interrupt cleanup has no recovery run")
+    if events[-1].get("action") in TERMINAL_ACTIONS:
+        raise StackError(
+            "recovery event log is terminal after "
+            f"{events[-1].get('action')}"
+        )
+    if not has_incomplete_fresh_up(events):
+        return {
+            **require_active_recovery_run(validated_fault),
+            "fresh_up_completed": True,
+        }
+    if (
+        len(events) != 1
+        or events[0].get("action") != "fresh_up_started"
+        or events[0].get("schema_version") != 2
+        or str(events[0].get("fault_id") or "") != validated_fault
+    ):
+        raise StackError(
+            "interrupt cleanup requires one valid fresh-up prefix"
+        )
+    start = events[0]
+    run_identity = validate_run_identity(start.get("run_identity"))
+    volume_name = run_identity["database_volume_name"]
+    if start.get("database_volume") != {
+        "name": volume_name,
+        "exists": False,
+    }:
+        raise StackError(
+            "interrupt cleanup fresh-up did not begin with an absent volume"
+        )
+    normalized_utc_time(
+        start.get("requested_at"),
+        field="interrupt cleanup fresh-up requested_at",
+    )
+    return {
+        "fault_id": validated_fault,
+        "run_identity": run_identity,
+        "database_volume": None,
+        "identity": start.get("identity"),
+        "events": events,
+        "fresh_up_completed": False,
+    }
+
+
+def interrupt_cleanup_volume_observation(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    run_identity = context["run_identity"]
+    actual = database_volume_observation(run_identity)
+    absent = {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }
+    if actual == absent:
+        return actual
+    expected = context.get("database_volume")
+    if context.get("fresh_up_completed") is True:
+        if actual != expected:
+            raise StackError(
+                "interrupt cleanup database volume identity drifted"
+            )
+        return actual
+    created_at = actual.get("created_at")
+    if (
+        set(actual)
+        != {"name", "exists", "created_at", "fingerprint"}
+        or actual.get("name") != run_identity["database_volume_name"]
+        or actual.get("exists") is not True
+        or actual.get("fingerprint")
+        != stable_hash(
+            {
+                "created_at": created_at,
+                "name": run_identity["database_volume_name"],
+            }
+        )
+    ):
+        raise StackError(
+            "interrupt cleanup startup volume identity drifted"
+        )
+    created_time = normalized_utc_time(
+        created_at,
+        field="interrupt cleanup startup volume creation time",
+    )
+    requested_time = normalized_utc_time(
+        context["events"][0].get("requested_at"),
+        field="interrupt cleanup fresh-up requested_at",
+    )
+    if created_time < requested_time:
+        raise StackError(
+            "interrupt cleanup startup volume predates fresh-up"
+        )
+    return actual
+
+
 def destroyed_service_inventory(
     run_identity: dict[str, Any],
     *,
@@ -2865,25 +2965,29 @@ def fresh_up(fault_id: str) -> None:
                     run_identity,
                     fallback_timestamp=requested_at,
                 )
-                append_event(
-                    "interrupted_cleanup",
-                    _recorded_at=str(cleanup["after"]["observed_at"]),
-                    fault_id=validated_fault,
-                    requested_at=requested_at,
-                    identity=identity,
-                    run_identity=run_identity,
-                    interrupted_stage=failure_stage,
-                    database_volume_before=database_volume,
-                    database_volume=cleanup["database_volume"],
-                    cleanup_requested_at=cleanup["cleanup_requested_at"],
-                    cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
-                    cleanup_confirmed=cleanup_is_confirmed(
-                        cleanup,
-                        run_identity,
-                    ),
-                    cleanup_error=cleanup["cleanup_error"],
-                    after=cleanup["after"],
-                )
+                if cleanup_is_confirmed(cleanup, run_identity):
+                    append_event(
+                        "interrupted_cleanup",
+                        _recorded_at=str(
+                            cleanup["after"]["observed_at"]
+                        ),
+                        fault_id=validated_fault,
+                        requested_at=requested_at,
+                        identity=identity,
+                        run_identity=run_identity,
+                        interrupted_stage=failure_stage,
+                        database_volume_before=database_volume,
+                        database_volume=cleanup["database_volume"],
+                        cleanup_requested_at=cleanup[
+                            "cleanup_requested_at"
+                        ],
+                        cleanup_confirmed_at=cleanup[
+                            "cleanup_confirmed_at"
+                        ],
+                        cleanup_confirmed=True,
+                        cleanup_error=cleanup["cleanup_error"],
+                        after=cleanup["after"],
+                    )
             except BaseException:
                 pass
             raise
@@ -3669,7 +3773,7 @@ def abort_recovery_run(
 
 @mutating_controller_command
 def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
-    context = require_active_recovery_run(fault_id)
+    context = require_interrupt_cleanup_run(fault_id)
     run_identity = context["run_identity"]
     identity = assert_frozen()
     if identity != context["identity"]:
@@ -3677,10 +3781,7 @@ def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
             "recovery harness identity changed before interrupt cleanup"
         )
     assert_isolated_compose(identity, run_identity=run_identity)
-    database_volume_before = confirmed_database_volume(
-        run_identity,
-        context["database_volume"],
-    )
+    database_volume_before = interrupt_cleanup_volume_observation(context)
     requested_at = now()
     active_state = active_recovery_state(context["events"])
     cleanup = cleanup_recovery_run(
@@ -3688,6 +3789,10 @@ def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
         fallback_timestamp=requested_at,
     )
     confirmed = cleanup_is_confirmed(cleanup, run_identity)
+    if not confirmed:
+        raise StackError(
+            "interrupt cleanup did not confirm terminal resource removal"
+        )
     event = append_event(
         "interrupted_cleanup",
         _recorded_at=str(cleanup["after"]["observed_at"]),
@@ -3700,15 +3805,11 @@ def interrupt_cleanup_recovery_run(fault_id: str) -> dict[str, Any]:
         active_state=active_state,
         cleanup_requested_at=cleanup["cleanup_requested_at"],
         cleanup_confirmed_at=cleanup["cleanup_confirmed_at"],
-        cleanup_confirmed=confirmed,
+        cleanup_confirmed=True,
         cleanup_error=cleanup["cleanup_error"],
         after=cleanup["after"],
     )
     print(json.dumps(event, ensure_ascii=False, indent=2))
-    if not confirmed:
-        raise StackError(
-            "interrupt cleanup did not confirm terminal resource removal"
-        )
     return event
 
 

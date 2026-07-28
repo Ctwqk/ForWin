@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import multiprocessing
@@ -1930,6 +1931,437 @@ def test_fresh_up_interrupt_cleans_and_reraises_without_setup_blocked(
         "fault_service_killed",
         "fault_service_recovered",
     }.intersection(event["action"] for event in events)
+
+
+@pytest.mark.parametrize(
+    ("boundary", "interruption", "partial_shape"),
+    (
+        (
+            "startup",
+            KeyboardInterrupt("startup interrupted"),
+            "volume-removed-services-remain",
+        ),
+        (
+            "post-completion",
+            SystemExit(19),
+            "services-removed-volume-remains",
+        ),
+    ),
+)
+def test_fresh_up_partial_interrupt_cleanup_stays_nonterminal_and_preserves_signal(
+    boundary: str,
+    interruption: BaseException,
+    partial_shape: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / boundary).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "a" * 32)
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = "forwin-v5-recovery-" + "a" * 32 + "-postgres-data"
+    absent = {"name": volume_name, "exists": False}
+    created_at = "2026-07-22T12:00:00+00:00"
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": created_at,
+        "fingerprint": stack.stable_hash(
+            {"created_at": created_at, "name": volume_name}
+        ),
+    }
+    absent_services = {
+        service: {"exists": False, "running": False}
+        for service in stack.SERVICES
+    }
+    partial_services = copy.deepcopy(absent_services)
+    partial_volume = absent
+    if partial_shape == "volume-removed-services-remain":
+        partial_services["postgres"] = {"exists": True, "running": False}
+    else:
+        partial_volume = present
+    cleanup = {
+        "cleanup_requested_at": "2026-07-22T12:00:01+00:00",
+        "cleanup_confirmed_at": None,
+        "cleanup_error": "partial cleanup remains",
+        "database_volume": partial_volume,
+        "after": {
+            "observed_at": "2026-07-22T12:00:02+00:00",
+            "services": partial_services,
+        },
+    }
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda *_args, **_kwargs: absent,
+    )
+    monkeypatch.setattr(
+        stack,
+        "confirmed_fresh_database_volume",
+        lambda *_args, **_kwargs: present,
+    )
+    monkeypatch.setattr(
+        stack,
+        "initialize_recovery_sentinel",
+        lambda **_kwargs: {
+            "table": "forwin_recovery_run_sentinel",
+            "sentinel_id": "b" * 64,
+            "run_id": "a" * 32,
+            "fault_id": f"fault-{boundary}",
+            "source_sha": SOURCE_SHA,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "stack_snapshot",
+        lambda **_kwargs: {"services": {}},
+    )
+    monkeypatch.setattr(
+        stack,
+        "wait_service",
+        lambda service, **_kwargs: {
+            "service": service,
+            "exists": True,
+            "running": True,
+        },
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda *_args, **_kwargs: copy.deepcopy(cleanup),
+    )
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:00+00:00",
+    )
+    if boundary == "startup":
+        monkeypatch.setattr(
+            stack,
+            "compose",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(interruption),
+        )
+    else:
+        monkeypatch.setattr(stack, "compose", lambda *_args, **_kwargs: "")
+        monkeypatch.setattr(
+            stack,
+            "print",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(interruption),
+            raising=False,
+        )
+
+    with pytest.raises(type(interruption)) as captured:
+        stack.fresh_up(f"fault-{boundary}")
+
+    assert captured.value is interruption
+    expected_actions = ["fresh_up_started"]
+    if boundary == "post-completion":
+        expected_actions.append("fresh_up_completed")
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == expected_actions
+
+
+def interrupt_cleanup_prefix(
+    stack_module: object,
+    *,
+    fault_id: str,
+    run_id: str,
+    evidence_dir: Path,
+    completed: bool,
+) -> tuple[dict, dict, dict]:
+    run_identity = stack_module.new_recovery_run_identity(
+        fault_id,
+        run_id=run_id,
+        directory=evidence_dir,
+    )
+    identity = {"source_sha": SOURCE_SHA}
+    volume_name = run_identity["database_volume_name"]
+    absent = {"name": volume_name, "exists": False}
+    requested_at = "2026-07-22T12:00:00+00:00"
+    stack_module.append_event(
+        "fresh_up_started",
+        fault_id=fault_id,
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=absent,
+    )
+    created_at = "2026-07-22T12:00:01+00:00"
+    present = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": created_at,
+        "fingerprint": stack_module.stable_hash(
+            {"created_at": created_at, "name": volume_name}
+        ),
+    }
+    if completed:
+        stack_module.append_event(
+            "fresh_up_completed",
+            fault_id=fault_id,
+            requested_at=requested_at,
+            identity=identity,
+            run_identity=run_identity,
+            database_volume=present,
+            sentinel={
+                "table": "forwin_recovery_run_sentinel",
+                "sentinel_id": "c" * 64,
+                "run_id": run_id,
+                "fault_id": fault_id,
+                "source_sha": SOURCE_SHA,
+            },
+            after={"services": {}},
+        )
+    return run_identity, identity, present
+
+
+def reseal_stack_events(stack_module: object, events: list[dict]) -> None:
+    previous = "0" * 64
+    for event in events:
+        event["previous_event_sha256"] = previous
+        event["event_sha256"] = stack_module.event_hash(event)
+        previous = event["event_sha256"]
+    stack_module.events_path().write_text(
+        "\n".join(json.dumps(event, sort_keys=True) for event in events)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("completed", (False, True))
+@pytest.mark.parametrize(
+    "partial_shape",
+    (
+        "volume-removed-services-remain",
+        "services-removed-volume-remains",
+    ),
+)
+def test_interrupt_cleanup_retries_partial_exact_run_until_one_terminal_event(
+    completed: bool,
+    partial_shape: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fault_id = f"retry-{partial_shape}-{completed}"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id=("d" if completed else "e") * 32,
+        evidence_dir=evidence_dir,
+        completed=completed,
+    )
+    absent = {
+        "name": run_identity["database_volume_name"],
+        "exists": False,
+    }
+    absent_services = {
+        service: {"exists": False, "running": False}
+        for service in stack.SERVICES
+    }
+    partial_services = copy.deepcopy(absent_services)
+    partial_volume = absent
+    live_volume = absent
+    if partial_shape == "volume-removed-services-remain":
+        partial_services["publisher-browser"] = {
+            "exists": True,
+            "running": False,
+        }
+    else:
+        partial_volume = present
+        live_volume = present
+    partial = {
+        "cleanup_requested_at": "2026-07-22T12:01:00+00:00",
+        "cleanup_confirmed_at": None,
+        "cleanup_error": "exact run still has resources",
+        "database_volume": partial_volume,
+        "after": {
+            "observed_at": "2026-07-22T12:01:01+00:00",
+            "services": partial_services,
+        },
+    }
+    confirmed = {
+        "cleanup_requested_at": "2026-07-22T12:02:00+00:00",
+        "cleanup_confirmed_at": "2026-07-22T12:02:01+00:00",
+        "cleanup_error": None,
+        "database_volume": absent,
+        "after": {
+            "observed_at": "2026-07-22T12:02:01+00:00",
+            "services": absent_services,
+        },
+    }
+    cleanup_results = iter((partial, confirmed))
+    cleanup_calls: list[dict] = []
+
+    def cleanup(
+        observed_run_identity: dict,
+        *,
+        fallback_timestamp: str,
+    ) -> dict:
+        assert fallback_timestamp
+        cleanup_calls.append(copy.deepcopy(observed_run_identity))
+        return copy.deepcopy(next(cleanup_results))
+
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda _identity, *, run_identity: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        lambda _run_identity, **_kwargs: copy.deepcopy(live_volume),
+    )
+    monkeypatch.setattr(stack, "cleanup_recovery_run", cleanup)
+    monkeypatch.setattr(
+        stack,
+        "now",
+        lambda: "2026-07-22T12:00:30+00:00",
+    )
+
+    with pytest.raises(
+        stack.StackError,
+        match="did not confirm terminal resource removal",
+    ):
+        stack.interrupt_cleanup_recovery_run(fault_id)
+
+    prefix_actions = ["fresh_up_started"]
+    if completed:
+        prefix_actions.append("fresh_up_completed")
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == prefix_actions
+
+    terminal = stack.interrupt_cleanup_recovery_run(fault_id)
+
+    assert terminal["action"] == "interrupted_cleanup"
+    assert terminal["cleanup_confirmed"] is True
+    assert terminal["database_volume"] == absent
+    assert terminal["after"]["services"] == absent_services
+    assert [
+        event["action"] for event in stack.load_verified_events()
+    ] == [*prefix_actions, "interrupted_cleanup"]
+    assert cleanup_calls == [run_identity, run_identity]
+
+    with pytest.raises(stack.StackError, match="terminal"):
+        stack.interrupt_cleanup_recovery_run(fault_id)
+    assert cleanup_calls == [run_identity, run_identity]
+    assert sum(
+        event["action"] == "interrupted_cleanup"
+        for event in stack.load_verified_events()
+    ) == 1
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    (
+        "fault",
+        "identity",
+        "compose-project",
+        "foreign-volume",
+        "terminal",
+    ),
+)
+def test_interrupt_cleanup_rejects_nonmatching_or_terminal_run(
+    rejection: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fault_id = f"interrupt-reject-{rejection}"
+    evidence_dir = (tmp_path / fault_id).resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity, identity, present = interrupt_cleanup_prefix(
+        stack,
+        fault_id=fault_id,
+        run_id="f" * 32,
+        evidence_dir=evidence_dir,
+        completed=rejection != "foreign-volume",
+    )
+    if rejection == "identity":
+        events = stack.load_verified_events()
+        events[-1]["identity"] = {"source_sha": "0" * 40}
+        reseal_stack_events(stack, events)
+    if rejection == "terminal":
+        absent = {
+            "name": run_identity["database_volume_name"],
+            "exists": False,
+        }
+        absent_services = {
+            service: {"exists": False, "running": False}
+            for service in stack.SERVICES
+        }
+        stack.append_event(
+            "interrupted_cleanup",
+            fault_id=fault_id,
+            requested_at="2026-07-22T12:01:00+00:00",
+            identity=identity,
+            run_identity=run_identity,
+            database_volume_before=present,
+            database_volume=absent,
+            cleanup_requested_at="2026-07-22T12:01:00+00:00",
+            cleanup_confirmed_at="2026-07-22T12:01:01+00:00",
+            cleanup_confirmed=True,
+            cleanup_error=None,
+            after={
+                "observed_at": "2026-07-22T12:01:01+00:00",
+                "services": absent_services,
+            },
+        )
+    cleanup_called: list[bool] = []
+    volume_observed: list[bool] = []
+    monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
+
+    def isolated(
+        _identity: dict,
+        *,
+        run_identity: dict,
+    ) -> None:
+        if rejection == "compose-project":
+            raise stack.StackError("different Compose project")
+
+    monkeypatch.setattr(stack, "assert_isolated_compose", isolated)
+
+    def volume_observation(
+        _run_identity: dict,
+        **_kwargs: object,
+    ) -> dict:
+        volume_observed.append(True)
+        if rejection == "foreign-volume":
+            raise stack.StackError("foreign database volume")
+        return copy.deepcopy(present)
+
+    monkeypatch.setattr(
+        stack,
+        "database_volume_observation",
+        volume_observation,
+    )
+    monkeypatch.setattr(
+        stack,
+        "cleanup_recovery_run",
+        lambda *_args, **_kwargs: cleanup_called.append(True) or {},
+    )
+
+    requested_fault = "different-fault" if rejection == "fault" else fault_id
+    with pytest.raises(stack.StackError):
+        stack.interrupt_cleanup_recovery_run(requested_fault)
+
+    assert cleanup_called == []
+    if rejection == "foreign-volume":
+        assert volume_observed == [True]
+    assert sum(
+        event["action"] == "interrupted_cleanup"
+        for event in stack.load_verified_events()
+    ) == (1 if rejection == "terminal" else 0)
 
 
 @pytest.mark.parametrize(

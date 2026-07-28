@@ -194,18 +194,14 @@ def parse_live_recovery_commands(
         assert not lines[-1].endswith("\\"), (
             "malformed terminal command continuation"
         )
+        assert re.search(r"\$\(|[`;&|<>]", paragraph) is None, (
+            "shell metacharacter is forbidden in runner command block"
+        )
         try:
             tokens = shlex.split(paragraph.replace("\\\n", " "))
         except ValueError as exc:
             raise AssertionError("malformed shell invocation") from exc
         assert tokens, "empty command paragraph"
-        if tokens[0] == "export":
-            assert len(tokens) > 1 and all(
-                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token)
-                for token in tokens[1:]
-            ), "malformed export invocation"
-            continue
-
         assert len(tokens) >= 5 and tokens[:3] == [
             "uv",
             "run",
@@ -249,10 +245,23 @@ def parse_live_recovery_commands(
 def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
     api_option = "  --api-url http://127.0.0.1:19099 \\\n"
     mcp_option = "  --mcp-url http://127.0.0.1:19096/mcp \\\n"
+    first_fault_id = (
+        '  --fault-id "${RECOVERY_RUN_ID}-01-generation-precommit" \\\n'
+    )
     first_evidence_dir = (
         '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
         '01-generation-precommit"'
     )
+    command_block_end = (
+        '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
+        '11-publisher-account-risk"\n```'
+    )
+
+    def append_command(paragraph: str) -> str:
+        return command_block_end.replace(
+            "\n```",
+            f"\n\n{paragraph}\n```",
+        )
 
     replacements = {
         "wrong_subcommand": (
@@ -278,11 +287,61 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
             first_evidence_dir + " unexpected positional",
         ),
         "extra_command": (
-            '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
-            '11-publisher-account-risk"\n```',
-            '  --evidence-dir "$RECOVERY_EVIDENCE_ROOT/'
-            '11-publisher-account-risk"\n\n'
-            "echo unexpected\n```",
+            command_block_end,
+            append_command("echo unexpected"),
+        ),
+        "export_command_substitution": (
+            command_block_end,
+            append_command(
+                'export HIDDEN_RUN="$(uv run python '
+                ".artifacts/rc-candidate/unexpected_recovery.py run)\""
+            ),
+        ),
+        "export_backtick_substitution": (
+            command_block_end,
+            append_command(
+                "export HIDDEN_RUN=\"`uv run python "
+                ".artifacts/rc-candidate/unexpected_recovery.py run`\""
+            ),
+        ),
+        "benign_export": (
+            command_block_end,
+            append_command("export HIDDEN_RUN=disabled"),
+        ),
+        "quoted_semicolon": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit;hidden"',
+            ),
+        ),
+        "quoted_and_operator": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit&&hidden"',
+            ),
+        ),
+        "quoted_or_operator": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit||hidden"',
+            ),
+        ),
+        "quoted_pipe": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit|hidden"',
+            ),
+        ),
+        "quoted_redirect": (
+            first_fault_id,
+            first_fault_id.replace(
+                'generation-precommit"',
+                'generation-precommit>hidden"',
+            ),
         ),
     }
     old, new = replacements[mutation]
@@ -301,6 +360,14 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
         ("malformed_continuation", "continuation"),
         ("extra_positional", "unexpected positional"),
         ("extra_command", "runner command shape"),
+        ("export_command_substitution", "shell metacharacter"),
+        ("export_backtick_substitution", "shell metacharacter"),
+        ("benign_export", "runner command shape"),
+        ("quoted_semicolon", "shell metacharacter"),
+        ("quoted_and_operator", "shell metacharacter"),
+        ("quoted_or_operator", "shell metacharacter"),
+        ("quoted_pipe", "shell metacharacter"),
+        ("quoted_redirect", "shell metacharacter"),
     ],
 )
 def test_live_recovery_runbook_parser_rejects_mutations(

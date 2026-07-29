@@ -22,6 +22,55 @@ The inventory is itself candidate-bound and intentionally excludes draft
 manifests, preflight logs, and all live evidence. Never force-add the whole
 `.artifacts/rc-candidate` directory.
 
+### Fresh Candidate Bootstrap
+
+Draft collection requires the five runtime roles to be running, but every v5
+role intentionally fails closed against an empty PostgreSQL volume. Bootstrap
+one fresh, isolated Compose project in dependency-first order. Do not start an
+application role before the exact candidate runtime image has migrated that
+project's database.
+
+Prepare an ignored Compose override that binds the exact runtime and browser
+image tags, the full candidate revision label, unique container names, named
+volumes, numeric loopback ports, and the secured runtime/provider env files.
+The override must not add bind mounts. Model-execution roles receive the
+provider env file; MCP, publisher worker, and publisher browser remain passive
+and credential-free.
+
+```bash
+export RC_COMPOSE_PROJECT=forwin-v5-rc
+export RC_ENV_FILE=<absolute-secured-runtime-env>
+export RC_OVERRIDE=<absolute-ignored-exact-image-override>
+
+docker compose -p "$RC_COMPOSE_PROJECT" \
+  -f docker-compose.yml \
+  -f "$RC_OVERRIDE" \
+  --env-file "$RC_ENV_FILE" \
+  --profile publisher up -d --no-build postgres qdrant minio
+
+docker compose -p "$RC_COMPOSE_PROJECT" \
+  -f docker-compose.yml \
+  -f "$RC_OVERRIDE" \
+  --env-file "$RC_ENV_FILE" \
+  --profile publisher run --rm --no-deps forwin alembic upgrade head
+
+docker compose -p "$RC_COMPOSE_PROJECT" \
+  -f docker-compose.yml \
+  -f "$RC_OVERRIDE" \
+  --env-file "$RC_ENV_FILE" \
+  --profile publisher up -d --no-build
+```
+
+Require PostgreSQL, Qdrant, API, MCP, and publisher browser to become healthy;
+require generation, outbox, and publisher workers to remain running. Verify
+that all six application containers use the exact candidate image IDs and full
+revision label before collecting the draft.
+
+The bootstrap stack is not V1 evidence. It exists only to break the
+identity-manifest dependency cycle and may later host the independently
+required fresh-30 smoke. V1 and every recovery fault still own separate fresh
+volumes, event chains, and terminal destroy through their tracked controllers.
+
 ```bash
 uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
   --draft \

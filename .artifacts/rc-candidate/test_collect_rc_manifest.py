@@ -26,6 +26,7 @@ CANDIDATE_MCP_PATH = Path(__file__).with_name("candidate_mcp_call.py")
 RELEASE_SOURCE_MANIFEST_PATH = Path(__file__).with_name(
     "release-source-files.txt"
 )
+RC_FREEZE_RUNBOOK_PATH = Path(__file__).with_name("rc-freeze-runbook.md")
 MATRIX_FIXTURES_PATH = Path(__file__).with_name("test_finalize_matrix.py")
 RECOVERY_FIXTURES_PATH = Path(__file__).with_name("test_finalize_recovery.py")
 RECOVERY_EVALUATOR_PATH = Path(__file__).with_name("recovery_evidence.py")
@@ -144,6 +145,24 @@ def test_release_source_manifest_is_exact_and_excludes_live_evidence() -> None:
         RELEASE_SOURCE_MANIFEST_PATH.resolve()
         in collector.RELEASE_HARNESS_PATHS
     )
+
+
+def test_rc_freeze_runbook_bootstraps_schema_before_candidate_roles() -> None:
+    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    dependencies = runbook.index(
+        "up -d --no-build postgres qdrant minio"
+    )
+    migration = runbook.index(
+        "run --rm --no-deps forwin alembic upgrade head"
+    )
+    candidate_roles = runbook.index(
+        "--profile publisher up -d --no-build",
+        migration,
+    )
+    draft_collection = runbook.index("--draft")
+
+    assert dependencies < migration < candidate_roles < draft_collection
+    assert "The bootstrap stack is not V1 evidence" in runbook
 
 
 def load_module(name: str, path: Path):

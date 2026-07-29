@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -66,6 +67,70 @@ CANDIDATE_RELEASE_PATHS = frozenset(
         recovery.GATE_HELPER_PATH.resolve(),
     }
 )
+BARRIER_FAULTS = frozenset(
+    {
+        "generation_worker_precommit_crash",
+        "generation_worker_postcommit_crash",
+        "qdrant_unavailable",
+        "projection_consumer_unavailable",
+    }
+)
+
+
+def barrier_payload(
+    kind: str,
+    fault_id: str,
+    snapshots: dict[str, dict],
+) -> dict:
+    after = snapshots["after"]["state"]
+    fixture = after["target"]["fixture"]
+    canon = after["database"]["canon_commits"][0]
+    digest = hashlib.sha256(fault_id.encode("ascii")).hexdigest()[:16]
+    prefix = f"fw_recovery_{digest}"
+    unsigned = int.from_bytes(
+        hashlib.sha256(f"advisory:{fault_id}".encode("ascii")).digest()[:8],
+        byteorder="big",
+        signed=False,
+    )
+    advisory_key = unsigned if unsigned < 2**63 else unsigned - 2**64
+    advisory_key = advisory_key or 1
+    unsigned_key = advisory_key & ((1 << 64) - 1)
+    holder_pid = 100
+    return {
+        "schema_version": 1,
+        "fault_kind": kind,
+        "fault_id": fault_id,
+        "holder_pid": holder_pid,
+        "waiter_pid": 200,
+        "waiter_application_name": "forwin-recovery-generation-worker",
+        "target_role": "generation-worker",
+        "holder_count": 1,
+        "waiter_count": 1,
+        "blocking_pids": [holder_pid],
+        "residue_count": 0,
+        "fixture": {
+            "fixture_id": fixture["fixture_id"],
+            "project_id": canon["project_id"],
+            "chapter_number": canon["chapter_number"],
+            "chapter_id": canon["chapter_id"],
+            "candidate_id": canon["candidate_id"],
+        },
+        "sql_objects": {
+            "scope_table": f"{prefix}_scope",
+            "function": f"{prefix}_fn",
+            "trigger": f"{prefix}_trg",
+            "target_table": (
+                "post_canon_maintenance_runs"
+                if kind == "generation_worker_postcommit_crash"
+                else "canon_commit_records"
+            ),
+        },
+        "advisory_lock": {
+            "key": advisory_key,
+            "classid": (unsigned_key >> 32) & 0xFFFFFFFF,
+            "objid": unsigned_key & 0xFFFFFFFF,
+        },
+    }
 
 
 def volume_fingerprint(name: str, created_at: str) -> str:
@@ -229,7 +294,21 @@ def fault_report(
             "path": str(EVALUATOR_PATH.resolve()),
             "sha256": recovery.sha256_file(EVALUATOR_PATH),
         },
+        "supplemental_artifacts": [],
     }
+    if kind in BARRIER_FAULTS:
+        barrier_path = fault_dir / "barrier-observation.json"
+        barrier_path.write_text(
+            json.dumps(barrier_payload(kind, fault_id, snapshots)),
+            encoding="utf-8",
+        )
+        report["supplemental_artifacts"].append(
+            {
+                "name": "barrier-observation.json",
+                "path": str(barrier_path),
+                "sha256": recovery.sha256_file(barrier_path),
+            }
+        )
     contract = recovery.SERVICE_FAULTS.get(kind)
     if contract is None:
         contract = {
@@ -592,6 +671,174 @@ def test_every_fault_contract_accepts_complete_evidence(tmp_path: Path) -> None:
             fault_report(tmp_path, kind),
             source_sha=SOURCE_SHA,
         ) == []
+
+
+def test_barrier_fault_requires_supplemental_evidence(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    report["supplemental_artifacts"] = []
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "qdrant_unavailable.barrier observation artifact is missing"
+        in violations
+    )
+
+
+def test_barrier_artifact_hash_and_directory_are_bound(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = report["supplemental_artifacts"][0]
+    path = Path(artifact["path"])
+    path.write_text("{}", encoding="utf-8")
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+    assert (
+        "qdrant_unavailable.barrier observation artifact hash mismatch"
+        in violations
+    )
+
+    external_path = tmp_path / "detached-barrier-observation.json"
+    external_path.write_text(
+        json.dumps(
+            barrier_payload(
+                "qdrant_unavailable",
+                report["fault_id"],
+                snapshot_fixtures.valid_snapshots("qdrant_unavailable"),
+            )
+        ),
+        encoding="utf-8",
+    )
+    artifact.update(
+        path=str(external_path),
+        sha256=recovery.sha256_file(external_path),
+    )
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+    assert (
+        "qdrant_unavailable.barrier observation directory mismatch"
+        in violations
+    )
+
+
+def test_barrier_artifact_rejects_same_directory_symlink(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = report["supplemental_artifacts"][0]
+    path = Path(artifact["path"])
+    target = path.with_name("barrier-target.json")
+    path.rename(target)
+    path.symlink_to(target.name)
+    artifact["sha256"] = recovery.sha256_file(target)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "qdrant_unavailable.barrier observation symbolic link is forbidden"
+        in violations
+    )
+
+
+def test_barrier_artifact_open_rejects_symlink_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = report["supplemental_artifacts"][0]
+    path = Path(artifact["path"])
+    outside = tmp_path / "outside-barrier.json"
+    shutil.copyfile(path, outside)
+    real_open = recovery.os.open
+    swapped = False
+
+    def swapping_open(
+        raw_path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if dir_fd is not None and raw_path == path.name and not swapped:
+            path.unlink()
+            path.symlink_to(outside)
+            swapped = True
+        return real_open(raw_path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(recovery.os, "open", swapping_open)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert swapped is True
+    assert (
+        "qdrant_unavailable.barrier observation symbolic link is forbidden"
+        in violations
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("schema_version", "schema mismatch"),
+        ("fault_kind", "identity mismatch"),
+        ("participant_count", "participant identity mismatch"),
+        ("fixture_id", "fixture identity mismatch"),
+        ("waiter_application", "waiter application mismatch"),
+        ("blocking_pids", "lock relation mismatch"),
+        ("advisory_key", "advisory lock identity mismatch"),
+        ("residue", "residue is not zero"),
+        ("sql_target", "SQL object identity mismatch"),
+    ),
+)
+def test_barrier_artifact_semantics_are_independently_validated(
+    tmp_path: Path,
+    mutation: str,
+    expected: str,
+) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = report["supplemental_artifacts"][0]
+    path = Path(artifact["path"])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if mutation == "schema_version":
+        payload["schema_version"] = True
+    elif mutation == "fault_kind":
+        payload["fault_kind"] = "projection_consumer_unavailable"
+    elif mutation == "participant_count":
+        payload["holder_count"] = True
+    elif mutation == "fixture_id":
+        payload["fixture"]["fixture_id"] = "detached-fixture"
+    elif mutation == "waiter_application":
+        payload["waiter_application_name"] = "unrelated-worker"
+    elif mutation == "blocking_pids":
+        payload["blocking_pids"] = []
+    elif mutation == "advisory_key":
+        payload["advisory_lock"]["key"] += 1
+    elif mutation == "residue":
+        payload["residue_count"] = 1
+    elif mutation == "sql_target":
+        payload["sql_objects"]["target_table"] = "unrelated_table"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    artifact["sha256"] = recovery.sha256_file(path)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert any(expected in item for item in violations)
 
 
 def test_publisher_backend_fault_requires_same_job_reclaim(tmp_path: Path) -> None:

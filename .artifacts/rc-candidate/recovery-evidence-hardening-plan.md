@@ -285,10 +285,13 @@ advisory locks and scoped triggers, Docker Compose, Qdrant, MinIO, pytest.
 
 - [ ] **Step 5: Implement Qdrant/outbox faults**
 
-  Prepare a review-ready candidate, stop the selected service through the
-  controller, approve through the supported API, capture degraded durable
-  state, recover, wait for convergence, then replay the existing projection
-  refresh endpoint.
+  Install the exact pre-Canon barrier before writing, wait for a visible
+  candidate and the sole blocked generation-worker transaction, stop the
+  selected service through the controller, then release the barrier so the
+  normal automatic Canon path creates the durable event. Capture degraded
+  durable state, recover, wait for convergence, then replay the existing
+  projection refresh endpoint. Do not change project policy or depend on a
+  transient manual-review state.
 
 - [ ] **Step 6: Derive, write, re-open, and revalidate each report**
 
@@ -422,7 +425,8 @@ advisory locks and scoped triggers, Docker Compose, Qdrant, MinIO, pytest.
 - [ ] **Step 2: Require one candidate identity across runner reports**
 
   Revalidate source SHA/tree, five image IDs, candidate-manifest hash,
-  evaluator hash, runner hash, endpoints, and event-chain Docker identity.
+  evaluator hash, runner hash, endpoints, event-chain Docker identity, and the
+  hash plus semantics of every required barrier supplemental artifact.
 
 - [ ] **Step 3: Replace prose-only recovery steps with exact runner commands**
 

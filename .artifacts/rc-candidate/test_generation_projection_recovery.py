@@ -885,7 +885,7 @@ def valid_projection_snapshots(
     kind: str = "projection_consumer_unavailable",
 ) -> dict[str, dict[str, Any]]:
     fixture = {
-        "fixture_id": token(kind, "fixture"),
+        "fixture_id": "fixture-a",
         "fault_id": FAULT_ID,
         "resource_type": "chapter",
         "resource_id": CHAPTER_ID,
@@ -1030,6 +1030,53 @@ def valid_generation_snapshots(
             "accepted_bundles"
         ] = accepted
     return snapshots
+
+
+def valid_barrier_payload(
+    kind: str,
+    snapshots: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    after = snapshots["after"]["state"]
+    target_fixture = after["target"]["fixture"]
+    canon = after["database"]["canon_commits"][0]
+    names = runner.barrier_names(FAULT_ID)
+    key = runner.advisory_key(FAULT_ID)
+    classid, objid = runner.advisory_lock_identity(key)
+    return {
+        "schema_version": 1,
+        "fault_kind": kind,
+        "fault_id": FAULT_ID,
+        "holder_pid": 100,
+        "waiter_pid": 200,
+        "waiter_application_name": GENERATION_WORKER_APPLICATION_NAME,
+        "target_role": "generation-worker",
+        "holder_count": 1,
+        "waiter_count": 1,
+        "blocking_pids": [100],
+        "residue_count": 0,
+        "fixture": {
+            "fixture_id": target_fixture["fixture_id"],
+            "project_id": canon["project_id"],
+            "chapter_number": canon["chapter_number"],
+            "chapter_id": canon["chapter_id"],
+            "candidate_id": canon["candidate_id"],
+        },
+        "sql_objects": {
+            "scope_table": names.scope_table,
+            "function": names.function,
+            "trigger": names.trigger,
+            "target_table": (
+                "post_canon_maintenance_runs"
+                if kind == "generation_worker_postcommit_crash"
+                else "canon_commit_records"
+            ),
+        },
+        "advisory_lock": {
+            "key": key,
+            "classid": classid,
+            "objid": objid,
+        },
+    }
 
 
 DESTROY_SERVICES = {
@@ -1251,6 +1298,12 @@ def test_writer_derives_before_write_then_reopens_hashes_and_revalidates(
         source_sha=SOURCE_SHA,
         snapshots=snapshots,
         event_log_path=events,
+        supplemental_artifacts={
+            "barrier-observation.json": valid_barrier_payload(
+                "projection_consumer_unavailable",
+                snapshots,
+            )
+        },
     )
 
     assert derive_calls >= 2
@@ -1564,38 +1617,6 @@ def test_sql_collector_normalizes_projection_outbox_and_checkpoint_rows() -> Non
     assert source.calls[2][1] == (PROJECT_ID,)
 
 
-def test_sql_collector_wait_boundaries_fail_closed() -> None:
-    source = FakeRows(
-        {
-            "/* task4 fixture boundary */": [
-                {
-                    "chapter_id": CHAPTER_ID,
-                    "candidate_id": CANDIDATE_ID,
-                    "candidate_status": "drafted",
-                    "task_id": TASK_ID,
-                }
-            ]
-        }
-    )
-    collector = runner.SQLCollector(source)
-
-    with pytest.raises(runner.SetupBlocked, match="review-ready"):
-        collector.wait_review_ready(
-            fault_id=FAULT_ID,
-            fixture_id="fixture-a",
-            project_id=PROJECT_ID,
-            task_id=TASK_ID,
-            timeout_seconds=0,
-        )
-
-    assert source.calls == [
-        (
-            runner.FIXTURE_BOUNDARY_SQL,
-            (PROJECT_ID, 1, TASK_ID),
-        )
-    ]
-
-
 def test_sql_collector_waits_for_candidate_before_starting_generation_barrier() -> None:
     class FixtureSequence:
         def __init__(self) -> None:
@@ -1714,7 +1735,7 @@ def test_sql_collector_requires_qdrant_failure_transition() -> None:
         )
 
 
-def test_api_client_uses_supported_approve_status_and_refresh_paths() -> None:
+def test_api_client_uses_projection_status_and_refresh_paths() -> None:
     calls: list[
         tuple[str, str, dict[str, Any] | None, dict[str, Any] | None]
     ] = []
@@ -1734,13 +1755,6 @@ def test_api_client_uses_supported_approve_status_and_refresh_paths() -> None:
                 copy.deepcopy(json_body),
             )
         )
-        if url.endswith("/review/approve"):
-            return {
-                "ok": True,
-                "project_id": PROJECT_ID,
-                "chapter_number": 1,
-                "status": "accepted",
-            }
         if url.endswith("/projections/status"):
             return projection_status()
         return {
@@ -1754,23 +1768,12 @@ def test_api_client_uses_supported_approve_status_and_refresh_paths() -> None:
         transport=transport,
     )
 
-    approved = api.approve_chapter(PROJECT_ID, 1)
     status = api.projection_status(PROJECT_ID)
     refreshed = api.refresh_projection(PROJECT_ID, 1)
 
-    assert approved["status"] == "accepted"
     assert status["target_canon_commit_id"] == CANON_ID
     assert refreshed["ok"] is True
     assert calls == [
-        (
-            "POST",
-            f"https://api.example/base/api/projects/{PROJECT_ID}/chapters/1/review/approve",
-            None,
-            {
-                "continue_generation": False,
-                "reason": "fault-local recovery evidence acceptance",
-            },
-        ),
         (
             "GET",
             f"https://api.example/base/api/projects/{PROJECT_ID}/projections/status",
@@ -2004,6 +2007,57 @@ def test_live_runner_missing_barrier_is_setup_blocked_and_cleans_in_finally(
     )
 
 
+def test_projection_barrier_failure_cleans_the_target_service_lifecycle(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = (tmp_path / "projection-barrier-failure").resolve()
+    log: list[str] = []
+    controller = LoggingController(evidence_dir, log)
+    barrier = MissingBarrier(log)
+    writer = FakeSetupWriter(evidence_dir)
+    live = runner.LiveRunner(
+        fault_kind="qdrant_unavailable",
+        fault_id=FAULT_ID,
+        source_sha=SOURCE_SHA,
+        controller=controller,
+        lifecycle=FakeLifecycleProject(),
+        sql_collector=SuccessfulProjectionCollector(
+            "qdrant_unavailable",
+            log,
+        ),
+        api=SuccessfulAPI(log),
+        qdrant=SuccessfulQdrant(),
+        writer=writer,
+        barrier_factory=lambda: barrier,
+        api_url=API_URL,
+        mcp_url=MCP_URL,
+        database_url=DATABASE_URL,
+        qdrant_url=QDRANT_URL,
+    )
+
+    result = live.run()
+
+    assert result.status == "setup_blocked"
+    assert writer.payload is not None
+    assert writer.payload["failure_stage"] == "barrier_wait"
+    assert controller.calls == [
+        ("fresh_up", FAULT_ID),
+        ("bind_endpoints", FAULT_ID),
+        ("stop", "qdrant", FAULT_ID),
+        ("start", "qdrant", FAULT_ID),
+        ("destroy",),
+    ]
+    assert not any(
+        call[0] == "stop" and call[1] == "generation-worker"
+        for call in controller.calls
+    )
+    assert (
+        log.index("barrier_cleanup")
+        < log.index("stop:qdrant")
+        < log.index("start:qdrant")
+    )
+
+
 @pytest.mark.parametrize("interruption", (KeyboardInterrupt, SystemExit))
 def test_task4_caller_owns_stack_before_fresh_up_returns(
     interruption: type[BaseException],
@@ -2042,10 +2096,22 @@ def test_task4_caller_owns_stack_before_fresh_up_returns(
 
 
 class SuccessfulBarrier:
-    def __init__(self, log: list[str]) -> None:
+    def __init__(
+        self,
+        log: list[str],
+        kind: str = "generation_worker_precommit_crash",
+    ) -> None:
         self.log = log
         self.cleanup_count = 0
         self.last_residue_count = 0
+        self.names = runner.barrier_names(FAULT_ID)
+        self.advisory_key = runner.advisory_key(FAULT_ID)
+        self.lock_identity = runner.advisory_lock_identity(self.advisory_key)
+        self.target_table = (
+            "post_canon_maintenance_runs"
+            if kind == "generation_worker_postcommit_crash"
+            else "canon_commit_records"
+        )
 
     def install(self, **_kwargs: Any) -> None:
         self.log.append("barrier_install")
@@ -2127,7 +2193,7 @@ def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
     evidence_dir.mkdir()
     valid_event_log(evidence_dir, fault_kind=kind)
     controller = LoggingController(evidence_dir, log)
-    barrier = SuccessfulBarrier(log)
+    barrier = SuccessfulBarrier(log, kind)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
         runner_path=MODULE_PATH,
@@ -2179,8 +2245,9 @@ def test_live_postcommit_generation_uses_real_evaluator_writer_and_finalizer(
 
 
 class SuccessfulProjectionCollector:
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, log: list[str] | None = None) -> None:
         self.kind = kind
+        self.log = log
         self.snapshots = valid_projection_snapshots(kind)
 
     def read_recovery_sentinel(self) -> dict[str, Any]:
@@ -2193,10 +2260,17 @@ class SuccessfulProjectionCollector:
     def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
         self.endpoint_identity = copy.deepcopy(identity)
 
-    def wait_review_ready(self, **_kwargs: Any) -> Any:
+    def wait_candidate_fixture(self, **_kwargs: Any) -> Any:
+        if self.log is not None:
+            self.log.append("candidate")
         return fixture_context()
 
+    def wait_review_ready(self, **_kwargs: Any) -> Any:
+        pytest.fail("projection faults must not depend on a manual review pause")
+
     def wait_projection_base(self, fixture: Any) -> Any:
+        if self.log is not None:
+            self.log.append("projection_base")
         return runner.FixtureContext(
             fixture_id=fixture.fixture_id,
             fault_id=fixture.fault_id,
@@ -2236,9 +2310,8 @@ class SuccessfulProjectionCollector:
 
 
 class MissingQdrantFailureCollector(SuccessfulProjectionCollector):
-    def __init__(self) -> None:
-        self.kind = "qdrant_unavailable"
-        self.snapshots = valid_projection_snapshots("qdrant_unavailable")
+    def __init__(self, log: list[str]) -> None:
+        super().__init__("qdrant_unavailable", log)
 
     def projection_snapshot(self, **kwargs: Any) -> dict[str, Any]:
         return copy.deepcopy(self.snapshots[kwargs["stage"]])
@@ -2252,9 +2325,6 @@ class SuccessfulAPI:
 
     def __init__(self, log: list[str]) -> None:
         self.log = log
-
-    def approve_chapter(self, _project_id: str, _chapter_number: int) -> None:
-        self.log.append("approve")
 
     def wait_projection_converged(
         self, _project_id: str, _canon_id: str
@@ -2290,6 +2360,7 @@ def test_live_qdrant_without_during_failure_is_setup_blocked(
     log: list[str] = []
     evidence_dir = (tmp_path / "qdrant-no-failure").resolve()
     controller = LoggingController(evidence_dir, log)
+    barrier = SuccessfulBarrier(log)
     writer = FakeSetupWriter(evidence_dir)
     live = runner.LiveRunner(
         fault_kind="qdrant_unavailable",
@@ -2297,10 +2368,11 @@ def test_live_qdrant_without_during_failure_is_setup_blocked(
         source_sha=SOURCE_SHA,
         controller=controller,
         lifecycle=FakeLifecycleProject(),
-        sql_collector=MissingQdrantFailureCollector(),
+        sql_collector=MissingQdrantFailureCollector(log),
         api=SuccessfulAPI(log),
         qdrant=SuccessfulQdrant(),
         writer=writer,
+        barrier_factory=lambda: barrier,
         api_url=API_URL,
         mcp_url=MCP_URL,
         database_url=DATABASE_URL,
@@ -2323,7 +2395,7 @@ def test_live_qdrant_without_during_failure_is_setup_blocked(
         ("projection_consumer_unavailable", "outbox-worker"),
     ],
 )
-def test_live_projection_success_uses_supported_accept_recover_and_refresh_order(
+def test_live_projection_success_uses_auto_canon_barrier_recover_and_refresh_order(
     tmp_path: Path,
     kind: str,
     service: str,
@@ -2333,6 +2405,7 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
     evidence_dir.mkdir()
     valid_event_log(evidence_dir, fault_kind=kind)
     controller = LoggingController(evidence_dir, log)
+    barrier = SuccessfulBarrier(log)
     writer = runner.EvidenceWriter(
         evidence_dir=evidence_dir,
         runner_path=MODULE_PATH,
@@ -2345,7 +2418,7 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
         source_sha=SOURCE_SHA,
         controller=controller,
         lifecycle=FakeLifecycleProject(),
-        sql_collector=SuccessfulProjectionCollector(kind),
+        sql_collector=SuccessfulProjectionCollector(kind, log),
         api=SuccessfulAPI(log),
         qdrant=SuccessfulQdrant() if kind == "qdrant_unavailable" else None,
         writer=writer,
@@ -2353,13 +2426,17 @@ def test_live_projection_success_uses_supported_accept_recover_and_refresh_order
         mcp_url=MCP_URL,
         database_url=DATABASE_URL,
         qdrant_url=QDRANT_URL if kind == "qdrant_unavailable" else "",
+        barrier_factory=lambda: barrier,
     )
 
     result = live.run()
 
     assert result.status == "pass"
-    assert log.index(f"stop:{service}") < log.index("approve")
-    assert log.index("approve") < log.index(f"start:{service}")
+    assert log.index("candidate") < log.index("barrier_wait")
+    assert log.index("barrier_wait") < log.index(f"stop:{service}")
+    assert log.index(f"stop:{service}") < log.index("barrier_cleanup")
+    assert log.index("barrier_cleanup") < log.index("projection_base")
+    assert log.index("projection_base") < log.index(f"start:{service}")
     convergences = [index for index, value in enumerate(log) if value == "converged"]
     assert len(convergences) == 2
     assert log.index(f"start:{service}") < convergences[0]
@@ -2403,20 +2480,19 @@ def test_writer_hashes_reopens_and_binds_supplemental_artifacts(
         evaluator=evidence,
         report_validator=finalizer.fault_report_violations,
     )
+    snapshots = valid_projection_snapshots()
     supplemental = {
-        "barrier-observation.json": {
-            "fault_id": FAULT_ID,
-            "holder_pid": 100,
-            "waiter_pid": 200,
-            "residue_count": 0,
-        }
+        "barrier-observation.json": valid_barrier_payload(
+            "projection_consumer_unavailable",
+            snapshots,
+        )
     }
 
     report_path = writer.write_pass_report(
         fault_kind="projection_consumer_unavailable",
         fault_id=FAULT_ID,
         source_sha=SOURCE_SHA,
-        snapshots=valid_projection_snapshots(),
+        snapshots=snapshots,
         event_log_path=events,
         supplemental_artifacts=supplemental,
     )

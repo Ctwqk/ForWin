@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -106,6 +108,17 @@ PUBLISHER_RISK_FAULTS = frozenset(
         "publisher_account_risk",
     }
 )
+BARRIER_FAULTS = frozenset(
+    {
+        "generation_worker_precommit_crash",
+        "generation_worker_postcommit_crash",
+        "qdrant_unavailable",
+        "projection_consumer_unavailable",
+    }
+)
+BARRIER_ARTIFACT_NAME = "barrier-observation.json"
+BARRIER_APPLICATION_NAME = "forwin-recovery-generation-worker"
+BARRIER_TARGET_ROLE = "generation-worker"
 _SAFE_HOLD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -950,6 +963,235 @@ def publisher_risk_discard_violations(
     return violations
 
 
+def barrier_observation_violations(
+    kind: str,
+    *,
+    report: dict[str, Any],
+    snapshots: dict[str, dict[str, Any]],
+    evidence_dir: Path,
+) -> list[str]:
+    if kind not in BARRIER_FAULTS:
+        return []
+    violations: list[str] = []
+    supplemental = report.get("supplemental_artifacts")
+    refs = supplemental if isinstance(supplemental, list) else []
+    matching = [
+        item
+        for item in refs
+        if isinstance(item, dict)
+        and item.get("name") == BARRIER_ARTIFACT_NAME
+    ]
+    if not matching:
+        return [f"{kind}.barrier observation artifact is missing"]
+    if len(matching) != 1:
+        return [f"{kind}.barrier observation artifact is duplicated"]
+
+    identity = matching[0]
+    path = Path(str(identity.get("path") or ""))
+    try:
+        resolved_path = path.resolve(strict=True)
+    except OSError:
+        violations.append(f"{kind}.barrier observation artifact hash mismatch")
+        return violations
+    if path.is_symlink() or path.absolute() != resolved_path:
+        violations.append(
+            f"{kind}.barrier observation symbolic link is forbidden"
+        )
+        return violations
+    if (
+        path.name != BARRIER_ARTIFACT_NAME
+        or resolved_path.parent != evidence_dir.resolve()
+    ):
+        violations.append(f"{kind}.barrier observation directory mismatch")
+    expected_hash = str(identity.get("sha256") or "")
+    directory_fd = -1
+    artifact_fd = -1
+    try:
+        directory_fd = os.open(
+            str(evidence_dir.resolve()),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        artifact_fd = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+        if not stat.S_ISREG(os.fstat(artifact_fd).st_mode):
+            violations.append(
+                f"{kind}.barrier observation is not a regular file"
+            )
+            return violations
+        with os.fdopen(artifact_fd, "rb", closefd=True) as handle:
+            artifact_fd = -1
+            artifact_bytes = handle.read()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            violations.append(
+                f"{kind}.barrier observation symbolic link is forbidden"
+            )
+            return violations
+        violations.append(f"{kind}.barrier observation artifact hash mismatch")
+        return violations
+    finally:
+        if artifact_fd >= 0:
+            os.close(artifact_fd)
+        if directory_fd >= 0:
+            os.close(directory_fd)
+    if (
+        not expected_hash
+        or hashlib.sha256(artifact_bytes).hexdigest() != expected_hash
+    ):
+        violations.append(f"{kind}.barrier observation artifact hash mismatch")
+        return violations
+    try:
+        payload = json.loads(artifact_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        violations.append(f"{kind}.barrier observation is invalid: {exc}")
+        return violations
+    if not isinstance(payload, dict):
+        violations.append(f"{kind}.barrier observation is not an object")
+        return violations
+
+    expected_keys = {
+        "schema_version",
+        "fault_kind",
+        "fault_id",
+        "holder_pid",
+        "waiter_pid",
+        "waiter_application_name",
+        "target_role",
+        "holder_count",
+        "waiter_count",
+        "blocking_pids",
+        "residue_count",
+        "fixture",
+        "sql_objects",
+        "advisory_lock",
+    }
+    if (
+        set(payload) != expected_keys
+        or type(payload.get("schema_version")) is not int
+        or payload.get("schema_version") != 1
+    ):
+        violations.append(f"{kind}.barrier observation schema mismatch")
+    if (
+        payload.get("fault_kind") != kind
+        or payload.get("fault_id") != report.get("fault_id")
+    ):
+        violations.append(f"{kind}.barrier observation identity mismatch")
+
+    holder_pid = payload.get("holder_pid")
+    waiter_pid = payload.get("waiter_pid")
+    valid_pids = (
+        type(holder_pid) is int
+        and holder_pid > 0
+        and type(waiter_pid) is int
+        and waiter_pid > 0
+        and waiter_pid != holder_pid
+    )
+    if (
+        not valid_pids
+        or type(payload.get("holder_count")) is not int
+        or payload.get("holder_count") != 1
+        or type(payload.get("waiter_count")) is not int
+        or payload.get("waiter_count") != 1
+    ):
+        violations.append(f"{kind}.barrier participant identity mismatch")
+    if payload.get("blocking_pids") != [holder_pid]:
+        violations.append(f"{kind}.barrier lock relation mismatch")
+    if payload.get("waiter_application_name") != BARRIER_APPLICATION_NAME:
+        violations.append(f"{kind}.barrier waiter application mismatch")
+    if payload.get("target_role") != BARRIER_TARGET_ROLE:
+        violations.append(f"{kind}.barrier target role mismatch")
+    if type(payload.get("residue_count")) is not int or payload.get(
+        "residue_count"
+    ) != 0:
+        violations.append(f"{kind}.barrier residue is not zero")
+
+    fixture = payload.get("fixture")
+    fixture = fixture if isinstance(fixture, dict) else {}
+    expected_fixture_keys = {
+        "fixture_id",
+        "project_id",
+        "chapter_number",
+        "chapter_id",
+        "candidate_id",
+    }
+    after = snapshots.get("after")
+    after = after if isinstance(after, dict) else {}
+    state = after.get("state")
+    state = state if isinstance(state, dict) else {}
+    target = state.get("target")
+    target = target if isinstance(target, dict) else {}
+    target_fixture = target.get("fixture")
+    target_fixture = (
+        target_fixture if isinstance(target_fixture, dict) else {}
+    )
+    database = state.get("database")
+    database = database if isinstance(database, dict) else {}
+    canon_rows = database.get("canon_commits")
+    canon_rows = canon_rows if isinstance(canon_rows, list) else []
+    canon = canon_rows[0] if canon_rows and isinstance(canon_rows[0], dict) else {}
+    expected_fixture = {
+        "fixture_id": target_fixture.get("fixture_id"),
+        "project_id": canon.get("project_id"),
+        "chapter_number": canon.get("chapter_number"),
+        "chapter_id": target_fixture.get("resource_id"),
+        "candidate_id": canon.get("candidate_id"),
+    }
+    fixture_mismatch = (
+        set(fixture) != expected_fixture_keys
+        or any(
+            fixture.get(key) != value
+            for key, value in expected_fixture.items()
+        )
+        or type(fixture.get("chapter_number")) is not int
+        or fixture.get("chapter_id") != canon.get("chapter_id")
+    )
+    if fixture_mismatch:
+        violations.append(f"{kind}.barrier fixture identity mismatch")
+
+    fault_id = str(report.get("fault_id") or "")
+    try:
+        fault_bytes = fault_id.encode("ascii")
+    except UnicodeEncodeError:
+        fault_bytes = b""
+    digest = hashlib.sha256(fault_bytes).hexdigest()[:16]
+    prefix = f"fw_recovery_{digest}"
+    sql_objects = payload.get("sql_objects")
+    expected_sql_objects = {
+        "scope_table": f"{prefix}_scope",
+        "function": f"{prefix}_fn",
+        "trigger": f"{prefix}_trg",
+        "target_table": (
+            "post_canon_maintenance_runs"
+            if kind == "generation_worker_postcommit_crash"
+            else "canon_commit_records"
+        ),
+    }
+    if not fault_bytes or sql_objects != expected_sql_objects:
+        violations.append(f"{kind}.barrier SQL object identity mismatch")
+
+    unsigned_key = int.from_bytes(
+        hashlib.sha256(b"advisory:" + fault_bytes).digest()[:8],
+        byteorder="big",
+        signed=False,
+    )
+    advisory_key = (
+        unsigned_key if unsigned_key < 2**63 else unsigned_key - 2**64
+    )
+    advisory_key = advisory_key or 1
+    lock_bits = advisory_key & ((1 << 64) - 1)
+    expected_lock = {
+        "key": advisory_key,
+        "classid": (lock_bits >> 32) & 0xFFFFFFFF,
+        "objid": lock_bits & 0xFFFFFFFF,
+    }
+    if not fault_bytes or payload.get("advisory_lock") != expected_lock:
+        violations.append(f"{kind}.barrier advisory lock identity mismatch")
+    return violations
+
+
 def fault_report_violations(
     report: dict[str, Any],
     *,
@@ -1091,6 +1333,14 @@ def fault_report_violations(
             violations.append(f"{kind}.independent event log summary mismatch")
         if any(event.get("schema_version") != 2 for event in events):
             violations.append(f"{kind}.event schema version mismatch")
+        violations.extend(
+            barrier_observation_violations(
+                kind,
+                report=report,
+                snapshots=snapshots,
+                evidence_dir=event_path.resolve().parent,
+            )
+        )
         run_violations, _ = run_resource_violations(
             kind,
             fault_id=str(report.get("fault_id") or ""),

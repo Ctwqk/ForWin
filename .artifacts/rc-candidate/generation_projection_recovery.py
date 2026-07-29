@@ -799,7 +799,6 @@ FIXTURE_BOUNDARY_SQL = """
     SELECT
         chapters.id AS chapter_id,
         candidates.id AS candidate_id,
-        candidates.status AS candidate_status,
         tasks.id AS task_id,
         tasks.status AS task_status
     FROM chapter_plans AS chapters
@@ -1039,27 +1038,6 @@ class SQLCollector:
             fixture_id=fixture_id,
             project_id=project_id,
             task_id=task_id,
-            require_review_ready=False,
-            timeout_seconds=timeout_seconds,
-            poll_seconds=poll_seconds,
-        )
-
-    def wait_review_ready(
-        self,
-        *,
-        fault_id: str,
-        fixture_id: str,
-        project_id: str,
-        task_id: str,
-        timeout_seconds: float = 600.0,
-        poll_seconds: float = 1.0,
-    ) -> FixtureContext:
-        return self._wait_fixture_boundary(
-            fault_id=fault_id,
-            fixture_id=fixture_id,
-            project_id=project_id,
-            task_id=task_id,
-            require_review_ready=True,
             timeout_seconds=timeout_seconds,
             poll_seconds=poll_seconds,
         )
@@ -1071,15 +1049,9 @@ class SQLCollector:
         fixture_id: str,
         project_id: str,
         task_id: str,
-        require_review_ready: bool,
         timeout_seconds: float,
         poll_seconds: float,
     ) -> FixtureContext:
-        boundary = (
-            "review-ready candidate"
-            if require_review_ready
-            else "candidate fixture"
-        )
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         first = True
         while first or time.monotonic() < deadline:
@@ -1092,13 +1064,7 @@ class SQLCollector:
                 row = rows[0]
                 chapter_id = str(row.get("chapter_id") or "")
                 candidate_id = str(row.get("candidate_id") or "")
-                ready = row.get("candidate_status") == "ready_for_canon"
-                reached = (
-                    bool(chapter_id)
-                    and bool(candidate_id)
-                    and (not require_review_ready or ready)
-                )
-                if reached:
+                if chapter_id and candidate_id:
                     return FixtureContext(
                         fixture_id=fixture_id,
                         fault_id=fault_id,
@@ -1112,11 +1078,11 @@ class SQLCollector:
                 if task_status in GENERATION_TASK_TERMINAL_STATUSES:
                     raise SetupBlocked(
                         "generation task reached terminal status "
-                        f"{task_status} before {boundary}"
+                        f"{task_status} before candidate fixture"
                     )
             if time.monotonic() < deadline:
                 time.sleep(poll_seconds)
-        raise SetupBlocked(f"one-chapter fixture did not reach {boundary}")
+        raise SetupBlocked("one-chapter fixture did not reach candidate fixture")
 
     def generation_barrier_stop_reason(self, fixture: FixtureContext) -> str:
         status = str(self._task_row(fixture).get("status") or "").strip()
@@ -1226,30 +1192,6 @@ class ForWinAPI:
             safe="",
         )
         return f"{self.api_url}/api/projects/{encoded_project}/{suffix}"
-
-    def approve_chapter(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> dict[str, Any]:
-        payload = self.transport(
-            "POST",
-            self._project_path(
-                project_id,
-                f"chapters/{int(chapter_number)}/review/approve",
-            ),
-            query=None,
-            json_body={
-                "continue_generation": False,
-                "reason": "fault-local recovery evidence acceptance",
-            },
-        )
-        if payload.get("ok") is False or payload.get("status") != "accepted":
-            raise SetupBlocked(
-                "supported chapter approval did not reach accepted: "
-                f"{payload.get('status') or payload}"
-            )
-        return payload
 
     def projection_status(self, project_id: str) -> dict[str, Any]:
         return self.transport(
@@ -1473,6 +1415,7 @@ class LiveRunner:
             )
             if (
                 not interrupted
+                and self.fault_kind in GENERATION_FAULTS
                 and self.barrier is not None
                 and self.stack_started
                 and not self.faulted
@@ -1628,7 +1571,7 @@ class LiveRunner:
                 "project_id": self.fixture.project_id,
                 "chapter_number": self.fixture.chapter_number,
                 "chapter_id": self.fixture.chapter_id,
-                "task_id": self.fixture.task_id,
+                "candidate_id": self.fixture.candidate_id,
             }
         names = getattr(self.barrier, "names", None)
         if names is not None:
@@ -1651,24 +1594,32 @@ class LiveRunner:
             raise SetupBlocked("ForWin API client is missing")
         self.stage = "genesis"
         project = asyncio.run(self.lifecycle.create_genesis_project())
+        if self.barrier_factory is None:
+            raise SetupBlocked("projection Canon barrier factory is missing")
+        self.stage = "barrier_install"
+        self.barrier = self.barrier_factory()
+        self.barrier.install(project_id=project.project_id, chapter_number=1)
         self.stage = "writing_handoff"
         task = asyncio.run(self.lifecycle.start_writing(project.project_id))
-        self.stage = "review_ready"
-        fixture = self.sql.wait_review_ready(
+        self.stage = "candidate_ready"
+        fixture = self.sql.wait_candidate_fixture(
             fault_id=self.fault_id,
             fixture_id=f"fixture-{self.fault_id}",
             project_id=project.project_id,
             task_id=task.task_id,
         )
+        self.stage = "barrier_wait"
+        self.barrier_observation = self.barrier.wait_for_blocked_waiter(
+            timeout_seconds=GENERATION_BOUNDARY_TIMEOUT_SECONDS,
+            stop_reason=lambda: self.sql.generation_barrier_stop_reason(fixture)
+        )
+        self.fixture = fixture
         service = SERVICE_BY_FAULT[self.fault_kind]
         self.stage = "service_fault"
         self.controller.stop(service, self.fault_id)
         self.faulted = True
-        self.stage = "supported_approval"
-        self.api.approve_chapter(
-            fixture.project_id,
-            fixture.chapter_number,
-        )
+        self.stage = "barrier_cleanup"
+        self.barrier.cleanup()
         self.stage = "durable_boundary"
         fixture = self.sql.wait_projection_base(fixture)
         before = self.sql.projection_snapshot(
@@ -1885,9 +1836,14 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
         else None
     )
     barrier_factory: Callable[[], AdvisoryBarrier] | None = None
-    if config.fault_kind in GENERATION_FAULTS:
+    if config.fault_kind in GENERATION_FAULTS | PROJECTION_FAULTS:
+        barrier_kind = (
+            config.fault_kind
+            if config.fault_kind in GENERATION_FAULTS
+            else "generation_worker_precommit_crash"
+        )
         barrier_factory = lambda: AdvisoryBarrier(
-            kind=config.fault_kind,
+            kind=barrier_kind,
             fault_id=config.fault_id,
             database_url=config.database_url,
         )

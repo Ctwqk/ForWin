@@ -104,10 +104,16 @@ missing holder/waiter boundary or cleanup residue produces `setup_blocked`.
 
 ## Projection Faults
 
-After the one-chapter candidate is `ready_for_canon`, the runner stops only the
-mapped service through `recovery_stack.py`, accepts the chapter through
-`POST /api/projects/{project_id}/chapters/1/review/approve`, and captures the
-fixture-bound Canon and `canon.projection.requested` outbox identity.
+The selected runtime uses automatic Spark gate decisions, so
+`ready_for_canon` is not a durable manual-pause boundary. Before writing, the
+runner installs the same exact-project/chapter pre-Canon advisory barrier used
+by the generation proof. After the candidate is visible it requires the exact
+generation-worker transaction to be blocked on Canon insertion, stops only the
+mapped projection service through `recovery_stack.py`, then releases and
+removes the barrier. The normal automatic Canon path commits the fixture-bound
+Canon and `canon.projection.requested` outbox identity while the selected
+service is unavailable. The runner never changes project policy or calls a
+manual approval endpoint.
 
 | Fault kind | Controller service | Convergence evidence |
 | --- | --- | --- |
@@ -120,6 +126,10 @@ Canon projection payload, payload hash, status, sanitized error, and attempt
 counter. The payload binds the event to the observed Canon, project, chapter,
 and candidate; status/error/attempt are mutable observations, not stable
 identity.
+
+The supplemental barrier artifact and cleanup contract are identical to the
+generation pre-commit proof: one holder, one generation-worker waiter, the
+holder as sole blocker, and zero scoped SQL residue.
 
 For `qdrant_unavailable`, Qdrant remains stopped until the fixture event has
 been claimed by the real worker and SQL shows a later attempt in durable
@@ -145,6 +155,11 @@ direct children of the evidence directory. The runner:
 4. derives and validates again;
 5. validates `fault-report.json` with `finalize_recovery.py` before writing;
 6. reopens, hashes, and validates the final report again.
+
+For all four barrier-backed faults, finalization also requires the direct-child
+`barrier-observation.json` artifact and independently checks its hash, fixture
+identity, exact generation-worker waiter, sole-blocker relation, scoped SQL
+object and advisory-lock identities, and zero cleanup residue.
 
 The report binds the fault ID, source SHA, evaluator identity, controller event
 log, run identity, evidence directory, and database volume lifecycle. A run

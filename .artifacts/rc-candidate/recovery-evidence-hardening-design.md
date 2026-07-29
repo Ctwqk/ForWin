@@ -56,6 +56,8 @@ Use four narrow components:
    - Imports the shared semantic validator.
    - Reloads and hashes every snapshot.
    - Recomputes assertions instead of trusting the report.
+   - Requires and independently validates the scoped barrier artifact for both
+     generation and both projection faults.
    - Requires exactly one fresh lifecycle, one typed fault/recovery pair, and
      one terminal destroy event for every one of the eleven faults.
    - Rejects report assertions or prose that disagree with derived state.
@@ -103,8 +105,11 @@ Canon is committed, the request is held before phase 3, MinIO is stopped, and
 the lock is released. The runner rejects a fixture that did not attempt the
 expected world artifact write.
 
-Qdrant and projection-consumer faults need no barrier: a review-ready candidate
-is accepted while the selected consumer is stopped.
+Qdrant and projection-consumer faults use the exact-project/chapter pre-Canon
+barrier. The selected service is stopped only after the real automatic Canon
+transaction is proven to be the sole blocked generation-worker waiter; barrier
+release then creates the durable projection event without relying on a
+transient manual-review state or changing project policy.
 
 Publisher backend recovery uses a projectless cover fixture and a database
 state boundary after the backend claim is durable. Publisher browser and risk

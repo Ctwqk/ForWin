@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -150,21 +152,36 @@ def test_release_source_manifest_is_exact_and_excludes_live_evidence() -> None:
     )
 
 
-def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
-    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
-    bootstrap = runbook.split(
-        "### Fresh Candidate Bootstrap",
-        maxsplit=1,
-    )[1].split(
-        "uv run python .artifacts/rc-candidate/collect_rc_manifest.py",
-        maxsplit=1,
-    )[0]
-    compose_commands = [
+def fenced_bash_blocks(text: str, *, after: str) -> list[str]:
+    section = text.split(after, maxsplit=1)[1]
+    return re.findall(r"```bash\n(.*?)\n```", section, flags=re.DOTALL)
+
+
+def active_shell_lines(block: str) -> list[str]:
+    return [
         line.strip()
-        for line in bootstrap.splitlines()
-        if line.strip().startswith("rc_compose ")
+        for line in block.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
     ]
 
+
+def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
+    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    bootstrap = fenced_bash_blocks(
+        runbook,
+        after="### Fresh Candidate Bootstrap",
+    )[0]
+    active = active_shell_lines(bootstrap)
+    compose_commands = [
+        line for line in active if line.startswith("rc_compose ")
+    ]
+    direct_compose_commands = [
+        line for line in active if line.startswith("docker compose ")
+    ]
+
+    assert direct_compose_commands == [
+        'docker compose -p "$RC_COMPOSE_PROJECT" \\',
+    ]
     assert compose_commands == [
         "rc_compose down --volumes --remove-orphans",
         (
@@ -181,47 +198,103 @@ def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
             "publisher-worker publisher-browser"
         ),
     ]
-    assert (
+    assert active.count(
         'RC_BOOTSTRAP_ID="$(date -u +%Y%m%dt%H%M%Sz)-$$"'
-        in bootstrap
-    )
-    assert (
+    ) == 1
+    assert active.count(
         'export RC_COMPOSE_PROJECT="forwin-v5-rc-${RC_BOOTSTRAP_ID}"'
-        in bootstrap
-    )
-    assert (
+    ) == 1
+    assert active.count(
         'test -z "$(docker ps -aq --filter '
         '"label=com.docker.compose.project=$RC_COMPOSE_PROJECT")"'
-        in bootstrap
-    )
-    assert (
+    ) == 1
+    assert active.count(
         "for volume_suffix in forwin-data forwin-postgres "
         "forwin-qdrant forwin-minio"
-        in bootstrap
-    )
-    assert (
-        'docker volume inspect "${RC_COMPOSE_PROJECT}_${volume_suffix}"'
-        in bootstrap
-    )
-    cleanup = bootstrap.index(
-        compose_commands[0]
-    )
-    trap = bootstrap.index("trap rc_candidate_abort ERR INT TERM")
-    dependencies = bootstrap.index(compose_commands[1])
+    ) == 1
+    assert active.count(
+        'if docker volume inspect '
+        '"${RC_COMPOSE_PROJECT}_${volume_suffix}" '
+        ">/dev/null 2>&1; then"
+    ) == 1
+    assert active.count("false") == 1
+    cleanup = active.index(compose_commands[0])
+    trap = active.index("trap rc_candidate_abort ERR INT TERM")
+    dependencies = active.index(compose_commands[1])
 
     assert cleanup < trap < dependencies
-    assert "trap - ERR INT TERM" in bootstrap
+    assert active.count("trap - ERR INT TERM") == 1
     assert "The bootstrap stack is not V1 evidence" in runbook
+
+
+def test_rc_freeze_volume_check_triggers_cleanup_for_every_existing_volume() -> None:
+    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    bootstrap = fenced_bash_blocks(
+        runbook,
+        after="### Fresh Candidate Bootstrap",
+    )[0]
+    loop_start = bootstrap.index("for volume_suffix in ")
+    loop_end = bootstrap.index("\ndone", loop_start) + len("\ndone")
+    volume_loop = bootstrap[loop_start:loop_end]
+    suffixes = (
+        "forwin-data",
+        "forwin-postgres",
+        "forwin-qdrant",
+        "forwin-minio",
+    )
+
+    for existing in suffixes:
+        script = f"""
+set -Eeuo pipefail
+RC_COMPOSE_PROJECT=forwin-v5-rc-test
+EXISTING_VOLUME={existing}
+docker() {{
+  [[ "$1" == volume && "$2" == inspect &&
+     "$3" == "${{RC_COMPOSE_PROJECT}}_${{EXISTING_VOLUME}}" ]]
+}}
+trap 'exit 97' ERR
+{volume_loop}
+"""
+        result = subprocess.run(
+            ["bash", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 97, existing
+
+    clean_script = f"""
+set -Eeuo pipefail
+RC_COMPOSE_PROJECT=forwin-v5-rc-test
+docker() {{ return 1; }}
+trap 'exit 97' ERR
+{volume_loop}
+"""
+    clean = subprocess.run(
+        ["bash", "-c", clean_script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert clean.returncode == 0
 
 
 def test_fresh30_runbook_destroys_bootstrap_stack_after_finalization() -> None:
     runbook = SMOKE_RUNBOOK_PATH.read_text(encoding="utf-8")
-    finalizer = runbook.index(
-        "uv run python .artifacts/rc-candidate/finalize_smoke.py"
-    )
-    destroy = runbook.index("rc_candidate_destroy", finalizer)
+    finalizer = "uv run python .artifacts/rc-candidate/finalize_smoke.py"
+    blocks = fenced_bash_blocks(runbook, after=finalizer)
+    active = [
+        line
+        for block in blocks
+        for line in active_shell_lines(block)
+    ]
 
-    assert finalizer < destroy
+    assert active.count("rc_candidate_destroy") == 1
+    normalized = " ".join(runbook.split())
+    assert (
+        "L200 must start from a different fresh Compose project and database."
+        in normalized
+    )
 
 
 def load_module(name: str, path: Path):

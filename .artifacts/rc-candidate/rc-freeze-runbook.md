@@ -69,8 +69,11 @@ trap rc_candidate_abort ERR INT TERM
 test -z "$(docker ps -aq --filter "label=com.docker.compose.project=$RC_COMPOSE_PROJECT")"
 for volume_suffix in forwin-data forwin-postgres forwin-qdrant forwin-minio
 do
-  ! docker volume inspect "${RC_COMPOSE_PROJECT}_${volume_suffix}" \
-    >/dev/null 2>&1
+  if docker volume inspect "${RC_COMPOSE_PROJECT}_${volume_suffix}" >/dev/null 2>&1; then
+    printf 'candidate volume already exists: %s\n' \
+      "${RC_COMPOSE_PROJECT}_${volume_suffix}" >&2
+    false
+  fi
 done
 
 rc_compose up -d --no-build --wait --wait-timeout 120 postgres qdrant minio

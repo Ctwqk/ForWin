@@ -14,7 +14,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
@@ -313,6 +313,27 @@ def relative(path: Path) -> str:
         return path.relative_to(ROOT).as_posix()
     except ValueError:
         return str(path)
+
+
+def source_path_matches_execution_copy(
+    recorded_source: object,
+    *,
+    actual_path: Path,
+    expected_path: Path,
+) -> bool:
+    raw_source = str(recorded_source or "")
+    source_path = PurePosixPath(raw_source)
+    source_parts = source_path.parts
+    actual_parts = PurePosixPath(actual_path.as_posix()).parts
+    return (
+        bool(raw_source)
+        and bool(source_parts)
+        and not source_path.is_absolute()
+        and ".." not in source_parts
+        and source_path.name == expected_path.name
+        and len(actual_parts) >= len(source_parts)
+        and actual_parts[-len(source_parts) :] == source_parts
+    )
 
 
 def iter_files(paths: Iterable[Path]) -> list[Path]:
@@ -907,7 +928,11 @@ def load_matrix_manifest(
             actual_path = Path(str(auditor.get(path_key) or "")).resolve()
             recorded_hash = str(auditor.get(hash_key) or "")
             if (
-                str(auditor.get(source_key) or "") != relative(expected_path)
+                not source_path_matches_execution_copy(
+                    auditor.get(source_key),
+                    actual_path=actual_path,
+                    expected_path=expected_path,
+                )
                 or not actual_path.is_file()
                 or sha256_file(actual_path) != recorded_hash
                 or not expected_path.is_file()

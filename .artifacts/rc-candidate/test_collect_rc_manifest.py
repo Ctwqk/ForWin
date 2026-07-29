@@ -1674,6 +1674,69 @@ def test_final_rc_accepts_matrix_tools_executed_from_frozen_worktree(
     assert result["source_sha"] == SOURCE_SHA
 
 
+def test_final_rc_accepts_actual_matrix_artifact_source_paths(
+    tmp_path: Path,
+) -> None:
+    frozen_harness = tmp_path / "frozen/.artifacts/v4-matrix-candidate"
+    frozen_harness.mkdir(parents=True)
+    frozen_auditor = frozen_harness / "finalize_matrix.py"
+    frozen_helper = frozen_harness / "l200_evidence.py"
+    frozen_auditor.write_bytes(MATRIX_FINALIZER_PATH.read_bytes())
+    frozen_helper.write_bytes(L200_PATH.read_bytes())
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(
+        audit_path,
+        auditor_path=frozen_auditor,
+        helper_path=frozen_helper,
+    )
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["auditor"]["source_path"] = (
+        ".artifacts/v4-matrix-candidate/finalize_matrix.py"
+    )
+    payload["auditor"]["database_helper_source_path"] = (
+        ".artifacts/v4-matrix-candidate/l200_evidence.py"
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = collector.load_matrix_manifest(
+        audit_path,
+        SOURCE_SHA,
+        require_final_audit=True,
+    )
+
+    assert result["result"] == "pass"
+
+
+@pytest.mark.parametrize(
+    "source_path",
+    (
+        "/tmp/finalize_matrix.py",
+        "../finalize_matrix.py",
+        ".artifacts/copied/finalize_matrix.py",
+        ".artifacts/v4-matrix-candidate/not_the_finalizer.py",
+    ),
+)
+def test_final_rc_rejects_matrix_source_path_not_bound_to_execution_copy(
+    tmp_path: Path,
+    source_path: str,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["auditor"]["source_path"] = source_path
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="matrix final audit tool identity mismatch: path",
+    ):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
+
+
 def test_final_rc_rejects_legacy_matrix_audit_schema(tmp_path: Path) -> None:
     audit_path = tmp_path / "matrix-audit.json"
     write_matrix_audit(audit_path)

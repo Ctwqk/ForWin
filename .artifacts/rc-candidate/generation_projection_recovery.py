@@ -89,6 +89,17 @@ FAULT_EVENT_BY_KIND = {
 RECOVERY_EVENT_ACTION = "fault_service_recovered"
 GENERATION_WORKER_APPLICATION_NAME = "forwin-recovery-generation-worker"
 GENERATION_WORKER_ROLE = "generation-worker"
+GENERATION_TASK_TERMINAL_STATUSES = frozenset(
+    {
+        "cancelled",
+        "completed",
+        "failed",
+        "needs_review",
+        "partial_failed",
+        "paused",
+        "succeeded",
+    }
+)
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 SQL_IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 CANON_PROJECTION_PAYLOAD_KEYS = {
@@ -357,6 +368,7 @@ class AdvisoryBarrier:
         *,
         timeout_seconds: float = 300.0,
         poll_seconds: float = 0.5,
+        stop_reason: Callable[[], str] | None = None,
     ) -> BarrierObservation:
         deadline = time.monotonic() + timeout_seconds
         last_error: BaseException | None = None
@@ -365,6 +377,9 @@ class AdvisoryBarrier:
                 return self.observe_blocked_waiter()
             except SetupBlocked as exc:
                 last_error = exc
+                reason = str(stop_reason() if stop_reason is not None else "").strip()
+                if reason:
+                    raise SetupBlocked(reason) from exc
                 time.sleep(poll_seconds)
         raise SetupBlocked(
             "generation barrier did not produce exactly one blocked waiter: "
@@ -784,7 +799,8 @@ FIXTURE_BOUNDARY_SQL = """
         chapters.id AS chapter_id,
         candidates.id AS candidate_id,
         candidates.status AS candidate_status,
-        tasks.id AS task_id
+        tasks.id AS task_id,
+        tasks.status AS task_status
     FROM chapter_plans AS chapters
     JOIN generation_tasks AS tasks
       ON tasks.project_id = chapters.project_id
@@ -1007,15 +1023,15 @@ class SQLCollector:
             (fixture.project_id,),
         )
 
-    def wait_task_fixture(
+    def wait_candidate_fixture(
         self,
         *,
         fault_id: str,
         fixture_id: str,
         project_id: str,
         task_id: str,
-        timeout_seconds: float = 300.0,
-        poll_seconds: float = 0.5,
+        timeout_seconds: float = 900.0,
+        poll_seconds: float = 1.0,
     ) -> FixtureContext:
         return self._wait_fixture_boundary(
             fault_id=fault_id,
@@ -1058,6 +1074,11 @@ class SQLCollector:
         timeout_seconds: float,
         poll_seconds: float,
     ) -> FixtureContext:
+        boundary = (
+            "review-ready candidate"
+            if require_review_ready
+            else "candidate fixture"
+        )
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         first = True
         while first or time.monotonic() < deadline:
@@ -1071,7 +1092,12 @@ class SQLCollector:
                 chapter_id = str(row.get("chapter_id") or "")
                 candidate_id = str(row.get("candidate_id") or "")
                 ready = row.get("candidate_status") == "ready_for_canon"
-                if chapter_id and (not require_review_ready or (candidate_id and ready)):
+                reached = (
+                    bool(chapter_id)
+                    and bool(candidate_id)
+                    and (not require_review_ready or ready)
+                )
+                if reached:
                     return FixtureContext(
                         fixture_id=fixture_id,
                         fault_id=fault_id,
@@ -1081,10 +1107,24 @@ class SQLCollector:
                         task_id=task_id,
                         candidate_id=candidate_id,
                     )
+                task_status = str(row.get("task_status") or "").strip()
+                if task_status in GENERATION_TASK_TERMINAL_STATUSES:
+                    raise SetupBlocked(
+                        "generation task reached terminal status "
+                        f"{task_status} before {boundary}"
+                    )
             if time.monotonic() < deadline:
                 time.sleep(poll_seconds)
-        boundary = "review-ready candidate" if require_review_ready else "chapter fixture"
         raise SetupBlocked(f"one-chapter fixture did not reach {boundary}")
+
+    def generation_barrier_stop_reason(self, fixture: FixtureContext) -> str:
+        status = str(self._task_row(fixture).get("status") or "").strip()
+        if status not in GENERATION_TASK_TERMINAL_STATUSES:
+            return ""
+        return (
+            f"generation task reached terminal status {status} "
+            "before the Canon barrier"
+        )
 
     def wait_task_reclaimed(
         self,
@@ -1511,7 +1551,7 @@ class LiveRunner:
         self.barrier.install(project_id=project.project_id, chapter_number=1)
         self.stage = "writing_handoff"
         task = asyncio.run(self.lifecycle.start_writing(project.project_id))
-        fixture = self.sql.wait_task_fixture(
+        fixture = self.sql.wait_candidate_fixture(
             fault_id=self.fault_id,
             fixture_id=f"fixture-{self.fault_id}",
             project_id=project.project_id,
@@ -1527,7 +1567,9 @@ class LiveRunner:
             before["state"]["database"]["task"]["lease_epoch"]
         )
         self.stage = "barrier_wait"
-        self.barrier_observation = self.barrier.wait_for_blocked_waiter()
+        self.barrier_observation = self.barrier.wait_for_blocked_waiter(
+            stop_reason=lambda: self.sql.generation_barrier_stop_reason(fixture)
+        )
         self.fixture = fixture
         during = self.sql.generation_snapshot(
             source_sha=self.source_sha,

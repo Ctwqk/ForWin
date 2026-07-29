@@ -51,6 +51,15 @@ Both generation faults install fault-ID-derived SQL identifiers and bind the
 project ID, chapter number, and advisory key as SQL parameters. The trigger
 looks up the key from the scoped table and calls `pg_advisory_xact_lock`.
 
+After the writing handoff, the runner allows up to 900 seconds for the generic
+pipeline to create its candidate row. This is a readiness boundary, not part of
+the advisory-lock timeout: model-backed drafting can legitimately spend most
+of that time before any transaction can reach the Canon trigger. Only after
+the candidate identity is visible does the 300-second exact blocked-waiter
+timer begin. If the generation task enters a terminal status before either
+required boundary, the runner fails closed immediately as `setup_blocked`
+instead of waiting out a timer or changing fixture content.
+
 | Fault kind | Trigger boundary | Additional scope |
 | --- | --- | --- |
 | `generation_worker_precommit_crash` | `BEFORE INSERT ON canon_commit_records` | exact project and chapter |

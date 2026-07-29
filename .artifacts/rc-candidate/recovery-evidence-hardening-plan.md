@@ -268,13 +268,18 @@ advisory locks and scoped triggers, Docker Compose, Qdrant, MinIO, pytest.
 
   Parameterize MCP URL. Create, generate, and lock all six Genesis stages;
   verify no active task before writing. Never modify story content after
-  creation to reach a barrier.
+  creation to reach a barrier. Treat chapter-plan creation and candidate
+  creation as distinct readiness boundaries: allow the model-backed pipeline
+  up to 900 seconds to create the candidate, and fail closed immediately if
+  the task becomes terminal first.
 
 - [ ] **Step 4: Implement pre/post-commit barriers**
 
   Pre-commit blocks scoped `canon_commit_records` insertion. Post-commit blocks
   scoped planning maintenance insertion. Prove the blocked worker PID before
-  SIGKILL and clean all database objects in `finally`.
+  SIGKILL and clean all database objects in `finally`. Start the bounded
+  blocked-waiter timer only after the candidate boundary is visible; stop it
+  immediately if the task reaches a terminal status before the Canon boundary.
 
 - [ ] **Step 5: Implement Qdrant/outbox faults**
 

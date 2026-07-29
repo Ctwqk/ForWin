@@ -282,6 +282,37 @@ def test_barrier_requires_exactly_one_holder_and_one_blocked_waiter() -> None:
         barrier.observe_blocked_waiter()
 
 
+def test_barrier_wait_stops_when_generation_boundary_becomes_unreachable() -> None:
+    admin = FakeConnection()
+    holder = FakeConnection()
+    barrier = runner.AdvisoryBarrier(
+        kind="generation_worker_precommit_crash",
+        fault_id=FAULT_ID,
+        database_url="postgresql://fixture",
+        connect=FakeConnectionFactory(admin, holder),
+    )
+    barrier.install(project_id=PROJECT_ID, chapter_number=1)
+    admin.lock_rows = lock_rows(barrier)[:1]
+
+    with pytest.raises(
+        runner.SetupBlocked,
+        match="generation task reached terminal status failed",
+    ):
+        barrier.wait_for_blocked_waiter(
+            timeout_seconds=300,
+            poll_seconds=0,
+            stop_reason=lambda: (
+                "generation task reached terminal status failed "
+                "before the Canon barrier"
+            ),
+        )
+
+    lock_queries = [
+        text for text, _params in admin.executions if "pg_locks" in text
+    ]
+    assert len(lock_queries) == 1
+
+
 def test_barrier_rejects_outbox_waiter_and_generation_outbox_race() -> None:
     admin = FakeConnection()
     holder = FakeConnection()
@@ -1565,6 +1596,82 @@ def test_sql_collector_wait_boundaries_fail_closed() -> None:
     ]
 
 
+def test_sql_collector_waits_for_candidate_before_starting_generation_barrier() -> None:
+    class FixtureSequence:
+        def __init__(self) -> None:
+            self.rows = [
+                {
+                    "chapter_id": CHAPTER_ID,
+                    "candidate_id": "",
+                    "candidate_status": "",
+                    "task_id": TASK_ID,
+                    "task_status": "running",
+                },
+                {
+                    "chapter_id": CHAPTER_ID,
+                    "candidate_id": CANDIDATE_ID,
+                    "candidate_status": "reviewed",
+                    "task_id": TASK_ID,
+                    "task_status": "running",
+                },
+            ]
+            self.calls = 0
+
+        def fetch_all(
+            self,
+            statement: str,
+            params: tuple[Any, ...] | list[Any] = (),
+        ) -> list[dict[str, Any]]:
+            assert "/* task4 fixture boundary */" in statement
+            assert tuple(params) == (PROJECT_ID, 1, TASK_ID)
+            self.calls += 1
+            return [copy.deepcopy(self.rows.pop(0))]
+
+    source = FixtureSequence()
+    fixture = runner.SQLCollector(source).wait_candidate_fixture(
+        fault_id=FAULT_ID,
+        fixture_id="fixture-a",
+        project_id=PROJECT_ID,
+        task_id=TASK_ID,
+        timeout_seconds=1,
+        poll_seconds=0,
+    )
+
+    assert fixture.candidate_id == CANDIDATE_ID
+    assert source.calls == 2
+
+
+def test_sql_collector_candidate_wait_fails_on_terminal_generation_task() -> None:
+    source = FakeRows(
+        {
+            "/* task4 fixture boundary */": [
+                {
+                    "chapter_id": CHAPTER_ID,
+                    "candidate_id": "",
+                    "candidate_status": "",
+                    "task_id": TASK_ID,
+                    "task_status": "failed",
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(
+        runner.SetupBlocked,
+        match="terminal status failed before candidate fixture",
+    ):
+        runner.SQLCollector(source).wait_candidate_fixture(
+            fault_id=FAULT_ID,
+            fixture_id="fixture-a",
+            project_id=PROJECT_ID,
+            task_id=TASK_ID,
+            timeout_seconds=300,
+            poll_seconds=0,
+        )
+
+    assert len(source.calls) == 1
+
+
 def test_sql_collector_requires_qdrant_failure_transition() -> None:
     class OutboxSequence:
         def __init__(self, rows: list[dict[str, Any]]) -> None:
@@ -1799,7 +1906,8 @@ class MissingBarrier:
     def install(self, **_kwargs: Any) -> None:
         return None
 
-    def wait_for_blocked_waiter(self) -> None:
+    def wait_for_blocked_waiter(self, **kwargs: Any) -> None:
+        assert callable(kwargs["stop_reason"])
         raise runner.SetupBlocked("required waiter not observed")
 
     def cleanup(self) -> None:
@@ -1831,8 +1939,11 @@ class FakeBoundaryCollector:
     def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
         self.endpoint_identity = copy.deepcopy(identity)
 
-    def wait_task_fixture(self, **_kwargs: Any) -> Any:
+    def wait_candidate_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
+
+    def generation_barrier_stop_reason(self, _fixture: Any) -> str:
+        return ""
 
     def generation_snapshot(self, **kwargs: Any) -> dict[str, Any]:
         return {
@@ -1939,7 +2050,8 @@ class SuccessfulBarrier:
     def install(self, **_kwargs: Any) -> None:
         self.log.append("barrier_install")
 
-    def wait_for_blocked_waiter(self) -> Any:
+    def wait_for_blocked_waiter(self, **kwargs: Any) -> Any:
+        assert callable(kwargs["stop_reason"])
         self.log.append("barrier_wait")
         return runner.BarrierObservation(
             holder_pid=100,
@@ -1963,8 +2075,14 @@ class SuccessfulGenerationCollector:
     def bind_endpoint_identity(self, identity: dict[str, Any]) -> None:
         self.endpoint_identity = copy.deepcopy(identity)
 
-    def wait_task_fixture(self, **_kwargs: Any) -> Any:
+    def wait_candidate_fixture(self, **_kwargs: Any) -> Any:
         return fixture_context()
+
+    def generation_barrier_stop_reason(self, _fixture: Any) -> str:
+        return ""
+
+    def wait_task_fixture(self, **_kwargs: Any) -> Any:
+        pytest.fail("generation faults must not start barrier timing at chapter-plan creation")
 
     def generation_snapshot(self, **kwargs: Any) -> dict[str, Any]:
         return copy.deepcopy(self.snapshots[kwargs["stage"]])

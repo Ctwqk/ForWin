@@ -2052,6 +2052,7 @@ class SuccessfulBarrier:
 
     def wait_for_blocked_waiter(self, **kwargs: Any) -> Any:
         assert callable(kwargs["stop_reason"])
+        assert kwargs["timeout_seconds"] == 900.0
         self.log.append("barrier_wait")
         return runner.BarrierObservation(
             holder_pid=100,

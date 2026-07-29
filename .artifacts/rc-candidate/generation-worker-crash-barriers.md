@@ -55,8 +55,10 @@ After the writing handoff, the runner allows up to 900 seconds for the generic
 pipeline to create its candidate row. This is a readiness boundary, not part of
 the advisory-lock timeout: model-backed drafting can legitimately spend most
 of that time before any transaction can reach the Canon trigger. Only after
-the candidate identity is visible does the 300-second exact blocked-waiter
-timer begin. If the generation task enters a terminal status before either
+the candidate identity is visible does a separate 900-second exact
+blocked-waiter timer begin; reviewer and Canon preparation are also
+model-backed and cannot share the candidate-readiness clock. If the generation
+task enters a terminal status before either
 required boundary, the runner fails closed immediately as `setup_blocked`
 instead of waiting out a timer or changing fixture content.
 

@@ -278,8 +278,10 @@ advisory locks and scoped triggers, Docker Compose, Qdrant, MinIO, pytest.
   Pre-commit blocks scoped `canon_commit_records` insertion. Post-commit blocks
   scoped planning maintenance insertion. Prove the blocked worker PID before
   SIGKILL and clean all database objects in `finally`. Start the bounded
-  blocked-waiter timer only after the candidate boundary is visible; stop it
-  immediately if the task reaches a terminal status before the Canon boundary.
+  900-second blocked-waiter timer only after the candidate boundary is visible;
+  reviewer and Canon preparation are model-backed and receive this independent
+  window. Stop immediately if the task reaches a terminal status before the
+  Canon boundary.
 
 - [ ] **Step 5: Implement Qdrant/outbox faults**
 

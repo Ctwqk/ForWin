@@ -100,6 +100,7 @@ GENERATION_TASK_TERMINAL_STATUSES = frozenset(
         "succeeded",
     }
 )
+GENERATION_BOUNDARY_TIMEOUT_SECONDS = 900.0
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 SQL_IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 CANON_PROJECTION_PAYLOAD_KEYS = {
@@ -366,7 +367,7 @@ class AdvisoryBarrier:
     def wait_for_blocked_waiter(
         self,
         *,
-        timeout_seconds: float = 300.0,
+        timeout_seconds: float = GENERATION_BOUNDARY_TIMEOUT_SECONDS,
         poll_seconds: float = 0.5,
         stop_reason: Callable[[], str] | None = None,
     ) -> BarrierObservation:
@@ -1030,7 +1031,7 @@ class SQLCollector:
         fixture_id: str,
         project_id: str,
         task_id: str,
-        timeout_seconds: float = 900.0,
+        timeout_seconds: float = GENERATION_BOUNDARY_TIMEOUT_SECONDS,
         poll_seconds: float = 1.0,
     ) -> FixtureContext:
         return self._wait_fixture_boundary(
@@ -1568,6 +1569,7 @@ class LiveRunner:
         )
         self.stage = "barrier_wait"
         self.barrier_observation = self.barrier.wait_for_blocked_waiter(
+            timeout_seconds=GENERATION_BOUNDARY_TIMEOUT_SECONDS,
             stop_reason=lambda: self.sql.generation_barrier_stop_reason(fixture)
         )
         self.fixture = fixture

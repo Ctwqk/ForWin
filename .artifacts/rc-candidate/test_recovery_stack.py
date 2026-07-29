@@ -2779,6 +2779,62 @@ def test_fresh_volume_rejects_created_at_before_requested_at_from_inspect(
         )
 
 
+def test_fresh_volume_accepts_docker_second_precision_created_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "second-precision-volume").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "second-precision-volume",
+        run_id="7" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    project_name = stack.recovery_project_name(run_identity)
+
+    def fake_command(*command: str, **_kwargs: object) -> str:
+        if command[1:3] == ("volume", "ls"):
+            return volume_name
+        if command == ("docker", "volume", "inspect", volume_name):
+            return json.dumps(
+                [
+                    {
+                        "Name": volume_name,
+                        "CreatedAt": "2026-07-22T12:00:00Z",
+                        "Labels": {
+                            "com.docker.compose.project": project_name,
+                            "com.docker.compose.volume": "forwin-postgres",
+                        },
+                    }
+                ]
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(stack, "command", fake_command)
+
+    observation = stack.confirmed_fresh_database_volume(
+        run_identity,
+        requested_at="2026-07-22T12:00:00.900000+00:00",
+    )
+
+    assert observation["exists"] is True
+    assert observation["created_at"] == "2026-07-22T12:00:00+00:00"
+
+
+def test_volume_creation_comparison_preserves_fractional_precision() -> None:
+    created_at = stack.normalized_utc_time(
+        "2026-07-22T12:00:00.500000+00:00",
+        field="created_at",
+    )
+    requested_at = stack.normalized_utc_time(
+        "2026-07-22T12:00:00.900000+00:00",
+        field="requested_at",
+    )
+
+    assert stack.volume_creation_predates_request(created_at, requested_at)
+
+
 def test_active_run_rejects_volume_created_before_fresh_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2819,6 +2875,51 @@ def test_active_run_rejects_volume_created_before_fresh_request(
 
     with pytest.raises(stack.StackError, match="predates fresh-up request"):
         stack.require_active_recovery_run("old-event-volume")
+
+
+def test_active_run_accepts_docker_second_precision_created_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = (tmp_path / "second-precision-event").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "second-precision-event",
+        run_id="8" * 32,
+        directory=evidence_dir,
+    )
+    volume_name = run_identity["database_volume_name"]
+    identity = {"source_sha": SOURCE_SHA}
+    requested_at = "2026-07-22T12:00:00.900000+00:00"
+    created_at = "2026-07-22T12:00:00+00:00"
+    volume = {
+        "name": volume_name,
+        "exists": True,
+        "created_at": created_at,
+        "fingerprint": stack.stable_hash(
+            {"created_at": created_at, "name": volume_name}
+        ),
+    }
+    stack.append_event(
+        "fresh_up_started",
+        fault_id="second-precision-event",
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume={"name": volume_name, "exists": False},
+    )
+    stack.append_event(
+        "fresh_up_completed",
+        fault_id="second-precision-event",
+        requested_at=requested_at,
+        identity=identity,
+        run_identity=run_identity,
+        database_volume=volume,
+    )
+
+    active = stack.require_active_recovery_run("second-precision-event")
+
+    assert active["database_volume"] == volume
 
 
 def test_fresh_up_records_stable_run_identity_and_database_volume_lifecycle(

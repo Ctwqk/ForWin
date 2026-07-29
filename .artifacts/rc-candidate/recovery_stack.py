@@ -383,6 +383,19 @@ def normalized_utc_timestamp(value: object, *, field: str) -> str:
     return normalized_utc_time(value, field=field).isoformat()
 
 
+def volume_creation_predates_request(
+    created_at: datetime,
+    requested_at: datetime,
+) -> bool:
+    # Docker volume CreatedAt is second-granularity on supported daemons.
+    request_floor = (
+        requested_at.replace(microsecond=0)
+        if created_at.microsecond == 0
+        else requested_at
+    )
+    return created_at < request_floor
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -2335,7 +2348,7 @@ def confirmed_fresh_database_volume(
         requested_at,
         field="fresh-up requested_at",
     )
-    if created_at < request_time:
+    if volume_creation_predates_request(created_at, request_time):
         raise StackError("database volume creation time predates fresh-up request")
     return observation
 
@@ -2401,7 +2414,7 @@ def require_active_recovery_run(
     )
     if completions[0].get("requested_at") != requested_at:
         raise StackError("fresh-up requested_at changed within event log")
-    if created_time < request_time:
+    if volume_creation_predates_request(created_time, request_time):
         raise StackError("database volume creation time predates fresh-up request")
     if (
         not isinstance(database_volume, dict)

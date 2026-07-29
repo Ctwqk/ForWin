@@ -31,45 +31,68 @@ application role before the exact candidate runtime image has migrated that
 project's database.
 
 Prepare an ignored Compose override that binds the exact runtime and browser
-image tags, the full candidate revision label, unique container names, named
-volumes, numeric loopback ports, and the secured runtime/provider env files.
-The override must not add bind mounts. Model-execution roles receive the
-provider env file; MCP, publisher worker, and publisher browser remain passive
-and credential-free.
+image tags, the full candidate revision label, container names derived from
+`RC_COMPOSE_PROJECT`, named volumes, numeric loopback ports, and the secured
+runtime/provider env files. The override must not add bind mounts. Only API,
+generation worker, and outbox worker receive the provider env file; MCP,
+publisher worker, and publisher browser remain passive and credential-free.
 
 ```bash
-export RC_COMPOSE_PROJECT=forwin-v5-rc
+set -Eeuo pipefail
+
+RC_BOOTSTRAP_ID="$(date -u +%Y%m%dt%H%M%Sz)-$$"
+export RC_COMPOSE_PROJECT="forwin-v5-rc-${RC_BOOTSTRAP_ID}"
 export RC_ENV_FILE=<absolute-secured-runtime-env>
 export RC_OVERRIDE=<absolute-ignored-exact-image-override>
 
-docker compose -p "$RC_COMPOSE_PROJECT" \
-  -f docker-compose.yml \
-  -f "$RC_OVERRIDE" \
-  --env-file "$RC_ENV_FILE" \
-  --profile publisher up -d --no-build postgres qdrant minio
+rc_compose() {
+  docker compose -p "$RC_COMPOSE_PROJECT" \
+    -f docker-compose.yml \
+    -f "$RC_OVERRIDE" \
+    --env-file "$RC_ENV_FILE" \
+    --profile publisher "$@"
+}
 
-docker compose -p "$RC_COMPOSE_PROJECT" \
-  -f docker-compose.yml \
-  -f "$RC_OVERRIDE" \
-  --env-file "$RC_ENV_FILE" \
-  --profile publisher run --rm --no-deps forwin alembic upgrade head
+rc_candidate_destroy() {
+  trap - ERR INT TERM
+  rc_compose down --volumes --remove-orphans
+}
 
-docker compose -p "$RC_COMPOSE_PROJECT" \
-  -f docker-compose.yml \
-  -f "$RC_OVERRIDE" \
-  --env-file "$RC_ENV_FILE" \
-  --profile publisher up -d --no-build
+rc_candidate_abort() {
+  local status=$?
+  rc_candidate_destroy || true
+  exit "$status"
+}
+
+trap rc_candidate_abort ERR INT TERM
+
+test -z "$(docker ps -aq --filter "label=com.docker.compose.project=$RC_COMPOSE_PROJECT")"
+for volume_suffix in forwin-data forwin-postgres forwin-qdrant forwin-minio
+do
+  ! docker volume inspect "${RC_COMPOSE_PROJECT}_${volume_suffix}" \
+    >/dev/null 2>&1
+done
+
+rc_compose up -d --no-build --wait --wait-timeout 120 postgres qdrant minio
+rc_compose run --rm --no-deps forwin alembic upgrade head
+rc_compose up -d --no-build --wait --wait-timeout 180 forwin generation-worker outbox-worker forwin-mcp publisher-worker publisher-browser
 ```
 
-Require PostgreSQL, Qdrant, API, MCP, and publisher browser to become healthy;
-require generation, outbox, and publisher workers to remain running. Verify
-that all six application containers use the exact candidate image IDs and full
-revision label before collecting the draft.
+The two bounded `--wait` barriers require PostgreSQL, Qdrant, API, MCP, and
+publisher browser to become healthy; generation, outbox, and publisher workers
+must remain running. The final `up` names exactly six application roles, so
+`postgres-test` and any future unrelated service cannot join the candidate.
+Verify that all six application containers use the exact candidate image IDs
+and full revision label before collecting the draft.
 
 The bootstrap stack is not V1 evidence. It exists only to break the
 identity-manifest dependency cycle and may later host the independently
 required fresh-30 smoke. V1 and every recovery fault still own separate fresh
 volumes, event chains, and terminal destroy through their tracked controllers.
+Keep the trap and helper functions active through draft collection and
+fresh-30 finalization. Any setup failure destroys the attempted containers,
+network, and volumes. The fresh-30 runbook owns terminal destroy after its
+finalizer seals the last bootstrap-stack evidence.
 
 ```bash
 uv run python .artifacts/rc-candidate/collect_rc_manifest.py \

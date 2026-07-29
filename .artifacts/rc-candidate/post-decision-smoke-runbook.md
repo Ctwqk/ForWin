@@ -75,6 +75,14 @@ uv run python .artifacts/rc-candidate/finalize_smoke.py \
 unset FORWIN_SMOKE_DATABASE_URL
 ```
 
+After the finalizer succeeds, destroy the bootstrap stack and all of its named
+volumes. It has no remaining release consumer; L200 must start from a different
+fresh Compose project and database.
+
+```bash
+rc_candidate_destroy
+```
+
 The finalizer independently collects project, chapter, task, GateLedger, cost,
 rule provenance, Genesis, Canon, GraphDelta, snapshot, entity/alias, outbox,
 projection, maintenance, and publisher evidence. Every Genesis stage must

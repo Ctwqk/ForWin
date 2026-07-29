@@ -27,6 +27,9 @@ RELEASE_SOURCE_MANIFEST_PATH = Path(__file__).with_name(
     "release-source-files.txt"
 )
 RC_FREEZE_RUNBOOK_PATH = Path(__file__).with_name("rc-freeze-runbook.md")
+SMOKE_RUNBOOK_PATH = Path(__file__).with_name(
+    "post-decision-smoke-runbook.md"
+)
 MATRIX_FIXTURES_PATH = Path(__file__).with_name("test_finalize_matrix.py")
 RECOVERY_FIXTURES_PATH = Path(__file__).with_name("test_finalize_recovery.py")
 RECOVERY_EVALUATOR_PATH = Path(__file__).with_name("recovery_evidence.py")
@@ -147,22 +150,78 @@ def test_release_source_manifest_is_exact_and_excludes_live_evidence() -> None:
     )
 
 
-def test_rc_freeze_runbook_bootstraps_schema_before_candidate_roles() -> None:
+def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
     runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
-    dependencies = runbook.index(
-        "up -d --no-build postgres qdrant minio"
-    )
-    migration = runbook.index(
-        "run --rm --no-deps forwin alembic upgrade head"
-    )
-    candidate_roles = runbook.index(
-        "--profile publisher up -d --no-build",
-        migration,
-    )
-    draft_collection = runbook.index("--draft")
+    bootstrap = runbook.split(
+        "### Fresh Candidate Bootstrap",
+        maxsplit=1,
+    )[1].split(
+        "uv run python .artifacts/rc-candidate/collect_rc_manifest.py",
+        maxsplit=1,
+    )[0]
+    compose_commands = [
+        line.strip()
+        for line in bootstrap.splitlines()
+        if line.strip().startswith("rc_compose ")
+    ]
 
-    assert dependencies < migration < candidate_roles < draft_collection
+    assert compose_commands == [
+        "rc_compose down --volumes --remove-orphans",
+        (
+            "rc_compose up -d --no-build --wait --wait-timeout 120 "
+            "postgres qdrant minio"
+        ),
+        (
+            "rc_compose run --rm --no-deps forwin "
+            "alembic upgrade head"
+        ),
+        (
+            "rc_compose up -d --no-build --wait --wait-timeout 180 "
+            "forwin generation-worker outbox-worker forwin-mcp "
+            "publisher-worker publisher-browser"
+        ),
+    ]
+    assert (
+        'RC_BOOTSTRAP_ID="$(date -u +%Y%m%dt%H%M%Sz)-$$"'
+        in bootstrap
+    )
+    assert (
+        'export RC_COMPOSE_PROJECT="forwin-v5-rc-${RC_BOOTSTRAP_ID}"'
+        in bootstrap
+    )
+    assert (
+        'test -z "$(docker ps -aq --filter '
+        '"label=com.docker.compose.project=$RC_COMPOSE_PROJECT")"'
+        in bootstrap
+    )
+    assert (
+        "for volume_suffix in forwin-data forwin-postgres "
+        "forwin-qdrant forwin-minio"
+        in bootstrap
+    )
+    assert (
+        'docker volume inspect "${RC_COMPOSE_PROJECT}_${volume_suffix}"'
+        in bootstrap
+    )
+    cleanup = bootstrap.index(
+        compose_commands[0]
+    )
+    trap = bootstrap.index("trap rc_candidate_abort ERR INT TERM")
+    dependencies = bootstrap.index(compose_commands[1])
+
+    assert cleanup < trap < dependencies
+    assert "trap - ERR INT TERM" in bootstrap
     assert "The bootstrap stack is not V1 evidence" in runbook
+
+
+def test_fresh30_runbook_destroys_bootstrap_stack_after_finalization() -> None:
+    runbook = SMOKE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    finalizer = runbook.index(
+        "uv run python .artifacts/rc-candidate/finalize_smoke.py"
+    )
+    destroy = runbook.index("rc_candidate_destroy", finalizer)
+
+    assert finalizer < destroy
 
 
 def load_module(name: str, path: Path):

@@ -776,6 +776,8 @@ def write_matrix_audit(
 ) -> None:
     fixtures = load_module("collector_matrix_fixtures", MATRIX_FIXTURES_PATH)
     raw_path = path.parent / "matrix.json"
+    harness_path = path.parent / "matrix_run.py"
+    harness_path.write_text("print('matrix')\n", encoding="utf-8")
     raw_path.write_text(
         json.dumps(
             {
@@ -783,6 +785,7 @@ def write_matrix_audit(
                 "source_sha": SOURCE_SHA,
                 "code_changes_during_run": 0,
                 "matrix": "30/60S/60P/100",
+                "harness_sha256": collector.sha256_file(harness_path),
             }
         ),
         encoding="utf-8",
@@ -824,6 +827,10 @@ def write_matrix_audit(
                     "matrix_manifest": {
                         "path": str(raw_path),
                         "sha256": collector.sha256_file(raw_path),
+                    },
+                    "harness": {
+                        "path": str(harness_path),
+                        "sha256": collector.sha256_file(harness_path),
                     },
                 },
                 "auditor": {
@@ -1771,6 +1778,56 @@ def test_final_rc_rejects_running_matrix_manifest(tmp_path: Path) -> None:
         )
 
 
+def test_draft_matrix_manifest_binds_external_sibling_harness(
+    tmp_path: Path,
+) -> None:
+    harness_path = tmp_path / "matrix_run.py"
+    harness_path.write_text("print('matrix')\n", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "source_sha": SOURCE_SHA,
+                "code_changes_during_run": 0,
+                "matrix": "30/60S/60P/100",
+                "harness_sha256": collector.sha256_file(harness_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = collector.load_matrix_manifest(manifest_path, SOURCE_SHA)
+
+    assert result["harness"] == {
+        "path": str(harness_path),
+        "sha256": collector.sha256_file(harness_path),
+    }
+
+
+def test_draft_matrix_manifest_rejects_sibling_harness_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    harness_path = tmp_path / "matrix_run.py"
+    harness_path.write_text("print('matrix')\n", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "source_sha": SOURCE_SHA,
+                "code_changes_during_run": 0,
+                "matrix": "30/60S/60P/100",
+                "harness_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(collector.ManifestError, match="matrix harness hash mismatch"):
+        collector.load_matrix_manifest(manifest_path, SOURCE_SHA)
+
+
 def test_final_rc_accepts_revalidated_matrix_audit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1799,6 +1856,26 @@ def test_final_rc_accepts_revalidated_matrix_audit(
     assert result["source_sha"] == SOURCE_SHA
     assert result["current_rc_source_sha"] == "b" * 40
     assert result["predecessor_delta"]["mode"] == "bounded_successor"
+
+
+def test_final_rc_rejects_matrix_audit_without_harness_identity(
+    tmp_path: Path,
+) -> None:
+    audit_path = tmp_path / "matrix-audit.json"
+    write_matrix_audit(audit_path)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["identity"].pop("harness")
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        collector.ManifestError,
+        match="matrix final audit harness identity is missing",
+    ):
+        collector.load_matrix_manifest(
+            audit_path,
+            SOURCE_SHA,
+            require_final_audit=True,
+        )
 
 
 def test_final_rc_rejects_outer_matrix_cell_project_mismatch(

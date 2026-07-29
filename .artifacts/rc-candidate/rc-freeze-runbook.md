@@ -110,7 +110,7 @@ uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
   --runtime-container <outbox-worker-container> \
   --runtime-container <mcp-container> \
   --runtime-container <publisher-worker-container> \
-  --matrix-manifest .artifacts/v4-matrix-candidate/manifest.json \
+  --matrix-manifest <absolute-frozen-r6-matrix-manifest> \
   --quality-profile <selected-profile> \
   --gate-delegate <selected-delegate> \
   --output .artifacts/v5-rc/candidate-draft.json
@@ -215,8 +215,7 @@ uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
   --runtime-container <outbox-worker-container> \
   --runtime-container <mcp-container> \
   --runtime-container <publisher-worker-container> \
-  --matrix-audit-manifest \
-    .artifacts/v4-matrix-candidate/final-audit/manifest.json \
+  --matrix-audit-manifest <absolute-frozen-r6-audit-manifest> \
   --quality-profile <selected-profile> \
   --gate-delegate <selected-delegate> \
   --rc-tag <v5-rc-tag> \

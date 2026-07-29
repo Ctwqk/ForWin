@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
-COLLECTOR_VERSION = 5
+COLLECTOR_VERSION = 6
 MANIFEST_SCHEMA_VERSION = 3
 MATRIX_AUDIT_SCHEMA_VERSION = 4
 DEFAULT_DEPENDENCY_IMAGES = {
@@ -961,6 +961,20 @@ def load_matrix_manifest(
             or int(matrix_payload.get("code_changes_during_run") or 0) != 0
         ):
             raise ManifestError("matrix source manifest identity mismatch")
+        recorded_harness = identity.get("harness")
+        if (
+            not isinstance(recorded_harness, dict)
+            or not recorded_harness.get("path")
+            or not recorded_harness.get("sha256")
+        ):
+            raise ManifestError(
+                "matrix final audit harness identity is missing"
+            )
+        harness = matrix_harness_identity(
+            matrix_path,
+            matrix_payload,
+            recorded=recorded_harness,
+        )
         predecessor_delta = matrix_successor_delta(
             matrix_source_sha,
             source_sha,
@@ -1071,6 +1085,7 @@ def load_matrix_manifest(
                 "path": relative(matrix_path),
                 "sha256": sha256_file(matrix_path),
             },
+            "harness": harness,
             "cells": {
                 name: {
                     "project_id": cells[name].get("project_id"),
@@ -1086,6 +1101,7 @@ def load_matrix_manifest(
         raise ManifestError("matrix manifest has no source_sha")
     if payload.get("code_changes_during_run") != 0:
         raise ManifestError("matrix manifest reports code_changes_during_run != 0")
+    harness = matrix_harness_identity(path, payload)
     return {
         "path": relative(path),
         "sha256": sha256_file(path),
@@ -1095,6 +1111,35 @@ def load_matrix_manifest(
         "current_rc_source_sha": source_sha,
         "code_changes_during_run": payload.get("code_changes_during_run"),
         "result": "draft",
+        "harness": harness,
+    }
+
+
+def matrix_harness_identity(
+    matrix_path: Path,
+    matrix_payload: Mapping[str, Any],
+    *,
+    recorded: object = None,
+) -> dict[str, str]:
+    expected_hash = str(matrix_payload.get("harness_sha256") or "")
+    if not expected_hash:
+        raise ManifestError("matrix manifest has no harness_sha256")
+
+    recorded_identity = recorded if isinstance(recorded, dict) else {}
+    raw_path = str(recorded_identity.get("path") or "")
+    harness_path = (
+        Path(raw_path) if raw_path else matrix_path.with_name("matrix_run.py")
+    )
+    if not harness_path.is_absolute():
+        harness_path = ROOT / harness_path
+    recorded_hash = str(recorded_identity.get("sha256") or expected_hash)
+    if recorded_hash != expected_hash:
+        raise ManifestError("matrix harness identity hash mismatch")
+    if not harness_path.is_file() or sha256_file(harness_path) != expected_hash:
+        raise ManifestError("matrix harness hash mismatch")
+    return {
+        "path": relative(harness_path),
+        "sha256": expected_hash,
     }
 
 
@@ -1965,8 +2010,6 @@ def main() -> int:
     telemetry_path = ROOT / "forwin/writer/llm/telemetry.py"
     mcp_models_path = ROOT / "forwin/mcp/models.py"
     baseline_path = ROOT / "forwin/migrations/versions/0001_v5_baseline.py"
-    harness_path = ROOT / ".artifacts/v4-matrix-candidate/matrix_run.py"
-
     config_values = literal_assignments(config_path)
     assert_routing_defaults(config_path)
     missing_defaults = [name for name in MODEL_DEFAULT_NAMES if name not in config_values]
@@ -1988,6 +2031,11 @@ def main() -> int:
         args.runtime_container,
         runtime_image["image_id"],
         model_profile_id=args.model_profile_id,
+    )
+    matrix_evidence = load_matrix_manifest(
+        args.matrix_manifest if args.draft else args.matrix_audit_manifest,
+        source_sha,
+        require_final_audit=not args.draft,
     )
 
     component_revisions = {
@@ -2011,7 +2059,6 @@ def main() -> int:
         "report_tools": tree_revision(
             ROOT / "forwin/audit",
             ROOT / "forwin/mcp",
-            harness_path,
         ),
     }
     release_harness = tracked_source_revision(
@@ -2062,7 +2109,7 @@ def main() -> int:
         "report_tools": {
             "schema_versions": report_schema_versions(mcp_models_path),
             "revision": component_revisions["report_tools"],
-            "matrix_harness_sha256": sha256_file(harness_path),
+            "matrix_harness_sha256": matrix_evidence["harness"]["sha256"],
             "packages": package_versions(),
             "python": sys.version.split()[0],
             "platform": platform.platform(),
@@ -2070,11 +2117,7 @@ def main() -> int:
             "docker": run("docker", "--version"),
         },
         "release_harness": release_harness,
-        "matrix_evidence": load_matrix_manifest(
-            args.matrix_manifest if args.draft else args.matrix_audit_manifest,
-            source_sha,
-            require_final_audit=not args.draft,
-        ),
+        "matrix_evidence": matrix_evidence,
         "additional_evidence": read_optional_evidence(args.evidence),
         "release_candidate": collect_release_candidate(
             args,

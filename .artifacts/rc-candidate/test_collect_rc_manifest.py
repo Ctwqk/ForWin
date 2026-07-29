@@ -165,8 +165,7 @@ def active_shell_lines(block: str) -> list[str]:
     ]
 
 
-def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
-    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+def assert_rc_bootstrap_contract(runbook: str) -> None:
     bootstrap = fenced_bash_blocks(
         runbook,
         after="### Fresh Candidate Bootstrap",
@@ -175,11 +174,11 @@ def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
     compose_commands = [
         line for line in active if line.startswith("rc_compose ")
     ]
-    direct_compose_commands = [
-        line for line in active if line.startswith("docker compose ")
+    compose_token_lines = [
+        line for line in active if re.search(r"\bdocker\s+compose\b", line)
     ]
 
-    assert direct_compose_commands == [
+    assert compose_token_lines == [
         'docker compose -p "$RC_COMPOSE_PROJECT" \\',
     ]
     assert compose_commands == [
@@ -219,15 +218,79 @@ def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
     ) == 1
     assert active.count("false") == 1
     cleanup = active.index(compose_commands[0])
-    trap = active.index("trap rc_candidate_abort ERR INT TERM")
+    trap_line = "trap rc_candidate_abort ERR INT TERM"
+    trap = active.index(trap_line)
     dependencies = active.index(compose_commands[1])
 
     assert cleanup < trap < dependencies
+    assert active.count(trap_line) == 1
     assert active.count("trap - ERR INT TERM") == 1
+    assert active.count("rc_candidate_destroy || true") == 1
+    assert active.count('exit "$status"') == 1
     assert "The bootstrap stack is not V1 evidence" in runbook
 
 
-def test_rc_freeze_volume_check_triggers_cleanup_for_every_existing_volume() -> None:
+def test_rc_freeze_runbook_owns_fresh_candidate_bootstrap_lifecycle() -> None:
+    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    assert_rc_bootstrap_contract(runbook)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("rc_candidate_destroy || true", ":"),
+        ('exit "$status"', ":"),
+        (
+            "trap rc_candidate_abort ERR INT TERM",
+            (
+                "trap rc_candidate_abort ERR INT TERM\n"
+                "trap rc_candidate_abort ERR INT TERM"
+            ),
+        ),
+        (
+            "rc_compose run --rm --no-deps forwin alembic upgrade head",
+            (
+                "command docker compose up postgres-test\n"
+                "rc_compose run --rm --no-deps forwin alembic upgrade head"
+            ),
+        ),
+        (
+            "rc_compose run --rm --no-deps forwin alembic upgrade head",
+            (
+                "if docker compose up postgres-test; then :; fi\n"
+                "rc_compose run --rm --no-deps forwin alembic upgrade head"
+            ),
+        ),
+        (
+            "rc_compose run --rm --no-deps forwin alembic upgrade head",
+            (
+                "printf ready; docker compose up postgres-test\n"
+                "rc_compose run --rm --no-deps forwin alembic upgrade head"
+            ),
+        ),
+    ),
+)
+def test_rc_bootstrap_contract_rejects_shell_bypasses(
+    old: str,
+    new: str,
+) -> None:
+    runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
+    assert runbook.count(old) >= 1
+    mutated = runbook.replace(old, new, 1)
+
+    with pytest.raises((AssertionError, ValueError)):
+        assert_rc_bootstrap_contract(mutated)
+
+
+def shell_function(block: str, name: str) -> str:
+    start = block.index(f"{name}() {{")
+    end = block.index("\n}", start) + len("\n}")
+    return block[start:end]
+
+
+def test_rc_freeze_volume_check_triggers_cleanup_for_every_existing_volume(
+    tmp_path: Path,
+) -> None:
     runbook = RC_FREEZE_RUNBOOK_PATH.read_text(encoding="utf-8")
     bootstrap = fenced_bash_blocks(
         runbook,
@@ -236,6 +299,8 @@ def test_rc_freeze_volume_check_triggers_cleanup_for_every_existing_volume() -> 
     loop_start = bootstrap.index("for volume_suffix in ")
     loop_end = bootstrap.index("\ndone", loop_start) + len("\ndone")
     volume_loop = bootstrap[loop_start:loop_end]
+    destroy = shell_function(bootstrap, "rc_candidate_destroy")
+    abort = shell_function(bootstrap, "rc_candidate_abort")
     suffixes = (
         "forwin-data",
         "forwin-postgres",
@@ -244,15 +309,22 @@ def test_rc_freeze_volume_check_triggers_cleanup_for_every_existing_volume() -> 
     )
 
     for existing in suffixes:
+        cleanup_log = tmp_path / f"{existing}.log"
         script = f"""
 set -Eeuo pipefail
 RC_COMPOSE_PROJECT=forwin-v5-rc-test
 EXISTING_VOLUME={existing}
+CLEANUP_LOG={json.dumps(str(cleanup_log))}
+rc_compose() {{
+  printf '%s\\n' "$*" >> "$CLEANUP_LOG"
+}}
 docker() {{
   [[ "$1" == volume && "$2" == inspect &&
      "$3" == "${{RC_COMPOSE_PROJECT}}_${{EXISTING_VOLUME}}" ]]
 }}
-trap 'exit 97' ERR
+{destroy}
+{abort}
+trap rc_candidate_abort ERR INT TERM
 {volume_loop}
 """
         result = subprocess.run(
@@ -261,13 +333,24 @@ trap 'exit 97' ERR
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 97, existing
+        assert result.returncode == 1, existing
+        assert (
+            cleanup_log.read_text(encoding="utf-8")
+            == "down --volumes --remove-orphans\n"
+        )
 
+    clean_log = tmp_path / "clean.log"
     clean_script = f"""
 set -Eeuo pipefail
 RC_COMPOSE_PROJECT=forwin-v5-rc-test
+CLEANUP_LOG={json.dumps(str(clean_log))}
+rc_compose() {{
+  printf '%s\\n' "$*" >> "$CLEANUP_LOG"
+}}
 docker() {{ return 1; }}
-trap 'exit 97' ERR
+{destroy}
+{abort}
+trap rc_candidate_abort ERR INT TERM
 {volume_loop}
 """
     clean = subprocess.run(
@@ -277,6 +360,7 @@ trap 'exit 97' ERR
         text=True,
     )
     assert clean.returncode == 0
+    assert not clean_log.exists()
 
 
 def test_fresh30_runbook_destroys_bootstrap_stack_after_finalization() -> None:

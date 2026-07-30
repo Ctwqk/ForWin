@@ -10,6 +10,7 @@ import httpx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+import forwin.mcp.http as mcp_http
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
@@ -49,6 +50,98 @@ api_module: HttpRuntimeHarness
 
 
 class ForWinAPIClientUnitTests(unittest.TestCase):
+    def test_basic_credentials_are_forwarded_without_plaintext_client_repr(
+        self,
+    ) -> None:
+        observed: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed["authorization"] = request.headers["authorization"]
+            return httpx.Response(200, json=[], request=request)
+
+        client = ForWinAPIClient(
+            base_url="http://forwin.invalid",
+            basic_username="operator",
+            basic_password="private",
+            transport=httpx.MockTransport(handler),
+        )
+
+        asyncio.run(client.project_list())
+
+        expected = httpx.BasicAuth("operator", "private").auth_flow(
+            httpx.Request("GET", "http://forwin.invalid/api/projects")
+        )
+        authenticated_request = next(expected)
+        self.assertEqual(
+            observed["authorization"],
+            authenticated_request.headers["authorization"],
+        )
+        self.assertNotIn("operator", repr(client))
+        self.assertNotIn("private", repr(client))
+
+    def test_partial_basic_credentials_fail_before_transport_use(self) -> None:
+        for username, password in (("operator", ""), ("", "private")):
+            with self.subTest(username=bool(username), password=bool(password)):
+                with self.assertRaisesRegex(ValueError, "must be set together"):
+                    ForWinAPIClient(
+                        base_url="http://forwin.invalid",
+                        basic_username=username,
+                        basic_password=password,
+                    )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "FORWIN_API_BASE_URL": "http://api.internal:8899",
+            "FORWIN_HTTP_BASIC_USER": "operator",
+            "FORWIN_HTTP_BASIC_PASSWORD": "private",
+        },
+        clear=True,
+    )
+    @patch("forwin.mcp.http.ForWinAPIClient")
+    def test_mcp_default_client_uses_shared_basic_environment(
+        self,
+        client_factory,
+    ) -> None:
+        sentinel = object()
+        client_factory.return_value = sentinel
+
+        client = mcp_http._default_api_client()
+
+        self.assertIs(client, sentinel)
+        client_factory.assert_called_once_with(
+            base_url="http://api.internal:8899",
+            timeout=900.0,
+            basic_username="operator",
+            basic_password="private",
+        )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "FORWIN_HTTP_BASIC_USER": "operator",
+            "FORWIN_HTTP_BASIC_PASSWORD": "private",
+        },
+        clear=True,
+    )
+    @patch("forwin.mcp.client.ForWinAPIClient")
+    def test_cli_api_client_uses_shared_basic_environment(
+        self,
+        client_factory,
+    ) -> None:
+        from forwin.cli import _api_client
+
+        args = build_parser().parse_args([])
+
+        _api_client(args)
+
+        client_factory.assert_called_once_with(
+            base_url="http://127.0.0.1:8899",
+            timeout=900.0,
+            basic_username="operator",
+            basic_password="private",
+        )
+
     def test_invalid_stage_key_is_rejected_before_http_request(self) -> None:
         client = ForWinAPIClient(
             base_url="http://forwin.invalid",

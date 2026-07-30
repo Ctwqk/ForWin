@@ -40,11 +40,25 @@ class ForWinAPIClient:
         *,
         base_url: str,
         timeout: float = 900.0,
+        basic_username: str = "",
+        basic_password: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = str(base_url).rstrip("/")
         self.timeout = float(timeout)
         self.transport = transport
+        username = str(basic_username or "")
+        password = str(basic_password or "")
+        if bool(username) != bool(password):
+            raise ValueError(
+                "FORWIN_HTTP_BASIC_USER and FORWIN_HTTP_BASIC_PASSWORD "
+                "must be set together"
+            )
+        self._auth = (
+            httpx.BasicAuth(username, password)
+            if username and password
+            else None
+        )
 
     async def health(self) -> dict[str, Any]:
         return await self._request_json("GET", "/health")
@@ -621,6 +635,7 @@ class ForWinAPIClient:
                 base_url=self.base_url,
                 timeout=self.timeout,
                 transport=self.transport,
+                auth=self._auth,
                 follow_redirects=True,
             ) as client:
                 response = await client.request(method.upper(), path, params=params, json=json)

@@ -26,11 +26,20 @@ from .models import (
 )
 
 
-def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
-    client = api_client or ForWinAPIClient(
-        base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+def _default_api_client() -> ForWinAPIClient:
+    return ForWinAPIClient(
+        base_url=os.environ.get(
+            "FORWIN_API_BASE_URL",
+            "http://127.0.0.1:8899",
+        ),
         timeout=_env_api_timeout_seconds(),
+        basic_username=os.environ.get("FORWIN_HTTP_BASIC_USER", ""),
+        basic_password=os.environ.get("FORWIN_HTTP_BASIC_PASSWORD", ""),
     )
+
+
+def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
+    client = api_client or _default_api_client()
     mcp = FastMCP(
         name="ForWin",
         instructions=(
@@ -420,10 +429,7 @@ def build_asgi_app(
     api_client: ForWinAPIClient | None = None,
     mcp_server: FastMCP | None = None,
 ) -> Starlette:
-    client = api_client or ForWinAPIClient(
-        base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
-        timeout=_env_api_timeout_seconds(),
-    )
+    client = api_client or _default_api_client()
     server = mcp_server or build_mcp_server(api_client=client)
     mcp_app = server.http_app(path="/mcp")
 

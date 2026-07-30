@@ -47,6 +47,8 @@ def _api_client(args: argparse.Namespace):
     return ForWinAPIClient(
         base_url=str(args.api_base_url).rstrip("/"),
         timeout=float(args.api_timeout),
+        basic_username=os.environ.get("FORWIN_HTTP_BASIC_USER", ""),
+        basic_password=os.environ.get("FORWIN_HTTP_BASIC_PASSWORD", ""),
     )
 
 

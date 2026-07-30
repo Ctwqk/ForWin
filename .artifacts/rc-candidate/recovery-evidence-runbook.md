@@ -63,6 +63,9 @@ and revalidates both artifacts.
 The three runners own fresh-up, fault injection, recovery, and terminal
 destroy. Do not run `recovery_stack.py fresh-up` before a runner; that would
 conflict with the runner's isolated lifecycle and evidence ownership.
+Every fresh-up proves MCP control-plane availability by calling the live
+read-only `task_active_generation_check` tool through the candidate's configured
+API authentication. An MCP health-page response alone is not sufficient.
 
 Set the fixed isolated endpoints and choose one new absolute evidence root.
 The root must not exist before the first command. `RECOVERY_RUN_ID` makes every

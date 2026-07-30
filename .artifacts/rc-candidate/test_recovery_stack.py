@@ -25,6 +25,18 @@ assert SPEC is not None and SPEC.loader is not None
 stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
+CANDIDATE_MCP_PATH = Path(__file__).with_name("candidate_mcp_call.py")
+CANDIDATE_MCP_SPEC = importlib.util.spec_from_file_location(
+    "candidate_mcp_recovery_probe",
+    CANDIDATE_MCP_PATH,
+)
+assert (
+    CANDIDATE_MCP_SPEC is not None
+    and CANDIDATE_MCP_SPEC.loader is not None
+)
+candidate_mcp = importlib.util.module_from_spec(CANDIDATE_MCP_SPEC)
+CANDIDATE_MCP_SPEC.loader.exec_module(candidate_mcp)
+
 FINALIZER_PATH = Path(__file__).with_name("finalize_recovery.py")
 FINALIZER_SPEC = importlib.util.spec_from_file_location(
     "finalize_recovery_contract",
@@ -156,6 +168,85 @@ def recovery_runner_contracts(
 
     assert len(contracts) == 3
     return contracts
+
+
+def test_active_generation_probe_payload_requires_consistent_public_state(
+) -> None:
+    payload = {
+        "has_active_generation_task": False,
+        "active_task_ids": [],
+        "active_count": 0,
+        "safe_to_restart": True,
+    }
+
+    assert candidate_mcp.validate_active_generation_check(payload) == payload
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {},
+        {
+            "has_active_generation_task": "false",
+            "active_task_ids": [],
+            "active_count": 0,
+            "safe_to_restart": True,
+        },
+        {
+            "has_active_generation_task": False,
+            "active_task_ids": ["task-1"],
+            "active_count": 0,
+            "safe_to_restart": True,
+        },
+        {
+            "has_active_generation_task": True,
+            "active_task_ids": ["task-1"],
+            "active_count": 1,
+            "safe_to_restart": True,
+        },
+    ),
+)
+def test_active_generation_probe_payload_rejects_malformed_or_drifting_state(
+    payload: dict,
+) -> None:
+    with pytest.raises(RuntimeError, match="active generation check"):
+        candidate_mcp.validate_active_generation_check(payload)
+
+
+def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_compose_process(
+        *args: str,
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, "validated\n", "")
+
+    monkeypatch.setattr(stack, "compose_process", fake_compose_process)
+
+    result = stack.functional_probe(
+        "forwin-mcp",
+        run_identity={"run_id": "a" * 32},
+    )
+
+    command = tuple(captured["args"])
+    assert command[:5] == (
+        "exec",
+        "-T",
+        "forwin-mcp",
+        "python",
+        "/app/.artifacts/rc-candidate/candidate_mcp_call.py",
+    )
+    assert "task_active_generation_check" in command
+    assert "--expect-active-generation-check" in command
+    assert "--url" in command
+    assert "http://127.0.0.1:8896/mcp" in command
+    assert "/health" not in " ".join(command)
+    assert result["passed"] is True
 
 
 def controller_recovery_endpoints() -> tuple[str, str]:

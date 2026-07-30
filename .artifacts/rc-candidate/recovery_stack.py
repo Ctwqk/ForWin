@@ -2232,13 +2232,12 @@ def functional_probe(
             "-T",
             "forwin-mcp",
             "python",
-            "-c",
-            (
-                "import httpx; "
-                "c=httpx.Client(trust_env=False,timeout=10); "
-                "r=c.get('http://127.0.0.1:8896/health'); "
-                "c.close(); raise SystemExit(0 if r.status_code==200 else 1)"
-            ),
+            "/app/.artifacts/rc-candidate/candidate_mcp_call.py",
+            "task_active_generation_check",
+            "{}",
+            "--url",
+            "http://127.0.0.1:8896/mcp",
+            "--expect-active-generation-check",
         )
     elif service == "publisher-browser":
         command_args = (

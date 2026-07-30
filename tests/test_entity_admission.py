@@ -502,6 +502,65 @@ def test_llm_classifier_includes_evidence_for_mentions_after_body_excerpt() -> N
     assert "必须包含 name 字段" in client.messages[0]["content"]
 
 
+def test_llm_classifier_repairs_schema_invalid_json_once() -> None:
+    class SequencedClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.responses = [
+                json.dumps(
+                    {
+                        "entities": [
+                            {
+                                "name": "蔡序",
+                                "decision": "register_character",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "name": "蔡序",
+                                "decision": "register_character",
+                                "canonical_name": "蔡序",
+                                "aliases": [],
+                                "role_hint": "复核员",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+
+        def chat(self, messages, **kwargs):
+            self.calls.append({"messages": messages, **kwargs})
+            return self.responses[len(self.calls) - 1]
+
+    client = SequencedClient()
+    decisions = LLMEntityAdmissionClassifier(client).classify(
+        project_id="project-1",
+        chapter_number=1,
+        names=["蔡序"],
+        writer_output=WriterOutput(
+            project_id="project-1",
+            chapter_number=1,
+            title="第一章",
+            body="蔡序在复核窗口后核对签名。",
+            end_of_chapter_summary="签名完成核对。",
+        ),
+        existing_entities=[],
+    )
+
+    assert decisions[0]["name"] == "蔡序"
+    assert len(client.calls) == 2
+    assert client.calls[0]["output_schema"]["required"] == ["decisions"]
+    assert client.calls[0]["stage_key"] == "entity_registrar"
+    assert client.calls[1]["stage_key"] == "entity_registrar_json_repair"
+    assert "entities" in client.calls[1]["messages"][-1]["content"]
+
+
 def test_canon_verifier_rejects_admission_conflict_without_reclassification() -> None:
     engine, session = _session()
     try:

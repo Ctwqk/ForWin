@@ -143,7 +143,11 @@ def test_llm_classifier_receives_nonbinding_genre_candidate_features() -> None:
                         {
                             "name": "AI-7",
                             "decision": "background_generic",
-                        }
+                        },
+                        {
+                            "name": "馆员",
+                            "decision": "background_generic",
+                        },
                     ]
                 }
             )

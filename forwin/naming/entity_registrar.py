@@ -15,8 +15,10 @@ from forwin.checker.reference_classifier import (
     looks_like_generic_character_reference,
     looks_like_non_character_reference,
 )
+from forwin.llm.compat import call_chat_compat
 from forwin.models.base import new_id
 from forwin.models.entity import Entity
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
@@ -25,6 +27,48 @@ from .types import EntityAdmissionDecision, EntityAdmissionPlan
 
 logger = logging.getLogger(__name__)
 _CHARACTER_KINDS = {"character", "person", "human"}
+_ENTITY_ADMISSION_ACTIONS = {
+    "register_character",
+    "register_alias",
+    "background_generic",
+    "plan_conflict",
+}
+_ENTITY_ADMISSION_OUTPUT_SCHEMA: dict[str, Any] = {
+    "title": "EntityAdmissionResponse",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    "decision": {
+                        "type": "string",
+                        "enum": sorted(_ENTITY_ADMISSION_ACTIONS),
+                    },
+                    "entity_id": {"type": "string"},
+                    "canonical_name": {"type": "string"},
+                    "aliases": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "role_hint": {"type": "string"},
+                    "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                    },
+                    "reason": {"type": "string"},
+                },
+                "required": ["name", "decision"],
+            },
+        }
+    },
+    "required": ["decisions"],
+}
 
 
 @dataclass(frozen=True)
@@ -38,8 +82,9 @@ class EntityAdmissionResult:
 
 
 class LLMEntityAdmissionClassifier:
-    def __init__(self, llm_client: Any) -> None:
+    def __init__(self, llm_client: Any, *, max_schema_retries: int = 1) -> None:
         self.llm_client = llm_client
+        self.max_schema_retries = max(0, int(max_schema_retries))
 
     def classify(
         self,
@@ -63,11 +108,12 @@ class LLMEntityAdmissionClassifier:
             for entity in existing_entities
             if str(entity.kind or "") == "character"
         ]
-        messages = [
+        base_messages = [
             {
                 "role": "system",
                 "content": (
                     "你是 ForWin 命名实体准入规划器。只输出 JSON。"
+                    "顶层必须且只能是包含 decisions 数组的对象。"
                     "对每个 unknown_names 项给出 decision: register_character, "
                     "register_alias, background_generic, plan_conflict。"
                     "register_character 需要 canonical_name, aliases, role_hint。"
@@ -76,6 +122,12 @@ class LLMEntityAdmissionClassifier:
                     "每条 decision 必须包含 name 字段，并完全复制对应 unknown_names 原值；"
                     "不得使用 unknown_name 或 entity_name 替代 name。"
                     "不得添加 unknown_names 之外的名字。"
+                    "输出必须匹配以下 JSON Schema："
+                    + json.dumps(
+                        _ENTITY_ADMISSION_OUTPUT_SCHEMA,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                 ),
             },
             {
@@ -116,19 +168,132 @@ class LLMEntityAdmissionClassifier:
                 ),
             },
         ]
-        raw = self.llm_client.chat(
-            messages,
-            temperature=0.2,
-            max_tokens=600,
-            response_format={"type": "json_object"},
-            task_family="entity_admission",
-            stage_key="entity_registrar",
+        last_raw = ""
+        last_error = ""
+        for attempt_index in range(self.max_schema_retries + 1):
+            stage_key = (
+                "entity_registrar"
+                if attempt_index == 0
+                else "entity_registrar_json_repair"
+            )
+            messages = (
+                base_messages
+                if attempt_index == 0
+                else _entity_admission_repair_messages(
+                    base_messages=base_messages,
+                    previous_raw=last_raw,
+                    validation_error=last_error,
+                )
+            )
+            raw = call_chat_compat(
+                self.llm_client,
+                messages,
+                temperature=0.2 if attempt_index == 0 else 0.0,
+                max_tokens=600,
+                response_format={"type": "json_object"},
+                output_schema=_ENTITY_ADMISSION_OUTPUT_SCHEMA,
+                task_family="entity_admission",
+                stage_key=stage_key,
+            )
+            try:
+                payload = parse_llm_json(
+                    raw,
+                    error_prefix="EntityRegistrar JSON parser",
+                )
+                return _validate_entity_admission_decisions(
+                    payload,
+                    expected_names=names,
+                )
+            except ValueError as exc:
+                last_raw = str(raw or "")
+                last_error = str(exc)
+                mark_latest_attempt_parse_failure(
+                    self.llm_client,
+                    parser_name="EntityRegistrar",
+                    stage_key=stage_key,
+                    schema_name="entity_admission_response",
+                    raw_output=last_raw,
+                    error=exc,
+                )
+        raise ValueError(
+            "EntityRegistrar schema invalid after "
+            f"{self.max_schema_retries + 1} attempts: {last_error}"
         )
-        payload = parse_llm_json(raw, error_prefix="EntityRegistrar JSON parser")
-        decisions = payload.get("decisions") if isinstance(payload, dict) else payload
-        if not isinstance(decisions, list):
-            raise ValueError("EntityRegistrar JSON missing decisions list")
-        return [item for item in decisions if isinstance(item, dict)]
+
+
+def _validate_entity_admission_decisions(
+    payload: dict[str, Any],
+    *,
+    expected_names: list[str],
+) -> list[dict[str, Any]]:
+    decisions = payload.get("decisions")
+    if not isinstance(decisions, list):
+        raise ValueError("EntityRegistrar JSON missing decisions list")
+
+    expected = set(expected_names)
+    seen: set[str] = set()
+    validated: list[dict[str, Any]] = []
+    for index, item in enumerate(decisions):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"EntityRegistrar decisions[{index}] must be an object"
+            )
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise ValueError(
+                f"EntityRegistrar decisions[{index}] missing name"
+            )
+        if name not in expected:
+            raise ValueError(
+                f"EntityRegistrar returned unexpected name: {name}"
+            )
+        if name in seen:
+            raise ValueError(
+                f"EntityRegistrar returned duplicate decision: {name}"
+            )
+        decision = str(item.get("decision") or "").strip()
+        if decision not in _ENTITY_ADMISSION_ACTIONS:
+            raise ValueError(
+                f"EntityRegistrar returned invalid decision for {name}: {decision}"
+            )
+        aliases = item.get("aliases")
+        if aliases is not None and (
+            not isinstance(aliases, list)
+            or any(not isinstance(alias, str) for alias in aliases)
+        ):
+            raise ValueError(
+                f"EntityRegistrar returned invalid aliases for {name}"
+            )
+        seen.add(name)
+        validated.append(item)
+
+    missing = [name for name in expected_names if name not in seen]
+    if missing:
+        raise ValueError(
+            "EntityRegistrar omitted decisions for: " + ", ".join(missing)
+        )
+    return validated
+
+
+def _entity_admission_repair_messages(
+    *,
+    base_messages: list[dict[str, str]],
+    previous_raw: str,
+    validation_error: str,
+) -> list[dict[str, str]]:
+    return [
+        *base_messages,
+        {
+            "role": "user",
+            "content": (
+                "上一次 JSON 不符合 EntityAdmissionResponse 契约。"
+                "请只返回修正后的 JSON 对象，顶层只能包含 decisions 数组；"
+                "必须为每个 unknown_names 项返回且仅返回一条 decision。\n\n"
+                f"校验错误：\n{validation_error[:2000]}\n\n"
+                f"上一次 JSON：\n{previous_raw[:6000]}"
+            ),
+        },
+    ]
 
 
 class EntityRegistrar:

@@ -930,6 +930,67 @@ class LLMClientRetryTests(unittest.TestCase):
         ]
         self.assertNotIn("replaced_by_kimi", skipped_reasons)
 
+    def test_canon_extraction_keeps_deepseek_as_fallback_when_kimi_is_rate_limited(
+        self,
+    ) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+            retry_initial_delay_seconds=0,
+            retry_max_delay_seconds=0,
+            fallback_profiles=[
+                {
+                    "id": "kimi",
+                    "name": "Kimi",
+                    "api_key": "kimi-key",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                },
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "deepseek-key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                },
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            request = httpx.Request("POST", url)
+            if kwargs["json"]["model"] == "kimi-k2.5":
+                return httpx.Response(
+                    429,
+                    json={"error": "rate limited"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "{\"events\": []}"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                result = client.chat(
+                    [{"role": "user", "content": "抽取 canon 事件"}],
+                    response_format={"type": "json_object"},
+                    task_family="writer",
+                    stage_key="state_event_extraction",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "{\"events\": []}")
+        self.assertEqual(calls, ["kimi-k2.5", "deepseek-chat"])
+        self.assertEqual(attempts[0]["error_category"], "rate_limit")
+        self.assertEqual(attempts[1]["profile_id"], "deepseek")
+
     def test_writer_preview_allows_minimax_as_low_risk_fallback(self) -> None:
         client = LLMClient(
             api_key="minimax-key",

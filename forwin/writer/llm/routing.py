@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v3.8-stage-aware-hard-replacement"
+_LLM_ROUTE_POLICY_VERSION = "v3.9-canon-deepseek-fallback"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
@@ -102,7 +102,12 @@ class RoutingMixin:
                 kind == "deepseek"
                 and has_kimi
                 and primary_kind != "deepseek"
-                and route not in {"prose_generation", "repair_generation"}
+                and route
+                not in {
+                    "prose_generation",
+                    "repair_generation",
+                    "canon_extraction",
+                }
             ):
                 reason = "replaced_by_kimi"
             elif kind == "kimi" and primary_kind == "deepseek":

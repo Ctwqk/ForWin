@@ -603,6 +603,8 @@ def test_shared_http_json_forwards_auth_headers_without_echoing_them(
     common: Any,
 ) -> None:
     observed: dict[str, Any] = {}
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "environment-operator")
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_PASSWORD", "environment-password")
 
     class Response:
         def __enter__(self) -> "Response":
@@ -638,6 +640,53 @@ def test_shared_http_json_forwards_auth_headers_without_echoing_them(
         observed["headers"]["X-forwin-extension-key"]
         == "private-extension"
     )
+
+
+def test_shared_http_json_adds_complete_environment_basic_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    common: Any,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "release-operator")
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_PASSWORD", "release-password")
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok": true}'
+
+    def urlopen(request: Any, *, timeout: float) -> Response:
+        observed["headers"] = dict(request.header_items())
+        return Response()
+
+    monkeypatch.setattr(common.urllib.request, "urlopen", urlopen)
+
+    assert common.http_json("GET", "http://forwin.invalid/api") == {"ok": True}
+    expected = "Basic " + base64.b64encode(
+        b"release-operator:release-password"
+    ).decode("ascii")
+    assert observed["headers"]["Authorization"] == expected
+
+
+def test_shared_http_json_rejects_partial_environment_basic_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    common: Any,
+) -> None:
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "release-operator")
+    monkeypatch.delenv("FORWIN_HTTP_BASIC_PASSWORD", raising=False)
+
+    def unexpected_urlopen(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("HTTP request must not be sent")
+
+    monkeypatch.setattr(common.urllib.request, "urlopen", unexpected_urlopen)
+
+    with pytest.raises(common.RunnerError, match="must be set together"):
+        common.http_json("GET", "http://forwin.invalid/api")
 
 
 def claim_response(fixture: Any, client_id: str) -> dict[str, Any]:

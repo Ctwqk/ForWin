@@ -49,6 +49,12 @@ EXPECTED_HARNESS_PATHS = {
     "compose_override": Path(__file__).with_name(
         "docker-compose.recovery.yml"
     ).resolve(),
+    "candidate_mcp_call": Path(__file__).with_name(
+        "candidate_mcp_call.py"
+    ).resolve(),
+    "http_auth": Path(__file__).with_name(
+        "release_http_auth.py"
+    ).resolve(),
     "finalizer": Path(__file__).resolve(),
 }
 
@@ -378,6 +384,16 @@ def preflight_violations(
             probe.get("exit_code", -1)
         ) != 0:
             violations.append(f"service {service} functional probe did not pass")
+        if (
+            service == "forwin-mcp"
+            and probe.get("helper_sha256")
+            != (
+                (harness.get("candidate_mcp_call") or {}).get(
+                    "sha256"
+                )
+            )
+        ):
+            violations.append("V1 MCP helper probe hash mismatch")
         if (
             service in EXPECTED_RUNTIME_SERVICES
             and item.get("image_id") != runtime_image.get("image_id")

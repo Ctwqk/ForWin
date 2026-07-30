@@ -22,6 +22,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_DIR = Path(__file__).resolve().parent
+if str(ARTIFACT_DIR) not in sys.path:
+    sys.path.insert(0, str(ARTIFACT_DIR))
+
+from release_http_auth import (  # noqa: E402
+    BasicAuthConfigurationError,
+    basic_authorization_header,
+)
+
 CONTROLLER_PATH = ARTIFACT_DIR / "recovery_stack.py"
 EVALUATOR_PATH = ARTIFACT_DIR / "recovery_evidence.py"
 FINALIZER_PATH = ARTIFACT_DIR / "finalize_recovery.py"
@@ -667,17 +675,26 @@ def http_json(
         if json_body is not None
         else None
     )
+    request_headers = {
+        "Content-Type": "application/json",
+        **{
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+        },
+    }
+    try:
+        basic_header = basic_authorization_header()
+    except BasicAuthConfigurationError as exc:
+        raise RunnerError(str(exc)) from exc
+    if basic_header and not any(
+        key.lower() == "authorization" for key in request_headers
+    ):
+        request_headers["Authorization"] = basic_header
     request = urllib.request.Request(
         target,
         data=body,
         method=method,
-        headers={
-            "Content-Type": "application/json",
-            **{
-                str(key): str(value)
-                for key, value in (headers or {}).items()
-            },
-        },
+        headers=request_headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:

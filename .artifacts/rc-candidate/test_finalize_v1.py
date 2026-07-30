@@ -32,6 +32,12 @@ def harness_paths() -> dict[str, Path]:
         "compose_override": v1.CONTROLLER_PATH.with_name(
             "docker-compose.recovery.yml"
         ),
+        "candidate_mcp_call": v1.CONTROLLER_PATH.with_name(
+            "candidate_mcp_call.py"
+        ),
+        "http_auth": v1.CONTROLLER_PATH.with_name(
+            "release_http_auth.py"
+        ),
         "finalizer": MODULE_PATH,
     }
 
@@ -106,6 +112,9 @@ def stack_snapshot() -> dict:
             "probe": {"passed": True, "exit_code": 0},
         }
     }
+    runtime["forwin-mcp"]["probe"]["helper_sha256"] = v1.sha256_file(
+        harness_paths()["candidate_mcp_call"]
+    )
     return {"services": {**runtime, **dependencies, **browser}}
 
 
@@ -423,6 +432,20 @@ def test_v1_rejects_harness_hash_mismatch(tmp_path: Path) -> None:
     violations = v1.preflight_violations(payload, events)
 
     assert "V1 harness hash mismatch: compose_override" in violations
+
+
+def test_v1_rejects_mcp_probe_helper_not_bound_to_harness(
+    tmp_path: Path,
+) -> None:
+    payload, candidate_path, events_path = valid_fixture(tmp_path)
+    events = v1.load_verified_events(events_path)
+    events[1]["after"]["services"]["forwin-mcp"]["probe"][
+        "helper_sha256"
+    ] = "0" * 64
+
+    violations = v1.preflight_violations(payload, events)
+
+    assert "V1 MCP helper probe hash mismatch" in violations
 
 
 def test_v1_rejects_missing_runtime_role(tmp_path: Path) -> None:

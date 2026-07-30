@@ -69,6 +69,18 @@ TEST_CONTAINER_SUFFIXES = {
 }
 
 
+def frozen_identity() -> dict[str, Any]:
+    return {
+        "source_sha": SOURCE_SHA,
+        "harness": {
+            "candidate_mcp_call": {
+                "path": str(CANDIDATE_MCP_PATH.resolve()),
+                "sha256": stack.sha256_file(CANDIDATE_MCP_PATH.resolve()),
+            }
+        },
+    }
+
+
 def module_assignment_literal(tree: ast.Module, name: str):
     assignments = [
         node
@@ -251,6 +263,9 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
     result = stack.functional_probe(
         "forwin-mcp",
         run_identity={"run_id": "a" * 32},
+        expected_helper_sha256=stack.sha256_file(
+            CANDIDATE_MCP_PATH.resolve()
+        ),
     )
 
     command = tuple(captured["args"])
@@ -303,6 +318,32 @@ def test_mcp_functional_probe_rejects_helper_changed_during_execution(
         stack.functional_probe(
             "forwin-mcp",
             run_identity={"run_id": "a" * 32},
+            expected_helper_sha256=stack.sha256_file(helper),
+        )
+
+
+def test_mcp_functional_probe_rejects_helper_changed_after_freeze(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = tmp_path / "candidate_mcp_call.py"
+    helper.write_text("print('frozen')\n", encoding="utf-8")
+    expected = stack.sha256_file(helper)
+    helper.write_text("print('drifted')\n", encoding="utf-8")
+    monkeypatch.setattr(stack, "CANDIDATE_MCP_CALL", helper)
+    monkeypatch.setattr(
+        stack,
+        "command",
+        lambda *_args, **_kwargs: pytest.fail(
+            "drifted helper must not execute"
+        ),
+    )
+
+    with pytest.raises(stack.StackError, match="frozen identity"):
+        stack.functional_probe(
+            "forwin-mcp",
+            run_identity={"run_id": "a" * 32},
+            expected_helper_sha256=expected,
         )
 
 
@@ -1610,7 +1651,7 @@ def recovery_lifecycle(
             }
         ),
     }
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     stack.append_event(
         "fresh_up_started",
         fault_id=fault_id,
@@ -1639,7 +1680,7 @@ def configure_primary_fresh_up_failure(
     evidence_dir = (tmp_path / f"fresh-failure-{run_digit}").resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: run_digit * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = (
         f"forwin-v5-recovery-{run_digit * 32}-postgres-data"
     )
@@ -2354,7 +2395,7 @@ def test_recovery_override_binds_worker_database_application_names() -> None:
 def test_file_inventory_is_read_only_identity_checked_and_data_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     run_identity = {"run_id": "3" * 32}
     calls: list[tuple[tuple[str, ...], dict]] = []
     monkeypatch.setattr(
@@ -2477,7 +2518,7 @@ def test_file_inventory_rejects_missing_root_and_escaped_rows(
     payload: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     run_identity = {"run_id": "4" * 32}
     monkeypatch.setattr(
         stack,
@@ -2830,6 +2871,7 @@ def test_recovery_harness_binds_v1_and_recovery_finalizers_unambiguously() -> No
     assert Path(harness["candidate_mcp_call"]["path"]).name == (
         "candidate_mcp_call.py"
     )
+    assert Path(harness["http_auth"]["path"]).name == "release_http_auth.py"
     assert Path(harness["v1_finalizer"]["path"]).name == "finalize_v1.py"
     assert Path(harness["recovery_finalizer"]["path"]).name == (
         "finalize_recovery.py"
@@ -3109,7 +3151,7 @@ def test_active_run_rejects_volume_created_before_fresh_request(
         directory=evidence_dir,
     )
     volume_name = run_identity["database_volume_name"]
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     stack.append_event(
         "fresh_up_started",
         fault_id="old-event-volume",
@@ -3151,7 +3193,7 @@ def test_active_run_accepts_docker_second_precision_created_at(
         directory=evidence_dir,
     )
     volume_name = run_identity["database_volume_name"]
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     requested_at = "2026-07-22T12:00:00.900000+00:00"
     created_at = "2026-07-22T12:00:00+00:00"
     volume = {
@@ -3191,7 +3233,7 @@ def test_fresh_up_records_stable_run_identity_and_database_volume_lifecycle(
     evidence_dir = (tmp_path / "fault-1").resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "c" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "c" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     present = {
@@ -3301,7 +3343,7 @@ def test_fresh_up_failure_cleans_resources_and_writes_terminal_setup_blocked(
     evidence_dir = (tmp_path / failure_stage).resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "8" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "8" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     present = {
@@ -3455,7 +3497,7 @@ def test_fresh_up_interrupt_cleans_and_reraises_without_setup_blocked(
     evidence_dir = (tmp_path / interrupt_type.__name__).resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "6" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "6" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     cleanup_calls: list[dict] = []
@@ -3553,7 +3595,7 @@ def test_fresh_up_partial_interrupt_cleanup_stays_nonterminal_and_preserves_sign
     evidence_dir = (tmp_path / boundary).resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "a" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "a" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     created_at = "2026-07-22T12:00:00+00:00"
@@ -3805,7 +3847,7 @@ def interrupt_cleanup_prefix(
         run_id=run_id,
         directory=evidence_dir,
     )
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = run_identity["database_volume_name"]
     absent = {"name": volume_name, "exists": False}
     requested_at = "2026-07-22T12:00:00+00:00"
@@ -4438,7 +4480,7 @@ def test_fresh_up_response_boundary_interrupt_is_terminal_and_propagates(
     evidence_dir = (tmp_path / boundary).resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "8" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "8" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     present = {
@@ -4566,7 +4608,7 @@ def test_fresh_up_cleanup_interruption_preserves_original_interrupt(
     evidence_dir = (tmp_path / "cleanup-interruption").resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "7" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "7" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     monkeypatch.setattr(stack, "assert_frozen", lambda **_kwargs: identity)
@@ -4618,7 +4660,7 @@ def test_fresh_up_preserves_original_and_cleanup_errors_in_setup_blocked(
     evidence_dir = (tmp_path / "cleanup-failed").resolve()
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     monkeypatch.setattr(stack.secrets, "token_hex", lambda _size: "9" * 32)
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "9" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
 
@@ -5168,7 +5210,7 @@ def test_fault_timestamp_is_captured_after_non_running_inspection(
             "2026-07-22T12:00:01+00:00",
         ]
     )
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     run_identity = {
         "run_id": "d" * 32,
         "evidence_directory": "/tmp/fault-1",
@@ -5274,7 +5316,7 @@ def test_recovery_timestamp_is_captured_after_readiness_and_probe(
             "2026-07-22T12:01:01+00:00",
         ]
     )
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     run_identity = {
         "run_id": "e" * 32,
         "evidence_directory": "/tmp/fault-1",
@@ -6395,7 +6437,7 @@ def test_concurrent_fresh_up_transactions_allow_exactly_one_success(
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
     context = multiprocessing.get_context("fork")
     first_entered = context.Event()
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     volume_name = "forwin-v5-recovery-" + "7" * 32 + "-postgres-data"
     absent = {"name": volume_name, "exists": False}
     present = {
@@ -6899,7 +6941,7 @@ def test_v1_up_records_migration_schema_role_and_embedding_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str((tmp_path / "v1").resolve()))
-    identity = {"source_sha": SOURCE_SHA}
+    identity = frozen_identity()
     snapshots = [
         {"stage": "before", "services": {}},
         {"stage": "after", "services": {"forwin": {"running": True}}},

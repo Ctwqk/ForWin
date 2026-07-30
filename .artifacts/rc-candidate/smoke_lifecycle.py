@@ -22,6 +22,15 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 
 ROOT = Path(__file__).resolve().parents[2]
+ARTIFACT_DIR = Path(__file__).resolve().parent
+if str(ARTIFACT_DIR) not in sys.path:
+    sys.path.insert(0, str(ARTIFACT_DIR))
+
+from release_http_auth import (  # noqa: E402
+    BasicAuthConfigurationError,
+    basic_auth_credentials,
+)
+
 HOST_ENV_ALLOWLIST = frozenset(
     {
         "HOME",
@@ -69,6 +78,31 @@ TARGET = 30
 
 class LifecycleError(RuntimeError):
     pass
+
+
+def direct_api_client(
+    *,
+    base_url: str,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 60,
+    source: Mapping[str, str] | None = None,
+) -> httpx.AsyncClient:
+    try:
+        credentials = basic_auth_credentials(source)
+    except BasicAuthConfigurationError as exc:
+        raise LifecycleError(str(exc)) from exc
+    return httpx.AsyncClient(
+        base_url=base_url,
+        timeout=timeout,
+        auth=(
+            httpx.BasicAuth(*credentials)
+            if credentials is not None
+            else None
+        ),
+        trust_env=False,
+        follow_redirects=False,
+        headers=headers,
+    )
 
 
 def direct_mcp_http_client(
@@ -378,11 +412,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             raise LifecycleError("project_create returned no project identity")
 
         request_id = str(uuid.uuid4())
-        async with httpx.AsyncClient(
+        async with direct_api_client(
             base_url=api_url,
             timeout=60,
-            trust_env=False,
-            follow_redirects=False,
             headers={"X-Request-ID": request_id},
         ) as http:
             current = (

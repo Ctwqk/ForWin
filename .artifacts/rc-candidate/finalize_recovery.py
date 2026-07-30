@@ -78,6 +78,21 @@ SERVICE_FAULTS: dict[str, dict[str, str]] = {
 ROOT = Path(__file__).resolve().parents[2]
 GATE_HELPER_PATH = Path(__file__).with_name("run_rc_gates.py")
 RECOVERY_CONTROLLER_PATH = Path(__file__).with_name("recovery_stack.py")
+EXPECTED_RECOVERY_HARNESS_PATHS = {
+    "controller": RECOVERY_CONTROLLER_PATH.resolve(),
+    "compose_file": (ROOT / "docker-compose.yml").resolve(),
+    "compose_override": Path(__file__).with_name(
+        "docker-compose.recovery.yml"
+    ).resolve(),
+    "candidate_mcp_call": Path(__file__).with_name(
+        "candidate_mcp_call.py"
+    ).resolve(),
+    "http_auth": Path(__file__).with_name(
+        "release_http_auth.py"
+    ).resolve(),
+    "v1_finalizer": Path(__file__).with_name("finalize_v1.py").resolve(),
+    "recovery_finalizer": Path(__file__).resolve(),
+}
 DESTROY_SERVICES = frozenset(
     {
         "forwin",
@@ -1386,6 +1401,39 @@ def fault_report_violations(
         )
         if not fresh_lifecycle_valid:
             violations.append(f"{kind}.fresh stack lifecycle mismatch")
+        elif isinstance(fresh_completions[0].get("after"), dict):
+            fresh_identity = fresh_completions[0].get("identity") or {}
+            event_harness = (
+                fresh_identity.get("harness")
+                if isinstance(fresh_identity, dict)
+                else {}
+            )
+            helper_artifact = (
+                event_harness.get("candidate_mcp_call")
+                if isinstance(event_harness, dict)
+                else None
+            )
+            services = fresh_completions[0]["after"].get("services") or {}
+            mcp_state = (
+                services.get("forwin-mcp")
+                if isinstance(services, dict)
+                else {}
+            )
+            probe = (
+                mcp_state.get("probe")
+                if isinstance(mcp_state, dict)
+                else {}
+            )
+            if isinstance(helper_artifact, dict) and (
+                not isinstance(probe, dict)
+                or probe.get("passed") is not True
+                or int(probe.get("exit_code", -1)) != 0
+                or probe.get("helper_sha256")
+                != helper_artifact.get("sha256")
+            ):
+                violations.append(
+                    f"{kind}.candidate MCP helper probe identity mismatch"
+                )
         service_contract = SERVICE_FAULTS.get(kind)
         contract = service_contract or {
             "service": "",
@@ -1559,11 +1607,22 @@ def fault_report_violations(
                         if isinstance(item, dict)
                     }
                     event_harness = event_identity.get("harness") or {}
-                    if not isinstance(event_harness, dict) or not event_harness:
+                    if not isinstance(event_harness, dict) or set(
+                        event_harness
+                    ) != set(EXPECTED_RECOVERY_HARNESS_PATHS):
                         violations.append(
-                            f"{kind}.service event harness identity missing"
+                            f"{kind}.service event harness identity set mismatch"
                         )
-                    for harness_key, artifact in event_harness.items():
+                        event_harness = (
+                            event_harness
+                            if isinstance(event_harness, dict)
+                            else {}
+                        )
+                    for (
+                        harness_key,
+                        expected_path,
+                    ) in EXPECTED_RECOVERY_HARNESS_PATHS.items():
+                        artifact = event_harness.get(harness_key)
                         if not isinstance(artifact, dict):
                             violations.append(
                                 f"{kind}.service event harness malformed: "
@@ -1581,6 +1640,7 @@ def fault_report_violations(
                             source_path = ""
                         if (
                             not source_path
+                            or artifact_path != expected_path
                             or not artifact_path.is_file()
                             or sha256_file(artifact_path)
                             != artifact.get("sha256")

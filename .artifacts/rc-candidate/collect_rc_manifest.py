@@ -76,6 +76,7 @@ RELEASE_HARNESS_PATHS = (
     Path(__file__).with_name("minio_recovery.py").resolve(),
     Path(__file__).with_name("publisher_recovery.py").resolve(),
     Path(__file__).with_name("recovery_evidence.py").resolve(),
+    Path(__file__).with_name("release_http_auth.py").resolve(),
     Path(__file__).with_name("recovery_runner_common.py").resolve(),
     Path(__file__).with_name("recovery_stack.py").resolve(),
     Path(__file__).with_name("release-source-files.txt").resolve(),

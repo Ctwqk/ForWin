@@ -1326,6 +1326,8 @@ def test_policy_fetch_disables_env_and_redirects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     options: dict = {}
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "release-operator")
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_PASSWORD", "release-password")
 
     class Response:
         def raise_for_status(self) -> None:
@@ -1356,12 +1358,34 @@ def test_policy_fetch_disables_env_and_redirects(
     )
 
     assert result == {"policy": {"quality_profile": "standard"}}
+    auth = options.pop("auth")
+    authenticated = next(
+        auth.auth_flow(l200.httpx.Request("GET", "http://forwin.invalid"))
+    )
+    assert authenticated.headers["Authorization"].startswith("Basic ")
     assert options == {
         "base_url": "http://127.0.0.1:18899",
         "timeout": 60,
         "trust_env": False,
         "follow_redirects": False,
     }
+
+
+def test_policy_fetch_rejects_partial_basic_auth_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "release-operator")
+    monkeypatch.delenv("FORWIN_HTTP_BASIC_PASSWORD", raising=False)
+
+    def unexpected_client(**_kwargs):
+        raise AssertionError("HTTP client must not be created")
+
+    monkeypatch.setattr(l200.httpx, "AsyncClient", unexpected_client)
+
+    with pytest.raises(l200.EvidenceError, match="must be set together"):
+        asyncio.run(
+            l200.fetch_policy("http://127.0.0.1:18899", "project-generic")
+        )
 
 
 def test_qdrant_projection_violation_is_blocking(tmp_path: Path) -> None:

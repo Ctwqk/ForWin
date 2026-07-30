@@ -28,13 +28,20 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[2]
+ARTIFACT_DIR = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ARTIFACT_DIR) not in sys.path:
+    sys.path.insert(0, str(ARTIFACT_DIR))
 
 from forwin.mcp.models import (  # noqa: E402
     CostLedgerReportView,
     GateLedgerReportView,
     RuleProvenanceReportView,
+)
+from release_http_auth import (  # noqa: E402
+    BasicAuthConfigurationError,
+    basic_auth_credentials,
 )
 
 RC_COLLECTOR_PATH = Path(__file__).with_name("collect_rc_manifest.py").resolve()
@@ -254,6 +261,16 @@ _SECRET_KEY_PARTS = (
 
 class EvidenceError(RuntimeError):
     pass
+
+
+def api_basic_auth(
+    source: Mapping[str, str] | None = None,
+) -> httpx.BasicAuth | None:
+    try:
+        credentials = basic_auth_credentials(source)
+    except BasicAuthConfigurationError as exc:
+        raise EvidenceError(str(exc)) from exc
+    return httpx.BasicAuth(*credentials) if credentials is not None else None
 
 
 class FreezeViolation(EvidenceError):
@@ -2028,6 +2045,7 @@ async def fetch_policy(api_url: str, project_id: str) -> dict[str, Any]:
     async with httpx.AsyncClient(
         base_url=api_url,
         timeout=60,
+        auth=api_basic_auth(),
         trust_env=False,
         follow_redirects=False,
     ) as http:

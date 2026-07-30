@@ -17,6 +17,8 @@ is frozen. Do not reuse the matrix project or its database.
   delta, gate argv/JUnit, recovery event identity, and lifecycle transcript
   rather than trusting the RC summary.
 - The L200 output directory does not exist.
+- The exact RC's complete `FORWIN_HTTP_BASIC_USER` and
+  `FORWIN_HTTP_BASIC_PASSWORD` pair is exported in the collector environment.
 
 Set local shell variables without recording credentials in evidence files:
 
@@ -30,6 +32,9 @@ QUALITY_PROFILE=standard
 GATE_DELEGATE=human
 read -r -s FORWIN_L200_DATABASE_URL
 export FORWIN_L200_DATABASE_URL
+read -r FORWIN_HTTP_BASIC_USER
+read -r -s FORWIN_HTTP_BASIC_PASSWORD
+export FORWIN_HTTP_BASIC_USER FORWIN_HTTP_BASIC_PASSWORD
 ```
 
 Enter the complete SQLAlchemy PostgreSQL URL at the hidden prompt. Never pass
@@ -47,9 +52,10 @@ revision labels for ForWin images, stable secret-redacted configuration
 fingerprints, identical effective routing across model-execution roles,
 credential-free passive roles, named volumes only, and exact loopback
 API/MCP/PostgreSQL/Qdrant bindings. Git and Docker subprocesses reject host
-control variables. Local API, MCP, and Qdrant clients neither inherit proxy
-settings nor follow redirects, so the recorded loopback binding is also the
-network target actually used by the collector.
+control variables. The local API client sends only the complete Basic
+credential pair from the process environment. Local API, MCP, and Qdrant
+clients neither inherit proxy settings nor follow redirects, so the recorded
+loopback binding is also the network target actually used by the collector.
 
 ## Initialize Before Writing
 

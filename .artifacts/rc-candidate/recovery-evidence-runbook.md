@@ -9,6 +9,9 @@ Never reuse a project, database volume, fault ID, or event log between faults.
 export FORWIN_RECOVERY_CANDIDATE_MANIFEST=<absolute-candidate-manifest>
 export FORWIN_RECOVERY_ENV_FILE=<absolute-runtime-env>
 export FORWIN_RECOVERY_PROVIDER_ENV_FILE=<absolute-provider-env>
+read -r FORWIN_HTTP_BASIC_USER
+read -r -s FORWIN_HTTP_BASIC_PASSWORD
+export FORWIN_HTTP_BASIC_USER FORWIN_HTTP_BASIC_PASSWORD
 ```
 
 The candidate manifest supplies the source SHA/tree, runtime, browser,
@@ -94,10 +97,12 @@ The Qdrant fault reads the effective
 `FORWIN_LLM_KB_QDRANT_COLLECTION` from the exact candidate Compose
 environment. Do not set a separate recovery collection override.
 
-Export `FORWIN_PUBLISHER_EXTENSION_API_KEY`, `FORWIN_HTTP_BASIC_USER`, and
-`FORWIN_HTTP_BASIC_PASSWORD` from the exact candidate's secured operator
-configuration before the five publisher commands. Do not write those values
-into an evidence file.
+Keep the complete `FORWIN_HTTP_BASIC_USER` and
+`FORWIN_HTTP_BASIC_PASSWORD` pair from the exact candidate's secured operator
+configuration exported for all eleven commands. Generation/projection and
+MinIO runners call protected project API routes as part of their proof. Export
+`FORWIN_PUBLISHER_EXTENSION_API_KEY` before the five publisher commands. Do not
+write any of these values into an evidence file.
 
 Run all eleven commands. Each command uses the runner's real CLI, a new
 absolute evidence directory, and a unique fault ID.

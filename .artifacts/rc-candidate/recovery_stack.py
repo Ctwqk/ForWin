@@ -419,6 +419,9 @@ def harness_identity(
         "compose_file": COMPOSE_FILE.resolve(),
         "compose_override": COMPOSE_OVERRIDE.resolve(),
         "candidate_mcp_call": CANDIDATE_MCP_CALL.resolve(),
+        "http_auth": Path(__file__).with_name(
+            "release_http_auth.py"
+        ).resolve(),
     }
     if mode == "recovery":
         paths.update(
@@ -439,6 +442,23 @@ def harness_identity(
         key: {"path": str(path), "sha256": sha256_file(path)}
         for key, path in paths.items()
     }
+
+
+def frozen_mcp_helper_sha256(identity: dict[str, Any]) -> str:
+    harness = identity.get("harness")
+    artifact = (
+        harness.get("candidate_mcp_call")
+        if isinstance(harness, dict)
+        else None
+    )
+    expected = (
+        str(artifact.get("sha256") or "")
+        if isinstance(artifact, dict)
+        else ""
+    )
+    if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+        raise StackError("candidate MCP helper frozen identity is missing")
+    return expected
 
 
 def validated_fault_id(fault_id: str) -> str:
@@ -2162,6 +2182,7 @@ def functional_probe(
     service: str,
     *,
     run_identity: dict[str, Any] | None = None,
+    expected_helper_sha256: str | None = None,
 ) -> dict[str, Any]:
     worker_markers = {
         "generation-worker": "generation-worker",
@@ -2231,6 +2252,13 @@ def functional_probe(
             ),
         )
     elif service == "forwin-mcp":
+        expected_helper = str(expected_helper_sha256 or "")
+        if re.fullmatch(r"[0-9a-f]{64}", expected_helper) is None:
+            raise StackError("candidate MCP helper frozen identity is missing")
+        if sha256_file(CANDIDATE_MCP_CALL) != expected_helper:
+            raise StackError(
+                "candidate MCP helper does not match frozen identity"
+            )
         mapping = published_endpoint_identity(
             "forwin-mcp",
             8896,
@@ -2238,7 +2266,6 @@ def functional_probe(
         )
         host = str(mapping["host"])
         authority = f"[{host}]" if ":" in host else host
-        helper_sha256 = sha256_file(CANDIDATE_MCP_CALL)
         output = command(
             sys.executable,
             "-I",
@@ -2251,12 +2278,12 @@ def functional_probe(
             env=host_command_environment(),
             timeout_seconds=60,
         )
-        if sha256_file(CANDIDATE_MCP_CALL) != helper_sha256:
+        if sha256_file(CANDIDATE_MCP_CALL) != expected_helper:
             raise StackError("candidate MCP helper changed during execution")
         return {
             "passed": True,
             "exit_code": 0,
-            "helper_sha256": helper_sha256,
+            "helper_sha256": expected_helper,
             "output_sha256": hashlib.sha256(
                 output.encode("utf-8")
             ).hexdigest(),
@@ -2288,6 +2315,7 @@ def stack_snapshot(
     *,
     probe: bool = False,
     run_identity: dict[str, Any] | None = None,
+    expected_helper_sha256: str | None = None,
 ) -> dict[str, Any]:
     services = {
         service: inspect_service(service, run_identity=run_identity)
@@ -2298,6 +2326,7 @@ def stack_snapshot(
             services[service]["probe"] = functional_probe(
                 service,
                 run_identity=run_identity,
+                expected_helper_sha256=expected_helper_sha256,
             )
     return {
         "observed_at": now(),
@@ -3264,7 +3293,11 @@ def fresh_up(fault_id: str) -> None:
         for service in SERVICES:
             wait_service(service, run_identity=run_identity)
         failure_stage = "functional_probe"
-        after = stack_snapshot(probe=True, run_identity=run_identity)
+        after = stack_snapshot(
+            probe=True,
+            run_identity=run_identity,
+            expected_helper_sha256=frozen_mcp_helper_sha256(identity),
+        )
         failure_stage = "database_volume_postcondition"
         database_volume = confirmed_fresh_database_volume(
             run_identity,
@@ -3383,7 +3416,10 @@ def v1_up() -> None:
     for service in SERVICES:
         wait_service(service)
     embedding = run_v1_embedding_smoke()
-    after = stack_snapshot(probe=True)
+    after = stack_snapshot(
+        probe=True,
+        expected_helper_sha256=frozen_mcp_helper_sha256(identity),
+    )
     event = append_event(
         "v1_preflight_completed",
         run_id=run_id,
@@ -3602,7 +3638,17 @@ def start_fault_service(service: str, fault_id: str) -> None:
         )
     compose("start", service, run_identity=run_identity)
     ready = wait_service(service, run_identity=run_identity)
-    ready["probe"] = functional_probe(service, run_identity=run_identity)
+    if service == "forwin-mcp":
+        ready["probe"] = functional_probe(
+            service,
+            run_identity=run_identity,
+            expected_helper_sha256=frozen_mcp_helper_sha256(identity),
+        )
+    else:
+        ready["probe"] = functional_probe(
+            service,
+            run_identity=run_identity,
+        )
     recovery_time = now()
     database_volume = confirmed_database_volume(
         run_identity,
@@ -3818,7 +3864,17 @@ def setup_release_service(
     requested_at = now()
     compose("start", service, run_identity=run_identity)
     after = wait_service(service, run_identity=run_identity)
-    after["probe"] = functional_probe(service, run_identity=run_identity)
+    if service == "forwin-mcp":
+        after["probe"] = functional_probe(
+            service,
+            run_identity=run_identity,
+            expected_helper_sha256=frozen_mcp_helper_sha256(identity),
+        )
+    else:
+        after["probe"] = functional_probe(
+            service,
+            run_identity=run_identity,
+        )
     if (
         after.get("container_id") != held["container_id"]
         or after.get("image_id") != held["image_id"]

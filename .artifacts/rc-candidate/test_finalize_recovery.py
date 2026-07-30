@@ -55,9 +55,16 @@ HARNESS_PATHS = {
     "compose_override": recovery.RECOVERY_CONTROLLER_PATH.with_name(
         "docker-compose.recovery.yml"
     ).resolve(),
-    "finalizer": recovery.RECOVERY_CONTROLLER_PATH.with_name(
+    "candidate_mcp_call": recovery.RECOVERY_CONTROLLER_PATH.with_name(
+        "candidate_mcp_call.py"
+    ).resolve(),
+    "http_auth": recovery.RECOVERY_CONTROLLER_PATH.with_name(
+        "release_http_auth.py"
+    ).resolve(),
+    "v1_finalizer": recovery.RECOVERY_CONTROLLER_PATH.with_name(
         "finalize_v1.py"
     ).resolve(),
+    "recovery_finalizer": MODULE_PATH.resolve(),
 }
 CANDIDATE_RELEASE_PATHS = frozenset(
     {
@@ -558,6 +565,13 @@ def fault_report(
                     fresh_services["publisher-worker"].update(
                         container_id="publisher-worker-boundary-container",
                     )
+                fresh_services["forwin-mcp"]["probe"] = {
+                    "passed": True,
+                    "exit_code": 0,
+                    "helper_sha256": recovery.sha256_file(
+                        HARNESS_PATHS["candidate_mcp_call"]
+                    ),
+                }
                 event["after"] = {
                     "services": fresh_services
                 }
@@ -1505,6 +1519,37 @@ def test_every_fault_requires_its_own_event_log(tmp_path: Path) -> None:
         source_sha=SOURCE_SHA,
     )
     assert "qdrant_unavailable.independent event log is missing" in violations
+
+
+def test_recovery_finalizer_binds_mcp_probe_to_frozen_helper(
+    tmp_path: Path,
+) -> None:
+    manifest = recovery_manifest(tmp_path)
+    report = json.loads(
+        Path(
+            manifest["faults"]["qdrant_unavailable"]["path"]
+        ).read_text(encoding="utf-8")
+    )
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    fresh = next(
+        event
+        for event in events
+        if event.get("action") == "fresh_up_completed"
+    )
+    fresh["after"]["services"]["forwin-mcp"]["probe"][
+        "helper_sha256"
+    ] = "0" * 64
+    reseal_event_log(report, events)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "qdrant_unavailable.candidate MCP helper probe identity mismatch"
+        in violations
+    )
 
 
 def test_service_fault_requires_fresh_stack_lifecycle(tmp_path: Path) -> None:

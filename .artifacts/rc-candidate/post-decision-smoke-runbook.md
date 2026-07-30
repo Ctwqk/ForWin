@@ -13,6 +13,8 @@ created after the candidate draft manifest was collected.
 - API and MCP URLs are the explicit numeric loopback bindings of the verified
   candidate Compose stack; hostnames, HTTPS, proxies, and alternate local
   services are not accepted.
+- The exact candidate's complete `FORWIN_HTTP_BASIC_USER` and
+  `FORWIN_HTTP_BASIC_PASSWORD` pair is exported in the runner environment.
 - Target is exactly 30 and no older matrix project is reused.
 
 Keep the database URL out of process arguments:
@@ -20,6 +22,9 @@ Keep the database URL out of process arguments:
 ```bash
 read -r -s FORWIN_SMOKE_DATABASE_URL
 export FORWIN_SMOKE_DATABASE_URL
+read -r FORWIN_HTTP_BASIC_USER
+read -r -s FORWIN_HTTP_BASIC_PASSWORD
+export FORWIN_HTTP_BASIC_USER FORWIN_HTTP_BASIC_PASSWORD
 ```
 
 Create and hand off the project with the tracked lifecycle runner. The premise
@@ -38,7 +43,8 @@ uv run python .artifacts/rc-candidate/smoke_lifecycle.py \
   --output .artifacts/v5-post-decision-smoke/lifecycle.json
 ```
 
-The runner creates the project through MCP, updates RuntimePolicy through HTTP,
+The runner creates the project through MCP, updates RuntimePolicy through
+authenticated HTTP,
 generates and locks all six Genesis stages through MCP, verifies no active task,
 and invokes the supported writing handoff. The resulting transcript binds both
 service URLs to the exact candidate-stack ports. Its HTTP/MCP clients do not

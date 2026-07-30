@@ -156,6 +156,9 @@ use a new directory for a retry instead of overwriting earlier evidence.
 ```bash
 read -r -s FORWIN_MATRIX_DATABASE_URL
 export FORWIN_MATRIX_DATABASE_URL
+read -r FORWIN_HTTP_BASIC_USER
+read -r -s FORWIN_HTTP_BASIC_PASSWORD
+export FORWIN_HTTP_BASIC_USER FORWIN_HTTP_BASIC_PASSWORD
 uv run python .artifacts/rc-candidate/finalize_matrix.py \
   --matrix-manifest .artifacts/v4-matrix-candidate/manifest.json \
   --mcp-url <candidate-mcp-url> \
@@ -173,6 +176,11 @@ uv run python .artifacts/rc-candidate/finalize_matrix.py \
   --output-dir .artifacts/v4-matrix-candidate/final-audit
 unset FORWIN_MATRIX_DATABASE_URL
 ```
+
+Keep the exact candidate's complete Basic credential pair exported while the
+four matrix cells create or update project policy and while the finalizer reads
+that policy. The runners fail before sending a request when only one value is
+present, and credentials must never be written into matrix evidence.
 
 The matrix may be a predecessor of the final RC only when it is an ancestor and
 every intervening file is in the collector's explicit R8

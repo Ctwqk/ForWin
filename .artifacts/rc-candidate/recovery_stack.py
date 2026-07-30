@@ -29,6 +29,7 @@ from forwin.config import InfrastructureConfig  # noqa: E402
 ARTIFACT_DIR = ROOT / ".artifacts/rc-candidate"
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 COMPOSE_OVERRIDE = ARTIFACT_DIR / "docker-compose.recovery.yml"
+CANDIDATE_MCP_CALL = ARTIFACT_DIR / "candidate_mcp_call.py"
 PROJECT = "forwin-v5-recovery"
 RECOVERY_PROJECT_PREFIX = "forwin-v5-recovery"
 DATABASE_VOLUME_SUFFIX = "postgres-data"
@@ -2227,18 +2228,30 @@ def functional_probe(
             ),
         )
     elif service == "forwin-mcp":
-        command_args = (
-            "exec",
-            "-T",
+        mapping = published_endpoint_identity(
             "forwin-mcp",
-            "python",
-            "/app/.artifacts/rc-candidate/candidate_mcp_call.py",
+            8896,
+            run_identity=run_identity,
+        )
+        host = str(mapping["host"])
+        authority = f"[{host}]" if ":" in host else host
+        output = command(
+            sys.executable,
+            str(CANDIDATE_MCP_CALL),
             "task_active_generation_check",
             "{}",
             "--url",
-            "http://127.0.0.1:8896/mcp",
+            f"http://{authority}:{mapping['host_port']}/mcp",
             "--expect-active-generation-check",
+            timeout_seconds=60,
         )
+        return {
+            "passed": True,
+            "exit_code": 0,
+            "output_sha256": hashlib.sha256(
+                output.encode("utf-8")
+            ).hexdigest(),
+        }
     elif service == "publisher-browser":
         command_args = (
             "exec",

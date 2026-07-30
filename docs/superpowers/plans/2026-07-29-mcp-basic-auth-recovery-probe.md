@@ -99,7 +99,7 @@ git commit -m "fix: authenticate internal ForWin API clients"
 
 **Interfaces:**
 - Consumes: live `forwin-mcp` service at `http://127.0.0.1:8896/mcp`
-- Produces: `functional_probe("forwin-mcp")` that exits zero only after a valid `task_active_generation_check` response
+- Produces: `functional_probe("forwin-mcp")` that exits zero only after a valid `task_active_generation_check` response through the verified published endpoint
 
 - [ ] **Step 1: Write failing probe tests**
 
@@ -127,7 +127,10 @@ Expected: failure because the command only performs `GET /health`.
 
 - [ ] **Step 3: Implement the live tool probe**
 
-Replace the MCP health request with a small async Python program executed inside the `forwin-mcp` container. It must:
+Replace the MCP health request with the tracked `candidate_mcp_call.py` helper
+executed on the controller host against the active run's Docker-verified
+published MCP mapping. The request still traverses the live MCP container and
+its API client. It must:
 
 ```python
 async with Client("http://127.0.0.1:8896/mcp") as client:
@@ -189,4 +192,3 @@ Call `task_active_generation_check` through the candidate MCP endpoint and requi
 - [ ] **Step 4: Retire old release evidence**
 
 Treat all manifests produced before the source change as historical. Use new output roots for V1, immutable gates, matrix, recovery, fresh30, and L200.
-

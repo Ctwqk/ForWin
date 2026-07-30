@@ -218,15 +218,32 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_compose_process(
+    def fake_command(
         *args: str,
         **kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
+    ) -> str:
         captured["args"] = args
         captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args, 0, "validated\n", "")
+        return "validated"
 
-    monkeypatch.setattr(stack, "compose_process", fake_compose_process)
+    monkeypatch.setattr(
+        stack,
+        "published_endpoint_identity",
+        lambda service, port, *, run_identity: {
+            "service": service,
+            "host": "127.0.0.1",
+            "host_port": 24112,
+            "container_port": port,
+        },
+    )
+    monkeypatch.setattr(stack, "command", fake_command)
+    monkeypatch.setattr(
+        stack,
+        "compose_process",
+        lambda *_args, **_kwargs: pytest.fail(
+            "MCP probe must use the verified published endpoint"
+        ),
+    )
 
     result = stack.functional_probe(
         "forwin-mcp",
@@ -234,17 +251,14 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
     )
 
     command = tuple(captured["args"])
-    assert command[:5] == (
-        "exec",
-        "-T",
-        "forwin-mcp",
-        "python",
-        "/app/.artifacts/rc-candidate/candidate_mcp_call.py",
+    assert command[:2] == (
+        sys.executable,
+        str(CANDIDATE_MCP_PATH.resolve()),
     )
     assert "task_active_generation_check" in command
     assert "--expect-active-generation-check" in command
     assert "--url" in command
-    assert "http://127.0.0.1:8896/mcp" in command
+    assert "http://127.0.0.1:24112/mcp" in command
     assert "/health" not in " ".join(command)
     assert result["passed"] is True
 

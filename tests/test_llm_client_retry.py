@@ -991,6 +991,68 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(attempts[0]["error_category"], "rate_limit")
         self.assertEqual(attempts[1]["profile_id"], "deepseek")
 
+    def test_review_json_keeps_deepseek_after_preferred_providers_are_rate_limited(
+        self,
+    ) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+            retry_initial_delay_seconds=0,
+            retry_max_delay_seconds=0,
+            fallback_profiles=[
+                {
+                    "id": "kimi",
+                    "name": "Kimi",
+                    "api_key": "kimi-key",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                },
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "deepseek-key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                },
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            model = kwargs["json"]["model"]
+            calls.append(model)
+            request = httpx.Request("POST", url)
+            if model in {"kimi-k2.5", "MiniMax-M2.7"}:
+                return httpx.Response(
+                    429,
+                    json={"error": "rate limited"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "{\"verdict\": \"pass\"}"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                result = client.chat(
+                    [{"role": "user", "content": "审核章节"}],
+                    response_format={"type": "json_object"},
+                    task_family="chapter_review_form",
+                    stage_key="chapter_review_form",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "{\"verdict\": \"pass\"}")
+        self.assertEqual(calls, ["kimi-k2.5", "MiniMax-M2.7", "deepseek-chat"])
+        self.assertEqual(attempts[-1]["profile_id"], "deepseek")
+        self.assertTrue(all(item["llm_task_route"] == "review_json" for item in attempts))
+
     def test_writer_preview_allows_minimax_as_low_risk_fallback(self) -> None:
         client = LLMClient(
             api_key="minimax-key",
@@ -1320,7 +1382,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         self.assertEqual(timeout.read, 30.0)
 
-    def test_kimi_primary_still_replaces_deepseek_fallback(self) -> None:
+    def test_kimi_primary_keeps_deepseek_as_lower_priority_fallback(self) -> None:
         client = LLMClient(
             api_key="kimi-key",
             base_url="https://api.moonshot.cn/v1",
@@ -1369,7 +1431,7 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(calls, ["kimi-k2.5"])
         skipped = attempts[0]["skipped_profiles"]
         skipped_reasons = [item["reason"] for item in skipped]
-        self.assertIn("replaced_by_kimi", skipped_reasons)
+        self.assertNotIn("replaced_by_kimi", skipped_reasons)
         self.assertIn("replaced_by_deepseek", skipped_reasons)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import importlib.util
 from pathlib import Path
 
@@ -36,17 +38,18 @@ def test_direct_api_client_uses_complete_basic_auth(
     )
 
     assert client is sentinel
-    auth = options.pop("auth")
-    authenticated = next(
-        auth.auth_flow(httpx.Request("GET", "http://forwin.invalid"))
-    )
-    assert authenticated.headers["Authorization"].startswith("Basic ")
+    expected_authorization = "Basic " + base64.b64encode(
+        b"release-operator:release-password"
+    ).decode("ascii")
     assert options == {
         "base_url": "http://127.0.0.1:18899",
         "timeout": 60,
         "trust_env": False,
         "follow_redirects": False,
-        "headers": {"X-Request-ID": "request-generic"},
+        "headers": {
+            "X-Request-ID": "request-generic",
+            "Authorization": expected_authorization,
+        },
     }
 
 
@@ -63,3 +66,41 @@ def test_direct_api_client_rejects_partial_basic_auth(
             base_url="http://127.0.0.1:18899",
             source={"FORWIN_HTTP_BASIC_USER": "release-operator"},
         )
+
+
+def test_direct_api_client_preserves_explicit_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options: dict = {}
+    real_async_client = httpx.AsyncClient
+
+    def capture_client(**kwargs):
+        options.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(smoke.httpx, "AsyncClient", capture_client)
+    smoke.direct_api_client(
+        base_url="http://forwin.invalid",
+        headers={"Authorization": "Bearer explicit-token"},
+        source={
+            "FORWIN_HTTP_BASIC_USER": "release-operator",
+            "FORWIN_HTTP_BASIC_PASSWORD": "release-password",
+        },
+    )
+
+    observed: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["authorization"] = request.headers["Authorization"]
+        return httpx.Response(200, json={"ok": True})
+
+    options["transport"] = httpx.MockTransport(handler)
+
+    async def request() -> None:
+        async with real_async_client(**options) as client:
+            response = await client.get("/api/generic")
+            response.raise_for_status()
+
+    asyncio.run(request())
+
+    assert observed["authorization"] == "Bearer explicit-token"

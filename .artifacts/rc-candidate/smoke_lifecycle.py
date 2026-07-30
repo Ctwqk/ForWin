@@ -28,7 +28,7 @@ if str(ARTIFACT_DIR) not in sys.path:
 
 from release_http_auth import (  # noqa: E402
     BasicAuthConfigurationError,
-    basic_auth_credentials,
+    basic_authorization_header,
 )
 
 HOST_ENV_ALLOWLIST = frozenset(
@@ -88,20 +88,23 @@ def direct_api_client(
     source: Mapping[str, str] | None = None,
 ) -> httpx.AsyncClient:
     try:
-        credentials = basic_auth_credentials(source)
+        basic_header = basic_authorization_header(source)
     except BasicAuthConfigurationError as exc:
         raise LifecycleError(str(exc)) from exc
+    request_headers = {
+        str(key): str(value)
+        for key, value in (headers or {}).items()
+    }
+    if basic_header and not any(
+        key.lower() == "authorization" for key in request_headers
+    ):
+        request_headers["Authorization"] = basic_header
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=timeout,
-        auth=(
-            httpx.BasicAuth(*credentials)
-            if credentials is not None
-            else None
-        ),
         trust_env=False,
         follow_redirects=False,
-        headers=headers,
+        headers=request_headers or None,
     )
 
 

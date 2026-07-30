@@ -172,6 +172,7 @@ class LLMEntityAdmissionClassifier:
         last_raw = ""
         last_error = ""
         for attempt_index in range(self.max_schema_retries + 1):
+            payload: dict[str, Any] | None = None
             stage_key = (
                 "entity_registrar"
                 if attempt_index == 0
@@ -217,6 +218,19 @@ class LLMEntityAdmissionClassifier:
                     raw_output=last_raw,
                     error=exc,
                 )
+                if (
+                    attempt_index == self.max_schema_retries
+                    and payload is not None
+                ):
+                    try:
+                        return _validate_entity_admission_decisions(
+                            payload,
+                            expected_names=names,
+                            existing_entities=existing_entities,
+                            require_complete=False,
+                        )
+                    except ValueError:
+                        pass
         raise ValueError(
             "EntityRegistrar schema invalid after "
             f"{self.max_schema_retries + 1} attempts: {last_error}"
@@ -228,6 +242,7 @@ def _validate_entity_admission_decisions(
     *,
     expected_names: list[str],
     existing_entities: list[EntitySnapshot],
+    require_complete: bool = True,
 ) -> list[dict[str, Any]]:
     decisions = payload.get("decisions")
     if not isinstance(decisions, list):
@@ -277,7 +292,7 @@ def _validate_entity_admission_decisions(
         validated.append(item)
 
     missing = [name for name in expected_names if name not in seen]
-    if missing:
+    if missing and require_complete:
         raise ValueError(
             "EntityRegistrar omitted decisions for: " + ", ".join(missing)
         )

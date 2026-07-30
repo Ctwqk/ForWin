@@ -626,6 +626,55 @@ def test_llm_classifier_repairs_unresolvable_alias_target() -> None:
     assert "missing-entity" in client.calls[1]["messages"][-1]["content"]
 
 
+def test_llm_classifier_scopes_exhausted_coverage_failure_to_omitted_name() -> None:
+    class PartialClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def chat(self, messages, **kwargs):
+            self.calls.append({"messages": messages, **kwargs})
+            return json.dumps(
+                {
+                    "decisions": [
+                        {
+                            "name": "蔡序",
+                            "decision": "register_character",
+                            "canonical_name": "蔡序",
+                            "aliases": [],
+                            "role_hint": "复核员",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    client = PartialClient()
+    decisions = LLMEntityAdmissionClassifier(client).classify(
+        project_id="project-1",
+        chapter_number=1,
+        names=["蔡序", "遮蔽名_"],
+        writer_output=WriterOutput(
+            project_id="project-1",
+            chapter_number=1,
+            title="第一章",
+            body="蔡序看见档案上只剩遮蔽名_。",
+            end_of_chapter_summary="档案中的名字遭到遮蔽。",
+        ),
+        existing_entities=[],
+    )
+
+    assert len(client.calls) == 2
+    assert decisions == [
+        {
+            "name": "蔡序",
+            "decision": "register_character",
+            "canonical_name": "蔡序",
+            "aliases": [],
+            "role_hint": "复核员",
+        }
+    ]
+
+
 def test_canon_verifier_rejects_admission_conflict_without_reclassification() -> None:
     engine, session = _session()
     try:

@@ -117,7 +117,8 @@ class LLMEntityAdmissionClassifier:
                     "对每个 unknown_names 项给出 decision: register_character, "
                     "register_alias, background_generic, plan_conflict。"
                     "register_character 需要 canonical_name, aliases, role_hint。"
-                    "register_alias 需要 entity_id 和 aliases。"
+                    "register_alias 需要 aliases，以及 existing_characters 中的 "
+                    "entity_id 或可唯一解析的 canonical_name；不得臆造别名目标。"
                     "background_generic 不入实体表。plan_conflict 表示与计划或 canon 冲突。"
                     "每条 decision 必须包含 name 字段，并完全复制对应 unknown_names 原值；"
                     "不得使用 unknown_name 或 entity_name 替代 name。"
@@ -203,6 +204,7 @@ class LLMEntityAdmissionClassifier:
                 return _validate_entity_admission_decisions(
                     payload,
                     expected_names=names,
+                    existing_entities=existing_entities,
                 )
             except ValueError as exc:
                 last_raw = str(raw or "")
@@ -225,6 +227,7 @@ def _validate_entity_admission_decisions(
     payload: dict[str, Any],
     *,
     expected_names: list[str],
+    existing_entities: list[EntitySnapshot],
 ) -> list[dict[str, Any]]:
     decisions = payload.get("decisions")
     if not isinstance(decisions, list):
@@ -264,6 +267,12 @@ def _validate_entity_admission_decisions(
             raise ValueError(
                 f"EntityRegistrar returned invalid aliases for {name}"
             )
+        if decision == "register_alias":
+            _validate_alias_target(
+                item,
+                mention_name=name,
+                existing_entities=existing_entities,
+            )
         seen.add(name)
         validated.append(item)
 
@@ -273,6 +282,40 @@ def _validate_entity_admission_decisions(
             "EntityRegistrar omitted decisions for: " + ", ".join(missing)
         )
     return validated
+
+
+def _validate_alias_target(
+    item: dict[str, Any],
+    *,
+    mention_name: str,
+    existing_entities: list[EntitySnapshot],
+) -> None:
+    entity_id = str(item.get("entity_id") or "").strip()
+    if entity_id:
+        if any(entity.entity_id == entity_id for entity in existing_entities):
+            return
+        raise ValueError(
+            "EntityRegistrar returned unresolvable alias target for "
+            f"{mention_name}: entity_id={entity_id}"
+        )
+
+    canonical_name = str(item.get("canonical_name") or "").strip()
+    if not canonical_name:
+        raise ValueError(
+            "EntityRegistrar alias target is missing entity_id and "
+            f"canonical_name for {mention_name}"
+        )
+    matching_ids = {
+        entity.entity_id
+        for entity in existing_entities
+        if canonical_name == entity.name or canonical_name in entity.aliases
+    }
+    if len(matching_ids) != 1:
+        resolution = "not found" if not matching_ids else "ambiguous"
+        raise ValueError(
+            "EntityRegistrar returned unresolvable alias target for "
+            f"{mention_name}: canonical_name={canonical_name} ({resolution})"
+        )
 
 
 def _entity_admission_repair_messages(

@@ -12,7 +12,7 @@ from forwin.models import Entity, Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
-from forwin.protocol import EntityMention, SceneOutput, WriterOutput
+from forwin.protocol import EntityMention, EntitySnapshot, SceneOutput, WriterOutput
 from forwin.protocol.book_state import WorldNode
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.review.draft_service import DraftReviewService
@@ -559,6 +559,71 @@ def test_llm_classifier_repairs_schema_invalid_json_once() -> None:
     assert client.calls[0]["stage_key"] == "entity_registrar"
     assert client.calls[1]["stage_key"] == "entity_registrar_json_repair"
     assert "entities" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_llm_classifier_repairs_unresolvable_alias_target() -> None:
+    class SequencedClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.responses = [
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "name": "刀疤男",
+                                "decision": "register_alias",
+                                "entity_id": "missing-entity",
+                                "aliases": ["刀疤男"],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "name": "刀疤男",
+                                "decision": "background_generic",
+                                "reason": "generic descriptive reference",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+
+        def chat(self, messages, **kwargs):
+            self.calls.append({"messages": messages, **kwargs})
+            return self.responses[len(self.calls) - 1]
+
+    client = SequencedClient()
+    decisions = LLMEntityAdmissionClassifier(client).classify(
+        project_id="project-1",
+        chapter_number=15,
+        names=["刀疤男"],
+        writer_output=WriterOutput(
+            project_id="project-1",
+            chapter_number=15,
+            title="第十五章",
+            body="刀疤男递来一份地图。",
+            end_of_chapter_summary="主角取得地图。",
+        ),
+        existing_entities=[
+            EntitySnapshot(
+                entity_id="known-entity",
+                kind="character",
+                name="岑昀行",
+                aliases=[],
+                description="既有角色",
+                current_state={},
+            )
+        ],
+    )
+
+    assert len(client.calls) == 2
+    assert decisions[0]["decision"] == "background_generic"
+    assert "missing-entity" in client.calls[1]["messages"][-1]["content"]
 
 
 def test_canon_verifier_rejects_admission_conflict_without_reclassification() -> None:

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -217,6 +218,8 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
+    monkeypatch.setenv("PYTHONPATH", "/tmp/untrusted-shadow")
+    monkeypatch.setenv("FORWIN_HTTP_BASIC_PASSWORD", "must-not-reach-helper")
 
     def fake_command(
         *args: str,
@@ -251,8 +254,9 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
     )
 
     command = tuple(captured["args"])
-    assert command[:2] == (
+    assert command[:3] == (
         sys.executable,
+        "-I",
         str(CANDIDATE_MCP_PATH.resolve()),
     )
     assert "task_active_generation_check" in command
@@ -260,7 +264,94 @@ def test_mcp_functional_probe_calls_read_only_tool_not_health_page(
     assert "--url" in command
     assert "http://127.0.0.1:24112/mcp" in command
     assert "/health" not in " ".join(command)
+    environment = captured["kwargs"]["env"]
+    assert isinstance(environment, dict)
+    assert set(environment) <= stack.HOST_ENV_ALLOWLIST
+    assert "PYTHONPATH" not in environment
+    assert "FORWIN_HTTP_BASIC_PASSWORD" not in environment
     assert result["passed"] is True
+    assert result["helper_sha256"] == stack.sha256_file(
+        CANDIDATE_MCP_PATH.resolve()
+    )
+
+
+def test_mcp_functional_probe_rejects_helper_changed_during_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = tmp_path / "candidate_mcp_call.py"
+    helper.write_text("print('original')\n", encoding="utf-8")
+    monkeypatch.setattr(stack, "CANDIDATE_MCP_CALL", helper)
+    monkeypatch.setattr(
+        stack,
+        "published_endpoint_identity",
+        lambda service, port, *, run_identity: {
+            "service": service,
+            "host": "127.0.0.1",
+            "host_port": 24112,
+            "container_port": port,
+        },
+    )
+
+    def mutate_helper(*_args: str, **_kwargs: object) -> str:
+        helper.write_text("print('changed')\n", encoding="utf-8")
+        return "validated"
+
+    monkeypatch.setattr(stack, "command", mutate_helper)
+
+    with pytest.raises(stack.StackError, match="helper changed"):
+        stack.functional_probe(
+            "forwin-mcp",
+            run_identity={"run_id": "a" * 32},
+        )
+
+
+def test_v1_mcp_endpoint_identity_uses_base_compose_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_id = "v1-mcp-container"
+    payload = [
+        {
+            "Id": container_id,
+            "Image": "sha256:" + "a" * 64,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": stack.PROJECT,
+                    "com.docker.compose.service": "forwin-mcp",
+                }
+            },
+            "State": {"Running": True},
+            "NetworkSettings": {
+                "Ports": {
+                    "8896/tcp": [
+                        {
+                            "HostIp": "127.0.0.1",
+                            "HostPort": "24112",
+                        }
+                    ]
+                }
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        stack,
+        "compose_container_id",
+        lambda *_args, **_kwargs: container_id,
+    )
+    monkeypatch.setattr(
+        stack,
+        "command",
+        lambda *_args, **_kwargs: json.dumps(payload),
+    )
+
+    identity = stack.published_endpoint_identity(
+        "forwin-mcp",
+        8896,
+        run_identity=None,
+    )
+
+    assert identity["container_id"] == container_id
+    assert identity["host_port"] == 24112
 
 
 def controller_recovery_endpoints() -> tuple[str, str]:
@@ -2053,9 +2144,16 @@ def test_endpoint_binding_uses_verified_dynamic_published_mappings(
 def test_minio_endpoint_identity_requires_exact_active_published_mapping(
     mutation: str,
     expected: str,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run_identity = {"run_id": "4" * 32}
+    evidence_dir = (tmp_path / "evidence").resolve()
+    monkeypatch.setenv(stack.EVIDENCE_DIR_ENV, str(evidence_dir))
+    run_identity = stack.new_recovery_run_identity(
+        "minio-endpoint-identity",
+        run_id="4" * 32,
+        directory=evidence_dir,
+    )
     container_id = "minio-container-exact"
     ports: dict[str, Any] = {
         "9000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "24115"}],
@@ -2729,6 +2827,9 @@ def test_recovery_run_identity_is_canonical_and_drives_unique_compose_resources(
 def test_recovery_harness_binds_v1_and_recovery_finalizers_unambiguously() -> None:
     harness = stack.harness_identity()
 
+    assert Path(harness["candidate_mcp_call"]["path"]).name == (
+        "candidate_mcp_call.py"
+    )
     assert Path(harness["v1_finalizer"]["path"]).name == "finalize_v1.py"
     assert Path(harness["recovery_finalizer"]["path"]).name == (
         "finalize_recovery.py"

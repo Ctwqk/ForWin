@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 StageKey = Literal[
     "brief",
@@ -358,11 +358,25 @@ class BandCheckpointView(BaseModel):
 
 
 class ActiveTaskCheckView(BaseModel):
-    has_active_generation_task: bool = False
-    active_task_ids: list[str] = Field(default_factory=list)
-    active_count: int = 0
-    safe_to_restart: bool = True
-    message: str = ""
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    has_active_generation_task: bool
+    active_task_ids: list[str]
+    active_count: int
+    safe_to_restart: bool
+    message: str
+
+    @model_validator(mode="after")
+    def validate_public_state(self) -> Self:
+        if any(not task_id.strip() for task_id in self.active_task_ids):
+            raise ValueError("active task IDs must not be empty")
+        if (
+            self.active_count != len(self.active_task_ids)
+            or self.has_active_generation_task is not (self.active_count > 0)
+            or self.safe_to_restart is self.has_active_generation_task
+        ):
+            raise ValueError("active generation state is inconsistent")
+        return self
 
 
 class WorldModelSnapshotView(BaseModel):

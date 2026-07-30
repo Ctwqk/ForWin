@@ -89,6 +89,75 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
                         basic_password=password,
                     )
 
+    def test_active_generation_check_rejects_incomplete_coerced_or_inconsistent_payloads(
+        self,
+    ) -> None:
+        malformed_payloads = (
+            {},
+            {
+                "has_active_generation_task": "false",
+                "active_task_ids": [],
+                "active_count": "0",
+                "safe_to_restart": "true",
+                "message": "",
+            },
+            {
+                "has_active_generation_task": False,
+                "active_task_ids": [1],
+                "active_count": 1,
+                "safe_to_restart": True,
+                "message": "",
+            },
+            {
+                "has_active_generation_task": False,
+                "active_task_ids": ["task-1"],
+                "active_count": 1,
+                "safe_to_restart": True,
+                "message": "",
+            },
+        )
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                client = ForWinAPIClient(
+                    base_url="http://forwin.invalid",
+                    transport=httpx.MockTransport(
+                        lambda request, payload=payload: httpx.Response(
+                            200,
+                            json=payload,
+                            request=request,
+                        )
+                    ),
+                )
+
+                with self.assertRaises(ValueError):
+                    asyncio.run(client.task_active_generation_check())
+
+    def test_active_generation_check_accepts_complete_strict_consistent_payload(
+        self,
+    ) -> None:
+        payload = {
+            "has_active_generation_task": True,
+            "active_task_ids": ["task-1"],
+            "active_count": 1,
+            "safe_to_restart": False,
+            "message": "generation active",
+        }
+        client = ForWinAPIClient(
+            base_url="http://forwin.invalid",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json=payload,
+                    request=request,
+                )
+            ),
+        )
+
+        result = asyncio.run(client.task_active_generation_check())
+
+        self.assertEqual(result.model_dump(mode="json"), payload)
+
     @patch.dict(
         "os.environ",
         {

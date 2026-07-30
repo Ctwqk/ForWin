@@ -55,4 +55,3 @@ Use TDD to prove:
    a health-only or malformed result;
 4. focused MCP/recovery suites and the full RC harness pass;
 5. a live candidate with Basic authentication enabled can execute the MCP tool.
-

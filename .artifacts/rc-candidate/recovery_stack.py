@@ -418,6 +418,7 @@ def harness_identity(
         "controller": Path(__file__).resolve(),
         "compose_file": COMPOSE_FILE.resolve(),
         "compose_override": COMPOSE_OVERRIDE.resolve(),
+        "candidate_mcp_call": CANDIDATE_MCP_CALL.resolve(),
     }
     if mode == "recovery":
         paths.update(
@@ -1693,7 +1694,7 @@ def published_endpoint_identity(
     service: str,
     container_port: int,
     *,
-    run_identity: dict[str, Any],
+    run_identity: dict[str, Any] | None,
 ) -> dict[str, Any]:
     allowed_ports = {
         "forwin": {8899},
@@ -1724,7 +1725,9 @@ def published_endpoint_identity(
         raise StackError(f"expected one endpoint container for {service}")
     item = payload[0]
     labels = (item.get("Config") or {}).get("Labels") or {}
-    expected_project = recovery_project_name(run_identity)
+    expected_project, _database_volume_name = compose_resource_identity(
+        run_identity
+    )
     if (
         labels.get("com.docker.compose.project") != expected_project
         or labels.get("com.docker.compose.service") != service
@@ -2235,19 +2238,25 @@ def functional_probe(
         )
         host = str(mapping["host"])
         authority = f"[{host}]" if ":" in host else host
+        helper_sha256 = sha256_file(CANDIDATE_MCP_CALL)
         output = command(
             sys.executable,
+            "-I",
             str(CANDIDATE_MCP_CALL),
             "task_active_generation_check",
             "{}",
             "--url",
             f"http://{authority}:{mapping['host_port']}/mcp",
             "--expect-active-generation-check",
+            env=host_command_environment(),
             timeout_seconds=60,
         )
+        if sha256_file(CANDIDATE_MCP_CALL) != helper_sha256:
+            raise StackError("candidate MCP helper changed during execution")
         return {
             "passed": True,
             "exit_code": 0,
+            "helper_sha256": helper_sha256,
             "output_sha256": hashlib.sha256(
                 output.encode("utf-8")
             ).hexdigest(),

@@ -1755,10 +1755,29 @@ class RunConfig:
     qdrant_collection: str = ""
 
 
+def candidate_runtime_llm_kb_qdrant_collection() -> str:
+    stack = common.load_module(
+        "forwin_recovery_stack_collection_resolver",
+        CONTROLLER_PATH,
+    )
+    try:
+        collection = stack.effective_llm_kb_qdrant_collection()
+    except Exception as exc:
+        raise RunnerError(
+            "candidate runtime LLM-KB Qdrant collection could not be resolved: "
+            f"{exc}"
+        ) from exc
+    return _required_text(
+        collection,
+        "candidate runtime LLM-KB Qdrant collection",
+    )
+
+
 def resolve_run_config(
     args: argparse.Namespace,
     *,
     environ: Mapping[str, str] = os.environ,
+    qdrant_collection_resolver: Callable[[], str] | None = None,
 ) -> RunConfig:
     fault_kind = str(args.fault_kind or "")
     if fault_kind not in SUPPORTED_FAULTS:
@@ -1794,14 +1813,22 @@ def resolve_run_config(
                 "FORWIN_RECOVERY_QDRANT_URL is required for the Qdrant fault"
             )
         qdrant_url = required_url(qdrant_url, "Qdrant URL")
-        qdrant_collection = str(
+        if str(
             environ.get("FORWIN_RECOVERY_QDRANT_COLLECTION") or ""
-        ).strip()
-        if not qdrant_collection:
+        ).strip():
             raise RunnerError(
-                "FORWIN_RECOVERY_QDRANT_COLLECTION is required for the "
-                "Qdrant fault"
+                "FORWIN_RECOVERY_QDRANT_COLLECTION must not be set; "
+                "the Qdrant fault derives the collection from the exact "
+                "candidate runtime"
             )
+        resolver = (
+            qdrant_collection_resolver
+            or candidate_runtime_llm_kb_qdrant_collection
+        )
+        qdrant_collection = _required_text(
+            resolver(),
+            "candidate runtime LLM-KB Qdrant collection",
+        )
     return RunConfig(
         fault_kind=fault_kind,
         fault_id=fault_id,

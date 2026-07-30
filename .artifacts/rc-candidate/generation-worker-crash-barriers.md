@@ -22,9 +22,11 @@ python .artifacts/rc-candidate/generation_projection_recovery.py run \
 ```
 
 `NAME` identifies the environment variable containing the PostgreSQL URL. For
-`qdrant_unavailable`, also set `FORWIN_RECOVERY_QDRANT_URL` and
-`FORWIN_RECOVERY_QDRANT_COLLECTION`. The evidence directory must be new or
-empty. Every invocation uses a new fault ID and evidence directory;
+`qdrant_unavailable`, also set `FORWIN_RECOVERY_QDRANT_URL`. The collection is
+derived from the exact candidate's effective
+`FORWIN_LLM_KB_QDRANT_COLLECTION`; a separate recovery override is rejected.
+The evidence directory must be new or empty. Every invocation uses a new fault
+ID and evidence directory;
 `recovery_stack.py fresh-up` creates the new run ID and database volume.
 
 ## Supported Lifecycle

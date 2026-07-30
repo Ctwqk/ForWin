@@ -270,14 +270,6 @@ def parse_live_recovery_setup(setup_block: str) -> dict[str, str]:
             f"http://{qdrant_bind}",
         ),
         (
-            "FORWIN_RECOVERY_QDRANT_COLLECTION",
-            (
-                'export FORWIN_RECOVERY_QDRANT_COLLECTION='
-                '"chapter_memories"',
-            ),
-            "chapter_memories",
-        ),
-        (
             "FORWIN_RECOVERY_MINIO_ENDPOINT",
             (
                 'export FORWIN_RECOVERY_MINIO_ENDPOINT='
@@ -745,8 +737,9 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
         'export FORWIN_RECOVERY_QDRANT_URL="'
         f'http://{stack.COMPOSE_ENV["FORWIN_QDRANT_DEBUG_BIND"]}"\n'
     )
-    qdrant_collection_export = (
-        'export FORWIN_RECOVERY_QDRANT_COLLECTION="chapter_memories"\n'
+    minio_endpoint_export = (
+        'export FORWIN_RECOVERY_MINIO_ENDPOINT="'
+        f'{stack.COMPOSE_ENV["FORWIN_RECOVERY_MINIO_API_BIND"]}"\n'
     )
     minio_secure_export = (
         'export FORWIN_RECOVERY_MINIO_SECURE="'
@@ -915,8 +908,8 @@ def mutate_live_recovery_runbook(runbook: str, mutation: str) -> str:
             recovery_evidence_root_export + recovery_run_id_export,
         ),
         "swapped_plain_setup_exports": (
-            qdrant_url_export + qdrant_collection_export,
-            qdrant_collection_export + qdrant_url_export,
+            qdrant_url_export + minio_endpoint_export,
+            minio_endpoint_export + qdrant_url_export,
         ),
         "duplicate_setup_paragraph": (
             database_export,
@@ -1175,6 +1168,20 @@ def test_live_recovery_runbook_parser_rejects_mutations(
 
     with pytest.raises(AssertionError, match=message):
         parse_live_recovery_commands(mutated)
+
+
+def test_live_recovery_qdrant_fault_uses_the_candidate_collection() -> None:
+    runbook = RECOVERY_RUNBOOK_PATH.read_text(encoding="utf-8")
+    setup_block, _command_block = live_recovery_bash_blocks(runbook)
+
+    assert "FORWIN_RECOVERY_QDRANT_COLLECTION" not in parse_live_recovery_setup(
+        setup_block
+    )
+    assert re.search(
+        r"effective\s+`FORWIN_LLM_KB_QDRANT_COLLECTION` from the exact\s+"
+        r"candidate Compose",
+        runbook,
+    )
 
 
 def test_live_recovery_runbook_commands_match_controller_contract() -> None:
@@ -1625,6 +1632,46 @@ def test_effective_compose_validator_rejects_extra_service() -> None:
         stack.validate_isolated_compose_config(payload, identity=identity)
 
 
+def test_llm_kb_collection_uses_the_runtime_default_when_compose_omits_it(
+) -> None:
+    from forwin.config import InfrastructureConfig
+
+    payload, _identity = isolated_compose_config()
+    runtime_default = InfrastructureConfig.model_fields[
+        "llm_kb_qdrant_collection"
+    ].default
+
+    assert stack.llm_kb_collection_from_compose_config(payload) == runtime_default
+
+
+def test_llm_kb_collection_rejects_effective_runtime_drift() -> None:
+    payload, _identity = isolated_compose_config()
+    for service in stack.LLM_KB_RUNTIME_SERVICES:
+        payload["services"][service]["environment"][
+            "FORWIN_LLM_KB_QDRANT_COLLECTION"
+        ] = "candidate-runtime-vectors"
+    payload["services"]["outbox-worker"]["environment"][
+        "FORWIN_LLM_KB_QDRANT_COLLECTION"
+    ] = "detached-outbox-vectors"
+
+    with pytest.raises(stack.StackError, match="LLM-KB Qdrant collection drift"):
+        stack.llm_kb_collection_from_compose_config(payload)
+
+
+def test_explicit_default_and_runtime_defaults_do_not_count_as_drift() -> None:
+    from forwin.config import InfrastructureConfig
+
+    payload, _identity = isolated_compose_config()
+    runtime_default = InfrastructureConfig.model_fields[
+        "llm_kb_qdrant_collection"
+    ].default
+    payload["services"]["outbox-worker"]["environment"][
+        "FORWIN_LLM_KB_QDRANT_COLLECTION"
+    ] = runtime_default
+
+    assert stack.llm_kb_collection_from_compose_config(payload) == runtime_default
+
+
 def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1651,8 +1698,14 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
     )
     runtime_env = tmp_path / "runtime.env"
     provider_env = tmp_path / "provider.env"
-    runtime_env.write_text("", encoding="utf-8")
-    provider_env.write_text("", encoding="utf-8")
+    runtime_env.write_text(
+        "FORWIN_LLM_KB_QDRANT_COLLECTION=runtime-vectors\n",
+        encoding="utf-8",
+    )
+    provider_env.write_text(
+        "FORWIN_LLM_KB_QDRANT_COLLECTION=provider-vectors\n",
+        encoding="utf-8",
+    )
     manifest = tmp_path / "candidate.json"
     runtime_tag = "forwin-v5-runtime:dynamic-config-test"
     browser_tag = "forwin-v5-browser:dynamic-config-test"
@@ -1701,6 +1754,9 @@ def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(
         payload,
         identity=identity,
         run_identity=run_identity,
+    )
+    assert stack.llm_kb_collection_from_compose_config(payload) == (
+        "provider-vectors"
     )
     project_name = stack.recovery_project_name(run_identity)
     assert payload["name"] == project_name

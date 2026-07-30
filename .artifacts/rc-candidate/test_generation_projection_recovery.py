@@ -2537,21 +2537,72 @@ def test_run_config_uses_cli_and_environment_for_every_live_endpoint(
     environment = {
         "FIXTURE_DATABASE_URL": "postgresql://db.example/fixture",
         "FORWIN_RECOVERY_QDRANT_URL": "https://qdrant.example",
-        "FORWIN_RECOVERY_QDRANT_COLLECTION": "fixture-collection",
     }
 
-    config = runner.resolve_run_config(arguments, environ=environment)
+    config = runner.resolve_run_config(
+        arguments,
+        environ=environment,
+        qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+    )
 
     assert config.database_url == "postgresql://db.example/fixture"
     assert config.mcp_url == "https://mcp.example/mcp"
     assert config.api_url == "https://api.example"
     assert config.qdrant_url == "https://qdrant.example"
-    assert config.qdrant_collection == "fixture-collection"
+    assert config.qdrant_collection == "candidate-runtime-vectors"
     assert config.evidence_dir == (tmp_path / "evidence").resolve()
 
     del environment["FORWIN_RECOVERY_QDRANT_URL"]
     with pytest.raises(runner.RunnerError, match="FORWIN_RECOVERY_QDRANT_URL"):
-        runner.resolve_run_config(arguments, environ=environment)
+        runner.resolve_run_config(
+            arguments,
+            environ=environment,
+            qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+        )
+
+
+def test_run_config_rejects_independent_qdrant_collection_override(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps({"source": {"sha": SOURCE_SHA}}),
+        encoding="utf-8",
+    )
+    arguments = runner.parse_args(
+        [
+            "run",
+            "--fault-kind",
+            "qdrant_unavailable",
+            "--fault-id",
+            FAULT_ID,
+            "--candidate-manifest",
+            str(candidate),
+            "--mcp-url",
+            "https://mcp.example/mcp",
+            "--api-url",
+            "https://api.example",
+            "--database-url-env",
+            "FIXTURE_DATABASE_URL",
+            "--evidence-dir",
+            str(tmp_path / "evidence"),
+        ]
+    )
+    environment = {
+        "FIXTURE_DATABASE_URL": "postgresql://db.example/fixture",
+        "FORWIN_RECOVERY_QDRANT_URL": "https://qdrant.example",
+        "FORWIN_RECOVERY_QDRANT_COLLECTION": "detached-override",
+    }
+
+    with pytest.raises(
+        runner.RunnerError,
+        match="FORWIN_RECOVERY_QDRANT_COLLECTION.*must not be set",
+    ):
+        runner.resolve_run_config(
+            arguments,
+            environ=environment,
+            qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+        )
 
 
 def test_cli_accepts_only_the_four_task4_fault_kinds(tmp_path: Path) -> None:

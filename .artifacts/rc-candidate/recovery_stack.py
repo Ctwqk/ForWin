@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from forwin.config import InfrastructureConfig  # noqa: E402
+
 ARTIFACT_DIR = ROOT / ".artifacts/rc-candidate"
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 COMPOSE_OVERRIDE = ARTIFACT_DIR / "docker-compose.recovery.yml"
@@ -96,6 +100,11 @@ APPLICATION_SERVICES = (
     "forwin-mcp",
     "publisher-worker",
     "publisher-browser",
+)
+LLM_KB_RUNTIME_SERVICES = (
+    "forwin",
+    "generation-worker",
+    "outbox-worker",
 )
 DEPENDENCY_SERVICES = ("postgres", "qdrant", "minio")
 HEALTHCHECK_SERVICES = frozenset(
@@ -1019,6 +1028,7 @@ def validate_isolated_compose_config(
         expected_image = browser_tag if service == "publisher-browser" else runtime_tag
         if not expected_image or item.get("image") != expected_image:
             raise StackError(f"{service} effective image is not the candidate image")
+    llm_kb_collection_from_compose_config(payload)
     dependency_images = identity.get("dependency_images") or {}
     for service in DEPENDENCY_SERVICES:
         expected_image = str(
@@ -1078,11 +1088,54 @@ def validate_isolated_compose_config(
         raise StackError("effective PostgreSQL volume is not run-isolated")
 
 
-def assert_isolated_compose(
-    identity: dict[str, Any],
+def llm_kb_collection_from_compose_config(
+    payload: dict[str, Any],
+) -> str:
+    field = InfrastructureConfig.model_fields.get(
+        "llm_kb_qdrant_collection"
+    )
+    runtime_default = str(
+        getattr(field, "default", "") or ""
+    ).strip()
+    if not runtime_default:
+        raise StackError(
+            "candidate runtime LLM-KB Qdrant collection default is missing"
+        )
+    services = payload.get("services")
+    if not isinstance(services, dict):
+        raise StackError("effective Compose services are missing")
+    effective: dict[str, str] = {}
+    for service in LLM_KB_RUNTIME_SERVICES:
+        item = services.get(service)
+        if not isinstance(item, dict):
+            raise StackError(
+                f"effective Compose service is missing: {service}"
+            )
+        environment = item.get("environment")
+        if not isinstance(environment, dict):
+            raise StackError(
+                f"{service} effective environment is missing"
+            )
+        value = str(
+            environment.get("FORWIN_LLM_KB_QDRANT_COLLECTION") or ""
+        ).strip()
+        effective[service] = value or runtime_default
+    values = set(effective.values())
+    if len(values) != 1:
+        detail = ", ".join(
+            f"{service}={effective[service]}"
+            for service in LLM_KB_RUNTIME_SERVICES
+        )
+        raise StackError(
+            f"effective LLM-KB Qdrant collection drift: {detail}"
+        )
+    return values.pop()
+
+
+def rendered_compose_config(
     *,
     run_identity: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     completed = compose_process(
         "config",
         "--format",
@@ -1097,9 +1150,27 @@ def assert_isolated_compose(
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise StackError("effective recovery Compose config is invalid JSON") from exc
+        raise StackError(
+            "effective recovery Compose config is invalid JSON"
+        ) from exc
     if not isinstance(payload, dict):
         raise StackError("effective recovery Compose config is not an object")
+    return payload
+
+
+def effective_llm_kb_qdrant_collection() -> str:
+    identity = assert_frozen()
+    payload = rendered_compose_config()
+    validate_isolated_compose_config(payload, identity=identity)
+    return llm_kb_collection_from_compose_config(payload)
+
+
+def assert_isolated_compose(
+    identity: dict[str, Any],
+    *,
+    run_identity: dict[str, Any] | None = None,
+) -> None:
+    payload = rendered_compose_config(run_identity=run_identity)
     validate_isolated_compose_config(
         payload,
         identity=identity,

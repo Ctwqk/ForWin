@@ -74,7 +74,6 @@ export FORWIN_RECOVERY_CANDIDATE_MANIFEST="$(
 )"
 export FORWIN_RECOVERY_DATABASE_URL="postgresql://forwin:forwin@127.0.0.1:55434/forwin"
 export FORWIN_RECOVERY_QDRANT_URL="http://127.0.0.1:16337"
-export FORWIN_RECOVERY_QDRANT_COLLECTION="chapter_memories"
 export FORWIN_RECOVERY_MINIO_ENDPOINT="127.0.0.1:19100"
 export FORWIN_RECOVERY_MINIO_ACCESS_KEY="forwin-recovery"
 export FORWIN_RECOVERY_MINIO_SECRET_KEY="forwin-recovery-secret"
@@ -87,6 +86,10 @@ export RECOVERY_EVIDENCE_ROOT="$(
 )/.artifacts/v5-recovery-live/$RECOVERY_RUN_ID"
 test ! -e "$RECOVERY_EVIDENCE_ROOT"
 ```
+
+The Qdrant fault reads the effective
+`FORWIN_LLM_KB_QDRANT_COLLECTION` from the exact candidate Compose
+environment. Do not set a separate recovery collection override.
 
 Export `FORWIN_PUBLISHER_EXTENSION_API_KEY`, `FORWIN_HTTP_BASIC_USER`, and
 `FORWIN_HTTP_BASIC_PASSWORD` from the exact candidate's secured operator

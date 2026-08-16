@@ -112,6 +112,18 @@ class FakeWriterLLM:
 
 
 class CodexBridgeTests(unittest.TestCase):
+    def test_health_reports_bridge_source_revision(self) -> None:
+        app = build_app(
+            token="",
+            runner=FakeCodexRunner(),
+            source_revision="candidate-sha",
+        )
+
+        response = TestClient(app).get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["source_revision"], "candidate-sha")
+
     def test_bridge_requires_bearer_token_when_configured(self) -> None:
         app = build_app(token="secret-token", runner=FakeCodexRunner())
         client = TestClient(app)

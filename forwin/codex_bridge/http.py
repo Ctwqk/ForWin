@@ -233,9 +233,15 @@ def build_app(
     token: str | None = None,
     runner: CodexExecRunner | None = None,
     max_workers: int | None = None,
+    source_revision: str | None = None,
 ) -> FastAPI:
     resolved_token = str(token if token is not None else os.environ.get("FORWIN_CODEX_BRIDGE_TOKEN", "")).strip()
     resolved_runner = runner or CodexExecRunner(default_cwd=os.environ.get("FORWIN_CODEX_DEFAULT_CWD", "."))
+    resolved_source_revision = str(
+        source_revision
+        if source_revision is not None
+        else os.environ.get("FORWIN_SOURCE_REVISION", "")
+    ).strip()
     executor = ThreadPoolExecutor(max_workers=max(1, int(max_workers or os.environ.get("FORWIN_CODEX_MAX_CONCURRENT", "1"))))
     jobs: dict[str, dict[str, Any]] = {}
     jobs_lock = threading.Lock()
@@ -245,7 +251,12 @@ def build_app(
     @app.get("/health")
     def health() -> dict[str, object]:
         status = resolved_runner.health()
-        return {"status": "ok" if status.get("available") else "degraded", "backend": "codex_bridge", **status}
+        return {
+            "status": "ok" if status.get("available") else "degraded",
+            "backend": "codex_bridge",
+            "source_revision": resolved_source_revision,
+            **status,
+        }
 
     @app.post("/v1/codex/chat", dependencies=[Depends(require_auth)])
     def chat(req: CodexBridgeChatRequest) -> CodexBridgeChatResponse:

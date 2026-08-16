@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import signal
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +13,12 @@ import httpx
 from fastapi.testclient import TestClient
 
 from forwin.codex_bridge.http import build_app
-from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
+from forwin.codex_bridge.runner import (
+    CodexExecRequest,
+    CodexExecResult,
+    CodexExecRunner,
+    _run_process,
+)
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.llm.router import LLMCallIntent
 from forwin.writer.chapter_writer import ChapterWriter
@@ -176,7 +183,7 @@ class CodexBridgeTests(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout='{"type":"done"}\n', stderr="")
 
         runner = CodexExecRunner(default_cwd=".")
-        with patch("forwin.codex_bridge.runner.subprocess.run", side_effect=fake_run):
+        with patch("forwin.codex_bridge.runner._run_process", side_effect=fake_run):
             result = runner.run(CodexExecRequest(prompt="ping", output_schema={"type": "object"}))
 
         cmd = captured["cmd"]
@@ -226,7 +233,7 @@ class CodexBridgeTests(unittest.TestCase):
             )
 
         runner = CodexExecRunner(default_cwd=".")
-        with patch("forwin.codex_bridge.runner.subprocess.run", side_effect=fake_run):
+        with patch("forwin.codex_bridge.runner._run_process", side_effect=fake_run):
             result = runner.run(CodexExecRequest(prompt="ping"))
 
         self.assertFalse(result.ok)
@@ -261,7 +268,7 @@ class CodexBridgeTests(unittest.TestCase):
                 )
 
             runner = CodexExecRunner(default_cwd=".", codex_home=codex_home)
-            with patch("forwin.codex_bridge.runner.subprocess.run", side_effect=fake_run):
+            with patch("forwin.codex_bridge.runner._run_process", side_effect=fake_run):
                 result = runner.run(
                     CodexExecRequest(
                         prompt="prove model",
@@ -271,6 +278,35 @@ class CodexBridgeTests(unittest.TestCase):
 
         self.assertEqual(result.thread_id, thread_id)
         self.assertEqual(result.actual_model, "gpt-5.3-codex-spark")
+
+    def test_codex_runner_kills_process_group_on_timeout(self) -> None:
+        class TimedOutProcess:
+            pid = 4242
+            returncode = -signal.SIGKILL
+
+            def __init__(self) -> None:
+                self.communicate_calls = 0
+
+            def communicate(self, *, input=None, timeout=None):  # noqa: ANN001
+                self.communicate_calls += 1
+                if self.communicate_calls == 1:
+                    raise subprocess.TimeoutExpired(["codex"], timeout)
+                return "", ""
+
+            def kill(self) -> None:
+                raise AssertionError("process-group cleanup should be used")
+
+        proc = TimedOutProcess()
+        with (
+            patch("forwin.codex_bridge.runner.subprocess.Popen", return_value=proc) as popen,
+            patch("forwin.codex_bridge.runner.os.killpg") as killpg,
+        ):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                _run_process(["codex", "exec"], input="prompt", timeout=0.01)
+
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        killpg.assert_called_once_with(proc.pid, signal.SIGKILL)
+        self.assertEqual(proc.communicate_calls, 2)
 
     def test_failed_bridge_response_retains_complete_runner_evidence(self) -> None:
         class FailedRunner(FakeCodexRunner):

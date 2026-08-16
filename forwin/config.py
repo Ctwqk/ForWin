@@ -351,7 +351,7 @@ def _infrastructure_env_values() -> dict[str, object]:
         ),
         "codex_max_concurrent": _env_int(env, "FORWIN_CODEX_MAX_CONCURRENT", 1),
         "codex_sync_timeout_seconds": _env_float(
-            env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 90.0
+            env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 900.0
         ),
         "codex_job_timeout_seconds": _env_float(
             env, "FORWIN_CODEX_JOB_TIMEOUT_SECONDS", 900.0
@@ -435,7 +435,7 @@ class _InfrastructureFields:
     codex_bridge_token: str = ""
     codex_default_model: str = DEFAULT_CODEX_MODEL
     codex_max_concurrent: int = 1
-    codex_sync_timeout_seconds: float = 90.0
+    codex_sync_timeout_seconds: float = 900.0
     codex_job_timeout_seconds: float = 900.0
     default_scene_count: int = 3
     max_scene_count: int = 4

@@ -77,7 +77,7 @@ class CodexBridgeClient:
         *,
         bridge_url: str,
         token: str = "",
-        timeout_seconds: float = 90.0,
+        timeout_seconds: float = 900.0,
     ) -> None:
         self.bridge_url = bridge_url.rstrip("/")
         self.token = token

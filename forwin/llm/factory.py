@@ -15,7 +15,7 @@ def maybe_wrap_with_codex_router(ordinary_adapter, config: InfrastructureConfig)
     codex_client = CodexBridgeClient(
         bridge_url=bridge_url,
         token=str(getattr(config, "codex_bridge_token", "") or ""),
-        timeout_seconds=float(getattr(config, "codex_sync_timeout_seconds", 90.0) or 90.0),
+        timeout_seconds=float(getattr(config, "codex_sync_timeout_seconds", 900.0) or 900.0),
     )
     return RoutedModelAdapter(
         LLMCallRouter(

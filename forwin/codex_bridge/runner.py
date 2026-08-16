@@ -2,12 +2,41 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+def _run_process(
+    cmd: list[str],
+    *,
+    input: str,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 @dataclass(frozen=True)
@@ -102,14 +131,10 @@ class CodexExecRunner:
                 )
                 cmd.extend(["--output-schema", str(schema_path)])
             cmd.append("-")
-            proc = subprocess.run(
+            proc = _run_process(
                 cmd,
                 input=request.prompt,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 timeout=timeout_seconds,
-                check=False,
             )
             events = self._parse_jsonl(proc.stdout)
             thread_id = self._thread_id_from_events(events)

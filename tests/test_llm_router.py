@@ -351,7 +351,7 @@ class LLMRouterTests(unittest.TestCase):
         self.assertFalse(config.codex_enabled)
         self.assertEqual(config.codex_bridge_url, "http://host.docker.internal:8897")
         self.assertEqual(config.codex_max_concurrent, 1)
-        self.assertEqual(config.codex_sync_timeout_seconds, 90.0)
+        self.assertEqual(config.codex_sync_timeout_seconds, 900.0)
         self.assertEqual(config.codex_job_timeout_seconds, 900.0)
 
     def test_api_genesis_service_uses_routed_adapter_when_codex_enabled(self) -> None:

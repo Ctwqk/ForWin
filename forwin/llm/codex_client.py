@@ -122,10 +122,14 @@ class CodexBridgeClient:
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        resolved_timeout = max(
+            self.timeout_seconds,
+            float(timeout_seconds or self.timeout_seconds),
+        )
         request_payload = {
             "prompt": prompt,
             "output_schema": output_schema,
-            "timeout_seconds": timeout_seconds or self.timeout_seconds,
+            "timeout_seconds": resolved_timeout,
             "permission_profile": intent.permission_profile,
             "model": str(model or "").strip(),
         }
@@ -141,6 +145,7 @@ class CodexBridgeClient:
                 f"{self.bridge_url}/v1/codex/chat",
                 headers=headers,
                 json=request_payload,
+                timeout=resolved_timeout,
             )
         except Exception as exc:  # noqa: BLE001
             self.last_call_trace.update(

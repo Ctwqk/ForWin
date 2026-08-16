@@ -76,8 +76,17 @@ class FakeHttpClient:
         self.posts: list[dict[str, object]] = []
         self.response = response
 
-    def post(self, url: str, *, headers=None, json=None) -> FakeHttpResponse:  # noqa: ANN001
-        self.posts.append({"url": url, "headers": headers, "json": json})
+    def post(
+        self,
+        url: str,
+        *,
+        headers=None,
+        json=None,
+        timeout=None,
+    ) -> FakeHttpResponse:  # noqa: ANN001
+        self.posts.append(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
         return self.response or FakeHttpResponse(
             {
                 "ok": True,
@@ -433,6 +442,26 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.completed")
         self.assertEqual(client.last_call_trace["returncode"], 0)
         self.assertNotIn("Authorization", json.dumps(client.last_call_trace))
+
+    def test_codex_client_enforces_configured_timeout_floor(self) -> None:
+        fake_http = FakeHttpClient()
+        with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
+            client = CodexBridgeClient(
+                bridge_url="http://bridge",
+                timeout_seconds=900,
+            )
+            client.chat(
+                [{"role": "user", "content": "write"}],
+                intent=LLMCallIntent(
+                    task_family="writer",
+                    stage_key="chapter_draft",
+                ),
+                timeout_seconds=90,
+            )
+
+        request = fake_http.posts[0]
+        self.assertEqual(request["json"]["timeout_seconds"], 900)
+        self.assertEqual(request["timeout"], 900)
 
     def test_codex_client_records_failed_bridge_response_before_raising(self) -> None:
         response = FakeHttpResponse(

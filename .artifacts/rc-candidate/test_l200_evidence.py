@@ -50,6 +50,25 @@ def test_l200_cli_starts_without_pythonpath() -> None:
     assert "verify-final" in completed.stdout
 
 
+def test_l200_cli_exposes_bootstrap_and_continuous_monitor() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(MODULE_PATH), "--help"],
+        cwd=MODULE_PATH.parents[2],
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONHOME", "PYTHONPATH"}
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "bootstrap" in completed.stdout
+    assert "monitor" in completed.stdout
+
+
 def test_l200_finalization_refuses_already_finalized_manifest(
     tmp_path: Path,
 ) -> None:
@@ -322,6 +341,14 @@ def test_collect_completed_band_reports_unwraps_report_tool_result_envelopes(
                 }
             ],
             output_dir=tmp_path,
+            run_manifest={
+                "initialized_at": "2026-07-23T12:00:00+00:00",
+                "rule_provenance": reports["rule_provenance_report"],
+                "rule_state_hash": l200.canonical_hash(
+                    l200.frozen_rule_state(reports["rule_provenance_report"])
+                ),
+            },
+            accepted_at_collection=25,
         )
     )
 
@@ -339,6 +366,7 @@ def test_collect_completed_band_reports_unwraps_report_tool_result_envelopes(
 
 def run_manifest(directory: Path) -> dict:
     return {
+        "initialized_at": "2026-07-23T12:00:00+00:00",
         "checkpoints": [
             {
                 "chapter": chapter,
@@ -356,6 +384,10 @@ def run_manifest(directory: Path) -> dict:
             }
         ],
         "code_changes_during_run": 0,
+        "rule_provenance": rule_report(),
+        "rule_state_hash": l200.canonical_hash(
+            l200.frozen_rule_state(rule_report())
+        ),
         "freeze_audit_state": {
             "runtime_policy_version": 1,
             "runtime_policy_update_events": 0,
@@ -417,6 +449,12 @@ def database_state() -> dict:
             "missing_commit_id": 0,
             "reverse_identity_mismatches": 0,
             "duplicate_accepted_chapters": 0,
+            "duplicate_ids": 0,
+            "duplicate_project_chapter_versions": 0,
+            "duplicate_candidate_draft_refs": 0,
+            "invalid_identity_rows": 0,
+            "chapter_plan_identity_mismatches": 0,
+            "chapter_draft_identity_mismatches": 0,
         },
         "graph": {
             "missing_graph_delta_refs": 0,
@@ -529,6 +567,30 @@ def write_band_reports(directory: Path) -> None:
     )
     l200.write_json(directory / "cost-report.json", cost_report(band_id="band-all"))
     l200.write_json(directory / "rule-provenance.json", rule_report())
+    l200.write_json(
+        directory / "metadata.json",
+        {
+            "schema_version": 1,
+            "project_id": "project-200",
+            "band": {
+                "band_id": "band-all",
+                "chapter_start": 1,
+                "chapter_end": 200,
+                "status": "pass",
+            },
+            "s1_scope": "band",
+            "s3_scope": "band",
+            "s2_scope": "frozen_project_snapshot_linked_to_band",
+            "s2_frozen_at": "2026-07-23T12:00:00+00:00",
+            "s2_rule_state_sha256": l200.canonical_hash(
+                l200.frozen_rule_state(rule_report())
+            ),
+            "s2_rule_provenance_sha256": l200.canonical_hash(rule_report()),
+            "s2_continuity_protocol": l200.ATTESTATION_PROTOCOL,
+            "s2_band_chapter_end": 200,
+            "s2_collected_at_accepted_count": 200,
+        },
+    )
 
 
 def write_finalized_output(directory: Path) -> dict:
@@ -540,7 +602,8 @@ def write_finalized_output(directory: Path) -> dict:
         "schema_version": 1,
         "run": "forwin-v5-final-l200-no-hotfix",
         "valid": True,
-        "finalized_at": "2026-07-23T12:00:00+00:00",
+        "initialized_at": "2026-07-23T12:00:00+00:00",
+        "finalized_at": "2026-07-23T12:00:10+00:00",
         "project_id": "project-200",
         "expected_target": 200,
         "quality_profile": "standard",
@@ -549,8 +612,13 @@ def write_finalized_output(directory: Path) -> dict:
         "violations": [],
         "code_changes_during_run": 0,
         "freeze_audit_state": database["freeze_audit"],
-        "freeze_identity": {"source_sha": "a" * 40},
-        "final_freeze_identity": {"source_sha": "a" * 40},
+        "policy_hash": "d" * 64,
+        "rule_provenance": rule_report(),
+        "rule_state_hash": l200.canonical_hash(
+            l200.frozen_rule_state(rule_report())
+        ),
+        "freeze_identity": {"source_sha": "a" * 40, "source_tree": "b" * 40},
+        "final_freeze_identity": {"source_sha": "a" * 40, "source_tree": "b" * 40},
         "connection_bindings": {"compose_project": "candidate"},
         "final_connection_bindings": {"compose_project": "candidate"},
         "live_schema_identity": {"sha256": "b" * 64},
@@ -558,6 +626,17 @@ def write_finalized_output(directory: Path) -> dict:
         "collector": {
             "path": str(MODULE_PATH.resolve()),
             "sha256": l200.sha256_file(MODULE_PATH),
+        },
+        "rc_manifest": {"path": "/tmp/rc.json", "sha256": "c" * 64},
+        "attestation": {
+            "protocol": l200.ATTESTATION_PROTOCOL,
+            "directory": "attestation",
+            "max_gap_seconds": l200.ATTESTATION_MAX_GAP_SECONDS,
+        },
+        "bootstrap_audit_state": {"event_count": 14, "event_sha256": "f" * 64},
+        "final_bootstrap_audit_state": {
+            "event_count": 14,
+            "event_sha256": "f" * 64,
         },
         "checkpoints": [
             {
@@ -577,6 +656,30 @@ def write_finalized_output(directory: Path) -> dict:
             }
         ],
     }
+    transcript = _bootstrap_transcript()
+    transcript["collector_sha256"] = manifest["collector"]["sha256"]
+    l200.write_json(directory / l200.BOOTSTRAP_TRANSCRIPT_NAME, transcript)
+    bootstrap_summary = l200.verify_bootstrap_transcript(
+        transcript,
+        project_id="project-200",
+        source_sha="a" * 40,
+        source_tree="b" * 40,
+        rc_manifest_sha256="c" * 64,
+        collector_sha256=manifest["collector"]["sha256"],
+        mcp_target_sha256="e" * 64,
+    )
+    manifest["bootstrap_transcript"] = {
+        "path": l200.BOOTSTRAP_TRANSCRIPT_NAME,
+        "sha256": l200.sha256_file(directory / l200.BOOTSTRAP_TRANSCRIPT_NAME),
+        "mcp_target_sha256": "e" * 64,
+        "summary": bootstrap_summary,
+    }
+    _write_attestation_chain(directory, manifest)
+    manifest["final_attestation"] = l200.verify_attestation_protocol(
+        directory,
+        manifest,
+        require_terminated=True,
+    )
     l200.atomic_write(
         directory / "chapter-status.csv",
         l200.chapter_csv(mcp["chapters"]),
@@ -2076,3 +2179,445 @@ def test_final_artifact_set_classifies_malformed_hashed_payload(
 
     with pytest.raises(l200.EvidenceError, match="payload is malformed"):
         l200.verify_final_artifact_set(tmp_path, manifest)
+
+
+def _write_attestation_chain(
+    directory: Path,
+    manifest: dict,
+    *,
+    observation_result: str = "pass",
+    observation_started_at: datetime | None = None,
+    observation_completed_at: datetime | None = None,
+    termination_started_at: datetime | None = None,
+    session_created_at: datetime | None = None,
+) -> None:
+    initialized = datetime.fromisoformat(manifest["initialized_at"])
+    session_created_at = session_created_at or initialized + timedelta(seconds=1)
+    observation_started_at = observation_started_at or initialized + timedelta(seconds=5)
+    observation_completed_at = observation_completed_at or initialized + timedelta(seconds=6)
+    termination_started_at = termination_started_at or initialized + timedelta(seconds=7)
+    root = directory / "attestation"
+    records = root / "records"
+    records.mkdir(parents=True)
+    (root / ".collector.lock").touch()
+    session = {
+        "schema_version": 1,
+        "protocol": "forwin-l200-continuous-attestation-v1",
+        "collector_session_id": "collector-session-1",
+        "created_at": session_created_at.isoformat(),
+        "run_anchor": l200.attestation_run_anchor(manifest),
+        "collector": dict(manifest["collector"]),
+        "rc_manifest": dict(manifest["rc_manifest"]),
+        "max_gap_seconds": l200.ATTESTATION_MAX_GAP_SECONDS,
+        "interval_seconds": l200.ATTESTATION_DEFAULT_INTERVAL_SECONDS,
+    }
+    l200.write_json(root / "session.json", session)
+    session_sha256 = l200.sha256_file(root / "session.json")
+    observation = {
+        "schema_version": 1,
+        "sequence": 1,
+        "record_type": "observation",
+        "collector_session_id": session["collector_session_id"],
+        "session_sha256": session_sha256,
+        "previous_record_sha256": session_sha256,
+        "started_at": observation_started_at.isoformat(),
+        "completed_at": observation_completed_at.isoformat(),
+        "result": observation_result,
+        "checks": l200.attestation_expected_checks(manifest),
+        "failure_category": "code" if observation_result == "fail" else "",
+        "failure_reason": "observed dirty tree" if observation_result == "fail" else "",
+    }
+    observation["record_sha256"] = l200.attestation_record_hash(observation)
+    l200.write_json(records / "00000001.json", observation)
+    termination = {
+        "schema_version": 1,
+        "sequence": 2,
+        "record_type": "termination",
+        "collector_session_id": session["collector_session_id"],
+        "session_sha256": session_sha256,
+        "previous_record_sha256": observation["record_sha256"],
+        "started_at": termination_started_at.isoformat(),
+        "completed_at": (termination_started_at + timedelta(seconds=1)).isoformat(),
+        "result": "pass" if observation_result == "pass" else "fail",
+        "termination_reason": "signal",
+    }
+    termination["record_sha256"] = l200.attestation_record_hash(termination)
+    l200.write_json(records / "00000002.json", termination)
+    state = {
+        "schema_version": 1,
+        "collector_session_id": session["collector_session_id"],
+        "session_sha256": session_sha256,
+        "status": "terminated" if observation_result == "pass" else "failed",
+        "sequence": 2,
+        "chain_head": termination["record_sha256"],
+        "started_at": session["created_at"],
+        "last_observed_at": observation_completed_at.isoformat(),
+        "terminated_at": termination["completed_at"],
+        "termination_reason": "signal" if observation_result == "pass" else "drift",
+        "permanent_failure": observation_result != "pass",
+    }
+    l200.write_json(root / "state.json", state)
+
+
+def _attestation_manifest() -> dict:
+    return {
+        "run": "forwin-v5-final-l200-no-hotfix",
+        "project_id": "project-200",
+        "initialized_at": "2026-07-23T12:00:00+00:00",
+        "collector": {"path": str(MODULE_PATH.resolve()), "sha256": "a" * 64},
+        "rc_manifest": {"path": "/tmp/rc.json", "sha256": "b" * 64},
+        "freeze_identity": {"source_sha": "a" * 40, "source_tree": "b" * 40},
+        "connection_bindings": {"compose_project": "candidate"},
+        "live_schema_identity": {"schema_sha256": "c" * 64},
+        "policy_hash": "d" * 64,
+        "rule_state_hash": "e" * 64,
+        "freeze_audit_state": {"event_sha256": "f" * 64},
+        "bootstrap_audit_state": {"event_sha256": "1" * 64},
+        "attestation": {
+            "protocol": "forwin-l200-continuous-attestation-v1",
+            "directory": "attestation",
+            "max_gap_seconds": l200.ATTESTATION_MAX_GAP_SECONDS,
+        },
+    }
+
+
+def test_continuous_attestation_requires_complete_normal_termination(
+    tmp_path: Path,
+) -> None:
+    manifest = _attestation_manifest()
+    _write_attestation_chain(tmp_path, manifest)
+
+    summary = l200.verify_attestation_protocol(
+        tmp_path,
+        manifest,
+        require_terminated=True,
+        reference_time=datetime(2026, 7, 23, 12, 0, 9, tzinfo=UTC),
+    )
+
+    assert summary["status"] == "terminated"
+    assert summary["observation_count"] == 1
+    assert summary["permanent_failure"] is False
+
+
+def test_continuous_attestation_rejects_hash_chained_incomplete_pass_checks(
+    tmp_path: Path,
+) -> None:
+    manifest = _attestation_manifest()
+    _write_attestation_chain(tmp_path, manifest)
+    root = tmp_path / "attestation"
+    observation_path = root / "records" / "00000001.json"
+    termination_path = root / "records" / "00000002.json"
+    observation = l200.load_json(observation_path)
+    observation["checks"].pop("schema_identity_sha256")
+    observation["record_sha256"] = l200.attestation_record_hash(observation)
+    l200.write_json(observation_path, observation)
+    termination = l200.load_json(termination_path)
+    termination["previous_record_sha256"] = observation["record_sha256"]
+    termination["record_sha256"] = l200.attestation_record_hash(termination)
+    l200.write_json(termination_path, termination)
+    state = l200.load_json(root / "state.json")
+    state["chain_head"] = termination["record_sha256"]
+    l200.write_json(root / "state.json", state)
+
+    with pytest.raises(l200.FreezeViolation, match="pass checks mismatch"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=True,
+        )
+
+
+def test_continuous_attestation_rejects_bounded_gap_and_observed_revert(
+    tmp_path: Path,
+) -> None:
+    manifest = _attestation_manifest()
+    initialized = datetime.fromisoformat(manifest["initialized_at"])
+    _write_attestation_chain(
+        tmp_path,
+        manifest,
+        observation_started_at=initialized + timedelta(seconds=5),
+        observation_completed_at=initialized + timedelta(seconds=6),
+        termination_started_at=initialized
+        + timedelta(seconds=l200.ATTESTATION_MAX_GAP_SECONDS + 7),
+    )
+    with pytest.raises(l200.FreezeViolation, match="attestation gap"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=True,
+            reference_time=initialized
+            + timedelta(seconds=l200.ATTESTATION_MAX_GAP_SECONDS + 9),
+        )
+    shutil.rmtree(tmp_path / "attestation")
+    _write_attestation_chain(tmp_path, manifest, observation_result="fail")
+    with pytest.raises(l200.FreezeViolation, match="permanent failure"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=True,
+            reference_time=initialized + timedelta(seconds=9),
+        )
+
+
+def test_continuous_attestation_must_start_within_first_bounded_gap(
+    tmp_path: Path,
+) -> None:
+    manifest = _attestation_manifest()
+    initialized = datetime.fromisoformat(manifest["initialized_at"])
+    session_started = initialized + timedelta(
+        seconds=l200.ATTESTATION_MAX_GAP_SECONDS + 1
+    )
+    _write_attestation_chain(
+        tmp_path,
+        manifest,
+        session_created_at=session_started,
+        observation_started_at=session_started + timedelta(seconds=1),
+        observation_completed_at=session_started + timedelta(seconds=2),
+        termination_started_at=session_started + timedelta(seconds=3),
+    )
+
+    with pytest.raises(l200.FreezeViolation, match="gap from init"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=True,
+            reference_time=session_started + timedelta(seconds=5),
+        )
+
+
+def test_continuous_attestation_rejects_running_or_identity_swapped_finalizer(
+    tmp_path: Path,
+) -> None:
+    manifest = _attestation_manifest()
+    _write_attestation_chain(tmp_path, manifest)
+    root = tmp_path / "attestation"
+    (root / "records" / "00000002.json").unlink()
+    observation = l200.load_json(root / "records" / "00000001.json")
+    state = l200.load_json(root / "state.json")
+    state.update(
+        {
+            "status": "running",
+            "sequence": 1,
+            "chain_head": observation["record_sha256"],
+            "terminated_at": "",
+            "termination_reason": "",
+        }
+    )
+    l200.write_json(root / "state.json", state)
+    with pytest.raises(l200.FreezeViolation, match="did not terminate normally"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=True,
+        )
+
+    session = l200.load_json(root / "session.json")
+    session["collector"]["sha256"] = "0" * 64
+    l200.write_json(root / "session.json", session)
+    with pytest.raises(l200.FreezeViolation, match="session identity mismatch"):
+        l200.verify_attestation_protocol(
+            tmp_path,
+            manifest,
+            require_terminated=False,
+        )
+
+def _bootstrap_transcript() -> dict:
+    run_id = "bootstrap-run-1"
+    project_id = "project-200"
+    sequence = [("project_create", ""), ("project_policy_update", "")]
+    for stage in l200.GENESIS_STAGES:
+        sequence.extend(
+            [("genesis_stage_generate", stage), ("genesis_stage_lock", stage)]
+        )
+    operations = []
+    previous = "0" * 64
+    for index, (tool, stage) in enumerate(sequence, start=1):
+        operation = {
+            "index": index,
+            "recorded_at": f"2026-07-23T12:00:{index:02d}+00:00",
+            "run_id": run_id,
+            "tool": tool,
+            "transport": "http" if tool == "project_policy_update" else "mcp_http",
+            "request_id": f"request-{index}",
+            "arguments_sha256": f"{index:064x}",
+            "result_sha256": f"{index + 100:064x}",
+            "project_id": project_id,
+            "stage_key": stage,
+            "result_ok": True,
+            "previous_operation_sha256": previous,
+        }
+        operation["operation_sha256"] = l200.canonical_hash(operation)
+        operations.append(operation)
+        previous = operation["operation_sha256"]
+    return {
+        "schema_version": 1,
+        "result": "genesis_ready",
+        "source_sha": "a" * 40,
+        "source_tree": "b" * 40,
+        "rc_manifest_sha256": "c" * 64,
+        "collector_sha256": "d" * 64,
+        "mcp_target_sha256": "e" * 64,
+        "run_id": run_id,
+        "started_at": "2026-07-23T12:00:00+00:00",
+        "completed_at": "2026-07-23T12:00:20+00:00",
+        "target": 200,
+        "project_id": project_id,
+        "operation_count": len(operations),
+        "operation_chain_head": previous,
+        "operations": operations,
+    }
+
+
+def test_bootstrap_transcript_binds_supported_project_and_genesis_operations() -> None:
+    transcript = _bootstrap_transcript()
+
+    summary = l200.verify_bootstrap_transcript(
+        transcript,
+        project_id="project-200",
+        source_sha="a" * 40,
+        source_tree="b" * 40,
+        rc_manifest_sha256="c" * 64,
+        collector_sha256="d" * 64,
+        mcp_target_sha256="e" * 64,
+    )
+
+    assert summary["operation_count"] == 14
+    assert summary["operation_chain_head"] == transcript["operation_chain_head"]
+
+    transcript["operations"][3]["result_ok"] = False
+    with pytest.raises(l200.EvidenceError, match="operation integrity"):
+        l200.verify_bootstrap_transcript(
+            transcript,
+            project_id="project-200",
+            source_sha="a" * 40,
+            source_tree="b" * 40,
+            rc_manifest_sha256="c" * 64,
+            collector_sha256="d" * 64,
+            mcp_target_sha256="e" * 64,
+        )
+
+
+def test_init_binding_rejects_equivalent_database_state_without_transcript(
+    tmp_path: Path,
+) -> None:
+    selected = argparse.Namespace(
+        output_dir=tmp_path,
+        project_id="project-200",
+        mcp_url="http://127.0.0.1:18897/mcp",
+    )
+    rc_manifest = {"source": {"sha": "a" * 40, "tree": "b" * 40}}
+
+    with pytest.raises(l200.EvidenceError, match="bootstrap transcript is missing"):
+        l200.load_and_verify_bootstrap_transcript(
+            selected,
+            rc_manifest,
+            rc_manifest_sha256="c" * 64,
+            collector_sha256="d" * 64,
+        )
+
+
+def test_band_s2_is_frozen_project_snapshot_linked_to_collection_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeClientContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    reports = {
+        "gate_ledger_report": gate_report(scope="band", band_id="band-1"),
+        "cost_report": cost_report(band_id="band-1"),
+    }
+
+    async def fake_call_mcp(
+        _client: object,
+        name: str,
+        _arguments: dict,
+    ) -> object:
+        return {"result": reports[name]}
+
+    monkeypatch.setattr(l200, "direct_mcp_client", lambda _url: FakeClientContext())
+    monkeypatch.setattr(l200, "call_mcp", fake_call_mcp)
+    manifest = {
+        "initialized_at": "2026-07-23T12:00:00+00:00",
+        "rule_provenance": rule_report(),
+        "rule_state_hash": l200.canonical_hash(l200.frozen_rule_state(rule_report())),
+    }
+    entries = asyncio.run(
+        l200.collect_completed_band_reports(
+            argparse.Namespace(
+                mcp_url="http://127.0.0.1:18897/mcp",
+                project_id="project-200",
+            ),
+            bands=[
+                {
+                    "band_id": "band-1",
+                    "chapter_start": 1,
+                    "chapter_end": 25,
+                    "status": "pass",
+                }
+            ],
+            output_dir=tmp_path,
+            run_manifest=manifest,
+            accepted_at_collection=31,
+        )
+    )
+    metadata = l200.load_json(Path(entries[0]["directory"]) / "metadata.json")
+
+    assert metadata["s2_scope"] == "frozen_project_snapshot_linked_to_band"
+    assert metadata["s2_frozen_at"] == manifest["initialized_at"]
+    assert metadata["s2_collected_at_accepted_count"] == 31
+    assert metadata["s2_band_chapter_end"] == 25
+    assert "project_snapshot_at_band_completion" not in json.dumps(metadata)
+
+
+def test_legacy_instantaneous_band_s2_claim_is_release_blocking(
+    tmp_path: Path,
+) -> None:
+    write_band_reports(tmp_path)
+    metadata_path = tmp_path / "metadata.json"
+    metadata = l200.load_json(metadata_path)
+    metadata["s2_scope"] = "project_snapshot_at_band_completion"
+    l200.write_json(metadata_path, metadata)
+
+    violations = l200.final_violations(
+        args(), run_manifest(tmp_path), mcp_state(), database_state()
+    )
+
+    assert any("frozen S2 evidence is invalid" in item for item in violations)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    (
+        "duplicate_ids",
+        "duplicate_project_chapter_versions",
+        "duplicate_candidate_draft_refs",
+        "invalid_identity_rows",
+        "chapter_plan_identity_mismatches",
+        "chapter_draft_identity_mismatches",
+    ),
+)
+def test_all_candidate_identity_failures_are_release_blocking(
+    tmp_path: Path,
+    metric: str,
+) -> None:
+    write_band_reports(tmp_path)
+    database = database_state()
+    database["candidates"][metric] = 1
+
+    violations = l200.final_violations(
+        args(), run_manifest(tmp_path), mcp_state(), database
+    )
+
+    assert f"candidates.{metric}=1, expected=0" in violations
+
+
+def test_canon_duplicate_idempotency_sql_ignores_empty_retry_keys() -> None:
+    normalized = " ".join(l200.CANON_INTEGRITY_SQL.split())
+
+    assert "count(*) FILTER (WHERE c.idempotency_key<>'')" in normalized
+    assert "count(DISTINCT c.idempotency_key) FILTER (WHERE c.idempotency_key<>'')" in normalized

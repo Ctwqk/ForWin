@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import fcntl
 import hashlib
 import ipaddress
 import importlib.util
@@ -11,14 +12,16 @@ import io
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastmcp import Client
@@ -81,6 +84,21 @@ CONTROL_ENV_KEYS = frozenset(
     }
 )
 CHECKPOINTS = tuple(range(25, 201, 25))
+ATTESTATION_PROTOCOL = "forwin-l200-continuous-attestation-v1"
+ATTESTATION_MAX_GAP_SECONDS = 180
+ATTESTATION_DEFAULT_INTERVAL_SECONDS = 60
+BOOTSTRAP_TRANSCRIPT_NAME = "bootstrap-transcript.json"
+ATTESTATION_CHECK_KEYS = frozenset(
+    {
+        "freeze_identity_sha256",
+        "connection_bindings_sha256",
+        "schema_identity_sha256",
+        "policy_sha256",
+        "rule_state_sha256",
+        "freeze_audit_sha256",
+        "bootstrap_audit_sha256",
+    }
+)
 GENESIS_STAGES = (
     "brief",
     "world",
@@ -137,6 +155,83 @@ EXPECTED_LLM_KB_JSONL_FILES = (
     "graph_deltas.jsonl",
     "open_questions.jsonl",
 )
+
+CANON_INTEGRITY_SQL = """
+    SELECT
+      count(*) FILTER (WHERE c.status='committed') AS committed,
+      count(*) FILTER (WHERE c.status<>'committed') AS non_committed,
+      count(DISTINCT c.chapter_number) FILTER (WHERE c.status='committed') AS distinct_chapters,
+      coalesce(min(c.chapter_number) FILTER (WHERE c.status='committed'),0) AS first_chapter,
+      coalesce(max(c.chapter_number) FILTER (WHERE c.status='committed'),0) AS last_chapter,
+      count(*)-count(DISTINCT c.id) AS duplicate_ids,
+      count(*)-count(DISTINCT c.candidate_id) AS duplicate_candidate_refs,
+      count(*) FILTER (WHERE c.idempotency_key<>'')
+        - count(DISTINCT c.idempotency_key) FILTER (WHERE c.idempotency_key<>'')
+        AS duplicate_idempotency_keys,
+      (SELECT count(*) FROM (
+         SELECT chapter_number FROM canon_commit_records
+         WHERE project_id=:project_id GROUP BY chapter_number HAVING count(*)>1
+       ) duplicate_chapter) AS duplicate_chapters,
+      count(*) FILTER (WHERE ws.id IS NULL) AS missing_world_snapshot_refs,
+      count(*) FILTER (WHERE ms.id IS NULL) AS missing_map_snapshot_refs,
+      count(*) FILTER (WHERE ws.id IS NOT NULL AND (ws.project_id<>c.project_id OR ws.as_of_chapter<>c.chapter_number)) AS wrong_world_snapshot_identity,
+      count(*) FILTER (WHERE ms.id IS NOT NULL AND (ms.project_id<>c.project_id OR ms.as_of_chapter<>c.chapter_number)) AS wrong_map_snapshot_identity,
+      count(*) FILTER (WHERE d.id IS NULL OR d.project_id<>c.project_id OR d.chapter_number<>c.chapter_number OR d.status<>'accepted' OR d.canon_status<>'canon' OR d.canon_commit_id<>c.id OR d.idempotency_key<>c.idempotency_key) AS candidate_identity_mismatches,
+      count(*) FILTER (WHERE cp.id IS NULL OR cp.project_id<>c.project_id OR cp.chapter_number<>c.chapter_number OR cp.status<>'accepted') AS chapter_identity_mismatches
+    FROM canon_commit_records c
+    LEFT JOIN candidate_draft_records d ON d.id=c.candidate_id
+    LEFT JOIN chapter_plans cp ON cp.id=d.chapter_plan_id
+    LEFT JOIN world_snapshots ws ON ws.id=c.world_snapshot_id
+    LEFT JOIN map_snapshots ms ON ms.id=c.map_snapshot_id
+    WHERE c.project_id=:project_id
+"""
+
+CANDIDATE_INTEGRITY_SQL = """
+    SELECT
+      count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon') AS accepted_canon,
+      count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon' AND d.canon_commit_id='') AS missing_commit_id,
+      count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon' AND (
+        c.id IS NULL OR c.status<>'committed' OR c.project_id<>d.project_id
+        OR c.chapter_number<>d.chapter_number OR c.candidate_id<>d.id
+        OR c.idempotency_key<>d.idempotency_key OR cp.id IS NULL
+        OR cp.project_id<>d.project_id OR cp.chapter_number<>d.chapter_number
+        OR cp.status<>'accepted'
+      )) AS reverse_identity_mismatches,
+      (SELECT count(*) FROM (
+        SELECT chapter_number FROM candidate_draft_records
+        WHERE project_id=:project_id AND status='accepted' AND canon_status='canon'
+        GROUP BY chapter_number HAVING count(*)>1
+      ) duplicate_chapter) AS duplicate_accepted_chapters,
+      count(*)-count(DISTINCT d.id) AS duplicate_ids,
+      (SELECT count(*) FROM (
+        SELECT project_id,chapter_number,version
+        FROM candidate_draft_records
+        WHERE project_id=:project_id
+        GROUP BY project_id,chapter_number,version HAVING count(*)>1
+      ) duplicate_version) AS duplicate_project_chapter_versions,
+      (SELECT count(*) FROM (
+        SELECT candidate_draft_id
+        FROM candidate_draft_records
+        WHERE project_id=:project_id
+        GROUP BY candidate_draft_id HAVING count(*)>1
+      ) duplicate_draft) AS duplicate_candidate_draft_refs,
+      count(*) FILTER (
+        WHERE d.id='' OR d.project_id='' OR d.chapter_number<=0
+          OR d.version<=0 OR d.candidate_draft_id=''
+      ) AS invalid_identity_rows,
+      count(*) FILTER (
+        WHERE cp.id IS NULL OR cp.project_id<>d.project_id
+          OR cp.chapter_number<>d.chapter_number
+      ) AS chapter_plan_identity_mismatches,
+      count(*) FILTER (
+        WHERE cd.id IS NULL OR cd.chapter_plan_id<>d.chapter_plan_id
+      ) AS chapter_draft_identity_mismatches
+    FROM candidate_draft_records d
+    LEFT JOIN canon_commit_records c ON c.id=d.canon_commit_id
+    LEFT JOIN chapter_plans cp ON cp.id=d.chapter_plan_id
+    LEFT JOIN chapter_drafts cd ON cd.id=d.candidate_draft_id
+    WHERE d.project_id=:project_id
+"""
 
 
 def direct_sync_client(*, timeout: Any) -> httpx.Client:
@@ -1118,6 +1213,189 @@ async def call_mcp_report(
     )
 
 
+def mcp_target_sha256(raw: str) -> str:
+    url = httpx.URL(raw)
+    if (
+        url.scheme != "http"
+        or not _loopback_host(str(url.host or ""))
+        or int(url.port or 0) <= 0
+        or url.path.rstrip("/") != "/mcp"
+        or url.query
+        or url.fragment
+    ):
+        raise EvidenceError("MCP URL must be a direct loopback HTTP /mcp endpoint")
+    return canonical_hash(
+        {
+            "scheme": url.scheme,
+            "host": url.host,
+            "port": int(url.port or 0),
+            "path": url.path.rstrip("/"),
+        }
+    )
+
+
+def bootstrap_operation_sequence() -> list[tuple[str, str, str]]:
+    sequence = [
+        ("project_create", "", "mcp_http"),
+        ("project_policy_update", "", "http"),
+    ]
+    for stage in GENESIS_STAGES:
+        sequence.extend(
+            [
+                ("genesis_stage_generate", stage, "mcp_http"),
+                ("genesis_stage_lock", stage, "mcp_http"),
+            ]
+        )
+    return sequence
+
+
+def verify_bootstrap_transcript(
+    transcript: dict[str, Any],
+    *,
+    project_id: str,
+    source_sha: str,
+    source_tree: str,
+    rc_manifest_sha256: str,
+    collector_sha256: str,
+    mcp_target_sha256: str,
+) -> dict[str, Any]:
+    violations: list[str] = []
+
+    def transcript_time(value: Any) -> datetime:
+        parsed = datetime.fromisoformat(str(value or ""))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    if (
+        int(transcript.get("schema_version") or 0) != 1
+        or transcript.get("result") != "genesis_ready"
+        or int(transcript.get("target") or 0) != 200
+        or transcript.get("project_id") != project_id
+    ):
+        violations.append("bootstrap transcript summary mismatch")
+    for key, expected in (
+        ("source_sha", source_sha),
+        ("source_tree", source_tree),
+        ("rc_manifest_sha256", rc_manifest_sha256),
+        ("collector_sha256", collector_sha256),
+        ("mcp_target_sha256", mcp_target_sha256),
+    ):
+        if str(transcript.get(key) or "") != expected:
+            violations.append(f"bootstrap transcript {key} mismatch")
+    operations = transcript.get("operations")
+    if not isinstance(operations, list):
+        operations = []
+    expected_sequence = bootstrap_operation_sequence()
+    actual_sequence = [
+        (
+            str((item or {}).get("tool") or ""),
+            str((item or {}).get("stage_key") or ""),
+            str((item or {}).get("transport") or ""),
+        )
+        for item in operations
+        if isinstance(item, dict)
+    ]
+    if actual_sequence != expected_sequence:
+        violations.append("bootstrap transcript operation sequence mismatch")
+    if int(transcript.get("operation_count") or 0) != len(operations):
+        violations.append("bootstrap transcript operation count mismatch")
+    run_id = str(transcript.get("run_id") or "")
+    previous = "0" * 64
+    request_ids: set[str] = set()
+    previous_time: datetime | None = None
+    try:
+        started_at = transcript_time(transcript.get("started_at"))
+        completed_at = transcript_time(transcript.get("completed_at"))
+        if completed_at <= started_at:
+            violations.append("bootstrap transcript time range mismatch")
+    except ValueError:
+        started_at = completed_at = datetime.min.replace(tzinfo=UTC)
+        violations.append("bootstrap transcript timestamps are invalid")
+    for index, operation in enumerate(operations, start=1):
+        if not isinstance(operation, dict):
+            violations.append(f"bootstrap operation integrity mismatch: {index}")
+            continue
+        operation_hash = str(operation.get("operation_sha256") or "")
+        expected_hash = canonical_hash(
+            {key: value for key, value in operation.items() if key != "operation_sha256"}
+        )
+        request_id = str(operation.get("request_id") or "")
+        try:
+            recorded_at = transcript_time(operation.get("recorded_at"))
+        except ValueError:
+            recorded_at = datetime.min.replace(tzinfo=UTC)
+        if (
+            int(operation.get("index") or 0) != index
+            or operation.get("previous_operation_sha256") != previous
+            or operation_hash != expected_hash
+            or operation.get("run_id") != run_id
+            or operation.get("project_id") != project_id
+            or operation.get("result_ok") is not True
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(operation.get("arguments_sha256") or "")
+            )
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(operation.get("result_sha256") or "")
+            )
+            or not request_id
+            or request_id in request_ids
+            or recorded_at < started_at
+            or recorded_at > completed_at
+            or (previous_time is not None and recorded_at < previous_time)
+        ):
+            violations.append(f"bootstrap operation integrity mismatch: {index}")
+        request_ids.add(request_id)
+        previous = operation_hash
+        previous_time = recorded_at
+    if (
+        not run_id
+        or not operations
+        or transcript.get("operation_chain_head") != previous
+    ):
+        violations.append("bootstrap transcript operation chain head mismatch")
+    if violations:
+        raise EvidenceError("invalid bootstrap transcript: " + "; ".join(violations))
+    return {
+        "project_id": project_id,
+        "operation_count": len(operations),
+        "operation_chain_head": previous,
+        "completed_at": completed_at.isoformat(),
+    }
+
+
+def load_and_verify_bootstrap_transcript(
+    args: argparse.Namespace,
+    rc_manifest: dict[str, Any],
+    *,
+    rc_manifest_sha256: str,
+    collector_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = args.output_dir.resolve() / BOOTSTRAP_TRANSCRIPT_NAME
+    if not path.is_file():
+        raise EvidenceError(f"bootstrap transcript is missing: {path}")
+    source = rc_manifest.get("source") or {}
+    transcript = load_json(path)
+    summary = verify_bootstrap_transcript(
+        transcript,
+        project_id=args.project_id,
+        source_sha=str(source.get("sha") or ""),
+        source_tree=str(source.get("tree") or ""),
+        rc_manifest_sha256=rc_manifest_sha256,
+        collector_sha256=collector_sha256,
+        mcp_target_sha256=mcp_target_sha256(args.mcp_url),
+    )
+    return (
+        {
+            "path": BOOTSTRAP_TRANSCRIPT_NAME,
+            "sha256": sha256_file(path),
+            "mcp_target_sha256": mcp_target_sha256(args.mcp_url),
+            "summary": summary,
+        },
+        transcript,
+    )
+
+
 def image_identity(tag: str) -> dict[str, Any]:
     try:
         payload = json.loads(command("docker", "image", "inspect", tag))
@@ -2057,6 +2335,300 @@ async def fetch_policy(api_url: str, project_id: str) -> dict[str, Any]:
     return payload
 
 
+def bootstrap_project_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    project = payload.get("project")
+    if isinstance(project, dict):
+        project_id = str(project.get("id") or "").strip()
+        if project_id:
+            return project_id
+    return str(payload.get("project_id") or "").strip()
+
+
+def append_bootstrap_operation(
+    operations: list[dict[str, Any]],
+    *,
+    run_id: str,
+    tool: str,
+    transport: str,
+    arguments: dict[str, Any],
+    result: Any,
+    project_id: str,
+    stage_key: str = "",
+    request_id: str,
+) -> None:
+    previous = (
+        str(operations[-1]["operation_sha256"])
+        if operations
+        else "0" * 64
+    )
+    result_ok = result.get("ok", True) is True if isinstance(result, dict) else True
+    operation = {
+        "index": len(operations) + 1,
+        "recorded_at": now(),
+        "run_id": run_id,
+        "tool": tool,
+        "transport": transport,
+        "request_id": request_id,
+        "arguments_sha256": canonical_hash(arguments),
+        "result_sha256": canonical_hash(result),
+        "project_id": project_id,
+        "stage_key": stage_key,
+        "result_ok": result_ok,
+        "previous_operation_sha256": previous,
+    }
+    operation["operation_sha256"] = canonical_hash(operation)
+    operations.append(operation)
+
+
+def bootstrap_policy_update_payload(
+    current: dict[str, Any],
+    *,
+    quality_profile: str,
+    gate_delegate: str,
+) -> dict[str, Any]:
+    policy = current.get("policy")
+    if not isinstance(policy, dict):
+        raise EvidenceError("bootstrap policy endpoint returned no policy")
+    chapter_length = policy.get("chapter_length") or {}
+    pause = policy.get("pause") or {}
+    if not isinstance(chapter_length, dict) or not isinstance(pause, dict):
+        raise EvidenceError("bootstrap policy endpoint returned malformed policy")
+    return {
+        "expected_version": int(current.get("version") or 0),
+        "quality_profile": quality_profile,
+        "model_profile_id": str(policy.get("model_profile_id") or ""),
+        "min_chapter_chars": int(chapter_length.get("min_chars") or 0),
+        "target_chapter_chars": int(chapter_length.get("target_chars") or 0),
+        "max_chapter_chars": int(chapter_length.get("max_chars") or 0),
+        "review_interval_chapters": int(
+            pause.get("review_interval_chapters") or 0
+        ),
+        "manual_checkpoints": bool(pause.get("manual_checkpoints", True)),
+        "band_checkpoint_action": str(
+            pause.get("band_checkpoint_action") or "pause_on_warn"
+        ),
+        "gate_delegate": gate_delegate,
+        "reason": "v5-l200-bootstrap",
+    }
+
+
+async def bootstrap_project(args: argparse.Namespace) -> None:
+    output = args.output_dir.resolve()
+    transcript_path = output / BOOTSTRAP_TRANSCRIPT_NAME
+    if transcript_path.exists() or (output / "manifest.json").exists():
+        raise EvidenceError("L200 bootstrap output already exists")
+    premise = args.premise_file.resolve().read_text(encoding="utf-8").strip()
+    if not premise:
+        raise EvidenceError("L200 bootstrap premise is empty")
+    setting_summary = (
+        args.setting_summary_file.resolve().read_text(encoding="utf-8").strip()
+        if args.setting_summary_file is not None
+        else ""
+    )
+    rc_path = args.rc_manifest.resolve()
+    rc_manifest = load_json(rc_path)
+    validate_frozen_rc_manifest(args, rc_manifest)
+    source = rc_manifest.get("source") or {}
+    source_sha = str(source.get("sha") or "")
+    source_tree = str(source.get("tree") or "")
+    if (
+        command("git", "rev-parse", "HEAD") != source_sha
+        or command("git", "rev-parse", "HEAD^{tree}") != source_tree
+        or command("git", "status", "--porcelain=v1", "--untracked-files=no")
+    ):
+        raise EvidenceError("bootstrap worktree differs from the frozen RC")
+    target_hash = mcp_target_sha256(args.mcp_url)
+    run_id = uuid4().hex
+    started_at = now()
+    operations: list[dict[str, Any]] = []
+    async with direct_mcp_client(args.mcp_url) as client:
+        create_arguments = {
+            "title": args.title,
+            "premise": premise,
+            "genre": args.genre,
+            "setting_summary": setting_summary,
+            "target_total_chapters": 200,
+        }
+        created = await call_mcp(client, "project_create", create_arguments)
+        project_id = bootstrap_project_id(created)
+        if not project_id:
+            raise EvidenceError("project_create returned no project identity")
+        append_bootstrap_operation(
+            operations,
+            run_id=run_id,
+            tool="project_create",
+            transport="mcp_http",
+            arguments=create_arguments,
+            result=created,
+            project_id=project_id,
+            request_id=str(uuid4()),
+        )
+
+        current_policy = await fetch_policy(args.api_url, project_id)
+        policy_update = bootstrap_policy_update_payload(
+            current_policy,
+            quality_profile=args.quality_profile,
+            gate_delegate=args.gate_delegate,
+        )
+        request_id = str(uuid4())
+        async with httpx.AsyncClient(
+            base_url=args.api_url,
+            timeout=60,
+            auth=api_basic_auth(),
+            headers={"X-Request-ID": request_id},
+            trust_env=False,
+            follow_redirects=False,
+        ) as http:
+            response = await http.put(
+                f"/api/projects/{project_id}/policy",
+                json=policy_update,
+            )
+            response.raise_for_status()
+            policy_result = response.json()
+        append_bootstrap_operation(
+            operations,
+            run_id=run_id,
+            tool="project_policy_update",
+            transport="http",
+            arguments=policy_update,
+            result=policy_result,
+            project_id=project_id,
+            request_id=request_id,
+        )
+
+        for stage in GENESIS_STAGES:
+            arguments = {"project_id": project_id, "stage_key": stage}
+            generated = await call_mcp(
+                client,
+                "genesis_stage_generate",
+                arguments,
+            )
+            append_bootstrap_operation(
+                operations,
+                run_id=run_id,
+                tool="genesis_stage_generate",
+                transport="mcp_http",
+                arguments=arguments,
+                result=generated,
+                project_id=project_id,
+                stage_key=stage,
+                request_id=str(uuid4()),
+            )
+            locked = await call_mcp(
+                client,
+                "genesis_stage_lock",
+                arguments,
+            )
+            append_bootstrap_operation(
+                operations,
+                run_id=run_id,
+                tool="genesis_stage_lock",
+                transport="mcp_http",
+                arguments=arguments,
+                result=locked,
+                project_id=project_id,
+                stage_key=stage,
+                request_id=str(uuid4()),
+            )
+        genesis = await call_mcp(client, "genesis_get", {"project_id": project_id})
+    if (
+        not isinstance(genesis, dict)
+        or genesis.get("creation_status") != "genesis_ready"
+        or not genesis.get("can_start_writing")
+    ):
+        raise EvidenceError("bootstrap did not reach Genesis writing handoff")
+    completed_at = now()
+    transcript = {
+        "schema_version": 1,
+        "result": "genesis_ready",
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "rc_manifest_sha256": sha256_file(rc_path),
+        "collector_sha256": sha256_file(Path(__file__).resolve()),
+        "mcp_target_sha256": target_hash,
+        "run_id": run_id,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "target": 200,
+        "project_id": project_id,
+        "operation_count": len(operations),
+        "operation_chain_head": str(operations[-1]["operation_sha256"]),
+        "operations": operations,
+    }
+    verify_bootstrap_transcript(
+        transcript,
+        project_id=project_id,
+        source_sha=source_sha,
+        source_tree=source_tree,
+        rc_manifest_sha256=sha256_file(rc_path),
+        collector_sha256=sha256_file(Path(__file__).resolve()),
+        mcp_target_sha256=target_hash,
+    )
+    write_json(transcript_path, transcript)
+    print(
+        json.dumps(
+            {"project_id": project_id, "transcript": str(transcript_path)},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+def collect_bootstrap_audit_state(
+    database_url: str,
+    project_id: str,
+) -> dict[str, Any]:
+    engine = create_engine(database_url, pool_pre_ping=True)
+    try:
+        with engine.connect() as connection:
+            events = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT id,event_type,actor_type,payload_json::jsonb,
+                               related_object_type,related_object_id,created_at
+                        FROM decision_events
+                        WHERE project_id=:project_id
+                          AND event_type IN (
+                            'project_created',
+                            'runtime_policy_updated',
+                            'genesis_stage_generated',
+                            'genesis_stage_locked'
+                          )
+                        ORDER BY created_at,id
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings()
+            ]
+    finally:
+        engine.dispose()
+    expected = [("project_created", ""), ("runtime_policy_updated", "")]
+    for stage in GENESIS_STAGES:
+        expected.extend(
+            [("genesis_stage_generated", stage), ("genesis_stage_locked", stage)]
+        )
+    actual = [
+        (
+            str(event.get("event_type") or ""),
+            str((event.get("payload_json") or {}).get("stage_key") or ""),
+        )
+        for event in events
+    ]
+    if actual != expected:
+        raise EvidenceError(
+            "bootstrap audit event sequence mismatch: " + repr(actual)
+        )
+    return {
+        "event_count": len(events),
+        "event_sha256": canonical_hash(events),
+        "events": events,
+    }
+
+
 def frozen_rule_state(report: dict[str, Any]) -> dict[str, Any]:
     return {
         key: report.get(key) or []
@@ -2299,11 +2871,42 @@ def band_directory_name(band: dict[str, Any]) -> str:
     return f"{start:03d}-{end:03d}-{hashlib.sha256(identity.encode()).hexdigest()[:10]}"
 
 
+def verify_band_s2_metadata(
+    metadata: dict[str, Any],
+    *,
+    band: dict[str, Any],
+    run_manifest: dict[str, Any],
+    rule_report: dict[str, Any],
+) -> None:
+    chapter_end = int(band.get("chapter_end") or 0)
+    collected_at_accepted = int(
+        metadata.get("s2_collected_at_accepted_count") or 0
+    )
+    expected_rule_state_hash = str(run_manifest.get("rule_state_hash") or "")
+    if (
+        metadata.get("s2_scope") != "frozen_project_snapshot_linked_to_band"
+        or metadata.get("s2_frozen_at") != run_manifest.get("initialized_at")
+        or metadata.get("s2_rule_state_sha256") != expected_rule_state_hash
+        or metadata.get("s2_rule_provenance_sha256") != canonical_hash(rule_report)
+        or metadata.get("s2_continuity_protocol") != ATTESTATION_PROTOCOL
+        or int(metadata.get("s2_band_chapter_end") or 0) != chapter_end
+        or collected_at_accepted < chapter_end
+        or canonical_hash(frozen_rule_state(rule_report))
+        != expected_rule_state_hash
+    ):
+        raise FreezeViolation(
+            "rule_state",
+            f"band {band.get('band_id')} frozen S2 evidence is invalid",
+        )
+
+
 async def collect_completed_band_reports(
     args: argparse.Namespace,
     *,
     bands: list[dict[str, Any]],
     output_dir: Path,
+    run_manifest: dict[str, Any],
+    accepted_at_collection: int,
 ) -> list[dict[str, Any]]:
     completed = [
         band
@@ -2311,6 +2914,13 @@ async def collect_completed_band_reports(
         if str(band.get("status") or "") in {"pass", "overridden"}
         and int(band.get("chapter_end") or 0) > 0
     ]
+    frozen_rules = run_manifest.get("rule_provenance")
+    if not isinstance(frozen_rules, dict):
+        raise EvidenceError("L200 manifest has no frozen rule provenance report")
+    if canonical_hash(frozen_rule_state(frozen_rules)) != str(
+        run_manifest.get("rule_state_hash") or ""
+    ):
+        raise FreezeViolation("rule_state", "frozen rule provenance identity changed")
     entries: list[dict[str, Any]] = []
     async with direct_mcp_client(args.mcp_url) as client:
         for band in sorted(
@@ -2333,6 +2943,13 @@ async def collect_completed_band_reports(
                     raise FreezeViolation(
                         "config", f"frozen band metadata changed for {band_id}"
                     )
+                rule = load_json(rule_path)
+                verify_band_s2_metadata(
+                    metadata,
+                    band=band,
+                    run_manifest=run_manifest,
+                    rule_report=rule,
+                )
             elif any(path.exists() for path in paths):
                 raise EvidenceError(f"partial band evidence exists: {directory}")
             else:
@@ -2355,11 +2972,7 @@ async def collect_completed_band_reports(
                         "format": "json",
                     },
                 )
-                rule = await call_mcp_report(
-                    client,
-                    "rule_provenance_report",
-                    {"project_id": args.project_id, "format": "json"},
-                )
+                rule = frozen_rules
                 report_violations = report_contract_violations(
                     gate=gate,
                     cost=cost,
@@ -2380,12 +2993,24 @@ async def collect_completed_band_reports(
                     "band": band,
                     "s1_scope": "band",
                     "s3_scope": "band",
-                    "s2_scope": "project_snapshot_at_band_completion",
+                    "s2_scope": "frozen_project_snapshot_linked_to_band",
+                    "s2_frozen_at": run_manifest.get("initialized_at"),
+                    "s2_rule_state_sha256": run_manifest.get("rule_state_hash"),
+                    "s2_rule_provenance_sha256": canonical_hash(rule),
+                    "s2_continuity_protocol": ATTESTATION_PROTOCOL,
+                    "s2_band_chapter_end": int(band.get("chapter_end") or 0),
+                    "s2_collected_at_accepted_count": accepted_at_collection,
                 }
                 write_json(gate_path, gate)
                 write_json(cost_path, cost)
                 write_json(rule_path, rule)
                 write_json(metadata_path, metadata)
+                verify_band_s2_metadata(
+                    metadata,
+                    band=band,
+                    run_manifest=run_manifest,
+                    rule_report=rule,
+                )
             entries.append(
                 {
                     "band_id": band_id,
@@ -2397,6 +3022,9 @@ async def collect_completed_band_reports(
                     "gate_ledger_sha256": sha256_file(gate_path),
                     "cost_report_sha256": sha256_file(cost_path),
                     "rule_provenance_sha256": sha256_file(rule_path),
+                    "s2_collected_at_accepted_count": int(
+                        metadata.get("s2_collected_at_accepted_count") or 0
+                    ),
                 }
             )
     return entries
@@ -2544,58 +3172,12 @@ def collect_database_state(database_url: str, project_id: str) -> dict[str, Any]
         with engine.connect() as connection:
             canon = scalar_counts(
                 connection,
-                """
-                SELECT
-                  count(*) FILTER (WHERE c.status='committed') AS committed,
-                  count(*) FILTER (WHERE c.status<>'committed') AS non_committed,
-                  count(DISTINCT c.chapter_number) FILTER (WHERE c.status='committed') AS distinct_chapters,
-                  coalesce(min(c.chapter_number) FILTER (WHERE c.status='committed'),0) AS first_chapter,
-                  coalesce(max(c.chapter_number) FILTER (WHERE c.status='committed'),0) AS last_chapter,
-                  count(*)-count(DISTINCT c.id) AS duplicate_ids,
-                  count(*)-count(DISTINCT c.candidate_id) AS duplicate_candidate_refs,
-                  count(*)-count(DISTINCT c.idempotency_key) AS duplicate_idempotency_keys,
-                  (SELECT count(*) FROM (
-                     SELECT chapter_number FROM canon_commit_records
-                     WHERE project_id=:project_id GROUP BY chapter_number HAVING count(*)>1
-                   ) duplicate_chapter) AS duplicate_chapters,
-                  count(*) FILTER (WHERE ws.id IS NULL) AS missing_world_snapshot_refs,
-                  count(*) FILTER (WHERE ms.id IS NULL) AS missing_map_snapshot_refs,
-                  count(*) FILTER (WHERE ws.id IS NOT NULL AND (ws.project_id<>c.project_id OR ws.as_of_chapter<>c.chapter_number)) AS wrong_world_snapshot_identity,
-                  count(*) FILTER (WHERE ms.id IS NOT NULL AND (ms.project_id<>c.project_id OR ms.as_of_chapter<>c.chapter_number)) AS wrong_map_snapshot_identity,
-                  count(*) FILTER (WHERE d.id IS NULL OR d.project_id<>c.project_id OR d.chapter_number<>c.chapter_number OR d.status<>'accepted' OR d.canon_status<>'canon' OR d.canon_commit_id<>c.id OR d.idempotency_key<>c.idempotency_key) AS candidate_identity_mismatches,
-                  count(*) FILTER (WHERE cp.id IS NULL OR cp.project_id<>c.project_id OR cp.chapter_number<>c.chapter_number OR cp.status<>'accepted') AS chapter_identity_mismatches
-                FROM canon_commit_records c
-                LEFT JOIN candidate_draft_records d ON d.id=c.candidate_id
-                LEFT JOIN chapter_plans cp ON cp.id=d.chapter_plan_id
-                LEFT JOIN world_snapshots ws ON ws.id=c.world_snapshot_id
-                LEFT JOIN map_snapshots ms ON ms.id=c.map_snapshot_id
-                WHERE c.project_id=:project_id
-                """,
+                CANON_INTEGRITY_SQL,
                 project_id,
             )
             candidates = scalar_counts(
                 connection,
-                """
-                SELECT
-                  count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon') AS accepted_canon,
-                  count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon' AND d.canon_commit_id='') AS missing_commit_id,
-                  count(*) FILTER (WHERE d.status='accepted' AND d.canon_status='canon' AND (
-                    c.id IS NULL OR c.status<>'committed' OR c.project_id<>d.project_id
-                    OR c.chapter_number<>d.chapter_number OR c.candidate_id<>d.id
-                    OR c.idempotency_key<>d.idempotency_key OR cp.id IS NULL
-                    OR cp.project_id<>d.project_id OR cp.chapter_number<>d.chapter_number
-                    OR cp.status<>'accepted'
-                  )) AS reverse_identity_mismatches,
-                  (SELECT count(*) FROM (
-                    SELECT chapter_number FROM candidate_draft_records
-                    WHERE project_id=:project_id AND status='accepted' AND canon_status='canon'
-                    GROUP BY chapter_number HAVING count(*)>1
-                  ) duplicate_chapter) AS duplicate_accepted_chapters
-                FROM candidate_draft_records d
-                LEFT JOIN canon_commit_records c ON c.id=d.canon_commit_id
-                LEFT JOIN chapter_plans cp ON cp.id=d.chapter_plan_id
-                WHERE d.project_id=:project_id
-                """,
+                CANDIDATE_INTEGRITY_SQL,
                 project_id,
             )
             graph = scalar_counts(
@@ -3361,6 +3943,14 @@ def verify_run_inputs(
         raise FreezeViolation("config", "RC manifest path changed during run")
     if str(rc_identity.get("sha256") or "") != sha256_file(args.rc_manifest.resolve()):
         raise FreezeViolation("config", "RC manifest content changed during run")
+    bootstrap = run_manifest.get("bootstrap_transcript") or {}
+    bootstrap_path = args.output_dir.resolve() / BOOTSTRAP_TRANSCRIPT_NAME
+    if (
+        bootstrap.get("path") != BOOTSTRAP_TRANSCRIPT_NAME
+        or not bootstrap_path.is_file()
+        or bootstrap.get("sha256") != sha256_file(bootstrap_path)
+    ):
+        raise FreezeViolation("evidence", "bootstrap transcript changed during run")
     if run_manifest.get("connection_hashes") != connection_hashes(args):
         raise FreezeViolation("config", "API/MCP/database target changed during run")
     if (
@@ -3377,6 +3967,61 @@ def verify_run_inputs(
         expected_containers.get("dependency") or []
     ):
         raise FreezeViolation("config", "dependency container set changed during run")
+
+
+def verify_bound_bootstrap_transcript(
+    args: argparse.Namespace,
+    run_manifest: dict[str, Any],
+    rc_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    descriptor = run_manifest.get("bootstrap_transcript") or {}
+    path = args.output_dir.resolve() / BOOTSTRAP_TRANSCRIPT_NAME
+    if (
+        descriptor.get("path") != BOOTSTRAP_TRANSCRIPT_NAME
+        or not path.is_file()
+        or descriptor.get("sha256") != sha256_file(path)
+    ):
+        raise FreezeViolation("evidence", "bootstrap transcript binding mismatch")
+    source = rc_manifest.get("source") or {}
+    summary = verify_bootstrap_transcript(
+        load_json(path),
+        project_id=args.project_id,
+        source_sha=str(source.get("sha") or ""),
+        source_tree=str(source.get("tree") or ""),
+        rc_manifest_sha256=str((run_manifest.get("rc_manifest") or {}).get("sha256") or ""),
+        collector_sha256=str((run_manifest.get("collector") or {}).get("sha256") or ""),
+        mcp_target_sha256=mcp_target_sha256(args.mcp_url),
+    )
+    if descriptor.get("summary") != summary:
+        raise FreezeViolation("evidence", "bootstrap transcript summary changed")
+    return summary
+
+
+def verify_bound_bootstrap_artifact(
+    output_dir: Path,
+    run_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    descriptor = run_manifest.get("bootstrap_transcript") or {}
+    path = output_dir.resolve() / BOOTSTRAP_TRANSCRIPT_NAME
+    if (
+        descriptor.get("path") != BOOTSTRAP_TRANSCRIPT_NAME
+        or not path.is_file()
+        or descriptor.get("sha256") != sha256_file(path)
+    ):
+        raise EvidenceError("L200 bootstrap transcript artifact mismatch")
+    freeze = run_manifest.get("freeze_identity") or {}
+    summary = verify_bootstrap_transcript(
+        load_json(path),
+        project_id=str(run_manifest.get("project_id") or ""),
+        source_sha=str(freeze.get("source_sha") or ""),
+        source_tree=str(freeze.get("source_tree") or ""),
+        rc_manifest_sha256=str((run_manifest.get("rc_manifest") or {}).get("sha256") or ""),
+        collector_sha256=str((run_manifest.get("collector") or {}).get("sha256") or ""),
+        mcp_target_sha256=str(descriptor.get("mcp_target_sha256") or ""),
+    )
+    if descriptor.get("summary") != summary:
+        raise EvidenceError("L200 bootstrap transcript summary mismatch")
+    return summary
 
 
 def verify_band_artifact_entries(
@@ -3412,6 +4057,551 @@ def checkpoint_chain_anchor(run_manifest: dict[str, Any]) -> str:
             ),
         }
     )
+
+
+def attestation_run_anchor(run_manifest: dict[str, Any]) -> str:
+    return canonical_hash(
+        {
+            "run": run_manifest.get("run"),
+            "project_id": run_manifest.get("project_id"),
+            "initialized_at": run_manifest.get("initialized_at"),
+            "collector": run_manifest.get("collector"),
+            "rc_manifest": run_manifest.get("rc_manifest"),
+        }
+    )
+
+
+def attestation_record_hash(record: dict[str, Any]) -> str:
+    return canonical_hash(
+        {key: value for key, value in record.items() if key != "record_sha256"}
+    )
+
+
+def attestation_expected_checks(run_manifest: dict[str, Any]) -> dict[str, str]:
+    freeze_identity = dict(run_manifest.get("freeze_identity") or {})
+    freeze_identity.pop("checked_at", None)
+    required = {
+        "freeze_identity": freeze_identity,
+        "connection_bindings": run_manifest.get("connection_bindings"),
+        "live_schema_identity": run_manifest.get("live_schema_identity"),
+        "policy_hash": run_manifest.get("policy_hash"),
+        "rule_state_hash": run_manifest.get("rule_state_hash"),
+        "freeze_audit_state": run_manifest.get("freeze_audit_state"),
+        "bootstrap_audit_state": run_manifest.get("bootstrap_audit_state"),
+    }
+    if any(value in (None, "", {}) for value in required.values()):
+        raise FreezeViolation(
+            "attestation", "attestation frozen check baseline is incomplete"
+        )
+    checks = {
+        "freeze_identity_sha256": canonical_hash(freeze_identity),
+        "connection_bindings_sha256": canonical_hash(
+            run_manifest["connection_bindings"]
+        ),
+        "schema_identity_sha256": canonical_hash(
+            run_manifest["live_schema_identity"]
+        ),
+        "policy_sha256": str(run_manifest["policy_hash"]),
+        "rule_state_sha256": str(run_manifest["rule_state_hash"]),
+        "freeze_audit_sha256": canonical_hash(run_manifest["freeze_audit_state"]),
+        "bootstrap_audit_sha256": canonical_hash(
+            run_manifest["bootstrap_audit_state"]
+        ),
+    }
+    if set(checks) != set(ATTESTATION_CHECK_KEYS) or any(
+        not re.fullmatch(r"[0-9a-f]{64}", value) for value in checks.values()
+    ):
+        raise FreezeViolation(
+            "attestation", "attestation frozen check hashes are invalid"
+        )
+    return checks
+
+
+def _evidence_time(value: Any, *, label: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or ""))
+    except ValueError as exc:
+        raise FreezeViolation("attestation", f"invalid attestation time: {label}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _verify_attestation_protocol_unlocked(
+    output_dir: Path,
+    run_manifest: dict[str, Any],
+    *,
+    require_terminated: bool,
+    reference_time: datetime | None = None,
+) -> dict[str, Any]:
+    descriptor = run_manifest.get("attestation") or {}
+    if (
+        descriptor.get("protocol") != ATTESTATION_PROTOCOL
+        or descriptor.get("directory") != "attestation"
+        or int(descriptor.get("max_gap_seconds") or 0)
+        != ATTESTATION_MAX_GAP_SECONDS
+    ):
+        raise FreezeViolation("attestation", "attestation protocol identity mismatch")
+    root = (output_dir.resolve() / "attestation").resolve()
+    if not root.is_relative_to(output_dir.resolve()):
+        raise FreezeViolation("attestation", "attestation directory escaped output root")
+    session_path = root / "session.json"
+    state_path = root / "state.json"
+    if not session_path.is_file() or not state_path.is_file():
+        raise FreezeViolation("attestation", "continuous attestation is missing")
+    session = load_json(session_path)
+    state = load_json(state_path)
+    session_sha256 = sha256_file(session_path)
+    if (
+        int(session.get("schema_version") or 0) != 1
+        or session.get("protocol") != ATTESTATION_PROTOCOL
+        or session.get("run_anchor") != attestation_run_anchor(run_manifest)
+        or session.get("collector") != run_manifest.get("collector")
+        or session.get("rc_manifest") != run_manifest.get("rc_manifest")
+        or int(session.get("max_gap_seconds") or 0)
+        != ATTESTATION_MAX_GAP_SECONDS
+        or int(session.get("interval_seconds") or 0) < 1
+        or int(session.get("interval_seconds") or 0)
+        > ATTESTATION_MAX_GAP_SECONDS // 2
+        or not str(session.get("collector_session_id") or "")
+    ):
+        raise FreezeViolation("attestation", "attestation session identity mismatch")
+    collector_session_id = str(session["collector_session_id"])
+    if (
+        state.get("collector_session_id") != collector_session_id
+        or state.get("session_sha256") != session_sha256
+    ):
+        raise FreezeViolation("attestation", "attestation state identity mismatch")
+    initialized_at = _evidence_time(
+        run_manifest.get("initialized_at"), label="manifest initialization"
+    )
+    session_created_at = _evidence_time(session.get("created_at"), label="session")
+    startup_gap = (session_created_at - initialized_at).total_seconds()
+    if startup_gap < 0 or startup_gap > ATTESTATION_MAX_GAP_SECONDS:
+        raise FreezeViolation(
+            "attestation",
+            f"attestation gap from init is outside bound: {startup_gap}",
+        )
+    records_dir = root / "records"
+    record_paths = sorted(records_dir.glob("*.json")) if records_dir.is_dir() else []
+    if not record_paths:
+        raise FreezeViolation("attestation", "continuous attestation has no observations")
+    previous_hash = session_sha256
+    previous_completed = session_created_at
+    observation_count = 0
+    last_observation_completed = ""
+    terminal_record: dict[str, Any] | None = None
+    expected_checks = attestation_expected_checks(run_manifest)
+    for sequence, path in enumerate(record_paths, start=1):
+        if path.name != f"{sequence:08d}.json":
+            raise FreezeViolation("attestation", "attestation sequence is not contiguous")
+        record = load_json(path)
+        started = _evidence_time(record.get("started_at"), label=f"record {sequence} start")
+        completed = _evidence_time(
+            record.get("completed_at"), label=f"record {sequence} completion"
+        )
+        gap = (started - previous_completed).total_seconds()
+        duration = (completed - started).total_seconds()
+        if gap < 0 or gap > ATTESTATION_MAX_GAP_SECONDS:
+            raise FreezeViolation(
+                "attestation",
+                f"attestation gap is outside bound at record {sequence}: {gap}",
+            )
+        if duration < 0 or duration > ATTESTATION_MAX_GAP_SECONDS:
+            raise FreezeViolation(
+                "attestation",
+                f"attestation observation duration is outside bound at record {sequence}",
+            )
+        if (
+            int(record.get("schema_version") or 0) != 1
+            or int(record.get("sequence") or 0) != sequence
+            or record.get("collector_session_id") != collector_session_id
+            or record.get("session_sha256") != session_sha256
+            or record.get("previous_record_sha256") != previous_hash
+            or record.get("record_sha256") != attestation_record_hash(record)
+        ):
+            raise FreezeViolation(
+                "attestation", f"attestation chain integrity mismatch: {sequence}"
+            )
+        record_type = str(record.get("record_type") or "")
+        if record_type == "observation":
+            if terminal_record is not None:
+                raise FreezeViolation(
+                    "attestation", "attestation observation follows terminal record"
+                )
+            observation_count += 1
+            last_observation_completed = completed.isoformat()
+            if record.get("result") == "pass" and (
+                record.get("checks") != expected_checks
+                or record.get("failure_category") != ""
+                or record.get("failure_reason") != ""
+            ):
+                raise FreezeViolation(
+                    "attestation",
+                    f"attestation pass checks mismatch: {sequence}",
+                )
+        elif record_type == "termination":
+            if sequence != len(record_paths) or terminal_record is not None:
+                raise FreezeViolation(
+                    "attestation", "attestation termination is not the final record"
+                )
+            terminal_record = record
+        else:
+            raise FreezeViolation(
+                "attestation", f"unknown attestation record type: {record_type}"
+            )
+        previous_hash = str(record["record_sha256"])
+        previous_completed = completed
+    if (
+        int(state.get("sequence") or 0) != len(record_paths)
+        or state.get("chain_head") != previous_hash
+        or int(state.get("schema_version") or 0) != 1
+        or state.get("started_at") != session.get("created_at")
+        or state.get("last_observed_at") != last_observation_completed
+    ):
+        raise FreezeViolation("attestation", "attestation state/chain head mismatch")
+    if (
+        state.get("permanent_failure") is True
+        or state.get("status") == "failed"
+        or any(record.get("result") != "pass" for record in map(load_json, record_paths))
+    ):
+        raise FreezeViolation(
+            "attestation", "continuous attestation recorded a permanent failure"
+        )
+    if require_terminated:
+        if (
+            state.get("status") != "terminated"
+            or terminal_record is None
+            or terminal_record.get("termination_reason") != "signal"
+            or state.get("termination_reason") != "signal"
+            or state.get("terminated_at") != terminal_record.get("completed_at")
+            or state.get("permanent_failure") is not False
+        ):
+            raise FreezeViolation(
+                "attestation", "continuous attestation did not terminate normally"
+            )
+    elif (
+        state.get("status") != "running"
+        or terminal_record is not None
+        or state.get("terminated_at") != ""
+        or state.get("termination_reason") != ""
+        or state.get("permanent_failure") is not False
+    ):
+        raise FreezeViolation("attestation", "continuous attestation is not running")
+    if observation_count < 1:
+        raise FreezeViolation("attestation", "continuous attestation has no observations")
+    if reference_time is not None:
+        normalized_reference = (
+            reference_time.replace(tzinfo=UTC)
+            if reference_time.tzinfo is None
+            else reference_time.astimezone(UTC)
+        )
+        freshness = (normalized_reference - previous_completed).total_seconds()
+        if freshness < 0 or freshness > ATTESTATION_MAX_GAP_SECONDS:
+            raise FreezeViolation(
+                "attestation", f"attestation gap to verifier is outside bound: {freshness}"
+            )
+    return {
+        "protocol": ATTESTATION_PROTOCOL,
+        "collector_session_id": collector_session_id,
+        "status": str(state.get("status") or ""),
+        "observation_count": observation_count,
+        "record_count": len(record_paths),
+        "chain_head": previous_hash,
+        "session_sha256": session_sha256,
+        "last_record_completed_at": previous_completed.isoformat(),
+        "permanent_failure": False,
+    }
+
+
+@contextmanager
+def attestation_lock(output_dir: Path, *, exclusive: bool):
+    root = output_dir.resolve() / "attestation"
+    if not root.is_dir():
+        raise FreezeViolation("attestation", "continuous attestation is missing")
+    lock_path = root / ".collector.lock"
+    if not exclusive and not lock_path.is_file():
+        raise FreezeViolation("attestation", "attestation collector lock is missing")
+    with lock_path.open("a+" if exclusive else "r", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def verify_attestation_protocol(
+    output_dir: Path,
+    run_manifest: dict[str, Any],
+    *,
+    require_terminated: bool,
+    reference_time: datetime | None = None,
+) -> dict[str, Any]:
+    with attestation_lock(output_dir, exclusive=False):
+        return _verify_attestation_protocol_unlocked(
+            output_dir,
+            run_manifest,
+            require_terminated=require_terminated,
+            reference_time=reference_time,
+        )
+
+
+def initialize_attestation_session(
+    output_dir: Path,
+    run_manifest: dict[str, Any],
+    *,
+    interval_seconds: int,
+) -> None:
+    root = output_dir.resolve() / "attestation"
+    try:
+        root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise EvidenceError("L200 continuous attestation already exists") from exc
+    created_at = now()
+    session = {
+        "schema_version": 1,
+        "protocol": ATTESTATION_PROTOCOL,
+        "collector_session_id": uuid4().hex,
+        "created_at": created_at,
+        "run_anchor": attestation_run_anchor(run_manifest),
+        "collector": run_manifest.get("collector"),
+        "rc_manifest": run_manifest.get("rc_manifest"),
+        "max_gap_seconds": ATTESTATION_MAX_GAP_SECONDS,
+        "interval_seconds": interval_seconds,
+    }
+    write_json(root / "session.json", session)
+    write_json(
+        root / "state.json",
+        {
+            "schema_version": 1,
+            "collector_session_id": session["collector_session_id"],
+            "session_sha256": sha256_file(root / "session.json"),
+            "status": "running",
+            "sequence": 0,
+            "chain_head": sha256_file(root / "session.json"),
+            "started_at": created_at,
+            "last_observed_at": "",
+            "terminated_at": "",
+            "termination_reason": "",
+            "permanent_failure": False,
+        },
+    )
+
+
+def _append_attestation_record_unlocked(
+    output_dir: Path,
+    *,
+    record_type: str,
+    started_at: str,
+    completed_at: str,
+    result: str,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    root = output_dir.resolve() / "attestation"
+    session_path = root / "session.json"
+    state_path = root / "state.json"
+    session = load_json(session_path)
+    state = load_json(state_path)
+    if state.get("status") != "running":
+        raise EvidenceError("continuous attestation collector is not running")
+    sequence = int(state.get("sequence") or 0) + 1
+    record = {
+        "schema_version": 1,
+        "sequence": sequence,
+        "record_type": record_type,
+        "collector_session_id": session["collector_session_id"],
+        "session_sha256": sha256_file(session_path),
+        "previous_record_sha256": state["chain_head"],
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "result": result,
+        **details,
+    }
+    record["record_sha256"] = attestation_record_hash(record)
+    record_path = root / "records" / f"{sequence:08d}.json"
+    if record_path.exists():
+        raise EvidenceError(f"attestation record already exists: {record_path}")
+    write_json(record_path, record)
+    state["sequence"] = sequence
+    state["chain_head"] = record["record_sha256"]
+    if record_type == "observation":
+        state["last_observed_at"] = completed_at
+    if result != "pass":
+        state["status"] = "failed"
+        state["permanent_failure"] = True
+        state["terminated_at"] = completed_at
+        state["termination_reason"] = "drift"
+    elif record_type == "termination":
+        state["status"] = "terminated"
+        state["terminated_at"] = completed_at
+        state["termination_reason"] = str(details.get("termination_reason") or "")
+    write_json(state_path, state)
+    return record
+
+
+def append_attestation_record(
+    output_dir: Path,
+    *,
+    record_type: str,
+    started_at: str,
+    completed_at: str,
+    result: str,
+    details: dict[str, Any],
+) -> dict[str, Any]:
+    with attestation_lock(output_dir, exclusive=True):
+        return _append_attestation_record_unlocked(
+            output_dir,
+            record_type=record_type,
+            started_at=started_at,
+            completed_at=completed_at,
+            result=result,
+            details=details,
+        )
+
+
+async def collect_attestation_checks(
+    args: argparse.Namespace,
+    run_manifest: dict[str, Any],
+) -> dict[str, str]:
+    verify_run_inputs(args, run_manifest)
+    rc_manifest = load_json(args.rc_manifest.resolve())
+    verify_bound_bootstrap_transcript(args, run_manifest, rc_manifest)
+    freeze = verify_frozen(args, rc_manifest)
+    bindings = connection_bindings(args, freeze)
+    verify_connection_bindings(run_manifest, bindings)
+    verify_runtime_configuration(run_manifest, freeze)
+    schema = verify_database_schema(run_manifest, args.database_url)
+    mcp = await collect_mcp_state(args)
+    assert_project_identity(args, mcp["project"])
+    policy = await fetch_policy(args.api_url, args.project_id)
+    hashes = assert_policy_and_rules_frozen(
+        run_manifest,
+        policy,
+        mcp["rule_provenance"],
+    )
+    freeze_audit = collect_database_freeze_audit(
+        args.database_url,
+        args.project_id,
+    )
+    verify_freeze_audit(run_manifest, freeze_audit)
+    bootstrap_audit = collect_bootstrap_audit_state(
+        args.database_url,
+        args.project_id,
+    )
+    if bootstrap_audit != run_manifest.get("bootstrap_audit_state"):
+        raise FreezeViolation(
+            "rule_state", "bootstrap operation audit changed during run"
+        )
+    stable_freeze = dict(freeze)
+    stable_freeze.pop("checked_at", None)
+    checks = {
+        "freeze_identity_sha256": canonical_hash(stable_freeze),
+        "connection_bindings_sha256": canonical_hash(bindings),
+        "schema_identity_sha256": canonical_hash(schema),
+        "policy_sha256": hashes["policy_hash"],
+        "rule_state_sha256": hashes["rule_state_hash"],
+        "freeze_audit_sha256": canonical_hash(freeze_audit),
+        "bootstrap_audit_sha256": canonical_hash(bootstrap_audit),
+    }
+    if checks != attestation_expected_checks(run_manifest):
+        raise FreezeViolation(
+            "attestation", "live attestation checks differ from frozen baseline"
+        )
+    return checks
+
+
+async def monitor_run(args: argparse.Namespace) -> None:
+    if (
+        args.interval_seconds < 1
+        or args.interval_seconds > ATTESTATION_MAX_GAP_SECONDS // 2
+    ):
+        raise EvidenceError(
+            "monitor interval must be between 1 and "
+            f"{ATTESTATION_MAX_GAP_SECONDS // 2} seconds"
+        )
+    output = args.output_dir.resolve()
+    run_manifest = load_json(output / "manifest.json")
+    if not run_manifest.get("valid"):
+        raise EvidenceError("L200 run is already invalidated")
+    assert_final_output_unsealed(output, run_manifest)
+    verify_run_inputs(args, run_manifest)
+    rc_manifest = load_json(args.rc_manifest.resolve())
+    verify_bound_bootstrap_transcript(args, run_manifest, rc_manifest)
+    initialize_attestation_session(
+        output,
+        run_manifest,
+        interval_seconds=args.interval_seconds,
+    )
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed_signals: list[signal.Signals] = []
+    for selected_signal in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(selected_signal, stop.set)
+            installed_signals.append(selected_signal)
+        except (NotImplementedError, RuntimeError):
+            continue
+    try:
+        while not stop.is_set():
+            started_at = now()
+            try:
+                checks = await collect_attestation_checks(args, run_manifest)
+            except Exception as exc:
+                category = (
+                    exc.category if isinstance(exc, FreezeViolation) else "attestation"
+                )
+                completed_at = now()
+                append_attestation_record(
+                    output,
+                    record_type="observation",
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    result="fail",
+                    details={
+                        "checks": {},
+                        "failure_category": category,
+                        "failure_reason": str(exc),
+                    },
+                )
+                violation = FreezeViolation(
+                    category,
+                    f"continuous attestation permanently failed: {exc}",
+                )
+                raise violation from exc
+            append_attestation_record(
+                output,
+                record_type="observation",
+                started_at=started_at,
+                completed_at=now(),
+                result="pass",
+                details={
+                    "checks": checks,
+                    "failure_category": "",
+                    "failure_reason": "",
+                },
+            )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=args.interval_seconds)
+            except TimeoutError:
+                pass
+        terminated_at = now()
+        append_attestation_record(
+            output,
+            record_type="termination",
+            started_at=terminated_at,
+            completed_at=now(),
+            result="pass",
+            details={"termination_reason": "signal"},
+        )
+        verify_attestation_protocol(
+            output,
+            run_manifest,
+            require_terminated=True,
+            reference_time=datetime.now(UTC),
+        )
+    finally:
+        for selected_signal in installed_signals:
+            loop.remove_signal_handler(selected_signal)
 
 
 def verify_checkpoint_artifact_entries(
@@ -3510,11 +4700,25 @@ async def init_run(args: argparse.Namespace) -> None:
         raise EvidenceError(f"L200 manifest already exists: {path}")
     rc_manifest = load_json(args.rc_manifest.resolve())
     rc_identity = validate_frozen_rc_manifest(args, rc_manifest)
+    collector = {
+        "path": str(Path(__file__).resolve()),
+        "sha256": sha256_file(Path(__file__).resolve()),
+    }
+    bootstrap_transcript, _ = load_and_verify_bootstrap_transcript(
+        args,
+        rc_manifest,
+        rc_manifest_sha256=sha256_file(args.rc_manifest.resolve()),
+        collector_sha256=str(collector["sha256"]),
+    )
     freeze = verify_frozen(args, rc_manifest)
     bindings = connection_bindings(args, freeze)
     live_schema = database_schema_identity(args.database_url)
     fresh_database = fresh_database_state(args.database_url, args.project_id)
     freeze_audit = collect_database_freeze_audit(
+        args.database_url,
+        args.project_id,
+    )
+    bootstrap_audit = collect_bootstrap_audit_state(
         args.database_url,
         args.project_id,
     )
@@ -3561,6 +4765,8 @@ async def init_run(args: argparse.Namespace) -> None:
             "path": str(args.rc_manifest.resolve()),
             "sha256": sha256_file(args.rc_manifest.resolve()),
         },
+        "bootstrap_transcript": bootstrap_transcript,
+        "bootstrap_audit_state": bootstrap_audit,
         "connection_hashes": connection_hashes(args),
         "connection_bindings": bindings,
         "container_names": {
@@ -3574,7 +4780,13 @@ async def init_run(args: argparse.Namespace) -> None:
         "policy_hash": canonical_hash(policy),
         "rule_state": rule_state,
         "rule_state_hash": canonical_hash(rule_state),
+        "rule_provenance": mcp["rule_provenance"],
         "freeze_audit_state": freeze_audit,
+        "attestation": {
+            "protocol": ATTESTATION_PROTOCOL,
+            "directory": "attestation",
+            "max_gap_seconds": ATTESTATION_MAX_GAP_SECONDS,
+        },
         "checkpoint_schedule": list(CHECKPOINTS),
         "checkpoint_chain_anchor": "",
         "checkpoints": [],
@@ -3588,14 +4800,13 @@ async def init_run(args: argparse.Namespace) -> None:
             "schema": 0,
             "rule_state": 0,
             "threshold": 0,
+            "attestation": 0,
+            "evidence": 0,
         },
         "initial_project": project,
         "initial_genesis": genesis,
         "initial_fresh_database": fresh_database,
-        "collector": {
-            "path": str(Path(__file__).resolve()),
-            "sha256": sha256_file(Path(__file__).resolve()),
-        },
+        "collector": collector,
     }
     run_manifest["checkpoint_chain_anchor"] = checkpoint_chain_anchor(run_manifest)
     write_json(path, run_manifest)
@@ -3610,6 +4821,12 @@ async def checkpoint(args: argparse.Namespace) -> None:
     if not run_manifest.get("valid"):
         raise EvidenceError("L200 run is already invalidated")
     verify_run_inputs(args, run_manifest)
+    attestation = verify_attestation_protocol(
+        args.output_dir.resolve(),
+        run_manifest,
+        require_terminated=False,
+        reference_time=datetime.now(UTC),
+    )
     verify_band_artifact_entries(
         args.output_dir.resolve(), list(run_manifest.get("band_reports") or [])
     )
@@ -3623,6 +4840,7 @@ async def checkpoint(args: argparse.Namespace) -> None:
             f"next checkpoint is {expected_next}, not {args.chapter}"
         )
     rc_manifest = load_json(args.rc_manifest.resolve())
+    verify_bound_bootstrap_transcript(args, run_manifest, rc_manifest)
     freeze = verify_frozen(args, rc_manifest)
     bindings = connection_bindings(args, freeze)
     verify_connection_bindings(run_manifest, bindings)
@@ -3654,10 +4872,20 @@ async def checkpoint(args: argparse.Namespace) -> None:
     )
     database = collect_database_state(args.database_url, args.project_id)
     verify_freeze_audit(run_manifest, database["freeze_audit"])
+    bootstrap_audit = collect_bootstrap_audit_state(
+        args.database_url,
+        args.project_id,
+    )
+    if bootstrap_audit != run_manifest.get("bootstrap_audit_state"):
+        raise FreezeViolation(
+            "rule_state", "bootstrap operation audit changed during run"
+        )
     band_reports = await collect_completed_band_reports(
         args,
         bands=database["bands"],
         output_dir=args.output_dir.resolve(),
+        run_manifest=run_manifest,
+        accepted_at_collection=accepted,
     )
     checkpoint_path = (
         args.output_dir.resolve() / "checkpoints" / f"{args.chapter:03d}.json"
@@ -3681,6 +4909,7 @@ async def checkpoint(args: argparse.Namespace) -> None:
         "rule_provenance": mcp["rule_provenance"],
         "database": database,
         "band_reports": band_reports,
+        "continuous_attestation": attestation,
     }
     write_json(checkpoint_path, payload)
     relative_path = Path("checkpoints") / checkpoint_path.name
@@ -3786,6 +5015,12 @@ def final_violations(
         ("missing_commit_id", 0),
         ("reverse_identity_mismatches", 0),
         ("duplicate_accepted_chapters", 0),
+        ("duplicate_ids", 0),
+        ("duplicate_project_chapter_versions", 0),
+        ("duplicate_candidate_draft_refs", 0),
+        ("invalid_identity_rows", 0),
+        ("chapter_plan_identity_mismatches", 0),
+        ("chapter_draft_identity_mismatches", 0),
     ):
         if int(candidates.get(key) or 0) != expected:
             violations.append(f"candidates.{key}={candidates.get(key)}, expected={expected}")
@@ -3975,6 +5210,7 @@ def final_violations(
         entry = report_entries.get(band_id) or {}
         directory = Path(str(entry.get("directory") or ""))
         paths = {
+            "metadata": directory / "metadata.json",
             "gate": directory / "gate-ledger.json",
             "cost": directory / "cost-report.json",
             "rules": directory / "rule-provenance.json",
@@ -3983,6 +5219,15 @@ def final_violations(
         if missing:
             violations.append(f"band {band_id} is missing reports: {missing}")
             continue
+        try:
+            verify_band_s2_metadata(
+                load_json(paths["metadata"]),
+                band=band,
+                run_manifest=run_manifest,
+                rule_report=load_json(paths["rules"]),
+            )
+        except EvidenceError as exc:
+            violations.append(f"band {band_id}: {exc}")
         violations.extend(
             f"band {band_id}: {item}"
             for item in report_contract_violations(
@@ -4026,6 +5271,7 @@ def final_report_markdown(
         f"- Needs review: `{needs_review_count(project)}`",
         f"- Active generation task: `{bool(mcp['active_task_check'].get('has_active_generation_task'))}`",
         f"- Code changes during run: `{run_manifest.get('code_changes_during_run', 0)}`",
+        f"- Continuous attestation records: `{(run_manifest.get('final_attestation') or {}).get('record_count', 0)}`",
         f"- Canon commits: `{database['canon']['committed']}`",
         f"- Outbox backlog: `{database['outbox']['backlog']}`",
         f"- Maintenance backlog: `{database['maintenance']['backlog']}`",
@@ -4093,6 +5339,20 @@ def verify_final_artifact_set(
         or int(run_manifest.get("code_changes_during_run") or 0) != 0
     ):
         raise EvidenceError("L200 manifest is not a finalized passing run")
+    attestation = verify_attestation_protocol(
+        output,
+        run_manifest,
+        require_terminated=True,
+    )
+    if run_manifest.get("final_attestation") != attestation:
+        raise EvidenceError("L200 final attestation summary mismatch")
+    verify_bound_bootstrap_artifact(output, run_manifest)
+    if (
+        not run_manifest.get("bootstrap_audit_state")
+        or run_manifest.get("bootstrap_audit_state")
+        != run_manifest.get("final_bootstrap_audit_state")
+    ):
+        raise EvidenceError("L200 bootstrap audit identity drift")
     for initial_key, final_key in (
         ("freeze_identity", "final_freeze_identity"),
         ("connection_bindings", "final_connection_bindings"),
@@ -4326,11 +5586,18 @@ async def finalize(args: argparse.Namespace) -> None:
     if not run_manifest.get("valid"):
         raise EvidenceError("L200 run is invalidated")
     verify_run_inputs(args, run_manifest)
+    attestation = verify_attestation_protocol(
+        output,
+        run_manifest,
+        require_terminated=True,
+        reference_time=datetime.now(UTC),
+    )
     verify_band_artifact_entries(
         output, list(run_manifest.get("band_reports") or [])
     )
     verify_checkpoint_artifact_entries(output, run_manifest)
     rc_manifest = load_json(args.rc_manifest.resolve())
+    verify_bound_bootstrap_transcript(args, run_manifest, rc_manifest)
     freeze = verify_frozen(args, rc_manifest)
     bindings = connection_bindings(args, freeze)
     verify_connection_bindings(run_manifest, bindings)
@@ -4347,6 +5614,16 @@ async def finalize(args: argparse.Namespace) -> None:
     )
     database = collect_database_state(args.database_url, args.project_id)
     verify_freeze_audit(run_manifest, database["freeze_audit"])
+    bootstrap_audit = collect_bootstrap_audit_state(
+        args.database_url,
+        args.project_id,
+    )
+    if bootstrap_audit != run_manifest.get("bootstrap_audit_state"):
+        raise FreezeViolation(
+            "rule_state", "bootstrap operation audit changed during run"
+        )
+    run_manifest["final_attestation"] = attestation
+    run_manifest["final_bootstrap_audit_state"] = bootstrap_audit
     database["projection_artifacts"] = collect_projection_artifacts(
         freeze,
         project_id=args.project_id,
@@ -4459,13 +5736,39 @@ def common_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def bootstrap_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--rc-manifest", type=Path, required=True)
+    parser.add_argument("--mcp-url", required=True)
+    parser.add_argument("--api-url", required=True)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--title", required=True)
+    parser.add_argument("--premise-file", type=Path, required=True)
+    parser.add_argument("--genre", default="玄幻")
+    parser.add_argument("--setting-summary-file", type=Path)
+    parser.add_argument(
+        "--quality-profile", choices=("standard", "pulp"), required=True
+    )
+    parser.add_argument(
+        "--gate-delegate", choices=("human", "spark"), required=True
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Collect strict evidence for the immutable ForWin v5 L200 gate."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    bootstrap_parser = commands.add_parser("bootstrap")
+    bootstrap_arguments(bootstrap_parser)
     init_parser = commands.add_parser("init")
     common_arguments(init_parser)
+    monitor_parser = commands.add_parser("monitor")
+    common_arguments(monitor_parser)
+    monitor_parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=ATTESTATION_DEFAULT_INTERVAL_SECONDS,
+    )
     checkpoint_parser = commands.add_parser("checkpoint")
     common_arguments(checkpoint_parser)
     checkpoint_parser.add_argument("--chapter", type=int, required=True)
@@ -4481,6 +5784,9 @@ async def async_main(args: argparse.Namespace) -> None:
         summary = verify_finalized_output(args.output_dir)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
         return
+    if args.command == "bootstrap":
+        await bootstrap_project(args)
+        return
     if args.expected_target != 200:
         raise EvidenceError("this release gate is intentionally fixed at 200 chapters")
     args.database_url = str(os.environ.get(args.database_url_env) or "").strip()
@@ -4490,6 +5796,8 @@ async def async_main(args: argparse.Namespace) -> None:
         )
     if args.command == "init":
         await init_run(args)
+    elif args.command == "monitor":
+        await monitor_run(args)
     elif args.command == "checkpoint":
         await checkpoint(args)
     else:
@@ -4501,7 +5809,7 @@ def main() -> int:
     try:
         asyncio.run(async_main(args))
     except Exception as exc:
-        if args.command in {"checkpoint", "finalize"} and isinstance(
+        if args.command in {"monitor", "checkpoint", "finalize"} and isinstance(
             exc, FreezeViolation
         ):
             invalidate(args, exc)

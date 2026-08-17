@@ -263,6 +263,7 @@ def decision_event_stmt(
     band_id: str = "",
     chapter_number: int = 0,
     task_id: str = "",
+    event_type: str = "",
     event_family: str = "",
     related_object_type: str = "",
     related_object_id: str = "",
@@ -277,6 +278,8 @@ def decision_event_stmt(
         stmt = stmt.where(DecisionEvent.chapter_number == chapter_number)
     if task_id:
         stmt = stmt.where(DecisionEvent.task_id == task_id)
+    if event_type:
+        stmt = stmt.where(DecisionEvent.event_type == event_type)
     if event_family:
         stmt = stmt.where(DecisionEvent.event_family == event_family)
     if related_object_type:
@@ -296,6 +299,7 @@ def list_decision_event_rows(
     band_id: str = "",
     chapter_number: int = 0,
     task_id: str = "",
+    event_type: str = "",
     event_family: str = "",
     related_object_type: str = "",
     related_object_id: str = "",
@@ -316,6 +320,7 @@ def list_decision_event_rows(
                 band_id=band_id,
                 chapter_number=chapter_number,
                 task_id=task_id,
+                event_type=event_type,
                 event_family=event_family,
                 related_object_type=related_object_type,
                 related_object_id=related_object_id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from datetime import datetime
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -50,6 +51,48 @@ api_module: HttpRuntimeHarness
 
 
 class ForWinAPIClientUnitTests(unittest.TestCase):
+    def test_project_decision_events_pushes_filters_and_limit_to_api(self) -> None:
+        observed: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed.update(dict(request.url.params))
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "id": "audit-1",
+                            "event_type": "generation_audit_checkpoint_reached",
+                        }
+                    ]
+                },
+                request=request,
+            )
+
+        client = ForWinAPIClient(
+            base_url="http://forwin.invalid",
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = asyncio.run(
+            client.project_decision_events(
+                project_id="project-1",
+                event_type="generation_audit_checkpoint_reached",
+                event_family="runtime_observation",
+                limit=7,
+            )
+        )
+
+        self.assertEqual(
+            observed,
+            {
+                "event_type": "generation_audit_checkpoint_reached",
+                "event_family": "runtime_observation",
+                "limit": "7",
+            },
+        )
+        self.assertEqual([item.id for item in result.items], ["audit-1"])
+
     def test_basic_credentials_are_forwarded_without_plaintext_client_repr(
         self,
     ) -> None:
@@ -530,6 +573,56 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         self.assertTrue(
             all("Use this when" in (tool.description or "") for tool in tools)
+        )
+
+    def test_project_decision_events_filters_before_database_limit(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="Decision Event MCP Book",
+                premise="验证长任务中的稀疏审计事件仍可查询。",
+                genre="悬疑",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+                creation_status="writing",
+            )
+            target = updater.save_decision_event(
+                DecisionEventInfo(
+                    project_id=project.id,
+                    chapter_number=6,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+                    summary="generation audit checkpoint",
+                )
+            )
+            target.created_at = datetime(2000, 1, 1)
+            for index in range(205):
+                updater.save_decision_event(
+                    DecisionEventInfo(
+                        project_id=project.id,
+                        chapter_number=7,
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.STAGE_ENTERED,
+                        summary=f"filler event {index}",
+                    )
+                )
+            session.commit()
+            project_id = project.id
+
+        payload = self._result_payload(
+            self._call_tool(
+                "project_decision_events",
+                {
+                    "project_id": project_id,
+                    "event_type": DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+                    "limit": 10,
+                },
+            )
+        )
+
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(
+            payload["items"][0]["event_type"],
+            DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
         )
 
     def test_gate_ledger_report_via_mcp_returns_json_and_markdown(self) -> None:

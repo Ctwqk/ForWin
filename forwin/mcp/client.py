@@ -80,8 +80,14 @@ class ForWinAPIClient:
         limit: int = 50,
     ) -> ProjectDecisionEventsView:
         params: dict[str, Any] = {}
-        if event_family.strip():
-            params["event_family"] = event_family.strip()
+        normalized_event_type = event_type.strip()
+        normalized_event_family = event_family.strip()
+        normalized_limit = max(1, min(int(limit or 1), 200))
+        if normalized_event_type:
+            params["event_type"] = normalized_event_type
+        if normalized_event_family:
+            params["event_family"] = normalized_event_family
+        params["limit"] = normalized_limit
         payload = await self._request_json(
             "GET",
             f"/api/projects/{project_id}/decision-events",
@@ -93,10 +99,7 @@ class ForWinAPIClient:
             self._decision_event_view(item)
             for item in self._ensure_iterable_dicts(payload.get("items"))
         ]
-        normalized_event_type = event_type.strip()
-        if normalized_event_type:
-            items = [item for item in items if item.event_type == normalized_event_type]
-        return ProjectDecisionEventsView(items=items[: max(1, int(limit or 1))])
+        return ProjectDecisionEventsView(items=items)
 
     async def gate_ledger_report(
         self,

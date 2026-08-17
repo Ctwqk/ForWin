@@ -168,10 +168,12 @@ def _build_operations(
         band_id: str = "",
         chapter_number: int = 0,
         task_id: str = "",
+        event_type: str = "",
         event_family: str = "",
         related_object_type: str = "",
         related_object_id: str = "",
         causal_root_id: str = "",
+        limit: int = 200,
     ):
         return operations.list_project_decision_events(
             project_id,
@@ -182,10 +184,12 @@ def _build_operations(
             band_id=band_id,
             chapter_number=chapter_number,
             task_id=task_id,
+            event_type=event_type,
             event_family=event_family,
             related_object_type=related_object_type,
             related_object_id=related_object_id,
             causal_root_id=causal_root_id,
+            limit=limit,
         )
 
     def get_project_causal_replay(

@@ -33,6 +33,12 @@ class AcceptanceStage:
             chapter_plan = repo.get_chapter_plan(project_id, chapter_number)
             if chapter_plan is None:
                 raise ValueError(f"第{chapter_number}章不存在")
+            chapter_status = str(chapter_plan.status or "")
+            if chapter_status not in {"drafted", "needs_review"}:
+                raise ValueError(
+                    f"第{chapter_number}章不是可接受状态（当前 "
+                    f"{chapter_status or 'unknown'}）"
+                )
 
             latest_draft = (
                 session.query(ChapterDraft)
@@ -61,9 +67,7 @@ class AcceptanceStage:
                 latest_draft.llm_raw_response
             )
             verdict = self._load_review_verdict(latest_review)
-            repair_attempt_count = len(
-                repo.list_chapter_rewrite_attempts(project_id, chapter_number)
-            )
+            repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)
             residual_issues = self._review_issue_payloads(verdict)
             preparation = self.canon_preparation.prepare(
                 context=self.canon_preparation_context,

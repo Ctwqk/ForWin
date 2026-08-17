@@ -363,8 +363,8 @@ class ChapterExecutionStage:
                         writer_output=writer_output,
                     )
                 )
-                repair_attempt_count = len(
-                    repo.list_chapter_rewrite_attempts(project_id, chapter_num)
+                repair_attempt_count = int(
+                    chapter_plan.repair_attempt_count or 0
                 )
                 residual_review_issues = self._review_issue_payloads(verdict)
                 canon_risk_level = self._review_canon_risk(verdict)
@@ -603,8 +603,8 @@ class ChapterExecutionStage:
                         force_accept_applied = (
                             force_accept_applied or canon_force_accept_applied
                         )
-                        repair_attempt_count = len(
-                            repo.list_chapter_rewrite_attempts(project_id, chapter_num)
+                        repair_attempt_count = int(
+                            chapter_plan.repair_attempt_count or 0
                         )
                         residual_review_issues = self._review_issue_payloads(verdict)
                         canon_risk_level = self._review_canon_risk(verdict)

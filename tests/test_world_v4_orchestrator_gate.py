@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
 from sqlalchemy import func, select
 
 from forwin.candidate_drafts import (
@@ -320,6 +321,8 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
                 ),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
+            chapter.status = "needs_review"
+            session.add(chapter)
 
         monkeypatch.setattr(
             pipeline,
@@ -361,3 +364,30 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
 
         assert "needs_review" in result["message"]
         assert status == "needs_review"
+
+
+def test_accept_review_rejects_planned_retry_candidate() -> None:
+    with TemporaryDirectory() as tmp:
+        db_path = postgres_test_url("accept-review-planned-retry")
+        engine = get_engine(db_path)
+        init_db(engine)
+        Session = get_session_factory(engine)
+        pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
+        with Session.begin() as session:
+            project, chapter = _setup_project(session)
+            _persist_candidate(
+                session,
+                project,
+                chapter,
+                WriterOutput(
+                    project_id=project.id,
+                    chapter_number=1,
+                    title="一",
+                    body="等待整章重写的旧正文",
+                    end_of_chapter_summary="旧候选仍在审计链中。",
+                ),
+                ReviewVerdict(verdict="fail", issues=[]),
+            )
+
+        with pytest.raises(ValueError, match="planned"):
+            pipeline.accept_review(project.id, 1)

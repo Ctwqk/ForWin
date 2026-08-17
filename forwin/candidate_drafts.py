@@ -227,6 +227,39 @@ class CandidateDraftRepository:
         self.session.flush()
         return row
 
+    def attach_repair_history(
+        self,
+        candidate_id: str,
+        attempts: list[object],
+    ) -> CandidateDraftRecord:
+        row = self.get(candidate_id, for_update=True)
+        if row is None:
+            raise LookupError("candidate draft not found")
+        history = [
+            {
+                "id": str(getattr(attempt, "id", "") or ""),
+                "attempt_no": int(getattr(attempt, "attempt_no", 0) or 0),
+                "repair_phase": str(
+                    getattr(attempt, "repair_phase", "") or ""
+                ),
+                "repair_scope": str(
+                    getattr(attempt, "repair_scope", "") or ""
+                ),
+                "result_verdict": str(
+                    getattr(attempt, "result_verdict", "") or ""
+                ),
+                "failure_reason": str(
+                    getattr(attempt, "failure_reason", "") or ""
+                ),
+            }
+            for attempt in attempts
+        ]
+        row.repair_attempt_count = len(history)
+        row.repair_history_json = _dump_json(history, fallback=[])
+        self.session.add(row)
+        self.session.flush()
+        return row
+
     def transition(
         self,
         candidate_id: str,

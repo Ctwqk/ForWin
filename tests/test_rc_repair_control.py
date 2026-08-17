@@ -315,10 +315,18 @@ class _RepairHarness:
         return {}
 
 
-def _repair_attempt(*, phase: str, scope: str = "chapter_plan") -> object:
+def _repair_attempt(
+    *,
+    phase: str,
+    scope: str = "chapter_plan",
+    source_draft_id: str = "draft-1",
+    result_draft_id: str = "draft-2",
+) -> object:
     return SimpleNamespace(
         repair_phase=phase,
         repair_scope=scope,
+        source_draft_id=source_draft_id,
+        result_draft_id=result_draft_id,
         forced_accept_applied=False,
     )
 
@@ -497,6 +505,98 @@ def test_attempts_from_another_phase_do_not_exhaust_active_phase(
         event.event_type == DecisionEventType.REPAIR_STARTED
         for event in harness.events
     )
+
+
+def test_attempts_from_previous_retry_cycle_do_not_exhaust_new_draft(
+    monkeypatch,
+) -> None:
+    class _RewriteStarted(Exception):
+        pass
+
+    harness = _RepairHarness(max_rewrites=1)
+    attempts = [
+        _repair_attempt(
+            phase="review_repair",
+            source_draft_id="old-draft-1",
+            result_draft_id="old-draft-2",
+        )
+    ]
+    monkeypatch.setattr(
+        repair_service,
+        "decide_repair_v2",
+        lambda _decision_input: Decision(
+            outcome="chapter_patch",
+            reason="new draft has a fresh repair cycle",
+            rule_id="test_retry_cycle",
+            missing_evidence=[],
+            routed_from="test",
+            sub_action={"scope": "chapter_plan"},
+        ),
+    )
+
+    def rewrite_started(*_args, **_kwargs):
+        raise _RewriteStarted
+
+    monkeypatch.setattr(repair_service, "_apply_repair_patch", rewrite_started)
+
+    with pytest.raises(_RewriteStarted):
+        _run_repair_loop(
+            harness,
+            attempts=attempts,
+            review=_hard_failure_review(),
+        )
+
+    assert any(
+        event.event_type == DecisionEventType.REPAIR_STARTED
+        for event in harness.events
+    )
+
+
+def test_draft_cycle_root_crosses_repair_phase_boundaries() -> None:
+    attempts = [
+        _repair_attempt(
+            phase="review_repair",
+            source_draft_id="draft-1",
+            result_draft_id="draft-2",
+        ),
+        _repair_attempt(
+            phase="canon_repair",
+            source_draft_id="draft-2",
+            result_draft_id="draft-3",
+        ),
+    ]
+
+    assert repair_service._draft_cycle_root_id(attempts, "draft-3") == "draft-1"
+
+
+def test_draft_cycle_excludes_all_attempts_from_previous_retry() -> None:
+    old_attempts = [
+        _repair_attempt(
+            phase="review_repair",
+            source_draft_id=f"old-draft-{index}",
+            result_draft_id=f"old-draft-{index + 1}",
+        )
+        for index in range(1, 4)
+    ]
+    new_attempts = [
+        _repair_attempt(
+            phase="review_repair",
+            source_draft_id="new-draft-1",
+            result_draft_id="new-draft-2",
+        ),
+        _repair_attempt(
+            phase="review_repair",
+            source_draft_id="new-draft-2",
+            result_draft_id="new-draft-3",
+        ),
+    ]
+
+    cycle = repair_service._attempts_for_draft_cycle(
+        [*old_attempts, *new_attempts],
+        "new-draft-1",
+    )
+
+    assert cycle == new_attempts
 
 
 @pytest.mark.parametrize(

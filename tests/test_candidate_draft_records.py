@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -101,6 +102,52 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
         assert committed.status == "accepted"
         assert committed.canon_status == "canon"
         assert committed.canon_commit_id == "canon-commit-1"
+
+
+def test_candidate_repair_history_can_be_scoped_to_current_draft_cycle() -> None:
+    engine = get_engine(postgres_test_url("candidate-repair-cycle-history"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project, chapter, draft, review, writer_output = _setup_reviewed_draft(session)
+        repository = CandidateDraftRepository(session)
+        record = repository.create_reviewed_version(
+            project_id=project.id,
+            chapter_plan=chapter,
+            draft=draft,
+            review=review,
+            writer_output=writer_output,
+            plan_revision="arc-v1:chapter-1",
+            policy_version=1,
+            repair_attempt_count=3,
+            repair_history=[{"id": "old-attempt"}],
+        )
+        current_attempts = [
+            SimpleNamespace(
+                id="new-attempt-1",
+                attempt_no=1,
+                repair_phase="review_repair",
+                repair_scope="chapter_plan",
+                result_verdict="fail",
+                failure_reason="continuity remains",
+            ),
+            SimpleNamespace(
+                id="new-attempt-2",
+                attempt_no=2,
+                repair_phase="review_repair",
+                repair_scope="band_plan",
+                result_verdict="warn",
+                failure_reason="",
+            ),
+        ]
+
+        updated = repository.attach_repair_history(record.id, current_attempts)
+
+        assert updated.repair_attempt_count == 2
+        assert [
+            item["id"] for item in json.loads(updated.repair_history_json)
+        ] == ["new-attempt-1", "new-attempt-2"]
 
 
 def test_candidate_draft_api_requires_v5_candidate_record() -> None:

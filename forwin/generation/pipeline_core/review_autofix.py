@@ -20,7 +20,6 @@ from forwin.models.draft import (
     ChapterDraft,
     ChapterReview,
 )
-from forwin.models.phase import ChapterRewriteAttempt
 from forwin.checker.rules import ContinuityChecker
 from forwin.protocol.review import (
     ContinuityIssue,
@@ -288,18 +287,6 @@ class ReviewWorkflowStage:
             model_name=str(getattr(self.llm_client, "model", "") or ""),
         )
         review_row = updater.save_review(draft.id, review)
-        repair_attempts = (
-            session.query(ChapterRewriteAttempt)
-            .filter(
-                ChapterRewriteAttempt.project_id == project_id,
-                ChapterRewriteAttempt.chapter_number == chapter_number,
-            )
-            .order_by(
-                ChapterRewriteAttempt.attempt_no.asc(),
-                ChapterRewriteAttempt.id.asc(),
-            )
-            .all()
-        )
         candidate_repository = CandidateDraftRepository(session)
         previous_candidate = candidate_repository.latest_for_chapter(
             project_id=project_id,
@@ -322,18 +309,8 @@ class ReviewWorkflowStage:
                 and previous_candidate.candidate_draft_id != draft.id
                 else ""
             ),
-            repair_attempt_count=len(repair_attempts),
-            repair_history=[
-                {
-                    "id": str(attempt.id),
-                    "attempt_no": int(attempt.attempt_no or 0),
-                    "repair_phase": str(attempt.repair_phase or ""),
-                    "repair_scope": str(attempt.repair_scope or ""),
-                    "result_verdict": str(attempt.result_verdict or ""),
-                    "failure_reason": str(attempt.failure_reason or ""),
-                }
-                for attempt in repair_attempts
-            ],
+            repair_attempt_count=0,
+            repair_history=[],
         )
         updater.mark_chapter_status(project_id, chapter_number, "drafted")
         session.flush()

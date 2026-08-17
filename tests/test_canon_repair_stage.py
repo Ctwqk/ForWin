@@ -246,11 +246,15 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
     review_attempt = SimpleNamespace(
         repair_scope="draft",
         repair_phase="review_repair",
+        source_draft_id="draft-1",
+        result_draft_id="draft-2",
         forced_accept_applied=False,
     )
     canon_attempt = SimpleNamespace(
         repair_scope="draft",
         repair_phase="canon_repair",
+        source_draft_id="draft-2",
+        result_draft_id="draft-3",
         forced_accept_applied=False,
     )
 
@@ -325,7 +329,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
         chapter_plan=SimpleNamespace(chapter_number=1),
         current_context=object(),
         current_output=object(),
-        current_draft=object(),
+        current_draft=SimpleNamespace(id="draft-1"),
         current_review=ReviewVerdict(verdict="fail", issues=[]),
         current_review_row=SimpleNamespace(id="review-1", review_meta_json="{}"),
         current_review_trace_id="review-trace",

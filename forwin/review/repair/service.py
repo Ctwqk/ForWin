@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.project import ChapterPlan
 import json
 from forwin.generation.pipeline_core.common import logger
@@ -91,6 +92,85 @@ def _attempts_for_repair_phase(
         for attempt in attempts
         if _attempt_repair_phase(attempt) == normalized_phase
     ]
+
+
+def _attempts_for_draft_cycle(
+    attempts: list[object],
+    root_draft_id: str,
+) -> list[object]:
+    reachable_draft_ids = {str(root_draft_id or "")}
+    selected: list[object] = []
+    pending = list(attempts)
+
+    while pending:
+        deferred: list[object] = []
+        progressed = False
+        for attempt in pending:
+            source_draft_id = str(
+                getattr(attempt, "source_draft_id", "") or ""
+            )
+            if source_draft_id not in reachable_draft_ids:
+                deferred.append(attempt)
+                continue
+            selected.append(attempt)
+            result_draft_id = str(
+                getattr(attempt, "result_draft_id", "") or ""
+            )
+            if result_draft_id:
+                reachable_draft_ids.add(result_draft_id)
+            progressed = True
+        if not progressed:
+            break
+        pending = deferred
+
+    return selected
+
+
+def _draft_cycle_root_id(
+    attempts: list[object],
+    draft_id: str,
+) -> str:
+    root_draft_id = str(draft_id or "")
+    visited = {root_draft_id}
+
+    while root_draft_id:
+        parent_draft_id = ""
+        for attempt in reversed(attempts):
+            source_draft_id = str(
+                getattr(attempt, "source_draft_id", "") or ""
+            )
+            result_draft_id = str(
+                getattr(attempt, "result_draft_id", "") or ""
+            )
+            if (
+                result_draft_id == root_draft_id
+                and source_draft_id
+                and source_draft_id != result_draft_id
+            ):
+                parent_draft_id = source_draft_id
+                break
+        if not parent_draft_id or parent_draft_id in visited:
+            break
+        root_draft_id = parent_draft_id
+        visited.add(root_draft_id)
+
+    return root_draft_id
+
+
+def _sync_candidate_repair_history(
+    session: Session,
+    *,
+    project_id: str,
+    chapter_number: int,
+    attempts: list[object],
+) -> None:
+    repository = CandidateDraftRepository(session)
+    candidate = repository.latest_for_chapter(
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    if candidate is not None:
+        repository.attach_repair_history(candidate.id, attempts)
 
 
 _CANON_SCOPE_TO_REPAIR_SCOPE = {
@@ -496,13 +576,24 @@ def _run_repair_loop_for_phase(
     current_review_event,
     repair_phase: str,
 ) -> tuple[WriterOutput, ReviewVerdict, bool]:
+    historical_attempts = repo.list_chapter_rewrite_attempts(
+        project_id, chapter_plan.chapter_number
+    )
+    repair_cycle_root_draft_id = _draft_cycle_root_id(
+        historical_attempts,
+        str(current_draft.id or ""),
+    )
     while True:
         if self._pause_requested():
             return current_output, current_review, False
-        existing_attempts = repo.list_chapter_rewrite_attempts(
+        historical_attempts = repo.list_chapter_rewrite_attempts(
             project_id, chapter_plan.chapter_number
         )
-        phase_attempts = _attempts_for_repair_phase(existing_attempts, repair_phase)
+        cycle_attempts = _attempts_for_draft_cycle(
+            historical_attempts,
+            repair_cycle_root_draft_id,
+        )
+        phase_attempts = _attempts_for_repair_phase(cycle_attempts, repair_phase)
         repair_v2_input = DecisionInput(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -563,7 +654,7 @@ def _run_repair_loop_for_phase(
                 parent_event_id=repair_event_id or str(current_review_event.id or ""),
             )
 
-        attempt_no = len(existing_attempts) + 1
+        attempt_no = len(cycle_attempts) + 1
         phase_attempt_no = len(phase_attempts) + 1
         repair_model_preference = {
             "preferred_provider_kind": "",
@@ -648,6 +739,12 @@ def _run_repair_loop_for_phase(
                 source_band_plan=source_band_plan,
                 result_band_plan=result_band_plan,
                 forced_accept_applied=False,
+            )
+            _sync_candidate_repair_history(
+                session,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                attempts=[*cycle_attempts, attempt_row],
             )
             chapter_plan.repair_attempt_count = attempt_no
             session.add(chapter_plan)
@@ -759,6 +856,12 @@ def _run_repair_loop_for_phase(
                     result_band_plan=result_band_plan,
                     forced_accept_applied=False,
                 )
+                _sync_candidate_repair_history(
+                    session,
+                    project_id=project_id,
+                    chapter_number=chapter_plan.chapter_number,
+                    attempts=[*cycle_attempts, attempt_row],
+                )
                 chapter_plan.repair_attempt_count = attempt_no
                 session.add(chapter_plan)
                 current_review_event = self._record_decision_event(
@@ -802,6 +905,12 @@ def _run_repair_loop_for_phase(
                 source_band_plan=source_band_plan,
                 result_band_plan=result_band_plan,
                 forced_accept_applied=False,
+            )
+            _sync_candidate_repair_history(
+                session,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                attempts=[*cycle_attempts, attempt_row],
             )
             chapter_plan.repair_attempt_count = attempt_no
             session.add(chapter_plan)
@@ -932,6 +1041,12 @@ def _run_repair_loop_for_phase(
             source_band_plan=source_band_plan,
             result_band_plan=result_band_plan,
             forced_accept_applied=False,
+        )
+        _sync_candidate_repair_history(
+            session,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            attempts=[*cycle_attempts, attempt_row],
         )
         chapter_plan.repair_attempt_count = attempt_no
         session.add(chapter_plan)

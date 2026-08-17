@@ -8,7 +8,7 @@ from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.context import ChapterContextPack, ReviewContextPack
-from forwin.protocol.review import RepairInstruction
+from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import SceneOutput, TimeAdvance, WriterOutput
 
 
@@ -133,6 +133,74 @@ def test_repair_preserve_constraints_are_owned_by_plan_and_canon() -> None:
     assert sanitized.design_patch["canon_invariants"][0]["invariant_key"] == (
         "book_state_rule:rule-transit-protocol"
     )
+
+
+def test_draft_review_keeps_warnings_out_of_merged_must_fix() -> None:
+    from forwin.review.draft_service import DraftReviewService
+
+    hard_issue = ContinuityIssue(
+        rule_name="causal_break",
+        severity="error",
+        description="硬性因果链断裂。",
+        suggested_fix="补回触发行动的已知事实。",
+        issue_type="continuity",
+        evidence_refs=["draft:body_head"],
+    )
+    warning_issue = ContinuityIssue(
+        rule_name="optional_entry",
+        severity="warning",
+        description="计划中的新角色尚未登场。",
+        suggested_fix="可在后续章节安排入口。",
+        issue_type="contract_delivery",
+        evidence_refs=["draft:body_head"],
+    )
+
+    passing = ReviewVerdict(verdict="pass", issues=[])
+    experience = ReviewVerdict(
+        verdict="fail",
+        issues=[hard_issue, warning_issue],
+        repair_instruction=RepairInstruction(
+            repair_scope="draft",
+            failure_type="mixed",
+            must_fix=[hard_issue.description, warning_issue.description],
+        ),
+    )
+    service = DraftReviewService(
+        experience_reviewer=SimpleNamespace(
+            review=lambda *_args, **_kwargs: experience
+        ),
+        plan_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
+        lint_collector=SimpleNamespace(collect=lambda _writer_output: []),
+        map_movement_review_enabled=False,
+        personality_review_enabled=False,
+        canon_quality_review_in_hub_enabled=False,
+    )
+
+    verdict = service.review(
+        project_id="project-1",
+        context=ChapterContextPack(
+            project_id="project-1",
+            project_title="混合审查",
+            premise="测试硬软问题分流。",
+            genre="悬疑",
+            setting_summary="",
+            chapter_number=1,
+            chapter_plan_title="第一章",
+            chapter_plan_one_line="主角核对行动依据。",
+            chapter_goals=["核对行动依据"],
+        ),
+        writer_output=_movement_output(),
+        continuity_checker=SimpleNamespace(
+            check=lambda _project_id, _writer_output: passing
+        ),
+    )
+
+    assert verdict.verdict == "fail"
+    assert [issue.severity for issue in verdict.issues] == ["error", "warning"]
+    assert verdict.repair_instruction is not None
+    assert verdict.repair_instruction.must_fix == [
+        "硬性因果链断裂。 修复要求：补回触发行动的已知事实。"
+    ]
 
 
 def test_map_movement_reviewer_owns_deterministic_movement_issue() -> None:

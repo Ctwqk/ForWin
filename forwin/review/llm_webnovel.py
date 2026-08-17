@@ -615,6 +615,7 @@ class LLMWebNovelReviewer:
                     "evidence_refs、suggested_fix。warn/fail issue 的 evidence_refs 必须全部来自允许列表。\n"
                     "repair_instruction 可以为 null，否则必须包含：repair_scope(draft/chapter_plan/band_plan)、"
                     "failure_type、must_fix、must_preserve、design_patch、evidence_refs。\n"
+                    "must_fix 只能对应 severity=error 的 issue；warning 只能保留为建议，不得升级为硬修复项。\n"
                     "若章节拖但仍有问题梯子/微进展/关系变化/规则稳态，只能给 warn 或 pass，不能给 fail。\n"
                     "人物一致性检查：决策是否符合 dominant skill；对白是否符合 expression/social mask；"
                     "压力反应是否符合 stress mode；是否把倾向误写成绝对规则；是否由 skill 发明新 canon。\n"

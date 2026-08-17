@@ -322,6 +322,10 @@ class DraftReviewService:
                 webnovel_instruction=webnovel.repair_instruction
                 or publisher_compliance.repair_instruction,
             )
+            repair_instruction = self._restrict_must_fix_to_writer_errors(
+                repair_instruction,
+                issues=issues,
+            )
             repair_instruction = self._sanitize_repair_instruction(
                 repair_instruction,
                 context=context,
@@ -788,6 +792,29 @@ class DraftReviewService:
         if suggested_fix:
             return f"{description} 修复要求：{suggested_fix}"
         return description
+
+    @classmethod
+    def _restrict_must_fix_to_writer_errors(
+        cls,
+        instruction: RepairInstruction | None,
+        *,
+        issues: list[ContinuityIssue],
+    ) -> RepairInstruction | None:
+        if instruction is None:
+            return None
+        writer_errors = [
+            issue
+            for issue in filter_writer_fixable_issues(issues)
+            if issue.severity == "error"
+        ]
+        must_fix = list(
+            dict.fromkeys(
+                text
+                for issue in writer_errors
+                if (text := cls._issue_repair_text(issue))
+            )
+        )
+        return instruction.model_copy(update={"must_fix": must_fix})
 
     @staticmethod
     def _continuity_repair_instruction(

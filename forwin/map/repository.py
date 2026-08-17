@@ -46,6 +46,8 @@ class MapRepository:
 
     def ensure_subworld_map_metadata(self, spec: SubWorldMapSpec) -> SubWorld:
         row = self.session.get(SubWorld, spec.subworld_id)
+        if row is not None and row.project_id != spec.project_id:
+            raise ValueError("subworld belongs to a different project")
         if row is None:
             row = SubWorld(
                 id=spec.subworld_id,
@@ -91,6 +93,9 @@ class MapRepository:
     ) -> MapGenerationRunRow:
         if not result.validation_report.valid:
             raise ValueError("cannot persist invalid map generation result")
+        subworld = self.session.get(SubWorld, spec.subworld_id)
+        if subworld is not None and subworld.project_id != spec.project_id:
+            raise ValueError("subworld belongs to a different project")
 
         self.session.execute(delete(MapRegionEdgeRow).where(MapRegionEdgeRow.subworld_id == spec.subworld_id))
         edge_rows = self.session.execute(
@@ -123,7 +128,6 @@ class MapRepository:
             self.upsert_map_edge(edge)
         self._delete_orphan_inter_subworld_edges(spec.project_id)
 
-        subworld = self.session.get(SubWorld, spec.subworld_id)
         if subworld is not None:
             subworld.map_status = "generated"
             subworld.generation_seed = int(spec.generation_seed or 0)

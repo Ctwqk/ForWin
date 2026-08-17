@@ -1,18 +1,43 @@
 from __future__ import annotations
 
 from datetime import datetime
+from hashlib import sha256
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base, new_id
 
 
+def project_scoped_subworld_id(project_id: str, logical_id: str) -> str:
+    project_ref = str(project_id or "").strip()
+    logical_ref = str(logical_id or "").strip()
+    if not project_ref or not logical_ref:
+        raise ValueError("project_id and logical_id are required")
+    digest = sha256(f"{project_ref}\0{logical_ref}".encode("utf-8")).hexdigest()
+    return f"sw_{digest[:29]}"
+
+
 class SubWorld(Base):
     __tablename__ = "sub_worlds"
     __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_sub_worlds_project_id_id",
+        ),
         Index("ix_sub_worlds_project_status", "project_id", "status"),
         Index("ix_sub_worlds_project_scope", "project_id", "scope"),
         Index("ix_sub_worlds_project_origin_arc", "project_id", "origin_arc_id"),
@@ -54,6 +79,11 @@ class SubWorld(Base):
 class SubWorldRosterItem(Base):
     __tablename__ = "sub_world_roster_items"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_sub_world_roster_project_subworld",
+        ),
         Index("ix_sub_world_roster_project_subworld", "project_id", "subworld_id"),
         Index("ix_sub_world_roster_project_status", "project_id", "status"),
         Index("ix_sub_world_roster_project_display", "project_id", "display_name"),
@@ -64,9 +94,7 @@ class SubWorldRosterItem(Base):
     project_id: Mapped[str] = mapped_column(
         String, ForeignKey("projects.id"), nullable=False
     )
-    subworld_id: Mapped[str] = mapped_column(
-        String, ForeignKey("sub_worlds.id"), nullable=False
-    )
+    subworld_id: Mapped[str] = mapped_column(String, nullable=False)
     entity_id: Mapped[Optional[str]] = mapped_column(
         String, ForeignKey("entities.id"), nullable=True
     )

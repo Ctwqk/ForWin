@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any
 
+from forwin.models.subworld import project_scoped_subworld_id
+
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
 
 
@@ -36,10 +38,11 @@ def build_subworld_map_specs_from_genesis(
     nodes = [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)]
     specs: list[SubWorldMapSpec] = []
     for submap in submaps:
-        subworld_id = str(submap["id"])
+        logical_subworld_id = str(submap["id"])
+        subworld_id = project_scoped_subworld_id(project_id, logical_subworld_id)
         subworld_name = str(submap["name"])
-        region_rows = _rows_for_subworld(regions, subworld_id, subworld_name, single_subworld=len(submaps) == 1)
-        node_rows = _rows_for_subworld(nodes, subworld_id, subworld_name, single_subworld=len(submaps) == 1, ref_key="parent_subworld")
+        region_rows = _rows_for_subworld(regions, logical_subworld_id, subworld_name, single_subworld=len(submaps) == 1)
+        node_rows = _rows_for_subworld(nodes, logical_subworld_id, subworld_name, single_subworld=len(submaps) == 1, ref_key="parent_subworld")
         region_roles, region_name_by_id = _region_roles(region_rows)
         anchors = _anchor_specs(
             submap=submap,
@@ -53,6 +56,7 @@ def build_subworld_map_specs_from_genesis(
             SubWorldMapSpec(
                 project_id=project_id,
                 subworld_id=subworld_id,
+                logical_subworld_id=logical_subworld_id,
                 name=subworld_name,
                 subworld_type=_subworld_type(submap),
                 culture_tags=_unique(
@@ -82,7 +86,7 @@ def build_subworld_map_specs_from_genesis(
                 resource_profile={"themes": list(submap.get("resource_themes", []) or [])},
                 faction_profile={"resident_factions": list(submap.get("resident_factions", []) or [])},
                 narrative_functions=_unique([anchor.narrative_function for anchor in anchors]),
-                generation_seed=_stable_seed(project_id, genesis_revision_id, subworld_id, atlas),
+                generation_seed=_stable_seed(project_id, genesis_revision_id, logical_subworld_id, atlas),
             )
         )
     return specs

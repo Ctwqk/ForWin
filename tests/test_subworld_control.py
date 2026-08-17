@@ -18,7 +18,11 @@ from forwin.models.genesis import BookGenesisRevision
 from forwin.map.models import MapRegionRow
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
-from forwin.models.subworld import SubWorld, SubWorldRosterItem
+from forwin.models.subworld import (
+    SubWorld,
+    SubWorldRosterItem,
+    project_scoped_subworld_id,
+)
 from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.planning.stage_analysis import ReplanGovernor, StageAssessment
 from forwin.generation.pipeline import ChapterPipeline
@@ -68,6 +72,111 @@ class _BookStateQueryStub:
 
 
 class SubWorldControlTests(unittest.TestCase):
+
+    def test_same_logical_subworld_id_is_isolated_across_projects(self) -> None:
+        engine = get_engine(postgres_test_url("subworld-project-isolation"))
+        init_db(engine)
+        session = get_session_factory(engine)()
+        try:
+            updater = StateUpdater(session)
+            project_a = updater.create_project(
+                title="甲书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
+            project_b = updater.create_project(
+                title="乙书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
+            arc_a = updater.create_arc_plan(project_a.id, "甲弧线")
+            arc_b = updater.create_arc_plan(project_b.id, "乙弧线")
+            manager = SubWorldManager()
+
+            def delta(role_hint: str) -> SubWorldPlanDelta:
+                return SubWorldPlanDelta.model_validate(
+                    {
+                        "new_subworlds": [
+                            {
+                                "subworld_id": "arc_local_1",
+                                "name": "同名局部世界",
+                                "scope": "arc_local",
+                                "chapter_window_hint": "1-3",
+                                "planned_slots": [
+                                    {
+                                        "slot_key": "local-contact",
+                                        "role_hint": role_hint,
+                                        "description": f"{role_hint}的角色槽位",
+                                    }
+                                ],
+                            }
+                        ],
+                        "initial_active_subworld_ids": ["arc_local_1"],
+                    }
+                )
+
+            result_a = manager.apply_arc_delta(
+                session=session,
+                project_id=project_a.id,
+                arc_id=arc_a.id,
+                delta=delta("甲方联络员"),
+                chapter_number=0,
+            )
+            result_b = manager.apply_arc_delta(
+                session=session,
+                project_id=project_b.id,
+                arc_id=arc_b.id,
+                delta=delta("乙方联络员"),
+                chapter_number=0,
+            )
+            session.flush()
+
+            subworld_a = result_a.new_subworlds[0].subworld_id
+            subworld_b = result_b.new_subworlds[0].subworld_id
+            activation_a = manager.plan_band_activation(
+                session=session,
+                project_id=project_a.id,
+                chapter_start=1,
+                chapter_end=3,
+                active_band=[],
+            )
+            activation_b = manager.plan_band_activation(
+                session=session,
+                project_id=project_b.id,
+                chapter_start=1,
+                chapter_end=3,
+                active_band=[],
+            )
+            rosters = session.execute(
+                select(SubWorldRosterItem).where(
+                    SubWorldRosterItem.project_id.in_([project_a.id, project_b.id])
+                )
+            ).scalars().all()
+        finally:
+            session.close()
+            engine.dispose()
+
+        self.assertNotEqual(subworld_a, subworld_b)
+        self.assertNotEqual(subworld_a, "arc_local_1")
+        self.assertNotEqual(subworld_b, "arc_local_1")
+        self.assertEqual(
+            {item.subworld_id for item in rosters if item.project_id == project_a.id},
+            {subworld_a},
+        )
+        self.assertEqual(
+            {item.subworld_id for item in rosters if item.project_id == project_b.id},
+            {subworld_b},
+        )
+        self.assertEqual(
+            [item.role_hint for item in activation_a.chapter_entry_targets],
+            ["甲方联络员"],
+        )
+        self.assertEqual(
+            [item.role_hint for item in activation_b.chapter_entry_targets],
+            ["乙方联络员"],
+        )
 
     def test_ensure_registry_rosters_book_state_characters(self) -> None:
         with TemporaryDirectory():
@@ -1582,7 +1691,8 @@ class SubWorldControlTests(unittest.TestCase):
             roster_rows = session.execute(
                 select(SubWorldRosterItem).where(
                     SubWorldRosterItem.project_id == project.id,
-                    SubWorldRosterItem.subworld_id == "subworld_dedupe",
+                    SubWorldRosterItem.subworld_id
+                    == project_scoped_subworld_id(project.id, "subworld_dedupe"),
                     SubWorldRosterItem.display_name == "沈临川",
                 )
             ).scalars().all()

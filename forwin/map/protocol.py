@@ -58,6 +58,7 @@ class MapAnchorNodeSpec(_MapProtocolModel):
 class SubWorldMapSpec(_MapProtocolModel):
     project_id: str
     subworld_id: str
+    logical_subworld_id: str = ""
     name: str
     subworld_type: str
     culture_tags: list[str] = Field(default_factory=list)

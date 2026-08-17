@@ -347,7 +347,7 @@ def build_interconnections_from_genesis_atlas(
 ) -> tuple[list[InterSubWorldConnectionSpec], str]:
     subworld_by_ref: dict[str, str] = {}
     for spec in specs:
-        for ref in [spec.subworld_id, spec.name]:
+        for ref in [spec.subworld_id, spec.logical_subworld_id, spec.name]:
             text = str(ref or "").strip()
             if text:
                 subworld_by_ref[text] = spec.subworld_id

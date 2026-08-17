@@ -20,6 +20,7 @@ from forwin.models import (
     SubWorldRosterItem,
     new_id,
 )
+from forwin.models.subworld import project_scoped_subworld_id
 from forwin.planning.goals import load_goals_json
 from forwin.map.protocol import RegionNode
 from forwin.map.repository import MapRepository
@@ -206,7 +207,10 @@ class SubWorldManager:
         for row in rows:
             roster_items = session.execute(
                 select(SubWorldRosterItem)
-                .where(SubWorldRosterItem.subworld_id == row.id)
+                .where(
+                    SubWorldRosterItem.project_id == project_id,
+                    SubWorldRosterItem.subworld_id == row.id,
+                )
                 .order_by(SubWorldRosterItem.is_core.desc(), SubWorldRosterItem.created_at.asc())
             ).scalars().all()
             result.append(
@@ -331,27 +335,39 @@ class SubWorldManager:
         entity_map = dict(entity_map or {})
         global_core_id = self.ensure_registry(session, project_id)
         roster_lookup = self._roster_lookup(session, project_id)
-        actual_active_ids: list[str] = []
+        resolved_reuse_ids: list[str] = []
 
         for subworld_id in delta.reuse_subworld_ids:
-            if subworld_id == global_core_id or session.get(SubWorld, subworld_id) is not None:
-                actual_active_ids.append(subworld_id)
+            row = self._owned_subworld(session, project_id, subworld_id)
+            if row is not None:
+                resolved_reuse_ids.append(row.id)
 
+        resolved_retire_ids: list[str] = []
         for subworld_id in delta.retire_subworld_ids:
-            row = session.get(SubWorld, subworld_id)
+            row = self._owned_subworld(session, project_id, subworld_id)
             if row is None or row.scope == "global_core":
                 continue
             row.status = "retired"
             row.retired_at_chapter = max(0, int(chapter_number or 0))
             session.add(row)
+            resolved_retire_ids.append(row.id)
 
         resolved_new_items: list[SubWorldPlanItem] = []
         for item in delta.new_subworlds:
             target_row = None
+            logical_subworld_id = str(item.subworld_id or "").strip()
             if item.scope == "global_core":
-                target_row = session.get(SubWorld, global_core_id)
-            elif item.subworld_id:
-                target_row = session.get(SubWorld, item.subworld_id)
+                target_row = self._owned_subworld(
+                    session,
+                    project_id,
+                    global_core_id,
+                )
+            elif logical_subworld_id:
+                target_row = self._owned_subworld(
+                    session,
+                    project_id,
+                    logical_subworld_id,
+                )
             if target_row is None:
                 metadata = {
                     "chapter_window_hint": item.chapter_window_hint,
@@ -362,11 +378,32 @@ class SubWorldManager:
                     "region_source": "runtime_generated" if item.region_seeds else "",
                     "region_promotion_state": "draft" if item.region_seeds else "",
                 }
+                if logical_subworld_id:
+                    metadata["logical_subworld_id"] = logical_subworld_id
+                parent_ref = str(item.parent_subworld_id or "").strip()
+                parent_row = self._owned_subworld(
+                    session,
+                    project_id,
+                    parent_ref,
+                )
                 target_row = SubWorld(
-                    id=item.subworld_id or new_id(),
+                    id=(
+                        project_scoped_subworld_id(
+                            project_id,
+                            logical_subworld_id,
+                        )
+                        if logical_subworld_id
+                        else new_id()
+                    ),
                     project_id=project_id,
                     origin_arc_id=arc_id,
-                    parent_subworld_id=item.parent_subworld_id or None,
+                    parent_subworld_id=(
+                        parent_row.id
+                        if parent_row is not None
+                        else project_scoped_subworld_id(project_id, parent_ref)
+                        if parent_ref
+                        else None
+                    ),
                     name=item.name,
                     purpose=item.purpose,
                     scope=item.scope,
@@ -388,6 +425,8 @@ class SubWorldManager:
                 if item.purpose and not str(target_row.purpose or "").strip():
                     target_row.purpose = item.purpose
                 meta = _load_json(target_row.metadata_json, {})
+                if logical_subworld_id:
+                    meta.setdefault("logical_subworld_id", logical_subworld_id)
                 if item.chapter_window_hint:
                     meta["chapter_window_hint"] = item.chapter_window_hint
                 if item.region_seeds:
@@ -480,23 +519,18 @@ class SubWorldManager:
                     activation_chapter=0,
                 )
             resolved_new_items.append(item.model_copy(update={"subworld_id": target_row.id}))
-            if target_row.id not in actual_active_ids and target_row.scope == "global_core":
-                actual_active_ids.append(target_row.id)
 
         normalized_initial_ids: list[str] = []
         for subworld_id in delta.initial_active_subworld_ids:
-            if subworld_id == global_core_id or session.get(SubWorld, subworld_id) is not None:
-                normalized_initial_ids.append(subworld_id)
+            row = self._owned_subworld(session, project_id, subworld_id)
+            if row is not None:
+                normalized_initial_ids.append(row.id)
         if global_core_id not in normalized_initial_ids:
             normalized_initial_ids.insert(0, global_core_id)
         session.flush()
         return SubWorldPlanDelta(
-            reuse_subworld_ids=list(dict.fromkeys(delta.reuse_subworld_ids)),
-            retire_subworld_ids=[
-                subworld_id
-                for subworld_id in delta.retire_subworld_ids
-                if subworld_id != global_core_id
-            ],
+            reuse_subworld_ids=list(dict.fromkeys(resolved_reuse_ids)),
+            retire_subworld_ids=list(dict.fromkeys(resolved_retire_ids)),
             new_subworlds=resolved_new_items,
             initial_active_subworld_ids=list(dict.fromkeys(normalized_initial_ids)),
         )
@@ -609,6 +643,7 @@ class SubWorldManager:
             roster_items = session.execute(
                 select(SubWorldRosterItem)
                 .where(
+                    SubWorldRosterItem.project_id == project_id,
                     SubWorldRosterItem.subworld_id == subworld_id,
                     SubWorldRosterItem.entity_kind == "character",
                 )
@@ -738,7 +773,10 @@ class SubWorldManager:
             score += 2
         role_hints = session.execute(
             select(SubWorldRosterItem.role_hint)
-            .where(SubWorldRosterItem.subworld_id == row.id)
+            .where(
+                SubWorldRosterItem.project_id == row.project_id,
+                SubWorldRosterItem.subworld_id == row.id,
+            )
         ).all()
         for role_hint, in role_hints:
             token = str(role_hint or "").strip()
@@ -785,6 +823,22 @@ class SubWorldManager:
             if display_name:
                 mapping[(item.subworld_id, "name", display_name)] = item.id
         return mapping
+
+    @staticmethod
+    def _owned_subworld(
+        session: Session,
+        project_id: str,
+        subworld_ref: str,
+    ) -> SubWorld | None:
+        reference = str(subworld_ref or "").strip()
+        if not reference:
+            return None
+        scoped_id = project_scoped_subworld_id(project_id, reference)
+        for candidate_id in dict.fromkeys([reference, scoped_id]):
+            row = session.get(SubWorld, candidate_id)
+            if row is not None and row.project_id == project_id:
+                return row
+        return None
 
     def _ensure_roster_item(
         self,

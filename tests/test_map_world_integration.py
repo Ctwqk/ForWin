@@ -29,6 +29,7 @@ from forwin.models import (
     Project,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.subworld import project_scoped_subworld_id
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.scene import SceneOutput
@@ -216,9 +217,10 @@ def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:
         runtime = get_book_map_runtime(session, "p1")
 
     assert result.validation_report.valid is True
-    assert result.summary["created_subworld_ids"] == ["sw-realm"]
+    realm_id = project_scoped_subworld_id("p1", "sw-realm")
+    assert result.summary["created_subworld_ids"] == [realm_id]
     assert result.summary["interconnection_source"] == "default_chain"
-    assert "sw-realm" in runtime.regions_by_subworld
+    assert realm_id in runtime.regions_by_subworld
     assert runtime.inter_subworld_edges_by_id
 
 
@@ -269,7 +271,9 @@ def test_arc_map_expansion_uses_explicit_atlas_cross_subworld_edges() -> None:
 
     assert result.validation_report.valid is True
     assert result.summary["interconnection_source"] == "atlas_edges"
-    assert result.summary["created_subworld_ids"] == ["sw-realm"]
+    assert result.summary["created_subworld_ids"] == [
+        project_scoped_subworld_id("p1", "sw-realm")
+    ]
     inter_edges = list(runtime.inter_subworld_edges_by_id.values())
     assert inter_edges
     assert any(edge.metadata.get("source_edge_id") == "atlas-edge-city-altar" for edge in inter_edges)

@@ -4,7 +4,14 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import inspect
 
-from forwin.map.protocol import MapEdge, MapNode, RegionNode
+from forwin.map.models import MapRegionRow
+from forwin.map.protocol import (
+    MapEdge,
+    MapGenerationResult,
+    MapNode,
+    RegionNode,
+    SubWorldMapSpec,
+)
 from forwin.map.repository import MapRepository
 from forwin.models import Project, SubWorld
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -77,6 +84,52 @@ def test_repository_persists_region_node_and_non_negative_edge() -> None:
         assert repo.list_regions("p1", "sw1")[0].name == "帝国核心区"
         assert repo.list_map_nodes("p1", "sw1")[0].subworld_id == "sw1"
         assert repo.list_map_edges("p1", "sw1")[0].travel_time == 1
+
+
+def test_persist_generation_rejects_foreign_subworld_before_deleting_rows() -> None:
+    engine = get_engine(postgres_test_url("map-foreign-subworld-write"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session() as session:
+        session.add_all(
+            [
+                Project(id="p1", title="甲书", premise="premise"),
+                Project(id="p2", title="乙书", premise="premise"),
+            ]
+        )
+        session.commit()
+        session.add(SubWorld(id="shared", project_id="p1", name="甲世界"))
+        session.commit()
+        session.add(
+            MapRegionRow(
+                id="foreign-region",
+                project_id="p1",
+                subworld_id="shared",
+                region_type="city",
+                name="甲城",
+            )
+        )
+        session.commit()
+        repo = MapRepository(session)
+        spec = SubWorldMapSpec(
+            project_id="p2",
+            subworld_id="shared",
+            name="乙世界",
+            subworld_type="realm",
+            target_region_count=1,
+            target_node_count=3,
+        )
+        result = MapGenerationResult(
+            project_id="p2",
+            subworld_id="shared",
+            generation_seed=0,
+        )
+
+        with pytest.raises(ValueError, match="different project"):
+            repo.persist_generation_result(spec=spec, result=result)
+
+        session.expire_all()
+        assert session.get(MapRegionRow, "foreign-region") is not None
 
 
 def test_map_edge_rejects_negative_weights() -> None:

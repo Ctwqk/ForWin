@@ -2155,6 +2155,11 @@ def upgrade() -> None:
             ["projects.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_sub_worlds_project_id_id",
+        ),
     )
     op.create_index(
         "ix_sub_worlds_project_origin_arc",
@@ -2848,8 +2853,9 @@ def upgrade() -> None:
             ["projects.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["subworld_id"],
-            ["sub_worlds.id"],
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_sub_world_roster_project_subworld",
         ),
         sa.PrimaryKeyConstraint("id"),
     )

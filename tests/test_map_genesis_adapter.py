@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from forwin.map.generator import generate_subworld_map
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
+from forwin.models.subworld import project_scoped_subworld_id
 
 
 def test_overview_only_map_atlas_builds_valid_default_spec() -> None:
@@ -12,7 +13,11 @@ def test_overview_only_map_atlas_builds_valid_default_spec() -> None:
     )
 
     assert len(specs) == 1
-    assert specs[0].subworld_id == "subworld-main-stage"
+    assert specs[0].subworld_id == project_scoped_subworld_id(
+        "p1",
+        "subworld-main-stage",
+    )
+    assert specs[0].logical_subworld_id == "subworld-main-stage"
     assert specs[0].target_region_count >= 3
     assert specs[0].target_node_count >= specs[0].target_region_count * 3
 

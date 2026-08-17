@@ -37,7 +37,12 @@ class PlanPatchValidator:
         current = int(current_chapter or 0)
         target_total = int(target_total_chapters or 0)
         accepted = {int(chapter) for chapter in accepted_chapters or []}
-        current_chapter_patch_types = {"canon_plan_staleness", "obligation_pre_write", "signal_pre_write"}
+        current_chapter_patch_types = {
+            "canon_plan_staleness",
+            "invariant_plan_binding",
+            "obligation_pre_write",
+            "signal_pre_write",
+        }
         overdue_obligation_patch_types = {"obligation_pre_write"}
         band_bounds = band_plan_bounds or {}
         minimum_scopes = minimum_scope_by_obligation or {}

@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from sqlalchemy import inspect
 
+from forwin.book_state import BookStateRepository
 from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.models import (
+    ArcPlanVersion,
     CandidateDraftRecord,
     ChapterDraft,
     ChapterPlan,
     ChapterReview,
     CharacterStateTransitionRow,
     CountdownLedgerRow,
-    ArcPlanVersion,
     Project,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -19,6 +20,7 @@ from forwin.planning.future_plan_audit import (
     FuturePlanAuditRepository,
     FuturePlanAuditRun,
 )
+from forwin.protocol.book_state import WorldNode
 from tests.postgres import postgres_test_url
 
 
@@ -346,6 +348,62 @@ def test_canon_quality_context_projects_countdowns_to_invariant_constraints() ->
                 "allowed_bridges": ["reset", "reopened", "branch_clock"],
             }
         ]
+    finally:
+        engine.dispose()
+
+
+def test_canon_quality_context_projects_book_state_rule_as_immutable_invariant() -> None:
+    engine = get_engine(postgres_test_url("future-plan-audit-book-state-rule-context"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(
+                title="规则上下文",
+                premise="测试",
+                genre="科幻",
+                target_total_chapters=36,
+            )
+            session.add(project)
+            session.flush()
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="rule-transit-protocol",
+                    project_id=project.id,
+                    node_type="rule",
+                    name="通行协议",
+                    description="门禁协议的公开版本。",
+                    created_at_chapter=5,
+                    source_refs=["chapter:5"],
+                    profile={
+                        "trigger_condition": "三枚印记同时点亮",
+                        "effect_description": "门扉只向右移动一格",
+                        "public_version": "三印同亮，门右移一格。",
+                        "hidden_version_fact_id": "fact-secret-backdoor",
+                    },
+                    state={"status": "active"},
+                )
+            )
+            session.commit()
+
+            context = _build_canon_quality_context(
+                session=session,
+                project_id=project.id,
+                chapter_number=6,
+                target_total_chapters=36,
+            )
+
+        invariant = next(
+            item
+            for item in context["invariant_constraints"]
+            if item["invariant_key"] == "book_state_rule:rule-transit-protocol"
+        )
+        assert invariant["kind"] == "active_rule"
+        assert invariant["label"] == "通行协议"
+        assert invariant["current_value"]["public_version"] == "三印同亮，门右移一格。"
+        assert "hidden_version_fact_id" not in invariant["current_value"]
+        assert invariant["constraints"]["immutable_definition"] is True
+        assert invariant["evidence_refs"] == ["chapter:5"]
     finally:
         engine.dispose()
 

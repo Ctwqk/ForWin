@@ -5,8 +5,7 @@ import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from forwin.models import Base, Project
-from forwin.models import ChapterPlan
+from forwin.models import Base, ChapterPlan, Project
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.future_plan_audit import FuturePlanAuditor
@@ -72,6 +71,49 @@ def test_future_plan_auditor_flags_day_scale_memory_reset_after_minute_ledger() 
     assert result.plan_patches[0].affected_chapters == [23]
     assert result.plan_patches[0].writer_context_injections[0]["countdown_key"] == "memory_reset"
     assert "90" in result.plan_patches[0].expected_resolution_tests[0]
+
+
+def test_future_plan_auditor_binds_immutable_canon_rule_to_current_plan() -> None:
+    plan = _plan(6, one_line="众人再次尝试通过门禁。")
+    invariant = {
+        "invariant_key": "book_state_rule:rule-transit-protocol",
+        "kind": "active_rule",
+        "label": "通行协议",
+        "current_value": {"public_version": "三印同亮，门右移一格。"},
+        "constraints": {"immutable_definition": True},
+        "evidence_refs": ["chapter:5"],
+    }
+    auditor = FuturePlanAuditor()
+
+    result = auditor.audit_plans(
+        project_id="project-1",
+        current_chapter=6,
+        trigger_stage="pre_write",
+        plans=[plan],
+        canon_quality_context={"invariant_constraints": [invariant]},
+        obligations=[],
+        target_total_chapters=60,
+        include_current=True,
+    )
+
+    assert result.status == "warn"
+    assert [issue.issue_type for issue in result.issues] == [
+        "invariant_plan_binding_missing"
+    ]
+    assert result.issues[0].blocking is False
+    patch = result.plan_patches[0]
+    assert patch.patch_type == "invariant_plan_binding"
+    assert patch.metadata["invariant_keys"] == [
+        "book_state_rule:rule-transit-protocol"
+    ]
+
+    auditor.apply_plan_patch(plan, patch)
+
+    anchors = json.loads(plan.experience_plan_json)["rule_anchors"]
+    assert len(anchors) == 1
+    assert "book_state_rule:rule-transit-protocol" in anchors[0]
+    assert "三印同亮，门右移一格。" in anchors[0]
+    assert "explicit canon bridge" in anchors[0]
 
 
 def test_future_plan_auditor_flags_stale_duration_in_adjacent_clause() -> None:

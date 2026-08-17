@@ -47,6 +47,7 @@ class BookStateReviewGate:
             issues.extend(_canon_permission_issues(delta))
             issues.extend(_schema_issues(delta))
             issues.extend(_writer_hidden_truth_issues(delta))
+            issues.extend(_immutable_rule_definition_issues(runtime, delta))
             issues.extend(_movement_issues(runtime, delta))
         accepted = not any(issue.severity == "error" for issue in issues)
         return BookStateReviewVerdict(
@@ -119,6 +120,78 @@ def _writer_hidden_truth_issues(delta: GraphDelta) -> list[BookStateReviewIssue]
                 )
             )
     return issues
+
+
+def _immutable_rule_definition_issues(
+    runtime: BookStateRuntime,
+    delta: GraphDelta,
+) -> list[BookStateReviewIssue]:
+    if not _is_writer_delta(delta) or _has_explicit_rule_bridge(delta):
+        return []
+    issues: list[BookStateReviewIssue] = []
+    for patch in delta.node_patches:
+        node = runtime.world.nodes_by_id.get(patch.node_id)
+        if node is None or str(node.node_type or "") != "rule":
+            continue
+        field_path = str(patch.field_path or "").strip()
+        if not _is_immutable_rule_definition_path(field_path):
+            continue
+        current = _world_node_field_value(runtime, node.id, field_path)
+        if _same_value(current, patch.new_value):
+            continue
+        issues.append(
+            BookStateReviewIssue(
+                severity="error",
+                code="immutable_rule_definition_conflict",
+                target_ref=f"node:{node.id}:{field_path or 'definition'}",
+                message=(
+                    f"writer delta cannot rewrite canonical rule definition {node.name or node.id} "
+                    f"at {field_path or 'definition'} without an explicit canon bridge"
+                ),
+            )
+        )
+    return issues
+
+
+def _is_writer_delta(delta: GraphDelta) -> bool:
+    return (
+        str(delta.source_type or "") in {"writer", "writer_output", "writing"}
+        or str(delta.operation or "") == "apply_writer_contract"
+        or str(delta.metadata.get("extraction_path") or "") == "writer_contract"
+    )
+
+
+def _has_explicit_rule_bridge(delta: GraphDelta) -> bool:
+    return bool(delta.metadata.get("explicit_rule_definition_bridge")) and str(
+        delta.source_type or ""
+    ) in {"operator", "canon_repair", "retcon"}
+
+
+def _is_immutable_rule_definition_path(field_path: str) -> bool:
+    return (
+        field_path in {"name", "aliases", "summary", "description", "profile"}
+        or field_path.startswith(("profile.", "metadata.writer_state."))
+    )
+
+
+def _world_node_field_value(
+    runtime: BookStateRuntime,
+    node_id: str,
+    field_path: str,
+):
+    node = runtime.world.nodes_by_id.get(node_id)
+    if node is None:
+        return None
+    value = node.model_dump(mode="python")
+    for part in field_path.split(".") if field_path else []:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _same_value(left, right) -> bool:
+    return left == right
 
 
 def _movement_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:

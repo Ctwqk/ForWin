@@ -90,6 +90,13 @@ def build_review_context_pack(
     future_plan_audit_summary = getattr(context, "future_plan_audit_summary", {}) or {}
     if not future_plan_audit_summary and isinstance(canon_quality_context, dict):
         future_plan_audit_summary = canon_quality_context.get("future_plan_audit_summary", {}) or {}
+    canon_invariants = []
+    if isinstance(canon_quality_context, dict):
+        canon_invariants = [
+            item
+            for item in canon_quality_context.get("invariant_constraints", []) or []
+            if isinstance(item, dict)
+        ]
     return ReviewContextPack(
         project_id=context.project_id,
         project_title=context.project_title,
@@ -125,6 +132,7 @@ def build_review_context_pack(
         lint_signals=list(lint_signals or []),
         active_personality_contexts=list(context.active_personality_contexts),
         deterministic_quality_report=dict(deterministic_quality_report or {}),
+        canon_invariants=canon_invariants,
         active_narrative_obligations=list(active_narrative_obligations),
         future_plan_audit_summary=dict(future_plan_audit_summary) if isinstance(future_plan_audit_summary, dict) else {},
     )

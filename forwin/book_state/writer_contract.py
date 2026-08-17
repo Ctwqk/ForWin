@@ -24,7 +24,6 @@ from forwin.protocol.writer import WriterOutput
 from .projection import BookStateProjection
 from .schema import WORLD_NODE_FIELDS
 
-
 _KIND_ALIASES = {
     "person": "character",
     "human": "character",
@@ -34,6 +33,8 @@ _KIND_ALIASES = {
     "object": "item",
     "artifact": "item",
     "resource": "item",
+    "law": "rule",
+    "protocol": "rule",
 }
 _FIELD_ALIASES = {
     "character": {
@@ -60,6 +61,18 @@ _FIELD_ALIASES = {
         "owner": "state.owner_id",
         "holder": "state.holder_id",
         "custody_state": "state.state_summary",
+    },
+    "rule": {
+        "definition": "profile.public_version",
+        "rule": "profile.public_version",
+        "rule_text": "profile.public_version",
+        "text": "profile.public_version",
+        "content": "profile.public_version",
+        "wording": "profile.public_version",
+        "formulation": "profile.public_version",
+        "public_version": "profile.public_version",
+        "trigger": "profile.trigger_condition",
+        "effect": "profile.effect_description",
     },
 }
 _WRITER_LOCATION_METADATA_PATH = "metadata.writer_location"
@@ -154,6 +167,7 @@ class WriterContractDeltaBuilder:
         narrative_patches: list[NarrativePatch] = []
         issues: list[WriterContractIssue] = []
         created_node_ids: set[str] = set()
+        lore_evidence_refs: list[str] = []
 
         admission_plan = _admission_plan(writer_output)
         if admission_plan is not None:
@@ -264,6 +278,58 @@ class WriterContractDeltaBuilder:
                     new_value=new_value,
                     reason=str(change.reason or "writer state change"),
                 )
+            )
+
+        patched_fields = {
+            (patch.node_id, str(patch.field_path or ""))
+            for patch in node_patches
+            if str(patch.op or "") == "set"
+        }
+        for lore in writer_output.lore_candidates:
+            name = str(lore.subject_name or "").strip()
+            description = str(lore.description or "").strip()
+            if not name or not description:
+                continue
+            node = node_by_name.get(name)
+            reported_kind = _normalize_kind(lore.subject_type)
+            resolved_kind = str(node.node_type) if node is not None else reported_kind
+            if resolved_kind != "rule":
+                continue
+            if node is None:
+                node = self._create_named_node(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    name=name,
+                    kind="rule",
+                    reason="writer rule lore candidate",
+                    node_patches=node_patches,
+                    created_node_ids=created_node_ids,
+                )
+                node_by_name[name] = node
+                node_kind_by_name[name] = "rule"
+            field_path = "profile.public_version"
+            patch_key = (node.id, field_path)
+            if patch_key in patched_fields:
+                continue
+            current_value = _current_node_value(runtime, node.id, field_path)
+            if current_value == description:
+                continue
+            node_patches.append(
+                NodePatch(
+                    node_id=node.id,
+                    node_type="rule",
+                    op="set",
+                    field_path=field_path,
+                    old_value=current_value,
+                    new_value=description,
+                    reason="writer rule lore candidate",
+                )
+            )
+            patched_fields.add(patch_key)
+            lore_evidence_refs.extend(
+                str(ref or "").strip()
+                for ref in lore.evidence_refs
+                if str(ref or "").strip()
             )
 
         for index, event in enumerate(writer_output.new_events):
@@ -477,11 +543,21 @@ class WriterContractDeltaBuilder:
             node_patches=node_patches,
             fact_patches=fact_patches,
             narrative_patches=narrative_patches,
-            evidence_refs=[f"chapter:{chapter_number}"],
+            evidence_refs=_unique_strings(
+                [f"chapter:{chapter_number}", *lore_evidence_refs]
+            ),
             review_verdict_id=review_verdict_id,
             metadata={
                 "extraction_path": "writer_contract",
                 "state_change_count": len(writer_output.state_changes),
+                "rule_lore_count": len(
+                    [
+                        lore
+                        for lore in writer_output.lore_candidates
+                        if _normalize_kind(lore.subject_type) == "rule"
+                        and str(lore.description or "").strip()
+                    ]
+                ),
                 "event_count": len(writer_output.new_events),
                 "thread_beat_count": len(writer_output.thread_beats),
                 "time_advanced": writer_output.time_advance is not None,
@@ -735,6 +811,10 @@ def _dedupe_issues(issues: list[WriterContractIssue]) -> list[WriterContractIssu
             result.append(issue)
             seen.add(key)
     return result
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
 
 
 __all__ = [

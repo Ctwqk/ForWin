@@ -97,3 +97,19 @@ def test_reviewer_context_pack_carries_active_narrative_obligations() -> None:
     review_context = build_review_context_pack(context=context)
 
     assert review_context.active_narrative_obligations == [obligation]
+
+
+def test_reviewer_context_pack_carries_canon_invariants() -> None:
+    context = sample_context()
+    invariant = {
+        "invariant_key": "book_state_rule:rule-transit-protocol",
+        "kind": "active_rule",
+        "label": "通行协议",
+        "current_value": {"public_version": "三印同亮，门右移一格。"},
+        "constraints": {"immutable_definition": True},
+    }
+    context.canon_quality_context = {"invariant_constraints": [invariant]}
+
+    review_context = build_review_context_pack(context=context)
+
+    assert review_context.canon_invariants == [invariant]

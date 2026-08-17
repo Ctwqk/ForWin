@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-
+from forwin.canon_quality.invariant_contract import (
+    immutable_rule_invariants,
+    render_invariant_anchor,
+)
+from forwin.models.base import new_id
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
@@ -13,8 +17,10 @@ from .custody import FuturePlanCustodyMixin
 from .helpers import (
     _band_contract_covers_obligation,
     _band_row_for_obligation,
+    _chapter_plan_contract,
     _character_state_constraints,
     _countdown_constraints,
+    _loads,
     _minimum_scope_for_obligation,
 )
 from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
@@ -69,6 +75,7 @@ class FuturePlanAuditor(
         patches: list[NarrativePlanPatch] = []
         countdowns = _countdown_constraints(canon_quality_context)
         character_state_constraints = _character_state_constraints(canon_quality_context)
+        immutable_invariants = immutable_rule_invariants(canon_quality_context)
         suppressed_prompt_constraint_keys: set[str] = set()
         form_plan_patch_signals_consumed = 0
         for plan in plans:
@@ -77,6 +84,15 @@ class FuturePlanAuditor(
                 continue
             if str(plan.status or "") == "accepted":
                 continue
+            invariant_binding = _audit_invariant_plan_binding(
+                project_id=project_id,
+                plan=plan,
+                invariants=immutable_invariants,
+            )
+            if invariant_binding is not None:
+                issue, patch = invariant_binding
+                issues.append(issue)
+                patches.append(patch)
             for issue, patch in self._audit_countdown_plan(
                 project_id=project_id,
                 current_chapter=int(current_chapter or 0),
@@ -178,6 +194,95 @@ class FuturePlanAuditor(
                 "form_plan_patch_signals_consumed": form_plan_patch_signals_consumed,
             },
         )
+
+
+def _audit_invariant_plan_binding(
+    *,
+    project_id: str,
+    plan: ChapterPlan,
+    invariants: list[dict[str, Any]],
+) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch] | None:
+    if not invariants:
+        return None
+    experience = _loads(plan.experience_plan_json, {})
+    if not isinstance(experience, dict):
+        experience = {}
+    existing = {
+        str(item).strip()
+        for item in experience.get("rule_anchors", []) or []
+        if str(item).strip()
+    }
+    rendered = [(item, render_invariant_anchor(item)) for item in invariants]
+    missing = [(item, anchor) for item, anchor in rendered if anchor not in existing]
+    if not missing:
+        return None
+    chapter_number = int(plan.chapter_number or 0)
+    keys = [str(item.get("invariant_key") or "") for item, _anchor in missing]
+    anchors = [anchor for _item, anchor in missing]
+    description = (
+        f"第{chapter_number}章计划缺少 {len(anchors)} 条 active canon invariant 绑定。"
+    )
+    evidence_refs = list(
+        dict.fromkeys(
+            [
+                f"chapter_plan:{chapter_number}",
+                *[
+                    str(ref)
+                    for item, _anchor in missing
+                    for ref in item.get("evidence_refs", []) or []
+                    if str(ref).strip()
+                ],
+            ]
+        )
+    )
+    metadata = {"invariant_keys": keys, "anchor_count": len(anchors)}
+    issue = FuturePlanAuditIssue(
+        issue_type="invariant_plan_binding_missing",
+        severity="warning",
+        target_chapter=chapter_number,
+        target_plan_id=str(plan.id or ""),
+        description=description,
+        evidence_refs=evidence_refs,
+        patch_type="invariant_plan_binding",
+        blocking=False,
+        metadata=metadata,
+    )
+    patch = NarrativePlanPatch(
+        id=new_id(),
+        project_id=project_id,
+        patch_type="invariant_plan_binding",
+        target_scope="chapter",
+        target_plan_id=str(plan.id or ""),
+        target_arc_id=str(plan.arc_plan_id or ""),
+        affected_chapters=[chapter_number],
+        old_contract=_chapter_plan_contract(plan),
+        new_contract={
+            "invariant_anchors": anchors,
+            "invariants": [item for item, _anchor in missing],
+        },
+        diff_summary=description,
+        must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
+        must_not_change=anchors,
+        writer_context_injections=[
+            {"type": "canon_invariant", "invariant": item, "instruction": anchor}
+            for item, anchor in missing
+        ],
+        reviewer_context_injections=[
+            {
+                "type": "canon_invariant",
+                "invariant": item,
+                "payoff_test": f"{item.get('invariant_key')} definition remains unchanged or has an explicit canon bridge.",
+            }
+            for item, _anchor in missing
+        ],
+        expected_resolution_tests=[
+            f"{item.get('invariant_key')} definition remains unchanged or has an explicit canon bridge."
+            for item, _anchor in missing
+        ],
+        validation_status="pending",
+        metadata=metadata,
+    )
+    return issue, patch
 
 
 def _normalize_form_mode(value: str | None) -> str:

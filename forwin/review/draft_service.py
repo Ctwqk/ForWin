@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import inspect
+
 from pydantic import ValidationError
 
+from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
+from forwin.canon_quality.invariant_contract import (
+    immutable_rule_invariants,
+    render_invariant_anchor,
+)
+from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
@@ -14,12 +21,10 @@ from forwin.protocol.review import (
     normalize_repair_scope,
 )
 from forwin.protocol.writer import WriterOutput
-from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
-from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
+
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
-from .plan_reviewer import PlanContractReviewer
 from .infrastructure_errors import (
     filter_writer_fixable_issues,
     infrastructure_issue_types,
@@ -27,6 +32,7 @@ from .infrastructure_errors import (
 from .lint import LintSignalCollector
 from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
+from .plan_reviewer import PlanContractReviewer
 from .publisher_compliance import PublisherComplianceReviewer
 
 
@@ -316,6 +322,10 @@ class DraftReviewService:
                 webnovel_instruction=webnovel.repair_instruction
                 or publisher_compliance.repair_instruction,
             )
+            repair_instruction = self._sanitize_repair_instruction(
+                repair_instruction,
+                context=context,
+            )
         verdict_payload = ReviewVerdict(
             verdict=verdict,
             issues=issues,
@@ -443,7 +453,7 @@ class DraftReviewService:
     ) -> RepairInstruction:
         if not self.experience_review_enabled:
             base_instruction = review.repair_instruction
-            return RepairInstruction(
+            instruction = RepairInstruction(
                 repair_scope="scene",
                 failure_type=(
                     base_instruction.failure_type
@@ -485,16 +495,61 @@ class DraftReviewService:
                     else list(review.evidence_refs)
                 ),
             )
+            sanitized = self._sanitize_repair_instruction(
+                instruction,
+                context=context,
+            )
+            return sanitized or instruction
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
             lint_signals=review.lint_signals,
         )
-        return self.experience_reviewer.choose_repair_escalation(
+        instruction = self.experience_reviewer.choose_repair_escalation(
             context=review_context,
             writer_output=writer_output,
             review=review,
             repair_attempts=repair_attempts or [],
+        )
+        sanitized = self._sanitize_repair_instruction(
+            instruction,
+            context=context,
+        )
+        return sanitized or instruction
+
+    @staticmethod
+    def _sanitize_repair_instruction(
+        instruction: RepairInstruction | None,
+        *,
+        context: ChapterContextPack,
+    ) -> RepairInstruction | None:
+        if instruction is None:
+            return None
+        invariants = immutable_rule_invariants(context.canon_quality_context)
+        must_preserve = list(
+            dict.fromkeys(
+                item
+                for item in [
+                    str(context.chapter_plan_title or "").strip(),
+                    str(context.chapter_plan_one_line or "").strip(),
+                    *[
+                        str(goal or "").strip()
+                        for goal in context.chapter_goals[:2]
+                    ],
+                    *[render_invariant_anchor(item) for item in invariants],
+                ]
+                if item
+            )
+        )
+        design_patch = dict(instruction.design_patch)
+        design_patch["system_owned_preserve_constraints"] = True
+        if invariants:
+            design_patch["canon_invariants"] = invariants
+        return instruction.model_copy(
+            update={
+                "must_preserve": must_preserve,
+                "design_patch": design_patch,
+            }
         )
 
     @staticmethod

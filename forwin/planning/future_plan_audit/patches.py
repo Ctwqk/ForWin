@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-
-
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativePlanPatch
 
@@ -22,6 +20,9 @@ from .helpers import (
 
 class FuturePlanPatchMixin:
     def apply_plan_patch(self, plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
+        if patch.patch_type == "invariant_plan_binding":
+            self._apply_invariant_plan_binding(plan, patch)
+            return
         if patch.patch_type in {"canon_plan_staleness", "future_plan_audit"}:
             if _is_custody_state_patch(patch):
                 self._apply_custody_state_patch(plan, patch)
@@ -33,6 +34,37 @@ class FuturePlanPatchMixin:
             return
         if patch.patch_type == "signal_pre_write":
             self._apply_form_plan_patch(plan, patch)
+
+    @staticmethod
+    def _apply_invariant_plan_binding(
+        plan: ChapterPlan,
+        patch: NarrativePlanPatch,
+    ) -> None:
+        anchors = [
+            str(item).strip()
+            for item in patch.new_contract.get("invariant_anchors", []) or []
+            if str(item).strip()
+        ]
+        invariant_keys = [
+            str(item).strip()
+            for item in patch.metadata.get("invariant_keys", []) or []
+            if str(item).strip()
+        ]
+        experience = _loads(plan.experience_plan_json, {})
+        if not isinstance(experience, dict):
+            experience = {}
+        existing = [
+            str(item).strip()
+            for item in experience.get("rule_anchors", []) or []
+            if str(item).strip()
+        ]
+        retained = [
+            item
+            for item in existing
+            if not any(f"[{key}]" in item for key in invariant_keys)
+        ]
+        experience["rule_anchors"] = list(dict.fromkeys([*anchors, *retained]))
+        plan.experience_plan_json = _json(experience)
 
     @staticmethod
     def _apply_countdown_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:

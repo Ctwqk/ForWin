@@ -1,7 +1,13 @@
 from __future__ import annotations
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from forwin.planning.checkpoints import NextBandSummary
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.contracts import PlanTaskItem
+from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
 
 from .experience import (
     ArcPayoffMap,
@@ -9,10 +15,6 @@ from .experience import (
     ChapterExperiencePlan,
     ReaderPromise,
 )
-from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
-from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.checkpoints import NextBandSummary
-from forwin.planning.contracts import PlanTaskItem
 from .subworld import ChapterEntryTarget, SubWorldSummary
 from .world_model import WorldContextPack
 
@@ -343,5 +345,6 @@ class ReviewContextPack(BaseModel):
     lint_signals: list[LintSignal] = Field(default_factory=list)
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     deterministic_quality_report: dict[str, Any] = Field(default_factory=dict)
+    canon_invariants: list[dict[str, Any]] = Field(default_factory=list)
     active_narrative_obligations: list[dict[str, Any]] = Field(default_factory=list)
     future_plan_audit_summary: dict[str, Any] = Field(default_factory=dict)

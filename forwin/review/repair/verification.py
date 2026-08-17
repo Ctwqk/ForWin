@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
+from forwin.llm.compat import call_chat_compat
 from forwin.protocol.review import RepairInstruction, RepairVerification, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
-from forwin.llm.compat import call_chat_compat
 
 _MAX_REVIEW_ISSUES_FOR_LLM = 12
 _MAX_TEXT_LIST_ITEMS_FOR_LLM = 8
@@ -221,23 +221,11 @@ class RepairVerifier:
             if key not in before_errors and key not in persistent_unfixed_after_keys
         ]
         broken_preserve_constraints: list[str] = []
-        original_text = "\n".join(
-            [
-                str(original_output.title or ""),
-                str(original_output.body or ""),
-                str(original_output.end_of_chapter_summary or ""),
-            ]
-        )
-        repaired_text = "\n".join(
-            [
-                str(repaired_output.title or ""),
-                str(repaired_output.body or ""),
-                str(repaired_output.end_of_chapter_summary or ""),
-            ]
-        )
+        original_title = str(original_output.title or "").strip()
+        repaired_title = str(repaired_output.title or "").strip()
         for item in repair_instruction.must_preserve:
             normalized = _meaningful_preserve_constraint(item)
-            if normalized and normalized in original_text and normalized not in repaired_text:
+            if normalized and normalized == original_title and repaired_title != original_title:
                 broken_preserve_constraints.append(f"修复后丢失保留内容：{normalized}")
         return RepairVerification(
             fixed_all_must_fix=not unfixed,

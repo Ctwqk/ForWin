@@ -1,15 +1,16 @@
 """Context assembler - builds ChapterContextPack from current state."""
 from __future__ import annotations
+
 import logging
 import re
 from typing import Any
 
 from sqlalchemy import func, select
 
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.project import ChapterPlan
 from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+from forwin.models.project import ChapterPlan
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,9 @@ def _build_canon_quality_context(
         return base
     try:
         from forwin.canon_quality.repository import CanonQualityRepository
-        from forwin.narrative_obligations.repository import NarrativeObligationRepository
+        from forwin.narrative_obligations.repository import (
+            NarrativeObligationRepository,
+        )
         from forwin.planning.future_plan_audit import FuturePlanAuditRepository
 
         repo = CanonQualityRepository(session)
@@ -98,7 +101,14 @@ def _build_canon_quality_context(
             for key, item in sorted(latest_by_key.items())
             if int(item.get("normalized_remaining_minutes") or 0) >= 0
         ]
-        invariant_constraints = _invariant_constraints_from_countdowns(countdown_constraints)
+        invariant_constraints = [
+            *_invariant_constraints_from_countdowns(countdown_constraints),
+            *_book_state_rule_invariant_constraints(
+                session=session,
+                project_id=project_id,
+                before_chapter=int(chapter_number or 0),
+            ),
+        ]
         latest_custody_by_character: dict[str, dict[str, Any]] = {}
         for transition in repo.list_character_transitions(
             project_id,
@@ -259,6 +269,92 @@ def _invariant_constraints_from_countdowns(countdown_constraints: list[dict[str,
     return result
 
 
+def _book_state_rule_invariant_constraints(
+    *,
+    session,
+    project_id: str,
+    before_chapter: int,
+) -> list[dict[str, Any]]:
+    from forwin.book_state.projection import BookStateProjection
+
+    runtime = BookStateProjection(session).load_runtime_as_of(
+        project_id,
+        as_of_chapter=max(int(before_chapter or 0) - 1, 0),
+    )
+    constraints: list[dict[str, Any]] = []
+    for node in runtime.world.nodes_by_id.values():
+        if str(node.node_type or "") != "rule":
+            continue
+        state = runtime.world.get_state(node.id)
+        status = str(state.get("status") or node.status or "active").strip()
+        if not node.is_active or status in {"inactive", "retired", "deleted", "revoked"}:
+            continue
+        current_value = _canonical_rule_definition(node)
+        if not current_value:
+            continue
+        constraints.append(
+            {
+                "invariant_key": f"book_state_rule:{node.id}",
+                "kind": "active_rule",
+                "subject_key": node.id,
+                "label": str(node.name or node.id),
+                "current_value": current_value,
+                "value_unit": "",
+                "status": "active",
+                "latest_chapter": int(node.created_at_chapter or 0),
+                "constraints": {
+                    "immutable_definition": True,
+                    "requires_explicit_bridge": True,
+                },
+                "allowed_bridges": ["supersede", "retcon", "revoke"],
+                "evidence_refs": list(node.source_refs),
+                "source": "book_state_rule",
+                "payload": {
+                    "node_id": node.id,
+                    "aliases": list(node.aliases),
+                },
+            }
+        )
+    return sorted(constraints, key=lambda item: str(item["invariant_key"]))
+
+
+def _canonical_rule_definition(node) -> dict[str, Any]:
+    definition = {
+        str(key): value
+        for key, value in dict(node.profile or {}).items()
+        if value not in (None, "", [], {})
+        and _is_public_rule_definition_field(key)
+    }
+    metadata = dict(node.metadata or {})
+    writer_state = metadata.get("writer_state")
+    if isinstance(writer_state, dict):
+        for key, value in writer_state.items():
+            if (
+                value not in (None, "", [], {})
+                and _is_public_rule_definition_field(key)
+            ):
+                definition.setdefault(str(key), value)
+    if not definition:
+        fallback = str(node.description or node.summary or "").strip()
+        if fallback:
+            definition["description"] = fallback
+    return definition
+
+
+def _is_public_rule_definition_field(value: Any) -> bool:
+    key = str(value or "").strip().lower()
+    return bool(key) and not any(
+        marker in key
+        for marker in (
+            "hidden",
+            "secret",
+            "private",
+            "internal",
+            "objective_truth",
+        )
+    )
+
+
 def _invariant_status(value: Any) -> str:
     normalized = str(value or "").strip()
     if normalized in {"active", "paused", "closed", "fulfilled", "resolved", "revoked", "warning", "conflict"}:
@@ -416,6 +512,7 @@ def _looks_like_final_chapter_label(*, title: str, summary: str = "") -> bool:
 
 __all__ = [
     '_build_canon_quality_context',
+    '_book_state_rule_invariant_constraints',
     '_truthy',
     '_recent_canon_custody_constraints',
     '_candidate_recent_canon_character_names',

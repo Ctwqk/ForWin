@@ -300,3 +300,45 @@ def test_repair_verifier_ignores_single_character_preserve_fragments() -> None:
 
     assert result.preserved_all_must_preserve is True
     assert result.broken_preserve_constraints == []
+
+
+def test_repair_verifier_does_not_treat_rewritten_body_wording_as_broken_preserve() -> None:
+    instruction = RepairInstruction(
+        repair_scope="chapter",
+        failure_type="continuity",
+        must_fix=["统一三个场景里的规则定义。"],
+        must_preserve=["旧稿第二场写下的临时规则措辞"],
+    )
+
+    result = RepairVerifier().verify(
+        original_output=WriterOutput(
+            chapter_number=9,
+            title="校正规则",
+            body="旧稿第二场写下的临时规则措辞，随后又给出另一套定义。",
+            end_of_chapter_summary="三处定义互相冲突。",
+        ),
+        repaired_output=WriterOutput(
+            chapter_number=9,
+            title="校正规则",
+            body="修复稿只保留已经进入 canon 的唯一规则定义。",
+            end_of_chapter_summary="规则定义已经统一。",
+        ),
+        before_review=ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="canon_rule_conflict",
+                    severity="error",
+                    description="统一三个场景里的规则定义。",
+                    issue_type="continuity",
+                    target_scope="chapter",
+                )
+            ],
+        ),
+        after_review=ReviewVerdict(verdict="pass", issues=[]),
+        repair_instruction=instruction,
+    )
+
+    assert result.fixed_all_must_fix is True
+    assert result.preserved_all_must_preserve is True
+    assert result.broken_preserve_constraints == []

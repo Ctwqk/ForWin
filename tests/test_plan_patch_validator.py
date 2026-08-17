@@ -102,6 +102,32 @@ def test_plan_patch_validator_allows_current_unaccepted_canon_plan_staleness_pat
     assert result.errors == []
 
 
+def test_plan_patch_validator_allows_current_invariant_binding_patch() -> None:
+    patch = NarrativePlanPatch(
+        id="patch-invariant-current",
+        project_id="project-1",
+        patch_type="invariant_plan_binding",
+        target_scope="chapter",
+        affected_chapters=[23],
+        target_plan_id="plan-23",
+        new_contract={"invariant_anchors": ["canon invariant rule-1"]},
+        writer_context_injections=[{"type": "canon_invariant"}],
+        reviewer_context_injections=[{"type": "canon_invariant"}],
+        expected_resolution_tests=["rule-1 definition remains unchanged"],
+    )
+
+    result = PlanPatchValidator().validate(
+        patch=patch,
+        obligations=[],
+        current_chapter=23,
+        target_total_chapters=60,
+        accepted_chapters=[],
+    )
+
+    assert result.passed is True
+    assert result.errors == []
+
+
 def test_plan_patch_validator_rejects_future_plan_audit_patch_for_accepted_chapter() -> None:
     patch = NarrativePlanPatch(
         id="patch-accepted",

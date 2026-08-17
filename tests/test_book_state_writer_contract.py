@@ -13,11 +13,13 @@ from forwin.book_state.writer_contract import WriterContractDeltaBuilder
 from forwin.models import Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
-from forwin.protocol import EntityMention, WriterOutput
+from forwin.protocol import EntityMention, LoreCandidate, WriterOutput
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
+    GraphDelta,
     MapEdge,
     MapNode,
+    NodePatch,
     WorldNode,
 )
 from forwin.protocol.state_change import (
@@ -32,6 +34,186 @@ def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return engine, sessionmaker(bind=engine)()
+
+
+def test_review_gate_blocks_writer_rewrite_of_canonical_rule_definition() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="规则门禁", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="rule-transit-protocol",
+                project_id=project.id,
+                node_type="rule",
+                name="通行协议",
+                profile={"public_version": "三印同亮，门右移一格。"},
+                created_at_chapter=5,
+            )
+        )
+
+        verdict = BookStateReviewGate(session).review(
+            ApprovedGraphDeltaSet(
+                project_id=project.id,
+                chapter_number=6,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta-rule-rewrite",
+                        project_id=project.id,
+                        chapter_number=6,
+                        source_type="writer_output",
+                        operation="apply_writer_contract",
+                        node_patches=[
+                            NodePatch(
+                                node_id="rule-transit-protocol",
+                                node_type="rule",
+                                op="set",
+                                field_path="profile.public_version",
+                                old_value="三印同亮，门右移一格。",
+                                new_value="三印同亮，门右移两格。",
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+
+        assert verdict.accepted is False
+        issue = next(
+            item
+            for item in verdict.issues
+            if item.code == "immutable_rule_definition_conflict"
+        )
+        assert issue.target_ref == "node:rule-transit-protocol:profile.public_version"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_writer_contract_persists_rule_lore_as_canonical_definition() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="规则登记", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=1,
+            title="第一章",
+            body="众人验证了通行协议。",
+            end_of_chapter_summary="通行协议首次被公开验证。",
+            entity_mentions=[
+                EntityMention(entity_name="通行协议", entity_kind="rule")
+            ],
+            lore_candidates=[
+                LoreCandidate(
+                    subject_name="通行协议",
+                    subject_type="rule",
+                    description="三印同亮，门右移一格。",
+                    evidence_refs=["chapter:1:scene:2"],
+                    confidence=0.98,
+                )
+            ],
+        )
+
+        result = WriterContractDeltaBuilder(session).build(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=output,
+            review_verdict_id="review-1",
+        )
+
+        assert result.issues == []
+        definition_patch = next(
+            patch
+            for patch in result.graph_deltas[0].node_patches
+            if patch.node_type == "rule"
+            and patch.field_path == "profile.public_version"
+        )
+        assert definition_patch.new_value == "三印同亮，门右移一格。"
+        assert "chapter:1:scene:2" in result.graph_deltas[0].evidence_refs
+
+        proposed = ApprovedGraphDeltaSet(
+            project_id=project.id,
+            chapter_number=1,
+            graph_deltas=result.graph_deltas,
+            approved_by=["test"],
+            review_verdict_id="review-1",
+        )
+        review = BookStateReviewGate(session).review(proposed)
+        assert review.accepted is True
+        assert review.approved_changes is not None
+        BookStateCompiler(session).compile(review.approved_changes)
+        rule = BookStateRepository(session).get_world_node(
+            definition_patch.node_id
+        )
+        assert rule is not None
+        assert rule.profile["public_version"] == "三印同亮，门右移一格。"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_writer_rule_lore_rewrite_is_rejected_end_to_end() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="规则改写", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="rule-transit-protocol",
+                project_id=project.id,
+                node_type="rule",
+                name="通行协议",
+                profile={"public_version": "三印同亮，门右移一格。"},
+                created_at_chapter=5,
+            )
+        )
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=6,
+            title="第六章",
+            body="众人误称门会右移两格。",
+            end_of_chapter_summary="正文改写了既有规则。",
+            lore_candidates=[
+                LoreCandidate(
+                    subject_name="通行协议",
+                    subject_type="rule",
+                    description="三印同亮，门右移两格。",
+                    evidence_refs=["chapter:6:scene:1"],
+                )
+            ],
+        )
+
+        result = WriterContractDeltaBuilder(session).build(
+            project_id=project.id,
+            chapter_number=6,
+            writer_output=output,
+            review_verdict_id="review-6",
+        )
+        assert result.issues == []
+
+        proposed = ApprovedGraphDeltaSet(
+            project_id=project.id,
+            chapter_number=6,
+            graph_deltas=result.graph_deltas,
+            approved_by=["test"],
+            review_verdict_id="review-6",
+        )
+        review = BookStateReviewGate(session).review(proposed)
+
+        assert review.accepted is False
+        assert any(
+            issue.code == "immutable_rule_definition_conflict"
+            for issue in review.issues
+        )
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_writer_contract_maps_structured_output_into_book_state_deltas() -> None:

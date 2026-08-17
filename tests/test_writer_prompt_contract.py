@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
-from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import (
+    build_lore_timeline_notes_extraction_prompt,
+    build_single_chapter_draft_prompt,
+)
 
 
 def test_writer_prompt_includes_protagonist_naming_contract() -> None:
@@ -447,6 +450,124 @@ def test_writer_prompt_includes_generic_invariant_constraints() -> None:
     assert "公开听证期限" in content
     assert "截止" in content
     assert "桥接" in content
+
+
+def test_writer_prompt_includes_exact_immutable_rule_definition() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="门城协议",
+        premise="主角：陆明，负责校验门禁规则。",
+        genre="科幻",
+        setting_summary="门禁文本会直接改变现实。",
+        chapter_number=6,
+        chapter_plan_title="再次校验",
+        chapter_plan_one_line="陆明复核通行协议。",
+        chapter_goals=["保持规则连续"],
+        canon_quality_context={
+            "invariant_constraints": [
+                {
+                    "invariant_key": "book_state_rule:rule-transit-protocol",
+                    "kind": "active_rule",
+                    "subject_key": "rule-transit-protocol",
+                    "label": "通行协议",
+                    "current_value": {
+                        "trigger_condition": "三枚印记同时点亮",
+                        "effect_description": "门扉只向右移动一格",
+                        "public_version": "三印同亮，门右移一格。",
+                    },
+                    "constraints": {"immutable_definition": True},
+                    "evidence_refs": ["chapter:5"],
+                }
+            ]
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "通行协议" in content
+    assert "三印同亮，门右移一格。" in content
+    assert "门扉只向右移动一格" in content
+    assert "不得静默改写" in content
+
+
+def test_lore_extraction_prompt_carries_exact_immutable_rule_definition() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="门城协议",
+        premise="主角：陆明，负责校验门禁规则。",
+        genre="科幻",
+        setting_summary="门禁文本会直接改变现实。",
+        chapter_number=6,
+        chapter_plan_title="再次校验",
+        chapter_plan_one_line="陆明复核通行协议。",
+        chapter_goals=["保持规则连续"],
+        canon_quality_context={
+            "invariant_constraints": [
+                {
+                    "invariant_key": "book_state_rule:rule-transit-protocol",
+                    "kind": "active_rule",
+                    "label": "通行协议",
+                    "current_value": {
+                        "public_version": "三印同亮，门右移一格。"
+                    },
+                    "constraints": {"immutable_definition": True},
+                }
+            ]
+        },
+    )
+
+    prompt = build_lore_timeline_notes_extraction_prompt(
+        context,
+        "再次校验",
+        "陆明逐字复诵：三印同亮，门右移一格。",
+    )
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "通行协议" in content
+    assert "三印同亮，门右移一格。" in content
+    assert "已有 canon 规则" in content
+    assert "不得改写或新造同义规则名" in content
+
+
+def test_immutable_rules_are_not_pruned_by_generic_prompt_caps() -> None:
+    invariants = [
+        {
+            "invariant_key": f"book_state_rule:rule-{index}",
+            "kind": "active_rule",
+            "label": f"规则{index}",
+            "current_value": {"public_version": f"精确定义{index}"},
+            "constraints": {"immutable_definition": True},
+        }
+        for index in range(1, 14)
+    ]
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="规则容量",
+        premise="测试不可变规则不会被数量裁剪。",
+        genre="科幻",
+        setting_summary="",
+        chapter_number=20,
+        chapter_plan_title="容量检查",
+        chapter_plan_one_line="逐项遵守既有规则。",
+        chapter_goals=["保持规则连续"],
+        canon_quality_context={"invariant_constraints": invariants},
+    )
+
+    writer_content = "\n".join(
+        item["content"] for item in build_single_chapter_draft_prompt(context)
+    )
+    extractor_content = "\n".join(
+        item["content"]
+        for item in build_lore_timeline_notes_extraction_prompt(
+            context,
+            "容量检查",
+            "正文没有改写任何规则。",
+        )
+    )
+
+    assert "精确定义13" in writer_content
+    assert "精确定义13" in extractor_content
 
 
 def test_writer_prompt_suppresses_generic_invariant_constraint_promoted_to_plan_patch() -> None:

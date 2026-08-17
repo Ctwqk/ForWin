@@ -7,7 +7,8 @@ from forwin.application.projects.reviews import _build_decision_layers
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.protocol.book_state import MapEdge, MapNode
-from forwin.protocol.context import ReviewContextPack
+from forwin.protocol.context import ChapterContextPack, ReviewContextPack
+from forwin.protocol.review import RepairInstruction
 from forwin.protocol.writer import SceneOutput, TimeAdvance, WriterOutput
 
 
@@ -76,6 +77,61 @@ def _movement_output() -> WriterOutput:
         update={
             "generation_meta": {"entity_admission_plan": plan.model_dump(mode="json")}
         }
+    )
+
+
+def test_repair_preserve_constraints_are_owned_by_plan_and_canon() -> None:
+    from forwin.review.draft_service import DraftReviewService
+
+    context = ChapterContextPack(
+        project_id="project-1",
+        project_title="规则修复",
+        premise="测试",
+        genre="科幻",
+        setting_summary="",
+        chapter_number=6,
+        chapter_plan_title="再次校验",
+        chapter_plan_one_line="陆明复核通行协议。",
+        chapter_goals=["保持规则连续", "完成门禁验证", "保留章末悬念"],
+        canon_quality_context={
+            "invariant_constraints": [
+                {
+                    "invariant_key": "book_state_rule:rule-transit-protocol",
+                    "kind": "active_rule",
+                    "label": "通行协议",
+                    "current_value": {
+                        "public_version": "三印同亮，门右移一格。"
+                    },
+                    "constraints": {"immutable_definition": True},
+                }
+            ]
+        },
+    )
+    llm_instruction = RepairInstruction(
+        repair_scope="draft",
+        failure_type="continuity",
+        must_fix=["修正规则冲突"],
+        must_preserve=["旧稿第二场的临时规则措辞"],
+        design_patch={"reviewer_note": "保留旧稿句子"},
+    )
+
+    sanitized = DraftReviewService._sanitize_repair_instruction(
+        llm_instruction,
+        context=context,
+    )
+
+    assert "旧稿第二场的临时规则措辞" not in sanitized.must_preserve
+    assert sanitized.must_preserve[:4] == [
+        "再次校验",
+        "陆明复核通行协议。",
+        "保持规则连续",
+        "完成门禁验证",
+    ]
+    invariant_anchor = sanitized.must_preserve[4]
+    assert "book_state_rule:rule-transit-protocol" in invariant_anchor
+    assert "三印同亮，门右移一格。" in invariant_anchor
+    assert sanitized.design_patch["canon_invariants"][0]["invariant_key"] == (
+        "book_state_rule:rule-transit-protocol"
     )
 
 

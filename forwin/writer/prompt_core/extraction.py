@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from forwin.canon_quality.invariant_contract import immutable_rule_invariants
 from forwin.protocol.context import ChapterContextPack
 
 
@@ -125,6 +126,7 @@ def build_lore_timeline_notes_extraction_prompt(
     chapter_title: str,
     chapter_body: str,
 ) -> list[dict]:
+    canon_rules = _immutable_rule_context(context)
     schema = json.dumps(
         {
             "lore_candidates": [
@@ -178,13 +180,22 @@ def build_lore_timeline_notes_extraction_prompt(
         "7. lore_candidates 最多 6 条，timeline_hints 最多 3 条，writer_notes 最多 5 条，entity_mentions 最多 8 条。\n"
         "8. 每个 description、note 和 evidence_refs 项都必须短，不要复述整段正文。\n"
         "9. 没有对应内容就返回空数组。\n"
-        "10. 只输出 JSON。\n\n"
+        "10. 已有 canon 规则是只读比较基线；正文若再次陈述同一规则，subject_name 必须复用已有名称，"
+        "description 必须忠实抽取正文实际表述，不得改写或新造同义规则名；即使正文与 canon 冲突也要如实抽取，交给 reviewer 阻断。\n"
+        "11. 只输出 JSON。\n\n"
+        f"已有 canon 规则：\n{canon_rules}\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
         {"role": "system", "content": "你是写作续航信息抽取器，只输出 JSON。"},
         {"role": "user", "content": user_content},
     ]
+
+
+def _immutable_rule_context(context: ChapterContextPack) -> str:
+    quality = getattr(context, "canon_quality_context", {}) or {}
+    rules = immutable_rule_invariants(quality)
+    return json.dumps(rules, ensure_ascii=False, sort_keys=True)
 
 
 def build_structured_extraction_prompt(

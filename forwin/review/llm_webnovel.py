@@ -29,6 +29,58 @@ def _read_timeout_seconds(env_name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+def _draft_rule_claims(writer_output: WriterOutput) -> list[dict[str, str]]:
+    claims: list[dict[str, str]] = []
+    for change in writer_output.state_changes:
+        if str(change.entity_kind or "").strip().lower() not in {
+            "rule",
+            "law",
+            "protocol",
+        }:
+            continue
+        claim = str(change.new_value or "").strip()
+        if not claim:
+            continue
+        field = str(change.field or "").strip() or "public_version"
+        if field in {
+            "definition",
+            "rule",
+            "rule_text",
+            "text",
+            "content",
+            "wording",
+            "formulation",
+        }:
+            field = "public_version"
+        claims.append(
+            {
+                "source": "state_change",
+                "subject_name": str(change.entity_name or "").strip(),
+                "field": field,
+                "claim": claim,
+            }
+        )
+    for lore in writer_output.lore_candidates:
+        if str(lore.subject_type or "").strip().lower() not in {
+            "rule",
+            "law",
+            "protocol",
+        }:
+            continue
+        claim = str(lore.description or "").strip()
+        if not claim:
+            continue
+        claims.append(
+            {
+                "source": "lore_candidate",
+                "subject_name": str(lore.subject_name or "").strip(),
+                "field": "public_version",
+                "claim": claim,
+            }
+        )
+    return claims[:12]
+
+
 class LLMWebNovelReviewer:
     name = "llm_webnovel"
 
@@ -310,7 +362,13 @@ class LLMWebNovelReviewer:
         evidence_index: list[dict[str, Any]] = []
         seen_evidence_ids: set[str] = set()
 
-        def add_evidence(evidence_id: str, kind: str, summary: str) -> None:
+        def add_evidence(
+            evidence_id: str,
+            kind: str,
+            summary: str,
+            *,
+            limit: int = 120,
+        ) -> None:
             if not evidence_id or evidence_id in seen_evidence_ids:
                 return
             seen_evidence_ids.add(evidence_id)
@@ -318,7 +376,7 @@ class LLMWebNovelReviewer:
                 {
                     "evidence_id": evidence_id,
                     "kind": kind,
-                    "summary": _trim(summary, 120),
+                    "summary": _trim(summary, limit),
                 }
             )
 
@@ -360,6 +418,15 @@ class LLMWebNovelReviewer:
                 )
         for item in context.active_rules[:5]:
             add_evidence(f"active_rule:{item.entity_id or item.name}", "active_rule", item.description)
+        for item in context.canon_invariants:
+            invariant_key = str(item.get("invariant_key") or "").strip()
+            if invariant_key:
+                add_evidence(
+                    f"canon_invariant:{invariant_key}",
+                    "canon_invariant",
+                    json.dumps(item, ensure_ascii=False, sort_keys=True),
+                    limit=1000,
+                )
         for item in context.active_personality_contexts[:8]:
             character_id = str(item.get("character_id") or item.get("character_name") or "").strip()
             if character_id:
@@ -439,6 +506,7 @@ class LLMWebNovelReviewer:
                     ),
                 )
 
+        rule_claims = _draft_rule_claims(writer_output)
         return {
             "chapter": {
                 "number": context.chapter_number,
@@ -474,6 +542,7 @@ class LLMWebNovelReviewer:
                     context.world_pressure.model_dump(mode="json") if context.world_pressure is not None else {}
                 ),
                 "active_rules": [item.model_dump(mode="json") for item in context.active_rules[:5]],
+                "canon_invariants": list(context.canon_invariants),
                 "world_context": context.world_context.model_dump(mode="json"),
             },
             "audience": {
@@ -504,6 +573,7 @@ class LLMWebNovelReviewer:
                 "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:5]],
                 "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
                 "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:5]],
+                "rule_claims": rule_claims,
                 "time_advance": (
                     writer_output.time_advance.model_dump(mode="json")
                     if writer_output.time_advance is not None
@@ -529,6 +599,7 @@ class LLMWebNovelReviewer:
                     "你审查的是网文体验而不是文学腔：看爽点兑现、问题梯子、沉浸感、规则可读性、"
                     "拖感是否仍有推进。所有 warn/fail issue 必须引用给定 evidence_id。"
                     "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
+                    "canon invariant 优先于章节计划、摘要和本章声称；静默改写规则定义必须 fail。"
                 ),
             },
             {

@@ -241,7 +241,14 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
         "  · 强状态 invariant ledger：",
         "    · 这些状态优先于前情摘要、章节计划和旧设定；改写它们必须在正文内写出明确桥接事件。",
     ]
-    for item in items[:8]:
+    selected = list(items[:8])
+    selected.extend(
+        item
+        for item in items[8:]
+        if str(item.get("kind") or "") == "active_rule"
+        and bool((item.get("constraints") or {}).get("immutable_definition"))
+    )
+    for item in selected:
         invariant_key = str(item.get("invariant_key") or "").strip()
         kind = str(item.get("kind") or "custom").strip()
         label = str(item.get("label") or item.get("subject_key") or invariant_key).strip()
@@ -275,8 +282,11 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
             )
             continue
         if kind == "active_rule":
+            definition = _compact_value(current_value)
             lines.append(
-                f"    · {label}：当前 active rule 仍生效；本章必须遵守规则边界，撤销或豁免需要正文证据。"
+                f"    · {label}：当前 active rule 仍生效；canon 精确定义为 {definition}；"
+                "本章必须逐项遵守，不得静默改写、换名或用同义表述改变触发条件、效果、例外和代价；"
+                "撤销、取代或豁免必须有明确桥接事件与 canon 证据。"
             )
             continue
         lines.append(

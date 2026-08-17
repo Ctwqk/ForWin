@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.book_state import (
     BookStateCompiler,
     BookStateQuery,
     BookStateRepository,
     BookStateReviewGate,
 )
+from forwin.book_state.extraction.contract import (
+    BookStateExtractionIssue,
+    BookStateExtractionResult,
+)
 from forwin.book_state.writer_contract import WriterContractDeltaBuilder
+from forwin.canon.preparation import BookStateCanonPreparer, CanonPreparationContext
 from forwin.models import Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
@@ -22,12 +31,14 @@ from forwin.protocol.book_state import (
     NodePatch,
     WorldNode,
 )
+from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.state_change import (
     EventCandidate,
     StateChangeCandidate,
     ThreadBeatCandidate,
     TimeAdvance,
 )
+from forwin.runtime.policy import RuntimePolicy
 
 
 def _session():
@@ -87,6 +98,153 @@ def test_review_gate_blocks_writer_rewrite_of_canonical_rule_definition() -> Non
             if item.code == "immutable_rule_definition_conflict"
         )
         assert issue.target_ref == "node:rule-transit-protocol:profile.public_version"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_book_state_preparer_records_review_block_reason() -> None:
+    engine, session = _session()
+    recorded_events: list[dict[str, object]] = []
+
+    def record_decision_event(**payload):
+        recorded_events.append(payload)
+        return SimpleNamespace(id=f"event-{len(recorded_events)}")
+
+    try:
+        project = Project(title="规则审计", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        BookStateRepository(session).create_world_node(
+            WorldNode(
+                id="rule-transit-protocol",
+                project_id=project.id,
+                node_type="rule",
+                name="通行协议",
+                profile={"public_version": "三印同亮，门右移一格。"},
+                created_at_chapter=5,
+            )
+        )
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=6,
+            title="第六章",
+            body="众人误称门会右移两格。",
+            end_of_chapter_summary="正文改写了既有规则。",
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="通行协议",
+                    entity_kind="rule",
+                    field="public_version",
+                    old_value="三印同亮，门右移一格。",
+                    new_value="三印同亮，门右移两格。",
+                    reason="writer explicitly rewrote the rule definition",
+                )
+            ],
+        )
+
+        outcome = BookStateCanonPreparer().prepare(
+            context=CanonPreparationContext(
+                policy=RuntimePolicy.for_profile("standard"),
+                llm_client=object(),  # type: ignore[arg-type]
+                artifact_store=object(),  # type: ignore[arg-type]
+                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
+                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+            ),
+            session=session,
+            candidate_id="candidate-review-6",
+            project_id=project.id,
+            chapter_number=6,
+            writer_output=output,
+            verdict=ReviewVerdict(verdict="pass"),
+        )
+
+        assert outcome.blocked is True
+        assert recorded_events[-1]["event_type"] == DecisionEventType.CANON_COMMIT_BLOCKED
+        payload = recorded_events[-1]["payload"]
+        assert isinstance(payload, dict)
+        assert payload["issues"][0]["code"] == "immutable_rule_definition_conflict"
+        gate_outcome = parse_gate_outcome(payload)
+        assert gate_outcome is not None
+        assert gate_outcome.gate_id == "book_state_review"
+        assert gate_outcome.candidate_id == "candidate-review-6"
+        assert gate_outcome.decision == "block"
+        assert gate_outcome.blocked is True
+        assert gate_outcome.issue_keys == ["immutable_rule_definition_conflict"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_book_state_preparer_records_extraction_block_reason(monkeypatch) -> None:
+    engine, session = _session()
+    recorded_events: list[dict[str, object]] = []
+
+    def record_decision_event(**payload):
+        recorded_events.append(payload)
+        return SimpleNamespace(id=f"event-{len(recorded_events)}")
+
+    class RejectedExtractor:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def extract(self, request):
+            return BookStateExtractionResult(
+                project_id=request.project_id,
+                chapter_number=request.chapter_number,
+                accepted=False,
+                issues=[
+                    BookStateExtractionIssue(
+                        code="writer_contract_invalid",
+                        message="writer contract extraction failed",
+                        evidence_refs=["chapter:1"],
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        "forwin.canon.preparation.BookStateGraphDeltaExtractor",
+        RejectedExtractor,
+    )
+    try:
+        project = Project(title="提取审计", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=1,
+            title="第一章",
+            body="结构化提取失败。",
+            end_of_chapter_summary="提取失败。",
+        )
+
+        outcome = BookStateCanonPreparer().prepare(
+            context=CanonPreparationContext(
+                policy=RuntimePolicy.for_profile("standard"),
+                llm_client=object(),  # type: ignore[arg-type]
+                artifact_store=object(),  # type: ignore[arg-type]
+                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
+                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+            ),
+            session=session,
+            candidate_id="candidate-extraction-1",
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=output,
+            verdict=ReviewVerdict(verdict="pass"),
+        )
+
+        assert outcome.blocked is True
+        payload = recorded_events[-1]["payload"]
+        assert isinstance(payload, dict)
+        assert payload["issues"][0]["code"] == "writer_contract_invalid"
+        gate_outcome = parse_gate_outcome(payload)
+        assert gate_outcome is not None
+        assert gate_outcome.gate_id == "book_state_extraction"
+        assert gate_outcome.candidate_id == "candidate-extraction-1"
+        assert gate_outcome.decision == "block"
+        assert gate_outcome.blocked is True
+        assert gate_outcome.issue_keys == ["writer_contract_invalid"]
     finally:
         session.close()
         engine.dispose()
@@ -179,12 +337,14 @@ def test_writer_rule_lore_rewrite_is_rejected_end_to_end() -> None:
             title="第六章",
             body="众人误称门会右移两格。",
             end_of_chapter_summary="正文改写了既有规则。",
-            lore_candidates=[
-                LoreCandidate(
-                    subject_name="通行协议",
-                    subject_type="rule",
-                    description="三印同亮，门右移两格。",
-                    evidence_refs=["chapter:6:scene:1"],
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="通行协议",
+                    entity_kind="rule",
+                    field="public_version",
+                    old_value="三印同亮，门右移一格。",
+                    new_value="三印同亮，门右移两格。",
+                    reason="writer explicitly rewrote the rule definition",
                 )
             ],
         )
@@ -211,6 +371,69 @@ def test_writer_rule_lore_rewrite_is_rejected_end_to_end() -> None:
             issue.code == "immutable_rule_definition_conflict"
             for issue in review.issues
         )
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_writer_contract_preserves_existing_rule_definition_when_lore_paraphrases_it() -> None:
+    engine, session = _session()
+    try:
+        project = Project(title="规则复述", premise="测试", genre="科幻")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="rule-transit-protocol",
+                project_id=project.id,
+                node_type="rule",
+                name="通行协议",
+                aliases=["三印协议"],
+                profile={"public_version": "三印同亮，门右移一格。"},
+                created_at_chapter=5,
+            )
+        )
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=6,
+            title="第六章",
+            body="三枚印记同时亮起，门便向右移动一格。",
+            end_of_chapter_summary="本章再次验证了既有通行协议。",
+            lore_candidates=[
+                LoreCandidate(
+                    subject_name="三印协议",
+                    subject_type="rule",
+                    description="三枚印记同时发光后，门向右挪动一格。",
+                    evidence_refs=["chapter:6:scene:1"],
+                )
+            ],
+        )
+
+        result = WriterContractDeltaBuilder(session).build(
+            project_id=project.id,
+            chapter_number=6,
+            writer_output=output,
+            review_verdict_id="review-6",
+        )
+
+        assert result.issues == []
+        assert not any(
+            patch.node_id == "rule-transit-protocol"
+            and patch.field_path == "profile.public_version"
+            for delta in result.graph_deltas
+            for patch in delta.node_patches
+        )
+        review = BookStateReviewGate(session).review(
+            ApprovedGraphDeltaSet(
+                project_id=project.id,
+                chapter_number=6,
+                graph_deltas=result.graph_deltas,
+                approved_by=["test"],
+                review_verdict_id="review-6",
+            )
+        )
+        assert review.accepted is True
     finally:
         session.close()
         engine.dispose()

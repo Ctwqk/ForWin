@@ -7,19 +7,23 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.candidate_drafts import candidate_body_hash
-from forwin.candidate_drafts import candidate_writer_output_admission_fingerprint
-from forwin.canon.eligibility import candidate_ineligibility_reason
-from forwin.book_state.extraction.contract import BookStateExtractionRequest
-from forwin.book_state.extraction.contract import BookStateExtractionResult
-from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
-from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
+from forwin.book_state.extraction.contract import (
+    BookStateExtractionRequest,
+    BookStateExtractionResult,
+)
+from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
+from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
+from forwin.candidate_drafts import (
+    CandidateDraftRepository,
+    candidate_body_hash,
+    candidate_writer_output_admission_fingerprint,
+)
+from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.model_adapter import ModelAdapter
-from forwin.models.book_state import GraphDeltaRow
 from forwin.models.audit import DecisionEvent
+from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
 from forwin.planning.world_contracts import WorldContractRepository
@@ -75,6 +79,7 @@ class BookStateCanonPreparer:
         *,
         context: CanonPreparationContext,
         session: Session,
+        candidate_id: str,
         project_id: str,
         chapter_number: int,
         writer_output: WriterOutput,
@@ -102,12 +107,36 @@ class BookStateCanonPreparer:
             )
         )
         if not extraction.accepted or extraction.changes is None:
+            _record_book_state_block(
+                context=context,
+                session=session,
+                candidate_id=candidate_id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                gate_id="book_state_extraction",
+                blocked_path="book-state-direct-extraction-blocked",
+                issues=extraction.issues,
+                related_object_type="candidate_draft",
+                related_object_id=candidate_id,
+            )
             return BookStatePreparationOutcome(
                 blocked_path="book-state-direct-extraction-blocked",
                 extraction=extraction,
             )
         review = BookStateReviewGate(session).review(extraction.changes)
         if not review.accepted or review.approved_changes is None:
+            _record_book_state_block(
+                context=context,
+                session=session,
+                candidate_id=candidate_id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                gate_id="book_state_review",
+                blocked_path="book-state-review-gate-blocked",
+                issues=review.issues,
+                related_object_type="book_state_review",
+                related_object_id=review.verdict_id,
+            )
             return BookStatePreparationOutcome(
                 blocked_path="book-state-review-gate-blocked",
                 extraction=extraction,
@@ -118,6 +147,65 @@ class BookStateCanonPreparer:
             extraction=extraction,
             review_verdict=review,
         )
+
+
+def _record_book_state_block(
+    *,
+    context: CanonPreparationContext,
+    session: Session,
+    candidate_id: str,
+    project_id: str,
+    chapter_number: int,
+    gate_id: str,
+    blocked_path: str,
+    issues: list[Any],
+    related_object_type: str,
+    related_object_id: str,
+) -> None:
+    issue_payloads = [
+        issue.model_dump(mode="json")
+        for issue in issues
+        if hasattr(issue, "model_dump")
+    ]
+    issue_keys = [
+        str(item.get("code") or "").strip()
+        for item in issue_payloads
+        if str(item.get("code") or "").strip()
+    ]
+    reason = "; ".join(
+        str(item.get("message") or item.get("code") or "").strip()
+        for item in issue_payloads
+        if str(item.get("message") or item.get("code") or "").strip()
+    )
+    context._record_decision_event(
+        updater=StateUpdater(session),
+        project_id=project_id,
+        chapter_number=chapter_number,
+        event_family="evaluation_verdict",
+        event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+        scope="chapter",
+        summary=f"第{chapter_number}章 {gate_id} 阻止 Canon 写入。",
+        reason=reason or blocked_path,
+        related_object_type=related_object_type,
+        related_object_id=related_object_id,
+        payload=attach_gate_outcome(
+            {
+                "blocked_path": blocked_path,
+                "issues": issue_payloads,
+            },
+            GateOutcome(
+                gate_id=gate_id,
+                responsibility_domain="book_state_admission",
+                scope="chapter",
+                candidate_id=candidate_id,
+                chapter_number=chapter_number,
+                fired=True,
+                decision="block",
+                blocked=True,
+                issue_keys=list(dict.fromkeys(issue_keys)),
+            ),
+        ),
+    )
 
 
 class CanonPreparationService:
@@ -277,6 +365,7 @@ class CanonPreparationService:
             book_state_outcome = self.book_state_preparer.prepare(
                 context=context,
                 session=session,
+                candidate_id=candidate_id,
                 project_id=project_id,
                 chapter_number=chapter_number,
                 writer_output=writer_output,

@@ -307,6 +307,8 @@ class WriterContractDeltaBuilder:
                 )
                 node_by_name[name] = node
                 node_kind_by_name[name] = "rule"
+            elif node.id not in created_node_ids:
+                continue
             field_path = "profile.public_version"
             patch_key = (node.id, field_path)
             if patch_key in patched_fields:

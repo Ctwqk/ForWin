@@ -128,6 +128,37 @@ def test_rebuild_updates_and_deletes_only_owned_stale_points(tmp_path: Path) -> 
         index.close()
 
 
+def test_non_ascii_and_repeated_headings_have_distinct_stable_points(
+    tmp_path: Path,
+) -> None:
+    client = FakeQdrantClient()
+    _write_current_state(
+        tmp_path,
+        "project-1",
+        "# 当前状态\n总览\n\n## 闻澄\n第一次\n\n## 林烬\n第二次\n"
+        "\n## 闻澄\n第三次\n",
+    )
+    index = _vector_index(tmp_path, client)
+    try:
+        first = index.rebuild_project("project-1", as_of_chapter=1)
+        first_points = _owned_points(client, "project-1")
+        first_ids = set(first_points)
+        section_keys = {
+            point.payload["section_key"] for point in first_points.values()
+        }
+        replay = index.rebuild_project("project-1", as_of_chapter=1)
+    finally:
+        index.close()
+
+    assert first["section_count"] == 4
+    assert len(first_points) == first["section_count"]
+    assert len(section_keys) == first["section_count"]
+    assert all(key.startswith("section-") for key in section_keys)
+    assert set(_owned_points(client, "project-1")) == first_ids
+    assert replay["skipped_section_count"] == first["section_count"]
+    assert replay["upserted_section_count"] == 0
+
+
 def test_target_metadata_change_updates_existing_payload(tmp_path: Path) -> None:
     client = FakeQdrantClient()
     _write_current_state(tmp_path, "project-1", "# Current\nstable state\n")

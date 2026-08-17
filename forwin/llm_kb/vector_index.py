@@ -583,10 +583,23 @@ def _markdown_sections(
             chunks.append((current_key, "\n".join(current_lines).strip()))
             current_lines = []
         if match:
-            current_key = re.sub(r"[^A-Za-z0-9_.-]+", "-", match.group(2).strip()).strip("-")[:80] or "section"
+            heading = match.group(2).strip()
+            current_key = re.sub(
+                r"[^A-Za-z0-9_.-]+",
+                "-",
+                heading,
+            ).strip("-")[:80]
+            if not current_key:
+                current_key = f"section-{sha1(heading.encode('utf-8')).hexdigest()[:12]}"
         current_lines.append(raw_line)
     if current_lines:
         chunks.append((current_key, "\n".join(current_lines).strip()))
+    key_counts: dict[str, int] = {}
+    unique_chunks: list[tuple[str, str]] = []
+    for key, chunk in chunks:
+        key_counts[key] = key_counts.get(key, 0) + 1
+        unique_key = key if key_counts[key] == 1 else f"{key}-{key_counts[key]}"
+        unique_chunks.append((unique_key, chunk))
     return [
         _section_record(
             file_key=file_key,
@@ -598,7 +611,7 @@ def _markdown_sections(
             as_of_chapter=as_of_chapter,
             projection_version=projection_version,
         )
-        for key, chunk in chunks
+        for key, chunk in unique_chunks
         if chunk.strip()
     ]
 

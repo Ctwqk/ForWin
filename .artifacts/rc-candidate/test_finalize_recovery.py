@@ -395,6 +395,21 @@ def fault_report(
         },
         "supplemental_artifacts": [],
     }
+    if kind == "publisher_backend_unavailable":
+        report.update(
+            fault_time="2026-07-22T12:16:30+00:00",
+            recovery_time="2026-07-22T12:17:30+00:00",
+        )
+    elif kind == "publisher_browser_unavailable":
+        report.update(
+            fault_time="2026-07-22T12:16:30+00:00",
+            recovery_time="2026-07-22T12:16:45+00:00",
+        )
+    elif kind in recovery.PUBLISHER_RISK_FAULTS:
+        report.update(
+            fault_time="2026-07-22T12:15:30+00:00",
+            recovery_time="2026-07-22T12:17:30+00:00",
+        )
     if kind in BARRIER_FAULTS:
         barrier_path = fault_dir / "barrier-observation.json"
         barrier_path.write_text(
@@ -512,36 +527,6 @@ def fault_report(
                 ]
                 if publisher_event_identity is not None else []
             ),
-            *(
-                [
-                    (
-                        "setup_service_held",
-                        "2026-07-22T11:59:10+00:00",
-                        "",
-                        "",
-                    ),
-                    (
-                        "setup_service_released",
-                        "2026-07-22T11:59:20+00:00",
-                        "",
-                        "",
-                    ),
-                ]
-                if kind == "publisher_backend_unavailable"
-                else []
-            ),
-            *(
-                [
-                    (
-                        "setup_service_held",
-                        "2026-07-22T11:59:11+00:00",
-                        "",
-                        "",
-                    )
-                ]
-                if kind in recovery.PUBLISHER_RISK_FAULTS
-                else []
-            ),
             (
                 contract["fault_action"],
                 report["fault_time"],
@@ -553,18 +538,6 @@ def fault_report(
                 report["recovery_time"],
                 "recovery_time",
                 report["recovery_time"],
-            ),
-            *(
-                [
-                    (
-                        "setup_service_discarded",
-                        "2026-07-22T12:01:11+00:00",
-                        "",
-                        "",
-                    )
-                ]
-                if kind in recovery.PUBLISHER_RISK_FAULTS
-                else []
             ),
             (
                 "destroyed",
@@ -658,18 +631,6 @@ def fault_report(
                         "container_id": published["container_id"],
                         "image_id": published["image_id"],
                     }
-                if kind in recovery.PUBLISHER_RISK_FAULTS:
-                    terminal = snapshots["after"]["state"]["external"][
-                        "browser_hold_terminal"
-                    ]
-                    fresh_services["publisher-browser"].update(
-                        container_id=terminal["container_id"],
-                        image_id=terminal["image_id"],
-                    )
-                if kind == "publisher_backend_unavailable":
-                    fresh_services["publisher-worker"].update(
-                        container_id="publisher-worker-boundary-container",
-                    )
                 fresh_services["forwin-mcp"]["probe"] = {
                     "passed": True,
                     "exit_code": 0,
@@ -682,88 +643,6 @@ def fault_report(
                 }
             if action == "endpoints_bound":
                 event["endpoint_identity"] = copy.deepcopy(endpoint)
-            if (
-                action
-                in {
-                "setup_service_held",
-                "setup_service_discarded",
-                }
-                and kind in recovery.PUBLISHER_RISK_FAULTS
-            ):
-                terminal = snapshots["after"]["state"]["external"][
-                    "browser_hold_terminal"
-                ]
-                event.update(
-                    hold_id=terminal["hold_id"],
-                    service="publisher-browser",
-                    fault_kind=kind,
-                    purpose="auxiliary",
-                    requested_at=(
-                        "2026-07-22T11:59:10+00:00"
-                        if action == "setup_service_held"
-                        else "2026-07-22T12:01:10+00:00"
-                    ),
-                )
-                if action == "setup_service_held":
-                    event["hold_time"] = event["recorded_at"]
-                    event["before"] = {
-                        "service": "publisher-browser",
-                        "exists": True,
-                        "running": True,
-                        "container_id": terminal["container_id"],
-                        "image_id": terminal["image_id"],
-                    }
-                    event["after"] = {
-                        "service": "publisher-browser",
-                        "exists": True,
-                        "running": False,
-                        "container_id": terminal["container_id"],
-                        "image_id": terminal["image_id"],
-                    }
-                else:
-                    event["discard_time"] = event["recorded_at"]
-                    stopped = {
-                        "service": "publisher-browser",
-                        "exists": True,
-                        "running": False,
-                        "container_id": terminal["container_id"],
-                        "image_id": terminal["image_id"],
-                    }
-                    event["before"] = copy.deepcopy(stopped)
-                    event["after"] = copy.deepcopy(stopped)
-            if (
-                kind == "publisher_backend_unavailable"
-                and action
-                in {"setup_service_held", "setup_service_released"}
-            ):
-                held = {
-                    "service": "publisher-worker",
-                    "exists": True,
-                    "running": action == "setup_service_released",
-                    "container_id": "publisher-worker-boundary-container",
-                    "image_id": publisher_event_identity[
-                        "runtime_image"
-                    ]["image_id"],
-                }
-                event.update(
-                    hold_id=f"backend-fixture-{fault_id}",
-                    service="publisher-worker",
-                    fault_kind=kind,
-                    purpose="pre-fault-boundary",
-                    requested_at=event["recorded_at"],
-                )
-                if action == "setup_service_held":
-                    event["hold_time"] = event["recorded_at"]
-                    event["before"] = {**held, "running": True}
-                    event["after"] = {**held, "running": False}
-                else:
-                    event["release_time"] = event["recorded_at"]
-                    event["before"] = {**held, "running": False}
-                    event["after"] = {
-                        **held,
-                        "running": True,
-                        "probe": {"passed": True},
-                    }
             if action == "destroyed":
                 event["after"] = {"services": copy.deepcopy(DESTROY_SERVICES)}
                 event["database_volume_before"] = copy.deepcopy(volume_present)
@@ -1911,10 +1790,33 @@ def balanced_hold_events(
     ]
 
 
-def test_finalizer_allows_terminal_discard_of_typed_risk_auxiliary_hold(
+def test_finalizer_allows_terminal_discard_of_auxiliary_hold(
     tmp_path: Path,
 ) -> None:
-    report = fault_report(tmp_path, "publisher_captcha")
+    kind = "minio_pre_canon_unavailable"
+    report = fault_report(tmp_path, kind)
+    events = recovery.load_verified_events(Path(report["event_log"]["path"]))
+    held = setup_hold_event(
+        events[1],
+        fault_kind=kind,
+        action="setup_service_held",
+        hold_id="terminal-discard-hold",
+        service="outbox-worker",
+        requested_at="2026-07-22T11:59:10+00:00",
+        confirmed_at="2026-07-22T11:59:11+00:00",
+    )
+    discarded = setup_hold_event(
+        events[1],
+        fault_kind=kind,
+        action="setup_service_discarded",
+        hold_id="terminal-discard-hold",
+        service="outbox-worker",
+        requested_at="2026-07-22T12:01:10+00:00",
+        confirmed_at="2026-07-22T12:01:11+00:00",
+    )
+    events.insert(3, held)
+    events.insert(-1, discarded)
+    reseal_event_log(report, events)
 
     assert recovery.fault_report_violations(
         report,
@@ -1935,26 +1837,37 @@ def test_finalizer_rejects_invalid_setup_discard_lifecycle(
     expected: str,
     tmp_path: Path,
 ) -> None:
-    report = fault_report(tmp_path, "publisher_captcha")
+    kind = "minio_pre_canon_unavailable"
+    report = fault_report(tmp_path, kind)
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    held = next(
-        event
-        for event in events
-        if event["action"] == "setup_service_held"
+    held = setup_hold_event(
+        events[1],
+        fault_kind=kind,
+        action="setup_service_held",
+        hold_id="invalid-discard-hold",
+        service="outbox-worker",
+        requested_at="2026-07-22T11:59:10+00:00",
+        confirmed_at="2026-07-22T11:59:11+00:00",
     )
-    discarded = next(
-        event
-        for event in events
-        if event["action"] == "setup_service_discarded"
+    discarded = setup_hold_event(
+        events[1],
+        fault_kind=kind,
+        action="setup_service_discarded",
+        hold_id="invalid-discard-hold",
+        service="outbox-worker",
+        requested_at="2026-07-22T12:01:10+00:00",
+        confirmed_at="2026-07-22T12:01:11+00:00",
     )
+    events.insert(3, held)
+    events.insert(-1, discarded)
     if mutation == "running-after":
         discarded["after"]["running"] = True
     elif mutation == "without-hold":
         events.remove(held)
     else:
-        discarded["service"] = "outbox-worker"
-        discarded["before"]["service"] = "outbox-worker"
-        discarded["after"]["service"] = "outbox-worker"
+        discarded["service"] = "qdrant"
+        discarded["before"]["service"] = "qdrant"
+        discarded["after"]["service"] = "qdrant"
     reseal_event_log(report, events)
 
     violations = recovery.fault_report_violations(
@@ -1962,7 +1875,7 @@ def test_finalizer_rejects_invalid_setup_discard_lifecycle(
         source_sha=SOURCE_SHA,
     )
 
-    assert f"publisher_captcha.{expected}" in violations
+    assert f"{kind}.{expected}" in violations
 
 
 @pytest.mark.parametrize(
@@ -2036,18 +1949,19 @@ def test_finalizer_rejects_unbound_recovery_endpoint_identity(
     assert f"{kind}.{expected}" in violations
 
 
-def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
+def test_finalizer_rejects_detector_pause_that_postdates_fault_marker(
     tmp_path: Path,
 ) -> None:
     report = fault_report(tmp_path, "publisher_mfa")
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    discarded = next(
+    fault = next(
         event
         for event in events
-        if event["action"] == "setup_service_discarded"
+        if event["action"] == "fault_marked"
     )
-    discarded["before"]["container_id"] = "different-browser-container"
-    discarded["after"]["container_id"] = "different-browser-container"
+    report["fault_time"] = "2026-07-22T12:14:59+00:00"
+    fault["fault_time"] = report["fault_time"]
+    fault["recorded_at"] = report["fault_time"]
     reseal_event_log(report, events)
 
     violations = recovery.fault_report_violations(
@@ -2056,7 +1970,7 @@ def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
     )
 
     assert (
-        "publisher_mfa.typed-risk discard is not final-snapshot bound"
+        "publisher_mfa.detector pause is not event-bound"
         in violations
     )
 
@@ -2064,18 +1978,18 @@ def test_finalizer_rejects_typed_risk_discard_not_bound_to_after_snapshot(
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
-        ("purpose", "setup hold targets primary fault service"),
-        ("discard", "pre-fault primary hold lifecycle mismatch"),
-        ("order", "pre-fault primary hold order mismatch"),
         (
-            "container",
-            "setup hold terminal identity continuity mismatch",
+            "fault-before-terminal",
+            "terminal publisher fault is not event-bound",
         ),
-        ("image", "setup hold terminal identity continuity mismatch"),
-        ("duplicate-terminal", "hold release has no matching hold"),
+        (
+            "recovery-before-job",
+            "recovery marker predates job convergence",
+        ),
+        ("duplicate-fault", "primary fault/recovery cardinality mismatch"),
     ),
 )
-def test_publisher_backend_primary_hold_is_narrowly_ordered_and_bound(
+def test_publisher_backend_markers_are_observation_bound(
     mutation: str,
     expected: str,
     tmp_path: Path,
@@ -2083,39 +1997,20 @@ def test_publisher_backend_primary_hold_is_narrowly_ordered_and_bound(
     kind = "publisher_backend_unavailable"
     report = fault_report(tmp_path, kind)
     events = recovery.load_verified_events(Path(report["event_log"]["path"]))
-    held = next(
-        event for event in events if event["action"] == "setup_service_held"
+    fault = next(event for event in events if event["action"] == "fault_marked")
+    recovered = next(
+        event for event in events if event["action"] == "recovery_marked"
     )
-    released = next(
-        event
-        for event in events
-        if event["action"] == "setup_service_released"
-    )
-    if mutation == "purpose":
-        held["purpose"] = released["purpose"] = "auxiliary"
-    elif mutation == "discard":
-        released["action"] = "setup_service_discarded"
-        released["discard_time"] = released.pop("release_time")
-        released["after"]["running"] = False
-        released["after"].pop("probe")
-    elif mutation == "order":
-        fault = next(
-            event
-            for event in events
-            if event["action"] == "fault_service_killed"
-        )
-        release_index = events.index(released)
-        fault_index = events.index(fault)
-        events[release_index], events[fault_index] = (
-            events[fault_index],
-            events[release_index],
-        )
-    elif mutation == "container":
-        released["after"]["container_id"] = "different-container"
-    elif mutation == "image":
-        released["before"]["image_id"] = "sha256:" + "e" * 64
+    if mutation == "fault-before-terminal":
+        report["fault_time"] = "2026-07-22T12:15:59+00:00"
+        fault["fault_time"] = report["fault_time"]
+        fault["recorded_at"] = report["fault_time"]
+    elif mutation == "recovery-before-job":
+        report["recovery_time"] = "2026-07-22T12:16:59+00:00"
+        recovered["recovery_time"] = report["recovery_time"]
+        recovered["recorded_at"] = report["recovery_time"]
     else:
-        events.insert(events.index(released) + 1, copy.deepcopy(released))
+        events.insert(events.index(fault) + 1, copy.deepcopy(fault))
     reseal_event_log(report, events)
 
     violations = recovery.fault_report_violations(

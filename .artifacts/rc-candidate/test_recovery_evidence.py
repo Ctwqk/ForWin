@@ -63,8 +63,11 @@ def fixture_identity(kind: str) -> dict[str, str]:
         "resource_id": resource_id,
     }
     if resource_type == "publisher_job":
-        fixture["logical_key"] = (
-            f"publisher-recovery:v1:{fixture['fault_id']}"
+        fixture.update(
+            logical_key=f"canon-publisher:{token(kind, 'canon-natural')}",
+            project_id=token(kind, "project"),
+            canon_commit_id=token(kind, "canon-commit"),
+            candidate_id=token(kind, "candidate"),
         )
     return fixture
 
@@ -409,31 +412,26 @@ def publisher_job_record(
     kind: str,
     *,
     status: str,
-    task_kind: str,
+    task_kind: str = "chapter_upload",
     variant: str = "primary",
 ) -> dict[str, Any]:
-    backend = task_kind == "cover_generate"
+    del task_kind
+    body = f"Generic publisher recovery fixture content. Identity {digest(kind, variant)[:16]}."
+    identity_variant = "" if variant == "primary" else f"-{variant}"
     return {
         "job_id": token(kind, f"job-{variant}"),
         "logical_key": (
-            f"publisher-recovery:v1:{token(kind, 'fault')}"
-            if variant == "primary"
-            else f"publisher-recovery:v1:{token(kind, f'fault-{variant}')}"
+            "canon-publisher:"
+            f"{token(kind, f'canon-natural{identity_variant}')}"
         ),
-        "task_kind": task_kind,
-        "project_id": "",
+        "task_kind": "chapter_upload",
+        "project_id": token(kind, f"project{identity_variant}"),
         "platform_id": "qidian",
         "status": status,
-        "publish": False,
-        "book_name": "Publisher Recovery Fixture",
-        "chapter_title": "" if backend else "Recovery Chapter",
-        "body_sha256": hashlib.sha256(
-            (
-                ""
-                if backend
-                else "Generic publisher recovery fixture content."
-            ).encode()
-        ).hexdigest(),
+        "publish": True,
+        "book_name": f"Publisher Recovery Fixture {digest(kind, variant)[:8]}",
+        "chapter_title": f"Recovery Chapter {digest(kind, variant)[:8]}",
+        "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
         "unsafe_payload_paths": [],
     }
 
@@ -446,21 +444,19 @@ def backend_job_record(
     artifact_id: str = "",
     variant: str = "primary",
 ) -> dict[str, Any]:
-    return {
-        **publisher_job_record(
-            kind,
-            status=status,
-            task_kind="cover_generate",
-            variant=variant,
-        ),
-        "owner_token": token(kind, owner),
-        "artifact_id": artifact_id,
-    }
+    del artifact_id
+    value = browser_job_record(kind, status=status, variant=variant)
+    value.update(
+        owner_token=token(kind, owner),
+        extension_client_id=token(kind, owner),
+    )
+    return value
 
 
 def browser_job_record(
     kind: str, status: str = "pending", variant: str = "primary"
 ) -> dict[str, Any]:
+    identity_variant = "" if variant == "primary" else f"-{variant}"
     base = publisher_job_record(
         kind,
         status=status,
@@ -469,11 +465,17 @@ def browser_job_record(
     )
     return {
         **base,
-        "canon_commit_id": "",
-        "candidate_id": "",
-        "chapter_number": 0,
-        "body_text": "Generic publisher recovery fixture content.",
-        "upload_url": "",
+        "canon_commit_id": token(kind, f"canon-commit{identity_variant}"),
+        "candidate_id": token(kind, f"candidate{identity_variant}"),
+        "chapter_number": 7,
+        "body_text": (
+            "Generic publisher recovery fixture content. "
+            f"Identity {digest(kind, variant)[:16]}."
+        ),
+        "upload_url": (
+            "https://write.qq.com/booknovelsvip/chaptertmp/"
+            f"CBID/{digest(kind, 'book')[:12]}#ccid={digest(kind, 'chapter')[:12]}"
+        ),
         "abort_requested": False,
         "owner_token": "",
         "extension_client_id": "",
@@ -488,7 +490,10 @@ def browser_job_record(
         "pause_reason": "",
         "pause_token": "",
         "risk_boundary": "",
-        "current_url": "",
+        "current_url": (
+            "https://write.qq.com/booknovelsvip/chaptertmp/"
+            f"CBID/{digest(kind, 'book')[:12]}#ccid={digest(kind, 'chapter')[:12]}"
+        ),
         "result_message": "",
         "error_message": "",
         "result_payload": {},
@@ -512,6 +517,7 @@ def risk_job_record(
         pause_reason=pause_reason,
         pause_token=pause_token,
         risk_boundary=risk_boundary,
+        current_attempt_id=pause_token,
         result_payload=(
             {
                 "risk_pause": {
@@ -526,24 +532,13 @@ def risk_job_record(
     return value
 
 
-def job_identity_record(kind: str, variant: str = "primary") -> dict[str, str]:
-    return {
-        "job_id": token(kind, f"job-{variant}"),
-        "logical_key": (
-            f"publisher-recovery:v1:{token(kind, 'fault')}"
-            if variant == "primary"
-            else f"publisher-recovery:v1:{token(kind, f'fault-{variant}')}"
-        ),
-        "task_kind": "cover_generate",
-    }
-
-
 def attempt_record(
     kind: str,
     variant: str = "primary",
     *,
     status: str = "paused",
     error_code: str = "",
+    phase: str = "claimed",
 ) -> dict[str, Any]:
     return {
         "attempt_id": token(kind, f"attempt-{variant}"),
@@ -553,62 +548,32 @@ def attempt_record(
         "owner_token": token(kind, "extension-owner"),
         "lease_epoch": 1 if variant == "primary" else 2,
         "status": status,
-        "phase": "claimed",
+        "phase": phase,
         "content_sha256": hashlib.sha256(
-            b"Generic publisher recovery fixture content."
+            (
+                "Generic publisher recovery fixture content. "
+                f"Identity {digest(kind, 'primary')[:16]}."
+            ).encode()
         ).hexdigest(),
         "error_code": error_code,
     }
 
 
 def receipt_record(kind: str, variant: str = "primary") -> dict[str, str]:
+    job = browser_job_record(kind)
     return {
         "receipt_id": token(kind, f"receipt-{variant}"),
         "job_id": token(kind, "job-primary"),
         "attempt_id": token(kind, f"attempt-{variant}"),
-        "natural_key": token(kind, f"receipt-natural-{variant}"),
-    }
-
-
-def stale_token_observation(kind: str) -> dict[str, str]:
-    return {
-        "observation_id": token(kind, "stale-token-observation"),
-        "job_id": token(kind, "job-primary"),
-        "stale_owner_token": token(kind, "owner-old"),
-        "current_owner_token": token(kind, "owner-new"),
-        "response": {"ok": False, "stale_claim": True},
-    }
-
-
-def cover_asset_record(kind: str) -> dict[str, Any]:
-    return {
-        "asset_id": token(kind, "cover-asset"),
-        "job_id": token(kind, "job-primary"),
-        "file_path": f"/app/data/publisher_covers/{token(kind, 'cover-asset')}.png",
-        "file_size": 67,
-        "mime_type": "image/png",
-    }
-
-
-def cover_file_record(kind: str, variant: str = "final") -> dict[str, Any]:
-    path = (
-        f"{token(kind, 'cover-asset')}.png"
-        if variant == "final"
-        else f".staging/{token(kind, variant)}.part"
-    )
-    return {
-        "path": path,
-        "size": 67,
-        "content_sha256": digest(kind, "shared-cover"),
-    }
-
-
-def heartbeat_observation(kind: str, stage: str, status: str) -> dict[str, str]:
-    return {
-        "observation_id": token(kind, f"heartbeat-{stage}"),
-        "browser_id": token(kind, "browser"),
-        "probe": "extension_heartbeat_status",
-        "status": status,
+        "natural_key": digest(kind, f"receipt-natural-{variant}"),
+        "idempotency_key": job["logical_key"],
+        "platform_id": "qidian",
+        "remote_book_id": digest(kind, "book")[:12],
+        "remote_chapter_id": digest(kind, "chapter")[:12],
+        "remote_url": job["upload_url"],
+        "official_state": "published",
+        "content_sha256": job["body_sha256"],
+        "source": "extension",
     }
 
 
@@ -632,53 +597,93 @@ def resume_action(kind: str) -> dict[str, str]:
 
 def resume_replay(kind: str) -> dict[str, str]:
     return {
-        "observation_id": token(kind, "resume-replay"),
-        "job_id": token(kind, "job-primary"),
-        "action_id": token(kind, "resume-action"),
         "pause_token": token(kind, "attempt-primary"),
         "pause_reason": {
             "publisher_captcha": "captcha",
             "publisher_mfa": "mfa",
             "publisher_account_risk": "account_risk",
         }[kind],
-        "request_sha256": digest(kind, "resume-request"),
-        "replay_request_sha256": digest(kind, "resume-request"),
-        "first_transition_sha256": digest(kind, "resume-transition"),
-        "replay_transition_sha256": digest(kind, "resume-transition"),
         "first_disposition": "applied",
         "replay_disposition": "idempotent",
     }
 
 
-def discarded_browser_observation(kind: str) -> dict[str, Any]:
+def publisher_canon_source(kind: str) -> dict[str, Any]:
+    job = browser_job_record(kind)
     return {
-        "action": "setup_service_discarded",
-        "fault_id": token(kind, "fault"),
-        "hold_id": f"risk-fixture-{token(kind, 'fault')}",
-        "service": "publisher-browser",
-        "container_id": token(kind, "browser-container"),
-        "image_id": "sha256:" + digest(kind, "browser-image"),
-        "exists": True,
-        "running": False,
+        "project_id": job["project_id"],
+        "chapter_plan_id": token(kind, "chapter-plan"),
+        "draft_id": token(kind, "draft"),
+        "candidate_id": job["candidate_id"],
+        "canon_commit_id": job["canon_commit_id"],
+        "canon_idempotency_key": token(kind, "canon-natural"),
+        "canon_status": "committed",
+        "candidate_status": "accepted",
+        "candidate_canon_status": "committed",
+        "chapter_status": "accepted",
+        "chapter_number": job["chapter_number"],
+        "body_hash": job["body_sha256"],
     }
 
 
-def terminal_write_observation(
-    kind: str, owner: str, waiter_pid: int
-) -> dict[str, Any]:
+def publisher_detector(kind: str) -> dict[str, str]:
+    reason = {
+        "publisher_captcha": "captcha",
+        "publisher_mfa": "mfa",
+        "publisher_account_risk": "account_risk",
+    }[kind]
     return {
-        "observation_id": token(kind, f"terminal-{owner}"),
+        "detector": "publisher-risk-v1",
+        "boundary": "pre-mutation",
+        "selector": f"#publisher-recovery-{reason}",
+        "matched_text": f"{reason} fixture",
+        "message": f"publisher {reason} detected",
+        "risk_reason": reason,
+        "observed_at": "2026-07-22T12:15:00+00:00",
+        "attempt_id": token(kind, "attempt-primary"),
+    }
+
+
+def publisher_effect(kind: str, count: int) -> dict[str, Any]:
+    return {
+        "fixture_id": token(kind, "fixture"),
+        "effect_key_sha256": digest(kind, "effect-key"),
+        "upload_effect_count": count,
+    }
+
+
+def publisher_terminal_fault(kind: str, mode: str) -> dict[str, str]:
+    return {
         "job_id": token(kind, "job-primary"),
-        "owner_token": token(kind, owner),
-        "holder_pid": 4100,
-        "waiter_pid": waiter_pid,
-        "waiter_application_name": "forwin-recovery-publisher-worker",
-        "waiter_role": "forwin",
-        "blocking_pids": [4100],
-        "trigger_name": token(kind, "terminal-trigger"),
-        "function_name": token(kind, "terminal-function"),
-        "scope_table": token(kind, "terminal-scope"),
-        "advisory_key": 912345,
+        "mode": mode,
+        "installed_at": "2026-07-22T12:14:00+00:00",
+        "observed_at": "2026-07-22T12:16:00+00:00",
+        "request_url": (
+            "http://forwin.invalid/api/publishers/extension/upload-jobs/"
+            f"{token(kind, 'job-primary')}/attempts/"
+            f"{token(kind, 'attempt-primary')}/receipt"
+        ),
+    }
+
+
+def publisher_journal(kind: str) -> dict[str, str]:
+    fault = publisher_terminal_fault(kind, "unused")
+    return {
+        "job_id": token(kind, "job-primary"),
+        "attempt_id": token(kind, "attempt-primary"),
+        "journal_phase": "ack_pending",
+        "receipt_key": digest(kind, "receipt-natural-primary"),
+        "content_sha256": browser_job_record(kind)["body_sha256"],
+        "fault_observed_at": fault["observed_at"],
+        "fault_request_url": fault["request_url"],
+    }
+
+
+def publisher_browser_lifecycle(kind: str, action: str) -> dict[str, str]:
+    return {
+        "action": action,
+        "service": "publisher-browser",
+        "fault_id": token(kind, "fault"),
     }
 
 
@@ -850,139 +855,169 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
         after["external"]["replay_baseline_artifact"] = artifact_record(kind)
         after["external"]["artifact"] = artifact_record(kind)
         after["barrier"]["residue_count"] = 0
-    elif kind == "publisher_backend_unavailable":
-        before["database"].update(
-            {
-                "job": backend_job_record(kind, "owner-old"),
-                "jobs": [job_identity_record(kind)],
-                "attempts": [],
-                "receipts": [],
-            }
-        )
-        during["database"].update(
-            {
-                "job": backend_job_record(kind, "owner-old"),
-                "jobs": [job_identity_record(kind)],
-                "attempts": [],
-                "receipts": [],
-                "cover_assets": [],
-            }
-        )
-        during["external"]["cover_files"] = [
-            cover_file_record(kind, "orphan")
-        ]
-        after["database"].update(
-            {
-                "job": backend_job_record(
-                    kind,
-                    "owner-new",
-                    status="succeeded",
-                    artifact_id=token(kind, "cover-asset"),
-                ),
-                "jobs": [job_identity_record(kind)],
-                "attempts": [],
-                "receipts": [],
-                "cover_assets": [cover_asset_record(kind)],
-            }
-        )
-        after["api"]["stale_token_observation"] = stale_token_observation(kind)
-        after["external"]["cover_files"] = [cover_file_record(kind)]
-        after["barrier"].update(
-            {
-                "terminal_writes": [
-                    terminal_write_observation(kind, "owner-old", 4200),
-                    terminal_write_observation(kind, "owner-new", 4300),
-                ],
-                "residue": {
-                    "trigger_count": 0,
-                    "function_count": 0,
-                    "scope_table_count": 0,
-                    "advisory_lock_count": 0,
-                },
-            }
-        )
-    elif kind == "publisher_browser_unavailable":
+    elif kind in PUBLISHER_KINDS:
         for snapshot in values.values():
             snapshot["state"]["database"].update(
                 {
+                    "canon_source": publisher_canon_source(kind),
                     "job": browser_job_record(kind),
+                    "job_identity_count": 1,
+                    "status": "pending",
                     "attempts": [],
                     "receipts": [],
+                    "resume_actions": [],
+                    "detector_evidence": {},
                 }
             )
-        before["external"]["browser_heartbeat"] = heartbeat_observation(
-            kind, "before", "healthy"
-        )
-        during["external"]["browser_heartbeat"] = heartbeat_observation(
-            kind, "during", "stale"
-        )
-        after["external"]["browser_heartbeat"] = heartbeat_observation(
-            kind, "after", "healthy"
-        )
-    else:
-        risk_reason = {
-            "publisher_captcha": "captcha",
-            "publisher_mfa": "mfa",
-            "publisher_account_risk": "account_risk",
-        }[kind]
-        before["database"].update(
+        before["external"].update(
             {
-                "job": risk_job_record(kind, "running"),
-                "attempts": [
-                    attempt_record(kind, status="running")
-                ],
+                "browser": {
+                    "browser_id": token(kind, "browser"),
+                    "status": "healthy",
+                    "probe": "extension_service_worker_cdp",
+                },
+                **publisher_effect(kind, 0),
             }
         )
-        during["database"].update(
-            {
-                "job": risk_job_record(
-                    kind,
-                    "paused",
-                    pause_reason=risk_reason,
-                    pause_token=token(kind, "attempt-primary"),
-                    risk_boundary="pre-mutation",
-                ),
-                "attempts": [
+        if kind in {
+            "publisher_backend_unavailable",
+            "publisher_browser_unavailable",
+        }:
+            mode = (
+                "backend_unavailable"
+                if kind == "publisher_backend_unavailable"
+                else "browser_shutdown_barrier"
+            )
+            during_job = browser_job_record(kind, status="running")
+            during_job.update(
+                owner_token=token(kind, "extension-owner"),
+                extension_client_id=token(kind, "extension-owner"),
+                current_attempt_id=token(kind, "attempt-primary"),
+                started_at="2026-07-22T12:15:00+00:00",
+            )
+            during["database"].update(
+                job=during_job,
+                status="running",
+                attempts=[
+                    attempt_record(
+                        kind,
+                        status="running",
+                        phase="mutation_started",
+                    )
+                ],
+            )
+            during["external"].update(
+                {
+                    "terminal_fault": publisher_terminal_fault(kind, mode),
+                    "journal": publisher_journal(kind),
+                    **publisher_effect(kind, 1),
+                }
+            )
+            after_job = copy.deepcopy(during_job)
+            after_job.update(
+                status="succeeded",
+                finished_at="2026-07-22T12:17:00+00:00",
+                result_message="published",
+            )
+            after["database"].update(
+                job=after_job,
+                status="succeeded",
+                attempts=[
+                    attempt_record(
+                        kind,
+                        status="succeeded",
+                        phase="result_submitted",
+                    )
+                ],
+                receipts=[receipt_record(kind)],
+            )
+            after["external"].update(
+                {
+                    "journal_replay": {
+                        "attempt_id": token(kind, "attempt-primary")
+                    },
+                    **publisher_effect(kind, 1),
+                }
+            )
+            if kind == "publisher_browser_unavailable":
+                during["external"]["browser_fault"] = (
+                    publisher_browser_lifecycle(
+                        kind,
+                        "fault_service_stopped",
+                    )
+                )
+                after["external"]["browser_recovery"] = (
+                    publisher_browser_lifecycle(
+                        kind,
+                        "fault_service_recovered",
+                    )
+                )
+        else:
+            risk_reason = {
+                "publisher_captcha": "captcha",
+                "publisher_mfa": "mfa",
+                "publisher_account_risk": "account_risk",
+            }[kind]
+            detector = publisher_detector(kind)
+            during_job = risk_job_record(
+                kind,
+                "paused",
+                pause_reason=risk_reason,
+                pause_token=token(kind, "attempt-primary"),
+                risk_boundary="pre-mutation",
+            )
+            during["database"].update(
+                job=during_job,
+                status="paused",
+                attempts=[
                     attempt_record(
                         kind,
                         status="paused",
                         error_code=risk_reason,
                     )
                 ],
-            }
-        )
-        after["database"].update(
-            {
-                "job": risk_job_record(kind, "pending"),
-                "attempts": [
+                detector_evidence=detector,
+            )
+            during["external"].update(
+                {
+                    "detector_evidence": copy.deepcopy(detector),
+                    **publisher_effect(kind, 0),
+                }
+            )
+            after_job = browser_job_record(kind, status="succeeded")
+            after_job.update(
+                owner_token=token(kind, "extension-owner"),
+                extension_client_id=token(kind, "extension-owner"),
+                current_attempt_id=token(kind, "attempt-secondary"),
+                finished_at="2026-07-22T12:17:00+00:00",
+                result_message="published",
+            )
+            after["database"].update(
+                job=after_job,
+                status="succeeded",
+                attempts=[
                     attempt_record(
                         kind,
                         status="paused",
                         error_code=risk_reason,
-                    )
-                ],
-                "receipts": [],
-                "resume_actions": [resume_action(kind)],
-                "pre_discard_job": risk_job_record(kind, "pending"),
-                "pre_discard_attempts": [
+                    ),
                     attempt_record(
                         kind,
-                        status="paused",
-                        error_code=risk_reason,
-                    )
+                        "secondary",
+                        status="succeeded",
+                        phase="result_submitted",
+                    ),
                 ],
-                "pre_discard_receipts": [],
-                "pre_discard_resume_actions": [resume_action(kind)],
-            }
-        )
-        after["api"].update(
-            {
-                "resume_replay": resume_replay(kind),
-            }
-        )
-        after["external"]["browser_hold_terminal"] = (
-            discarded_browser_observation(kind)
-        )
+                receipts=[receipt_record(kind, "secondary")],
+                resume_actions=[resume_action(kind)],
+                detector_evidence=detector,
+            )
+            after["external"].update(
+                {
+                    "operator_resume": resume_replay(kind),
+                    **publisher_effect(kind, 1),
+                }
+            )
     return values
 
 
@@ -1185,14 +1220,13 @@ RECORD_CASES = (
         7,
     ),
     RecordCase(
-        "job identity",
+        "publisher Canon source",
         "publisher_backend_unavailable",
         "after",
-        "database.jobs",
-        job_identity_record("publisher_backend_unavailable"),
-        "logical_key",
+        "database.canon_source",
+        publisher_canon_source("publisher_backend_unavailable"),
+        "canon_commit_id",
         7,
-        True,
     ),
     RecordCase(
         "attempt",
@@ -1215,45 +1249,44 @@ RECORD_CASES = (
         True,
     ),
     RecordCase(
-        "stale token observation",
+        "publisher terminal fault",
         "publisher_backend_unavailable",
-        "after",
-        "api.stale_token_observation",
-        stale_token_observation("publisher_backend_unavailable"),
-        "observation_id",
-        7,
-    ),
-    RecordCase(
-        "cover asset",
-        "publisher_backend_unavailable",
-        "after",
-        "database.cover_assets",
-        cover_asset_record("publisher_backend_unavailable"),
-        "asset_id",
-        7,
-        True,
-    ),
-    RecordCase(
-        "cover file",
-        "publisher_backend_unavailable",
-        "after",
-        "external.cover_files",
-        cover_file_record("publisher_backend_unavailable"),
-        "path",
-        7,
-        True,
-    ),
-    RecordCase(
-        "terminal write",
-        "publisher_backend_unavailable",
-        "after",
-        "barrier.terminal_writes",
-        terminal_write_observation(
-            "publisher_backend_unavailable", "owner-old", 4200
+        "during",
+        "external.terminal_fault",
+        publisher_terminal_fault(
+            "publisher_backend_unavailable", "backend_unavailable"
         ),
-        "observation_id",
+        "request_url",
         7,
-        True,
+    ),
+    RecordCase(
+        "publisher journal",
+        "publisher_backend_unavailable",
+        "during",
+        "external.journal",
+        publisher_journal("publisher_backend_unavailable"),
+        "attempt_id",
+        7,
+    ),
+    RecordCase(
+        "publisher journal replay",
+        "publisher_browser_unavailable",
+        "after",
+        "external.journal_replay",
+        {"attempt_id": token("publisher_browser_unavailable", "attempt-primary")},
+        "attempt_id",
+        7,
+    ),
+    RecordCase(
+        "publisher browser lifecycle",
+        "publisher_browser_unavailable",
+        "during",
+        "external.browser_fault",
+        publisher_browser_lifecycle(
+            "publisher_browser_unavailable", "fault_service_stopped"
+        ),
+        "action",
+        7,
     ),
     RecordCase(
         "browser job",
@@ -1265,12 +1298,12 @@ RECORD_CASES = (
         7,
     ),
     RecordCase(
-        "heartbeat observation",
-        "publisher_browser_unavailable",
+        "publisher detector evidence",
+        "publisher_captcha",
         "during",
-        "external.browser_heartbeat",
-        heartbeat_observation("publisher_browser_unavailable", "during", "stale"),
-        "observation_id",
+        "database.detector_evidence",
+        publisher_detector("publisher_captcha"),
+        "detector",
         7,
     ),
     RecordCase(
@@ -1293,12 +1326,12 @@ RECORD_CASES = (
         True,
     ),
     RecordCase(
-        "resume replay",
+        "operator resume replay",
         "publisher_captcha",
         "after",
-        "api.resume_replay",
+        "external.operator_resume",
         resume_replay("publisher_captcha"),
-        "observation_id",
+        "pause_token",
         7,
     ),
 )
@@ -1481,7 +1514,6 @@ def test_every_normalized_record_has_a_strict_schema(
             "projection_consumer_unavailable",
             "external.projection_identities",
         ),
-        ("publisher_backend_unavailable", "database.jobs"),
     ),
 )
 def test_required_identity_inventories_reject_empty_coverage(
@@ -1624,11 +1656,11 @@ def test_qdrant_identity_inventory_rejects_zero_vector_dimensions() -> None:
             "external.replay_baseline_artifact.content_sha256",
             "external.replay_baseline_artifact.content_sha256",
         ),
-        (
-            "publisher_backend_unavailable",
-            "after",
-            "external.cover_files.0.content_sha256",
-            "external.cover_files[0].content_sha256",
+            (
+                "publisher_backend_unavailable",
+                "after",
+                "database.receipts.0.content_sha256",
+                "database.receipts[0].content_sha256",
         ),
     ),
 )
@@ -1683,11 +1715,11 @@ def test_sha256_evidence_requires_canonical_digest(
             "external.replay_baseline_artifact.size",
             "external.replay_baseline_artifact.size",
         ),
-        (
-            "publisher_backend_unavailable",
-            "after",
-            "database.cover_assets.0.file_size",
-            "database.cover_assets[0].file_size",
+            (
+                "publisher_backend_unavailable",
+                "after",
+                "database.job_identity_count",
+                "database.job_identity_count",
         ),
         (
             "publisher_captcha",
@@ -1700,12 +1732,6 @@ def test_sha256_evidence_requires_canonical_digest(
             "after",
             "barrier.residue_count",
             "barrier.residue_count",
-        ),
-        (
-            "publisher_backend_unavailable",
-            "after",
-            "barrier.residue.trigger_count",
-            "barrier.residue.trigger_count",
         ),
     ),
 )
@@ -1770,19 +1796,24 @@ def test_fixture_identity_must_match_each_snapshot_fault_id() -> None:
         )
 
 
-def test_fault_local_fixtures_are_distinct_and_publisher_jobs_are_projectless() -> None:
+def test_fault_local_fixtures_are_distinct_and_publishers_bind_canon() -> None:
     fixtures = [fixture_identity(kind) for kind in FAULT_KINDS]
 
     assert len({item["fixture_id"] for item in fixtures}) == len(FAULT_KINDS)
     for kind in FAULT_KINDS:
         values = valid_snapshots(kind)
-        assert "project_id" not in values["before"]["state"]["target"]["fixture"]
-        for snapshot in values.values():
-            job = snapshot["state"]["database"].get("job")
-            if job is not None:
-                assert job["project_id"] == ""
-                assert job["publish"] is False
-                assert job["unsafe_payload_paths"] == []
+        fixture = values["before"]["state"]["target"]["fixture"]
+        if kind in PUBLISHER_KINDS:
+            job = values["before"]["state"]["database"]["job"]
+            source = values["before"]["state"]["database"]["canon_source"]
+            assert fixture["project_id"] == job["project_id"] == source["project_id"]
+            assert fixture["canon_commit_id"] == job["canon_commit_id"]
+            assert fixture["candidate_id"] == job["candidate_id"]
+            assert job["task_kind"] == "chapter_upload"
+            assert job["publish"] is True
+            assert job["unsafe_payload_paths"] == []
+        else:
+            assert "project_id" not in fixture
 
 
 @pytest.mark.parametrize(
@@ -1799,9 +1830,9 @@ def test_publisher_faults_require_exact_attempt_and_receipt_inventories(
 ) -> None:
     values = valid_snapshots(kind)
 
-    expected_attempts = 0 if kind == "publisher_browser_unavailable" else 1
+    expected_attempts = 1 if kind == "publisher_browser_unavailable" else 2
     assert len(values["after"]["state"]["database"]["attempts"]) == expected_attempts
-    assert values["after"]["state"]["database"]["receipts"] == []
+    assert len(values["after"]["state"]["database"]["receipts"]) == 1
     assert evidence.snapshot_violations(kind, values) == []
 
 
@@ -1998,46 +2029,52 @@ def test_copied_publisher_booleans_are_not_snapshot_schema_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "value", "assertion"),
+    ("stage", "path", "value", "assertion"),
     (
         (
-            "api.stale_token_observation.job_id",
+            "during",
+            "external.terminal_fault.job_id",
             token("publisher_backend_unavailable", "job-other"),
-            "stale_token_rejected",
+            "retryable_during_fault",
         ),
         (
-            "api.stale_token_observation.stale_owner_token",
-            token("publisher_backend_unavailable", "owner-other"),
-            "stale_token_rejected",
+            "during",
+            "external.terminal_fault.mode",
+            "browser_shutdown_barrier",
+            "retryable_during_fault",
         ),
         (
-            "api.stale_token_observation.current_owner_token",
-            token("publisher_backend_unavailable", "owner-other"),
-            "stale_token_rejected",
+            "during",
+            "external.journal.job_id",
+            token("publisher_backend_unavailable", "job-other"),
+            "retryable_during_fault",
         ),
         (
-            "api.stale_token_observation.response.stale_claim",
-            False,
-            "stale_token_rejected",
+            "during",
+            "external.journal.attempt_id",
+            token("publisher_backend_unavailable", "attempt-other"),
+            "retryable_during_fault",
         ),
         (
-            "external.cover_files.0.path",
-            "other.png",
-            "shared_path_readable",
+            "after",
+            "external.journal_replay.attempt_id",
+            token("publisher_backend_unavailable", "attempt-other"),
+            "journal_replayed",
         ),
         (
-            "external.cover_files.0.size",
-            68,
-            "shared_path_readable",
+            "after",
+            "database.receipts.0.natural_key",
+            digest("publisher_backend_unavailable", "receipt-other"),
+            "journal_replayed",
         ),
     ),
 )
-def test_backend_observations_are_bound_to_job_token_and_path_identity(
-    path: str, value: Any, assertion: str
+def test_backend_terminal_journal_is_bound_to_job_attempt_and_receipt(
+    stage: str, path: str, value: Any, assertion: str
 ) -> None:
     kind = "publisher_backend_unavailable"
     values = valid_snapshots(kind)
-    set_path(values["after"]["state"], path, value)
+    set_path(values[stage]["state"], path, value)
 
     assert evidence.snapshot_violations(kind, values) == []
     assertions = evidence.derive_assertions(kind, values)
@@ -2062,7 +2099,7 @@ def test_risk_type_and_fence_are_derived_from_paused_job_and_attempt(
 
     assert evidence.snapshot_violations(kind, values) == []
     assertions = evidence.derive_assertions(kind, values)
-    assert assertions["paused_safely"] is False
+    assert assertions["typed_pause_from_detector"] is False
     assert evidence.assertion_violations(kind, assertions)
 
 
@@ -2079,15 +2116,19 @@ def test_risk_type_and_fence_are_derived_from_paused_job_and_attempt(
             "anonymous",
             "operator_action_recorded",
         ),
-        ("api.resume_replay.action_id", "wrong-action", "resume_replay_idempotent"),
         (
-            "api.resume_replay.replay_request_sha256",
-            digest("publisher_captcha", "wrong-request"),
+            "external.operator_resume.pause_token",
+            "wrong-attempt",
             "resume_replay_idempotent",
         ),
         (
-            "api.resume_replay.replay_transition_sha256",
-            digest("publisher_captcha", "wrong-transition"),
+            "external.operator_resume.pause_reason",
+            "mfa",
+            "resume_replay_idempotent",
+        ),
+        (
+            "external.operator_resume.replay_disposition",
+            "applied",
             "resume_replay_idempotent",
         ),
     ),
@@ -2129,12 +2170,12 @@ def test_risk_rejects_duplicate_resume_actions_even_with_same_natural_key() -> N
             "wrong-project",
             "candidate resource mismatch",
         ),
-        (
-            "publisher_backend_unavailable",
-            "database.jobs.0.job_id",
-            "wrong-job",
-            "database.jobs coverage mismatch",
-        ),
+            (
+                "publisher_backend_unavailable",
+                "database.canon_source.project_id",
+                "wrong-project",
+                "publisher Canon source is not stable",
+            ),
     ),
 )
 def test_related_inventory_records_cannot_drift_to_other_resources(
@@ -2156,7 +2197,7 @@ def test_receipt_identity_must_reference_the_reclaimed_job_and_attempt() -> None
     values["after"]["state"]["database"]["receipts"] = [receipt]
 
     assert any(
-        "database.receipts[0] attempt identity mismatch" in item
+        "database.receipts[0] publisher identity mismatch" in item
         for item in evidence.snapshot_violations(kind, values)
     )
 
@@ -2598,273 +2639,166 @@ def contract_cases() -> list[ContractCase]:
             set_mutation("after", "barrier.residue_count", 1),
             1,
         ),
-        ContractCase(
-            "backend safe fixture",
-            "publisher_backend_unavailable",
-            "fixture_safe",
-            set_mutation("after", "database.job.project_id", "project-live"),
-            False,
-        ),
-        ContractCase(
-            "backend reclaim token",
-            "publisher_backend_unavailable",
-            "same_job_reclaimed",
-            set_mutation(
-                "after",
-                "database.job.owner_token",
-                token("publisher_backend_unavailable", "owner-old"),
-            ),
-            False,
-        ),
-        ContractCase(
-            "backend terminal boundary",
-            "publisher_backend_unavailable",
-            "terminal_write_boundary_observed",
-            set_mutation(
-                "after",
-                "barrier.terminal_writes.1.blocking_pids",
-                [9999],
-            ),
-            False,
-        ),
-        ContractCase(
-            "backend stale token result",
-            "publisher_backend_unavailable",
-            "stale_token_rejected",
-            set_mutation(
-                "after",
-                "api.stale_token_observation.response.stale_claim",
-                False,
-            ),
-            False,
-        ),
-        ContractCase(
-            "backend shared path result",
-            "publisher_backend_unavailable",
-            "shared_path_readable",
-            set_mutation(
-                "after", "external.cover_files.0.size", 68
-            ),
-            False,
-        ),
-        ContractCase(
-            "backend orphan cleanup",
-            "publisher_backend_unavailable",
-            "orphan_cleanup_observed",
-            set_mutation("during", "external.cover_files", []),
-            False,
-        ),
-        ContractCase(
-            "backend orphan residue",
-            "publisher_backend_unavailable",
-            "orphan_residue_count",
-            set_mutation(
-                "after",
-                "external.cover_files",
-                [
-                    cover_file_record("publisher_backend_unavailable"),
-                    cover_file_record(
-                        "publisher_backend_unavailable", "residue"
-                    ),
-                ],
-            ),
-            1,
-        ),
-        ContractCase(
-            "backend barrier residue",
-            "publisher_backend_unavailable",
-            "barrier_residue_count",
-            set_mutation("after", "barrier.residue.trigger_count", 1),
-            1,
-        ),
-        ContractCase(
-            "backend duplicate attempts",
-            "publisher_backend_unavailable",
-            "duplicate_attempts",
-            set_mutation(
-                "after",
-                "database.attempts",
-                [
-                    attempt_record("publisher_backend_unavailable"),
-                    attempt_record("publisher_backend_unavailable"),
-                ],
-            ),
-            1,
-        ),
-        ContractCase(
-            "backend duplicate receipts",
-            "publisher_backend_unavailable",
-            "duplicate_receipts",
-            multi_mutation(
-                set_mutation(
-                    "after",
-                    "database.attempts",
-                    [attempt_record("publisher_backend_unavailable")],
-                ),
-                set_mutation(
-                    "after",
-                    "database.receipts",
-                    [
-                        receipt_record("publisher_backend_unavailable"),
-                        receipt_record("publisher_backend_unavailable"),
-                    ],
-                ),
-            ),
-            1,
-        ),
-        ContractCase(
-            "backend attempts",
-            "publisher_backend_unavailable",
-            "attempt_count",
-            set_mutation(
-                "after",
-                "database.attempts",
-                [attempt_record("publisher_backend_unavailable")],
-            ),
-            1,
-        ),
-        ContractCase(
-            "backend receipts",
-            "publisher_backend_unavailable",
-            "receipt_count",
-            multi_mutation(
-                set_mutation(
-                    "after",
-                    "database.attempts",
-                    [attempt_record("publisher_backend_unavailable")],
-                ),
-                set_mutation(
-                    "after",
-                    "database.receipts",
-                    [receipt_record("publisher_backend_unavailable")],
-                ),
-            ),
-            1,
-        ),
-        ContractCase(
-            "browser safe fixture",
-            "publisher_browser_unavailable",
-            "fixture_safe",
-            set_mutation("after", "database.job.project_id", "project-live"),
-            False,
-        ),
-        ContractCase(
-            "browser same job",
-            "publisher_browser_unavailable",
-            "same_job_identity",
-            set_mutation(
-                "after",
-                "database.job.body_sha256",
-                digest("publisher_browser_unavailable", "changed-body"),
-            ),
-            False,
-        ),
-        ContractCase(
-            "browser full row unchanged",
-            "publisher_browser_unavailable",
-            "full_job_row_unchanged",
-            set_mutation(
-                "during",
-                "database.job.current_url",
-                "https://remote.invalid/drift",
-            ),
-            False,
-        ),
-        ContractCase(
-            "browser preclaim window",
-            "publisher_browser_unavailable",
-            "preclaim_boundary_preserved",
-            set_mutation(
-                "during",
-                "database.job.database_now",
-                "2026-07-22T13:01:00+00:00",
-            ),
-            False,
-        ),
-        ContractCase(
-            "browser pending job",
-            "publisher_browser_unavailable",
-            "pending_job_preserved",
-            set_mutation("during", "database.job.status", "running"),
-            False,
-        ),
-        ContractCase(
-            "browser heartbeat",
-            "publisher_browser_unavailable",
-            "heartbeat_recovered",
-            set_mutation("after", "external.browser_heartbeat.status", "stale"),
-            False,
-        ),
-        ContractCase(
-            "browser attempts",
-            "publisher_browser_unavailable",
-            "attempt_count",
-            set_mutation(
-                "after",
-                "database.attempts",
-                [attempt_record("publisher_browser_unavailable")],
-            ),
-            1,
-        ),
-        ContractCase(
-            "browser mutation",
-            "publisher_browser_unavailable",
-            "mutation_count",
-            set_mutation(
-                "after",
-                "database.job.body_sha256",
-                digest("publisher_browser_unavailable", "changed-body"),
-            ),
-            1,
-        ),
-        ContractCase(
-            "browser receipts",
-            "publisher_browser_unavailable",
-            "receipt_count",
-            set_mutation(
-                "after",
-                "database.receipts",
-                [receipt_record("publisher_browser_unavailable")],
-            ),
-            1,
-        ),
     ]
-    for kind in RISK_KINDS:
+    for kind in (
+        "publisher_backend_unavailable",
+        "publisher_browser_unavailable",
+    ):
         cases.extend(
             (
                 ContractCase(
-                    f"{kind} safe fixture",
+                    f"{kind} same attempt convergence",
                     kind,
-                    "fixture_safe",
-                    set_mutation(
-                        "after", "database.job.project_id", "project-live"
-                    ),
-                    False,
-                ),
-                ContractCase(
-                    f"{kind} same job",
-                    kind,
-                    "same_job_identity",
+                    "same_job_attempt_converged",
                     set_mutation(
                         "after",
-                        "database.job.body_sha256",
-                        digest(kind, "changed-body"),
+                        "database.attempts.0.status",
+                        "running",
                     ),
                     False,
                 ),
                 ContractCase(
-                    f"{kind} paused fence",
+                    f"{kind} retryable boundary",
                     kind,
-                    "paused_safely",
+                    "retryable_during_fault",
                     set_mutation(
                         "during",
-                        "database.job.risk_boundary",
-                        "post-mutation",
+                        "external.journal.journal_phase",
+                        "queued",
                     ),
                     False,
                 ),
                 ContractCase(
-                    f"{kind} authenticated resume",
+                    f"{kind} journal replay",
+                    kind,
+                    "journal_replayed",
+                    set_mutation(
+                        "after",
+                        "external.journal_replay.attempt_id",
+                        token(kind, "attempt-other"),
+                    ),
+                    False,
+                ),
+                ContractCase(
+                    f"{kind} external effect",
+                    kind,
+                    "external_effect_at_most_once",
+                    set_mutation(
+                        "after",
+                        "external.upload_effect_count",
+                        2,
+                    ),
+                    False,
+                ),
+                ContractCase(
+                    f"{kind} duplicate jobs",
+                    kind,
+                    "duplicate_jobs",
+                    set_mutation(
+                        "after",
+                        "database.job_identity_count",
+                        2,
+                    ),
+                    1,
+                ),
+                ContractCase(
+                    f"{kind} duplicate attempts",
+                    kind,
+                    "duplicate_attempts",
+                    duplicate_mutation("after", "database.attempts"),
+                    1,
+                ),
+                ContractCase(
+                    f"{kind} duplicate receipts",
+                    kind,
+                    "duplicate_receipts",
+                    duplicate_mutation("after", "database.receipts"),
+                    1,
+                ),
+                ContractCase(
+                    f"{kind} attempt count",
+                    kind,
+                    "attempt_count",
+                    set_mutation(
+                        "after",
+                        "database.attempts",
+                        [
+                            attempt_record(
+                                kind,
+                                status="succeeded",
+                                phase="result_submitted",
+                            ),
+                            attempt_record(
+                                kind,
+                                "secondary",
+                                status="succeeded",
+                                phase="result_submitted",
+                            ),
+                        ],
+                    ),
+                    2,
+                ),
+                ContractCase(
+                    f"{kind} receipt count",
+                    kind,
+                    "receipt_count",
+                    set_mutation("after", "database.receipts", []),
+                    0,
+                ),
+            )
+        )
+    cases.append(
+        ContractCase(
+            "publisher backend fault observation",
+            "publisher_backend_unavailable",
+            "backend_fault_observed",
+            set_mutation(
+                "during",
+                "external.terminal_fault.request_url",
+                "http://forwin.invalid/wrong-terminal",
+            ),
+            False,
+        )
+    )
+    for kind in RISK_KINDS:
+        reason = {
+            "publisher_captcha": "captcha",
+            "publisher_mfa": "mfa",
+            "publisher_account_risk": "account_risk",
+        }[kind]
+        third_attempt = attempt_record(
+            kind,
+            "tertiary",
+            status="succeeded",
+            phase="result_submitted",
+        )
+        third_attempt.update(
+            attempt_id=token(kind, "attempt-tertiary"),
+            attempt_number=3,
+            lease_epoch=3,
+        )
+        cases.extend(
+            (
+                ContractCase(
+                    f"{kind} typed detector pause",
+                    kind,
+                    "typed_pause_from_detector",
+                    multi_mutation(
+                        set_mutation(
+                            "during",
+                            "database.detector_evidence.boundary",
+                            "post-mutation",
+                        ),
+                        set_mutation(
+                            "during",
+                            "external.detector_evidence.boundary",
+                            "post-mutation",
+                        ),
+                    ),
+                    False,
+                ),
+                ContractCase(
+                    f"{kind} operator action",
                     kind,
                     "operator_action_recorded",
                     set_mutation(
@@ -2875,51 +2809,65 @@ def contract_cases() -> list[ContractCase]:
                     False,
                 ),
                 ContractCase(
-                    f"{kind} replay",
+                    f"{kind} resume replay",
                     kind,
                     "resume_replay_idempotent",
                     set_mutation(
                         "after",
-                        "api.resume_replay.replay_disposition",
+                        "external.operator_resume.replay_disposition",
                         "applied",
                     ),
                     False,
                 ),
                 ContractCase(
-                    f"{kind} hold discard state",
+                    f"{kind} no bypass",
                     kind,
-                    "hold_discard_preserved_state",
+                    "no_bypass",
                     set_mutation(
-                        "after",
-                        "database.pre_discard_resume_actions",
-                        [],
+                        "during",
+                        "external.upload_effect_count",
+                        1,
                     ),
                     False,
                 ),
                 ContractCase(
-                    f"{kind} browser stopped at discard",
+                    f"{kind} external effect",
                     kind,
-                    "browser_stopped_at_discard",
+                    "external_effect_at_most_once",
                     set_mutation(
                         "after",
-                        "external.browser_hold_terminal.running",
-                        True,
+                        "external.upload_effect_count",
+                        2,
                     ),
                     False,
                 ),
                 ContractCase(
-                    f"{kind} bypass",
+                    f"{kind} duplicate jobs",
                     kind,
-                    "bypass_attempted",
+                    "duplicate_jobs",
                     set_mutation(
                         "after",
-                        "database.attempts.0.phase",
-                        "mutation_started",
+                        "database.job_identity_count",
+                        2,
                     ),
-                    True,
+                    1,
                 ),
                 ContractCase(
-                    f"{kind} attempts",
+                    f"{kind} duplicate attempts",
+                    kind,
+                    "duplicate_attempts",
+                    duplicate_mutation("after", "database.attempts", 1),
+                    1,
+                ),
+                ContractCase(
+                    f"{kind} duplicate receipts",
+                    kind,
+                    "duplicate_receipts",
+                    duplicate_mutation("after", "database.receipts"),
+                    1,
+                ),
+                ContractCase(
+                    f"{kind} attempt count",
                     kind,
                     "attempt_count",
                     set_mutation(
@@ -2929,25 +2877,25 @@ def contract_cases() -> list[ContractCase]:
                             attempt_record(
                                 kind,
                                 status="paused",
-                                error_code={
-                                    "publisher_captcha": "captcha",
-                                    "publisher_mfa": "mfa",
-                                    "publisher_account_risk": "account_risk",
-                                }[kind],
+                                error_code=reason,
                             ),
-                            attempt_record(kind, "secondary"),
+                            attempt_record(
+                                kind,
+                                "secondary",
+                                status="succeeded",
+                                phase="result_submitted",
+                            ),
+                            third_attempt,
                         ],
                     ),
-                    2,
+                    3,
                 ),
                 ContractCase(
-                    f"{kind} receipts",
+                    f"{kind} receipt count",
                     kind,
                     "receipt_count",
-                    set_mutation(
-                        "after", "database.receipts", [receipt_record(kind)]
-                    ),
-                    1,
+                    set_mutation("after", "database.receipts", []),
+                    0,
                 ),
             )
         )
@@ -2998,24 +2946,6 @@ def schema_invariant_cases() -> list[SchemaInvariantCase]:
             duplicate_mutation("after", "database.authoritative_identities"),
             "after.state.database.authoritative_identities coverage mismatch",
         ),
-        SchemaInvariantCase(
-            "backend job coverage",
-            "publisher_backend_unavailable",
-            "duplicate_jobs",
-            duplicate_mutation("after", "database.jobs"),
-            "after.state.database.jobs coverage mismatch",
-        ),
-        SchemaInvariantCase(
-            "browser same job",
-            "publisher_browser_unavailable",
-            "same_job_identity",
-            set_mutation(
-                "after",
-                "database.job.job_id",
-                token("publisher_browser_unavailable", "job-other"),
-            ),
-            "after.state.database.job fixture resource mismatch",
-        ),
     ]
     for kind in FAULT_KINDS:
         cases.append(
@@ -3031,20 +2961,49 @@ def schema_invariant_cases() -> list[SchemaInvariantCase]:
                 f"{kind}.endpoint identity is not stable or bound",
             )
         )
-    for kind in RISK_KINDS:
-        cases.append(
-            SchemaInvariantCase(
-                f"{kind} same job",
-                kind,
-                "same_job_identity",
-                set_mutation(
-                    "after",
-                    "database.job.job_id",
-                    token(kind, "job-other"),
+    for kind in PUBLISHER_KINDS:
+        cases.extend(
+            (
+                SchemaInvariantCase(
+                    f"{kind} Canon fixture binding",
+                    kind,
+                    "fixture_safe",
+                    set_mutation(
+                        "after",
+                        "database.job.project_id",
+                        token(kind, "project-other"),
+                    ),
+                    "publisher Canon job identity is not stable",
                 ),
-                "after.state.database.job fixture resource mismatch",
+                SchemaInvariantCase(
+                    f"{kind} Canon source binding",
+                    kind,
+                    "canon_source_bound",
+                    set_mutation(
+                        "after",
+                        "database.canon_source.body_hash",
+                        digest(kind, "body-other"),
+                    ),
+                    "publisher Canon source is not stable",
+                ),
             )
         )
+    cases.append(
+        SchemaInvariantCase(
+            "publisher browser lifecycle",
+            "publisher_browser_unavailable",
+            "browser_restarted",
+            set_mutation(
+                "after",
+                "external.browser_recovery.action",
+                "recovery_marked",
+            ),
+            (
+                "after.state.external.browser_recovery does not describe "
+                "the real browser lifecycle"
+            ),
+        )
+    )
     return cases
 
 
@@ -3156,73 +3115,31 @@ def test_load_snapshot_accepts_only_a_json_object(tmp_path: Path) -> None:
 def test_derive_assertions_rejects_invalid_snapshot_schema() -> None:
     kind = "publisher_browser_unavailable"
     values = valid_snapshots(kind)
-    del values["after"]["state"]["external"]["browser_heartbeat"]
+    del values["after"]["state"]["external"]["journal_replay"]
 
     with pytest.raises(
         evidence.EvidenceContractError,
-        match="after.state.external.browser_heartbeat is missing",
+        match="after.state.external.journal_replay is missing",
     ):
         evidence.derive_assertions(kind, values)
 
 
 @pytest.mark.parametrize(
-    "field",
-    (
-        "available_at",
-        "current_attempt_id",
-        "owner_token",
-        "extension_client_id",
-        "abort_requested",
-        "deleted_at",
-        "upload_url",
-        "current_url",
-        "result_message",
-        "error_message",
-        "result_payload",
-        "canon_commit_id",
-        "candidate_id",
-        "chapter_number",
-        "body_text",
-        "created_at",
-        "updated_at",
-        "database_now",
-    ),
-)
-def test_browser_full_row_schema_rejects_each_omitted_risk_field(
-    field: str,
-) -> None:
-    kind = "publisher_browser_unavailable"
-    values = valid_snapshots(kind)
-    del values["during"]["state"]["database"]["job"][field]
-
-    violations = evidence.snapshot_violations(kind, values)
-
-    assert any(
-        f"during.state.database.job" in violation
-        and "keys missing" in violation
-        for violation in violations
-    )
-
-
-@pytest.mark.parametrize(
     ("field", "value"),
     (
-        ("available_at", "2026-07-22T13:30:00+00:00"),
-        ("current_attempt_id", "attempt-drift-generalized"),
-        ("owner_token", "owner-drift-generalized"),
-        ("extension_client_id", "owner-drift-generalized"),
-        ("abort_requested", True),
-        ("deleted_at", "2026-07-22T12:40:00+00:00"),
-        ("upload_url", "https://remote.invalid/upload"),
-        ("current_url", "https://remote.invalid/chapter"),
-        ("result_message", "changed"),
-        ("error_message", "changed"),
-        ("result_payload", {"unexpected": "mutation"}),
-        ("candidate_id", "candidate-drift-generalized"),
+        ("logical_key", "canon-publisher:wrong"),
+        ("task_kind", "cover_generate"),
+        ("project_id", "wrong-project"),
+        ("platform_id", "other-platform"),
+        ("publish", False),
+        ("canon_commit_id", "wrong-canon"),
+        ("candidate_id", "wrong-candidate"),
         ("chapter_number", 9),
+        ("body_sha256", "0" * 64),
+        ("upload_url", "https://remote.invalid/upload"),
     ),
 )
-def test_browser_full_row_drift_is_snapshot_derived(
+def test_browser_canon_identity_rejects_each_drifted_field(
     field: str,
     value: Any,
 ) -> None:
@@ -3230,32 +3147,58 @@ def test_browser_full_row_drift_is_snapshot_derived(
     values = valid_snapshots(kind)
     values["during"]["state"]["database"]["job"][field] = value
 
+    violations = evidence.snapshot_violations(kind, values)
+
+    assert any(
+        "publisher Canon job identity is not stable" in violation
+        or "publisher fixture is not bound to a safe Canon chapter upload" in violation
+        for violation in violations
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    (
+        ("database.job.current_attempt_id", "attempt-drift-generalized"),
+        ("database.attempts.0.owner_token", "owner-drift-generalized"),
+        ("database.attempts.0.lease_epoch", 2),
+    ),
+)
+def test_browser_recovery_requires_same_job_attempt_to_converge(
+    path: str,
+    value: Any,
+) -> None:
+    kind = "publisher_browser_unavailable"
+    values = valid_snapshots(kind)
+    set_path(values["after"]["state"], path, value)
+
     assertions = evidence.derive_assertions(kind, values)
 
-    assert assertions["full_job_row_unchanged"] is False
-    assert assertions["mutation_count"] > 0
+    assert assertions["same_job_attempt_converged"] is False
 
 
 @pytest.mark.parametrize(
     ("stage", "field", "value"),
     (
-        ("before", "database_now", "2026-07-22T13:00:00+00:00"),
-        ("during", "database_now", "2026-07-22T13:01:00+00:00"),
-        ("after", "available_at", "2026-07-22T12:29:59+00:00"),
+        ("during", "journal_phase", "queued"),
+        ("during", "attempt_id", "wrong-attempt"),
+        ("after", "attempt_id", "wrong-attempt"),
     ),
 )
-def test_browser_available_at_must_remain_future_at_every_db_observation(
+def test_browser_journal_must_remain_bound_across_recovery(
     stage: str,
     field: str,
     value: str,
 ) -> None:
     kind = "publisher_browser_unavailable"
     values = valid_snapshots(kind)
-    values[stage]["state"]["database"]["job"][field] = value
+    key = "journal" if stage == "during" else "journal_replay"
+    values[stage]["state"]["external"][key][field] = value
 
     assertions = evidence.derive_assertions(kind, values)
 
-    assert assertions["preclaim_boundary_preserved"] is False
+    assertion = "retryable_during_fault" if stage == "during" else "journal_replayed"
+    assert assertions[assertion] is False
 
 
 @pytest.mark.parametrize("kind", PUBLISHER_KINDS)
@@ -3356,132 +3299,141 @@ def test_consumed_optional_endpoint_cannot_be_missing_or_wrong_service(
 @pytest.mark.parametrize(
     ("path", "value"),
     (
-        ("database.pre_discard_job.status", "paused"),
-        ("database.pre_discard_attempts", []),
+        ("database.attempts.0.status", "running"),
+        ("external.upload_effect_count", 2),
         (
-            "database.pre_discard_receipts",
+            "database.receipts",
             [receipt_record("publisher_captcha")],
         ),
-        ("database.pre_discard_resume_actions", []),
     ),
 )
-def test_typed_risk_discard_must_preserve_post_resume_database_state(
+def test_typed_risk_resume_must_not_bypass_the_paused_attempt(
     path: str,
     value: Any,
 ) -> None:
     kind = "publisher_captcha"
     values = valid_snapshots(kind)
-    set_path(values["after"]["state"], path, value)
+    set_path(values["during"]["state"], path, value)
 
     assertions = evidence.derive_assertions(kind, values)
 
-    assert assertions["hold_discard_preserved_state"] is False
+    assert assertions["no_bypass"] is False
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     (
-        ("available_at", "2026-07-22T14:00:00+00:00"),
-        ("current_attempt_id", "attempt-drift-generalized"),
-        ("owner_token", "owner-drift-generalized"),
-        ("extension_client_id", "client-drift-generalized"),
-        ("abort_requested", True),
-        ("deleted_at", "2026-07-22T13:00:00+00:00"),
-        ("upload_url", "https://remote.invalid/upload"),
-        ("current_url", "https://remote.invalid/chapter"),
-        ("result_message", "changed"),
-        ("error_message", "changed"),
-        ("result_payload", {"changed": True}),
-        ("created_at", "2026-07-22T11:00:00+00:00"),
-        ("updated_at", "2026-07-22T13:00:00+00:00"),
+        ("detector", "runner-supplied"),
+        ("boundary", "post-mutation"),
+        ("risk_reason", "mfa"),
     ),
 )
-def test_typed_risk_discard_compares_every_canonical_job_risk_class(
+def test_typed_risk_requires_production_detector_evidence(
     field: str,
     value: Any,
 ) -> None:
     kind = "publisher_account_risk"
     values = valid_snapshots(kind)
-    values["after"]["state"]["database"]["pre_discard_job"][field] = value
+    values["during"]["state"]["database"]["detector_evidence"][field] = value
+    values["during"]["state"]["external"]["detector_evidence"][field] = value
 
     assertions = evidence.derive_assertions(kind, values)
 
-    assert assertions["hold_discard_preserved_state"] is False
+    assert assertions["typed_pause_from_detector"] is False
 
 
-def test_typed_risk_discard_must_observe_browser_still_stopped() -> None:
+@pytest.mark.parametrize("field", ("selector", "matched_text"))
+def test_typed_risk_detector_requires_concrete_browser_observation(
+    field: str,
+) -> None:
+    kind = "publisher_account_risk"
+    values = valid_snapshots(kind)
+    values["during"]["state"]["database"]["detector_evidence"][field] = ""
+    values["during"]["state"]["external"]["detector_evidence"][field] = ""
+
+    assert any(
+        f"detector_evidence.{field} has invalid str value" in violation
+        for violation in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_typed_risk_requires_matching_browser_detector_evidence() -> None:
     kind = "publisher_mfa"
     values = valid_snapshots(kind)
-    values["after"]["state"]["external"]["browser_hold_terminal"][
-        "running"
-    ] = True
+    values["during"]["state"]["external"]["detector_evidence"][
+        "matched_text"
+    ] = "different observation"
 
     assertions = evidence.derive_assertions(kind, values)
 
-    assert assertions["browser_stopped_at_discard"] is False
+    assert assertions["typed_pause_from_detector"] is False
 
 
-@pytest.mark.parametrize("mutation", ("duplicate", "normalization"))
-def test_publisher_cover_inventory_evidence_is_unique_and_canonical_relative(
+@pytest.mark.parametrize("mutation", ("duplicate", "journal_mismatch"))
+def test_publisher_receipt_evidence_is_unique_and_journal_bound(
     mutation: str,
 ) -> None:
     kind = "publisher_backend_unavailable"
     values = valid_snapshots(kind)
-    files = values["after"]["state"]["external"]["cover_files"]
     if mutation == "duplicate":
-        files.append(copy.deepcopy(files[0]))
+        receipts = values["after"]["state"]["database"]["receipts"]
+        receipts.append(copy.deepcopy(receipts[0]))
     else:
-        files[0]["path"] = f"manual//{files[0]['path']}"
+        values["after"]["state"]["database"]["receipts"][0][
+            "natural_key"
+        ] = digest(kind, "receipt-mismatch")
 
-    violations = evidence.snapshot_violations(kind, values)
-
-    assert any(
-        "external.cover_files path" in violation
-        for violation in violations
-    )
+    assert evidence.snapshot_violations(kind, values) == []
+    assertions = evidence.derive_assertions(kind, values)
+    assertion = "duplicate_receipts" if mutation == "duplicate" else "journal_replayed"
+    assert assertions[assertion] != evidence.FAULT_CONTRACTS[kind][assertion]
 
 
 def test_task6_publisher_contracts_require_independently_derived_terms() -> None:
     assert evidence.FAULT_CONTRACTS["publisher_backend_unavailable"] == {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_reclaimed": True,
-        "terminal_write_boundary_observed": True,
-        "stale_token_rejected": True,
-        "shared_path_readable": True,
-        "orphan_cleanup_observed": True,
-        "orphan_residue_count": 0,
-        "barrier_residue_count": 0,
+        "backend_fault_observed": True,
+        "same_job_attempt_converged": True,
+        "retryable_during_fault": True,
+        "journal_replayed": True,
+        "external_effect_at_most_once": True,
         "duplicate_jobs": 0,
         "duplicate_attempts": 0,
         "duplicate_receipts": 0,
-        "attempt_count": 0,
-        "receipt_count": 0,
+        "attempt_count": 1,
+        "receipt_count": 1,
     }
     assert evidence.FAULT_CONTRACTS["publisher_browser_unavailable"] == {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "full_job_row_unchanged": True,
-        "preclaim_boundary_preserved": True,
-        "pending_job_preserved": True,
-        "heartbeat_recovered": True,
-        "attempt_count": 0,
-        "mutation_count": 0,
-        "receipt_count": 0,
+        "browser_restarted": True,
+        "same_job_attempt_converged": True,
+        "retryable_during_fault": True,
+        "journal_replayed": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 1,
+        "receipt_count": 1,
     }
     expected_risk = {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "paused_safely": True,
+        "typed_pause_from_detector": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
-        "hold_discard_preserved_state": True,
-        "browser_stopped_at_discard": True,
-        "bypass_attempted": False,
-        "attempt_count": 1,
-        "receipt_count": 0,
+        "no_bypass": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 2,
+        "receipt_count": 1,
     }
     for kind in RISK_KINDS:
         assert evidence.FAULT_CONTRACTS[kind] == expected_risk

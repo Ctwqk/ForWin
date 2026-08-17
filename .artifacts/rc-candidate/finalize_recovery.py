@@ -63,11 +63,6 @@ SERVICE_FAULTS: dict[str, dict[str, str]] = {
         "fault_action": "fault_service_stopped",
         "fault_time_field": "fault_time",
     },
-    "publisher_backend_unavailable": {
-        "service": "publisher-worker",
-        "fault_action": "fault_service_killed",
-        "fault_time_field": "crash_time",
-    },
     "publisher_browser_unavailable": {
         "service": "publisher-browser",
         "fault_action": "fault_service_stopped",
@@ -121,6 +116,13 @@ PUBLISHER_RISK_FAULTS = frozenset(
         "publisher_captcha",
         "publisher_mfa",
         "publisher_account_risk",
+    }
+)
+PUBLISHER_FAULTS = frozenset(
+    {
+        "publisher_backend_unavailable",
+        "publisher_browser_unavailable",
+        *PUBLISHER_RISK_FAULTS,
     }
 )
 BARRIER_FAULTS = frozenset(
@@ -341,28 +343,19 @@ def setup_hold_violations(
         service = str(event.get("service") or "")
         purpose = str(event.get("purpose") or "")
         event_fault_kind = str(event.get("fault_kind") or "")
-        primary_boundary = (
-            kind == "publisher_backend_unavailable"
-            and service == "publisher-worker"
-            and purpose == "pre-fault-boundary"
-        )
         if _SAFE_HOLD_ID.fullmatch(hold_id) is None:
             violations.append(f"{kind}.setup hold identity is invalid")
         if service not in AUXILIARY_HOLD_SERVICES:
             violations.append(f"{kind}.setup hold service is not allowed")
         if event_fault_kind != kind:
             violations.append(f"{kind}.setup hold fault kind mismatch")
-        if purpose not in {"auxiliary", "pre-fault-boundary"}:
+        if purpose != "auxiliary":
             violations.append(f"{kind}.setup hold purpose is invalid")
-        if purpose == "pre-fault-boundary" and not primary_boundary:
-            violations.append(
-                f"{kind}.setup hold pre-fault purpose is not allowed"
-            )
         if action == "setup_service_discarded" and purpose != "auxiliary":
             violations.append(
                 f"{kind}.setup discard is not an auxiliary hold"
             )
-        if service == primary_service and not primary_boundary:
+        if service == primary_service:
             violations.append(
                 f"{kind}.setup hold targets primary fault service"
             )
@@ -570,41 +563,7 @@ def setup_hold_violations(
         for event in hold_events
         if event.get("service") == primary_service
     ]
-    if kind == "publisher_backend_unavailable":
-        if [event.get("action") for event in primary_holds] != [
-            "setup_service_held",
-            "setup_service_released",
-        ]:
-            violations.append(
-                f"{kind}.pre-fault primary hold lifecycle mismatch"
-            )
-        else:
-            fault_events = [
-                event
-                for event in events
-                if event.get("action") == "fault_service_killed"
-                and event.get("service") == primary_service
-            ]
-            recovery_events = [
-                event
-                for event in events
-                if event.get("action") == "fault_service_recovered"
-                and event.get("service") == primary_service
-            ]
-            if (
-                len(fault_events) != 1
-                or len(recovery_events) != 1
-                or not (
-                    events.index(primary_holds[0])
-                    < events.index(primary_holds[1])
-                    < events.index(fault_events[0])
-                    < events.index(recovery_events[0])
-                )
-            ):
-                violations.append(
-                    f"{kind}.pre-fault primary hold order mismatch"
-                )
-    elif primary_holds:
+    if primary_holds:
         violations.append(f"{kind}.primary service hold is not allowed")
     return violations
 
@@ -929,83 +888,119 @@ def endpoint_violations(
     return violations
 
 
-def publisher_risk_discard_violations(
+def publisher_observation_violations(
     kind: str,
     *,
     events: list[dict[str, Any]],
     snapshots: dict[str, dict[str, Any]],
+    report: dict[str, Any],
 ) -> list[str]:
-    if kind not in PUBLISHER_RISK_FAULTS:
+    if kind not in PUBLISHER_FAULTS:
         return []
     violations: list[str] = []
 
     def mapping(value: object) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
 
-    browser_holds = [
-        event
-        for event in events
-        if event.get("service") == "publisher-browser"
-        and event.get("action")
-        in {
-            "setup_service_held",
-            "setup_service_released",
-            "setup_service_discarded",
-        }
-    ]
-    if [event.get("action") for event in browser_holds] != [
-        "setup_service_held",
-        "setup_service_discarded",
-    ]:
-        return [f"{kind}.typed-risk browser hold/discard lifecycle mismatch"]
-    held, discarded = browser_holds
-    after_snapshot = mapping(snapshots.get("after"))
-    after_state = mapping(after_snapshot.get("state"))
-    external = mapping(after_state.get("external"))
-    terminal = external.get("browser_hold_terminal")
-    discarded_after = mapping(discarded.get("after"))
-    expected_terminal = {
-        "action": "setup_service_discarded",
-        "fault_id": discarded.get("fault_id"),
-        "hold_id": discarded.get("hold_id"),
-        "service": discarded.get("service"),
-        "container_id": discarded_after.get("container_id"),
-        "image_id": discarded_after.get("image_id"),
-        "exists": discarded_after.get("exists"),
-        "running": discarded_after.get("running"),
-    }
-    if terminal != expected_terminal:
-        violations.append(
-            f"{kind}.typed-risk discard is not final-snapshot bound"
-        )
+    during = mapping(mapping(snapshots.get("during")).get("state"))
+    after = mapping(mapping(snapshots.get("after")).get("state"))
+    during_database = mapping(during.get("database"))
+    during_external = mapping(during.get("external"))
+    after_database = mapping(after.get("database"))
+    after_job = mapping(after_database.get("job"))
+    service_contract = SERVICE_FAULTS.get(kind)
+    fault_action = (
+        service_contract["fault_action"]
+        if service_contract is not None
+        else "fault_marked"
+    )
+    recovery_action = (
+        "fault_service_recovered"
+        if service_contract is not None
+        else "recovery_marked"
+    )
     fault_events = [
         event
         for event in events
-        if event.get("action") == "fault_marked"
-        and event.get("fault_kind") == kind
+        if event.get("fault_id") == report.get("fault_id")
+        and event.get("action") == fault_action
+        and (
+            event.get("service") == service_contract["service"]
+            if service_contract is not None
+            else event.get("fault_kind") == kind
+        )
     ]
     recovery_events = [
         event
         for event in events
-        if event.get("action") == "recovery_marked"
-        and event.get("fault_kind") == kind
-    ]
-    destroyed = [
-        event for event in events if event.get("action") == "destroyed"
-    ]
-    if (
-        len(fault_events) != 1
-        or len(recovery_events) != 1
-        or len(destroyed) != 1
-        or not (
-            events.index(held)
-            < events.index(fault_events[0])
-            < events.index(recovery_events[0])
-            < events.index(discarded)
-            < events.index(destroyed[0])
+        if event.get("fault_id") == report.get("fault_id")
+        and event.get("action") == recovery_action
+        and (
+            event.get("service") == service_contract["service"]
+            if service_contract is not None
+            else event.get("fault_kind") == kind
         )
-    ):
-        violations.append(f"{kind}.typed-risk discard event order mismatch")
+    ]
+    if len(fault_events) != 1 or len(recovery_events) != 1:
+        return violations
+
+    if kind == "publisher_browser_unavailable":
+        expected_fault = {
+            "action": fault_events[0].get("action"),
+            "service": fault_events[0].get("service"),
+            "fault_id": fault_events[0].get("fault_id"),
+        }
+        expected_recovery = {
+            "action": recovery_events[0].get("action"),
+            "service": recovery_events[0].get("service"),
+            "fault_id": recovery_events[0].get("fault_id"),
+        }
+        after_external = mapping(after.get("external"))
+        if (
+            during_external.get("browser_fault") != expected_fault
+            or after_external.get("browser_recovery") != expected_recovery
+        ):
+            violations.append(
+                f"{kind}.browser lifecycle snapshots are not event-bound"
+            )
+
+    try:
+        fault_time = strict_normalized_time(report.get("fault_time"))
+        recovery_time = strict_normalized_time(report.get("recovery_time"))
+        finished_at = strict_normalized_time(after_job.get("finished_at"))
+        if kind in {
+            "publisher_backend_unavailable",
+            "publisher_browser_unavailable",
+        }:
+            terminal = mapping(during_external.get("terminal_fault"))
+            journal = mapping(during_external.get("journal"))
+            observed_at = strict_normalized_time(terminal.get("observed_at"))
+            if (
+                journal.get("fault_observed_at") != terminal.get("observed_at")
+                or journal.get("fault_request_url") != terminal.get("request_url")
+                or observed_at > fault_time
+            ):
+                violations.append(
+                    f"{kind}.terminal publisher fault is not event-bound"
+                )
+        else:
+            detector = mapping(during_database.get("detector_evidence"))
+            observed_at = strict_normalized_time(detector.get("observed_at"))
+            if observed_at > fault_time:
+                violations.append(
+                    f"{kind}.detector pause is not event-bound"
+                )
+        if kind == "publisher_browser_unavailable":
+            if recovery_time > finished_at:
+                violations.append(
+                    f"{kind}.browser recovery event follows job convergence"
+                )
+        elif finished_at > recovery_time:
+            violations.append(
+                f"{kind}.recovery marker predates job convergence"
+            )
+    except (TypeError, ValueError):
+        violations.append(f"{kind}.publisher observation timestamp is invalid")
     return violations
 
 
@@ -1707,10 +1702,11 @@ def fault_report_violations(
             )
         )
         violations.extend(
-            publisher_risk_discard_violations(
+            publisher_observation_violations(
                 kind,
                 events=events,
                 snapshots=snapshots,
+                report=report,
             )
         )
         event_fault_ids = {

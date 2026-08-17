@@ -8,7 +8,7 @@ import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -52,6 +52,9 @@ _FIXTURE_SCHEMA = {
 _PUBLISHER_FIXTURE_SCHEMA = {
     **_FIXTURE_SCHEMA,
     "logical_key": str,
+    "project_id": str,
+    "canon_commit_id": str,
+    "candidate_id": str,
 }
 _TASK_SCHEMA = {"task_id": str, "lease_epoch": int}
 _CANON_SCHEMA = {
@@ -188,12 +191,7 @@ _PUBLISHER_JOB_SCHEMA = {
     "body_sha256": str,
     "unsafe_payload_paths": list,
 }
-_BACKEND_JOB_SCHEMA = {
-    **_PUBLISHER_JOB_SCHEMA,
-    "owner_token": str,
-    "artifact_id": str,
-}
-_BROWSER_JOB_SCHEMA = {
+_CANON_PUBLISHER_JOB_SCHEMA = {
     **_PUBLISHER_JOB_SCHEMA,
     "canon_commit_id": str,
     "candidate_id": str,
@@ -222,11 +220,19 @@ _BROWSER_JOB_SCHEMA = {
     "updated_at": str,
     "database_now": str,
 }
-_RISK_JOB_SCHEMA = dict(_BROWSER_JOB_SCHEMA)
-_JOB_IDENTITY_SCHEMA = {
-    "job_id": str,
-    "logical_key": str,
-    "task_kind": str,
+_PUBLISHER_CANON_SOURCE_SCHEMA = {
+    "project_id": str,
+    "chapter_plan_id": str,
+    "draft_id": str,
+    "candidate_id": str,
+    "canon_commit_id": str,
+    "canon_idempotency_key": str,
+    "canon_status": str,
+    "candidate_status": str,
+    "candidate_canon_status": str,
+    "chapter_status": str,
+    "chapter_number": int,
+    "body_hash": str,
 }
 _ATTEMPT_SCHEMA = {
     "attempt_id": str,
@@ -245,55 +251,57 @@ _RECEIPT_SCHEMA = {
     "job_id": str,
     "attempt_id": str,
     "natural_key": str,
-}
-_COVER_ASSET_SCHEMA = {
-    "asset_id": str,
-    "job_id": str,
-    "file_path": str,
-    "file_size": int,
-    "mime_type": str,
-}
-_STALE_TOKEN_OBSERVATION_SCHEMA = {
-    "observation_id": str,
-    "job_id": str,
-    "stale_owner_token": str,
-    "current_owner_token": str,
-    "response": dict,
-}
-_STALE_TOKEN_RESPONSE_SCHEMA = {
-    "ok": bool,
-    "stale_claim": bool,
-}
-_COVER_FILE_SCHEMA = {
-    "path": str,
-    "size": int,
+    "idempotency_key": str,
+    "platform_id": str,
+    "remote_book_id": str,
+    "remote_chapter_id": str,
+    "remote_url": str,
+    "official_state": str,
     "content_sha256": str,
+    "source": str,
 }
-_TERMINAL_WRITE_OBSERVATION_SCHEMA = {
-    "observation_id": str,
-    "job_id": str,
-    "owner_token": str,
-    "holder_pid": int,
-    "waiter_pid": int,
-    "waiter_application_name": str,
-    "waiter_role": str,
-    "blocking_pids": list,
-    "trigger_name": str,
-    "function_name": str,
-    "scope_table": str,
-    "advisory_key": int,
+_PUBLISHER_DETECTOR_SCHEMA = {
+    "detector": str,
+    "boundary": str,
+    "selector": str,
+    "matched_text": str,
+    "message": str,
+    "risk_reason": str,
+    "observed_at": str,
+    "attempt_id": str,
 }
-_BARRIER_RESIDUE_SCHEMA = {
-    "trigger_count": int,
-    "function_count": int,
-    "scope_table_count": int,
-    "advisory_lock_count": int,
-}
-_HEARTBEAT_SCHEMA = {
-    "observation_id": str,
+_PUBLISHER_BROWSER_SCHEMA = {
     "browser_id": str,
-    "probe": str,
     "status": str,
+    "probe": str,
+}
+_PUBLISHER_BROWSER_LIFECYCLE_SCHEMA = {
+    "action": str,
+    "service": str,
+    "fault_id": str,
+}
+_PUBLISHER_TERMINAL_FAULT_SCHEMA = {
+    "job_id": str,
+    "mode": str,
+    "installed_at": str,
+    "observed_at": str,
+    "request_url": str,
+}
+_PUBLISHER_JOURNAL_SCHEMA = {
+    "job_id": str,
+    "attempt_id": str,
+    "journal_phase": str,
+    "receipt_key": str,
+    "content_sha256": str,
+    "fault_observed_at": str,
+    "fault_request_url": str,
+}
+_PUBLISHER_JOURNAL_REPLAY_SCHEMA = {"attempt_id": str}
+_PUBLISHER_OPERATOR_RESUME_SCHEMA = {
+    "pause_token": str,
+    "pause_reason": str,
+    "first_disposition": str,
+    "replay_disposition": str,
 }
 _RESUME_ACTION_SCHEMA = {
     "action_id": str,
@@ -306,19 +314,6 @@ _RESUME_ACTION_SCHEMA = {
     "reason_sha256": str,
     "old_status": str,
     "new_status": str,
-}
-_RESUME_REPLAY_SCHEMA = {
-    "observation_id": str,
-    "job_id": str,
-    "action_id": str,
-    "pause_token": str,
-    "pause_reason": str,
-    "request_sha256": str,
-    "replay_request_sha256": str,
-    "first_transition_sha256": str,
-    "replay_transition_sha256": str,
-    "first_disposition": str,
-    "replay_disposition": str,
 }
 _ENDPOINT_IDENTITY_SCHEMA = {
     "schema_version": int,
@@ -361,16 +356,6 @@ _ENDPOINT_DATABASE_KEYS = {
     "container_port",
     "container_id",
     "image_id",
-}
-_PRE_DISCARD_BROWSER_SCHEMA = {
-    "action": str,
-    "fault_id": str,
-    "hold_id": str,
-    "service": str,
-    "container_id": str,
-    "image_id": str,
-    "exists": bool,
-    "running": bool,
 }
 _EMPTY_STRING_FIELDS = {
     "artifact_id",
@@ -457,70 +442,78 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "publisher_backend_unavailable": {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_reclaimed": True,
-        "terminal_write_boundary_observed": True,
-        "stale_token_rejected": True,
-        "shared_path_readable": True,
-        "orphan_cleanup_observed": True,
-        "orphan_residue_count": 0,
-        "barrier_residue_count": 0,
+        "backend_fault_observed": True,
+        "same_job_attempt_converged": True,
+        "retryable_during_fault": True,
+        "journal_replayed": True,
+        "external_effect_at_most_once": True,
         "duplicate_jobs": 0,
         "duplicate_attempts": 0,
         "duplicate_receipts": 0,
-        "attempt_count": 0,
-        "receipt_count": 0,
+        "attempt_count": 1,
+        "receipt_count": 1,
     },
     "publisher_browser_unavailable": {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "full_job_row_unchanged": True,
-        "preclaim_boundary_preserved": True,
-        "pending_job_preserved": True,
-        "heartbeat_recovered": True,
-        "attempt_count": 0,
-        "mutation_count": 0,
-        "receipt_count": 0,
+        "browser_restarted": True,
+        "same_job_attempt_converged": True,
+        "retryable_during_fault": True,
+        "journal_replayed": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 1,
+        "receipt_count": 1,
     },
     "publisher_captcha": {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "paused_safely": True,
+        "typed_pause_from_detector": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
-        "hold_discard_preserved_state": True,
-        "browser_stopped_at_discard": True,
-        "bypass_attempted": False,
-        "attempt_count": 1,
-        "receipt_count": 0,
+        "no_bypass": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 2,
+        "receipt_count": 1,
     },
     "publisher_mfa": {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "paused_safely": True,
+        "typed_pause_from_detector": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
-        "hold_discard_preserved_state": True,
-        "browser_stopped_at_discard": True,
-        "bypass_attempted": False,
-        "attempt_count": 1,
-        "receipt_count": 0,
+        "no_bypass": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 2,
+        "receipt_count": 1,
     },
     "publisher_account_risk": {
         "isolated_endpoint_identity": True,
+        "canon_source_bound": True,
         "fixture_safe": True,
-        "same_job_identity": True,
-        "paused_safely": True,
+        "typed_pause_from_detector": True,
         "operator_action_recorded": True,
         "resume_replay_idempotent": True,
-        "hold_discard_preserved_state": True,
-        "browser_stopped_at_discard": True,
-        "bypass_attempted": False,
-        "attempt_count": 1,
-        "receipt_count": 0,
+        "no_bypass": True,
+        "external_effect_at_most_once": True,
+        "duplicate_jobs": 0,
+        "duplicate_attempts": 0,
+        "duplicate_receipts": 0,
+        "attempt_count": 2,
+        "receipt_count": 1,
     },
 }
 
@@ -610,132 +603,153 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
     "publisher_backend_unavailable": {
         "before": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
-            "state.database.jobs",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.browser",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "during": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
-            "state.database.jobs",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
-            "state.database.cover_assets",
-            "state.external.cover_files",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.terminal_fault",
+            "state.external.journal",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "after": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
-            "state.database.jobs",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
-            "state.database.cover_assets",
-            "state.api.stale_token_observation",
-            "state.external.cover_files",
-            "state.barrier.terminal_writes",
-            "state.barrier.residue",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.journal_replay",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
     },
     "publisher_browser_unavailable": {
         "before": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
-            "state.external.browser_heartbeat",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.browser",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "during": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
-            "state.external.browser_heartbeat",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.terminal_fault",
+            "state.external.journal",
+            "state.external.browser_fault",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "after": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
-            "state.external.browser_heartbeat",
+            "state.database.resume_actions",
+            "state.database.detector_evidence",
+            "state.external.browser_recovery",
+            "state.external.journal_replay",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
     },
     "publisher_captcha": {
         "before": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
-            "state.database.attempts",
-        ),
-        "during": (
-            "state.target.endpoint_identity",
-            "state.database.job",
-            "state.database.attempts",
-        ),
-        "after": (
-            "state.target.endpoint_identity",
-            "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
-            "state.database.pre_discard_job",
-            "state.database.pre_discard_attempts",
-            "state.database.pre_discard_receipts",
-            "state.database.pre_discard_resume_actions",
-            "state.api.resume_replay",
-            "state.external.browser_hold_terminal",
-        ),
-    },
-    "publisher_mfa": {
-        "before": (
-            "state.target.endpoint_identity",
-            "state.database.job",
-            "state.database.attempts",
+            "state.database.detector_evidence",
+            "state.external.browser",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "during": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
-            "state.database.attempts",
-        ),
-        "after": (
-            "state.target.endpoint_identity",
-            "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
-            "state.database.pre_discard_job",
-            "state.database.pre_discard_attempts",
-            "state.database.pre_discard_receipts",
-            "state.database.pre_discard_resume_actions",
-            "state.api.resume_replay",
-            "state.external.browser_hold_terminal",
-        ),
-    },
-    "publisher_account_risk": {
-        "before": (
-            "state.target.endpoint_identity",
-            "state.database.job",
-            "state.database.attempts",
-        ),
-        "during": (
-            "state.target.endpoint_identity",
-            "state.database.job",
-            "state.database.attempts",
+            "state.database.detector_evidence",
+            "state.external.detector_evidence",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
         "after": (
             "state.target.endpoint_identity",
+            "state.database.canon_source",
             "state.database.job",
+            "state.database.job_identity_count",
+            "state.database.status",
             "state.database.attempts",
             "state.database.receipts",
             "state.database.resume_actions",
-            "state.database.pre_discard_job",
-            "state.database.pre_discard_attempts",
-            "state.database.pre_discard_receipts",
-            "state.database.pre_discard_resume_actions",
-            "state.api.resume_replay",
-            "state.external.browser_hold_terminal",
+            "state.database.detector_evidence",
+            "state.external.operator_resume",
+            "state.external.fixture_id",
+            "state.external.effect_key_sha256",
+            "state.external.upload_effect_count",
         ),
     },
 }
+_REQUIRED_PATHS["publisher_mfa"] = _REQUIRED_PATHS["publisher_captcha"]
+_REQUIRED_PATHS["publisher_account_risk"] = _REQUIRED_PATHS[
+    "publisher_captcha"
+]
 
 
 def required_path(value: Mapping[str, Any], dotted: str) -> Any:
@@ -888,8 +902,11 @@ def snapshot_violations(
             _capture_required(snapshot, dotted, stage, violations)
 
     if not violations:
-        violations.extend(_shape_violations(kind, snapshots))
-    if not violations:
+        if kind in _PUBLISHER_FAULTS:
+            violations.extend(_publisher_snapshot_violations(kind, snapshots))
+        else:
+            violations.extend(_shape_violations(kind, snapshots))
+    if not violations and kind not in _PUBLISHER_FAULTS:
         violations.extend(_stable_identity_violations(kind, snapshots))
     return _deduplicated(violations)
 
@@ -1191,10 +1208,6 @@ def _minio_post_canon(
 
 _PUBLISHER_BOOK_NAME = "Publisher Recovery Fixture"
 _PUBLISHER_CHAPTER_TITLE = "Recovery Chapter"
-_PUBLISHER_BODY_SHA256 = hashlib.sha256(
-    b"Generic publisher recovery fixture content."
-).hexdigest()
-_EMPTY_BODY_SHA256 = hashlib.sha256(b"").hexdigest()
 _PUBLISHER_JOB_IDENTITY_FIELDS = (
     "job_id",
     "logical_key",
@@ -1206,11 +1219,21 @@ _PUBLISHER_JOB_IDENTITY_FIELDS = (
     "chapter_title",
     "body_sha256",
     "unsafe_payload_paths",
+    "canon_commit_id",
+    "candidate_id",
+    "chapter_number",
+    "body_text",
+    "upload_url",
 )
 _RISK_REASONS = {
     "publisher_captcha": "captcha",
     "publisher_mfa": "mfa",
     "publisher_account_risk": "account_risk",
+}
+_PUBLISHER_FAULTS = {
+    "publisher_backend_unavailable",
+    "publisher_browser_unavailable",
+    *_RISK_REASONS,
 }
 
 
@@ -1220,31 +1243,49 @@ def _publisher_fixture_safe(
 ) -> bool:
     fixtures = [_path(snapshots, stage, "target.fixture") for stage in STAGES]
     jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
-    backend = kind == "publisher_backend_unavailable"
-    expected_task_kind = "cover_generate" if backend else "chapter_upload"
-    expected_title = "" if backend else _PUBLISHER_CHAPTER_TITLE
-    expected_body_sha256 = _EMPTY_BODY_SHA256 if backend else _PUBLISHER_BODY_SHA256
+    sources = [
+        _path(snapshots, stage, "database.canon_source") for stage in STAGES
+    ]
     return (
         _all_stable_equal(fixtures)
+        and _all_stable_equal(sources)
         and all(
             fixture["resource_type"] == "publisher_job"
             and fixture["resource_id"] == job["job_id"]
             and fixture["logical_key"] == job["logical_key"]
-            and fixture["logical_key"]
-            == f"publisher-recovery:v1:{fixture['fault_id']}"
+            and fixture["project_id"] == job["project_id"]
+            and fixture["canon_commit_id"] == job["canon_commit_id"]
+            and fixture["candidate_id"] == job["candidate_id"]
             and fixture["fault_id"] == snapshots[stage]["fault_id"]
             for stage, fixture, job in zip(STAGES, fixtures, jobs)
         )
         and all(
-            job["task_kind"] == expected_task_kind
-            and job["project_id"] == ""
+            job["task_kind"] == "chapter_upload"
+            and bool(job["project_id"])
             and job["platform_id"] == "qidian"
-            and job["publish"] is False
-            and job["book_name"] == _PUBLISHER_BOOK_NAME
-            and job["chapter_title"] == expected_title
-            and job["body_sha256"] == expected_body_sha256
+            and job["publish"] is True
+            and job["book_name"].startswith(_PUBLISHER_BOOK_NAME)
+            and job["chapter_title"].startswith(_PUBLISHER_CHAPTER_TITLE)
+            and job["body_text"].startswith(
+                "Generic publisher recovery fixture content."
+            )
+            and job["body_sha256"]
+            == hashlib.sha256(job["body_text"].encode("utf-8")).hexdigest()
+            and job["upload_url"].startswith("https://write.qq.com/")
             and job["unsafe_payload_paths"] == []
             for job in jobs
+        )
+        and all(
+            source["project_id"] == job["project_id"]
+            and source["canon_commit_id"] == job["canon_commit_id"]
+            and source["candidate_id"] == job["candidate_id"]
+            and source["chapter_number"] == job["chapter_number"]
+            and source["body_hash"] == job["body_sha256"]
+            and source["canon_status"] == "committed"
+            and source["candidate_status"] == "accepted"
+            and source["candidate_canon_status"] == "committed"
+            and source["chapter_status"] == "accepted"
+            for source, job in zip(sources, jobs)
         )
     )
 
@@ -1336,241 +1377,449 @@ def _endpoint_identity(
     )
 
 
-def _publisher_cover_relative_path(value: Any) -> str:
-    root = PurePosixPath("/app/data/publisher_covers")
-    raw = str(value or "")
-    path = PurePosixPath(raw)
-    if not path.is_absolute():
-        return ""
-    try:
-        relative = path.relative_to(root)
-    except ValueError:
-        return ""
-    normalized = relative.as_posix()
-    if (
-        not normalized
-        or normalized == "."
-        or path.as_posix() != raw
-        or "\\" in raw
-        or any(part in {"", ".", ".."} for part in relative.parts)
-    ):
-        return ""
-    return normalized
+def _publisher_snapshot_violations(
+    kind: str,
+    snapshots: Mapping[str, dict[str, Any]],
+) -> list[str]:
+    violations: list[str] = []
+
+    def record(
+        stage: str,
+        dotted: str,
+        schema: Mapping[str, type[Any]],
+        *,
+        allow_empty: bool = False,
+    ) -> Mapping[str, Any] | None:
+        value = _path(snapshots, stage, dotted)
+        path = f"{stage}.state.{dotted}"
+        if not isinstance(value, Mapping):
+            violations.append(f"{path} is not an object")
+            return None
+        if allow_empty and not value:
+            return value
+        expected = set(schema)
+        violations.extend(_unknown_key_violations(path, value, expected))
+        missing = sorted(expected - set(value))
+        if missing:
+            violations.append(f"{path} keys missing: {missing}")
+        for field, expected_type in schema.items():
+            if field not in value:
+                continue
+            nested = value[field]
+            permits_empty = field in _EMPTY_STRING_FIELDS or field in {
+                "error_message",
+                "message",
+            }
+            if type(nested) is not expected_type or (
+                expected_type is str and not nested and not permits_empty
+            ):
+                violations.append(
+                    f"{path}.{field} has invalid {expected_type.__name__} value"
+                )
+            elif (
+                expected_type is str
+                and field.endswith("_sha256")
+                and _SHA256_PATTERN.fullmatch(nested) is None
+            ):
+                violations.append(f"{path}.{field} is not a canonical SHA-256 digest")
+            elif expected_type is int and nested < 0:
+                violations.append(f"{path}.{field} is negative")
+        return value
+
+    def records(
+        stage: str,
+        dotted: str,
+        schema: Mapping[str, type[Any]],
+    ) -> Sequence[Any] | None:
+        value = _path(snapshots, stage, dotted)
+        path = f"{stage}.state.{dotted}"
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            violations.append(f"{path} is not an array")
+            return None
+        for index, row in enumerate(value):
+            if not isinstance(row, Mapping):
+                violations.append(f"{path}[{index}] is not an object")
+                continue
+            expected = set(schema)
+            violations.extend(
+                _unknown_key_violations(f"{path}[{index}]", row, expected)
+            )
+            missing = sorted(expected - set(row))
+            if missing:
+                violations.append(f"{path}[{index}] keys missing: {missing}")
+            for field, expected_type in schema.items():
+                if field not in row:
+                    continue
+                nested = row[field]
+                permits_empty = field in _EMPTY_STRING_FIELDS
+                if type(nested) is not expected_type or (
+                    expected_type is str and not nested and not permits_empty
+                ):
+                    violations.append(
+                        f"{path}[{index}].{field} has invalid "
+                        f"{expected_type.__name__} value"
+                    )
+                elif (
+                    expected_type is str
+                    and field.endswith("_sha256")
+                    and _SHA256_PATTERN.fullmatch(nested) is None
+                ):
+                    violations.append(
+                        f"{path}[{index}].{field} is not a canonical SHA-256 digest"
+                    )
+                elif expected_type is int and nested < 0:
+                    violations.append(f"{path}[{index}].{field} is negative")
+        return value
+
+    for stage in STAGES:
+        allowed = _allowed_state_fields(kind, stage)
+        state = snapshots[stage]["state"]
+        for section in sorted(_STATE_KEYS):
+            violations.extend(
+                _unknown_key_violations(
+                    f"{stage}.state.{section}",
+                    state[section],
+                    allowed[section],
+                )
+            )
+        record(stage, "target.fixture", _PUBLISHER_FIXTURE_SCHEMA)
+        endpoint = record(
+            stage,
+            "target.endpoint_identity",
+            _ENDPOINT_IDENTITY_SCHEMA,
+        )
+        if isinstance(endpoint, Mapping):
+            sentinel = endpoint.get("sentinel")
+            http_endpoints = [endpoint.get(name) for name in ("api", "mcp")]
+            database_endpoint = endpoint.get("database")
+            if (
+                not isinstance(sentinel, Mapping)
+                or set(sentinel)
+                != {
+                    "table",
+                    "sentinel_id",
+                    "run_id",
+                    "fault_id",
+                    "source_sha",
+                }
+                or any(
+                    not isinstance(item, Mapping)
+                    or set(item) != _ENDPOINT_HTTP_KEYS
+                    for item in http_endpoints
+                )
+                or not isinstance(database_endpoint, Mapping)
+                or set(database_endpoint) != _ENDPOINT_DATABASE_KEYS
+            ):
+                violations.append(
+                    f"{stage}.state.target.endpoint identity nested field set mismatch"
+                )
+        record(stage, "database.canon_source", _PUBLISHER_CANON_SOURCE_SCHEMA)
+        job = record(stage, "database.job", _CANON_PUBLISHER_JOB_SCHEMA)
+        records(stage, "database.attempts", _ATTEMPT_SCHEMA)
+        records(stage, "database.receipts", _RECEIPT_SCHEMA)
+        records(stage, "database.resume_actions", _RESUME_ACTION_SCHEMA)
+        detector = record(
+            stage,
+            "database.detector_evidence",
+            _PUBLISHER_DETECTOR_SCHEMA,
+            allow_empty=True,
+        )
+        count = _path(snapshots, stage, "database.job_identity_count")
+        status = _path(snapshots, stage, "database.status")
+        if type(count) is not int:
+            violations.append(
+                f"{stage}.state.database.job_identity_count is not an integer"
+            )
+        elif count < 0:
+            violations.append(
+                f"{stage}.state.database.job_identity_count is negative"
+            )
+        if type(status) is not str or not status:
+            violations.append(f"{stage}.state.database.status is not a nonempty string")
+        elif isinstance(job, Mapping) and status != job.get("status"):
+            violations.append(f"{stage}.state.database.status does not match job")
+        if kind in _RISK_REASONS and stage in {"during", "after"} and not detector:
+            violations.append(f"{stage}.state.database.detector_evidence is empty")
+
+        external = state["external"]
+        fixture_id = external.get("fixture_id")
+        effect_hash = external.get("effect_key_sha256")
+        effect_count = external.get("upload_effect_count")
+        if type(fixture_id) is not str or not fixture_id:
+            violations.append(f"{stage}.state.external.fixture_id is empty")
+        if (
+            type(effect_hash) is not str
+            or _SHA256_PATTERN.fullmatch(effect_hash) is None
+        ):
+            violations.append(
+                f"{stage}.state.external.effect_key_sha256 is not a canonical SHA-256 digest"
+            )
+        if type(effect_count) is not int or effect_count < 0:
+            violations.append(
+                f"{stage}.state.external.upload_effect_count is not a nonnegative integer"
+            )
+
+    record("before", "external.browser", _PUBLISHER_BROWSER_SCHEMA)
+    if kind in {
+        "publisher_backend_unavailable",
+        "publisher_browser_unavailable",
+    }:
+        record("during", "external.terminal_fault", _PUBLISHER_TERMINAL_FAULT_SCHEMA)
+        record("during", "external.journal", _PUBLISHER_JOURNAL_SCHEMA)
+        record("after", "external.journal_replay", _PUBLISHER_JOURNAL_REPLAY_SCHEMA)
+    if kind == "publisher_browser_unavailable":
+        for stage, dotted, action in (
+            ("during", "external.browser_fault", "fault_service_stopped"),
+            ("after", "external.browser_recovery", "fault_service_recovered"),
+        ):
+            value = record(stage, dotted, _PUBLISHER_BROWSER_LIFECYCLE_SCHEMA)
+            path = f"{stage}.state.{dotted}"
+            if isinstance(value, Mapping) and (
+                value.get("action") != action
+                or value.get("service") != "publisher-browser"
+                or value.get("fault_id") != snapshots[stage]["fault_id"]
+            ):
+                violations.append(f"{path} does not describe the real browser lifecycle")
+    if kind in _RISK_REASONS:
+        record("during", "external.detector_evidence", _PUBLISHER_DETECTOR_SCHEMA)
+        record("after", "external.operator_resume", _PUBLISHER_OPERATOR_RESUME_SCHEMA)
+
+    if not violations:
+        violations.extend(_publisher_relation_violations(kind, snapshots))
+    return _deduplicated(violations)
 
 
-def _publisher_inventory_relative_path(value: Any) -> str:
-    raw = str(value or "")
-    path = PurePosixPath(raw)
-    if (
-        not raw
-        or path.is_absolute()
-        or path.as_posix() != raw
-        or "\\" in raw
-        or any(part in {"", ".", ".."} for part in path.parts)
-    ):
-        return ""
-    return raw
+def _publisher_relation_violations(
+    kind: str,
+    snapshots: Mapping[str, dict[str, Any]],
+) -> list[str]:
+    violations: list[str] = []
+    fixtures = [_path(snapshots, stage, "target.fixture") for stage in STAGES]
+    jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
+    sources = [_path(snapshots, stage, "database.canon_source") for stage in STAGES]
+    if not _all_stable_equal(fixtures):
+        violations.append("publisher target fixture is not stable")
+    if not _all_stable_equal(sources):
+        violations.append("publisher Canon source is not stable")
+    identities = [
+        {field: job[field] for field in _PUBLISHER_JOB_IDENTITY_FIELDS}
+        for job in jobs
+    ]
+    if not _all_stable_equal(identities):
+        violations.append("publisher Canon job identity is not stable")
+    if not _publisher_fixture_safe(kind, snapshots):
+        violations.append("publisher fixture is not bound to a safe Canon chapter upload")
+    if not _endpoint_identity(kind, snapshots):
+        violations.append(f"{kind}.endpoint identity is not stable or bound")
+
+    for stage, fixture, job in zip(STAGES, fixtures, jobs, strict=True):
+        external = _path(snapshots, stage, "external")
+        attempts = _path(snapshots, stage, "database.attempts")
+        receipts = _path(snapshots, stage, "database.receipts")
+        actions = _path(snapshots, stage, "database.resume_actions")
+        detector = _path(snapshots, stage, "database.detector_evidence")
+        if external["fixture_id"] != fixture["fixture_id"]:
+            violations.append(f"{stage}.state.external fixture identity mismatch")
+        attempt_ids = set()
+        for index, attempt in enumerate(attempts):
+            if attempt["job_id"] != job["job_id"]:
+                violations.append(
+                    f"{stage}.state.database.attempts[{index}] job identity mismatch"
+                )
+            attempt_ids.add(attempt["attempt_id"])
+        for index, receipt in enumerate(receipts):
+            if (
+                receipt["job_id"] != job["job_id"]
+                or receipt["attempt_id"] not in attempt_ids
+                or receipt["idempotency_key"] != job["logical_key"]
+                or receipt["platform_id"] != job["platform_id"]
+                or receipt["content_sha256"] != job["body_sha256"]
+                or receipt["remote_url"] != job["upload_url"]
+                or receipt["official_state"] != "published"
+                or receipt["source"] != "extension"
+            ):
+                violations.append(
+                    f"{stage}.state.database.receipts[{index}] publisher identity mismatch"
+                )
+        for index, action in enumerate(actions):
+            if action["job_id"] != job["job_id"]:
+                violations.append(
+                    f"{stage}.state.database.resume_actions[{index}] job identity mismatch"
+                )
+        if detector and detector["attempt_id"] not in attempt_ids:
+            violations.append(
+                f"{stage}.state.database.detector_evidence attempt identity mismatch"
+            )
+    return violations
+
+
+def _publisher_terminal_recovery(
+    kind: str,
+    snapshots: Mapping[str, dict[str, Any]],
+) -> dict[str, Any]:
+    jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
+    attempts = [_path(snapshots, stage, "database.attempts") for stage in STAGES]
+    receipts = [_path(snapshots, stage, "database.receipts") for stage in STAGES]
+    counts = [
+        _path(snapshots, stage, "external.upload_effect_count") for stage in STAGES
+    ]
+    during_attempt = attempts[1][0] if len(attempts[1]) == 1 else {}
+    after_attempt = attempts[2][0] if len(attempts[2]) == 1 else {}
+    receipt = receipts[2][0] if len(receipts[2]) == 1 else {}
+    journal = _path(snapshots, "during", "external.journal")
+    replay = _path(snapshots, "after", "external.journal_replay")
+    terminal = _path(snapshots, "during", "external.terminal_fault")
+    attempt_identity_fields = (
+        "attempt_id",
+        "job_id",
+        "attempt_number",
+        "attempt_kind",
+        "owner_token",
+        "lease_epoch",
+        "content_sha256",
+    )
+    converged = (
+        attempts[0] == []
+        and len(attempts[1]) == 1
+        and len(attempts[2]) == 1
+        and _same_fields(during_attempt, after_attempt, attempt_identity_fields)
+        and jobs[0]["status"] == "pending"
+        and jobs[1]["status"] == "running"
+        and jobs[1]["current_attempt_id"] == during_attempt.get("attempt_id")
+        and during_attempt.get("status") == "running"
+        and during_attempt.get("phase") == "mutation_started"
+        and jobs[2]["status"] == "succeeded"
+        and jobs[2]["current_attempt_id"] == after_attempt.get("attempt_id")
+        and after_attempt.get("status") == "succeeded"
+        and after_attempt.get("phase") == "result_submitted"
+        and len(receipts[2]) == 1
+        and receipt.get("attempt_id") == after_attempt.get("attempt_id")
+    )
+    expected_mode = (
+        "backend_unavailable"
+        if kind == "publisher_backend_unavailable"
+        else "browser_shutdown_barrier"
+    )
+    base = {
+        "isolated_endpoint_identity": _endpoint_identity(kind, snapshots),
+        "canon_source_bound": _all_stable_equal(
+            [_path(snapshots, stage, "database.canon_source") for stage in STAGES]
+        ),
+        "fixture_safe": _publisher_fixture_safe(kind, snapshots),
+        "same_job_attempt_converged": converged,
+        "retryable_during_fault": (
+            converged
+            and receipts[1] == []
+            and terminal["mode"] == expected_mode
+            and terminal["job_id"] == jobs[1]["job_id"]
+            and bool(terminal["observed_at"])
+            and journal["job_id"] == jobs[1]["job_id"]
+            and journal["attempt_id"] == during_attempt.get("attempt_id")
+            and journal["journal_phase"] == "ack_pending"
+            and journal["content_sha256"] == jobs[1]["body_sha256"]
+            and journal["fault_observed_at"] == terminal["observed_at"]
+        ),
+        "journal_replayed": (
+            converged
+            and replay["attempt_id"] == journal["attempt_id"]
+            and receipt.get("natural_key") == journal["receipt_key"]
+        ),
+        "external_effect_at_most_once": counts == [0, 1, 1],
+        "duplicate_jobs": max(
+            int(_path(snapshots, stage, "database.job_identity_count")) - 1
+            for stage in STAGES
+        ),
+        "duplicate_attempts": duplicate_excess(
+            attempts[2], ("job_id", "attempt_number")
+        ),
+        "duplicate_receipts": duplicate_excess(
+            receipts[2], ("job_id", "natural_key")
+        ),
+        "attempt_count": len(attempts[2]),
+        "receipt_count": len(receipts[2]),
+    }
+    if kind == "publisher_backend_unavailable":
+        return {
+            **{
+                key: base[key]
+                for key in (
+                    "isolated_endpoint_identity",
+                    "canon_source_bound",
+                    "fixture_safe",
+                )
+            },
+            "backend_fault_observed": (
+                terminal["mode"] == "backend_unavailable"
+                and terminal["request_url"] == journal["fault_request_url"]
+            ),
+            **{
+                key: base[key]
+                for key in (
+                    "same_job_attempt_converged",
+                    "retryable_during_fault",
+                    "journal_replayed",
+                    "external_effect_at_most_once",
+                    "duplicate_jobs",
+                    "duplicate_attempts",
+                    "duplicate_receipts",
+                    "attempt_count",
+                    "receipt_count",
+                )
+            },
+        }
+    stopped = _path(snapshots, "during", "external.browser_fault")
+    recovered = _path(snapshots, "after", "external.browser_recovery")
+    return {
+        **{
+            key: base[key]
+            for key in (
+                "isolated_endpoint_identity",
+                "canon_source_bound",
+                "fixture_safe",
+            )
+        },
+        "browser_restarted": (
+            stopped["action"] == "fault_service_stopped"
+            and recovered["action"] == "fault_service_recovered"
+            and stopped["service"] == recovered["service"] == "publisher-browser"
+            and stopped["fault_id"] == recovered["fault_id"]
+            == snapshots["before"]["fault_id"]
+        ),
+        **{
+            key: base[key]
+            for key in (
+                "same_job_attempt_converged",
+                "retryable_during_fault",
+                "journal_replayed",
+                "external_effect_at_most_once",
+                "duplicate_jobs",
+                "duplicate_attempts",
+                "duplicate_receipts",
+                "attempt_count",
+                "receipt_count",
+            )
+        },
+    }
 
 
 def _publisher_backend(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    job_before = _path(snapshots, "before", "database.job")
-    job_during = _path(snapshots, "during", "database.job")
-    job_after = _path(snapshots, "after", "database.job")
-    jobs = _path(snapshots, "after", "database.jobs")
-    attempts = _path(snapshots, "after", "database.attempts")
-    receipts = _path(snapshots, "after", "database.receipts")
-    cover_assets_during = _path(
-        snapshots, "during", "database.cover_assets"
+    return _publisher_terminal_recovery(
+        "publisher_backend_unavailable",
+        snapshots,
     )
-    cover_assets_after = _path(snapshots, "after", "database.cover_assets")
-    files_during = _path(snapshots, "during", "external.cover_files")
-    files_after = _path(snapshots, "after", "external.cover_files")
-    stale_token = _path(snapshots, "after", "api.stale_token_observation")
-    stale_response = stale_token["response"]
-    terminal_writes = _path(snapshots, "after", "barrier.terminal_writes")
-    residue = _path(snapshots, "after", "barrier.residue")
-    asset = cover_assets_after[0] if len(cover_assets_after) == 1 else {}
-    file_by_path = {row["path"]: row for row in files_after}
-    expected_asset_paths = {
-        row["asset_id"]: _publisher_cover_relative_path(row["file_path"])
-        for row in cover_assets_after
-    }
-    shared_file = file_by_path.get(
-        expected_asset_paths.get(str(asset.get("asset_id") or ""), ""),
-        {},
-    )
-    after_paths = set(file_by_path)
-    during_paths = {row["path"] for row in files_during}
-    referenced_paths = set(expected_asset_paths.values())
-    orphan_after = after_paths - referenced_paths
-    barrier_bound = (
-        len(terminal_writes) == 2
-        and all(
-            observation["job_id"] == job_after["job_id"]
-            and observation["waiter_application_name"]
-            == "forwin-recovery-publisher-worker"
-            and observation["waiter_role"] == "forwin"
-            and observation["holder_pid"] != observation["waiter_pid"]
-            and observation["blocking_pids"]
-            == [observation["holder_pid"]]
-            and observation["holder_pid"] > 0
-            and observation["waiter_pid"] > 0
-            for observation in terminal_writes
-        )
-        and terminal_writes[0]["owner_token"] == job_during["owner_token"]
-        and terminal_writes[1]["owner_token"] == job_after["owner_token"]
-        and terminal_writes[0]["owner_token"]
-        != terminal_writes[1]["owner_token"]
-        and all(
-            terminal_writes[0][field] == terminal_writes[1][field]
-            for field in (
-                "trigger_name",
-                "function_name",
-                "scope_table",
-                "advisory_key",
-                "holder_pid",
-            )
-        )
-    )
-    return {
-        "isolated_endpoint_identity": _endpoint_identity(
-            "publisher_backend_unavailable", snapshots
-        ),
-        "fixture_safe": _publisher_fixture_safe(
-            "publisher_backend_unavailable", snapshots
-        ),
-        "same_job_reclaimed": _same_fields(
-            job_during,
-            job_after,
-            _PUBLISHER_JOB_IDENTITY_FIELDS,
-        )
-        and _same_fields(
-            job_before,
-            job_during,
-            (*_PUBLISHER_JOB_IDENTITY_FIELDS, "owner_token"),
-        )
-        and job_before["status"] == "running"
-        and job_during["status"] == "running"
-        and job_after["status"] == "succeeded"
-        and job_during["owner_token"] != job_after["owner_token"],
-        "terminal_write_boundary_observed": barrier_bound,
-        "stale_token_rejected": (
-            stale_token["job_id"] == job_after["job_id"]
-            and stale_token["stale_owner_token"] == job_during["owner_token"]
-            and stale_token["current_owner_token"] == job_after["owner_token"]
-            and stale_response == {"ok": False, "stale_claim": True}
-        ),
-        "shared_path_readable": (
-            len(cover_assets_after) == 1
-            and asset.get("job_id") == job_after["job_id"]
-            and asset.get("asset_id") == job_after["artifact_id"]
-            and bool(expected_asset_paths.get(str(asset.get("asset_id") or "")))
-            and shared_file.get("path")
-            == expected_asset_paths.get(str(asset.get("asset_id") or ""))
-            and shared_file.get("size") == asset.get("file_size")
-            and isinstance(shared_file.get("content_sha256"), str)
-            and _SHA256_PATTERN.fullmatch(
-                str(shared_file.get("content_sha256") or "")
-            )
-            is not None
-            and int(shared_file.get("size") or 0) > 0
-        ),
-        "orphan_cleanup_observed": (
-            cover_assets_during == []
-            and bool(during_paths)
-            and during_paths.isdisjoint(after_paths)
-        ),
-        "orphan_residue_count": len(orphan_after),
-        "barrier_residue_count": sum(residue.values()),
-        "duplicate_jobs": duplicate_excess(jobs, ("logical_key",)),
-        "duplicate_attempts": duplicate_excess(
-            attempts, ("job_id", "attempt_number")
-        ),
-        "duplicate_receipts": duplicate_excess(
-            receipts, ("job_id", "natural_key")
-        ),
-        "attempt_count": len(attempts),
-        "receipt_count": len(receipts),
-    }
 
 
 def _publisher_browser(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
-    heartbeats = [
-        _path(snapshots, stage, "external.browser_heartbeat")
-        for stage in STAGES
-    ]
-    attempts = [
-        _path(snapshots, stage, "database.attempts")
-        for stage in STAGES
-    ]
-    receipts = [
-        _path(snapshots, stage, "database.receipts")
-        for stage in STAGES
-    ]
-    stable_jobs = [
-        _without_fields(job, {"database_now"})
-        for job in jobs
-    ]
-    full_row_unchanged = _all_stable_equal(stable_jobs)
-    preclaim = True
-    for job, attempt_rows, receipt_rows in zip(
-        jobs,
-        attempts,
-        receipts,
-        strict=True,
-    ):
-        try:
-            available_at = datetime.fromisoformat(job["available_at"])
-            database_now = datetime.fromisoformat(job["database_now"])
-        except ValueError:
-            preclaim = False
-            continue
-        preclaim = preclaim and (
-            available_at.tzinfo is not None
-            and database_now.tzinfo is not None
-            and available_at > database_now
-            and job["status"] == "pending"
-            and job["owner_token"] == ""
-            and job["extension_client_id"] == ""
-            and job["owner_token"] == job["extension_client_id"]
-            and job["current_attempt_id"] == ""
-            and job["abort_requested"] is False
-            and job["deleted_at"] == ""
-            and attempt_rows == []
-            and receipt_rows == []
-        )
-    return {
-        "isolated_endpoint_identity": _endpoint_identity(
-            "publisher_browser_unavailable", snapshots
-        ),
-        "fixture_safe": _publisher_fixture_safe(
-            "publisher_browser_unavailable", snapshots
-        ),
-        "same_job_identity": full_row_unchanged,
-        "full_job_row_unchanged": full_row_unchanged,
-        "preclaim_boundary_preserved": preclaim,
-        "pending_job_preserved": all(job["status"] == "pending" for job in jobs),
-        "heartbeat_recovered": (
-            len({heartbeat["browser_id"] for heartbeat in heartbeats}) == 1
-            and all(
-                heartbeat["probe"] == "extension_heartbeat_status"
-                for heartbeat in heartbeats
-            )
-            and [heartbeat["status"] for heartbeat in heartbeats]
-            == ["healthy", "stale", "healthy"]
-        ),
-        "attempt_count": max(len(rows) for rows in attempts),
-        "mutation_count": sum(
-            stable_hash(job) != stable_hash(stable_jobs[0])
-            for job in stable_jobs[1:]
-        ),
-        "receipt_count": max(len(rows) for rows in receipts),
-    }
+    return _publisher_terminal_recovery(
+        "publisher_browser_unavailable",
+        snapshots,
+    )
 
 
 def _publisher_risk(
@@ -1578,128 +1827,113 @@ def _publisher_risk(
     snapshots: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
     jobs = [_path(snapshots, stage, "database.job") for stage in STAGES]
-    paused_job = jobs[1]
-    attempts_by_stage = [
-        _path(snapshots, stage, "database.attempts")
-        for stage in STAGES
-    ]
-    attempts_after = attempts_by_stage[2]
-    receipts = _path(snapshots, "after", "database.receipts")
+    attempts = [_path(snapshots, stage, "database.attempts") for stage in STAGES]
+    receipts = [_path(snapshots, stage, "database.receipts") for stage in STAGES]
     actions = _path(snapshots, "after", "database.resume_actions")
-    pre_discard_job = _path(
-        snapshots, "after", "database.pre_discard_job"
+    detector = _path(snapshots, "during", "database.detector_evidence")
+    external_detector = _path(
+        snapshots, "during", "external.detector_evidence"
     )
-    pre_discard_attempts = _path(
-        snapshots, "after", "database.pre_discard_attempts"
-    )
-    pre_discard_receipts = _path(
-        snapshots, "after", "database.pre_discard_receipts"
-    )
-    pre_discard_actions = _path(
-        snapshots, "after", "database.pre_discard_resume_actions"
-    )
-    browser_terminal = _path(
-        snapshots, "after", "external.browser_hold_terminal"
-    )
-    replay = _path(snapshots, "after", "api.resume_replay")
-    action = actions[0] if len(actions) == 1 else {}
-    attempt = attempts_after[0] if len(attempts_after) == 1 else {}
+    resume = _path(snapshots, "after", "external.operator_resume")
+    counts = [
+        _path(snapshots, stage, "external.upload_effect_count") for stage in STAGES
+    ]
     expected_reason = _RISK_REASONS[kind]
-    operator_action_recorded = (
-        len(actions) == 1
-        and action.get("job_id") == paused_job["job_id"]
-        and action.get("natural_key")
-        == (
-            f"{paused_job['job_id']}:resume:"
-            f"{paused_job['pause_token']}"
-        )
-        and action.get("action") == "resume"
-        and action.get("pause_token") == paused_job["pause_token"]
-        and action.get("auth_method") in {"basic", "trusted_proxy"}
-        and bool(action.get("actor_id"))
-        and action.get("old_status") == "paused"
-        and action.get("new_status") == "pending"
-    )
-    stable_attempt_fields = (
+    paused = attempts[1][0] if len(attempts[1]) == 1 else {}
+    final_paused = attempts[2][0] if len(attempts[2]) >= 1 else {}
+    succeeded = attempts[2][1] if len(attempts[2]) == 2 else {}
+    action = actions[0] if len(actions) == 1 else {}
+    receipt = receipts[2][0] if len(receipts[2]) == 1 else {}
+    stable_pause_fields = (
         "attempt_id",
         "job_id",
         "attempt_number",
         "attempt_kind",
         "owner_token",
         "lease_epoch",
+        "status",
         "phase",
         "content_sha256",
+        "error_code",
     )
-    stable_attempt = (
-        all(len(rows) == 1 for rows in attempts_by_stage)
-        and all(
-            _same_fields(
-                attempts_by_stage[0][0],
-                rows[0],
-                stable_attempt_fields,
-            )
-            for rows in attempts_by_stage[1:]
-        )
+    typed_pause = (
+        attempts[0] == []
+        and len(attempts[1]) == 1
+        and jobs[0]["status"] == "pending"
+        and jobs[1]["status"] == "paused"
+        and jobs[1]["current_attempt_id"] == paused.get("attempt_id")
+        and jobs[1]["pause_token"] == paused.get("attempt_id")
+        and jobs[1]["pause_reason"] == expected_reason
+        and jobs[1]["risk_boundary"] == "pre-mutation"
+        and paused.get("status") == "paused"
+        and paused.get("phase") == "claimed"
+        and paused.get("error_code") == expected_reason
+        and detector == external_detector
+        and detector.get("detector") == "publisher-risk-v1"
+        and detector.get("boundary") == "pre-mutation"
+        and detector.get("risk_reason") == expected_reason
+        and detector.get("attempt_id") == paused.get("attempt_id")
+        and bool(detector.get("selector"))
+        and bool(detector.get("matched_text"))
     )
-    pre_mutation = (
-        stable_attempt
-        and attempt.get("phase") == "claimed"
-        and attempt.get("status") == "paused"
-        and attempt.get("error_code") == expected_reason
-        and paused_job["risk_boundary"] == "pre-mutation"
-        and paused_job["pause_reason"] == expected_reason
-        and paused_job["pause_token"] == attempt.get("attempt_id")
+    action_recorded = (
+        len(actions) == 1
+        and action.get("job_id") == jobs[2]["job_id"]
+        and action.get("action") == "resume"
+        and action.get("pause_token") == paused.get("attempt_id")
+        and action.get("natural_key")
+        == f"{jobs[2]['job_id']}:resume:{paused.get('attempt_id')}"
+        and action.get("auth_method") in {"basic", "trusted_proxy"}
+        and action.get("old_status") == "paused"
+        and action.get("new_status") == "pending"
+    )
+    converged = (
+        typed_pause
+        and len(attempts[2]) == 2
+        and _same_fields(paused, final_paused, stable_pause_fields)
+        and succeeded.get("attempt_number") == paused.get("attempt_number", 0) + 1
+        and succeeded.get("status") == "succeeded"
+        and succeeded.get("phase") == "result_submitted"
+        and succeeded.get("content_sha256") == jobs[2]["body_sha256"]
+        and jobs[2]["status"] == "succeeded"
+        and jobs[2]["current_attempt_id"] == succeeded.get("attempt_id")
+        and len(receipts[2]) == 1
+        and receipt.get("attempt_id") == succeeded.get("attempt_id")
     )
     return {
         "isolated_endpoint_identity": _endpoint_identity(kind, snapshots),
+        "canon_source_bound": _all_stable_equal(
+            [_path(snapshots, stage, "database.canon_source") for stage in STAGES]
+        ),
         "fixture_safe": _publisher_fixture_safe(kind, snapshots),
-        "same_job_identity": _all_stable_equal(
-            [
-                {field: job[field] for field in _PUBLISHER_JOB_IDENTITY_FIELDS}
-                for job in jobs
-            ]
+        "typed_pause_from_detector": typed_pause,
+        "operator_action_recorded": action_recorded,
+        "resume_replay_idempotent": (
+            action_recorded
+            and resume["pause_token"] == paused.get("attempt_id")
+            and resume["pause_reason"] == expected_reason
+            and resume["first_disposition"] == "applied"
+            and resume["replay_disposition"] == "idempotent"
         ),
-        "paused_safely": (
-            jobs[0]["status"] == "running"
-            and paused_job["status"] == "paused"
-            and jobs[2]["status"] == "pending"
-            and pre_mutation
+        "no_bypass": (
+            typed_pause
+            and receipts[0] == receipts[1] == []
+            and counts[0] == counts[1] == 0
+            and converged
         ),
-        "operator_action_recorded": operator_action_recorded,
-        "resume_replay_idempotent": operator_action_recorded
-        and replay["job_id"] == paused_job["job_id"]
-        and replay["action_id"] == action["action_id"]
-        and replay["pause_token"] == paused_job["pause_token"]
-        and replay["pause_reason"] == expected_reason
-        and replay["request_sha256"] == replay["replay_request_sha256"]
-        and replay["first_transition_sha256"]
-        == replay["replay_transition_sha256"]
-        and replay["first_disposition"] == "applied"
-        and replay["replay_disposition"] == "idempotent",
-        "hold_discard_preserved_state": (
-            _without_fields(pre_discard_job, {"database_now"})
-            == _without_fields(jobs[2], {"database_now"})
-            and pre_discard_attempts == attempts_after
-            and pre_discard_receipts == receipts
-            and pre_discard_actions == actions
+        "external_effect_at_most_once": counts == [0, 0, 1],
+        "duplicate_jobs": max(
+            int(_path(snapshots, stage, "database.job_identity_count")) - 1
+            for stage in STAGES
         ),
-        "browser_stopped_at_discard": (
-            browser_terminal["action"] == "setup_service_discarded"
-            and browser_terminal["fault_id"]
-            == snapshots["after"]["fault_id"]
-            and browser_terminal["service"] == "publisher-browser"
-            and bool(browser_terminal["hold_id"])
-            and bool(browser_terminal["container_id"])
-            and str(browser_terminal["image_id"]).startswith("sha256:")
-            and browser_terminal["exists"] is True
-            and browser_terminal["running"] is False
+        "duplicate_attempts": duplicate_excess(
+            attempts[2], ("job_id", "attempt_number")
         ),
-        "bypass_attempted": not (
-            pre_mutation
-            and receipts == []
+        "duplicate_receipts": duplicate_excess(
+            receipts[2], ("job_id", "natural_key")
         ),
-        "attempt_count": len(attempts_after),
-        "receipt_count": len(receipts),
+        "attempt_count": len(attempts[2]),
+        "receipt_count": len(receipts[2]),
     }
 
 
@@ -1843,12 +2077,7 @@ def _shape_violations(
                 continue
             nested = value[field]
             permits_empty_string = (
-                field == "error_message"
-                or field in _EMPTY_STRING_FIELDS
-                or (
-                    field == "owner_token"
-                    and kind == "publisher_browser_unavailable"
-                )
+                field == "error_message" or field in _EMPTY_STRING_FIELDS
             )
             if type(nested) is not expected_type or (
                 expected_type is str
@@ -1935,12 +2164,7 @@ def _shape_violations(
                     allowed[section],
                 )
             )
-        fixture_schema = (
-            _PUBLISHER_FIXTURE_SCHEMA
-            if kind.startswith("publisher_")
-            else _FIXTURE_SCHEMA
-        )
-        record(stage, "target.fixture", fixture_schema)
+        record(stage, "target.fixture", _FIXTURE_SCHEMA)
         optional_endpoint_names = _OPTIONAL_ENDPOINTS_BY_KIND.get(kind, ())
         endpoint = record(
             stage,
@@ -2114,68 +2338,6 @@ def _shape_violations(
             _AUTHORITATIVE_SCHEMA,
         )
         scalar("after", "barrier.residue_count", int, "an integer")
-    elif kind == "publisher_backend_unavailable":
-        for stage in STAGES:
-            record(stage, "database.job", _BACKEND_JOB_SCHEMA)
-            records(stage, "database.jobs", _JOB_IDENTITY_SCHEMA)
-            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
-            records(stage, "database.receipts", _RECEIPT_SCHEMA)
-        for stage in ("during", "after"):
-            records(stage, "database.cover_assets", _COVER_ASSET_SCHEMA)
-            records(stage, "external.cover_files", _COVER_FILE_SCHEMA)
-        stale = record(
-            "after",
-            "api.stale_token_observation",
-            _STALE_TOKEN_OBSERVATION_SCHEMA,
-        )
-        if isinstance(stale, Mapping) and isinstance(
-            stale.get("response"), Mapping
-        ):
-            record_value(
-                "after.state.api.stale_token_observation.response",
-                stale["response"],
-                _STALE_TOKEN_RESPONSE_SCHEMA,
-            )
-        records(
-            "after",
-            "barrier.terminal_writes",
-            _TERMINAL_WRITE_OBSERVATION_SCHEMA,
-        )
-        record("after", "barrier.residue", _BARRIER_RESIDUE_SCHEMA)
-    elif kind == "publisher_browser_unavailable":
-        for stage in STAGES:
-            record(stage, "database.job", _BROWSER_JOB_SCHEMA)
-            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
-            records(stage, "database.receipts", _RECEIPT_SCHEMA)
-            record(stage, "external.browser_heartbeat", _HEARTBEAT_SCHEMA)
-    else:
-        for stage in STAGES:
-            record(stage, "database.job", _RISK_JOB_SCHEMA)
-            records(stage, "database.attempts", _ATTEMPT_SCHEMA)
-        records("after", "database.receipts", _RECEIPT_SCHEMA)
-        records("after", "database.resume_actions", _RESUME_ACTION_SCHEMA)
-        record("after", "database.pre_discard_job", _RISK_JOB_SCHEMA)
-        records(
-            "after",
-            "database.pre_discard_attempts",
-            _ATTEMPT_SCHEMA,
-        )
-        records(
-            "after",
-            "database.pre_discard_receipts",
-            _RECEIPT_SCHEMA,
-        )
-        records(
-            "after",
-            "database.pre_discard_resume_actions",
-            _RESUME_ACTION_SCHEMA,
-        )
-        record("after", "api.resume_replay", _RESUME_REPLAY_SCHEMA)
-        record(
-            "after",
-            "external.browser_hold_terminal",
-            _PRE_DISCARD_BROWSER_SCHEMA,
-        )
     if not violations:
         violations.extend(_relation_violations(kind, snapshots))
     return violations
@@ -2224,54 +2386,20 @@ def _relation_violations(
             violations.append(
                 f"{stage}.state.target.fixture.fault_id mismatch"
             )
-    publisher = kind.startswith("publisher_")
-    expected_resource_type = "publisher_job" if publisher else "chapter"
-    if fixture["resource_type"] != expected_resource_type:
+    if fixture["resource_type"] != "chapter":
         violations.append(
             "before.state.target.fixture.resource_type mismatch"
         )
 
-    if publisher:
-        for stage in STAGES:
-            job = _path(snapshots, stage, "database.job")
-            if job["job_id"] != fixture["resource_id"]:
+    for stage, dotted in _chapter_record_paths(kind):
+        value = _path(snapshots, stage, dotted)
+        rows = value if isinstance(value, Sequence) else (value,)
+        for index, row in enumerate(rows):
+            if row["chapter_id"] != fixture["resource_id"]:
+                suffix = f"[{index}]" if isinstance(value, Sequence) else ""
                 violations.append(
-                    f"{stage}.state.database.job fixture resource mismatch"
+                    f"{stage}.state.{dotted}{suffix} fixture resource mismatch"
                 )
-            if job["logical_key"] != fixture["logical_key"]:
-                violations.append(
-                    f"{stage}.state.database.job fixture logical key mismatch"
-                )
-        if kind == "publisher_backend_unavailable":
-            for stage in ("during", "after"):
-                files = _path(
-                    snapshots,
-                    stage,
-                    "external.cover_files",
-                )
-                paths = [
-                    _publisher_inventory_relative_path(row["path"])
-                    for row in files
-                ]
-                if any(not path for path in paths):
-                    violations.append(
-                        f"{stage}.state.external.cover_files path is unsafe"
-                    )
-                if len(paths) != len(set(paths)):
-                    violations.append(
-                        f"{stage}.state.external.cover_files path is duplicated"
-                    )
-    else:
-        for stage, dotted in _chapter_record_paths(kind):
-            value = _path(snapshots, stage, dotted)
-            rows = value if isinstance(value, Sequence) else (value,)
-            for index, row in enumerate(rows):
-                if row["chapter_id"] != fixture["resource_id"]:
-                    suffix = f"[{index}]" if isinstance(value, Sequence) else ""
-                    violations.append(
-                        f"{stage}.state.{dotted}{suffix} "
-                        "fixture resource mismatch"
-                    )
 
     for stage, canon_path, related_path in _canon_relation_paths(kind):
         canon_rows = _path(snapshots, stage, canon_path)
@@ -2683,81 +2811,6 @@ def _external_relation_violations(
                     violations.append(
                         f"after.state.{dotted} status is invalid"
                     )
-    elif kind == "publisher_backend_unavailable":
-        for stage in STAGES:
-            job = _path(snapshots, stage, "database.job")
-            jobs = _path(snapshots, stage, "database.jobs")
-            attempts = _path(snapshots, stage, "database.attempts")
-            receipts = _path(snapshots, stage, "database.receipts")
-            violations.extend(
-                _coverage_violations(
-                    stage,
-                    "database.jobs",
-                    [(job["job_id"], job["logical_key"], job["task_kind"])],
-                    [
-                        (row["job_id"], row["logical_key"], row["task_kind"])
-                        for row in jobs
-                    ],
-                )
-            )
-            known_attempt_ids = {
-                row["attempt_id"]
-                for row in attempts
-                if row["job_id"] == job["job_id"]
-            }
-            for index, row in enumerate(attempts):
-                if row["job_id"] != job["job_id"]:
-                    violations.append(
-                        f"{stage}.state.database.attempts[{index}] "
-                        "job identity mismatch"
-                    )
-            for index, row in enumerate(receipts):
-                if row["job_id"] != job["job_id"]:
-                    violations.append(
-                        f"{stage}.state.database.receipts[{index}] "
-                        "job identity mismatch"
-                    )
-                if row["attempt_id"] not in known_attempt_ids:
-                    violations.append(
-                        f"{stage}.state.database.receipts[{index}] "
-                        "attempt identity mismatch"
-                    )
-        after_job = _path(snapshots, "after", "database.job")
-        cover_assets = _path(snapshots, "after", "database.cover_assets")
-        if len(cover_assets) == 1 and (
-            cover_assets[0]["job_id"] != after_job["job_id"]
-            or cover_assets[0]["asset_id"] != after_job["artifact_id"]
-        ):
-            violations.append(
-                "after.state.database.cover_assets job identity mismatch"
-            )
-    elif kind in {
-        "publisher_captcha",
-        "publisher_mfa",
-        "publisher_account_risk",
-    }:
-        paused_job = _path(snapshots, "during", "database.job")
-        for stage in STAGES:
-            attempts = _path(snapshots, stage, "database.attempts")
-            for index, row in enumerate(attempts):
-                if row["job_id"] != paused_job["job_id"]:
-                    violations.append(
-                        f"{stage}.state.database.attempts[{index}] "
-                        "job identity mismatch"
-                    )
-        for index, action in enumerate(
-            _path(snapshots, "after", "database.resume_actions")
-        ):
-            if action["job_id"] != paused_job["job_id"]:
-                violations.append(
-                    f"after.state.database.resume_actions[{index}] "
-                    "job identity mismatch"
-                )
-        replay = _path(snapshots, "after", "api.resume_replay")
-        if replay["job_id"] != paused_job["job_id"]:
-            violations.append(
-                "after.state.api.resume_replay job identity mismatch"
-            )
     if not _endpoint_identity(kind, snapshots):
         violations.append(f"{kind}.endpoint identity is not stable or bound")
     return violations

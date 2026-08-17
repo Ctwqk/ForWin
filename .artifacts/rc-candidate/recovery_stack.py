@@ -163,6 +163,39 @@ _HOLD_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _ABORT_STAGE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 PUBLISHER_COVER_ROOT = "/app/data/publisher_covers"
+LLM_KB_ROOT = "/app/data/llm_kb"
+LLM_KB_ROOT_FILE_KEYS = frozenset(
+    {
+        "CURRENT_STATE.md",
+        "NEXT_CHAPTER_CONTEXT.md",
+        "ACTIVE_THREADS.md",
+        "CHARACTER_MEMORY.md",
+        "FACTION_MEMORY.md",
+        "MAP_CONTEXT.md",
+        "READER_PROMISES.md",
+        "KNOWLEDGE_GAPS.md",
+        "REVEAL_LADDER.md",
+        "MUST_NOT_REVEAL.md",
+        "RECENT_CHANGES.md",
+        "STYLE_AND_TONE.md",
+        "CONSTRAINTS.md",
+        "facts.jsonl",
+        "events.jsonl",
+        "graph_deltas.jsonl",
+        "open_questions.jsonl",
+        "retrieval_index.json",
+    }
+)
+LLM_KB_ROLE_ARTIFACTS = frozenset(
+    {
+        "packs/reviewer/context.json",
+        "packs/planner/context.json",
+        "packs/compiler/context.json",
+    }
+)
+LLM_KB_ARTIFACT_PATHS = LLM_KB_ROOT_FILE_KEYS | LLM_KB_ROLE_ARTIFACTS
+LLM_KB_MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
+LLM_KB_MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
 RECOVERY_SENTINEL_TABLE = "forwin_recovery_run_sentinel"
 
 ISOLATED_DATABASE_URL = (
@@ -4300,6 +4333,148 @@ print(
 """.strip()
 
 
+def llm_kb_artifact_snapshot_script(
+    expected_root: str = LLM_KB_ROOT,
+) -> str:
+    template = """
+import hashlib
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+project_id = sys.argv[2]
+expected_root = Path(__EXPECTED_ROOT__)
+allowed = set(__ALLOWED_PATHS__)
+max_artifact_bytes = __MAX_ARTIFACT_BYTES__
+max_snapshot_bytes = __MAX_SNAPSHOT_BYTES__
+if root != expected_root or not root.is_absolute():
+    raise SystemExit("LLM KB root does not match the frozen contract")
+if (
+    not project_id
+    or project_id in {".", ".."}
+    or "/" in project_id
+    or "\\\\" in project_id
+):
+    raise SystemExit("LLM KB project identity is invalid")
+try:
+    resolved_root = root.resolve(strict=True)
+except FileNotFoundError as exc:
+    raise SystemExit("LLM KB root is missing") from exc
+if resolved_root != root or not root.is_dir() or root.is_symlink():
+    raise SystemExit("LLM KB root is not a canonical real directory")
+project_root = root / project_id
+try:
+    resolved_project_root = project_root.resolve(strict=True)
+except FileNotFoundError as exc:
+    raise SystemExit("LLM KB project root is missing") from exc
+if (
+    resolved_project_root != project_root
+    or resolved_project_root.parent != root
+    or not project_root.is_dir()
+    or project_root.is_symlink()
+):
+    raise SystemExit("LLM KB project root is not canonical")
+
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+try:
+    root_fd = os.open(root, directory_flags)
+    project_fd = os.open(project_id, directory_flags, dir_fd=root_fd)
+except OSError as exc:
+    raise SystemExit("LLM KB project root is not canonical") from exc
+
+def read_artifact(relative):
+    parts = Path(relative).parts
+    directory_fd = os.dup(project_fd)
+    artifact_fd = -1
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        try:
+            artifact_fd = os.open(
+                parts[-1],
+                file_flags,
+                dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            return None
+        before = os.fstat(artifact_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise SystemExit("LLM KB artifact is not a canonical file")
+        with os.fdopen(artifact_fd, "rb", closefd=True) as handle:
+            artifact_fd = -1
+            raw = handle.read(max_artifact_bytes + 1)
+            after = os.fstat(handle.fileno())
+        identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, key) != getattr(after, key) for key in identity_fields):
+            raise SystemExit("LLM KB artifact changed while reading")
+        if len(raw) != before.st_size:
+            raise SystemExit("LLM KB artifact snapshot exceeds the size limit")
+        return raw
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SystemExit(
+            "LLM KB artifact path is not canonical; symbolic links are forbidden"
+        ) from exc
+    finally:
+        if artifact_fd >= 0:
+            os.close(artifact_fd)
+        os.close(directory_fd)
+
+files = []
+total_size = 0
+try:
+    for relative in sorted(allowed):
+        raw = read_artifact(relative)
+        if raw is None:
+            continue
+        total_size += len(raw)
+        if len(raw) > max_artifact_bytes or total_size > max_snapshot_bytes:
+            raise SystemExit("LLM KB artifact snapshot exceeds the size limit")
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SystemExit("LLM KB artifact is not UTF-8") from exc
+        files.append(
+            {
+                "path": relative,
+                "size": len(raw),
+                "content_sha256": hashlib.sha256(raw).hexdigest(),
+                "content": content,
+            }
+        )
+finally:
+    os.close(project_fd)
+    os.close(root_fd)
+print(
+    json.dumps(
+        {
+            "project_id": project_id,
+            "root": str(project_root),
+            "files": files,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+)
+"""
+    replacements = {
+        "__EXPECTED_ROOT__": repr(str(expected_root)),
+        "__ALLOWED_PATHS__": repr(tuple(sorted(LLM_KB_ARTIFACT_PATHS))),
+        "__MAX_ARTIFACT_BYTES__": str(LLM_KB_MAX_ARTIFACT_BYTES),
+        "__MAX_SNAPSHOT_BYTES__": str(LLM_KB_MAX_SNAPSHOT_BYTES),
+    }
+    for marker, value in replacements.items():
+        template = template.replace(marker, value)
+    return template.strip()
+
+
 @mutating_controller_command
 def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
     if service != "publisher-browser":
@@ -4365,6 +4540,79 @@ def file_inventory(service: str, fault_id: str, root: str) -> dict[str, Any]:
         if raw_path in seen_paths:
             raise StackError("file inventory returned a duplicate file path")
         seen_paths.add(raw_path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return payload
+
+
+@mutating_controller_command
+def llm_kb_artifact_snapshot(
+    fault_id: str,
+    project_id: str,
+) -> dict[str, Any]:
+    normalized_project_id = str(project_id or "")
+    if _FAULT_ID_PATTERN.fullmatch(normalized_project_id) is None:
+        raise StackError("LLM KB project identity is invalid")
+    context = require_active_recovery_run(fault_id)
+    run_identity = context["run_identity"]
+    identity = assert_frozen()
+    if identity != context["identity"]:
+        raise StackError(
+            "recovery harness identity changed before LLM KB artifact snapshot"
+        )
+    assert_isolated_compose(identity, run_identity=run_identity)
+    output = compose(
+        "exec",
+        "-T",
+        "outbox-worker",
+        "python",
+        "-c",
+        llm_kb_artifact_snapshot_script(),
+        LLM_KB_ROOT,
+        normalized_project_id,
+        run_identity=run_identity,
+    )
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise StackError("LLM KB artifact snapshot returned invalid JSON") from exc
+    expected_root = f"{LLM_KB_ROOT}/{normalized_project_id}"
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"project_id", "root", "files"}
+        or payload.get("project_id") != normalized_project_id
+        or payload.get("root") != expected_root
+        or not isinstance(payload.get("files"), list)
+    ):
+        raise StackError("LLM KB artifact snapshot returned an invalid object")
+    seen_paths: set[str] = set()
+    total_size = 0
+    for row in payload["files"]:
+        if not isinstance(row, dict):
+            raise StackError("LLM KB artifact snapshot returned a malformed row")
+        path = row.get("path")
+        content = row.get("content")
+        if (
+            set(row) != {"path", "size", "content_sha256", "content"}
+            or path not in LLM_KB_ARTIFACT_PATHS
+            or path in seen_paths
+            or not isinstance(content, str)
+        ):
+            raise StackError("LLM KB artifact snapshot returned an unsafe row")
+        encoded = content.encode("utf-8")
+        total_size += len(encoded)
+        if (
+            len(encoded) > LLM_KB_MAX_ARTIFACT_BYTES
+            or total_size > LLM_KB_MAX_SNAPSHOT_BYTES
+        ):
+            raise StackError("LLM KB artifact snapshot exceeds the size limit")
+        if (
+            type(row.get("size")) is not int
+            or row["size"] != len(encoded)
+            or row.get("content_sha256")
+            != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise StackError("LLM KB artifact snapshot row digest is invalid")
+        seen_paths.add(path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return payload
 
@@ -4463,6 +4711,9 @@ def parse_args() -> argparse.Namespace:
     inventory_parser.add_argument("service", choices=("publisher-browser",))
     inventory_parser.add_argument("--fault-id", required=True)
     inventory_parser.add_argument("--root", required=True)
+    llm_kb_parser = commands.add_parser("llm-kb-artifacts")
+    llm_kb_parser.add_argument("--fault-id", required=True)
+    llm_kb_parser.add_argument("--project-id", required=True)
     endpoint_parser = commands.add_parser("bind-endpoints")
     endpoint_parser.add_argument("--fault-id", required=True)
     endpoint_parser.add_argument("--api-url", required=True)
@@ -4517,6 +4768,8 @@ def main() -> int:
         mark_fault(args.fault_kind, args.phase, args.fault_id)
     elif args.command == "file-inventory":
         file_inventory(args.service, args.fault_id, args.root)
+    elif args.command == "llm-kb-artifacts":
+        llm_kb_artifact_snapshot(args.fault_id, args.project_id)
     elif args.command == "bind-endpoints":
         bind_recovery_endpoints(
             args.fault_id,

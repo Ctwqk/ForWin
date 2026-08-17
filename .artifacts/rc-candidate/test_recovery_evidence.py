@@ -266,20 +266,44 @@ def projection_observation(
     status: str = "converged",
     *,
     collection: str = "fixture-vectors",
-) -> dict[str, str]:
+    variant: str = "primary",
+    projection_type: str | None = None,
+) -> dict[str, Any]:
     identity_label = (
-        "point-primary"
+        f"point-{variant}"
         if kind == "qdrant_unavailable"
-        else "projection-primary"
+        else f"projection-{variant}"
+    )
+    raw_identity = token(kind, identity_label)
+    payload_sha256 = digest(kind, f"qdrant-payload-{variant}")
+    vector_sha256 = digest(kind, f"qdrant-vector-{variant}")
+    evidence_identity = (
+        f"{raw_identity}#payload-sha256={payload_sha256}"
+        f"#vector-sha256={vector_sha256}"
     )
     record = {
-        "projection_type": "vector",
-        "identity_id": token(kind, identity_label),
+        "projection_type": (
+            projection_type
+            or ("chapter_memory" if kind == "qdrant_unavailable" else "vector")
+        ),
+        "identity_id": (
+            evidence_identity
+            if kind == "qdrant_unavailable"
+            else raw_identity
+        ),
         "canon_id": token(kind, "canon-primary"),
         "status": status,
     }
     if kind == "qdrant_unavailable":
-        record["collection"] = collection
+        record.update(
+            {
+                "collection": collection,
+                "raw_point_id": raw_identity,
+                "payload_sha256": payload_sha256,
+                "vector_sha256": vector_sha256,
+                "vector_dimensions": 3,
+            }
+        )
     return record
 
 
@@ -288,12 +312,23 @@ def point_record(
     variant: str = "primary",
     *,
     collection: str = "fixture-vectors",
-) -> dict[str, str]:
+    projection_type: str = "chapter_memory",
+) -> dict[str, Any]:
+    raw_point_id = token(kind, f"point-{variant}")
+    payload_sha256 = digest(kind, f"qdrant-payload-{variant}")
+    vector_sha256 = digest(kind, f"qdrant-vector-{variant}")
     return {
         "collection": collection,
-        "projection_type": "vector",
-        "point_id": token(kind, f"point-{variant}"),
+        "projection_type": projection_type,
+        "point_id": (
+            f"{raw_point_id}#payload-sha256={payload_sha256}"
+            f"#vector-sha256={vector_sha256}"
+        ),
+        "raw_point_id": raw_point_id,
         "canon_id": token(kind, "canon-primary"),
+        "payload_sha256": payload_sha256,
+        "vector_sha256": vector_sha256,
+        "vector_dimensions": 3,
     }
 
 
@@ -698,8 +733,27 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
             2,
             status="processed",
         )
-        baseline_projections = [projection_observation(kind)]
-        baseline_points = [point_record(kind)]
+        baseline_projections = [
+            projection_observation(
+                kind,
+                collection="fixture-memory-vectors",
+            ),
+            projection_observation(
+                kind,
+                collection="fixture-kb-vectors",
+                variant="secondary",
+                projection_type="llm_kb",
+            ),
+        ]
+        baseline_points = [
+            point_record(kind, collection="fixture-memory-vectors"),
+            point_record(
+                kind,
+                "secondary",
+                collection="fixture-kb-vectors",
+                projection_type="llm_kb",
+            ),
+        ]
         after["external"].update(
             {
                 "replay_baseline_projections": copy.deepcopy(
@@ -1482,6 +1536,17 @@ def test_identity_inventory_rejects_extra_coverage(kind: str, path: str) -> None
         ),
         ("qdrant_unavailable", "external.point_identities", "canon_id"),
         ("qdrant_unavailable", "external.point_identities", "point_id"),
+        ("qdrant_unavailable", "external.point_identities", "raw_point_id"),
+        (
+            "qdrant_unavailable",
+            "external.point_identities",
+            "payload_sha256",
+        ),
+        (
+            "qdrant_unavailable",
+            "external.point_identities",
+            "vector_sha256",
+        ),
         (
             "projection_consumer_unavailable",
             "external.projection_identities",
@@ -1499,11 +1564,30 @@ def test_identity_inventory_rejects_wrong_binding(
 ) -> None:
     values = valid_snapshots(kind)
     rows = path_value(values["after"]["state"], path)
-    rows[0][field] = token(kind, "wrong-binding")
+    rows[0][field] = (
+        digest(kind, "wrong-binding")
+        if field.endswith("_sha256")
+        else token(kind, "wrong-binding")
+    )
 
     assert any(
         f"{path} coverage mismatch" in item
         for item in evidence.snapshot_violations(kind, values)
+    )
+
+
+def test_qdrant_identity_inventory_rejects_zero_vector_dimensions() -> None:
+    values = valid_snapshots("qdrant_unavailable")
+    values["after"]["state"]["external"]["point_identities"][0][
+        "vector_dimensions"
+    ] = 0
+
+    assert any(
+        "vector_dimensions is not positive" in item
+        for item in evidence.snapshot_violations(
+            "qdrant_unavailable",
+            values,
+        )
     )
 
 
@@ -2117,6 +2201,45 @@ def multi_mutation(
     return mutate
 
 
+def qdrant_identity_mutation(variant: str) -> Callable[[dict[str, Any]], None]:
+    def mutate(values: dict[str, Any]) -> None:
+        raw_point_id = token("qdrant_unavailable", f"point-{variant}")
+        payload_sha256 = digest(
+            "qdrant_unavailable",
+            f"qdrant-payload-{variant}",
+        )
+        vector_sha256 = digest(
+            "qdrant_unavailable",
+            f"qdrant-vector-{variant}",
+        )
+        evidence_identity = (
+            f"{raw_point_id}#payload-sha256={payload_sha256}"
+            f"#vector-sha256={vector_sha256}"
+        )
+        projection = values["after"]["state"]["external"]["projections"][0]
+        identity = values["after"]["state"]["external"][
+            "point_identities"
+        ][0]
+        projection.update(
+            {
+                "identity_id": evidence_identity,
+                "raw_point_id": raw_point_id,
+                "payload_sha256": payload_sha256,
+                "vector_sha256": vector_sha256,
+            }
+        )
+        identity.update(
+            {
+                "point_id": evidence_identity,
+                "raw_point_id": raw_point_id,
+                "payload_sha256": payload_sha256,
+                "vector_sha256": vector_sha256,
+            }
+        )
+
+    return mutate
+
+
 @dataclass(frozen=True)
 class ContractCase:
     name: str
@@ -2294,18 +2417,7 @@ def contract_cases() -> list[ContractCase]:
             "qdrant replay identity",
             "qdrant_unavailable",
             "replay_identity_unchanged",
-            multi_mutation(
-                set_mutation(
-                    "after",
-                    "external.projections.0.identity_id",
-                    token("qdrant_unavailable", "point-after-refresh"),
-                ),
-                set_mutation(
-                    "after",
-                    "external.point_identities.0.point_id",
-                    token("qdrant_unavailable", "point-after-refresh"),
-                ),
-            ),
+            qdrant_identity_mutation("after-refresh"),
             False,
         ),
         ContractCase(

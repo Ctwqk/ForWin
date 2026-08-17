@@ -901,6 +901,19 @@ class RecoveryController:
             str(root),
         )
 
+    def llm_kb_artifact_snapshot(
+        self,
+        fault_id: str,
+        project_id: str,
+    ) -> dict[str, Any]:
+        return self._run(
+            "llm-kb-artifacts",
+            "--fault-id",
+            validate_fault_id(fault_id),
+            "--project-id",
+            validate_fault_id(project_id),
+        )
+
     def abort(self, fault_id: str, stage: str, reason: str) -> dict[str, Any]:
         completed, _command = self._command(
             "abort",

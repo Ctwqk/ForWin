@@ -5,7 +5,6 @@ import copy
 import hashlib
 import importlib.util
 import json
-import os
 import re
 import sys
 from collections.abc import Callable
@@ -637,6 +636,21 @@ def projection_status() -> dict[str, Any]:
     }
 
 
+def expected_qdrant_points(
+    points: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    return {
+        projection_type: [
+            {
+                "id": point["id"],
+                "payload": copy.deepcopy(point["payload"]),
+            }
+            for point in projection_points
+        ]
+        for projection_type, projection_points in points.items()
+    }
+
+
 def test_qdrant_collector_audits_both_projection_payloads() -> None:
     points = {
         "chapter_memory": [
@@ -649,6 +663,7 @@ def test_qdrant_collector_audits_both_projection_payloads() -> None:
                     "summary": "Fixture summary",
                     "excerpt": "Fixture excerpt",
                 },
+                "vector": [0.25, 0.75],
             }
         ],
         "llm_kb": [
@@ -660,6 +675,7 @@ def test_qdrant_collector_audits_both_projection_payloads() -> None:
                     "as_of_chapter": 1,
                     "text": "Fixture knowledge",
                 },
+                "vector": [0.5, -0.5],
             }
         ],
     }
@@ -667,6 +683,7 @@ def test_qdrant_collector_audits_both_projection_payloads() -> None:
     projections, identities = runner.normalize_qdrant_projections(
         status=projection_status(),
         points_by_projection=points,
+        expected_points_by_projection=expected_qdrant_points(points),
         project_id=PROJECT_ID,
         canon_id=CANON_ID,
         chapter_number=1,
@@ -697,14 +714,36 @@ def test_qdrant_collector_audits_both_projection_payloads() -> None:
     assert [row["identity_id"] for row in projections] == [
         row["point_id"] for row in identities
     ]
+    assert all(row["vector_dimensions"] == 2 for row in projections)
+    assert all(
+        re.fullmatch(r"[0-9a-f]{64}", row["vector_sha256"])
+        for row in projections
+    )
 
     changed_points = copy.deepcopy(points)
     changed_points["chapter_memory"][0]["payload"]["summary"] = (
         "Changed after replay"
     )
+    with pytest.raises(runner.SetupBlocked, match="expected payload"):
+        runner.normalize_qdrant_projections(
+            status=projection_status(),
+            points_by_projection=changed_points,
+            expected_points_by_projection=expected_qdrant_points(points),
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
+        )
+
+    changed_vector = copy.deepcopy(points)
+    changed_vector["chapter_memory"][0]["vector"] = [0.75, 0.25]
     changed, _ = runner.normalize_qdrant_projections(
         status=projection_status(),
-        points_by_projection=changed_points,
+        points_by_projection=changed_vector,
+        expected_points_by_projection=expected_qdrant_points(points),
         project_id=PROJECT_ID,
         canon_id=CANON_ID,
         chapter_number=1,
@@ -714,6 +753,59 @@ def test_qdrant_collector_audits_both_projection_payloads() -> None:
         },
     )
     assert changed[0]["identity_id"] != projections[0]["identity_id"]
+
+
+@pytest.mark.parametrize(
+    "vector",
+    (
+        None,
+        [],
+        [0.0, 0.0],
+        [float("nan"), 1.0],
+        [True, 1.0],
+        [10**1000, 1.0],
+    ),
+)
+def test_qdrant_collector_rejects_missing_or_degenerate_vectors(
+    vector: Any,
+) -> None:
+    points = {
+        "chapter_memory": [
+            {
+                "id": "memory-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "chapter_number": 1,
+                },
+                "vector": vector,
+            }
+        ],
+        "llm_kb": [
+            {
+                "id": "kb-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "index_kind": "llm_kb",
+                    "as_of_chapter": 1,
+                },
+                "vector": [0.5, -0.5],
+            }
+        ],
+    }
+
+    with pytest.raises(runner.SetupBlocked, match="vector"):
+        runner.normalize_qdrant_projections(
+            status=projection_status(),
+            points_by_projection=points,
+            expected_points_by_projection=expected_qdrant_points(points),
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
+        )
 
 
 def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
@@ -726,6 +818,7 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
                     "project_id": PROJECT_ID,
                     "chapter_number": 1,
                 },
+                "vector": [0.25, 0.75],
             },
             {
                 "id": "memory-a",
@@ -734,6 +827,7 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
                     "chapter_number": 1,
                     "summary": "Conflicting payload",
                 },
+                "vector": [0.5, 0.5],
             },
         ],
         "llm_kb": [
@@ -744,6 +838,7 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
                     "index_kind": "llm_kb",
                     "as_of_chapter": 1,
                 },
+                "vector": [0.5, -0.5],
             }
         ],
     }
@@ -752,6 +847,10 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
         runner.normalize_qdrant_projections(
             status=projection_status(),
             points_by_projection=points,
+            expected_points_by_projection={
+                key: value[:1]
+                for key, value in expected_qdrant_points(points).items()
+            },
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             chapter_number=1,
@@ -765,6 +864,9 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
         runner.normalize_qdrant_projections(
             status=projection_status(),
             points_by_projection={"llm_kb": points["llm_kb"]},
+            expected_points_by_projection={
+                "llm_kb": expected_qdrant_points(points)["llm_kb"]
+            },
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             chapter_number=1,
@@ -782,6 +884,10 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
             points_by_projection={
                 key: value[:1] for key, value in points.items()
             },
+            expected_points_by_projection={
+                key: value[:1]
+                for key, value in expected_qdrant_points(points).items()
+            },
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             chapter_number=1,
@@ -790,6 +896,278 @@ def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
                 "llm_kb": "fixture-kb-vectors",
             },
         )
+
+
+def artifact_row(path: str, content: str) -> dict[str, Any]:
+    encoded = content.encode("utf-8")
+    return {
+        "path": path,
+        "size": len(encoded),
+        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+        "content": content,
+    }
+
+
+def llm_kb_artifact_snapshot() -> dict[str, Any]:
+    source_digest = "source-digest-a"
+    indexed_files = sorted(runner.LLM_KB_ROOT_FILE_KEYS)
+    index = json.dumps(
+        {
+            "project_id": PROJECT_ID,
+            "as_of_chapter": 1,
+            "source_digest": source_digest,
+            "projection_version": "llm_kb_v2",
+            "files": indexed_files,
+            "root_policy": "writer_safe",
+            "canon_source": "BookState DB canon",
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    files = [
+        artifact_row("retrieval_index.json", index),
+    ]
+    for file_key in indexed_files:
+        if file_key == "CURRENT_STATE.md":
+            content = "# Current State\n- node:node-a\n- chapter:1\n"
+        elif file_key.endswith(".jsonl"):
+            content = ""
+        else:
+            content = f"# {file_key.removesuffix('.md')}\nfixture\n"
+        files.append(artifact_row(file_key, content))
+    for role in ("reviewer", "planner", "compiler"):
+        files.append(
+            artifact_row(
+                f"packs/{role}/context.json",
+                json.dumps(
+                    {
+                        "project_id": PROJECT_ID,
+                        "role": role,
+                        "active_personality_contexts": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+        )
+    return {
+        "project_id": PROJECT_ID,
+        "root": f"/app/data/llm_kb/{PROJECT_ID}",
+        "files": files,
+    }
+
+
+def test_expected_qdrant_points_are_derived_from_canon_and_raw_llm_kb(
+) -> None:
+    chapter_points = runner.build_expected_chapter_memory_points(
+        [
+            {
+                "project_id": PROJECT_ID,
+                "chapter_number": 1,
+                "title": "Fixture title",
+                "summary": "Fixture summary",
+                "body_text": "x" * 510,
+            }
+        ],
+        project_id=PROJECT_ID,
+        chapter_number=1,
+    )
+    assert chapter_points == [
+        {
+            "id": "78c013af-5bcf-ca3e-f86f-cc0b336fd627",
+            "payload": {
+                "project_id": PROJECT_ID,
+                "chapter_number": 1,
+                "title": "Fixture title",
+                "summary": "Fixture summary",
+                "excerpt": "x" * 500,
+            },
+        }
+    ]
+
+    llm_kb_points = runner.build_expected_llm_kb_points(
+        llm_kb_artifact_snapshot(),
+        project_id=PROJECT_ID,
+        chapter_number=1,
+    )
+    points_by_id = {point["id"]: point for point in llm_kb_points}
+    assert len(points_by_id) == 16
+    assert {
+        "577a5f59-ad41-cc8d-1b4c-4a4f3d17a3e6",
+        "8959e015-1899-b170-3050-d5ff2259fce6",
+        "d5eccf46-e415-2f24-8c40-ff354db3045f",
+        "164cd9c6-5407-bd63-3cdc-331037f75743",
+    }.issubset(points_by_id)
+    markdown = points_by_id[
+        "577a5f59-ad41-cc8d-1b4c-4a4f3d17a3e6"
+    ]["payload"]
+    assert markdown["text"] == (
+        "# Current State\n- node:node-a\n- chapter:1"
+    )
+    assert markdown["node_refs"] == ["node-a"]
+    assert markdown["chapter_refs"] == ["chapter:1"]
+    assert markdown["source_digest"] == "source-digest-a"
+
+
+def test_expected_llm_kb_points_reject_tampered_artifact_content() -> None:
+    snapshot = llm_kb_artifact_snapshot()
+    current = next(
+        row
+        for row in snapshot["files"]
+        if row["path"] == "CURRENT_STATE.md"
+    )
+    current["content"] += "tampered"
+
+    with pytest.raises(runner.SetupBlocked, match="artifact digest"):
+        runner.build_expected_llm_kb_points(
+            snapshot,
+            project_id=PROJECT_ID,
+            chapter_number=1,
+        )
+
+
+@pytest.mark.parametrize("missing_file", sorted(runner.LLM_KB_ROOT_FILE_KEYS))
+def test_llm_kb_oracle_rejects_coordinated_required_file_omission(
+    missing_file: str,
+) -> None:
+    snapshot = llm_kb_artifact_snapshot()
+    index_row = next(
+        row
+        for row in snapshot["files"]
+        if row["path"] == "retrieval_index.json"
+    )
+    index = json.loads(index_row["content"])
+    index["files"].remove(missing_file)
+    replacement = artifact_row(
+        "retrieval_index.json",
+        json.dumps(index, ensure_ascii=False, indent=2),
+    )
+    snapshot["files"] = [
+        replacement if row["path"] == "retrieval_index.json" else row
+        for row in snapshot["files"]
+        if row["path"] != missing_file
+    ]
+
+    with pytest.raises(runner.SetupBlocked, match="file set"):
+        runner.build_expected_llm_kb_points(
+            snapshot,
+            project_id=PROJECT_ID,
+            chapter_number=1,
+        )
+
+
+def test_llm_kb_oracle_keeps_non_ascii_and_repeated_sections_distinct() -> None:
+    snapshot = llm_kb_artifact_snapshot()
+    content = (
+        "# 当前状态\n总览\n\n## 闻澄\n第一次\n\n## 林烬\n第二次\n"
+        "\n## 闻澄\n第三次\n"
+    )
+    snapshot["files"] = [
+        artifact_row("CURRENT_STATE.md", content)
+        if row["path"] == "CURRENT_STATE.md"
+        else row
+        for row in snapshot["files"]
+    ]
+
+    points = runner.build_expected_llm_kb_points(
+        snapshot,
+        project_id=PROJECT_ID,
+        chapter_number=1,
+    )
+    section_keys = sorted(
+        point["payload"]["section_key"]
+        for point in points
+        if point["payload"]["file_key"] == "CURRENT_STATE.md"
+    )
+
+    assert section_keys == [
+        "section-045859e7926b",
+        "section-6ff3e16f5f1c",
+        "section-e89578afbb6d",
+        "section-e89578afbb6d-2",
+    ]
+
+
+def test_llm_kb_oracle_matches_production_parser_for_complete_artifacts(
+    tmp_path: Path,
+) -> None:
+    importlib.import_module("forwin.retrieval.memory_index")
+    from forwin.llm_kb import vector_index
+
+    snapshot = llm_kb_artifact_snapshot()
+    replacements = {
+        "CURRENT_STATE.md": (
+            "# 当前状态\n总览 node:node-a chapter:1\n\n"
+            "## 闻澄\n第一次\n\n## 林烬\n第二次\n\n## 闻澄\n第三次\n"
+        ),
+        "facts.jsonl": json.dumps(
+            {
+                "id": "fact-a",
+                "as_of_chapter": 1,
+                "text": "事实 A",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        "packs/reviewer/context.json": json.dumps(
+            {
+                "project_id": PROJECT_ID,
+                "role": "reviewer",
+                "active_personality_contexts": [
+                    {
+                        "character_id": "character-a",
+                        "character_name": "闻澄",
+                        "active_skills": {"deduction": 2},
+                        "current_behavior_bias": {"caution": 0.7},
+                        "constraints": ["不得泄露"],
+                        "source_refs": ["book_state:node:node-a"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    }
+    snapshot["files"] = [
+        artifact_row(row["path"], replacements.get(row["path"], row["content"]))
+        for row in snapshot["files"]
+    ]
+    project_root = tmp_path / PROJECT_ID
+    for row in snapshot["files"]:
+        path = project_root / row["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(row["content"], encoding="utf-8")
+
+    production_sections = vector_index._collect_project_sections(
+        project_root,
+        source_digest="source-digest-a",
+        as_of_chapter=1,
+        projection_version="llm_kb_v2",
+    )
+    production_points = sorted(
+        (
+            {
+                "id": vector_index._point_id(
+                    PROJECT_ID,
+                    section["file_key"],
+                    section["section_key"],
+                    section["role_scope"],
+                ),
+                "payload": vector_index._desired_section_payload(
+                    PROJECT_ID,
+                    section,
+                ),
+            }
+            for section in production_sections
+        ),
+        key=lambda point: point["id"],
+    )
+
+    assert runner.build_expected_llm_kb_points(
+        snapshot,
+        project_id=PROJECT_ID,
+        chapter_number=1,
+    ) == production_points
 
 
 def test_projection_identity_collector_binds_api_status_to_sql_identity() -> None:
@@ -1031,29 +1409,35 @@ def valid_projection_snapshots(
         )
     status = projection_status()
     if kind == "qdrant_unavailable":
+        points_by_projection = {
+            "chapter_memory": [
+                {
+                    "id": "memory-a",
+                    "payload": {
+                        "project_id": PROJECT_ID,
+                        "chapter_number": 1,
+                    },
+                    "vector": [0.25, 0.75],
+                }
+            ],
+            "llm_kb": [
+                {
+                    "id": "kb-a",
+                    "payload": {
+                        "project_id": PROJECT_ID,
+                        "index_kind": "llm_kb",
+                        "as_of_chapter": 1,
+                    },
+                    "vector": [0.5, -0.5],
+                }
+            ],
+        }
         projections, identities = runner.normalize_qdrant_projections(
             status=status,
-            points_by_projection={
-                "chapter_memory": [
-                    {
-                        "id": "memory-a",
-                        "payload": {
-                            "project_id": PROJECT_ID,
-                            "chapter_number": 1,
-                        },
-                    }
-                ],
-                "llm_kb": [
-                    {
-                        "id": "kb-a",
-                        "payload": {
-                            "project_id": PROJECT_ID,
-                            "index_kind": "llm_kb",
-                            "as_of_chapter": 1,
-                        },
-                    }
-                ],
-            },
+            points_by_projection=points_by_projection,
+            expected_points_by_projection=expected_qdrant_points(
+                points_by_projection
+            ),
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             chapter_number=1,
@@ -1934,11 +2318,12 @@ def test_qdrant_reader_scrolls_every_exact_candidate_collection() -> None:
                     "points": [
                         {
                             "id": "memory-a",
-                            "payload": {
-                                "project_id": PROJECT_ID,
-                                "chapter_number": 1,
-                            },
-                        }
+                        "payload": {
+                            "project_id": PROJECT_ID,
+                            "chapter_number": 1,
+                        },
+                        "vector": [0.25, 0.75],
+                    }
                     ],
                     "next_page_offset": None,
                 }
@@ -1953,6 +2338,7 @@ def test_qdrant_reader_scrolls_every_exact_candidate_collection() -> None:
                             "index_kind": "llm_kb",
                             "as_of_chapter": 1,
                         },
+                        "vector": [0.5, -0.5],
                     }
                 ],
                 "next_page_offset": None,
@@ -1994,6 +2380,7 @@ def test_qdrant_reader_scrolls_every_exact_candidate_collection() -> None:
         for _, _, body in calls
     )
     assert all("index_kind" not in json.dumps(body) for _, _, body in calls)
+    assert all(body["with_vector"] is True for _, _, body in calls)
 
 
 class FakeControllerLifecycle:
@@ -2017,6 +2404,14 @@ class FakeControllerLifecycle:
 
     def start(self, service: str, fault_id: str) -> None:
         self.calls.append(("start", service, fault_id))
+
+    def llm_kb_artifact_snapshot(
+        self,
+        fault_id: str,
+        project_id: str,
+    ) -> dict[str, Any]:
+        self.calls.append(("llm_kb_artifact_snapshot", fault_id, project_id))
+        return llm_kb_artifact_snapshot()
 
     def destroy(self) -> None:
         self.calls.append(("destroy",))
@@ -2442,6 +2837,20 @@ class SuccessfulProjectionCollector:
             }
         ]
 
+    def chapter_memory_oracle_rows(
+        self,
+        _fixture: Any,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "project_id": PROJECT_ID,
+                "chapter_number": 1,
+                "title": "Fixture title",
+                "summary": "Fixture summary",
+                "body_text": "Fixture excerpt",
+            }
+        ]
+
 
 class MissingQdrantFailureCollector(SuccessfulProjectionCollector):
     def __init__(self, log: list[str]) -> None:
@@ -2483,25 +2892,32 @@ class SuccessfulQdrant:
         self,
         _project_id: str,
     ) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "chapter_memory": [
+        chapter_points = runner.build_expected_chapter_memory_points(
+            [
                 {
-                    "id": "memory-a",
-                    "payload": {
-                        "project_id": PROJECT_ID,
-                        "chapter_number": 1,
-                    },
+                    "project_id": PROJECT_ID,
+                    "chapter_number": 1,
+                    "title": "Fixture title",
+                    "summary": "Fixture summary",
+                    "body_text": "Fixture excerpt",
                 }
             ],
+            project_id=PROJECT_ID,
+            chapter_number=1,
+        )
+        llm_kb_points = runner.build_expected_llm_kb_points(
+            llm_kb_artifact_snapshot(),
+            project_id=PROJECT_ID,
+            chapter_number=1,
+        )
+        return {
+            "chapter_memory": [
+                {**point, "vector": [0.25, 0.75]}
+                for point in chapter_points
+            ],
             "llm_kb": [
-                {
-                    "id": "kb-a",
-                    "payload": {
-                        "project_id": PROJECT_ID,
-                        "index_kind": "llm_kb",
-                        "as_of_chapter": 1,
-                    },
-                }
+                {**point, "vector": [0.5, -0.5]}
+                for point in llm_kb_points
             ],
         }
 
@@ -2622,6 +3038,36 @@ def test_live_projection_success_uses_auto_canon_barrier_recover_and_refresh_ord
             row["projection_type"]
             for row in after["state"]["external"]["point_identities"]
         } == {"chapter_memory", "llm_kb"}
+        oracle_ref = next(
+            item
+            for item in report["supplemental_artifacts"]
+            if item["name"] == runner.QDRANT_ORACLE_ARTIFACT_NAME
+        )
+        oracle_path = Path(oracle_ref["path"])
+        oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+        assert [capture["phase"] for capture in oracle["captures"]] == [
+            "replay_baseline",
+            "final",
+        ]
+        assert all(
+            capture["llm_kb_oracle"]["artifact_count"] == 21
+            for capture in oracle["captures"]
+        )
+        oracle["captures"][0]["point_bindings"][0]["payload_sha256"] = (
+            "0" * 64
+        )
+        oracle["captures"][0]["point_bindings_sha256"] = evidence.stable_hash(
+            oracle["captures"][0]["point_bindings"]
+        )
+        oracle_path.write_text(json.dumps(oracle), encoding="utf-8")
+        oracle_ref["sha256"] = runner.sha256_file(oracle_path)
+        assert any(
+            "qdrant oracle observation binding mismatch" in violation
+            for violation in finalizer.fault_report_violations(
+                report,
+                source_sha=SOURCE_SHA,
+            )
+        )
 
 
 def test_writer_hashes_reopens_and_binds_supplemental_artifacts(

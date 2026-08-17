@@ -113,12 +113,20 @@ _PROJECTION_OBSERVATION_SCHEMA = {
 _QDRANT_PROJECTION_OBSERVATION_SCHEMA = {
     **_PROJECTION_OBSERVATION_SCHEMA,
     "collection": str,
+    "raw_point_id": str,
+    "payload_sha256": str,
+    "vector_sha256": str,
+    "vector_dimensions": int,
 }
 _POINT_SCHEMA = {
     "collection": str,
     "projection_type": str,
     "point_id": str,
+    "raw_point_id": str,
     "canon_id": str,
+    "payload_sha256": str,
+    "vector_sha256": str,
+    "vector_dimensions": int,
 }
 _PROJECTION_IDENTITY_SCHEMA = {
     "projection_type": str,
@@ -1866,6 +1874,8 @@ def _shape_violations(
                 )
             elif expected_type is int and nested < 0:
                 violations.append(f"{path}.{field} is negative")
+            elif field == "vector_dimensions" and nested == 0:
+                violations.append(f"{path}.{field} is not positive")
             elif expected_type is list:
                 item_type = int if field == "blocking_pids" else str
                 if any(type(item) is not item_type for item in nested):
@@ -2454,6 +2464,10 @@ def _external_relation_violations(
                         row["projection_type"],
                         row["canon_id"],
                         row["identity_id"],
+                        row["raw_point_id"],
+                        row["payload_sha256"],
+                        row["vector_sha256"],
+                        row["vector_dimensions"],
                     )
                     for row in projections
                 ]
@@ -2463,9 +2477,27 @@ def _external_relation_violations(
                         row["projection_type"],
                         row["canon_id"],
                         row["point_id"],
+                        row["raw_point_id"],
+                        row["payload_sha256"],
+                        row["vector_sha256"],
+                        row["vector_dimensions"],
                     )
                     for row in identities
                 ]
+                evidence_rows = [
+                    (row, "identity_id") for row in projections
+                ] + [(row, "point_id") for row in identities]
+                for row, identity_field in evidence_rows:
+                    expected_identity = (
+                        f"{row['raw_point_id']}"
+                        f"#payload-sha256={row['payload_sha256']}"
+                        f"#vector-sha256={row['vector_sha256']}"
+                    )
+                    if row[identity_field] != expected_identity:
+                        violations.append(
+                            f"after.state.{identity_path} Qdrant evidence "
+                            "identity binding mismatch"
+                        )
             else:
                 expected_coverage = [
                     (

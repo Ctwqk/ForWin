@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -14,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import UUID
 
 from psycopg import sql
 
@@ -113,6 +115,31 @@ CANON_PROJECTION_PAYLOAD_KEYS = {
     "trigger",
 }
 QDRANT_PROJECTION_TYPES = ("chapter_memory", "llm_kb")
+QDRANT_ORACLE_ARTIFACT_NAME = "qdrant-oracle-manifest.json"
+QDRANT_ORACLE_PHASES = ("replay_baseline", "final")
+LLM_KB_PROJECTION_VERSION = "llm_kb_v2"
+LLM_KB_ROOT_FILE_KEYS = frozenset(
+    {
+        "CURRENT_STATE.md",
+        "NEXT_CHAPTER_CONTEXT.md",
+        "ACTIVE_THREADS.md",
+        "CHARACTER_MEMORY.md",
+        "FACTION_MEMORY.md",
+        "MAP_CONTEXT.md",
+        "READER_PROMISES.md",
+        "KNOWLEDGE_GAPS.md",
+        "REVEAL_LADDER.md",
+        "MUST_NOT_REVEAL.md",
+        "RECENT_CHANGES.md",
+        "STYLE_AND_TONE.md",
+        "CONSTRAINTS.md",
+        "facts.jsonl",
+        "events.jsonl",
+        "graph_deltas.jsonl",
+        "open_questions.jsonl",
+    }
+)
+LLM_KB_VECTOR_ROLES = ("reviewer", "planner", "compiler")
 QDRANT_AMBIENT_COLLECTION_OVERRIDES = (
     "FORWIN_RECOVERY_QDRANT_COLLECTION",
     "FORWIN_RECOVERY_CHAPTER_MEMORY_QDRANT_COLLECTION",
@@ -602,20 +629,699 @@ def _healthy_components(
     }
 
 
+def _oracle_point_id(*parts: object) -> str:
+    # SHA-1 mirrors the stable production identity contract; it is not security.
+    digest = hashlib.sha1(
+        ":".join(str(part) for part in parts).encode("utf-8")
+    ).hexdigest()[:32]
+    return str(UUID(digest))
+
+
+def build_expected_chapter_memory_points(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    project_id: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    if not rows:
+        raise SetupBlocked("Canon chapter memory oracle is missing")
+    points: list[dict[str, Any]] = []
+    seen_chapters: set[int] = set()
+    for row in rows:
+        raw_chapter = row.get("chapter_number") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(row, Mapping)
+            or row.get("project_id") != project_id
+            or type(raw_chapter) is not int
+            or not 1 <= int(raw_chapter) <= int(chapter_number)
+            or int(raw_chapter) in seen_chapters
+        ):
+            raise SetupBlocked(
+                "Canon chapter memory oracle is not uniquely target-bound"
+            )
+        normalized_chapter = int(raw_chapter)
+        seen_chapters.add(normalized_chapter)
+        title = str(row.get("title") or "")
+        summary = str(row.get("summary") or "")
+        body = str(row.get("body_text") or "")
+        points.append(
+            {
+                "id": _oracle_point_id(project_id, normalized_chapter),
+                "payload": {
+                    "project_id": project_id,
+                    "chapter_number": normalized_chapter,
+                    "title": title,
+                    "summary": summary,
+                    "excerpt": body[:500],
+                },
+            }
+        )
+    return sorted(points, key=lambda point: int(point["payload"]["chapter_number"]))
+
+
+def _oracle_trim(text: object, limit: int) -> str:
+    normalized = str(text or "").strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _oracle_role_scope(file_key: str) -> str:
+    if "review" in file_key or "risk" in file_key:
+        return "reviewer"
+    if "plan" in file_key or "outline" in file_key:
+        return "planner"
+    return "writer"
+
+
+def _oracle_visibility(role_scope: str) -> str:
+    return {
+        "reviewer": "reviewer_only",
+        "planner": "planner_only",
+        "compiler": "compiler_only",
+    }.get(role_scope, "writer_safe")
+
+
+def _oracle_reference_fields(
+    file_key: str,
+    text: str,
+    source_refs: list[str],
+    *,
+    raw_payload: Mapping[str, Any] | None = None,
+) -> dict[str, list[str]]:
+    blob = "\n".join([text, *source_refs])
+
+    def ref_ids(ref_type: str) -> set[str]:
+        return set(
+            re.findall(
+                rf"(?:book_state:{ref_type}:|{ref_type}:)"
+                r"([A-Za-z0-9_.-]+)",
+                blob,
+            )
+        )
+
+    node_refs = ref_ids("node")
+    edge_refs = ref_ids("edge")
+    fact_refs = ref_ids("fact")
+    map_refs = {
+        f"{left or right}:{item_id}"
+        for left, right, item_id in re.findall(
+            r"(?:book_state:(map_node|map_edge):|(map_node|map_edge):)"
+            r"([A-Za-z0-9_.-]+)",
+            blob,
+        )
+    }
+    chapter_refs = set(re.findall(r"\bchapter:\d+\b", blob))
+    if raw_payload is not None:
+        item_id = str(raw_payload.get("id") or "").strip()
+        if item_id:
+            if file_key == "facts.jsonl":
+                fact_refs.add(item_id)
+            elif file_key == "graph_deltas.jsonl":
+                target_type = str(raw_payload.get("target_type") or "").strip()
+                target_id = str(raw_payload.get("target_id") or "").strip()
+                if target_type == "node" and target_id:
+                    node_refs.add(target_id)
+                elif target_type == "edge" and target_id:
+                    edge_refs.add(target_id)
+            else:
+                node_refs.add(item_id)
+        raw_chapter = raw_payload.get("as_of_chapter") or raw_payload.get(
+            "chapter_number"
+        )
+        if raw_chapter:
+            chapter_refs.add(f"chapter:{int(raw_chapter)}")
+    return {
+        "node_refs": sorted(node_refs),
+        "edge_refs": sorted(edge_refs),
+        "fact_refs": sorted(fact_refs),
+        "map_refs": sorted(map_refs),
+        "chapter_refs": sorted(chapter_refs),
+    }
+
+
+def _oracle_section(
+    *,
+    file_key: str,
+    section_key: str,
+    role_scope: str,
+    text: str,
+    source_refs: list[str],
+    source_digest: str,
+    chapter_number: int,
+    raw_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    refs = _oracle_reference_fields(
+        file_key,
+        text,
+        source_refs,
+        raw_payload=raw_payload,
+    )
+    visibility_scope = _oracle_visibility(role_scope)
+    section_digest = hashlib.sha1(
+        json.dumps(
+            {
+                "file_key": file_key,
+                "section_key": section_key,
+                "role_scope": role_scope,
+                "visibility_scope": visibility_scope,
+                "text": text,
+                "source_refs": source_refs,
+                **refs,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "index_kind": "llm_kb",
+        "as_of_chapter": int(chapter_number),
+        "projection_version": LLM_KB_PROJECTION_VERSION,
+        "file_key": file_key,
+        "section_key": section_key,
+        "role_scope": role_scope,
+        "visibility_scope": visibility_scope,
+        "canon_status": "canon_projection",
+        **refs,
+        "text": text,
+        "source_refs": source_refs,
+        "source_digest": source_digest,
+        "section_digest": section_digest,
+    }
+
+
+def _oracle_markdown_sections(
+    file_key: str,
+    content: str,
+    *,
+    source_digest: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    chunks: list[tuple[str, str]] = []
+    current_key = "root"
+    current_lines: list[str] = []
+    for raw_line in content.splitlines():
+        match = re.match(r"^(#{1,4})\s+(.+?)\s*$", raw_line)
+        if match and current_lines:
+            chunks.append((current_key, "\n".join(current_lines).strip()))
+            current_lines = []
+        if match:
+            heading = match.group(2).strip()
+            current_key = re.sub(
+                r"[^A-Za-z0-9_.-]+",
+                "-",
+                heading,
+            ).strip("-")[:80]
+            if not current_key:
+                current_key = (
+                    "section-"
+                    + hashlib.sha1(heading.encode("utf-8")).hexdigest()[:12]
+                )
+        current_lines.append(raw_line)
+    if current_lines:
+        chunks.append((current_key, "\n".join(current_lines).strip()))
+    key_counts: dict[str, int] = {}
+    unique_chunks: list[tuple[str, str]] = []
+    for section_key, text in chunks:
+        key_counts[section_key] = key_counts.get(section_key, 0) + 1
+        unique_key = (
+            section_key
+            if key_counts[section_key] == 1
+            else f"{section_key}-{key_counts[section_key]}"
+        )
+        unique_chunks.append((unique_key, text))
+    role_scope = _oracle_role_scope(file_key)
+    return [
+        _oracle_section(
+            file_key=file_key,
+            section_key=section_key,
+            role_scope=role_scope,
+            text=_oracle_trim(text, 3000),
+            source_refs=[f"llm_kb:{file_key}#{section_key}"],
+            source_digest=source_digest,
+            chapter_number=chapter_number,
+        )
+        for section_key, text in unique_chunks
+        if text.strip()
+    ]
+
+
+def _oracle_jsonl_sections(
+    file_key: str,
+    content: str,
+    *,
+    source_digest: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    for index, raw in enumerate(content.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SetupBlocked("LLM KB JSONL artifact is invalid") from exc
+        if not isinstance(payload, Mapping):
+            raise SetupBlocked("LLM KB JSONL artifact row is not an object")
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        sections.append(
+            _oracle_section(
+                file_key=file_key,
+                section_key=str(payload.get("id") or index),
+                role_scope=_oracle_role_scope(file_key),
+                text=_oracle_trim(text, 2400),
+                source_refs=[f"llm_kb:{file_key}:{index}"],
+                source_digest=source_digest,
+                chapter_number=chapter_number,
+                raw_payload=payload,
+            )
+        )
+    return sections
+
+
+def _oracle_role_sections(
+    role: str,
+    content: str,
+    *,
+    source_digest: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise SetupBlocked("LLM KB role artifact is invalid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise SetupBlocked("LLM KB role artifact is not an object")
+    file_key = f"packs/{role}/context.json"
+    sections = [
+        _oracle_section(
+            file_key=file_key,
+            section_key="context",
+            role_scope=role,
+            text=_oracle_trim(content, 6000),
+            source_refs=[f"llm_kb:pack:{role}"],
+            source_digest=source_digest,
+            chapter_number=chapter_number,
+        )
+    ]
+    contexts = payload.get("active_personality_contexts")
+    if contexts is None:
+        contexts = []
+    if not isinstance(contexts, list):
+        raise SetupBlocked("LLM KB role personality contexts are invalid")
+    for index, context in enumerate(contexts, start=1):
+        if not isinstance(context, Mapping):
+            raise SetupBlocked("LLM KB role personality context is invalid")
+        character_id = str(context.get("character_id") or index)
+        text = json.dumps(
+            {
+                "character_id": context.get("character_id", ""),
+                "character_name": context.get("character_name", ""),
+                "active_skills": context.get("active_skills", {}),
+                "current_behavior_bias": context.get(
+                    "current_behavior_bias",
+                    {},
+                ),
+                "constraints": context.get("constraints", []),
+                "source_refs": context.get("source_refs", []),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        sections.append(
+            _oracle_section(
+                file_key=f"packs/{role}/active_personality_context.json",
+                section_key=character_id,
+                role_scope=role,
+                text=_oracle_trim(text, 2400),
+                source_refs=[
+                    f"llm_kb:pack:{role}:active_personality_context:{character_id}"
+                ],
+                source_digest=source_digest,
+                chapter_number=chapter_number,
+            )
+        )
+    return sections
+
+
+def build_expected_llm_kb_points(
+    snapshot: Mapping[str, Any],
+    *,
+    project_id: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(snapshot, Mapping) or snapshot.get("project_id") != project_id:
+        raise SetupBlocked("LLM KB artifact snapshot is not project-bound")
+    raw_files = snapshot.get("files")
+    if not isinstance(raw_files, list):
+        raise SetupBlocked("LLM KB artifact snapshot files are missing")
+    files: dict[str, str] = {}
+    for row in raw_files:
+        if not isinstance(row, Mapping):
+            raise SetupBlocked("LLM KB artifact row is malformed")
+        path = str(row.get("path") or "")
+        content = row.get("content")
+        if not path or path in files or not isinstance(content, str):
+            raise SetupBlocked("LLM KB artifact path/content is invalid")
+        encoded = content.encode("utf-8")
+        if (
+            type(row.get("size")) is not int
+            or int(row["size"]) != len(encoded)
+            or row.get("content_sha256")
+            != hashlib.sha256(encoded).hexdigest()
+        ):
+            raise SetupBlocked("LLM KB artifact digest/size is invalid")
+        files[path] = content
+    index_content = files.get("retrieval_index.json")
+    if index_content is None:
+        raise SetupBlocked("LLM KB retrieval index artifact is missing")
+    try:
+        index = json.loads(index_content)
+    except json.JSONDecodeError as exc:
+        raise SetupBlocked("LLM KB retrieval index artifact is invalid") from exc
+    if (
+        not isinstance(index, Mapping)
+        or index.get("project_id") != project_id
+        or type(index.get("as_of_chapter")) is not int
+        or int(index["as_of_chapter"]) != int(chapter_number)
+        or index.get("projection_version") != LLM_KB_PROJECTION_VERSION
+    ):
+        raise SetupBlocked("LLM KB retrieval index target is invalid")
+    source_digest = _required_text(
+        index.get("source_digest"),
+        "LLM KB source digest",
+    )
+    indexed_files = index.get("files")
+    if (
+        not isinstance(indexed_files, list)
+        or any(not isinstance(item, str) for item in indexed_files)
+        or len(indexed_files) != len(set(indexed_files))
+        or set(indexed_files) != LLM_KB_ROOT_FILE_KEYS
+    ):
+        raise SetupBlocked("LLM KB retrieval index file set is invalid")
+    role_files = {
+        f"packs/{role}/context.json" for role in LLM_KB_VECTOR_ROLES
+    }
+    if set(files) != {"retrieval_index.json", *indexed_files, *role_files}:
+        raise SetupBlocked("LLM KB artifact snapshot file set is not exact")
+    sections: list[dict[str, Any]] = []
+    for file_key in sorted(indexed_files):
+        content = files[file_key]
+        if file_key.endswith(".jsonl"):
+            sections.extend(
+                _oracle_jsonl_sections(
+                    file_key,
+                    content,
+                    source_digest=source_digest,
+                    chapter_number=chapter_number,
+                )
+            )
+        else:
+            sections.extend(
+                _oracle_markdown_sections(
+                    file_key,
+                    content,
+                    source_digest=source_digest,
+                    chapter_number=chapter_number,
+                )
+            )
+    for role in LLM_KB_VECTOR_ROLES:
+        sections.extend(
+            _oracle_role_sections(
+                role,
+                files[f"packs/{role}/context.json"],
+                source_digest=source_digest,
+                chapter_number=chapter_number,
+            )
+        )
+    points: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for section in sections:
+        if not section["text"].strip():
+            continue
+        point_id = _oracle_point_id(
+            project_id,
+            section["file_key"],
+            section["section_key"],
+            section["role_scope"],
+        )
+        if point_id in seen_ids:
+            raise SetupBlocked("LLM KB artifact produced duplicate point identity")
+        seen_ids.add(point_id)
+        points.append(
+            {
+                "id": point_id,
+                "payload": {"project_id": project_id, **section},
+            }
+        )
+    if not points:
+        raise SetupBlocked("LLM KB artifact produced no expected points")
+    return sorted(points, key=lambda point: str(point["id"]))
+
+
+def _oracle_json_sha256(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _oracle_point_bindings(
+    projection_type: str,
+    collection: str,
+    points: Sequence[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    bindings = []
+    for point in points:
+        payload = point.get("payload") if isinstance(point, Mapping) else None
+        if not isinstance(payload, Mapping):
+            raise SetupBlocked("Qdrant oracle expected point is malformed")
+        bindings.append(
+            {
+                "projection_type": projection_type,
+                "collection": collection,
+                "raw_point_id": _required_text(
+                    point.get("id"),
+                    "Qdrant oracle point identity",
+                ),
+                "payload_sha256": _oracle_json_sha256(payload),
+            }
+        )
+    return sorted(
+        bindings,
+        key=lambda row: (
+            row["projection_type"],
+            row["collection"],
+            row["raw_point_id"],
+        ),
+    )
+
+
+def build_qdrant_oracle_capture(
+    *,
+    phase: str,
+    fault_id: str,
+    project_id: str,
+    canon_id: str,
+    chapter_number: int,
+    chapter_rows: Sequence[Mapping[str, Any]],
+    llm_kb_snapshot: Mapping[str, Any],
+    expected_points_by_projection: Mapping[
+        str,
+        Sequence[Mapping[str, Any]],
+    ],
+    collections: Mapping[str, str],
+) -> dict[str, Any]:
+    if phase not in QDRANT_ORACLE_PHASES:
+        raise SetupBlocked("Qdrant oracle capture phase is invalid")
+    if set(expected_points_by_projection) != set(QDRANT_PROJECTION_TYPES):
+        raise SetupBlocked("Qdrant oracle projection set is not exact")
+    if set(collections) != set(QDRANT_PROJECTION_TYPES):
+        raise SetupBlocked("Qdrant oracle collection set is not exact")
+    normalized_rows: list[dict[str, Any]] = []
+    row_manifest: list[dict[str, Any]] = []
+    for row in chapter_rows:
+        if not isinstance(row, Mapping):
+            raise SetupBlocked("Canon oracle row is malformed")
+        normalized = {
+            "project_id": row.get("project_id"),
+            "chapter_number": row.get("chapter_number"),
+            "title": str(row.get("title") or ""),
+            "summary": str(row.get("summary") or ""),
+            "body_text": str(row.get("body_text") or ""),
+        }
+        normalized_rows.append(normalized)
+        row_manifest.append(
+            {
+                "project_id": normalized["project_id"],
+                "chapter_number": normalized["chapter_number"],
+                "title_sha256": hashlib.sha256(
+                    normalized["title"].encode("utf-8")
+                ).hexdigest(),
+                "summary_sha256": hashlib.sha256(
+                    normalized["summary"].encode("utf-8")
+                ).hexdigest(),
+                "body_text_sha256": hashlib.sha256(
+                    normalized["body_text"].encode("utf-8")
+                ).hexdigest(),
+                "excerpt_sha256": hashlib.sha256(
+                    normalized["body_text"][:500].encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    raw_artifacts = llm_kb_snapshot.get("files")
+    if not isinstance(raw_artifacts, list):
+        raise SetupBlocked("LLM KB oracle artifact list is missing")
+    artifact_manifest = sorted(
+        (
+            {
+                "path": row.get("path"),
+                "size": row.get("size"),
+                "content_sha256": row.get("content_sha256"),
+            }
+            for row in raw_artifacts
+            if isinstance(row, Mapping)
+        ),
+        key=lambda row: str(row["path"]),
+    )
+    if len(artifact_manifest) != len(raw_artifacts):
+        raise SetupBlocked("LLM KB oracle artifact row is malformed")
+    point_bindings = [
+        binding
+        for projection_type in QDRANT_PROJECTION_TYPES
+        for binding in _oracle_point_bindings(
+            projection_type,
+            _required_text(
+                collections[projection_type],
+                f"{projection_type} oracle collection",
+            ),
+            expected_points_by_projection[projection_type],
+        )
+    ]
+    point_bindings.sort(
+        key=lambda row: (
+            row["projection_type"],
+            row["collection"],
+            row["raw_point_id"],
+        )
+    )
+    return {
+        "phase": phase,
+        "fault_id": fault_id,
+        "project_id": project_id,
+        "canon_id": canon_id,
+        "chapter_number": int(chapter_number),
+        "canon_oracle": {
+            "row_count": len(normalized_rows),
+            "source_rows_sha256": _oracle_json_sha256(normalized_rows),
+            "row_manifest_sha256": _oracle_json_sha256(row_manifest),
+            "rows": row_manifest,
+        },
+        "llm_kb_oracle": {
+            "root": llm_kb_snapshot.get("root"),
+            "artifact_count": len(artifact_manifest),
+            "artifacts_sha256": _oracle_json_sha256(artifact_manifest),
+            "artifacts": artifact_manifest,
+        },
+        "expected_point_count": len(point_bindings),
+        "expected_points_sha256": _oracle_json_sha256(
+            {
+                projection_type: list(
+                    expected_points_by_projection[projection_type]
+                )
+                for projection_type in QDRANT_PROJECTION_TYPES
+            }
+        ),
+        "point_bindings_sha256": _oracle_json_sha256(point_bindings),
+        "point_bindings": point_bindings,
+    }
+
+
 def _qdrant_point_evidence_identity(
     point_id: str,
     payload: Mapping[str, Any],
+    vector: Sequence[float],
 ) -> str:
     payload_sha256 = hashlib.sha256(
         canonical_json(payload).encode("utf-8")
     ).hexdigest()
-    return f"{point_id}#payload-sha256={payload_sha256}"
+    vector_sha256 = hashlib.sha256(
+        canonical_json(list(vector)).encode("utf-8")
+    ).hexdigest()
+    return (
+        f"{point_id}#payload-sha256={payload_sha256}"
+        f"#vector-sha256={vector_sha256}"
+    )
+
+
+def _qdrant_vector(point: Mapping[str, Any]) -> list[float]:
+    raw = point.get("vector")
+    if not isinstance(raw, Sequence) or isinstance(
+        raw,
+        (str, bytes, bytearray),
+    ):
+        raise SetupBlocked("Qdrant projection point vector is missing")
+    vector: list[float] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise SetupBlocked("Qdrant projection point vector is invalid")
+        try:
+            normalized = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise SetupBlocked(
+                "Qdrant projection point vector is invalid"
+            ) from exc
+        if not math.isfinite(normalized):
+            raise SetupBlocked("Qdrant projection point vector is not finite")
+        vector.append(normalized)
+    if not vector:
+        raise SetupBlocked("Qdrant projection point vector is empty")
+    if not any(value != 0.0 for value in vector):
+        raise SetupBlocked("Qdrant projection point vector is degenerate")
+    return vector
+
+
+def _expected_qdrant_payloads(
+    raw_points: Sequence[Mapping[str, Any]],
+    *,
+    projection_type: str,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw_points, Sequence) or isinstance(
+        raw_points,
+        (str, bytes, bytearray),
+    ):
+        raise SetupBlocked(
+            f"expected {projection_type} Qdrant points are not an array"
+        )
+    if not raw_points:
+        raise SetupBlocked(
+            f"expected {projection_type} Qdrant projection contains no points"
+        )
+    expected: dict[str, dict[str, Any]] = {}
+    for point in raw_points:
+        if not isinstance(point, Mapping):
+            raise SetupBlocked("expected Qdrant projection point is malformed")
+        raw_point_id = point.get("id")
+        if isinstance(raw_point_id, bool) or not isinstance(
+            raw_point_id,
+            (str, int),
+        ):
+            raise SetupBlocked("expected Qdrant point identity is invalid")
+        point_id = str(raw_point_id).strip()
+        payload = point.get("payload")
+        if not point_id or not isinstance(payload, Mapping):
+            raise SetupBlocked("expected Qdrant point payload is missing")
+        if point_id in expected:
+            raise SetupBlocked("expected Qdrant point identity is duplicated")
+        expected[point_id] = dict(payload)
+    return expected
 
 
 def normalize_qdrant_projections(
     *,
     status: Mapping[str, Any],
     points_by_projection: Mapping[str, Sequence[Mapping[str, Any]]],
+    expected_points_by_projection: Mapping[
+        str,
+        Sequence[Mapping[str, Any]],
+    ],
     project_id: str,
     canon_id: str,
     chapter_number: int,
@@ -626,6 +1332,8 @@ def normalize_qdrant_projections(
         raise SetupBlocked("Qdrant projection collection set is not exact")
     if set(points_by_projection) != expected:
         raise SetupBlocked("Qdrant point projection set is not exact")
+    if set(expected_points_by_projection) != expected:
+        raise SetupBlocked("expected Qdrant point projection set is not exact")
     normalized_collections = {
         projection_type: _required_text(
             collections[projection_type],
@@ -646,6 +1354,10 @@ def normalize_qdrant_projections(
     raw_identities: set[tuple[str, str]] = set()
     for projection_type in QDRANT_PROJECTION_TYPES:
         raw_points = points_by_projection[projection_type]
+        expected_payloads = _expected_qdrant_payloads(
+            expected_points_by_projection[projection_type],
+            projection_type=projection_type,
+        )
         if not isinstance(raw_points, Sequence) or isinstance(
             raw_points,
             (str, bytes, bytearray),
@@ -658,6 +1370,8 @@ def normalize_qdrant_projections(
                 f"{projection_type} Qdrant projection contains no points"
             )
         collection = normalized_collections[projection_type]
+        observed_point_ids: set[str] = set()
+        observed_vector_dimensions: set[int] = set()
         for point in raw_points:
             if not isinstance(point, Mapping):
                 raise SetupBlocked("Qdrant projection contains a malformed point")
@@ -674,6 +1388,7 @@ def normalize_qdrant_projections(
             if identity in raw_identities:
                 raise SetupBlocked("Qdrant duplicate point identity was observed")
             raw_identities.add(identity)
+            observed_point_ids.add(point_id)
             payload = point.get("payload")
             if not isinstance(payload, Mapping):
                 raise SetupBlocked("Qdrant projection point payload is missing")
@@ -682,7 +1397,7 @@ def normalize_qdrant_projections(
             if projection_type == "chapter_memory":
                 if (
                     type(payload.get("chapter_number")) is not int
-                    or int(payload["chapter_number"]) != chapter_number
+                    or not 1 <= int(payload["chapter_number"]) <= chapter_number
                 ):
                     raise SetupBlocked(
                         "chapter_memory Qdrant payload chapter is not bound"
@@ -693,9 +1408,27 @@ def normalize_qdrant_projections(
                 or int(payload["as_of_chapter"]) != chapter_number
             ):
                 raise SetupBlocked("llm_kb Qdrant payload target is not bound")
+            expected_payload = expected_payloads.get(point_id)
+            if expected_payload is None:
+                raise SetupBlocked(
+                    f"{projection_type} Qdrant point identity is not expected"
+                )
+            if dict(payload) != expected_payload:
+                raise SetupBlocked(
+                    f"{projection_type} Qdrant point does not match expected payload"
+                )
+            vector = _qdrant_vector(point)
+            observed_vector_dimensions.add(len(vector))
+            payload_sha256 = hashlib.sha256(
+                canonical_json(payload).encode("utf-8")
+            ).hexdigest()
+            vector_sha256 = hashlib.sha256(
+                canonical_json(vector).encode("utf-8")
+            ).hexdigest()
             evidence_identity = _qdrant_point_evidence_identity(
                 point_id,
                 payload,
+                vector,
             )
             projections.append(
                 {
@@ -704,6 +1437,10 @@ def normalize_qdrant_projections(
                     "canon_id": canon_id,
                     "status": "converged",
                     "collection": collection,
+                    "raw_point_id": point_id,
+                    "payload_sha256": payload_sha256,
+                    "vector_sha256": vector_sha256,
+                    "vector_dimensions": len(vector),
                 }
             )
             identities.append(
@@ -711,8 +1448,20 @@ def normalize_qdrant_projections(
                     "collection": collection,
                     "projection_type": projection_type,
                     "point_id": evidence_identity,
+                    "raw_point_id": point_id,
                     "canon_id": canon_id,
+                    "payload_sha256": payload_sha256,
+                    "vector_sha256": vector_sha256,
+                    "vector_dimensions": len(vector),
                 }
+            )
+        if observed_point_ids != set(expected_payloads):
+            raise SetupBlocked(
+                f"{projection_type} Qdrant point identity set is not exact"
+            )
+        if len(observed_vector_dimensions) != 1:
+            raise SetupBlocked(
+                f"{projection_type} Qdrant vector dimensions are inconsistent"
             )
     projections.sort(
         key=lambda row: (
@@ -886,6 +1635,29 @@ PROJECTION_IDENTITIES_SQL = """
     WHERE project_id = %s
     ORDER BY projection_kind, id
     /* task4 projection identities */
+"""
+
+CHAPTER_MEMORY_ORACLE_SQL = """
+    SELECT
+        plans.project_id,
+        plans.chapter_number,
+        plans.title,
+        drafts.summary,
+        drafts.body_text
+    FROM canon_commit_records AS commits
+    JOIN candidate_draft_records AS candidates
+      ON candidates.id = commits.candidate_id
+    JOIN chapter_plans AS plans
+      ON plans.id = candidates.chapter_plan_id
+    JOIN chapter_drafts AS drafts
+      ON drafts.id = candidates.candidate_draft_id
+    WHERE commits.project_id = %s
+      AND commits.chapter_number <= %s
+      AND commits.status = 'committed'
+      AND candidates.status = 'accepted'
+      AND plans.status = 'accepted'
+    ORDER BY plans.chapter_number
+    /* task4 chapter memory oracle */
 """
 
 FIXTURE_BOUNDARY_SQL = """
@@ -1114,6 +1886,15 @@ class SQLCollector:
         return self.source.fetch_all(
             PROJECTION_IDENTITIES_SQL,
             (fixture.project_id,),
+        )
+
+    def chapter_memory_oracle_rows(
+        self,
+        fixture: FixtureContext,
+    ) -> list[dict[str, Any]]:
+        return self.source.fetch_all(
+            CHAPTER_MEMORY_ORACLE_SQL,
+            (fixture.project_id, fixture.chapter_number),
         )
 
     def wait_candidate_fixture(
@@ -1396,7 +2177,7 @@ class QdrantReader:
                 },
                 "limit": 256,
                 "with_payload": True,
-                "with_vector": False,
+                "with_vector": True,
             }
             if offset is not None:
                 body["offset"] = offset
@@ -1473,6 +2254,7 @@ class LiveRunner:
         self.barrier_observation: BarrierObservation | None = None
         self.fixture: FixtureContext | None = None
         self.supplemental_artifacts: dict[str, dict[str, Any]] = {}
+        self.qdrant_oracle_captures: list[dict[str, Any]] = []
 
     def run(self) -> LiveRunResult:
         snapshots: dict[str, dict[str, Any]] | None = None
@@ -1774,6 +2556,7 @@ class LiveRunner:
         replay_baseline = self._collect_projection_evidence(
             status=status,
             fixture=fixture,
+            oracle_phase="replay_baseline",
         )
         self.stage = "projection_replay"
         self.api.refresh_projection(
@@ -1793,6 +2576,7 @@ class LiveRunner:
         final = self._collect_projection_evidence(
             status=status,
             fixture=fixture,
+            oracle_phase="final",
         )
         external = after["state"]["external"]
         if self.fault_kind == "qdrant_unavailable":
@@ -1816,22 +2600,62 @@ class LiveRunner:
         *,
         status: Mapping[str, Any],
         fixture: FixtureContext,
+        oracle_phase: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if self.fault_kind == "qdrant_unavailable":
             if self.qdrant is None:
                 raise SetupBlocked("Qdrant reader is missing")
-            return normalize_qdrant_projections(
+            chapter_rows = self.sql.chapter_memory_oracle_rows(fixture)
+            llm_kb_snapshot = self.controller.llm_kb_artifact_snapshot(
+                self.fault_id,
+                fixture.project_id,
+            )
+            expected_points = {
+                "chapter_memory": build_expected_chapter_memory_points(
+                    chapter_rows,
+                    project_id=fixture.project_id,
+                    chapter_number=fixture.chapter_number,
+                ),
+                "llm_kb": build_expected_llm_kb_points(
+                    llm_kb_snapshot,
+                    project_id=fixture.project_id,
+                    chapter_number=fixture.chapter_number,
+                ),
+            }
+            normalized = normalize_qdrant_projections(
                 status=status,
                 points_by_projection=(
                     self.qdrant.project_points_by_projection(
                         fixture.project_id
                     )
                 ),
+                expected_points_by_projection=expected_points,
                 project_id=fixture.project_id,
                 canon_id=fixture.canon_id,
                 chapter_number=fixture.chapter_number,
                 collections=self.qdrant.collections,
             )
+            capture = build_qdrant_oracle_capture(
+                phase=_required_text(oracle_phase, "Qdrant oracle phase"),
+                fault_id=self.fault_id,
+                project_id=fixture.project_id,
+                canon_id=fixture.canon_id,
+                chapter_number=fixture.chapter_number,
+                chapter_rows=chapter_rows,
+                llm_kb_snapshot=llm_kb_snapshot,
+                expected_points_by_projection=expected_points,
+                collections=self.qdrant.collections,
+            )
+            if len(self.qdrant_oracle_captures) >= len(QDRANT_ORACLE_PHASES):
+                raise SetupBlocked("Qdrant oracle capture count exceeded")
+            self.qdrant_oracle_captures.append(capture)
+            self.supplemental_artifacts[QDRANT_ORACLE_ARTIFACT_NAME] = {
+                "schema_version": 1,
+                "fault_kind": self.fault_kind,
+                "fault_id": self.fault_id,
+                "captures": list(self.qdrant_oracle_captures),
+            }
+            return normalized
         return normalize_projection_identities(
             status=status,
             rows=self.sql.projection_identity_rows(fixture),

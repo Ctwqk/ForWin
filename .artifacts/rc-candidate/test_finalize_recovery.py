@@ -144,6 +144,98 @@ def volume_fingerprint(name: str, created_at: str) -> str:
     return evidence.stable_hash({"created_at": created_at, "name": name})
 
 
+def qdrant_oracle_payload(
+    fault_id: str,
+    snapshots: dict[str, dict],
+) -> dict:
+    after = snapshots["after"]["state"]
+    canon = after["database"]["canon_commits"][0]
+    artifact_manifest = [
+        {
+            "path": path,
+            "size": 0,
+            "content_sha256": evidence.stable_hash(
+                {"path": path, "fixture": "llm-kb"}
+            ),
+        }
+        for path in sorted(recovery.LLM_KB_REQUIRED_ARTIFACT_PATHS)
+    ]
+    row_manifest = [
+        {
+            "project_id": canon["project_id"],
+            "chapter_number": chapter_number,
+            "title_sha256": evidence.stable_hash(
+                {"chapter": chapter_number, "field": "title"}
+            ),
+            "summary_sha256": evidence.stable_hash(
+                {"chapter": chapter_number, "field": "summary"}
+            ),
+            "body_text_sha256": evidence.stable_hash(
+                {"chapter": chapter_number, "field": "body"}
+            ),
+            "excerpt_sha256": evidence.stable_hash(
+                {"chapter": chapter_number, "field": "excerpt"}
+            ),
+        }
+        for chapter_number in range(1, canon["chapter_number"] + 1)
+    ]
+    captures = []
+    for phase, projection_path in recovery.QDRANT_ORACLE_PHASE_PATHS.items():
+        point_bindings = sorted(
+            (
+                {
+                    "projection_type": row["projection_type"],
+                    "collection": row["collection"],
+                    "raw_point_id": row["raw_point_id"],
+                    "payload_sha256": row["payload_sha256"],
+                }
+                for row in after["external"][projection_path]
+            ),
+            key=lambda row: (
+                row["projection_type"],
+                row["collection"],
+                row["raw_point_id"],
+            ),
+        )
+        captures.append(
+            {
+                "phase": phase,
+                "fault_id": fault_id,
+                "project_id": canon["project_id"],
+                "canon_id": canon["canon_id"],
+                "chapter_number": canon["chapter_number"],
+                "canon_oracle": {
+                    "row_count": len(row_manifest),
+                    "source_rows_sha256": evidence.stable_hash(
+                        {"rows": row_manifest, "source": "canon-sql"}
+                    ),
+                    "row_manifest_sha256": evidence.stable_hash(row_manifest),
+                    "rows": row_manifest,
+                },
+                "llm_kb_oracle": {
+                    "root": f"/app/data/llm_kb/{canon['project_id']}",
+                    "artifact_count": len(artifact_manifest),
+                    "artifacts_sha256": evidence.stable_hash(
+                        artifact_manifest
+                    ),
+                    "artifacts": artifact_manifest,
+                },
+                "expected_point_count": len(point_bindings),
+                "expected_points_sha256": evidence.stable_hash(
+                    {"phase": phase, "points": point_bindings}
+                ),
+                "point_bindings_sha256": evidence.stable_hash(point_bindings),
+                "point_bindings": point_bindings,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "fault_kind": "qdrant_unavailable",
+        "fault_id": fault_id,
+        "captures": captures,
+    }
+
+
 def fault_report(
     tmp_path: Path,
     kind: str,
@@ -314,6 +406,19 @@ def fault_report(
                 "name": "barrier-observation.json",
                 "path": str(barrier_path),
                 "sha256": recovery.sha256_file(barrier_path),
+            }
+        )
+    if kind == "qdrant_unavailable":
+        oracle_path = fault_dir / recovery.QDRANT_ORACLE_ARTIFACT_NAME
+        oracle_path.write_text(
+            json.dumps(qdrant_oracle_payload(fault_id, snapshots)),
+            encoding="utf-8",
+        )
+        report["supplemental_artifacts"].append(
+            {
+                "name": recovery.QDRANT_ORACLE_ARTIFACT_NAME,
+                "path": str(oracle_path),
+                "sha256": recovery.sha256_file(oracle_path),
             }
         )
     contract = recovery.SERVICE_FAULTS.get(kind)
@@ -698,6 +803,86 @@ def test_barrier_fault_requires_supplemental_evidence(tmp_path: Path) -> None:
 
     assert (
         "qdrant_unavailable.barrier observation artifact is missing"
+        in violations
+    )
+
+
+def test_qdrant_fault_requires_oracle_manifest(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    report["supplemental_artifacts"] = [
+        artifact
+        for artifact in report["supplemental_artifacts"]
+        if artifact["name"] != recovery.QDRANT_ORACLE_ARTIFACT_NAME
+    ]
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "qdrant_unavailable.qdrant oracle manifest artifact is missing"
+        in violations
+    )
+
+
+def test_qdrant_oracle_requires_both_projection_types(tmp_path: Path) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = next(
+        item
+        for item in report["supplemental_artifacts"]
+        if item["name"] == recovery.QDRANT_ORACLE_ARTIFACT_NAME
+    )
+    path = Path(artifact["path"])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for capture in payload["captures"]:
+        capture["point_bindings"] = [
+            row
+            for row in capture["point_bindings"]
+            if row["projection_type"] != "llm_kb"
+        ]
+        capture["expected_point_count"] = len(capture["point_bindings"])
+        capture["point_bindings_sha256"] = evidence.stable_hash(
+            capture["point_bindings"]
+        )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    artifact["sha256"] = recovery.sha256_file(path)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert "qdrant_unavailable.qdrant oracle point binding mismatch" in violations
+
+
+def test_qdrant_oracle_rejects_oversized_aggregate_source_manifest(
+    tmp_path: Path,
+) -> None:
+    report = fault_report(tmp_path, "qdrant_unavailable")
+    artifact = next(
+        item
+        for item in report["supplemental_artifacts"]
+        if item["name"] == recovery.QDRANT_ORACLE_ARTIFACT_NAME
+    )
+    path = Path(artifact["path"])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for capture in payload["captures"]:
+        for row in capture["llm_kb_oracle"]["artifacts"][:5]:
+            row["size"] = 4 * 1024 * 1024
+        capture["llm_kb_oracle"]["artifacts_sha256"] = evidence.stable_hash(
+            capture["llm_kb_oracle"]["artifacts"]
+        )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    artifact["sha256"] = recovery.sha256_file(path)
+
+    violations = recovery.fault_report_violations(
+        report,
+        source_sha=SOURCE_SHA,
+    )
+
+    assert (
+        "qdrant_unavailable.LLM KB oracle artifact binding mismatch"
         in violations
     )
 

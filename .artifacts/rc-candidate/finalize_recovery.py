@@ -132,9 +132,40 @@ BARRIER_FAULTS = frozenset(
     }
 )
 BARRIER_ARTIFACT_NAME = "barrier-observation.json"
+QDRANT_ORACLE_ARTIFACT_NAME = "qdrant-oracle-manifest.json"
+QDRANT_ORACLE_PHASE_PATHS = {
+    "replay_baseline": "replay_baseline_projections",
+    "final": "projections",
+}
+LLM_KB_REQUIRED_ARTIFACT_PATHS = frozenset(
+    {
+        "CURRENT_STATE.md",
+        "NEXT_CHAPTER_CONTEXT.md",
+        "ACTIVE_THREADS.md",
+        "CHARACTER_MEMORY.md",
+        "FACTION_MEMORY.md",
+        "MAP_CONTEXT.md",
+        "READER_PROMISES.md",
+        "KNOWLEDGE_GAPS.md",
+        "REVEAL_LADDER.md",
+        "MUST_NOT_REVEAL.md",
+        "RECENT_CHANGES.md",
+        "STYLE_AND_TONE.md",
+        "CONSTRAINTS.md",
+        "facts.jsonl",
+        "events.jsonl",
+        "graph_deltas.jsonl",
+        "open_questions.jsonl",
+        "retrieval_index.json",
+        "packs/reviewer/context.json",
+        "packs/planner/context.json",
+        "packs/compiler/context.json",
+    }
+)
 BARRIER_APPLICATION_NAME = "forwin-recovery-generation-worker"
 BARRIER_TARGET_ROLE = "generation-worker"
 _SAFE_HOLD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def sha256_file(path: Path) -> str:
@@ -1207,6 +1238,302 @@ def barrier_observation_violations(
     return violations
 
 
+def _bound_supplemental_json(
+    kind: str,
+    *,
+    report: dict[str, Any],
+    evidence_dir: Path,
+    artifact_name: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    violations: list[str] = []
+    supplemental = report.get("supplemental_artifacts")
+    refs = supplemental if isinstance(supplemental, list) else []
+    matching = [
+        item
+        for item in refs
+        if isinstance(item, dict) and item.get("name") == artifact_name
+    ]
+    label = artifact_name.removesuffix(".json").replace("-", " ")
+    if len(matching) != 1:
+        state = "missing" if not matching else "duplicated"
+        return None, [f"{kind}.{label} artifact is {state}"]
+    identity = matching[0]
+    path = Path(str(identity.get("path") or ""))
+    if path.name != artifact_name or path.parent.resolve() != evidence_dir.resolve():
+        return None, [f"{kind}.{label} artifact directory mismatch"]
+    expected_hash = str(identity.get("sha256") or "")
+    directory_fd = -1
+    artifact_fd = -1
+    try:
+        directory_fd = os.open(
+            str(evidence_dir.resolve()),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        artifact_fd = os.open(
+            artifact_name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+        metadata = os.fstat(artifact_fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 2 * 1024 * 1024:
+            return None, [f"{kind}.{label} artifact is not a bounded regular file"]
+        with os.fdopen(artifact_fd, "rb", closefd=True) as handle:
+            artifact_fd = -1
+            raw = handle.read(2 * 1024 * 1024 + 1)
+    except OSError as exc:
+        detail = "symbolic link is forbidden" if exc.errno == errno.ELOOP else "hash mismatch"
+        return None, [f"{kind}.{label} artifact {detail}"]
+    finally:
+        if artifact_fd >= 0:
+            os.close(artifact_fd)
+        if directory_fd >= 0:
+            os.close(directory_fd)
+    if (
+        len(raw) != metadata.st_size
+        or _SHA256_PATTERN.fullmatch(expected_hash) is None
+        or hashlib.sha256(raw).hexdigest() != expected_hash
+    ):
+        return None, [f"{kind}.{label} artifact hash mismatch"]
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, [f"{kind}.{label} artifact is invalid JSON"]
+    if not isinstance(payload, dict):
+        return None, [f"{kind}.{label} artifact is not an object"]
+    return payload, violations
+
+
+def qdrant_oracle_manifest_violations(
+    kind: str,
+    *,
+    report: dict[str, Any],
+    snapshots: dict[str, dict[str, Any]],
+    evidence_dir: Path,
+) -> list[str]:
+    if kind != "qdrant_unavailable":
+        return []
+    payload, violations = _bound_supplemental_json(
+        kind,
+        report=report,
+        evidence_dir=evidence_dir,
+        artifact_name=QDRANT_ORACLE_ARTIFACT_NAME,
+    )
+    if payload is None:
+        return violations
+    if set(payload) != {"schema_version", "fault_kind", "fault_id", "captures"}:
+        violations.append(f"{kind}.qdrant oracle manifest schema mismatch")
+        return violations
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("fault_kind") != kind
+        or payload.get("fault_id") != report.get("fault_id")
+    ):
+        violations.append(f"{kind}.qdrant oracle manifest identity mismatch")
+    captures = payload.get("captures")
+    if not isinstance(captures, list) or len(captures) != 2:
+        violations.append(f"{kind}.qdrant oracle capture set mismatch")
+        return violations
+    after = snapshots.get("after")
+    after = after if isinstance(after, dict) else {}
+    state = after.get("state")
+    state = state if isinstance(state, dict) else {}
+    database = state.get("database")
+    database = database if isinstance(database, dict) else {}
+    canon_rows = database.get("canon_commits")
+    canon_rows = canon_rows if isinstance(canon_rows, list) else []
+    canon = canon_rows[0] if len(canon_rows) == 1 else {}
+    external = state.get("external")
+    external = external if isinstance(external, dict) else {}
+    expected_capture_keys = {
+        "phase",
+        "fault_id",
+        "project_id",
+        "canon_id",
+        "chapter_number",
+        "canon_oracle",
+        "llm_kb_oracle",
+        "expected_point_count",
+        "expected_points_sha256",
+        "point_bindings_sha256",
+        "point_bindings",
+    }
+    seen_phases: list[str] = []
+    previous_bindings: list[dict[str, Any]] | None = None
+    for capture in captures:
+        if not isinstance(capture, dict) or set(capture) != expected_capture_keys:
+            violations.append(f"{kind}.qdrant oracle capture schema mismatch")
+            continue
+        phase = str(capture.get("phase") or "")
+        seen_phases.append(phase)
+        if (
+            phase not in QDRANT_ORACLE_PHASE_PATHS
+            or capture.get("fault_id") != report.get("fault_id")
+            or capture.get("project_id") != canon.get("project_id")
+            or capture.get("canon_id") != canon.get("canon_id")
+            or capture.get("chapter_number") != canon.get("chapter_number")
+        ):
+            violations.append(f"{kind}.qdrant oracle capture identity mismatch")
+        canon_oracle = capture.get("canon_oracle")
+        if not isinstance(canon_oracle, dict) or set(canon_oracle) != {
+            "row_count",
+            "source_rows_sha256",
+            "row_manifest_sha256",
+            "rows",
+        }:
+            violations.append(f"{kind}.Canon oracle manifest schema mismatch")
+        else:
+            rows = canon_oracle.get("rows")
+            if (
+                not isinstance(rows, list)
+                or canon_oracle.get("row_count") != len(rows)
+                or len(rows) != int(capture.get("chapter_number") or 0)
+                or evaluator.stable_hash(rows)
+                != canon_oracle.get("row_manifest_sha256")
+                or _SHA256_PATTERN.fullmatch(
+                    str(canon_oracle.get("source_rows_sha256") or "")
+                )
+                is None
+            ):
+                violations.append(f"{kind}.Canon oracle manifest digest mismatch")
+            elif [row.get("chapter_number") for row in rows] != list(
+                range(1, int(capture["chapter_number"]) + 1)
+            ) or any(
+                not isinstance(row, dict)
+                or set(row)
+                != {
+                    "project_id",
+                    "chapter_number",
+                    "title_sha256",
+                    "summary_sha256",
+                    "body_text_sha256",
+                    "excerpt_sha256",
+                }
+                or row.get("project_id") != capture.get("project_id")
+                or any(
+                    _SHA256_PATTERN.fullmatch(str(row.get(field) or "")) is None
+                    for field in (
+                        "title_sha256",
+                        "summary_sha256",
+                        "body_text_sha256",
+                        "excerpt_sha256",
+                    )
+                )
+                for row in rows
+            ):
+                violations.append(f"{kind}.Canon oracle row binding mismatch")
+        llm_oracle = capture.get("llm_kb_oracle")
+        if not isinstance(llm_oracle, dict) or set(llm_oracle) != {
+            "root",
+            "artifact_count",
+            "artifacts_sha256",
+            "artifacts",
+        }:
+            violations.append(f"{kind}.LLM KB oracle manifest schema mismatch")
+        else:
+            artifacts = llm_oracle.get("artifacts")
+            if not isinstance(artifacts, list):
+                artifacts = []
+            artifact_paths = [
+                row.get("path") if isinstance(row, dict) else None
+                for row in artifacts
+            ]
+            if (
+                llm_oracle.get("root")
+                != f"/app/data/llm_kb/{capture.get('project_id')}"
+                or llm_oracle.get("artifact_count") != len(artifacts)
+                or set(artifact_paths) != LLM_KB_REQUIRED_ARTIFACT_PATHS
+                or len(artifact_paths) != len(set(artifact_paths))
+                or sum(
+                    row.get("size", 0)
+                    for row in artifacts
+                    if isinstance(row, dict)
+                    and type(row.get("size")) is int
+                )
+                > 16 * 1024 * 1024
+                or evaluator.stable_hash(artifacts)
+                != llm_oracle.get("artifacts_sha256")
+                or any(
+                    not isinstance(row, dict)
+                    or set(row) != {"path", "size", "content_sha256"}
+                    or type(row.get("size")) is not int
+                    or not 0 <= row["size"] <= 4 * 1024 * 1024
+                    or _SHA256_PATTERN.fullmatch(
+                        str(row.get("content_sha256") or "")
+                    )
+                    is None
+                    for row in artifacts
+                )
+            ):
+                violations.append(f"{kind}.LLM KB oracle artifact binding mismatch")
+        bindings = capture.get("point_bindings")
+        if not isinstance(bindings, list):
+            bindings = []
+        if (
+            capture.get("expected_point_count") != len(bindings)
+            or not bindings
+            or {
+                row.get("projection_type")
+                for row in bindings
+                if isinstance(row, dict)
+            }
+            != {"chapter_memory", "llm_kb"}
+            or evaluator.stable_hash(bindings)
+            != capture.get("point_bindings_sha256")
+            or _SHA256_PATTERN.fullmatch(
+                str(capture.get("expected_points_sha256") or "")
+            )
+            is None
+            or any(
+                not isinstance(row, dict)
+                or set(row)
+                != {
+                    "projection_type",
+                    "collection",
+                    "raw_point_id",
+                    "payload_sha256",
+                }
+                or row.get("projection_type")
+                not in {"chapter_memory", "llm_kb"}
+                or not str(row.get("collection") or "")
+                or not str(row.get("raw_point_id") or "")
+                or _SHA256_PATTERN.fullmatch(
+                    str(row.get("payload_sha256") or "")
+                )
+                is None
+                for row in bindings
+            )
+        ):
+            violations.append(f"{kind}.qdrant oracle point binding mismatch")
+        if previous_bindings is not None and bindings != previous_bindings:
+            violations.append(f"{kind}.qdrant oracle changed across replay")
+        previous_bindings = bindings
+        observed_rows = external.get(QDRANT_ORACLE_PHASE_PATHS.get(phase, ""))
+        if not isinstance(observed_rows, list):
+            observed_rows = []
+        observed_bindings = sorted(
+            (
+                {
+                    "projection_type": row.get("projection_type"),
+                    "collection": row.get("collection"),
+                    "raw_point_id": row.get("raw_point_id"),
+                    "payload_sha256": row.get("payload_sha256"),
+                }
+                for row in observed_rows
+                if isinstance(row, dict)
+            ),
+            key=lambda row: (
+                str(row["projection_type"]),
+                str(row["collection"]),
+                str(row["raw_point_id"]),
+            ),
+        )
+        if observed_bindings != bindings:
+            violations.append(f"{kind}.qdrant oracle observation binding mismatch")
+    if seen_phases != list(QDRANT_ORACLE_PHASE_PATHS):
+        violations.append(f"{kind}.qdrant oracle capture phase mismatch")
+    return violations
+
+
 def fault_report_violations(
     report: dict[str, Any],
     *,
@@ -1350,6 +1677,14 @@ def fault_report_violations(
             violations.append(f"{kind}.event schema version mismatch")
         violations.extend(
             barrier_observation_violations(
+                kind,
+                report=report,
+                snapshots=snapshots,
+                evidence_dir=event_path.resolve().parent,
+            )
+        )
+        violations.extend(
+            qdrant_oracle_manifest_violations(
                 kind,
                 report=report,
                 snapshots=snapshots,

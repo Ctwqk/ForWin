@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -2621,6 +2622,223 @@ def test_file_inventory_script_rejects_missing_and_symlinked_paths(
     )
 
     assert completed.returncode != 0
+
+
+def test_llm_kb_artifact_snapshot_is_identity_checked_and_content_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = frozen_identity()
+    run_identity = {"run_id": "5" * 32}
+    project_id = "project-a"
+    content = json.dumps(
+        {
+            "project_id": project_id,
+            "as_of_chapter": 1,
+            "source_digest": "digest-a",
+            "projection_version": "llm_kb_v2",
+            "files": [],
+        }
+    )
+    encoded = content.encode("utf-8")
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda _fault_id: {
+            "identity": identity,
+            "run_identity": run_identity,
+        },
+    )
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def compose(*args: str, **kwargs: object) -> str:
+        calls.append((args, dict(kwargs)))
+        return json.dumps(
+            {
+                "project_id": project_id,
+                "root": f"/app/data/llm_kb/{project_id}",
+                "files": [
+                    {
+                        "path": "retrieval_index.json",
+                        "size": len(encoded),
+                        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+                        "content": content,
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(stack, "compose", compose)
+    payload = stack.llm_kb_artifact_snapshot.__wrapped__(
+        "fault-llm-kb",
+        project_id,
+    )
+
+    assert payload["files"][0]["content"] == content
+    args, kwargs = calls[0]
+    assert args[:4] == ("exec", "-T", "outbox-worker", "python")
+    assert "content_sha256" in args[5]
+    assert args[-2:] == ("/app/data/llm_kb", project_id)
+    assert kwargs == {"run_identity": run_identity}
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ("packs-symlink", "role-symlink", "file-symlink"),
+)
+def test_llm_kb_artifact_snapshot_script_rejects_symlinked_path_components(
+    layout: str,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "llm_kb"
+    project_root = root / "project-a"
+    project_root.mkdir(parents=True)
+    packs = project_root / "packs"
+    if layout == "packs-symlink":
+        real_packs = project_root / "real-packs"
+        (real_packs / "reviewer").mkdir(parents=True)
+        (real_packs / "reviewer" / "context.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+        packs.symlink_to(real_packs, target_is_directory=True)
+    elif layout == "role-symlink":
+        real_role = packs / "real-reviewer"
+        real_role.mkdir(parents=True)
+        (real_role / "context.json").write_text("{}", encoding="utf-8")
+        (packs / "reviewer").symlink_to(
+            real_role,
+            target_is_directory=True,
+        )
+    else:
+        role = packs / "reviewer"
+        role.mkdir(parents=True)
+        target = role / "real-context.json"
+        target.write_text("{}", encoding="utf-8")
+        (role / "context.json").symlink_to(target)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            stack.llm_kb_artifact_snapshot_script(str(root)),
+            str(root),
+            "project-a",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "canonical" in completed.stderr or "symbolic" in completed.stderr
+
+
+def test_llm_kb_artifact_snapshot_script_reads_regular_file_by_descriptor(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "llm_kb"
+    project_root = root / "project-a"
+    project_root.mkdir(parents=True)
+    content = '{"project_id":"project-a"}'
+    (project_root / "retrieval_index.json").write_text(
+        content,
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            stack.llm_kb_artifact_snapshot_script(str(root)),
+            str(root),
+            "project-a",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["root"] == str(project_root)
+    assert len(payload["files"]) == 1
+    artifact_row = payload["files"][0]
+    assert artifact_row["path"] == "retrieval_index.json"
+    assert artifact_row["content"] == content
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    ("LLM_KB_MAX_ARTIFACT_BYTES", "LLM_KB_MAX_SNAPSHOT_BYTES"),
+)
+def test_llm_kb_artifact_snapshot_rejects_oversized_container_output(
+    limit_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = frozen_identity()
+    run_identity = {"run_id": "6" * 32}
+    project_id = "project-a"
+    content = "xxxxx"
+    encoded = content.encode("utf-8")
+    monkeypatch.setattr(stack, limit_name, 4)
+    monkeypatch.setattr(
+        stack,
+        "require_active_recovery_run",
+        lambda _fault_id: {
+            "identity": identity,
+            "run_identity": run_identity,
+        },
+    )
+    monkeypatch.setattr(stack, "assert_frozen", lambda: identity)
+    monkeypatch.setattr(
+        stack,
+        "assert_isolated_compose",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        stack,
+        "compose",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "project_id": project_id,
+                "root": f"/app/data/llm_kb/{project_id}",
+                "files": [
+                    {
+                        "path": "retrieval_index.json",
+                        "size": len(encoded),
+                        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+                        "content": content,
+                    }
+                ],
+            }
+        ),
+    )
+
+    with pytest.raises(stack.StackError, match="size limit"):
+        stack.llm_kb_artifact_snapshot.__wrapped__(
+            "fault-llm-kb",
+            project_id,
+        )
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ("", "../escape", "project/a", "project a"),
+)
+def test_llm_kb_artifact_snapshot_rejects_unsafe_project_identity(
+    project_id: str,
+) -> None:
+    with pytest.raises(stack.StackError, match="project identity"):
+        stack.llm_kb_artifact_snapshot.__wrapped__(
+            "fault-llm-kb",
+            project_id,
+        )
 
 
 def test_recovery_override_parameterizes_all_container_and_database_volume_names(

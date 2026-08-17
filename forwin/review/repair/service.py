@@ -594,6 +594,11 @@ def _run_repair_loop_for_phase(
             repair_cycle_root_draft_id,
         )
         phase_attempts = _attempts_for_repair_phase(cycle_attempts, repair_phase)
+        phase_rewrite_limit = self.policy.review.effective_rewrite_limit(
+            has_blocking_issue=any(
+                issue.blocking for issue in current_review.issues
+            )
+        )
         repair_v2_input = DecisionInput(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -609,7 +614,7 @@ def _run_repair_loop_for_phase(
             target_total_chapters=0,
             plan_layer_health=PlanLayerHealth(),
         )
-        if len(phase_attempts) >= self.policy.review.max_rewrites:
+        if len(phase_attempts) >= phase_rewrite_limit:
             return _apply_final_residual_decision(
                 self,
                 session=session,

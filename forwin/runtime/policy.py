@@ -36,6 +36,7 @@ class ReviewPolicy(FrozenPolicyModel):
     signals: tuple[str, ...]
     repair_scopes: tuple[str, ...]
     max_rewrites: int = Field(ge=0, le=12)
+    blocking_rewrites: int = Field(default=0, ge=0, le=12)
     repair_models: tuple[str, ...]
 
     def allows_signal(self, name: str) -> bool:
@@ -43,6 +44,11 @@ class ReviewPolicy(FrozenPolicyModel):
 
     def allows_repair_scope(self, scope: str) -> bool:
         return scope in self.repair_scopes
+
+    def effective_rewrite_limit(self, *, has_blocking_issue: bool) -> int:
+        if not has_blocking_issue:
+            return self.max_rewrites
+        return max(self.max_rewrites, self.blocking_rewrites)
 
 
 class PlanningPolicy(FrozenPolicyModel):
@@ -77,7 +83,13 @@ class RuntimePolicy(FrozenPolicyModel):
                 model_profile_id=model_profile_id,
                 chapter_length=ChapterLengthPolicy(min_chars=1800, target_chars=2400, max_chars=3000),
                 pause=PausePolicy(manual_checkpoints=False, band_checkpoint_action="continue"),
-                review=ReviewPolicy(signals=("lint", "publisher"), repair_scopes=(), max_rewrites=0, repair_models=()),
+                review=ReviewPolicy(
+                    signals=("lint", "publisher"),
+                    repair_scopes=(),
+                    max_rewrites=0,
+                    blocking_rewrites=1,
+                    repair_models=(),
+                ),
                 planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
                 canon=CanonPolicy(quality_gate="pulp_fatal", book_state_layers=("world",)),
                 writer_attention_retries=1,

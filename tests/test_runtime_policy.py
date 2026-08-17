@@ -21,6 +21,8 @@ def test_standard_policy_is_strict_and_complete() -> None:
     assert policy.canon.book_state_layers == ("world", "map", "cognition", "narrative")
     assert policy.review.allows_signal("canon_quality")
     assert policy.review.allows_repair_scope("book")
+    assert policy.review.effective_rewrite_limit(has_blocking_issue=False) == 3
+    assert policy.review.effective_rewrite_limit(has_blocking_issue=True) == 3
 
 
 def test_pulp_policy_is_deliberately_small_but_keeps_hard_floor() -> None:
@@ -29,7 +31,10 @@ def test_pulp_policy_is_deliberately_small_but_keeps_hard_floor() -> None:
     assert policy.pause.manual_checkpoints is False
     assert policy.pause.band_checkpoint_action == "continue"
     assert policy.review.max_rewrites == 0
+    assert policy.review.blocking_rewrites == 1
     assert policy.review.repair_scopes == ()
+    assert policy.review.effective_rewrite_limit(has_blocking_issue=False) == 0
+    assert policy.review.effective_rewrite_limit(has_blocking_issue=True) == 1
     assert policy.planning.use_llm_simulation is False
     assert policy.canon.hard_floor is True
     assert policy.canon.book_state_layers == ("world",)

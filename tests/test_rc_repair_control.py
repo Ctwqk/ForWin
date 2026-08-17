@@ -231,9 +231,14 @@ def test_rule_decision_audit_contract_returns_none_on_recording_error() -> None:
     assert event is None
 
 
-def _runtime_policy(*, max_rewrites: int) -> RuntimePolicy:
+def _runtime_policy(
+    *,
+    max_rewrites: int,
+    blocking_rewrites: int = 0,
+) -> RuntimePolicy:
     payload = RuntimePolicy.for_profile("standard").model_dump(mode="python")
     payload["review"]["max_rewrites"] = max_rewrites
+    payload["review"]["blocking_rewrites"] = blocking_rewrites
     return RuntimePolicy.model_validate(payload)
 
 
@@ -261,8 +266,16 @@ class _MemoryRepo:
 
 
 class _RepairHarness:
-    def __init__(self, *, max_rewrites: int) -> None:
-        self.policy = _runtime_policy(max_rewrites=max_rewrites)
+    def __init__(
+        self,
+        *,
+        max_rewrites: int,
+        blocking_rewrites: int = 0,
+    ) -> None:
+        self.policy = _runtime_policy(
+            max_rewrites=max_rewrites,
+            blocking_rewrites=blocking_rewrites,
+        )
         self.rule_decisions: list[Decision] = []
         self.rule_events: list[DecisionEvent] = []
         self.events: list[DecisionEvent] = []
@@ -331,7 +344,7 @@ def _repair_attempt(
     )
 
 
-def _hard_failure_review() -> ReviewVerdict:
+def _hard_failure_review(*, blocking: bool = False) -> ReviewVerdict:
     return ReviewVerdict(
         verdict="fail",
         issues=[
@@ -343,6 +356,7 @@ def _hard_failure_review() -> ReviewVerdict:
                 issue_type="continuity",
                 target_scope="chapter_plan",
                 evidence_refs=["draft:body_head"],
+                blocking=blocking,
             )
         ],
         repair_instruction=RepairInstruction(
@@ -455,6 +469,76 @@ def test_zero_phase_budget_starts_no_rewrite(monkeypatch) -> None:
         harness,
         attempts=[],
         review=_hard_failure_review(),
+    )
+
+    assert forced_accept is False
+    assert review.repair_exhausted is True
+    assert [decision.rule_id for decision in harness.rule_decisions] == [
+        "final_residual_policy"
+    ]
+    assert not any(
+        event.event_type == DecisionEventType.REPAIR_STARTED
+        for event in harness.events
+    )
+
+
+def test_blocking_budget_starts_rewrite_when_ordinary_budget_is_zero(
+    monkeypatch,
+) -> None:
+    class _RewriteStarted(Exception):
+        pass
+
+    harness = _RepairHarness(max_rewrites=0, blocking_rewrites=1)
+    monkeypatch.setattr(
+        repair_service,
+        "decide_repair_v2",
+        lambda _decision_input: Decision(
+            outcome="chapter_patch",
+            reason="blocking chapter repair is executable",
+            rule_id="test_blocking_chapter_patch",
+            missing_evidence=[],
+            routed_from="test",
+            sub_action={"scope": "chapter_plan"},
+        ),
+    )
+
+    def rewrite_started(*_args, **_kwargs):
+        raise _RewriteStarted
+
+    monkeypatch.setattr(repair_service, "_apply_repair_patch", rewrite_started)
+
+    with pytest.raises(_RewriteStarted):
+        _run_repair_loop(
+            harness,
+            attempts=[],
+            review=_hard_failure_review(blocking=True),
+        )
+
+    assert [decision.rule_id for decision in harness.rule_decisions] == [
+        "test_blocking_chapter_patch"
+    ]
+    assert any(
+        event.event_type == DecisionEventType.REPAIR_STARTED
+        for event in harness.events
+    )
+
+
+def test_blocking_budget_allows_only_one_phase_rewrite(monkeypatch) -> None:
+    harness = _RepairHarness(max_rewrites=0, blocking_rewrites=1)
+
+    def unexpected_repair_decision(_decision_input):
+        raise AssertionError("blocking repair budget must be exhausted")
+
+    monkeypatch.setattr(
+        repair_service,
+        "decide_repair_v2",
+        unexpected_repair_decision,
+    )
+
+    _output, review, forced_accept = _run_repair_loop(
+        harness,
+        attempts=[_repair_attempt(phase="review_repair")],
+        review=_hard_failure_review(blocking=True),
     )
 
     assert forced_accept is False

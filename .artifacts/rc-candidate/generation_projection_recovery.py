@@ -112,6 +112,14 @@ CANON_PROJECTION_PAYLOAD_KEYS = {
     "candidate_id",
     "trigger",
 }
+QDRANT_PROJECTION_TYPES = ("chapter_memory", "llm_kb")
+QDRANT_AMBIENT_COLLECTION_OVERRIDES = (
+    "FORWIN_RECOVERY_QDRANT_COLLECTION",
+    "FORWIN_RECOVERY_CHAPTER_MEMORY_QDRANT_COLLECTION",
+    "FORWIN_RECOVERY_LLM_KB_QDRANT_COLLECTION",
+    "FORWIN_QDRANT_COLLECTION",
+    "FORWIN_LLM_KB_QDRANT_COLLECTION",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -594,47 +602,132 @@ def _healthy_components(
     }
 
 
-def normalize_qdrant_projection(
+def _qdrant_point_evidence_identity(
+    point_id: str,
+    payload: Mapping[str, Any],
+) -> str:
+    payload_sha256 = hashlib.sha256(
+        canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+    return f"{point_id}#payload-sha256={payload_sha256}"
+
+
+def normalize_qdrant_projections(
     *,
     status: Mapping[str, Any],
-    points: Sequence[Mapping[str, Any]],
+    points_by_projection: Mapping[str, Sequence[Mapping[str, Any]]],
     project_id: str,
     canon_id: str,
-    collection: str,
+    chapter_number: int,
+    collections: Mapping[str, str],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    collection = _required_text(collection, "Qdrant collection")
+    expected = set(QDRANT_PROJECTION_TYPES)
+    if set(collections) != expected:
+        raise SetupBlocked("Qdrant projection collection set is not exact")
+    if set(points_by_projection) != expected:
+        raise SetupBlocked("Qdrant point projection set is not exact")
+    normalized_collections = {
+        projection_type: _required_text(
+            collections[projection_type],
+            f"{projection_type} Qdrant collection",
+        )
+        for projection_type in QDRANT_PROJECTION_TYPES
+    }
+    if len(set(normalized_collections.values())) != len(expected):
+        raise SetupBlocked("Qdrant projection collections must be distinct")
+    chapter_number = int(chapter_number)
+    if chapter_number <= 0:
+        raise SetupBlocked("Qdrant projection chapter number is invalid")
     healthy = _healthy_components(status, canon_id=canon_id)
-    if "llm_kb" not in healthy:
+    if any(kind not in healthy for kind in QDRANT_PROJECTION_TYPES):
         raise SetupBlocked("Qdrant projection checkpoint is not converged")
-    bound_points = [
-        point
-        for point in points
-        if isinstance(point.get("payload"), Mapping)
-        and point["payload"].get("project_id") == project_id
-        and point["payload"].get("index_kind") == "llm_kb"
-        and str(point.get("id") or "")
-    ]
-    if not bound_points:
-        raise SetupBlocked("Qdrant projection contains no fixture-bound points")
-    projections = [
-        {
-            "projection_type": "llm_kb",
-            "identity_id": str(point["id"]),
-            "canon_id": canon_id,
-            "status": "converged",
-            "collection": collection,
-        }
-        for point in bound_points
-    ]
-    identities = [
-        {
-            "collection": collection,
-            "projection_type": "llm_kb",
-            "point_id": str(point["id"]),
-            "canon_id": canon_id,
-        }
-        for point in bound_points
-    ]
+    projections: list[dict[str, Any]] = []
+    identities: list[dict[str, Any]] = []
+    raw_identities: set[tuple[str, str]] = set()
+    for projection_type in QDRANT_PROJECTION_TYPES:
+        raw_points = points_by_projection[projection_type]
+        if not isinstance(raw_points, Sequence) or isinstance(
+            raw_points,
+            (str, bytes, bytearray),
+        ):
+            raise SetupBlocked(
+                f"{projection_type} Qdrant points are not an array"
+            )
+        if not raw_points:
+            raise SetupBlocked(
+                f"{projection_type} Qdrant projection contains no points"
+            )
+        collection = normalized_collections[projection_type]
+        for point in raw_points:
+            if not isinstance(point, Mapping):
+                raise SetupBlocked("Qdrant projection contains a malformed point")
+            raw_point_id = point.get("id")
+            if isinstance(raw_point_id, bool) or not isinstance(
+                raw_point_id,
+                (str, int),
+            ):
+                raise SetupBlocked("Qdrant projection point identity is invalid")
+            point_id = str(raw_point_id).strip()
+            if not point_id:
+                raise SetupBlocked("Qdrant projection point identity is empty")
+            identity = (collection, point_id)
+            if identity in raw_identities:
+                raise SetupBlocked("Qdrant duplicate point identity was observed")
+            raw_identities.add(identity)
+            payload = point.get("payload")
+            if not isinstance(payload, Mapping):
+                raise SetupBlocked("Qdrant projection point payload is missing")
+            if payload.get("project_id") != project_id:
+                raise SetupBlocked("Qdrant projection point project is not bound")
+            if projection_type == "chapter_memory":
+                if (
+                    type(payload.get("chapter_number")) is not int
+                    or int(payload["chapter_number"]) != chapter_number
+                ):
+                    raise SetupBlocked(
+                        "chapter_memory Qdrant payload chapter is not bound"
+                    )
+            elif (
+                payload.get("index_kind") != "llm_kb"
+                or type(payload.get("as_of_chapter")) is not int
+                or int(payload["as_of_chapter"]) != chapter_number
+            ):
+                raise SetupBlocked("llm_kb Qdrant payload target is not bound")
+            evidence_identity = _qdrant_point_evidence_identity(
+                point_id,
+                payload,
+            )
+            projections.append(
+                {
+                    "projection_type": projection_type,
+                    "identity_id": evidence_identity,
+                    "canon_id": canon_id,
+                    "status": "converged",
+                    "collection": collection,
+                }
+            )
+            identities.append(
+                {
+                    "collection": collection,
+                    "projection_type": projection_type,
+                    "point_id": evidence_identity,
+                    "canon_id": canon_id,
+                }
+            )
+    projections.sort(
+        key=lambda row: (
+            row["projection_type"],
+            row["collection"],
+            row["identity_id"],
+        )
+    )
+    identities.sort(
+        key=lambda row: (
+            row["projection_type"],
+            row["collection"],
+            row["point_id"],
+        )
+    )
     return projections, identities
 
 
@@ -1252,15 +1345,41 @@ class QdrantReader:
         self,
         *,
         qdrant_url: str,
-        collection: str,
+        collections: Mapping[str, str],
         transport: Callable[..., dict[str, Any]] = http_json,
     ) -> None:
         self.qdrant_url = required_url(qdrant_url, "Qdrant URL")
-        self.collection = _required_text(collection, "Qdrant collection")
+        if set(collections) != set(QDRANT_PROJECTION_TYPES):
+            raise RunnerError("Qdrant projection collection set is not exact")
+        self.collections = {
+            projection_type: _required_text(
+                collections[projection_type],
+                f"{projection_type} Qdrant collection",
+            )
+            for projection_type in QDRANT_PROJECTION_TYPES
+        }
+        if len(set(self.collections.values())) != len(self.collections):
+            raise RunnerError("Qdrant projection collections must be distinct")
         self.transport = transport
 
-    def project_points(self, project_id: str) -> list[dict[str, Any]]:
-        collection = urllib.parse.quote(self.collection, safe="")
+    def project_points_by_projection(
+        self,
+        project_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            projection_type: self._project_points(
+                project_id,
+                collection,
+            )
+            for projection_type, collection in self.collections.items()
+        }
+
+    def _project_points(
+        self,
+        project_id: str,
+        collection_name: str,
+    ) -> list[dict[str, Any]]:
+        collection = urllib.parse.quote(collection_name, safe="")
         url = f"{self.qdrant_url}/collections/{collection}/points/scroll"
         offset: Any = None
         seen_offsets: set[str] = set()
@@ -1701,12 +1820,17 @@ class LiveRunner:
         if self.fault_kind == "qdrant_unavailable":
             if self.qdrant is None:
                 raise SetupBlocked("Qdrant reader is missing")
-            return normalize_qdrant_projection(
+            return normalize_qdrant_projections(
                 status=status,
-                points=self.qdrant.project_points(fixture.project_id),
+                points_by_projection=(
+                    self.qdrant.project_points_by_projection(
+                        fixture.project_id
+                    )
+                ),
                 project_id=fixture.project_id,
                 canon_id=fixture.canon_id,
-                collection=self.qdrant.collection,
+                chapter_number=fixture.chapter_number,
+                collections=self.qdrant.collections,
             )
         return normalize_projection_identities(
             status=status,
@@ -1752,24 +1876,36 @@ class RunConfig:
     database_url: str
     evidence_dir: Path
     qdrant_url: str = ""
-    qdrant_collection: str = ""
+    qdrant_collections: tuple[tuple[str, str], ...] = ()
 
 
-def candidate_runtime_llm_kb_qdrant_collection() -> str:
+def candidate_runtime_qdrant_projection_collections() -> dict[str, str]:
     stack = common.load_module(
         "forwin_recovery_stack_collection_resolver",
         CONTROLLER_PATH,
     )
     try:
-        collection = stack.effective_llm_kb_qdrant_collection()
+        collections = stack.effective_qdrant_projection_collections()
     except Exception as exc:
         raise RunnerError(
-            "candidate runtime LLM-KB Qdrant collection could not be resolved: "
+            "candidate runtime Qdrant projection collections could not be "
+            "resolved: "
             f"{exc}"
         ) from exc
+    if not isinstance(collections, Mapping):
+        raise RunnerError(
+            "candidate runtime Qdrant projection collections are invalid"
+        )
+    return {
+        str(key): str(value)
+        for key, value in collections.items()
+    }
+
+
+def candidate_runtime_llm_kb_qdrant_collection() -> str:
     return _required_text(
-        collection,
-        "candidate runtime LLM-KB Qdrant collection",
+        candidate_runtime_qdrant_projection_collections().get("llm_kb"),
+        "candidate runtime llm_kb Qdrant collection",
     )
 
 
@@ -1777,7 +1913,9 @@ def resolve_run_config(
     args: argparse.Namespace,
     *,
     environ: Mapping[str, str] = os.environ,
-    qdrant_collection_resolver: Callable[[], str] | None = None,
+    qdrant_collection_resolver: Callable[
+        [], Mapping[str, str]
+    ] | None = None,
 ) -> RunConfig:
     fault_kind = str(args.fault_kind or "")
     if fault_kind not in SUPPORTED_FAULTS:
@@ -1803,7 +1941,7 @@ def resolve_run_config(
             f"{evidence_dir}"
         )
     qdrant_url = ""
-    qdrant_collection = ""
+    qdrant_collections: tuple[tuple[str, str], ...] = ()
     if fault_kind == "qdrant_unavailable":
         qdrant_url = str(
             environ.get("FORWIN_RECOVERY_QDRANT_URL") or ""
@@ -1813,22 +1951,37 @@ def resolve_run_config(
                 "FORWIN_RECOVERY_QDRANT_URL is required for the Qdrant fault"
             )
         qdrant_url = required_url(qdrant_url, "Qdrant URL")
-        if str(
-            environ.get("FORWIN_RECOVERY_QDRANT_COLLECTION") or ""
-        ).strip():
-            raise RunnerError(
-                "FORWIN_RECOVERY_QDRANT_COLLECTION must not be set; "
-                "the Qdrant fault derives the collection from the exact "
-                "candidate runtime"
-            )
+        for override in QDRANT_AMBIENT_COLLECTION_OVERRIDES:
+            if str(environ.get(override) or "").strip():
+                raise RunnerError(
+                    f"{override} must not be set; the Qdrant fault derives "
+                    "collections from the exact candidate runtime"
+                )
         resolver = (
             qdrant_collection_resolver
-            or candidate_runtime_llm_kb_qdrant_collection
+            or candidate_runtime_qdrant_projection_collections
         )
-        qdrant_collection = _required_text(
-            resolver(),
-            "candidate runtime LLM-KB Qdrant collection",
-        )
+        resolved = resolver()
+        if not isinstance(resolved, Mapping) or set(resolved) != set(
+            QDRANT_PROJECTION_TYPES
+        ):
+            raise RunnerError(
+                "candidate runtime Qdrant projection collection set is not "
+                "exact"
+            )
+        normalized = {
+            projection_type: _required_text(
+                resolved[projection_type],
+                f"candidate runtime {projection_type} Qdrant collection",
+            )
+            for projection_type in QDRANT_PROJECTION_TYPES
+        }
+        if len(set(normalized.values())) != len(normalized):
+            raise RunnerError(
+                "candidate runtime Qdrant projection collections must be "
+                "distinct"
+            )
+        qdrant_collections = tuple(normalized.items())
     return RunConfig(
         fault_kind=fault_kind,
         fault_id=fault_id,
@@ -1839,7 +1992,7 @@ def resolve_run_config(
         database_url=database_url,
         evidence_dir=evidence_dir,
         qdrant_url=qdrant_url,
-        qdrant_collection=qdrant_collection,
+        qdrant_collections=qdrant_collections,
     )
 
 
@@ -1857,7 +2010,7 @@ def build_live_runner(config: RunConfig) -> LiveRunner:
     qdrant = (
         QdrantReader(
             qdrant_url=config.qdrant_url,
-            collection=config.qdrant_collection,
+            collections=dict(config.qdrant_collections),
         )
         if config.fault_kind == "qdrant_unavailable"
         else None

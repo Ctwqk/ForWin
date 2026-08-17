@@ -102,11 +102,22 @@ APPLICATION_SERVICES = (
     "publisher-worker",
     "publisher-browser",
 )
-LLM_KB_RUNTIME_SERVICES = (
+QDRANT_PROJECTION_RUNTIME_SERVICES = (
     "forwin",
     "generation-worker",
     "outbox-worker",
 )
+LLM_KB_RUNTIME_SERVICES = QDRANT_PROJECTION_RUNTIME_SERVICES
+QDRANT_PROJECTION_COLLECTION_CONFIG = {
+    "chapter_memory": (
+        "qdrant_collection",
+        "FORWIN_QDRANT_COLLECTION",
+    ),
+    "llm_kb": (
+        "llm_kb_qdrant_collection",
+        "FORWIN_LLM_KB_QDRANT_COLLECTION",
+    ),
+}
 DEPENDENCY_SERVICES = ("postgres", "qdrant", "minio")
 HEALTHCHECK_SERVICES = frozenset(
     {"postgres", "qdrant", "forwin", "forwin-mcp", "publisher-browser"}
@@ -1110,48 +1121,60 @@ def validate_isolated_compose_config(
         raise StackError("effective PostgreSQL volume is not run-isolated")
 
 
-def llm_kb_collection_from_compose_config(
+def qdrant_projection_collections_from_compose_config(
     payload: dict[str, Any],
-) -> str:
-    field = InfrastructureConfig.model_fields.get(
-        "llm_kb_qdrant_collection"
-    )
-    runtime_default = str(
-        getattr(field, "default", "") or ""
-    ).strip()
-    if not runtime_default:
-        raise StackError(
-            "candidate runtime LLM-KB Qdrant collection default is missing"
-        )
+) -> dict[str, str]:
     services = payload.get("services")
     if not isinstance(services, dict):
         raise StackError("effective Compose services are missing")
-    effective: dict[str, str] = {}
-    for service in LLM_KB_RUNTIME_SERVICES:
-        item = services.get(service)
-        if not isinstance(item, dict):
-            raise StackError(
-                f"effective Compose service is missing: {service}"
-            )
-        environment = item.get("environment")
-        if not isinstance(environment, dict):
-            raise StackError(
-                f"{service} effective environment is missing"
-            )
-        value = str(
-            environment.get("FORWIN_LLM_KB_QDRANT_COLLECTION") or ""
+    resolved: dict[str, str] = {}
+    for projection_type, (
+        config_field,
+        environment_key,
+    ) in QDRANT_PROJECTION_COLLECTION_CONFIG.items():
+        field = InfrastructureConfig.model_fields.get(config_field)
+        runtime_default = str(
+            getattr(field, "default", "") or ""
         ).strip()
-        effective[service] = value or runtime_default
-    values = set(effective.values())
-    if len(values) != 1:
-        detail = ", ".join(
-            f"{service}={effective[service]}"
-            for service in LLM_KB_RUNTIME_SERVICES
-        )
-        raise StackError(
-            f"effective LLM-KB Qdrant collection drift: {detail}"
-        )
-    return values.pop()
+        if not runtime_default:
+            raise StackError(
+                "candidate runtime "
+                f"{projection_type} Qdrant collection default is missing"
+            )
+        effective: dict[str, str] = {}
+        for service in QDRANT_PROJECTION_RUNTIME_SERVICES:
+            item = services.get(service)
+            if not isinstance(item, dict):
+                raise StackError(
+                    f"effective Compose service is missing: {service}"
+                )
+            environment = item.get("environment")
+            if not isinstance(environment, dict):
+                raise StackError(
+                    f"{service} effective environment is missing"
+                )
+            value = str(environment.get(environment_key) or "").strip()
+            effective[service] = value or runtime_default
+        values = set(effective.values())
+        if len(values) != 1:
+            detail = ", ".join(
+                f"{service}={effective[service]}"
+                for service in QDRANT_PROJECTION_RUNTIME_SERVICES
+            )
+            raise StackError(
+                f"effective {projection_type} Qdrant collection drift: "
+                f"{detail}"
+            )
+        resolved[projection_type] = values.pop()
+    return resolved
+
+
+def llm_kb_collection_from_compose_config(
+    payload: dict[str, Any],
+) -> str:
+    return qdrant_projection_collections_from_compose_config(payload)[
+        "llm_kb"
+    ]
 
 
 def rendered_compose_config(
@@ -1180,11 +1203,15 @@ def rendered_compose_config(
     return payload
 
 
-def effective_llm_kb_qdrant_collection() -> str:
+def effective_qdrant_projection_collections() -> dict[str, str]:
     identity = assert_frozen()
     payload = rendered_compose_config()
     validate_isolated_compose_config(payload, identity=identity)
-    return llm_kb_collection_from_compose_config(payload)
+    return qdrant_projection_collections_from_compose_config(payload)
+
+
+def effective_llm_kb_qdrant_collection() -> str:
+    return effective_qdrant_projection_collections()["llm_kb"]
 
 
 def assert_isolated_compose(

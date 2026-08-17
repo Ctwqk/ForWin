@@ -1869,44 +1869,74 @@ def test_effective_compose_validator_rejects_extra_service() -> None:
         stack.validate_isolated_compose_config(payload, identity=identity)
 
 
-def test_llm_kb_collection_uses_the_runtime_default_when_compose_omits_it(
-) -> None:
+def test_qdrant_projection_collections_use_candidate_runtime_defaults() -> None:
     from forwin.config import InfrastructureConfig
 
     payload, _identity = isolated_compose_config()
-    runtime_default = InfrastructureConfig.model_fields[
-        "llm_kb_qdrant_collection"
-    ].default
+    expected = {
+        "chapter_memory": InfrastructureConfig.model_fields[
+            "qdrant_collection"
+        ].default,
+        "llm_kb": InfrastructureConfig.model_fields[
+            "llm_kb_qdrant_collection"
+        ].default,
+    }
 
-    assert stack.llm_kb_collection_from_compose_config(payload) == runtime_default
+    assert stack.qdrant_projection_collections_from_compose_config(
+        payload
+    ) == expected
 
 
-def test_llm_kb_collection_rejects_effective_runtime_drift() -> None:
+@pytest.mark.parametrize(
+    ("projection_type", "environment_key"),
+    [
+        ("chapter_memory", "FORWIN_QDRANT_COLLECTION"),
+        ("llm_kb", "FORWIN_LLM_KB_QDRANT_COLLECTION"),
+    ],
+)
+def test_qdrant_projection_collections_reject_effective_runtime_drift(
+    projection_type: str,
+    environment_key: str,
+) -> None:
     payload, _identity = isolated_compose_config()
-    for service in stack.LLM_KB_RUNTIME_SERVICES:
+    for service in stack.QDRANT_PROJECTION_RUNTIME_SERVICES:
         payload["services"][service]["environment"][
-            "FORWIN_LLM_KB_QDRANT_COLLECTION"
-        ] = "candidate-runtime-vectors"
+            environment_key
+        ] = f"candidate-{projection_type}-vectors"
     payload["services"]["outbox-worker"]["environment"][
-        "FORWIN_LLM_KB_QDRANT_COLLECTION"
+        environment_key
     ] = "detached-outbox-vectors"
 
-    with pytest.raises(stack.StackError, match="LLM-KB Qdrant collection drift"):
-        stack.llm_kb_collection_from_compose_config(payload)
+    with pytest.raises(
+        stack.StackError,
+        match=f"{projection_type} Qdrant collection drift",
+    ):
+        stack.qdrant_projection_collections_from_compose_config(payload)
 
 
-def test_explicit_default_and_runtime_defaults_do_not_count_as_drift() -> None:
+def test_explicit_qdrant_defaults_do_not_count_as_runtime_drift() -> None:
     from forwin.config import InfrastructureConfig
 
     payload, _identity = isolated_compose_config()
-    runtime_default = InfrastructureConfig.model_fields[
-        "llm_kb_qdrant_collection"
-    ].default
-    payload["services"]["outbox-worker"]["environment"][
-        "FORWIN_LLM_KB_QDRANT_COLLECTION"
-    ] = runtime_default
+    expected = {
+        "FORWIN_QDRANT_COLLECTION": InfrastructureConfig.model_fields[
+            "qdrant_collection"
+        ].default,
+        "FORWIN_LLM_KB_QDRANT_COLLECTION": (
+            InfrastructureConfig.model_fields[
+                "llm_kb_qdrant_collection"
+            ].default
+        ),
+    }
+    for key, value in expected.items():
+        payload["services"]["outbox-worker"]["environment"][key] = value
 
-    assert stack.llm_kb_collection_from_compose_config(payload) == runtime_default
+    assert stack.qdrant_projection_collections_from_compose_config(
+        payload
+    ) == {
+        "chapter_memory": expected["FORWIN_QDRANT_COLLECTION"],
+        "llm_kb": expected["FORWIN_LLM_KB_QDRANT_COLLECTION"],
+    }
 
 
 def test_dynamic_effective_compose_config_binds_project_containers_and_db_mount(

@@ -616,6 +616,15 @@ def projection_status() -> dict[str, Any]:
         "target_chapter_number": 1,
         "components": [
             {
+                "projection_kind": "chapter_memory",
+                "status": "healthy",
+                "healthy": True,
+                "target_canon_commit_id": CANON_ID,
+                "target_chapter_number": 1,
+                "projected_canon_commit_id": CANON_ID,
+                "projected_chapter_number": 1,
+            },
+            {
                 "projection_kind": "llm_kb",
                 "status": "healthy",
                 "healthy": True,
@@ -628,61 +637,158 @@ def projection_status() -> dict[str, Any]:
     }
 
 
-def test_qdrant_collector_requires_project_bound_points_and_healthy_checkpoint() -> None:
-    points = [
-        {
-            "id": "point-a",
-            "payload": {
-                "project_id": PROJECT_ID,
-                "index_kind": "llm_kb",
-                "as_of_chapter": 1,
-            },
-        },
-        {
-            "id": "foreign-point",
-            "payload": {
-                "project_id": "other-project",
-                "index_kind": "llm_kb",
-                "as_of_chapter": 1,
-            },
-        },
-    ]
+def test_qdrant_collector_audits_both_projection_payloads() -> None:
+    points = {
+        "chapter_memory": [
+            {
+                "id": "memory-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "chapter_number": 1,
+                    "title": "Fixture title",
+                    "summary": "Fixture summary",
+                    "excerpt": "Fixture excerpt",
+                },
+            }
+        ],
+        "llm_kb": [
+            {
+                "id": "kb-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "index_kind": "llm_kb",
+                    "as_of_chapter": 1,
+                    "text": "Fixture knowledge",
+                },
+            }
+        ],
+    }
 
-    projections, identities = runner.normalize_qdrant_projection(
+    projections, identities = runner.normalize_qdrant_projections(
         status=projection_status(),
-        points=points,
+        points_by_projection=points,
         project_id=PROJECT_ID,
         canon_id=CANON_ID,
-        collection="fixture-vectors",
+        chapter_number=1,
+        collections={
+            "chapter_memory": "fixture-memory-vectors",
+            "llm_kb": "fixture-kb-vectors",
+        },
     )
 
-    assert projections == [
-        {
-            "projection_type": "llm_kb",
-            "identity_id": "point-a",
-            "canon_id": CANON_ID,
-            "status": "converged",
-            "collection": "fixture-vectors",
-        }
+    assert [row["projection_type"] for row in projections] == [
+        "chapter_memory",
+        "llm_kb",
     ]
-    assert identities == [
-        {
-            "collection": "fixture-vectors",
-            "projection_type": "llm_kb",
-            "point_id": "point-a",
-            "canon_id": CANON_ID,
-        }
+    assert [row["collection"] for row in projections] == [
+        "fixture-memory-vectors",
+        "fixture-kb-vectors",
+    ]
+    assert [row["collection"] for row in identities] == [
+        "fixture-memory-vectors",
+        "fixture-kb-vectors",
+    ]
+    assert projections[0]["identity_id"].startswith(
+        "memory-a#payload-sha256="
+    )
+    assert projections[1]["identity_id"].startswith(
+        "kb-a#payload-sha256="
+    )
+    assert [row["identity_id"] for row in projections] == [
+        row["point_id"] for row in identities
     ]
 
-    degraded = projection_status()
-    degraded["components"][0]["healthy"] = False
-    with pytest.raises(runner.SetupBlocked, match="not converged"):
-        runner.normalize_qdrant_projection(
-            status=degraded,
-            points=points,
+    changed_points = copy.deepcopy(points)
+    changed_points["chapter_memory"][0]["payload"]["summary"] = (
+        "Changed after replay"
+    )
+    changed, _ = runner.normalize_qdrant_projections(
+        status=projection_status(),
+        points_by_projection=changed_points,
+        project_id=PROJECT_ID,
+        canon_id=CANON_ID,
+        chapter_number=1,
+        collections={
+            "chapter_memory": "fixture-memory-vectors",
+            "llm_kb": "fixture-kb-vectors",
+        },
+    )
+    assert changed[0]["identity_id"] != projections[0]["identity_id"]
+
+
+def test_qdrant_collector_rejects_missing_projection_and_raw_point_duplicates(
+) -> None:
+    points = {
+        "chapter_memory": [
+            {
+                "id": "memory-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "chapter_number": 1,
+                },
+            },
+            {
+                "id": "memory-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "chapter_number": 1,
+                    "summary": "Conflicting payload",
+                },
+            },
+        ],
+        "llm_kb": [
+            {
+                "id": "kb-a",
+                "payload": {
+                    "project_id": PROJECT_ID,
+                    "index_kind": "llm_kb",
+                    "as_of_chapter": 1,
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(runner.SetupBlocked, match="duplicate point identity"):
+        runner.normalize_qdrant_projections(
+            status=projection_status(),
+            points_by_projection=points,
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
-            collection="fixture-vectors",
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
+        )
+
+    with pytest.raises(runner.SetupBlocked, match="projection set"):
+        runner.normalize_qdrant_projections(
+            status=projection_status(),
+            points_by_projection={"llm_kb": points["llm_kb"]},
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
+        )
+
+    degraded = projection_status()
+    degraded["components"][1]["healthy"] = False
+    with pytest.raises(runner.SetupBlocked, match="not converged"):
+        runner.normalize_qdrant_projections(
+            status=degraded,
+            points_by_projection={
+                key: value[:1] for key, value in points.items()
+            },
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
         )
 
 
@@ -925,20 +1031,36 @@ def valid_projection_snapshots(
         )
     status = projection_status()
     if kind == "qdrant_unavailable":
-        projections, identities = runner.normalize_qdrant_projection(
+        projections, identities = runner.normalize_qdrant_projections(
             status=status,
-            points=[
-                {
-                    "id": "point-a",
-                    "payload": {
-                        "project_id": PROJECT_ID,
-                        "index_kind": "llm_kb",
-                    },
-                }
-            ],
+            points_by_projection={
+                "chapter_memory": [
+                    {
+                        "id": "memory-a",
+                        "payload": {
+                            "project_id": PROJECT_ID,
+                            "chapter_number": 1,
+                        },
+                    }
+                ],
+                "llm_kb": [
+                    {
+                        "id": "kb-a",
+                        "payload": {
+                            "project_id": PROJECT_ID,
+                            "index_kind": "llm_kb",
+                            "as_of_chapter": 1,
+                        },
+                    }
+                ],
+            },
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
-            collection="fixture-vectors",
+            chapter_number=1,
+            collections={
+                "chapter_memory": "fixture-memory-vectors",
+                "llm_kb": "fixture-kb-vectors",
+            },
         )
         snapshots["after"]["state"]["external"].update(
             replay_baseline_projections=copy.deepcopy(projections),
@@ -1794,7 +1916,7 @@ def test_api_client_uses_projection_status_and_refresh_paths() -> None:
     ]
 
 
-def test_qdrant_reader_scrolls_parameterized_endpoint_and_collection() -> None:
+def test_qdrant_reader_scrolls_every_exact_candidate_collection() -> None:
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
     def transport(
@@ -1806,29 +1928,30 @@ def test_qdrant_reader_scrolls_parameterized_endpoint_and_collection() -> None:
     ) -> dict[str, Any]:
         body = copy.deepcopy(json_body or {})
         calls.append((method, url, body))
-        if len(calls) == 1:
+        if url.endswith("/fixture-memory-vectors/points/scroll"):
             return {
                 "result": {
                     "points": [
                         {
-                            "id": "point-a",
+                            "id": "memory-a",
                             "payload": {
                                 "project_id": PROJECT_ID,
-                                "index_kind": "llm_kb",
+                                "chapter_number": 1,
                             },
                         }
                     ],
-                    "next_page_offset": "next-a",
+                    "next_page_offset": None,
                 }
             }
         return {
             "result": {
                 "points": [
                     {
-                        "id": "point-b",
+                        "id": "kb-a",
                         "payload": {
                             "project_id": PROJECT_ID,
                             "index_kind": "llm_kb",
+                            "as_of_chapter": 1,
                         },
                     }
                 ],
@@ -1838,28 +1961,39 @@ def test_qdrant_reader_scrolls_parameterized_endpoint_and_collection() -> None:
 
     qdrant = runner.QdrantReader(
         qdrant_url="https://vectors.example",
-        collection="fixture-vectors",
+        collections={
+            "chapter_memory": "fixture-memory-vectors",
+            "llm_kb": "fixture-kb-vectors",
+        },
         transport=transport,
     )
 
-    points = qdrant.project_points(PROJECT_ID)
+    points = qdrant.project_points_by_projection(PROJECT_ID)
 
-    assert [point["id"] for point in points] == ["point-a", "point-b"]
-    assert all(
-        url
-        == "https://vectors.example/collections/fixture-vectors/points/scroll"
-        for _, url, _ in calls
-    )
-    assert calls[0][2]["filter"] == {
-        "must": [
-            {
-                "key": "project_id",
-                "match": {"value": PROJECT_ID},
-            }
-        ]
+    assert {
+        projection: [point["id"] for point in projection_points]
+        for projection, projection_points in points.items()
+    } == {
+        "chapter_memory": ["memory-a"],
+        "llm_kb": ["kb-a"],
     }
-    assert "offset" not in calls[0][2]
-    assert calls[1][2]["offset"] == "next-a"
+    assert {url for _, url, _ in calls} == {
+        "https://vectors.example/collections/fixture-memory-vectors/points/scroll",
+        "https://vectors.example/collections/fixture-kb-vectors/points/scroll",
+    }
+    assert all(
+        body["filter"]
+        == {
+            "must": [
+                {
+                    "key": "project_id",
+                    "match": {"value": PROJECT_ID},
+                }
+            ]
+        }
+        for _, _, body in calls
+    )
+    assert all("index_kind" not in json.dumps(body) for _, _, body in calls)
 
 
 class FakeControllerLifecycle:
@@ -2339,19 +2473,37 @@ class SuccessfulAPI:
 
 
 class SuccessfulQdrant:
-    collection = "fixture-vectors"
+    collections = {
+        "chapter_memory": "fixture-memory-vectors",
+        "llm_kb": "fixture-kb-vectors",
+    }
     qdrant_url = QDRANT_URL
 
-    def project_points(self, _project_id: str) -> list[dict[str, Any]]:
-        return [
-            {
-                "id": "point-a",
-                "payload": {
-                    "project_id": PROJECT_ID,
-                    "index_kind": "llm_kb",
-                },
-            }
-        ]
+    def project_points_by_projection(
+        self,
+        _project_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "chapter_memory": [
+                {
+                    "id": "memory-a",
+                    "payload": {
+                        "project_id": PROJECT_ID,
+                        "chapter_number": 1,
+                    },
+                }
+            ],
+            "llm_kb": [
+                {
+                    "id": "kb-a",
+                    "payload": {
+                        "project_id": PROJECT_ID,
+                        "index_kind": "llm_kb",
+                        "as_of_chapter": 1,
+                    },
+                }
+            ],
+        }
 
 
 def test_live_qdrant_without_during_failure_is_setup_blocked(
@@ -2465,7 +2617,11 @@ def test_live_projection_success_uses_auto_canon_barrier_recover_and_refresh_ord
         assert {
             row["collection"]
             for row in after["state"]["external"]["point_identities"]
-        } == {"fixture-vectors"}
+        } == {"fixture-memory-vectors", "fixture-kb-vectors"}
+        assert {
+            row["projection_type"]
+            for row in after["state"]["external"]["point_identities"]
+        } == {"chapter_memory", "llm_kb"}
 
 
 def test_writer_hashes_reopens_and_binds_supplemental_artifacts(
@@ -2542,14 +2698,20 @@ def test_run_config_uses_cli_and_environment_for_every_live_endpoint(
     config = runner.resolve_run_config(
         arguments,
         environ=environment,
-        qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+        qdrant_collection_resolver=lambda: {
+            "chapter_memory": "candidate-memory-vectors",
+            "llm_kb": "candidate-kb-vectors",
+        },
     )
 
     assert config.database_url == "postgresql://db.example/fixture"
     assert config.mcp_url == "https://mcp.example/mcp"
     assert config.api_url == "https://api.example"
     assert config.qdrant_url == "https://qdrant.example"
-    assert config.qdrant_collection == "candidate-runtime-vectors"
+    assert dict(config.qdrant_collections) == {
+        "chapter_memory": "candidate-memory-vectors",
+        "llm_kb": "candidate-kb-vectors",
+    }
     assert config.evidence_dir == (tmp_path / "evidence").resolve()
 
     del environment["FORWIN_RECOVERY_QDRANT_URL"]
@@ -2557,7 +2719,10 @@ def test_run_config_uses_cli_and_environment_for_every_live_endpoint(
         runner.resolve_run_config(
             arguments,
             environ=environment,
-            qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+            qdrant_collection_resolver=lambda: {
+                "chapter_memory": "candidate-memory-vectors",
+                "llm_kb": "candidate-kb-vectors",
+            },
         )
 
 
@@ -2588,20 +2753,81 @@ def test_run_config_rejects_independent_qdrant_collection_override(
             str(tmp_path / "evidence"),
         ]
     )
+    for override in (
+        "FORWIN_RECOVERY_QDRANT_COLLECTION",
+        "FORWIN_RECOVERY_CHAPTER_MEMORY_QDRANT_COLLECTION",
+        "FORWIN_RECOVERY_LLM_KB_QDRANT_COLLECTION",
+        "FORWIN_QDRANT_COLLECTION",
+        "FORWIN_LLM_KB_QDRANT_COLLECTION",
+    ):
+        environment = {
+            "FIXTURE_DATABASE_URL": "postgresql://db.example/fixture",
+            "FORWIN_RECOVERY_QDRANT_URL": "https://qdrant.example",
+            override: "detached-override",
+        }
+
+        with pytest.raises(
+            runner.RunnerError,
+            match=f"{override}.*must not be set",
+        ):
+            runner.resolve_run_config(
+                arguments,
+                environ=environment,
+                qdrant_collection_resolver=lambda: {
+                    "chapter_memory": "candidate-memory-vectors",
+                    "llm_kb": "candidate-kb-vectors",
+                },
+            )
+
+
+def test_run_config_requires_exact_distinct_qdrant_projection_set(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps({"source": {"sha": SOURCE_SHA}}),
+        encoding="utf-8",
+    )
+    arguments = runner.parse_args(
+        [
+            "run",
+            "--fault-kind",
+            "qdrant_unavailable",
+            "--fault-id",
+            FAULT_ID,
+            "--candidate-manifest",
+            str(candidate),
+            "--mcp-url",
+            "https://mcp.example/mcp",
+            "--api-url",
+            "https://api.example",
+            "--database-url-env",
+            "FIXTURE_DATABASE_URL",
+            "--evidence-dir",
+            str(tmp_path / "evidence"),
+        ]
+    )
     environment = {
         "FIXTURE_DATABASE_URL": "postgresql://db.example/fixture",
         "FORWIN_RECOVERY_QDRANT_URL": "https://qdrant.example",
-        "FORWIN_RECOVERY_QDRANT_COLLECTION": "detached-override",
     }
 
-    with pytest.raises(
-        runner.RunnerError,
-        match="FORWIN_RECOVERY_QDRANT_COLLECTION.*must not be set",
-    ):
+    with pytest.raises(runner.RunnerError, match="projection collection set"):
         runner.resolve_run_config(
             arguments,
             environ=environment,
-            qdrant_collection_resolver=lambda: "candidate-runtime-vectors",
+            qdrant_collection_resolver=lambda: {
+                "llm_kb": "candidate-kb-vectors"
+            },
+        )
+    with pytest.raises(runner.RunnerError, match="must be distinct"):
+        runner.resolve_run_config(
+            arguments,
+            environ=environment,
+            qdrant_collection_resolver=lambda: {
+                "chapter_memory": "shared-vectors",
+                "llm_kb": "shared-vectors",
+            },
         )
 
 

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import inspect
 
-from forwin.map.models import MapRegionRow
+from forwin.map.models import MapNodeRow, MapRegionRow
 from forwin.map.protocol import (
     MapEdge,
     MapGenerationResult,
@@ -130,6 +130,122 @@ def test_persist_generation_rejects_foreign_subworld_before_deleting_rows() -> N
 
         session.expire_all()
         assert session.get(MapRegionRow, "foreign-region") is not None
+
+
+def test_upsert_map_node_rejects_foreign_subworld() -> None:
+    engine = get_engine(postgres_test_url("map-node-foreign-subworld"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session() as session:
+        session.add_all(
+            [
+                Project(id="p1", title="甲书", premise="premise"),
+                Project(id="p2", title="乙书", premise="premise"),
+            ]
+        )
+        session.commit()
+        session.add(SubWorld(id="shared", project_id="p1", name="甲世界"))
+        session.commit()
+
+        with pytest.raises(ValueError, match="different project"):
+            MapRepository(session).upsert_map_node(
+                MapNode(
+                    id="foreign-node",
+                    project_id="p2",
+                    subworld_id="shared",
+                    node_type="settlement",
+                    name="乙城",
+                )
+            )
+
+
+def test_persist_generation_scopes_cleanup_to_project() -> None:
+    engine = get_engine(postgres_test_url("map-cleanup-project-scope"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session() as session:
+        session.add_all(
+            [
+                Project(id="p1", title="甲书", premise="premise"),
+                Project(id="p2", title="乙书", premise="premise"),
+            ]
+        )
+        session.commit()
+        session.add(SubWorld(id="shared", project_id="p1", name="甲世界"))
+        session.commit()
+        session.add(
+            MapNodeRow(
+                id="foreign-node",
+                project_id="p2",
+                subworld_id="shared",
+                node_type="settlement",
+                name="乙城",
+            )
+        )
+        session.commit()
+        spec = SubWorldMapSpec(
+            project_id="p1",
+            subworld_id="shared",
+            name="甲世界",
+            subworld_type="realm",
+            target_region_count=1,
+            target_node_count=3,
+        )
+        result = MapGenerationResult(
+            project_id="p1",
+            subworld_id="shared",
+            generation_seed=0,
+        )
+
+        MapRepository(session).persist_generation_result(spec=spec, result=result)
+
+        session.expire_all()
+        assert session.get(MapNodeRow, "foreign-node") is not None
+
+
+def test_persist_generation_rejects_result_identity_before_deleting_rows() -> None:
+    engine = get_engine(postgres_test_url("map-result-identity"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session() as session:
+        session.add_all(
+            [
+                Project(id="p1", title="甲书", premise="premise"),
+                Project(id="p2", title="乙书", premise="premise"),
+            ]
+        )
+        session.commit()
+        session.add(SubWorld(id="shared", project_id="p1", name="甲世界"))
+        session.commit()
+        session.add(
+            MapRegionRow(
+                id="owned-region",
+                project_id="p1",
+                subworld_id="shared",
+                region_type="city",
+                name="甲城",
+            )
+        )
+        session.commit()
+        spec = SubWorldMapSpec(
+            project_id="p1",
+            subworld_id="shared",
+            name="甲世界",
+            subworld_type="realm",
+            target_region_count=1,
+            target_node_count=3,
+        )
+        result = MapGenerationResult(
+            project_id="p2",
+            subworld_id="shared",
+            generation_seed=0,
+        )
+
+        with pytest.raises(ValueError, match="result identity"):
+            MapRepository(session).persist_generation_result(spec=spec, result=result)
+
+        session.expire_all()
+        assert session.get(MapRegionRow, "owned-region") is not None
 
 
 def test_map_edge_rejects_negative_weights() -> None:

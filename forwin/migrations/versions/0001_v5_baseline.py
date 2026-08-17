@@ -2674,8 +2674,9 @@ def upgrade() -> None:
             ["projects.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["subworld_id"],
-            ["sub_worlds.id"],
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_generation_runs_project_subworld",
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -2716,8 +2717,9 @@ def upgrade() -> None:
             ["projects.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["subworld_id"],
-            ["sub_worlds.id"],
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_region_edges_project_subworld",
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -2774,8 +2776,9 @@ def upgrade() -> None:
             ["projects.id"],
         ),
         sa.ForeignKeyConstraint(
-            ["subworld_id"],
-            ["sub_worlds.id"],
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_regions_project_subworld",
         ),
         sa.PrimaryKeyConstraint("id"),
     )

@@ -93,13 +93,38 @@ class MapRepository:
     ) -> MapGenerationRunRow:
         if not result.validation_report.valid:
             raise ValueError("cannot persist invalid map generation result")
-        subworld = self.session.get(SubWorld, spec.subworld_id)
-        if subworld is not None and subworld.project_id != spec.project_id:
-            raise ValueError("subworld belongs to a different project")
+        if (result.project_id, result.subworld_id) != (
+            spec.project_id,
+            spec.subworld_id,
+        ):
+            raise ValueError("map result identity does not match spec")
+        for item in [
+            *result.regions,
+            *result.region_edges,
+            *result.map_nodes,
+            *result.map_edges,
+        ]:
+            if (item.project_id, item.subworld_id) != (
+                spec.project_id,
+                spec.subworld_id,
+            ):
+                raise ValueError("map result item identity does not match spec")
+        subworld = self._require_owned_subworld(
+            spec.project_id,
+            spec.subworld_id,
+        )
 
-        self.session.execute(delete(MapRegionEdgeRow).where(MapRegionEdgeRow.subworld_id == spec.subworld_id))
+        self.session.execute(
+            delete(MapRegionEdgeRow).where(
+                MapRegionEdgeRow.project_id == spec.project_id,
+                MapRegionEdgeRow.subworld_id == spec.subworld_id,
+            )
+        )
         edge_rows = self.session.execute(
-            select(MapEdgeRow).where(MapEdgeRow.subworld_id == spec.subworld_id)
+            select(MapEdgeRow).where(
+                MapEdgeRow.project_id == spec.project_id,
+                MapEdgeRow.subworld_id == spec.subworld_id,
+            )
         ).scalars().all()
         for row in edge_rows:
             metadata = _loads(row.metadata_json, {})
@@ -109,14 +134,22 @@ class MapRepository:
                 continue
             self.session.delete(row)
         node_rows = self.session.execute(
-            select(MapNodeRow).where(MapNodeRow.subworld_id == spec.subworld_id)
+            select(MapNodeRow).where(
+                MapNodeRow.project_id == spec.project_id,
+                MapNodeRow.subworld_id == spec.subworld_id,
+            )
         ).scalars().all()
         for row in node_rows:
             metadata = _loads(row.metadata_json, {})
             if isinstance(metadata, dict) and metadata.get("node_role") == "exit_node":
                 continue
             self.session.delete(row)
-        self.session.execute(delete(MapRegionRow).where(MapRegionRow.subworld_id == spec.subworld_id))
+        self.session.execute(
+            delete(MapRegionRow).where(
+                MapRegionRow.project_id == spec.project_id,
+                MapRegionRow.subworld_id == spec.subworld_id,
+            )
+        )
 
         for region in result.regions:
             self.upsert_region(region)
@@ -128,16 +161,15 @@ class MapRepository:
             self.upsert_map_edge(edge)
         self._delete_orphan_inter_subworld_edges(spec.project_id)
 
-        if subworld is not None:
-            subworld.map_status = "generated"
-            subworld.generation_seed = int(spec.generation_seed or 0)
-            meta = _loads(subworld.metadata_json, {})
-            if not isinstance(meta, dict):
-                meta = {}
-            meta["map_status"] = "generated"
-            meta["generation_seed"] = int(spec.generation_seed or 0)
-            subworld.metadata_json = _dump(meta)
-            self.session.add(subworld)
+        subworld.map_status = "generated"
+        subworld.generation_seed = int(spec.generation_seed or 0)
+        meta = _loads(subworld.metadata_json, {})
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["map_status"] = "generated"
+        meta["generation_seed"] = int(spec.generation_seed or 0)
+        subworld.metadata_json = _dump(meta)
+        self.session.add(subworld)
 
         run = MapGenerationRunRow(
             project_id=spec.project_id,
@@ -153,7 +185,9 @@ class MapRepository:
         return run
 
     def upsert_region(self, region: RegionNode) -> MapRegionRow:
+        self._require_owned_subworld(region.project_id, region.subworld_id)
         row = self.session.get(MapRegionRow, region.id)
+        self._require_row_owner(row, region.project_id)
         if row is None:
             row = MapRegionRow(
                 id=region.id,
@@ -179,7 +213,9 @@ class MapRepository:
         return row
 
     def upsert_region_edge(self, edge: RegionEdge) -> MapRegionEdgeRow:
+        self._require_owned_subworld(edge.project_id, edge.subworld_id)
         row = self.session.get(MapRegionEdgeRow, edge.id)
+        self._require_row_owner(row, edge.project_id)
         if row is None:
             row = MapRegionEdgeRow(
                 id=edge.id,
@@ -202,7 +238,10 @@ class MapRepository:
         return row
 
     def upsert_map_node(self, node: MapNode) -> MapNodeRow:
+        if node.subworld_id:
+            self._require_owned_subworld(node.project_id, node.subworld_id)
         row = self.session.get(MapNodeRow, node.id)
+        self._require_row_owner(row, node.project_id)
         if row is None:
             row = MapNodeRow(
                 id=node.id,
@@ -238,7 +277,10 @@ class MapRepository:
 
     def upsert_map_edge(self, edge: MapEdge) -> MapEdgeRow:
         _ensure_non_negative_edge(edge)
+        if edge.subworld_id:
+            self._require_owned_subworld(edge.project_id, edge.subworld_id)
         row = self.session.get(MapEdgeRow, edge.id)
+        self._require_row_owner(row, edge.project_id)
         if row is None:
             row = MapEdgeRow(id=edge.id, project_id=edge.project_id, subworld_id=edge.subworld_id)
             self.session.add(row)
@@ -262,6 +304,23 @@ class MapRepository:
         row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
+
+    def _require_owned_subworld(
+        self,
+        project_id: str,
+        subworld_id: str,
+    ) -> SubWorld:
+        row = self.session.get(SubWorld, subworld_id)
+        if row is None:
+            raise ValueError("subworld does not exist")
+        if row.project_id != project_id:
+            raise ValueError("subworld belongs to a different project")
+        return row
+
+    @staticmethod
+    def _require_row_owner(row: Any, project_id: str) -> None:
+        if row is not None and row.project_id != project_id:
+            raise ValueError("map row belongs to a different project")
 
     def list_regions(self, project_id: str, subworld_id: str | None = None) -> list[RegionNode]:
         stmt = select(MapRegionRow).where(MapRegionRow.project_id == project_id)

@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -12,6 +22,11 @@ from forwin.models.base import Base, new_id
 class MapRegionRow(Base):
     __tablename__ = "map_regions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_regions_project_subworld",
+        ),
         Index("ix_map_regions_project_subworld", "project_id", "subworld_id"),
         Index("ix_map_regions_project_type", "project_id", "region_type"),
         Index("ix_map_regions_project_status", "project_id", "status"),
@@ -19,7 +34,7 @@ class MapRegionRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    subworld_id: Mapped[str] = mapped_column(String, ForeignKey("sub_worlds.id"), nullable=False)
+    subworld_id: Mapped[str] = mapped_column(String, nullable=False)
     region_type: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(Text, default="")
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -45,6 +60,11 @@ class MapRegionRow(Base):
 class MapRegionEdgeRow(Base):
     __tablename__ = "map_region_edges"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_region_edges_project_subworld",
+        ),
         Index("ix_map_region_edges_project_subworld", "project_id", "subworld_id"),
         Index("ix_map_region_edges_project_from", "project_id", "from_region_id"),
         Index("ix_map_region_edges_project_to", "project_id", "to_region_id"),
@@ -53,7 +73,7 @@ class MapRegionEdgeRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    subworld_id: Mapped[str] = mapped_column(String, ForeignKey("sub_worlds.id"), nullable=False)
+    subworld_id: Mapped[str] = mapped_column(String, nullable=False)
     from_region_id: Mapped[str] = mapped_column(String, nullable=False)
     to_region_id: Mapped[str] = mapped_column(String, nullable=False)
     edge_type: Mapped[str] = mapped_column(String, default="adjacent")
@@ -155,13 +175,18 @@ class MapEdgeRow(Base):
 class MapGenerationRunRow(Base):
     __tablename__ = "map_generation_runs"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_map_generation_runs_project_subworld",
+        ),
         Index("ix_map_generation_runs_project_subworld", "project_id", "subworld_id"),
         Index("ix_map_generation_runs_project_created", "project_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    subworld_id: Mapped[str] = mapped_column(String, ForeignKey("sub_worlds.id"), nullable=False)
+    subworld_id: Mapped[str] = mapped_column(String, nullable=False)
     generation_seed: Mapped[int] = mapped_column(Integer, default=0)
     algorithm: Mapped[str] = mapped_column(String, default="anchor_graph_v1")
     input_spec_json: Mapped[str] = mapped_column(Text, default="{}")

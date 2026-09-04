@@ -1198,6 +1198,63 @@ def test_final_release_candidate_rejects_lightweight_tag(
         collector.collect_release_candidate(args, SOURCE_SHA)
 
 
+def test_final_release_candidate_accepts_commit_record_without_tag(
+    tmp_path: Path,
+) -> None:
+    args = final_args(tmp_path)
+    args.rc_tag = ""
+
+    release = collector.collect_release_candidate(args, SOURCE_SHA)
+
+    assert release["status"] == "frozen"
+    assert release["source_sha"] == SOURCE_SHA
+    assert release["annotated_tag"] == ""
+    assert release["tag_object_sha"] == ""
+    assert len(release["evidence"]) == 4
+    assert all(item["result"] == "pass" for item in release["evidence"].values())
+
+
+def test_final_release_candidate_rejects_tag_pointing_to_another_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = final_args(tmp_path)
+
+    def fake_run(*command: str) -> str:
+        if command == ("git", "cat-file", "-t", "refs/tags/v5.0.0-rc1"):
+            return "tag"
+        if command == ("git", "rev-parse", "refs/tags/v5.0.0-rc1^{}"):
+            return "f" * 40
+        raise AssertionError(command)
+
+    monkeypatch.setattr(collector, "run", fake_run)
+    with pytest.raises(collector.ManifestError, match="points to"):
+        collector.collect_release_candidate(args, SOURCE_SHA)
+
+
+@pytest.mark.parametrize("source_sha", ["", "a" * 7, "HEAD"])
+def test_tagless_release_candidate_rejects_missing_or_nonmatching_source(
+    tmp_path: Path,
+    source_sha: str,
+) -> None:
+    args = final_args(tmp_path)
+    args.rc_tag = ""
+
+    with pytest.raises(collector.ManifestError, match="source"):
+        collector.collect_release_candidate(args, source_sha)
+
+
+def test_tagless_release_candidate_still_requires_behavior_evidence(
+    tmp_path: Path,
+) -> None:
+    args = final_args(tmp_path)
+    args.rc_tag = ""
+    args.recovery_manifest = None
+
+    with pytest.raises(collector.ManifestError, match="recovery-manifest"):
+        collector.collect_release_candidate(args, SOURCE_SHA)
+
+
 def test_final_release_candidate_rejects_cross_candidate_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

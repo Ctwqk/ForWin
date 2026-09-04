@@ -1828,7 +1828,6 @@ def collect_release_candidate(
         }
 
     required = {
-        "--rc-tag": args.rc_tag,
         "--v1-manifest": args.v1_manifest,
         "--gate-manifest": args.gate_manifest,
         "--recovery-manifest": args.recovery_manifest,
@@ -1840,15 +1839,18 @@ def collect_release_candidate(
             "final RC manifest requires: " + ", ".join(sorted(missing))
         )
 
-    tag = str(args.rc_tag)
-    tag_ref = f"refs/tags/{tag}"
-    if run("git", "cat-file", "-t", tag_ref) != "tag":
-        raise ManifestError(f"RC tag is not annotated: {tag}")
-    tagged_source = run("git", "rev-parse", f"{tag_ref}^{{}}")
-    if tagged_source != source_sha:
-        raise ManifestError(
-            f"RC tag {tag} points to {tagged_source}, expected {source_sha}"
-        )
+    tag = str(args.rc_tag or "").strip()
+    tag_object_sha = ""
+    if tag:
+        tag_ref = f"refs/tags/{tag}"
+        if run("git", "cat-file", "-t", tag_ref) != "tag":
+            raise ManifestError(f"RC tag is not annotated: {tag}")
+        tagged_source = run("git", "rev-parse", f"{tag_ref}^{{}}")
+        if tagged_source != source_sha:
+            raise ManifestError(
+                f"RC tag {tag} points to {tagged_source}, expected {source_sha}"
+            )
+        tag_object_sha = run("git", "rev-parse", tag_ref)
 
     evidence = {
         "v1_preflight": load_release_evidence(
@@ -1887,7 +1889,7 @@ def collect_release_candidate(
         "status": "frozen",
         "source_sha": source_sha,
         "annotated_tag": tag,
-        "tag_object_sha": run("git", "rev-parse", tag_ref),
+        "tag_object_sha": tag_object_sha,
         "evidence": evidence,
     }
 
@@ -1982,7 +1984,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gate-delegate", default="human")
     parser.add_argument("--model-profile-id", default="")
     parser.add_argument("--draft", action="store_true")
-    parser.add_argument("--rc-tag", default="")
+    parser.add_argument(
+        "--rc-tag",
+        default="",
+        help="Optional annotated tag; otherwise freeze the recorded HEAD commit and tree",
+    )
     parser.add_argument("--v1-manifest", type=Path)
     parser.add_argument("--gate-manifest", type=Path)
     parser.add_argument("--recovery-manifest", type=Path)

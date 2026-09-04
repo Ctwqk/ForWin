@@ -198,10 +198,16 @@ Each cell also binds the manifest project ID to the MCP project identity and
 the frozen policy version to both the HTTP response and PostgreSQL row. A
 policy changed and later restored to identical content still fails by version.
 
-## 3. Annotated Tag
+## 3. Immutable Commit Record Or Annotated Tag
 
-Create an annotated tag at the exact candidate source only after all evidence
-passes:
+The final manifest records the complete Git commit SHA and tree hash from a
+clean worktree, bound to the tested image revisions and evidence. This immutable
+commit record is sufficient; creating a tag is optional. L200 verifies that the
+recorded commit exists, that its tree matches, and that the running source and
+images remain unchanged.
+
+If using a tag, create an annotated tag at the exact candidate source only after
+all evidence passes:
 
 ```bash
 git tag -a <v5-rc-tag> -m "Freeze ForWin v5 release candidate"
@@ -226,7 +232,6 @@ uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
   --matrix-audit-manifest <absolute-frozen-r6-audit-manifest> \
   --quality-profile <selected-profile> \
   --gate-delegate <selected-delegate> \
-  --rc-tag <v5-rc-tag> \
   --v1-manifest .artifacts/v1-release-gate/manifest.json \
   --gate-manifest .artifacts/v5-rc-gates/manifest.json \
   --recovery-manifest .artifacts/v5-recovery-final/manifest.json \
@@ -234,10 +239,15 @@ uv run python .artifacts/rc-candidate/collect_rc_manifest.py \
   --output .artifacts/v5-rc/manifest.json
 ```
 
+To bind an optional annotated tag, add `--rc-tag <v5-rc-tag>` to this command.
+An explicitly supplied tag must be annotated and point to the recorded commit;
+an invalid tag does not fall back to the commit-only path.
+
 Final mode revalidates the V1 event chain/report, matrix cells and deterministic
 report, exact gate runner/argv/JUnit results, every independent recovery
 report/event chain and exact family runner, and the full fresh-30 state plus its
-HTTP/MCP operation transcript. It also requires the annotated tag object,
+HTTP/MCP operation transcript. It also requires the immutable commit record
+(and verifies the annotated tag object when supplied),
 identical effective routing across the three model-execution roles,
 credential-free MCP/publisher-worker routing, one source tree, all five image
 identities, one candidate-manifest hash, one evaluator hash, source-bound

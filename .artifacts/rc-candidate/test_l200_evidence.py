@@ -1986,6 +1986,133 @@ def test_frozen_rc_manifest_reverifies_release_evidence_files(
         l200.validate_frozen_rc_manifest(selected, manifest)
 
 
+@pytest.fixture
+def complete_frozen_rc_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict:
+    """Use real evidence validators; replace only Git's external source record."""
+    fixture_path = Path(__file__).with_name("test_collect_rc_manifest.py")
+    spec = importlib.util.spec_from_file_location("rc_manifest_fixtures", fixture_path)
+    assert spec is not None and spec.loader is not None
+    fixtures = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixtures)
+    source_sha, source_tree = fixtures.SOURCE_SHA, fixtures.SOURCE_TREE
+    original_run = subprocess.run
+
+    def git_record(command, **kwargs):
+        if command[0] != "git":
+            return original_run(command, **kwargs)
+        args = list(command[1:])
+        if args == ["cat-file", "-t", "refs/tags/v5.0.0-rc1"]:
+            output = "tag"
+        elif args == ["rev-parse", "refs/tags/v5.0.0-rc1^{}"]:
+            output = source_sha
+        elif args == ["rev-parse", "refs/tags/v5.0.0-rc1"]:
+            output = "d" * 40
+        elif args == ["rev-parse", "--verify", f"{source_sha}^{{commit}}"]:
+            output = source_sha
+        elif args == ["rev-parse", "--verify", f"{source_sha}^{{tree}}"]:
+            output = source_tree
+        elif args[:2] == ["ls-files", "--error-unmatch"]:
+            output = args[2]
+        elif args[:1] == ["hash-object"]:
+            return original_run(command, **kwargs)
+        elif args[:1] == ["rev-parse"] and args[1].startswith(source_sha + ":"):
+            path = MODULE_PATH.parents[2] / args[1].split(":", 1)[1]
+            return original_run(["git", "hash-object", str(path)], **kwargs)
+        else:
+            return subprocess.CompletedProcess(command, 128, "", "unknown commit")
+        return subprocess.CompletedProcess(command, 0, output + "\n", "")
+
+    monkeypatch.setattr(subprocess, "run", git_record)
+    manifest = frozen_rc_manifest(tmp_path)
+    final_args = fixtures.final_args(tmp_path)
+    candidate = json.loads((tmp_path / "shared-candidate.json").read_text())
+    manifest["schema_version"] = 3
+    manifest["collected_at"] = "2026-07-23T12:00:00+00:00"
+    manifest["source"]["tree"] = source_tree
+    manifest["images"] = candidate["images"]
+    for service in manifest["model_profiles"]["effective_container_fields"]["services"].values():
+        service["runtime_image_id"] = candidate["images"]["runtime"]["image_id"]
+    manifest["release_harness"] = fixtures.collector.tree_revision(
+        *fixtures.collector.RELEASE_HARNESS_PATHS
+    )
+    matrix_path = tmp_path / "matrix-audit.json"
+    fixtures.write_matrix_audit(matrix_path)
+    manifest["matrix_evidence"] = fixtures.collector.load_matrix_manifest(
+        matrix_path, source_sha, require_final_audit=True
+    )
+    manifest["release_candidate"] = fixtures.collector.collect_release_candidate(
+        final_args, source_sha
+    )
+    return manifest
+
+
+@pytest.mark.parametrize("with_tag", [False, True])
+def test_frozen_rc_accepts_complete_commit_record(
+    complete_frozen_rc_manifest: dict,
+    with_tag: bool,
+) -> None:
+    manifest = complete_frozen_rc_manifest
+    if not with_tag:
+        manifest["release_candidate"]["annotated_tag"] = ""
+        manifest["release_candidate"]["tag_object_sha"] = ""
+
+    result = l200.validate_frozen_rc_manifest(
+        argparse.Namespace(quality_profile="standard", gate_delegate="human"),
+        manifest,
+    )
+
+    assert result["source_sha"] == "a" * 40
+    assert result["annotated_tag"] == ("v5.0.0-rc1" if with_tag else "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("sha", ""), ("sha", "a" * 7), ("sha", "HEAD"), ("tree", ""), ("tree", "f" * 40)],
+)
+def test_tagless_frozen_rc_rejects_invalid_commit_record(
+    complete_frozen_rc_manifest: dict,
+    field: str,
+    value: str,
+) -> None:
+    manifest = complete_frozen_rc_manifest
+    manifest["release_candidate"]["annotated_tag"] = ""
+    manifest["release_candidate"]["tag_object_sha"] = ""
+    manifest["source"][field] = value
+
+    with pytest.raises(l200.EvidenceError, match="source|commit"):
+        l200.validate_frozen_rc_manifest(
+            argparse.Namespace(quality_profile="standard", gate_delegate="human"),
+            manifest,
+        )
+
+
+@pytest.mark.parametrize("missing", ["source", "evidence", "image", "clean_tree"])
+def test_tagless_frozen_rc_preserves_release_requirements(
+    complete_frozen_rc_manifest: dict,
+    missing: str,
+) -> None:
+    manifest = complete_frozen_rc_manifest
+    manifest["release_candidate"]["annotated_tag"] = ""
+    manifest["release_candidate"]["tag_object_sha"] = ""
+    if missing == "source":
+        manifest["release_candidate"]["source_sha"] = "f" * 40
+    elif missing == "evidence":
+        del manifest["release_candidate"]["evidence"]["live_recovery"]
+    elif missing == "image":
+        manifest["images"]["runtime"]["revision"] = "f" * 40
+    else:
+        manifest["source"]["tracked_worktree_clean"] = False
+
+    with pytest.raises(l200.EvidenceError):
+        l200.validate_frozen_rc_manifest(
+            argparse.Namespace(quality_profile="standard", gate_delegate="human"),
+            manifest,
+        )
+
+
 def test_frozen_rc_manifest_requires_v1_preflight(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

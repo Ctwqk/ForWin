@@ -2112,9 +2112,7 @@ def validate_frozen_rc_manifest(
     if release.get("source_sha") != source.get("sha"):
         violations.append("RC release candidate source SHA mismatch")
     tag = str(release.get("annotated_tag") or "")
-    if not tag:
-        violations.append("RC manifest has no annotated tag")
-    else:
+    if tag:
         try:
             tag_ref = f"refs/tags/{tag}"
             if command("git", "cat-file", "-t", tag_ref) != "tag":
@@ -2129,6 +2127,15 @@ def validate_frozen_rc_manifest(
                 violations.append("RC annotated tag object SHA mismatch")
         except EvidenceError as exc:
             violations.append(f"RC tag cannot be verified: {exc}")
+    else:
+        try:
+            source_sha = str(source.get("sha") or "")
+            if command("git", "rev-parse", "--verify", f"{source_sha}^{{commit}}") != source_sha:
+                violations.append("RC source SHA is not a complete commit identity")
+            if command("git", "rev-parse", "--verify", f"{source_sha}^{{tree}}") != source.get("tree"):
+                violations.append("RC source tree does not match its commit")
+        except EvidenceError as exc:
+            violations.append(f"RC source commit cannot be verified: {exc}")
     evidence = release.get("evidence") or {}
     candidate_manifest_hashes: set[str] = set()
     for key in (

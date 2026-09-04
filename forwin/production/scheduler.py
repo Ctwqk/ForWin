@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from hashlib import sha256
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from forwin.application.generation import GenerationApplicationService
 from forwin.application.read_models import normalize_project_automation
@@ -14,7 +16,15 @@ from forwin.models.project import Project
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
 
-from .events import action_for_blocked_reason, message_for_action
+from .events import (
+    ACTION_ACTIVE_TASK,
+    ACTION_BLOCKED,
+    ACTION_IDLE,
+    ACTION_RAN_REVIEW_JOBS,
+    ACTION_WAITING_REVIEW,
+    action_for_blocked_reason,
+    message_for_action,
+)
 from .executor import ProductionExecutionResult, ProductionExecutor
 from .planner import ProductionPlan, ProductionPlanner
 from .policy import policy_from_automation
@@ -77,121 +87,163 @@ class ProductionScheduler:
         now_local = (
             now.astimezone(self.display_tz) if self.display_tz is not None else now
         )
-        today = now_local.strftime("%Y-%m-%d")
-        current_minutes = now_local.hour * 60 + now_local.minute
-        session = self._session()
-        try:
-            ready_projects: list[tuple[Project, ProjectAutomationSettings]] = []
-            projects = (
-                session.execute(select(Project).order_by(Project.updated_at.desc()))
-                .scalars()
-                .all()
+        with self._session() as session:
+            project_ids = list(
+                session.scalars(select(Project.id).order_by(Project.updated_at.desc()))
             )
-            for project in projects:
-                automation = normalize_project_automation(project.automation_json)
-                if not automation.enabled:
+        results: list[ProductionRunResult] = []
+        for project_id in project_ids:
+            # Every project commits independently; later failures cannot undo a dispatch.
+            with self._session() as session, session.begin():
+                lock_key = int.from_bytes(
+                    sha256(f"forwin:production:{project_id}".encode()).digest()[:8],
+                    "big",
+                    signed=True,
+                )
+                if not session.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key}
+                ):
                     continue
-                if automation.last_scheduler_date == today:
-                    continue
-                if current_minutes < daily_start_minutes(automation.daily_start_time):
-                    continue
-                ready_projects.append((project, automation))
+                result = self._run_project(session, project_id, now, now_local)
+                if result is not None:
+                    results.append(result)
+        return results
 
-            backlogs = ProductionRepository(session).load_backlogs(
-                [project.id for project, _automation in ready_projects],
-                generation_terminal_statuses=self.generation_terminal_statuses,
-                upload_terminal_statuses=self.upload_terminal_statuses,
-            )
+    @staticmethod
+    def _is_due(automation: ProjectAutomationSettings, now_local: datetime) -> bool:
+        if not automation.enabled:
+            return False
+        if now_local.hour * 60 + now_local.minute < daily_start_minutes(
+            automation.daily_start_time
+        ):
+            return False
+        # Older schedulers also stamped blocked/idle checks as a completed day.
+        retryable_actions = {
+            ACTION_ACTIVE_TASK,
+            ACTION_WAITING_REVIEW,
+            ACTION_IDLE,
+            ACTION_BLOCKED,
+        }
+        return (
+            automation.last_scheduler_date != now_local.date().isoformat()
+            or automation.last_scheduler_action in retryable_actions
+        )
+
+    def _plan(
+        self,
+        session: Session,
+        project_id: str,
+        automation: ProjectAutomationSettings,
+        now_local: datetime,
+    ) -> ProductionPlan:
+        backlog = ProductionRepository(session).load_backlogs(
+            [project_id],
+            generation_terminal_statuses=self.generation_terminal_statuses,
+            upload_terminal_statuses=self.upload_terminal_statuses,
+        )[project_id]
+        return self.planner.plan(
+            policy=policy_from_automation(automation), backlog=backlog, now=now_local
+        )
+
+    def _run_project(
+        self,
+        session: Session,
+        project_id: str,
+        now: datetime,
+        now_local: datetime,
+    ) -> ProductionRunResult | None:
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
+        automation = normalize_project_automation(project.automation_json)
+        if not self._is_due(automation, now_local):
+            return None
+        context = OperationContext(
+            project_id=project_id, stage="production.scheduler.run_due_projects"
+        )
+        with self.observability.span(
+            context,
+            "production.scheduler.project",
+            span_kind="scheduler",
+            component="production",
+        ) as span:
             executor = ProductionExecutor(
                 generation_application=self.generation_application,
                 publisher_manager_factory=self.publisher_manager_factory,
-                release_session=session,
+                session=session,
                 session_factory=self.session_factory,
                 config=self.config,
                 review_chapter=self.review_chapter,
                 approve_chapter_review=self.approve_chapter_review,
             )
-            results: list[ProductionRunResult] = []
-            for project, automation in ready_projects:
-                obs_context = OperationContext(
-                    project_id=project.id,
-                    stage="production.scheduler.run_due_projects",
+            plan = self._plan(session, project_id, automation, now_local)
+            # Review owns separate Canon transactions. Until callbacks return, this
+            # transaction holds only the advisory lock and has made no writes.
+            reviewed = (
+                executor.execute_review_jobs(plan=plan, project=project)
+                if not plan.blocked_reason
+                else 0
+            )
+            session.expire_all()
+            project = session.scalar(
+                select(Project).where(Project.id == project_id).with_for_update()
+            )
+            if project is None:
+                return None
+            automation = normalize_project_automation(project.automation_json)
+            if not self._is_due(automation, now_local):
+                return None
+            plan = self._plan(session, project_id, automation, now_local)
+            if plan.blocked_reason:
+                action = action_for_blocked_reason(plan.blocked_reason)
+                execution = ProductionExecutionResult(
+                    action=action,
+                    message=message_for_action(
+                        action, blocked_reason=plan.blocked_reason
+                    ),
+                    review_job_count=reviewed,
                 )
-                with self.observability.span(
-                    obs_context,
-                    "production.scheduler.project",
-                    span_kind="scheduler",
-                    component="production",
-                ) as span:
-                    policy = policy_from_automation(automation)
-                    backlog = backlogs.get(project.id)
-                    if backlog is None:
-                        span.set_status("skipped")
-                        continue
-                    plan = self.planner.plan(
-                        policy=policy, backlog=backlog, now=now_local
-                    )
-                    updated = automation.model_copy(
-                        update={
-                            "last_scheduler_date": today,
-                            "last_scheduler_at": self.display_datetime(now),
-                        }
-                    )
-                    if plan.blocked_reason:
-                        action = action_for_blocked_reason(plan.blocked_reason)
-                        message = message_for_action(
-                            action, blocked_reason=plan.blocked_reason
-                        )
-                        span.tag("action", action)
-                        updated = updated.model_copy(
-                            update={
-                                "last_scheduler_action": action,
-                                "last_scheduler_message": message,
-                                "last_scheduler_task_id": "",
-                            }
-                        )
-                        self.persist_project_automation(session, project, updated)
-                        results.append(
-                            ProductionRunResult(
-                                project_id=project.id,
-                                action=action,
-                                message=message,
-                                plan=plan,
-                            )
-                        )
-                        continue
-
-                    execution = executor.execute(
-                        plan=plan,
-                        project=project,
-                        policy=policy,
-                    )
-                    span.tag("action", execution.action)
-                    updated = updated.model_copy(
-                        update={
-                            "last_scheduler_action": execution.action,
-                            "last_scheduler_message": execution.message,
-                            "last_scheduler_task_id": execution.task_id,
-                        }
-                    )
-                    self.persist_project_automation(session, project, updated)
-                    results.append(
-                        ProductionRunResult(
-                            project_id=project.id,
-                            action=execution.action,
-                            message=execution.message,
-                            task_id=execution.task_id,
-                            plan=plan,
-                            execution=execution,
-                        )
-                    )
-            session.commit()
-            return results
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+            else:
+                execution = executor.execute(
+                    plan=plan,
+                    project=project,
+                    policy=policy_from_automation(automation),
+                    review_job_count=reviewed,
+                )
+            if reviewed and not execution.task_id and not execution.publish_job_count:
+                execution = execution.model_copy(
+                    update={
+                        "action": ACTION_RAN_REVIEW_JOBS,
+                        "message": message_for_action(
+                            ACTION_RAN_REVIEW_JOBS, chapter_count=reviewed
+                        ),
+                        "review_job_count": reviewed,
+                    }
+                )
+            reserved = bool(
+                execution.task_id or execution.publish_job_count or reviewed
+            )
+            updated = automation.model_copy(
+                update={
+                    "last_scheduler_date": now_local.date().isoformat()
+                    if reserved
+                    else "",
+                    "last_scheduler_at": self.display_datetime(now),
+                    "last_scheduler_action": execution.action,
+                    "last_scheduler_message": execution.message,
+                    "last_scheduler_task_id": execution.task_id,
+                }
+            )
+            self.persist_project_automation(session, project, updated)
+            span.tag("action", execution.action)
+            return ProductionRunResult(
+                project_id=project_id,
+                action=execution.action,
+                message=execution.message,
+                task_id=execution.task_id,
+                plan=plan,
+                execution=execution,
+            )
 
     def _session(self) -> Any:
         if self.get_session is not None:

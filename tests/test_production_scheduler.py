@@ -22,7 +22,7 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
     commands = []
 
     class RecordingApplicationService:
-        def enqueue(self, command):
+        def enqueue(self, command, *, session=None):
             commands.append(command)
             suffix = (
                 "initial"

@@ -11,6 +11,7 @@ from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.plan import CanonCommitPlan
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from forwin.application.errors import (
     ActiveGenerationTaskError,
@@ -82,7 +83,30 @@ class GenerationApplicationService:
         self.infrastructure = infrastructure
         self.runner = runner or self._run_claimed
 
-    def enqueue(self, command: EnqueueGenerationCommand) -> GenerationTaskHandle:
+    def enqueue(
+        self,
+        command: EnqueueGenerationCommand,
+        *,
+        session: Session | None = None,
+    ) -> GenerationTaskHandle:
+        """Enqueue atomically with caller work when a session is supplied."""
+        try:
+            if session is None:
+                with self.session_factory.begin() as managed_session:
+                    return self._enqueue_in_session(command, managed_session)
+            # A racing active-task constraint must not poison the caller's transaction.
+            with session.begin_nested():
+                return self._enqueue_in_session(command, session)
+        except IntegrityError as exc:
+            if "ux_generation_tasks_one_active_per_project" in str(exc):
+                raise ActiveGenerationTaskError(
+                    f"active generation task exists for project: {command.project_id}"
+                ) from exc
+            raise
+
+    def _enqueue_in_session(
+        self, command: EnqueueGenerationCommand, session: Session
+    ) -> GenerationTaskHandle:
         project_id = str(command.project_id or "").strip()
         if not project_id:
             raise ProjectNotFound(project_id)
@@ -90,67 +114,59 @@ class GenerationApplicationService:
         max_chapters = max(0, int(command.max_chapters or 0))
         run_until_chapter = max(0, int(command.run_until_chapter or 0))
         task_id = new_task_id()
-        try:
-            with self.session_factory.begin() as session:
-                project = session.get(Project, project_id)
-                if project is None:
-                    raise ProjectNotFound(project_id)
-                repository = GenerationTaskRepository(session)
-                if repository.has_active(project_id):
-                    raise ActiveGenerationTaskError(
-                        f"active generation task exists for project: {project_id}"
-                    )
-                policy_record = ProjectPolicyStore(session).load(project)
-                root_event = StateUpdater(session).save_decision_event(
-                    DecisionEventInfo(
-                        project_id=project_id,
-                        task_id=task_id,
-                        scope="task",
-                        event_family="business_event",
-                        event_type=ensure_decision_event_type(
-                            str(command.root_event_type or "")
-                        ),
-                        actor_type="api",
-                        summary="生成任务已创建。",
-                        payload={
-                            "requested_chapters": requested_chapters,
-                            "max_chapters": max_chapters,
-                            "run_until_chapter": run_until_chapter,
-                        },
-                        related_object_type="generation_task",
-                        related_object_id=task_id,
-                    )
-                )
-                payload = execution_payload(
-                    mode="continue",
-                    policy=policy_record.policy,
-                    policy_version=policy_record.version,
-                    root_event_id=root_event.id,
-                    auto_continue=command.auto_continue,
-                    run_until_chapter=run_until_chapter,
-                    max_chapters=max_chapters,
-                )
-                task = repository.create(
-                    task_id=task_id,
-                    project_id=project_id,
-                    title=str(command.title or ""),
-                    subtitle=str(command.subtitle or ""),
-                    message=str(command.message or ""),
-                    requested_chapters=requested_chapters,
-                    max_chapters=max_chapters,
-                    run_until_chapter=run_until_chapter,
-                    payload=payload,
-                )
-                return GenerationTaskHandle(
-                    task_id=task.id,
-                    project_id=project_id,
-                )
-        except IntegrityError as exc:
-            if "ux_generation_tasks_one_active_per_project" in str(exc):
-                raise ActiveGenerationTaskError(
-                    f"active generation task exists for project: {project_id}"
-                ) from exc
-            raise
+        project = session.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFound(project_id)
+        repository = GenerationTaskRepository(session)
+        if repository.has_active(project_id):
+            raise ActiveGenerationTaskError(
+                f"active generation task exists for project: {project_id}"
+            )
+        policy_record = ProjectPolicyStore(session).load(project)
+        root_event = StateUpdater(session).save_decision_event(
+            DecisionEventInfo(
+                project_id=project_id,
+                task_id=task_id,
+                scope="task",
+                event_family="business_event",
+                event_type=ensure_decision_event_type(
+                    str(command.root_event_type or "")
+                ),
+                actor_type="api",
+                summary="生成任务已创建。",
+                payload={
+                    "requested_chapters": requested_chapters,
+                    "max_chapters": max_chapters,
+                    "run_until_chapter": run_until_chapter,
+                },
+                related_object_type="generation_task",
+                related_object_id=task_id,
+            )
+        )
+        payload = execution_payload(
+            mode="continue",
+            policy=policy_record.policy,
+            policy_version=policy_record.version,
+            root_event_id=root_event.id,
+            auto_continue=command.auto_continue,
+            run_until_chapter=run_until_chapter,
+            max_chapters=max_chapters,
+        )
+        task = repository.create(
+            task_id=task_id,
+            project_id=project_id,
+            title=str(command.title or ""),
+            subtitle=str(command.subtitle or ""),
+            message=str(command.message or ""),
+            requested_chapters=requested_chapters,
+            max_chapters=max_chapters,
+            run_until_chapter=run_until_chapter,
+            payload=payload,
+        )
+        return GenerationTaskHandle(
+            task_id=task.id,
+            project_id=project_id,
+        )
 
     def execute_claimed(
         self,

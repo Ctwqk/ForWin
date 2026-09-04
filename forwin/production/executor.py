@@ -40,7 +40,7 @@ class ProductionExecutor:
         *,
         generation_application: GenerationApplicationService,
         publisher_manager_factory: Callable[[], Any] | None = None,
-        release_session: Any | None = None,
+        session: Any | None = None,
         session_factory: Callable[[], Any] | None = None,
         config: Any = None,
         review_chapter: Callable[[str, int], Any] | None = None,
@@ -48,7 +48,7 @@ class ProductionExecutor:
     ) -> None:
         self.generation_application = generation_application
         self.publisher_manager_factory = publisher_manager_factory
-        self.release_session = release_session
+        self.session = session
         self.session_factory = session_factory
         self.config = config
         self.review_chapter = review_chapter
@@ -60,9 +60,11 @@ class ProductionExecutor:
         plan: ProductionPlan,
         project: Project,
         policy: ProductionPolicy,
+        review_job_count: int | None = None,
     ) -> ProductionExecutionResult:
         action = ACTION_IDLE
         task_id = ""
+        enqueue_options = {"session": self.session} if self.session is not None else {}
         try:
             if plan.generation_mode == "initial" and plan.write_chapters:
                 requested = max(
@@ -80,7 +82,8 @@ class ProductionExecutor:
                         subtitle=f"自动调度 · 首批 {len(plan.write_chapters)} 章",
                         message=f"按计划开始首批 {requested} 章。",
                         root_event_type=DecisionEventType.GENERATION_REQUESTED,
-                    )
+                    ),
+                    **enqueue_options,
                 ).task_id
                 action = ACTION_STARTED_INITIAL_GENERATION
             elif plan.generation_mode == "continue" and plan.write_chapters:
@@ -100,7 +103,8 @@ class ProductionExecutor:
                         subtitle=f"自动调度 · 今日上限 {maximum} 章",
                         message=f"按计划继续生成，今日最多处理 {maximum} 章。",
                         root_event_type=DecisionEventType.CONTINUE_REQUESTED,
-                    )
+                    ),
+                    **enqueue_options,
                 ).task_id
                 action = ACTION_STARTED_CONTINUE_GENERATION
         except ActiveGenerationTaskError:
@@ -109,7 +113,8 @@ class ProductionExecutor:
                 message=message_for_action(ACTION_ACTIVE_TASK),
             )
 
-        review_job_count = self._execute_review_jobs(plan=plan, project=project)
+        if review_job_count is None:
+            review_job_count = self.execute_review_jobs(plan=plan, project=project)
         if action == ACTION_IDLE and review_job_count > 0:
             action = ACTION_RAN_REVIEW_JOBS
 
@@ -139,7 +144,7 @@ class ProductionExecutor:
             publish_job_count=publish_job_count,
         )
 
-    def _execute_review_jobs(
+    def execute_review_jobs(
         self,
         *,
         plan: ProductionPlan,
@@ -185,8 +190,8 @@ class ProductionExecutor:
             "publish": True,
             "actor_type": "scheduler",
         }
-        if self.release_session is not None:
-            release_request["session"] = self.release_session
+        if self.session is not None:
+            release_request["session"] = self.session
         released = manager.release_canon_jobs(
             **release_request,
         )

@@ -347,7 +347,11 @@ def update_project_automation(
 ) -> ProjectAutomationUpdateResponse:
     session = get_session()
     try:
-        project = session.get(Project, project_id)
+        # Read settings after acquiring the same lock used by daily dispatch so a
+        # concurrent edit cannot overwrite its newly committed reservation.
+        project = session.scalar(
+            select(Project).where(Project.id == project_id).with_for_update()
+        )
         if project is None:
             raise HTTPException(404, "项目不存在")
         current = normalize_project_automation(project.automation_json)

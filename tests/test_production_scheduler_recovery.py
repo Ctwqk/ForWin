@@ -4,6 +4,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event
+from time import monotonic
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,8 @@ from forwin.application.generation import (
     EnqueueGenerationCommand,
     GenerationApplicationService,
 )
+from forwin.api_schema import ProjectAutomationUpdateRequest
+from forwin.application.projects.generation import update_project_automation
 from forwin.config import InfrastructureConfig
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, new_id
@@ -250,6 +253,65 @@ def test_concurrent_ticks_cannot_reserve_a_second_daily_batch(sessions):
         finally:
             resume.set()
         assert first.result(timeout=5)[0].task_id
+    assert len(_tasks(sessions)) == 1
+
+
+def test_settings_update_waits_for_dispatch_and_preserves_daily_reservation(sessions):
+    project_id = _project(sessions)
+    reserved, resume, settings_started = Event(), Event(), Event()
+    settings_backend = []
+
+    def pause_before_dispatch_commit(session, project, automation):
+        stored = _persist(session, project, automation)
+        reserved.set()
+        assert resume.wait(10), "test did not release scheduler transaction"
+        return stored
+
+    def settings_session():
+        session = sessions()
+        settings_backend.append(session.scalar(text("SELECT pg_backend_pid()")))
+        settings_started.set()
+        return session
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        dispatch = pool.submit(
+            _scheduler(
+                sessions, persist_project_automation=pause_before_dispatch_commit
+            ).run_due_projects,
+            now=NOW,
+        )
+        try:
+            assert reserved.wait(5)
+            settings = pool.submit(
+                update_project_automation,
+                project_id,
+                ProjectAutomationUpdateRequest(
+                    enabled=True, daily_start_time="09:00", daily_chapter_quota=2
+                ),
+                get_session=settings_session,
+                persist_project_automation=_persist,
+            )
+            assert settings_started.wait(5)
+            deadline = monotonic() + 5
+            with sessions() as observer:
+                while not observer.scalar(
+                    text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
+                    {"pid": settings_backend[0]},
+                ):
+                    assert monotonic() < deadline, "settings did not overlap dispatch"
+                    assert not settings.done(), "settings unexpectedly finished"
+                    resume.wait(0.01)
+        finally:
+            resume.set()
+        result = dispatch.result(timeout=5)
+        assert settings.result(timeout=5).ok
+
+    automation = _automation(sessions, project_id)
+    assert automation["last_scheduler_date"] == TODAY
+    assert automation["daily_chapter_quota"] == 2
+    with sessions.begin() as session:
+        session.get(GenerationTask, result[0].task_id).status = "completed"
+    assert _scheduler(sessions).run_due_projects(now=NOW + timedelta(minutes=1)) == []
     assert len(_tasks(sessions)) == 1
 
 

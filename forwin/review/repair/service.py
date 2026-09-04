@@ -938,6 +938,22 @@ def _run_repair_loop_for_phase(
                 parent_event_id=str(repair_started_event.id or ""),
             )
             continue
+        protected_title = str(current_output.title or "").strip()
+        plan_title_changed = repair_scope == "chapter_plan" and (
+            str(source_chapter_plan.get("title") or "").strip()
+            != str(result_chapter_plan.get("title") or "").strip()
+        )
+        if (
+            protected_title
+            and not plan_title_changed
+            and any(
+                str(item or "").strip() == protected_title
+                for item in repair_instruction.must_preserve
+            )
+        ):
+            rewritten_output = rewritten_output.model_copy(
+                update={"title": current_output.title}
+            )
         rewritten_writer_trace_id = self._save_prompt_trace_payload(
             session=session,
             updater=updater,

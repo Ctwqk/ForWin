@@ -22,9 +22,13 @@ RepairVerification两个既有聚合值使用True/False/None表达已验证通�
 
 ## 3. 同日重新调度
 
-把最近检查与当日已预留的生产/发布额度分开。active task、waiting review、临时失败或暂时无内容不消耗当日机会；状态解除后同日可以再次评估。每日上限按已经持久预留的工作计算，重复tick、重启和并发不能再次获得相同额度。
+把最近检查与当日已预留的工作批次分开。复用last_scheduler_at记录检查、last_scheduler_date记录当日一次成功批次预留，保留现有每日批次语义，不扩展全天滚动补量。未完成任何工作时，active task、waiting review、临时失败或暂时无内容不消耗当日机会；状态解除后同日可以再次评估。已有旧blocked/idle日期标记也应能恢复。重复tick、重启和并发不能再次获得同一日批次额度。
 
-复用Project自动化持久状态、既有GenerationTask和Canon发布job，不创建第二套调度器。项目级事务串行化检查、额度预留、任务入队与发布job释放；必要时GenerationApplicationService接收调用方session，保持应用层唯一入队入口，避免独立事务间的提交窗口或锁等待。保留任务active唯一约束、发布幂等和原质量/策略条件。
+复用Project自动化持久状态、既有GenerationTask和Canon发布job，不创建第二套调度器。项目级调度锁串行化检查；GenerationApplicationService接收调用方session，使额度预留、任务入队与发布job释放共同提交，保持应用层唯一入队入口。保留任务active唯一约束、发布幂等和原质量/策略条件。
+
+同步review回调会在独立事务中获取Canon的Project锁，不能放进scheduler已持有Project行锁的区间。采用事务级advisory调度锁，在没有行锁/写入时执行已有review回调，随后获取Project行锁、重新读设置和backlog，再完成入队/释放/日槽的原子事务。不能先提交日槽后执行未持久化的review回调，以免崩溃丢失该次工作；也不能让两个scheduler并行审同一批。自动化设置入口同样锁后读取，避免并发设置写入覆盖新日槽。该日槽不表示小说质量或平台确认发布已完成。
+
+成功完成同步review也算当日工作批次；review后需要人工批准，或生产后才出现新发布job，不承诺该入口当日再次派发。review独立事务崩溃后的恢复依赖已持久化章节状态；此处尚无跨崩溃累计review额度账本。这些属于后续持续生产控制器的范围，不以本轮一次批次的幂等测试代替。
 
 ## 验证与交付
 

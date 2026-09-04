@@ -18,6 +18,7 @@
 | 文档 | 状态 | 说明 |
 |---|---|---|
 | `CURRENT_DESIGN.md` | active-current | 当前实际设计的完整入口，描述主流程、owner、默认策略、阻断条件、已删范围和剩余耦合。 |
+| `../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md` | active-current | 外部评审阶段一：逐合同三态验证、trace outbox补传、同日阻断恢复及一次批次原子预留；不扩展V5主架构。 |
 | `CURRENT_ARCHITECTURE.md` | active-current | 精简架构边界，固定 RuntimePolicy v2 / report-only Generation Audit / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
 | `../docs/superpowers/specs/2026-09-04-v5-closure-design.md` | active-current | 最新收口复评：以 fdaeaa6 领先候选为基线，冻结已完成 Track A/B0，修正重复验收与 tag-only 附加门；保留真实恢复及最终全新 L200 no-hotfix。 |
@@ -53,7 +54,11 @@
 | `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除的历史证据；仅供追溯，不是当前 runtime、策略字段或目标架构。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
-## 2026-09 V5 当前候选状态
+## 2026-09 外部评审后的修复
+
+基于已推送的master@0a06cfa，阶段一继续保留V5主体设计，已完成三个已复现问题及交叉复核边界的修复。最终530824e默认2218通过/1跳过、独立RC1156通过，Ruff/compileall通过；没有新增真实运行验收。当前实现和验证边界见[本轮记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。下节6161e4c及R27是前轮历史证据，不能替代新代码的回归或实际运行验收。
+
+## 2026-09 V5 前轮收口状态
 
 本轮起点是 `codex/v5-r9-integration-candidate@fdaeaa6`，初次核对时领先 master 147 个提交；修订派生于 `codex/v5-closure`，集成目标为远端默认分支 master。已确认所有其他 v5 worktree 的实现均包含在该候选或已移植。代码集成与正式运行发布分开记录。
 

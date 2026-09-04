@@ -208,6 +208,14 @@ uv run python .artifacts/rc-candidate/publisher_recovery.py run \
   --evidence-dir "$RECOVERY_EVIDENCE_ROOT/11-publisher-account-risk"
 ```
 
+For `minio_post_canon_unavailable`, the current runner expects the targeted business
+maintenance step to complete once while the frozen trace remains pending in outbox.
+Restoring storage must finish that trace upload without increasing the completed
+maintenance step's attempts or lease epoch. The uploaded content/key/hash must
+match the frozen event; a failed business step still blocks subsequent Canon
+admission. This is the current proof boundary, not a requirement to rerun
+planning merely to reconstruct a trace.
+
 ## Fault Report
 
 Each command must exit zero and write `fault-report.json` with schema version

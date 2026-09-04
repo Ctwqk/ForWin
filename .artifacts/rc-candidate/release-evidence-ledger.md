@@ -1,7 +1,8 @@
 # ForWin v5 Release Evidence Ledger
 
-Updated: 2026-09-04. Current assessment baseline: `fdaeaa687a0dc4c65550a01d030e7d97d43b0c5f`.
-Closure work is on `codex/v5-closure`, derived from that candidate. The original R27 runtime and artifacts are preserved.
+Updated: 2026-09-04. Current source successor: `530824e245bdf43226947d532c85289a40a01fd3`, based on pushed `master@0a06cfa`.
+The original closure assessment started at `fdaeaa687a0dc4c65550a01d030e7d97d43b0c5f`; R27 runtime and artifacts are preserved.
+The three autonomy fixes and their local verification are recorded in `docs/operations/v5-autonomy-fixes-2026-09-04.md`; `docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md` defines their scope. This does not establish live release acceptance.
 Authority: `docs/superpowers/specs/2026-09-04-v5-closure-design.md` amends the reviewed final plan. Older roadmap checkboxes do not reopen completed implementation.
 
 ## Status rules
@@ -25,7 +26,7 @@ Authority: `docs/superpowers/specs/2026-09-04-v5-closure-design.md` amends the r
 | A4 Obsidian | IMPLEMENTED | `c1a4a26`: reverse import removed; export/generic Canon proposals retained |
 | Daily automation | RETAINED | Original plan's deletion conditions have not been established |
 
-## Current source verification
+## Source verification history
 
 | Scope | Status | Evidence |
 | --- | --- | --- |
@@ -33,9 +34,10 @@ Authority: `docs/superpowers/specs/2026-09-04-v5-closure-design.md` amends the r
 | fdaeaa6 hidden RC harness tests | PASS | 1130 tests pass; explicitly collected outside default tests/ discovery |
 | fdaeaa6 Ruff / compileall | PASS | Ruff 0.15.22, forwin/tests; compileall successful |
 | b40fbd7 closure successor | PASS (local) | Default 2163 pass / 1 opt-in skip; independently invoked hidden RC 1147 pass; Ruff / compileall pass. Final dead-interface deletion at 6161e4c is verified separately |
-| 6161e4c final runtime source | PASS (local) | Default 2162 pass / 1 opt-in skip, exit 0; Ruff / compileall pass. One removed test exclusively covered a deleted unused interface. Hidden RC Python unchanged since the 1147-pass run; later closure commits only change documentation |
+| 6161e4c closure runtime source | PASS (local) | Default 2162 pass / 1 opt-in skip, exit 0; Ruff / compileall pass. One removed test exclusively covered a deleted unused interface. Hidden RC Python unchanged since the 1147-pass run; later closure commits only change documentation |
+| 530824e autonomy fixes | PASS (local) | Default 2218 pass / 1 opt-in skip, separate RC 1156 pass; Ruff/compileall pass. Contracts, trace delivery and daily dispatch fixes have focused regressions; no live acceptance run |
 
-Raw logs, JUnit, exact commands and isolation details are in the task artifact directory under the source workspace, `.artifacts/v5-closure-2026-09-04/baseline/`. The tracked operations assessment summarizes final closure results.
+Raw logs, JUnit, exact commands and isolation details are in the task artifact directory under the source workspace, `.artifacts/v5-closure-2026-09-04/baseline/`. The tracked operations assessment summarizes final closure results. New autonomy-fix evidence is separately retained under `.artifacts/v5-autonomy-fixes-2026-09-04/`; see its operations report for the two initial architecture-check failures and final rerun.
 
 ## R6 diagnostic matrix
 

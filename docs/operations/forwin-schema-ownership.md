@@ -24,7 +24,11 @@ PostgreSQL schema namespace, or separate service.
   broad bans that would freeze known legacy read paths.
 - New outbox event state is owned by `forwin/outbox/*`, `forwin/models/outbox.py`,
   and approved producer/handler adapters such as
-  `forwin/knowledge_system/projection_jobs.py`.
+  `forwin/knowledge_system/projection_jobs.py` and
+  `forwin/maintenance/trace_upload.py`. The trace adapter reads an existing
+  event's immutable identity to reject conflicting payloads, enqueues through
+  the outbox store, and uploads frozen artifacts. Event status, retries and
+  leases remain owned by the outbox worker.
 - Publisher browser automation should use backend API calls and heartbeat
   checks; it should not own direct database writes.
 - MCP should call API/MCP workflow tools and should not import SQLAlchemy model

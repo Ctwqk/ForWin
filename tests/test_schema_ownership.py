@@ -50,6 +50,8 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
         "forwin/models/__init__.py",
         "forwin/models/outbox.py",
         "forwin/knowledge_system/projection_jobs.py",
+        # Trace reads immutable identity; enqueue and lifecycle stay in outbox.
+        "forwin/maintenance/trace_upload.py",
     }
     allowed_prefixes = ("forwin/outbox/",)
 

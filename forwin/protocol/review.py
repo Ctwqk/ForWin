@@ -119,7 +119,7 @@ class RepairContractCheck(BaseModel):
 
 
 class RepairVerification(BaseModel):
-    # Missing legacy fields keep their original False default; explicit None is coverage unknown.
+    # Missing fields keep their original False default; explicit None is coverage unknown.
     fixed_all_must_fix: bool | None = False
     preserved_all_must_preserve: bool | None = False
     unfixed: list[str] = Field(default_factory=list)

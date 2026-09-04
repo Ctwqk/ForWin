@@ -7,5 +7,6 @@ Status: DRAFT REVIEW domain.
 Rules:
 
 - Treat this package as the main review surface for chapter drafts.
-- Keep world_v4 extraction-specific checks in the compatibility gate, not in this facade.
-- Do not replace `DraftReviewService` with `world_v4_review_gate`; the latter validates BookState extraction deltas.
+- BookState extraction checks belong to `forwin.book_state.extraction`; its deterministic gate validates deltas before Canon admission.
+- Review the complete stitched `WriterOutput.body` as the final narrative. Pre-stitch scene drafts remain writing artifacts and must not be supplied as a second narrative to the LLM reviewer.
+- Preserve protected chapter titles during repair unless the plan explicitly changes them; this does not weaken content verification.

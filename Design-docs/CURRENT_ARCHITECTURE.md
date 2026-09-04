@@ -1,6 +1,8 @@
 # ForWin Current Architecture
 
-更新时间：2026-07-10
+更新时间：2026-09-04
+
+完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。
 
 状态：active-current。本文档是当前架构入口；旧 V2/V3/V4 side-by-side 计划只作为历史背景或兼容说明读取。
 
@@ -30,7 +32,7 @@ Genesis / Writer / Review 主链
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
 - 当前策略与生成审计契约：`RuntimePolicy.schema_version=2`；Generation Audit 固定为 `report-only`，按数据库中 `ChapterPlan.status="accepted"` row 计数，对 `all profiles` 使用 `cadence=6`，即每六个 accepted DB chapter 记录一次 `generation_audit_checkpoint_reached`，其 `event_family="runtime_observation"`，并且固定为 `no pause/delegation/block`，不改变 generation `RunResult`。
 - 任务入口：Genesis handoff、continue、auto-continue、scheduler 与 durable worker 统一经过 `GenerationApplicationService`；worker 只执行持久化任务的 `execute_claimed`。CLI、MCP 与网页都调用 HTTP 用例，不构造或运行 `ChapterPipeline`；`RuntimeContainer` 是唯一 pipeline 构造点。
-- 运行时计划：`forwin.planning.PlanningService` 是写侧门面，`PlanningQuery` 读取 active arc/chapter/band 计划，future audit 与 patch validation 统一投影为 `PlanHealth`。
+- 运行时计划：`forwin.planning.PlanningService` 是主要门面，`PlanningQuery` 读取 active arc/chapter/band 计划；Genesis 物化、repair patch 和 post-Canon replan 仍有写路径。`PlanHealthService` 将 future audit 投影为 typed health；patch validation 由计划修订流程负责。
 - 实体准入：`EntityRegistrar` 只构建并验证候选稿上的 `EntityAdmissionPlan`，不会写 `Entity` / `EntityAlias`；分类器异常、遗漏、别名歧义和唯一性冲突均 fail-closed。只有 `CanonAdmissionService` 通过 `EntityAdmissionCommitter` 在 Canon 事务中落实无冲突计划。
 - review 主链：`review.DraftReviewService` 聚合章节文本、体验、计划契约、地图、人格和 lint；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享 primary quality 分析；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon。`CanonPreparationService` 在事务外完成资格、quality、实体计划与 BookState review，`CanonAdmissionService.commit_plan` 是唯一 accepted-chapter 原子写入口；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
@@ -47,6 +49,8 @@ Genesis / Writer / Review 主链
 - 决策事件契约归 `forwin.audit.events`，持久化归 `forwin.models.audit`；任务契约、约束与 checkpoint 归 `forwin.planning`，草稿规则归 `forwin.review`，project-control 应用用例归 `forwin.application.project_control`，Codex 受控动作归 `forwin.codex_bridge.governed_actions`。生产代码不再使用泛化 `governance` namespace。
 
 ## Review 决策层
+
+LLM 正文评审与 repair escalation 使用完整拼接后的 `WriterOutput.body`。`scene_outputs` 中的拼接前草稿不得作为第二份正文送审；原场景产物保留供诊断及结构化地图检查。摘要、状态、事件、时间候选与 Canon invariants 用于交叉核验，不替代最终正文。
 
 章节 review 详情固定返回五个有序、互不代替的 `decision_layers`：
 
@@ -79,10 +83,12 @@ immutable CandidateDraftRecord
    -> project/candidate locks + stale revalidation
    -> BookStateCompiler + entity/alias + obligations + chapter acceptance
    -> CanonCommitRecord + deterministic outbox rows
--> post-commit knowledge / memory / publisher workers
+-> projection / phase3 maintenance / publisher outbox consumers
 ```
 
 `forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都提交持久化的 `CanonCommitPlan`。旧 `commit()`、`BookStateDirectCommitService`、`BookStateCanonPort`、`_commit_book_state_canon`、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除。运行期世界编辑 proposal 也只能经 `CanonAdmissionService.commit_world_edit` 写 BookState。
+
+post-Canon maintenance 按 planning → arc → world → feedback 顺序运行，并完成 order controls。第2章起，Canon 提交强制要求前章四步与 controls 成功且没有未解除的 future/checkpoint/manual 阻断；它不同于可重建的知识投影。当前 trace 上传失败也可能使维护 step 失败，这项耦合尚未删除。
 
 旧 `world_model_v4` / world-v4 compatibility projection 与 `StateUpdater.apply_*` 写入已经从 accepted chapter runtime 删除。`state_changes`、`new_events`、`thread_beats`、`time_advance` 和 EntityAdmissionPlan 先转成同一 GraphDelta 合约，再经 BookState review/compile 一次落盘；后续只保留 Knowledge Projection refresh 等当前检索投影。
 

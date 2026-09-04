@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-07-19
+更新时间：2026-09-04
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -17,12 +17,14 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| `CURRENT_ARCHITECTURE.md` | active-current | 当前唯一架构入口，固定 RuntimePolicy v2 / report-only Generation Audit / application boundary / BookState / BookMap / review 口径。 |
+| `CURRENT_DESIGN.md` | active-current | 当前实际设计的完整入口，描述主流程、owner、默认策略、阻断条件、已删范围和剩余耦合。 |
+| `CURRENT_ARCHITECTURE.md` | active-current | 精简架构边界，固定 RuntimePolicy v2 / report-only Generation Audit / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
+| `../docs/superpowers/specs/2026-09-04-v5-closure-design.md` | active-current | 最新收口复评：以 fdaeaa6 领先候选为基线，冻结已完成 Track A/B0，修正重复验收与 tag-only 附加门；保留真实恢复及最终全新 L200 no-hotfix。 |
 | `../forwin_architecture_consolidation_audit.md` | historical-plan | 2026-07-09 架构收敛审计（历史论证记录）。其 Phase A-D 已由 v5 hard-cut 完成并替代，Phase A-F 不再作为待办；source-of-truth 思维与测试/风险框架由后续计划继承。 |
 | `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；RuntimePolicy v2，旧项目和旧设置不迁移。 |
-| `../docs/superpowers/plans/2026-07-12-forwin-v5-final-roadmap.md` | active-current | v5 收尾最终路线：测试债清偿 → 必做删除 → 度量仪表 → 发布验证（V1-V6）→ 200 章 no-hotfix → 部署。 |
-| `../docs/superpowers/plans/2026-07-12-forwin-measurement-loop.md` | active-current | Measurement Loop（S1-S8）：门禁效力账本、规则出身制度、成本/人时、读者回路、多样性遥测、体验校准。 |
+| `../docs/superpowers/plans/2026-07-12-forwin-v5-final-roadmap.md` | historical-plan | 执行顺序已被《复核执行版最终总方案》及 2026-09-04 收口修订覆盖；不能把旧 checkbox 当当前待办。 |
+| `../docs/superpowers/plans/2026-07-12-forwin-measurement-loop.md` | baseline-with-overrides | S1/S3/S2 已实现并冻结；S4-S8 属发布后改进，不阻塞 v5。 |
 | `V4.5_markstone.md` | active-current | 当前代码与设计差距统一入口，旧 `world_model_v4` 已降级。 |
 | `V4.5.1_markstone.md` | active-current | V4.5 后端闭环后的残余 contract / 文档 / 测试收束。 |
 | `V4_final_book_state_runtime.md` | active-current | BookState 最终 runtime 规格。 |
@@ -51,7 +53,18 @@
 | `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除的历史证据；仅供追溯，不是当前 runtime、策略字段或目标架构。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
-## 2026-07 V5 Final Roadmap Execution Status
+## 2026-09 V5 当前候选状态
+
+本轮起点是 `codex/v5-r9-integration-candidate@fdaeaa6`，初次核对时领先 master 147 个提交；修订派生于 `codex/v5-closure`，集成目标为远端默认分支 master。已确认所有其他 v5 worktree 的实现均包含在该候选或已移植。代码集成与正式运行发布分开记录。
+
+- Track A/B0 和 A2/A4 的实现决定均已落地：provisional/Scenario/reverse import 已删，Generation Audit report-only，BookState ownership 已归位；停止重复实现与扩建度量。
+- 最终本地验证：6161e4c默认suite 2162通过/1跳过，未再修改的RC harness 1147通过，Ruff/compileall通过。fdaeaa6旧基线的测试环境污染失败记录保留；不把旧SHA或本地PASS改称真实发布PASS。详见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)。
+- R27 通过隔离 MCP 实时核实为 85/250 accepted：L30 8/30、L60S 8/60、L60P 60/60、L100 9/100；三个 standard 项目 needs_review，active generation count=0。矩阵为 partial，不是通过。
+- L100 暴露的旧 scene text 并列送审及受保护标题漂移已分别修复；真实内容问题未被静默批准。
+- V1 和 generation pre/post-commit 恢复存在旧候选真实 PASS；其余当前候选故障证据不齐。`setup_blocked` 不能算恢复 PASS。完整差异见 `.artifacts/rc-candidate/release-evidence-ledger.md`。
+- R9 正式 RC 冻结、最终全新 L200 no-hotfix、R11 部署均未完成。原始历史记录保留下文，不能覆盖本节状态。
+
+## 2026-07 V5 Final Roadmap 历史执行记录
 
 状态：R0-R4 implementation complete；旧长跑已安全退出，current-HEAD 测试债已清零，Track A 与发布前 B0 仪表已落地，下一阶段为 R5 发布验证。
 
@@ -122,7 +135,7 @@
 | duplicate canon quality analysis | removed | `QualityAnalysisRunRow` | 已删除 | draft review/canon gate 共享有效 primary 结果；content/plan/analyzer 指纹变化自动失效，replay/dry-run/失败结果不复用。 |
 | `book_genesis_core.workflow` unreachable implementation | removed | typed `BookGenesisService` -> `GenesisWorkspaceService` methods | 已删除 | 588 行文件整段删除；handoff 锁 active revision，四个 workspace mutation 入口 fail-closed。 |
 | SubWorld entity admission policy/patch/repair | removed | `EntityRegistrar` -> `EntityAdmissionPlan` -> Canon `EntityAdmissionCommitter` | 已删除 | 草稿期不写 Entity/EntityAlias；旧 canon checker、repair scope、nonblocking 例外和 summary 名字桥全部删除。 |
-| `planning.future_plan_auditor` re-export + `phase24.PlanningServices` bag | removed | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 已删除 | planning 包不再动态转发旧符号；future audit 与 patch validation 共享 typed health contract。 |
+| `planning.future_plan_auditor` re-export + `phase24.PlanningServices` bag | removed | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 已删除 | planning 包不再动态转发旧符号；实际 PlanHealth 生产调用来自 future audit，patch validation 保留自己的修订合同。 |
 
 ## 2026-07 V5 Slice 1 Status
 

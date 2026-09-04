@@ -81,14 +81,14 @@ def test_repair_verifier_does_not_turn_rule_clean_repair_into_hard_failure() -> 
         repair_instruction=instruction,
     )
 
-    assert result.fixed_all_must_fix is True
+    assert result.fixed_all_must_fix is None
     assert result.preserved_all_must_preserve is True
     assert result.unfixed == []
     assert result.broken_preserve_constraints == []
-    assert result.verifier_mode == "rule_preferred_llm_disagreed"
+    assert result.verifier_mode == "rule+llm"
 
 
-def test_repair_verifier_llm_prompt_is_bounded_to_review_summary() -> None:
+def test_repair_verifier_does_not_send_partial_oversized_context() -> None:
     huge_payload = "巨大上下文" * 30_000
     instruction = RepairInstruction(
         repair_scope="chapter_plan",
@@ -152,12 +152,10 @@ def test_repair_verifier_llm_prompt_is_bounded_to_review_summary() -> None:
         repair_instruction=instruction,
     )
 
-    prompt = "\n".join(str(message.get("content", "")) for message in client.messages)
-    assert result.verifier_mode == "rule+llm"
-    assert len(prompt) < 25_000
-    assert huge_payload not in prompt
-    assert "巨大上下文" not in prompt
-    assert "EntityRegistrar 无法为周隐（声音）作出注册决定" in prompt
+    assert client.messages == []
+    assert result.fixed_all_must_fix is None
+    assert result.preserved_all_must_preserve is None
+    assert all(check.reason == "input_budget_exceeded" for check in result.checks)
 
 
 def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue() -> None:
@@ -212,7 +210,7 @@ def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue
         repair_instruction=instruction,
     )
 
-    assert result.fixed_all_must_fix is True
+    assert result.fixed_all_must_fix is None
     assert result.unfixed == []
     assert result.new_risks == ["EntityRegistrar 无法为命名角色「方敏」作出注册决定。"]
 
@@ -298,7 +296,7 @@ def test_repair_verifier_ignores_single_character_preserve_fragments() -> None:
         repair_instruction=instruction,
     )
 
-    assert result.preserved_all_must_preserve is True
+    assert result.preserved_all_must_preserve is None
     assert result.broken_preserve_constraints == []
 
 
@@ -339,6 +337,6 @@ def test_repair_verifier_does_not_treat_rewritten_body_wording_as_broken_preserv
         repair_instruction=instruction,
     )
 
-    assert result.fixed_all_must_fix is True
-    assert result.preserved_all_must_preserve is True
+    assert result.fixed_all_must_fix is None
+    assert result.preserved_all_must_preserve is None
     assert result.broken_preserve_constraints == []

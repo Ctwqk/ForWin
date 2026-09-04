@@ -49,7 +49,10 @@ class FinalResidualPolicy:
                 residual_issues=residual_issues,
                 requires_human=True,
             )
-        if not verification.fixed_all_must_fix or not verification.preserved_all_must_preserve:
+        if (
+            verification.fixed_all_must_fix is False
+            or verification.preserved_all_must_preserve is False
+        ):
             return FinalResidualDecision(
                 decision="manual_review_required",
                 forceable=False,

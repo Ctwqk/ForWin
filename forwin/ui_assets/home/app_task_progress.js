@@ -590,11 +590,20 @@
             [
               attempt.failure_reason || '',
               Object.keys(verification).length
-                ? `验证：must-fix ${verification.fixed_all_must_fix ? '通过' : '未通过'}；must-preserve ${verification.preserved_all_must_preserve ? '通过' : '未通过'}`
+                ? `验证：must-fix ${verification.fixed_all_must_fix === null ? '未验证' : verification.fixed_all_must_fix === true ? '通过' : '未通过'}；must-preserve / must-not-reveal ${verification.preserved_all_must_preserve === null ? '未验证' : verification.preserved_all_must_preserve === true ? '通过' : '未通过'}`
                 : '未记录独立验证。',
             ].filter(Boolean).join(' / '),
             [attempt.result_review_id ? `review:${attempt.result_review_id}` : ''].filter(Boolean),
           );
+          (Array.isArray(verification.checks) ? verification.checks : []).forEach((check) => {
+            appendReviewDetailRow(
+              repairList,
+              check.constraint || check.contract_id,
+              [check.contract_id, check.status === 'pass' ? '通过' : check.status === 'fail' ? '未通过' : '未验证', check.method],
+              check.reason,
+              (Array.isArray(check.evidence) ? check.evidence : []).map((ref) => `${ref.source}[${ref.start}:${ref.end}] ${ref.quote}`),
+            );
+          });
         });
       }
       if (data.rule_decision?.rule_id) {

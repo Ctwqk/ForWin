@@ -161,8 +161,8 @@ def _build_decision_layers(
             getattr(latest_attempt, "verification_json", "{}"), {}
         )
         verification_blocked = bool(verification) and (
-            not bool(verification.get("fixed_all_must_fix"))
-            or not bool(verification.get("preserved_all_must_preserve"))
+            verification.get("fixed_all_must_fix", False) is False
+            or verification.get("preserved_all_must_preserve", False) is False
         )
         repair_failed = bool(failure_reason) or result_verdict == "fail"
         repair_pending = not repair_failed and not result_verdict

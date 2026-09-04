@@ -14,8 +14,8 @@ def candidate_ineligibility_reason(verdict: ReviewVerdict) -> str:
             return "high-risk final residual blocks Canon"
     verification = verdict.repair_verification
     if verification is not None and (
-        not verification.fixed_all_must_fix
-        or not verification.preserved_all_must_preserve
+        verification.fixed_all_must_fix is False
+        or verification.preserved_all_must_preserve is False
     ):
         return "repair verification is incomplete"
     residuals = verdict.residual_review_issues or []

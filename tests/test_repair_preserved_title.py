@@ -214,3 +214,18 @@ def test_preserving_title_does_not_accept_an_unfixed_body_error(repair_runtime):
     assert any(issue.rule_name == "repair_unfixed" for issue in review.issues)
     assert review.final_residual_decision.decision == "manual_review_required"
     assert forced_accept is False
+
+
+def test_repair_event_reports_unknown_coverage_without_claiming_contract_success(repair_runtime):
+    from forwin.audit.events import DecisionEventType
+    from forwin.models.audit import DecisionEvent
+
+    _, review, _, _, _ = _run_title_repair(repair_runtime, must_preserve=["第10章"])
+    assert review.repair_verification.fixed_all_must_fix is None
+    _, session, chapter_plan = repair_runtime
+    event = session.scalars(select(DecisionEvent).where(
+        DecisionEvent.project_id == chapter_plan.project_id,
+        DecisionEvent.event_type == DecisionEventType.REPAIR_SUCCEEDED,
+    )).one()
+    assert "未验证" in event.summary
+    assert "已修复。" not in event.summary

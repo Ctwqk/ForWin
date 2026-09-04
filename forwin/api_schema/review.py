@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from forwin.audit.events import DecisionEventInfo
+from forwin.protocol.review import RepairVerification
 
 
 class ChapterDetail(BaseModel):
@@ -45,13 +46,8 @@ class LintSignalInfo(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
-class RepairVerificationInfo(BaseModel):
-    fixed_all_must_fix: bool = False
-    preserved_all_must_preserve: bool = False
-    unfixed: list[str] = Field(default_factory=list)
-    broken_preserve_constraints: list[str] = Field(default_factory=list)
-    new_risks: list[str] = Field(default_factory=list)
-    verifier_mode: str = ""
+class RepairVerificationInfo(RepairVerification):
+    pass
 
 
 class FinalResidualDecisionInfo(BaseModel):

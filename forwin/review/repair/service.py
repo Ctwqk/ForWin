@@ -1071,6 +1071,11 @@ def _run_repair_loop_for_phase(
         )
         chapter_plan.repair_attempt_count = attempt_no
         session.add(chapter_plan)
+        verification = rewritten_review.repair_verification
+        coverage_unknown = verification is not None and (
+            verification.fixed_all_must_fix is None
+            or verification.preserved_all_must_preserve is None
+        )
         repair_result_event = self._record_decision_event(
             updater=updater,
             project_id=project_id,
@@ -1083,7 +1088,11 @@ def _run_repair_loop_for_phase(
             ),
             scope="chapter",
             summary=(
-                f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 已修复。"
+                (
+                    f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 评审通过；部分合同未验证。"
+                    if coverage_unknown
+                    else f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 已修复。"
+                )
                 if rewritten_review.verdict != "fail"
                 else f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 仍未通过。"
             ),

@@ -491,7 +491,10 @@ class ReviewWorkflowStage:
             repair_instruction=repair_instruction,
         )
         merged_review = review.model_copy(update={"repair_verification": verification})
-        if verification.fixed_all_must_fix and verification.preserved_all_must_preserve:
+        if (
+            verification.fixed_all_must_fix is not False
+            and verification.preserved_all_must_preserve is not False
+        ):
             return merged_review
 
         issues = list(merged_review.issues)

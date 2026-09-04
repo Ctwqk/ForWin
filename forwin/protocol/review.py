@@ -101,13 +101,33 @@ class RepairInstruction(BaseModel):
         return normalized
 
 
+class RepairEvidence(BaseModel):
+    source: Literal["original_body", "repaired_body", "original_title", "repaired_title"]
+    quote: str
+    start: int = Field(ge=0, strict=True)
+    end: int = Field(ge=0, strict=True)
+
+
+class RepairContractCheck(BaseModel):
+    contract_id: str
+    kind: Literal["must_fix", "must_preserve", "must_not_reveal"]
+    constraint: str
+    status: Literal["pass", "fail", "unknown"] = "unknown"
+    method: str = "unverified"
+    reason: str = ""
+    evidence: list[RepairEvidence] = Field(default_factory=list)
+
+
 class RepairVerification(BaseModel):
-    fixed_all_must_fix: bool = False
-    preserved_all_must_preserve: bool = False
+    # Missing legacy fields keep their original False default; explicit None is coverage unknown.
+    fixed_all_must_fix: bool | None = False
+    preserved_all_must_preserve: bool | None = False
     unfixed: list[str] = Field(default_factory=list)
     broken_preserve_constraints: list[str] = Field(default_factory=list)
     new_risks: list[str] = Field(default_factory=list)
     verifier_mode: str = ""
+    checks: list[RepairContractCheck] = Field(default_factory=list)
+    recheck_count: int = Field(default=0, ge=0, le=1)
 
 
 class FinalResidualDecision(BaseModel):

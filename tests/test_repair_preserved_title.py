@@ -229,3 +229,89 @@ def test_repair_event_reports_unknown_coverage_without_claiming_contract_success
     )).one()
     assert "未验证" in event.summary
     assert "已修复。" not in event.summary
+
+
+@pytest.mark.parametrize("keep_body_error", [False, True])
+def test_persisted_repair_unknown_survives_reload_api_and_canon_eligibility(
+    repair_runtime, keep_body_error
+):
+    from forwin.application.projects.reviews import get_chapter_review
+    from forwin.canon.eligibility import candidate_ineligibility_reason
+    from forwin.generation.pipeline_core.finalization import _load_review_verdict
+    from forwin.models.draft import ChapterReview
+
+    _, current_review, _, _, _ = _run_title_repair(
+        repair_runtime,
+        must_preserve=["保留交割事实"],
+        keep_body_error=keep_body_error,
+    )
+    pipeline, session, chapter_plan = repair_runtime
+    project_id, chapter_plan_id = chapter_plan.project_id, chapter_plan.id
+    expected_fixed = False if keep_body_error else None
+    assert current_review.repair_verification.fixed_all_must_fix is expected_fixed
+    assert current_review.repair_verification.preserved_all_must_preserve is None
+    # The error case exercises the final-residual metadata rewrite as well as save_review.
+    assert current_review.repair_exhausted is keep_body_error
+    session.commit()
+
+    with pipeline._SessionFactory() as reloaded_session:
+        persisted = reloaded_session.scalars(
+            select(ChapterReview)
+            .join(ChapterDraft, ChapterReview.draft_id == ChapterDraft.id)
+            .where(ChapterDraft.chapter_plan_id == chapter_plan_id)
+            .order_by(ChapterDraft.version.desc(), ChapterReview.created_at.desc())
+        ).first()
+        reloaded = _load_review_verdict(persisted)
+        assert reloaded.repair_verification.fixed_all_must_fix is expected_fixed
+        assert reloaded.repair_verification.preserved_all_must_preserve is None
+        assert bool(candidate_ineligibility_reason(reloaded)) is keep_body_error
+
+    api = get_chapter_review(
+        project_id,
+        10,
+        get_session=pipeline._SessionFactory,
+        decision_refs_for_chapter_review=lambda _session, **_kwargs: [],
+    )
+    assert api.repair_verification.fixed_all_must_fix is expected_fixed
+    assert api.repair_verification.preserved_all_must_preserve is None
+    assert api.repair_verification.checks[1].status == "unknown"
+    assert api.rewrite_attempts[-1].verification.preserved_all_must_preserve is None
+    assert api.repair_verification.model_dump()["preserved_all_must_preserve"] is None
+
+
+def test_legacy_stored_review_missing_aggregate_fields_still_defaults_to_failure(
+    repair_runtime,
+):
+    from forwin.application.projects.reviews import get_chapter_review
+    from forwin.canon.eligibility import candidate_ineligibility_reason
+    from forwin.generation.pipeline_core.finalization import _load_review_verdict
+    from forwin.models.draft import ChapterReview
+
+    pipeline, session, chapter_plan = repair_runtime
+    project_id = chapter_plan.project_id
+    draft = StateUpdater(session).save_draft(
+        chapter_plan.id,
+        WriterOutput(chapter_number=10, title="旧记录", body="旧稿正文。", end_of_chapter_summary=""),
+        raw_response="",
+    )
+    row = ChapterReview(
+        draft_id=draft.id,
+        verdict="pass",
+        issues_json="[]",
+        review_meta_json='{"repair_verification":{"verifier_mode":"rule_only"}}',
+    )
+    session.add(row)
+    session.flush()
+    review_id = row.id
+    session.commit()
+    with pipeline._SessionFactory() as reloaded_session:
+        reloaded = _load_review_verdict(reloaded_session.get(ChapterReview, review_id))
+        assert reloaded.repair_verification.fixed_all_must_fix is False
+        assert reloaded.repair_verification.preserved_all_must_preserve is False
+        assert candidate_ineligibility_reason(reloaded)
+    api = get_chapter_review(
+        project_id, 10, get_session=pipeline._SessionFactory,
+        decision_refs_for_chapter_review=lambda _session, **_kwargs: [],
+    )
+    assert api.repair_verification.fixed_all_must_fix is False
+    assert api.repair_verification.preserved_all_must_preserve is False

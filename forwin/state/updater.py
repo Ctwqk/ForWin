@@ -390,7 +390,7 @@ class StateUpdater:
                     rule_name=str(payload.get("rule_name") or ""),
                 )
             issues_data.append(payload)
-        review_meta = verdict.model_dump(mode="json", exclude_none=True)
+        review_meta = verdict.model_dump(mode="json")
         review_meta.pop("verdict", None)
         review_meta.pop("issues", None)
         review = ChapterReview(

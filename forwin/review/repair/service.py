@@ -1157,7 +1157,7 @@ def _run_repair_loop_for_phase(
 
 @staticmethod
 def _review_meta_json(review: ReviewVerdict) -> str:
-    review_meta = review.model_dump(mode="json", exclude_none=True)
+    review_meta = review.model_dump(mode="json")
     review_meta.pop("verdict", None)
     review_meta.pop("issues", None)
     return json.dumps(review_meta, ensure_ascii=False)

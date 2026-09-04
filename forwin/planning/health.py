@@ -55,41 +55,6 @@ class PlanHealthService:
             blocking=blocking,
         )
 
-    @staticmethod
-    def from_patch_validation(
-        result: object,
-        *,
-        scope: PlanHealthScope,
-        evidence: list[str] | None = None,
-    ) -> PlanHealth:
-        errors = [
-            str(error)
-            for error in getattr(result, "errors", []) or []
-            if str(error).strip()
-        ]
-        passed = bool(getattr(result, "passed", False))
-        return PlanHealth(
-            severity="pass" if passed else "fail",
-            scope=scope,
-            evidence=_dedupe(evidence or []),
-            reasons=_dedupe(errors),
-            blocking=not passed,
-        )
-
-    @staticmethod
-    def combine(*health: PlanHealth) -> PlanHealth:
-        if not health:
-            return PlanHealth()
-        severity_rank = {"pass": 0, "warn": 1, "fail": 2}
-        scope_rank = {"chapter": 0, "band": 1, "arc": 2, "book": 3, "operator": 4}
-        return PlanHealth(
-            severity=max(health, key=lambda item: severity_rank[item.severity]).severity,
-            scope=max(health, key=lambda item: scope_rank[item.scope]).scope,
-            evidence=_dedupe([ref for item in health for ref in item.evidence]),
-            reasons=_dedupe([reason for item in health for reason in item.reasons]),
-            blocking=any(item.blocking for item in health),
-        )
-
 
 def _dedupe(items: list[str]) -> list[str]:
     result: list[str] = []

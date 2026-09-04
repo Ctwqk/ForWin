@@ -4,7 +4,6 @@ from pathlib import Path
 
 from forwin.planning import PlanHealthService, PlanningQuery, PlanningService
 from forwin.planning.future_plan_audit import FuturePlanAuditIssue, FuturePlanAuditRun
-from forwin.planning.structural_patch_validator import PatchValidationResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,17 +33,6 @@ def test_future_plan_audit_maps_to_blocking_plan_health() -> None:
     assert health.scope == "chapter"
     assert health.blocking is True
     assert health.evidence == ["chapter:9"]
-
-
-def test_patch_validation_maps_to_blocking_plan_health() -> None:
-    patch_health = PlanHealthService.from_patch_validation(
-        PatchValidationResult(passed=False, errors=["missing_source_evidence"]),
-        scope="arc",
-    )
-    assert patch_health.severity == "fail"
-    assert patch_health.scope == "arc"
-    assert patch_health.blocking is True
-    assert patch_health.reasons == ["missing_source_evidence"]
 
 
 def test_planning_facade_replaces_dynamic_forwarding_shims() -> None:

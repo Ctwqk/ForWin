@@ -476,6 +476,8 @@ def database_state() -> dict:
         },
         "outbox": {
             "total": 600,
+            "canon_total": 600,
+            "trace_total": 0,
             "event_type_counts": {
                 event_type: 200 for event_type in l200.EXPECTED_OUTBOX_TYPES
             },
@@ -495,9 +497,7 @@ def database_state() -> dict:
                 "projected_canon_commit_id": "canon-200",
                 "projected_chapter_number": 200,
                 "last_event_id": "canon-key-200:canon.projection.requested",
-                "source_digest": (
-                    "d" * 64 if kind == "chapter_memory" else "e" * 64
-                ),
+                "source_digest": ("d" * 64 if kind == "chapter_memory" else "e" * 64),
                 "last_error": "",
             }
             for kind in l200.EXPECTED_PROJECTIONS
@@ -534,9 +534,7 @@ def database_state() -> dict:
         },
         "maintenance": {
             "total": 800,
-            "step_counts": {
-                step: 200 for step in l200.EXPECTED_MAINTENANCE_STEPS
-            },
+            "step_counts": {step: 200 for step in l200.EXPECTED_MAINTENANCE_STEPS},
             "backlog": 0,
             "duplicate_idempotency_keys": 0,
             "duplicate_canon_steps": 0,
@@ -2748,3 +2746,20 @@ def test_canon_duplicate_idempotency_sql_ignores_empty_retry_keys() -> None:
 
     assert "count(*) FILTER (WHERE c.idempotency_key<>'')" in normalized
     assert "count(DISTINCT c.idempotency_key) FILTER (WHERE c.idempotency_key<>'')" in normalized
+
+
+def test_processed_trace_does_not_inflate_canon_quota_but_pending_trace_blocks(
+    tmp_path,
+):
+    write_band_reports(tmp_path)
+    database = database_state()
+    database["outbox"].update(total=601, canon_total=600, trace_total=1)
+    database["outbox"]["event_type_counts"]["maintenance.trace.upload.requested"] = 1
+    assert (
+        l200.final_violations(args(), run_manifest(tmp_path), mcp_state(), database)
+        == []
+    )
+    database["outbox"]["backlog"] = 1
+    assert "outbox.backlog=1" in l200.final_violations(
+        args(), run_manifest(tmp_path), mcp_state(), database
+    )

@@ -27,7 +27,7 @@ from forwin.maintenance.state import (
     post_canon_order_controls,
     post_canon_phase3_complete,
 )
-from forwin.observability.llm_trace import post_canon_trace_artifact_key
+from forwin.maintenance.trace_upload import enqueue_trace_upload
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
@@ -408,7 +408,8 @@ class PostCanonMaintenanceService:
                 self._drain_llm_attempts()
                 result = dict(runner(session, commit) or {})
                 attempts = self._drain_llm_attempts()
-                trace = self._save_step_trace(
+                trace = self._enqueue_step_trace(
+                    session=session,
                     commit=commit,
                     step_name="order_controls",
                     attempts=attempts,
@@ -654,7 +655,8 @@ class PostCanonMaintenanceService:
                 if heartbeat.ownership_lost:
                     raise _lease_lost(claim, "complete")
                 self._acquire_completion_fence(session, claim)
-                trace = self._save_step_trace(
+                trace = self._enqueue_step_trace(
+                    session=session,
                     commit=commit,
                     step_name=claim.step_name,
                     attempts=attempts,
@@ -969,21 +971,19 @@ class PostCanonMaintenanceService:
         except Exception:  # noqa: BLE001
             return
 
-    def _save_step_trace(
+    def _enqueue_step_trace(
         self,
         *,
+        session: Session,
         commit: CanonCommitRecord,
         step_name: str,
         attempts: list[dict[str, Any]],
     ) -> dict[str, Any]:
         if not attempts:
             return {}
-        artifact_key = post_canon_trace_artifact_key(
-            canon_commit_id=commit.id,
-            step_name=step_name,
-        )
-        content = json.dumps(
-            {
+        return enqueue_trace_upload(
+            session,
+            trace={
                 "schema_version": "post-canon-trace-v1",
                 "canon_commit_id": commit.id,
                 "project_id": commit.project_id,
@@ -991,19 +991,6 @@ class PostCanonMaintenanceService:
                 "step_name": step_name,
                 "attempts": _safe_attempts(attempts),
             },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-            default=str,
-        )
-        return dict(
-            self.artifact_store.save_keyed_artifact(
-                project_id=commit.project_id,
-                artifact_key=artifact_key,
-                content=content,
-                content_type="application/json",
-            )
-            or {}
         )
 
 

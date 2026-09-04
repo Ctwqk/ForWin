@@ -326,3 +326,41 @@ def test_real_publisher_status_uses_terminal_allowlist(
         database_url(prepared_canon), prepared_canon.project_id
     )
     assert state["publisher"]["unsettled_jobs"] == expected_unsettled
+
+
+@pytest.mark.parametrize(
+    "status,backlog", [("processed", 0), ("pending", 1), ("failed", 1)]
+)
+def test_real_trace_outbox_is_separate_from_canon_cardinality_but_keeps_backlog(
+    prepared_canon, status, backlog
+):
+    from forwin.maintenance.trace_upload import enqueue_trace_upload
+
+    commit(prepared_canon)
+    with prepared_canon.Session.begin() as session:
+        for event in session.scalars(select(OutboxEvent)):
+            event.status = "processed"
+        reference = enqueue_trace_upload(
+            session,
+            trace={
+                "schema_version": "post-canon-trace-v1",
+                "canon_commit_id": prepared_canon.plan.canon_commit_id,
+                "project_id": prepared_canon.project_id,
+                "chapter_number": 1,
+                "step_name": "world",
+                "attempts": [{"attempt_no": 1}],
+            },
+        )
+        event = session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_id == reference["event_id"])
+        )
+        event.status = status
+    state = l200.collect_database_state(
+        database_url(prepared_canon), prepared_canon.project_id
+    )
+    assert state["outbox"]["total"] == 4
+    assert state["outbox"]["canon_total"] == 3
+    assert state["outbox"]["trace_total"] == 1
+    assert state["outbox"]["backlog"] == backlog
+    assert state["outbox"]["failed"] == int(status == "failed")
+    assert state["outbox"]["identity_mismatches"] == 0

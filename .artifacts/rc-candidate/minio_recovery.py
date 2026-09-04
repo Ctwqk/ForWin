@@ -208,6 +208,7 @@ def normalize_maintenance(row: Mapping[str, Any]) -> dict[str, Any]:
         "canon_id": required_text(row.get("canon_id"), "canon_id"),
         "attempt": int(row.get("attempt") or 0),
         "lease_epoch": int(row.get("lease_epoch") or 0),
+        "status": required_text(row.get("status"), "maintenance status"),
     }
 
 
@@ -240,16 +241,19 @@ def expected_world_object_key(
     project_id: str,
     canon_id: str,
     prefix: str,
+    content_sha256: str,
 ) -> str:
     project = required_text(project_id, "project_id")
     commit = required_text(canon_id, "canon_id")
     if SAFE_KEY_PART_PATTERN.fullmatch(commit) is None:
         raise SetupBlocked("canon_id is not safe for a production artifact key")
+    if re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
+        raise SetupBlocked("trace content SHA must be complete")
     artifact_key = PurePosixPath(
         "post_canon",
         commit,
         "world",
-        "llm_trace.json",
+        f"llm_trace_{content_sha256}.json",
     ).as_posix()
     relative = PurePosixPath(
         "projects",
@@ -309,11 +313,13 @@ class MinioInventory:
         *,
         project_id: str,
         canon_id: str,
+        content_sha256: str,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         expected = expected_world_object_key(
             project_id=project_id,
             canon_id=canon_id,
             prefix=self.prefix,
+            content_sha256=content_sha256,
         )
         inventory = self.project_objects(project_id)
         matches = [row for row in inventory if row["key"] == expected]
@@ -1068,6 +1074,12 @@ PHASE3_OUTBOX_SQL = """
     /* task5 phase3 outbox */
 """
 
+TRACE_OUTBOX_SQL = PHASE3_OUTBOX_SQL.replace(
+    "event_type = 'canon.phase3.requested'",
+    "event_type = 'maintenance.trace.upload.requested' AND payload_json::jsonb ->> 'step_name' = 'world'",
+).replace("task5 phase3 outbox", "task5 trace outbox")
+
+
 AUTHORITATIVE_SQL = """
     SELECT
         'canon'::text AS entity_type,
@@ -1262,6 +1274,35 @@ class SQLCollector:
             (fixture.project_id, fixture.chapter_number),
         )
 
+    def _trace_rows(self, fixture: FixtureContext) -> list[dict[str, Any]]:
+        return self.database.fetch_all(
+            TRACE_OUTBOX_SQL,
+            (fixture.project_id, fixture.chapter_number),
+        )
+
+    @staticmethod
+    def _trace_observation(row: Mapping[str, Any]) -> dict[str, Any]:
+        payload = _json_payload(row.get("payload_json"), "trace payload")
+        return {
+            "row_id": required_text(row.get("id"), "trace row id"),
+            "event_id": required_text(row.get("event_id"), "trace event id"),
+            "aggregate_type": required_text(
+                row.get("aggregate_type"), "trace aggregate type"
+            ),
+            "aggregate_id": required_text(
+                row.get("aggregate_id"), "trace aggregate id"
+            ),
+            "event_type": required_text(row.get("event_type"), "trace event type"),
+            "payload": payload,
+            "payload_sha256": stable_hash(payload),
+            "status": required_text(row.get("status"), "trace status"),
+            "error_message": str(row.get("error_message") or ""),
+            "attempt": _required_counter(row.get("attempts"), "trace attempts"),
+            "lease_epoch": _required_counter(
+                row.get("lease_epoch"), "trace lease epoch"
+            ),
+        }
+
     def _maintenance_rows(
         self,
         fixture: FixtureContext,
@@ -1340,6 +1381,12 @@ class SQLCollector:
                     "fixture world maintenance identity is missing or duplicated"
                 )
             database["maintenance"] = normalize_maintenance(maintenance[0])
+            trace_rows = self._trace_rows(fixture)
+            if len(trace_rows) != 1:
+                raise SetupBlocked(
+                    "fixture world trace identity is missing or duplicated"
+                )
+            database["trace_upload"] = self._trace_observation(trace_rows[0])
         if stage == "after":
             if (
                 artifact is None
@@ -1429,21 +1476,30 @@ class SQLCollector:
             "post-Canon barrier did not expose one Canon and one pending phase3 event"
         )
 
-    def require_maintenance_pending(self, fixture: FixtureContext) -> None:
+    def require_maintenance_ready_with_trace_pending(
+        self, fixture: FixtureContext
+    ) -> None:
         rows = self._maintenance_rows(fixture)
-        world = [row for row in rows if row.get("step_name") == "world"]
-        if len(world) != 1 or world[0].get("status") not in {
-            "pending",
-            "failed",
-        }:
-            raise SetupBlocked(
-                "MinIO outage did not leave world maintenance retryable"
-            )
-        phase3 = self._phase3_rows(fixture)
-        if len(phase3) != 1 or phase3[0].get("status") != "pending":
-            raise SetupBlocked(
-                "held phase3 event is not pending after maintenance failure"
-            )
+        if (
+            len(rows) != len(POST_CANON_STEPS)
+            or {row.get("step_name") for row in rows} != set(POST_CANON_STEPS)
+            or any(row.get("status") != "succeeded" for row in rows)
+        ):
+            raise SetupBlocked("MinIO outage did not preserve completed maintenance")
+        traces = self._trace_rows(fixture)
+        if len(traces) != 1 or traces[0].get("status") != "pending":
+            raise SetupBlocked("MinIO outage did not retain one pending world trace")
+        world = next(row for row in rows if row.get("step_name") == "world")
+        reference = _json_payload(world.get("result_json"), "world result").get(
+            "trace", {}
+        )
+        trace = self._trace_observation(traces[0])
+        if (
+            reference.get("event_id") != trace["event_id"]
+            or reference.get("artifact_key") != trace["payload"].get("artifact_key")
+            or reference.get("hash") != trace["payload"].get("content_sha256")
+        ):
+            raise SetupBlocked("pending trace is not bound to completed world result")
 
     def wait_converged(
         self,
@@ -1461,22 +1517,25 @@ class SQLCollector:
                 accepted = self._accepted(fixture)
                 phase3 = self._phase3_rows(fixture)
                 maintenance = self._maintenance_rows(fixture)
+                traces = self._trace_rows(fixture)
                 steps = {str(row.get("step_name") or "") for row in maintenance}
                 if (
                     len(canon) == 1
                     and len(accepted) == 1
                     and len(phase3) == 1
                     and phase3[0].get("status") == "processed"
+                    and len(traces) == 1
+                    and traces[0].get("status") == "processed"
                     and steps == set(POST_CANON_STEPS)
                     and len(maintenance) == len(POST_CANON_STEPS)
-                    and all(
-                        row.get("status") == "succeeded"
-                        for row in maintenance
-                    )
+                    and all(row.get("status") == "succeeded" for row in maintenance)
                 ):
                     return inventory.require_world_object(
                         project_id=fixture.project_id,
                         canon_id=fixture.canon_id or canon[0]["canon_id"],
+                        content_sha256=self._trace_observation(traces[0])["payload"][
+                            "content_sha256"
+                        ],
                     )
             except Exception as exc:
                 last_error = exc
@@ -1992,11 +2051,11 @@ class LiveRunner:
         self.barrier.release()
         response = self.async_approval.join()
         self.async_approval = None
-        if response.get("status") != "maintenance_pending":
+        if response.get("status") != "accepted":
             raise SetupBlocked(
-                "post-Canon MinIO outage did not return maintenance_pending"
+                "post-Canon MinIO outage did not preserve business acceptance"
             )
-        self.sql.require_maintenance_pending(fixture)
+        self.sql.require_maintenance_ready_with_trace_pending(fixture)
         during = self.sql.post_snapshot(
             source_sha=self.source_sha,
             stage="during",
@@ -2099,6 +2158,9 @@ class LiveRunner:
                 project_id=fixture.project_id,
                 canon_id=fixture.canon_id,
                 prefix=self.inventory.prefix,
+                content_sha256=after["state"]["database"]["trace_upload"]["payload"][
+                    "content_sha256"
+                ],
             ),
             "baseline": baseline_objects,
             "after_replay": final_objects,

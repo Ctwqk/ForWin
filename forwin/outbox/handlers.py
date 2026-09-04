@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from forwin.knowledge_system.projection_jobs import build_projection_outbox_handlers
 from forwin.maintenance.events import build_post_canon_outbox_handlers
+from forwin.maintenance.trace_upload import build_trace_upload_outbox_handlers
 from forwin.outbox.worker import OutboxClaim
 from forwin.publisher_runtime.canon_jobs import (
     build_canon_publisher_outbox_handlers,
@@ -24,6 +25,7 @@ def build_default_outbox_handlers(
     memory_index_provider: Callable[[], Any] | None = None,
     post_canon_service_provider: Callable[[], Any] | None = None,
     publisher_job_service_provider: Callable[[], Any] | None = None,
+    artifact_store_provider: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[[OutboxClaim], None]]:
     if memory_index is not None and memory_index_provider is not None:
         raise ValueError("Pass memory_index or memory_index_provider, not both")
@@ -50,6 +52,12 @@ def build_default_outbox_handlers(
             memory_index_provider=shared_memory_provider,
         )
     ]
+    if artifact_store_provider is not None:
+        handler_maps.append(
+            build_trace_upload_outbox_handlers(
+                artifact_store_provider=artifact_store_provider,
+            )
+        )
     if post_canon_service_provider is not None:
         resolve_post_canon_service = _shared_provider(
             post_canon_service_provider,

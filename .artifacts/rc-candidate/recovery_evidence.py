@@ -137,11 +137,23 @@ _PROJECTION_IDENTITY_SCHEMA = {
     "canon_id": str,
 }
 _MAINTENANCE_SCHEMA = {
+    "status": str,
     "natural_key": str,
     "project_id": str,
     "canon_id": str,
     "attempt": int,
     "lease_epoch": int,
+}
+_TRACE_UPLOAD_SCHEMA = {**_OUTBOX_SCHEMA, "row_id": str, "lease_epoch": int}
+_TRACE_UPLOAD_PAYLOAD_SCHEMA = {
+    "schema_version": int,
+    "project_id": str,
+    "canon_commit_id": str,
+    "chapter_number": int,
+    "step_name": str,
+    "content": str,
+    "content_sha256": str,
+    "artifact_key": str,
 }
 _ARTIFACT_SCHEMA = {
     "key": str,
@@ -430,7 +442,10 @@ FAULT_CONTRACTS: dict[str, dict[str, Any]] = {
         "isolated_endpoint_identity": True,
         "canon_identity_unchanged": True,
         "accepted_identity_unchanged": True,
-        "phase3_retry_same_identity": True,
+        "maintenance_not_reexecuted": True,
+        "trace_identity_unchanged": True,
+        "trace_uploaded": True,
+        "trace_content_uploaded": True,
         "phase3_replay_identity_unchanged": True,
         "phase3_release_rowcount": 1,
         "phase3_release_preserved_claim": True,
@@ -586,11 +601,13 @@ _REQUIRED_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
             "state.database.canon_commits",
             "state.database.accepted_bundles",
             "state.database.maintenance",
+            "state.database.trace_upload",
         ),
         "after": (
             "state.database.canon_commits",
             "state.database.accepted_bundles",
             "state.database.maintenance",
+            "state.database.trace_upload",
             "state.database.authoritative_identities",
             "state.database.phase3_replay_baseline",
             "state.database.phase3_replay_release",
@@ -1129,6 +1146,8 @@ def _minio_post_canon(
     ]
     maintenance_during = _path(snapshots, "during", "database.maintenance")
     maintenance_after = _path(snapshots, "after", "database.maintenance")
+    trace_during = _path(snapshots, "during", "database.trace_upload")
+    trace_after = _path(snapshots, "after", "database.trace_upload")
     artifact_baseline = _path(
         snapshots,
         "after",
@@ -1169,17 +1188,39 @@ def _minio_post_canon(
         ),
         "canon_identity_unchanged": _all_stable_equal(canon),
         "accepted_identity_unchanged": _all_stable_equal(accepted),
-        "phase3_retry_same_identity": (
-            maintenance_during["natural_key"]
-            == maintenance_after["natural_key"]
-            and maintenance_after["attempt"] > maintenance_during["attempt"]
-            and maintenance_after["lease_epoch"]
-            > maintenance_during["lease_epoch"]
+        "maintenance_not_reexecuted": (
+            maintenance_during == maintenance_after
+            and maintenance_after["status"] == "succeeded"
+        ),
+        "trace_identity_unchanged": all(
+            trace_during[field] == trace_after[field]
+            for field in (
+                "row_id",
+                "event_id",
+                "aggregate_type",
+                "aggregate_id",
+                "event_type",
+                "payload",
+                "payload_sha256",
+            )
+        ),
+        "trace_uploaded": (
+            trace_during["status"] == "pending"
+            and trace_after["status"] == "processed"
+            and trace_after["attempt"] > trace_during["attempt"]
+            and trace_after["lease_epoch"] > trace_during["lease_epoch"]
+            and trace_after["error_message"] == ""
+        ),
+        "trace_content_uploaded": (
+            artifact_after["content_sha256"] == trace_after["payload"]["content_sha256"]
+            and artifact_after["size"]
+            == len(trace_after["payload"]["content"].encode("utf-8"))
+            and artifact_after["key"].endswith(
+                f"projects/{trace_after['aggregate_id']}/keyed/{trace_after['payload']['artifact_key']}"
+            )
         ),
         "phase3_replay_identity_unchanged": all(
-            replay_baseline[field]
-            == replay_release[field]
-            == replay_final[field]
+            replay_baseline[field] == replay_release[field] == replay_final[field]
             for field in replay_identity_fields
         ),
         "phase3_release_rowcount": replay_release["conditional_rowcount"],
@@ -1187,19 +1228,15 @@ def _minio_post_canon(
             replay_baseline["status"] == "processed"
             and replay_release["status"] == "pending"
             and replay_release["attempts"] == replay_baseline["attempts"]
-            and replay_release["lease_epoch"]
-            == replay_baseline["lease_epoch"]
+            and replay_release["lease_epoch"] == replay_baseline["lease_epoch"]
         ),
         "phase3_worker_claim_advanced": (
             replay_final["attempts"] == replay_release["attempts"] + 1
-            and replay_final["lease_epoch"]
-            == replay_release["lease_epoch"] + 1
+            and replay_final["lease_epoch"] == replay_release["lease_epoch"] + 1
         ),
         "phase3_replay_final_processed": replay_final["status"] == "processed",
         "artifact_identity_unchanged": artifact_baseline == artifact_after,
-        "barrier_residue_count": _path(
-            snapshots, "after", "barrier.residue_count"
-        ),
+        "barrier_residue_count": _path(snapshots, "after", "barrier.residue_count"),
         "duplicate_authoritative_identities": duplicate_excess(
             identities, ("entity_type", "natural_key")
         ),
@@ -2311,6 +2348,13 @@ def _shape_violations(
             )
         for stage in ("during", "after"):
             record(stage, "database.maintenance", _MAINTENANCE_SCHEMA)
+            trace = record(stage, "database.trace_upload", _TRACE_UPLOAD_SCHEMA)
+            if isinstance(trace, Mapping) and isinstance(trace.get("payload"), Mapping):
+                record_value(
+                    f"{stage}.state.database.trace_upload.payload",
+                    trace["payload"],
+                    _TRACE_UPLOAD_PAYLOAD_SCHEMA,
+                )
         record(
             "after",
             "external.replay_baseline_artifact",
@@ -2750,6 +2794,46 @@ def _external_relation_violations(
             maintenance = _path(
                 snapshots, stage, "database.maintenance"
             )
+            trace = _path(snapshots, stage, "database.trace_upload")
+            payload = trace["payload"]
+            digest = hashlib.sha256(payload["content"].encode("utf-8")).hexdigest()
+            try:
+                content = json.loads(payload["content"])
+            except (ValueError, TypeError):
+                content = {}
+            expected_key = (
+                f"post_canon/{canon['canon_id']}/world/llm_trace_{digest}.json"
+            )
+            if (
+                trace["aggregate_type"] != "project"
+                or trace["aggregate_id"] != canon["project_id"]
+                or trace["event_type"] != "maintenance.trace.upload.requested"
+                or trace["event_id"]
+                != f"maintenance-trace:{canon['canon_id']}:world:{digest}"
+                or trace["payload_sha256"] != stable_hash(payload)
+                or payload["schema_version"] != 1
+                or payload["canon_commit_id"] != canon["canon_id"]
+                or payload["project_id"] != canon["project_id"]
+                or payload["chapter_number"] != canon["chapter_number"]
+                or payload["step_name"] != "world"
+                or payload["content_sha256"] != digest
+                or payload["artifact_key"] != expected_key
+                or not isinstance(content, dict)
+                or content.get("schema_version") != "post-canon-trace-v1"
+                or any(
+                    content.get(field) != payload[field]
+                    for field in (
+                        "canon_commit_id",
+                        "project_id",
+                        "chapter_number",
+                        "step_name",
+                    )
+                )
+                or not isinstance(content.get("attempts"), list)
+            ):
+                violations.append(
+                    f"{stage}.state.database.trace_upload identity mismatch"
+                )
             if (
                 maintenance["project_id"] != canon["project_id"]
                 or maintenance["canon_id"] != canon["canon_id"]

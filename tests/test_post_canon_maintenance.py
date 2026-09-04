@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
-import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -220,88 +219,6 @@ def test_expired_run_is_reclaimed_and_old_epoch_cannot_complete() -> None:
             )
 
 
-def test_world_trace_failure_keeps_canon_and_retries_same_artifact_key() -> None:
-    service, sessions, calls = _durable_service()
-    attempt_ready = False
-
-    def runner(_session, _commit, *, name: str):
-        nonlocal attempt_ready
-        calls.append(name)
-        attempt_ready = name == "world"
-        return {"step": name}
-
-    def drain_attempts():
-        nonlocal attempt_ready
-        if not attempt_ready:
-            return []
-        attempt_ready = False
-        return [{"attempt_no": 1, "stage_key": "world_pressure"}]
-
-    class ArtifactStoreSpy:
-        def __init__(self) -> None:
-            self.keys: list[str] = []
-
-        def save_keyed_artifact(self, **request):
-            self.keys.append(str(request["artifact_key"]))
-            if len(self.keys) == 1:
-                raise OSError("minio unavailable")
-            return {"artifact_key": request["artifact_key"], "artifact_uri": "minio://trace"}
-
-    artifact_store = ArtifactStoreSpy()
-    service.llm_client = SimpleNamespace(
-        drain_llm_attempt_events=drain_attempts,
-    )
-    service.artifact_store = artifact_store
-    service._step_runners = {
-        step_name: (
-            lambda session, commit, name=step_name: runner(
-                session,
-                commit,
-                name=name,
-            )
-        )
-        for step_name in POST_CANON_STEP_NAMES
-    }
-
-    with pytest.raises(PostCanonMaintenanceError, match="minio unavailable"):
-        service.run(canon_commit_id="canon-1", worker_id="worker-1")
-
-    with sessions() as session:
-        canon = session.get(CanonCommitRecord, "canon-1")
-        rows = list(
-            session.execute(
-                select(PostCanonMaintenanceRun).where(
-                    PostCanonMaintenanceRun.canon_commit_id == "canon-1"
-                )
-            ).scalars()
-        )
-    by_step = {row.step_name: row for row in rows}
-    assert canon is not None and canon.status == "committed"
-    assert by_step["planning"].status == "succeeded"
-    assert by_step["arc"].status == "succeeded"
-    assert by_step["world"].status == "failed"
-    assert by_step["feedback"].status == "pending"
-
-    service.run(canon_commit_id="canon-1", worker_id="worker-2")
-
-    with sessions() as session:
-        rows = list(
-            session.execute(
-                select(PostCanonMaintenanceRun).where(
-                    PostCanonMaintenanceRun.canon_commit_id == "canon-1"
-                )
-            ).scalars()
-        )
-    by_step = {row.step_name: row for row in rows}
-    assert calls == ["planning", "arc", "world", "world", "feedback"]
-    assert by_step["world"].status == "succeeded"
-    assert by_step["world"].attempts == 2
-    assert artifact_store.keys == [
-        "post_canon/canon-1/world/llm_trace.json",
-        "post_canon/canon-1/world/llm_trace.json",
-    ]
-
-
 def test_heartbeat_cleanup_is_safe_before_thread_start() -> None:
     heartbeat = _ClaimHeartbeat(
         service=SimpleNamespace(),
@@ -345,18 +262,7 @@ def test_failure_write_is_fenced_by_unexpired_lease() -> None:
     assert "lease_expires_at >" in sql
 
 
-def test_completion_fence_precedes_deterministic_artifact_write() -> None:
-    source = inspect.getsource(PostCanonMaintenanceService._execute_claim)
-
-    run_step = source.index("runner(session, commit)")
-    save_trace = source.index("self._save_step_trace(")
-    completion_fence = source.index("self._acquire_completion_fence(")
-    complete = source.index("self._complete_claim_in_session(")
-
-    assert run_step < completion_fence < save_trace < complete
-
-
-def test_trace_failure_rolls_back_step_and_marks_run_retryable() -> None:
+def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None:
     transaction_errors: list[type[BaseException] | None] = []
     failed_claims = []
     commit = SimpleNamespace(id="canon-1", status="committed")
@@ -388,8 +294,8 @@ def test_trace_failure_rolls_back_step_and_marks_run_retryable() -> None:
     )
     service.heartbeat = lambda _claim: None  # type: ignore[method-assign]
     service._step_runners["world"] = lambda _session, _commit: {"ok": True}
-    service._save_step_trace = (  # type: ignore[method-assign]
-        lambda **_kwargs: (_ for _ in ()).throw(OSError("minio unavailable"))
+    service._enqueue_step_trace = (  # type: ignore[method-assign]
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("outbox unavailable"))
     )
     service._fail_claim = (  # type: ignore[method-assign]
         lambda claim, _exc: failed_claims.append(claim)
@@ -406,7 +312,7 @@ def test_trace_failure_rolls_back_step_and_marks_run_retryable() -> None:
         lease_seconds=300,
     )
 
-    with pytest.raises(PostCanonMaintenanceError, match="minio unavailable"):
+    with pytest.raises(PostCanonMaintenanceError, match="outbox unavailable"):
         service._execute_claim(claim)
 
     assert transaction_errors == [OSError]
@@ -440,7 +346,7 @@ def test_stale_completion_fence_is_rejected() -> None:
         )
 
 
-def test_stale_completion_cannot_write_deterministic_trace() -> None:
+def test_stale_completion_cannot_enqueue_trace() -> None:
     commit = SimpleNamespace(id="canon-1", status="committed")
 
     class FakeSession:
@@ -468,7 +374,7 @@ def test_stale_completion_cannot_write_deterministic_trace() -> None:
     service.heartbeat = lambda _claim: None  # type: ignore[method-assign]
     service._step_runners["world"] = lambda _session, _commit: {"ok": True}
     trace_writes: list[str] = []
-    service._save_step_trace = (  # type: ignore[method-assign]
+    service._enqueue_step_trace = (  # type: ignore[method-assign]
         lambda **kwargs: trace_writes.append(str(kwargs["step_name"])) or {}
     )
     claim = PostCanonRunClaim(

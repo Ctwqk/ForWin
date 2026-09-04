@@ -3350,6 +3350,8 @@ def collect_database_state(database_url: str, project_id: str) -> dict[str, Any]
                 """
                 SELECT
                   count(*) AS total,
+                  count(*) FILTER (WHERE event_type IN ('canon.projection.requested','canon.phase3.requested','canon.publisher.requested')) AS canon_total,
+                  count(*) FILTER (WHERE event_type='maintenance.trace.upload.requested') AS trace_total,
                   count(*)-count(DISTINCT event_id) AS duplicate_event_ids,
                   count(*) FILTER (WHERE status<>'processed') AS backlog,
                   count(*) FILTER (WHERE status='failed') AS failed
@@ -5057,8 +5059,15 @@ def final_violations(
             violations.append(f"entities.{key}={entities.get(key)}")
 
     outbox = database["outbox"]
-    if int(outbox.get("total") or 0) != target * len(EXPECTED_OUTBOX_TYPES):
-        violations.append(f"outbox.total={outbox.get('total')}, expected={target * 3}")
+    if int(outbox.get("canon_total") or 0) != target * len(EXPECTED_OUTBOX_TYPES):
+        violations.append(
+            f"outbox.canon_total={outbox.get('canon_total')}, expected={target * 3}"
+        )
+    type_counts = outbox.get("event_type_counts") or {}
+    if int(outbox.get("total") or 0) != sum(
+        int(count) for count in type_counts.values()
+    ):
+        violations.append("outbox.total does not match all event type counts")
     for event_type in EXPECTED_OUTBOX_TYPES:
         actual = int((outbox.get("event_type_counts") or {}).get(event_type, 0))
         if actual != target:

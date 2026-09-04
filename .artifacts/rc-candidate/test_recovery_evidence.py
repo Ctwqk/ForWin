@@ -347,6 +347,7 @@ def projection_identity_record(
 
 def maintenance_record(kind: str, attempt: int, lease_epoch: int) -> dict[str, Any]:
     return {
+        "status": "succeeded",
         "natural_key": token(kind, "world-maintenance"),
         "project_id": token(kind, "project"),
         "canon_id": token(kind, "canon-primary"),
@@ -355,7 +356,57 @@ def maintenance_record(kind: str, attempt: int, lease_epoch: int) -> dict[str, A
     }
 
 
+def trace_upload_record(
+    kind: str, *, status: str = "pending", attempt: int = 0, lease_epoch: int = 0
+) -> dict[str, Any]:
+    content = json.dumps(
+        {
+            "schema_version": "post-canon-trace-v1",
+            "project_id": token(kind, "project"),
+            "canon_commit_id": token(kind, "canon-primary"),
+            "chapter_number": 1,
+            "step_name": "world",
+            "attempts": [{"attempt_no": 1}],
+        },
+        sort_keys=True,
+    )
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    commit_id = token(kind, "canon-primary")
+    payload = {
+        "schema_version": 1,
+        "project_id": token(kind, "project"),
+        "canon_commit_id": commit_id,
+        "chapter_number": 1,
+        "step_name": "world",
+        "content": content,
+        "content_sha256": sha,
+        "artifact_key": f"post_canon/{commit_id}/world/llm_trace_{sha}.json",
+    }
+    return {
+        "row_id": token(kind, "trace-row"),
+        "event_id": f"maintenance-trace:{commit_id}:world:{sha}",
+        "aggregate_type": "project",
+        "aggregate_id": payload["project_id"],
+        "event_type": "maintenance.trace.upload.requested",
+        "payload": payload,
+        "payload_sha256": evidence.stable_hash(payload),
+        "status": status,
+        "attempt": attempt,
+        "lease_epoch": lease_epoch,
+        "error_message": "",
+    }
+
+
 def artifact_record(kind: str, variant: str = "primary") -> dict[str, Any]:
+    if kind == "minio_post_canon_unavailable" and variant == "primary":
+        trace = trace_upload_record(kind)["payload"]
+        return {
+            "key": f"artifacts/projects/{trace['project_id']}/keyed/{trace['artifact_key']}",
+            "etag": digest(kind, "etag-primary")[:32],
+            "size": len(trace["content"].encode()),
+            "content_type": "application/json",
+            "content_sha256": trace["content_sha256"],
+        }
     return {
         "key": f"world/{token(kind, f'artifact-{variant}')}.json",
         "etag": digest(kind, f"etag-{variant}")[:32],
@@ -827,9 +878,13 @@ def valid_snapshots(kind: str) -> dict[str, dict[str, Any]]:
                 }
             )
         during["database"]["maintenance"] = maintenance_record(kind, 1, 8)
+        during["database"]["trace_upload"] = trace_upload_record(kind)
         after["database"].update(
             {
-                "maintenance": maintenance_record(kind, 2, 9),
+                "maintenance": maintenance_record(kind, 1, 8),
+                "trace_upload": trace_upload_record(
+                    kind, status="processed", attempt=1, lease_epoch=1
+                ),
                 "authoritative_identities": [authoritative_record(kind)],
                 "phase3_replay_baseline": phase3_replay_observation(
                     kind,
@@ -2340,18 +2395,14 @@ def contract_cases() -> list[ContractCase]:
                     "database.canon_commits",
                     [
                         canon_record("generation_worker_precommit_crash"),
-                        canon_record(
-                            "generation_worker_precommit_crash", "secondary"
-                        ),
+                        canon_record("generation_worker_precommit_crash", "secondary"),
                     ],
                 ),
                 set_mutation(
                     "after",
                     "database.authoritative_identities",
                     [
-                        authoritative_record(
-                            "generation_worker_precommit_crash"
-                        ),
+                        authoritative_record("generation_worker_precommit_crash"),
                         authoritative_record(
                             "generation_worker_precommit_crash", "secondary"
                         ),
@@ -2517,18 +2568,14 @@ def contract_cases() -> list[ContractCase]:
                     "database.canon_commits",
                     [
                         canon_record("minio_pre_canon_unavailable"),
-                        canon_record(
-                            "minio_pre_canon_unavailable", "secondary"
-                        ),
+                        canon_record("minio_pre_canon_unavailable", "secondary"),
                     ],
                 ),
                 set_mutation(
                     "after",
                     "database.authoritative_identities",
                     [
-                        authoritative_record(
-                            "minio_pre_canon_unavailable"
-                        ),
+                        authoritative_record("minio_pre_canon_unavailable"),
                         authoritative_record(
                             "minio_pre_canon_unavailable", "secondary"
                         ),
@@ -2560,10 +2607,33 @@ def contract_cases() -> list[ContractCase]:
             False,
         ),
         ContractCase(
-            "minio maintenance retry",
+            "minio business replay is forbidden",
             "minio_post_canon_unavailable",
-            "phase3_retry_same_identity",
-            set_mutation("after", "database.maintenance.attempt", 1),
+            "maintenance_not_reexecuted",
+            set_mutation("after", "database.maintenance.attempt", 2),
+            False,
+        ),
+        ContractCase(
+            "minio trace identity changed",
+            "minio_post_canon_unavailable",
+            "trace_identity_unchanged",
+            set_mutation(
+                "after", "database.trace_upload.row_id", "different-trace-row"
+            ),
+            False,
+        ),
+        ContractCase(
+            "minio trace still pending",
+            "minio_post_canon_unavailable",
+            "trace_uploaded",
+            set_mutation("after", "database.trace_upload.status", "pending"),
+            False,
+        ),
+        ContractCase(
+            "minio trace object has wrong size",
+            "minio_post_canon_unavailable",
+            "trace_content_uploaded",
+            set_mutation("after", "external.artifact.size", 1),
             False,
         ),
         ContractCase(
@@ -3437,3 +3507,15 @@ def test_task6_publisher_contracts_require_independently_derived_terms() -> None
     }
     for kind in RISK_KINDS:
         assert evidence.FAULT_CONTRACTS[kind] == expected_risk
+
+
+def test_minio_trace_recovery_requires_business_attempts_unchanged():
+    kind = "minio_post_canon_unavailable"
+    values = valid_snapshots(kind)
+    values["after"]["state"]["database"]["maintenance"] = copy.deepcopy(
+        values["during"]["state"]["database"]["maintenance"]
+    )
+    observed = evidence._minio_post_canon(values)
+    assert observed.get("maintenance_not_reexecuted") is True
+    values["after"]["state"]["database"]["maintenance"]["attempt"] += 1
+    assert evidence._minio_post_canon(values).get("maintenance_not_reexecuted") is False

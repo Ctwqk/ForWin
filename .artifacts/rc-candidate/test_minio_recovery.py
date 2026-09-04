@@ -29,7 +29,17 @@ CANDIDATE_ID = "candidate-a"
 CANON_ID = "canon-a"
 TASK_ID = "task-a"
 CANON_KEY = "canon-natural-a"
-BODY = b'{"schema_version":"post-canon-trace-v1"}'
+BODY = json.dumps(
+    {
+        "schema_version": "post-canon-trace-v1",
+        "project_id": PROJECT_ID,
+        "canon_commit_id": CANON_ID,
+        "chapter_number": 1,
+        "step_name": "world",
+        "attempts": [{"attempt_no": 1}],
+    },
+    sort_keys=True,
+).encode()
 BODY_SHA = hashlib.sha256(BODY).hexdigest()
 EVENT_TYPE = "canon.phase3.requested"
 EVENT_ID = f"{CANON_KEY}:{EVENT_TYPE}"
@@ -244,6 +254,7 @@ def test_minio_inventory_uses_list_head_and_independent_byte_hash(
         project_id=PROJECT_ID,
         canon_id=CANON_ID,
         prefix="artifacts",
+        content_sha256=BODY_SHA,
     )
     client = FakeMinio(key=key)
     inventory = runner.MinioInventory(
@@ -289,14 +300,18 @@ def test_expected_world_key_matches_production_composition(runner: Any) -> None:
         step_name="world",
     )
     production = store._key(
-        f"projects/{PROJECT_ID}/keyed/{artifact_key}"
+        f"projects/{PROJECT_ID}/keyed/{artifact_key.removesuffix('.json')}_{BODY_SHA}.json"
     )
 
-    assert runner.expected_world_object_key(
-        project_id=PROJECT_ID,
-        canon_id=CANON_ID,
-        prefix="release-prefix",
-    ) == production
+    assert (
+        runner.expected_world_object_key(
+            project_id=PROJECT_ID,
+            canon_id=CANON_ID,
+            prefix="release-prefix",
+            content_sha256=BODY_SHA,
+        )
+        == production
+    )
     assert PROJECT_ID in production
     assert CANON_ID in production
 
@@ -846,6 +861,32 @@ def accepted_record() -> dict[str, Any]:
     }
 
 
+def trace_observation(*, status="pending", attempt=0, lease_epoch=0):
+    payload = {
+        "schema_version": 1,
+        "project_id": PROJECT_ID,
+        "canon_commit_id": CANON_ID,
+        "chapter_number": 1,
+        "step_name": "world",
+        "content": BODY.decode(),
+        "content_sha256": BODY_SHA,
+        "artifact_key": f"post_canon/{CANON_ID}/world/llm_trace_{BODY_SHA}.json",
+    }
+    return {
+        "row_id": "trace-row-a",
+        "event_id": f"maintenance-trace:{CANON_ID}:world:{BODY_SHA}",
+        "aggregate_type": "project",
+        "aggregate_id": PROJECT_ID,
+        "event_type": "maintenance.trace.upload.requested",
+        "payload": payload,
+        "payload_sha256": stable_hash(payload),
+        "status": status,
+        "attempt": attempt,
+        "lease_epoch": lease_epoch,
+        "error_message": "",
+    }
+
+
 def valid_snapshots(
     runner: Any,
     kind: str,
@@ -902,14 +943,16 @@ def valid_snapshots(
         "canon_id": CANON_ID,
         "attempt": 1,
         "lease_epoch": 1,
+        "status": "succeeded",
     }
     snapshots["after"]["state"]["database"].update(
         maintenance={
             "natural_key": f"post-canon-maintenance:v1:{CANON_KEY}:world",
             "project_id": PROJECT_ID,
             "canon_id": CANON_ID,
-            "attempt": 2,
-            "lease_epoch": 2,
+            "attempt": 1,
+            "lease_epoch": 1,
+            "status": "succeeded",
         },
         authoritative_identities=[
             {
@@ -927,9 +970,7 @@ def valid_snapshots(
             "lease_epoch": 4,
         },
         phase3_replay_release={
-            **runner.SQLCollector._event_identity(
-                phase3_row(status="pending")
-            ),
+            **runner.SQLCollector._event_identity(phase3_row(status="pending")),
             "status": "pending",
             "attempts": 3,
             "lease_epoch": 4,
@@ -950,6 +991,10 @@ def valid_snapshots(
             "attempts": 4,
             "lease_epoch": 5,
         },
+    )
+    snapshots["during"]["state"]["database"]["trace_upload"] = trace_observation()
+    snapshots["after"]["state"]["database"]["trace_upload"] = trace_observation(
+        status="processed", attempt=1, lease_epoch=1
     )
     snapshots["after"]["state"]["external"][
         "replay_baseline_artifact"
@@ -1232,6 +1277,7 @@ def test_task5_success_uses_real_writer_evaluator_and_finalizer(
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             prefix="artifacts",
+            content_sha256=BODY_SHA,
         ),
         "etag": "etag-a",
         "size": len(BODY),
@@ -1477,6 +1523,7 @@ def test_live_pre_canon_replays_the_identical_request_and_uses_real_pipeline(
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             prefix="artifacts",
+            content_sha256=BODY_SHA,
         ),
         "etag": "etag-a",
         "size": len(BODY),
@@ -1559,8 +1606,8 @@ class BlockingApprovalAPI:
         self.calls.append("approval:blocked")
         if not self.release_event.wait(timeout=2):
             raise RuntimeError("barrier was not released")
-        self.calls.append("approval:maintenance-pending")
-        return {"ok": True, "status": "maintenance_pending"}
+        self.calls.append("approval:accepted")
+        return {"ok": True, "status": "accepted"}
 
 
 class FakeReviewBarrier:
@@ -1653,8 +1700,8 @@ class PostCanonSQL:
                 assert kwargs[field] == database[field]
         return copy.deepcopy(self.snapshots[stage])
 
-    def require_maintenance_pending(self, _fixture: Any) -> None:
-        self.calls.append("maintenance:pending")
+    def require_maintenance_ready_with_trace_pending(self, _fixture: Any) -> None:
+        self.calls.append("maintenance:succeeded-trace-pending")
 
     def wait_converged(
         self,
@@ -1720,6 +1767,7 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             prefix="artifacts",
+            content_sha256=BODY_SHA,
         ),
         "etag": "etag-a",
         "size": len(BODY),
@@ -1777,8 +1825,8 @@ def test_live_post_canon_uses_holds_barrier_replay_and_real_pipeline(
         "snapshot:before",
         "stop:minio",
         "barrier:release",
-        "approval:maintenance-pending",
-        "maintenance:pending",
+        "approval:accepted",
+        "maintenance:succeeded-trace-pending",
         "snapshot:during",
         "barrier:cleanup-zero",
         "start:minio",
@@ -1821,6 +1869,7 @@ def test_unobserved_fault_aborts_and_can_only_report_setup_blocked(
             project_id=PROJECT_ID,
             canon_id=CANON_ID,
             prefix="artifacts",
+            content_sha256=BODY_SHA,
         ),
         "etag": "etag-a",
         "size": len(BODY),
@@ -1899,7 +1948,7 @@ def test_failure_cleanup_closes_barrier_before_joining_async_request(
             assert timeout_seconds == 120.0
             assert state["cleaned"] is True
             state["joined"] = True
-            return {"ok": True, "status": "maintenance_pending"}
+            return {"ok": True, "status": "accepted"}
 
     live = object.__new__(runner.LiveRunner)
     live.barrier = FailingReleaseBarrier()
@@ -2162,3 +2211,45 @@ def test_read_only_production_schema_contrast() -> None:
         '"/api/projects/{project_id}/chapters/{chapter_number}/review/approve"'
         in routes
     )
+
+
+def test_collector_requires_committed_steps_and_the_exact_pending_trace(runner):
+    observation = trace_observation()
+    trace_row = {
+        **observation,
+        "id": observation["row_id"],
+        "payload_json": observation["payload"],
+        "attempts": 0,
+    }
+    reference = {
+        "event_id": observation["event_id"],
+        "artifact_key": observation["payload"]["artifact_key"],
+        "hash": BODY_SHA,
+    }
+    rows = [
+        {
+            "step_name": step,
+            "status": "succeeded",
+            "result_json": json.dumps({"trace": reference} if step == "world" else {}),
+        }
+        for step in runner.POST_CANON_STEPS
+    ]
+
+    class Database:
+        def fetch_all(self, statement, params):
+            assert params[0] == PROJECT_ID
+            if "task5 maintenance" in statement:
+                return rows
+            if "task5 trace outbox" in statement:
+                return [trace_row]
+            raise AssertionError(statement)
+
+    collector = runner.SQLCollector(Database())
+    collector.require_maintenance_ready_with_trace_pending(fixture(runner))
+    rows[0]["status"] = "failed"
+    with pytest.raises(runner.SetupBlocked, match="completed maintenance"):
+        collector.require_maintenance_ready_with_trace_pending(fixture(runner))
+    rows[0]["status"] = "succeeded"
+    trace_row["event_id"] = "unrelated-trace"
+    with pytest.raises(runner.SetupBlocked, match="not bound"):
+        collector.require_maintenance_ready_with_trace_pending(fixture(runner))

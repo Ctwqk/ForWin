@@ -478,6 +478,7 @@ class RuntimeContainer:
             memory_index_provider=self._provide_outbox_memory_index,
             post_canon_service_provider=(self._provide_outbox_post_canon_maintenance),
             publisher_job_service_provider=self._provide_outbox_publisher_jobs,
+            artifact_store_provider=lambda: core.artifact_store,
         )
 
     def _resolve_post_canon_maintenance(

@@ -432,15 +432,10 @@ class LLMWebNovelReviewer:
             if character_id:
                 add_evidence(f"personality:{character_id}", "personality", json.dumps(item, ensure_ascii=False))
 
+        add_evidence("draft:body", "draft", writer_output.body)
         add_evidence("draft:summary", "draft", writer_output.end_of_chapter_summary)
         add_evidence("draft:body_head", "draft", writer_output.body[:500])
         add_evidence("draft:body_tail", "draft", writer_output.body[-500:])
-        for scene in writer_output.scene_outputs[:4]:
-            add_evidence(
-                f"scene:{scene.scene_no}",
-                "scene",
-                f"{scene.micro_summary or scene.scene_objective} | reward={scene.reward_beat_tag} | anchor={scene.immersion_anchor}",
-            )
         for event in writer_output.new_events[:5]:
             add_evidence(
                 f"draft_event:{event.significance}:{_trim(event.summary, 24)}",
@@ -567,9 +562,10 @@ class LLMWebNovelReviewer:
             "draft": {
                 "title": writer_output.title,
                 "summary": writer_output.end_of_chapter_summary,
+                # Scene drafts precede stitching and can contradict this final body.
+                "body": writer_output.body,
                 "body_head": _trim(writer_output.body[:500], 500),
                 "body_tail": _trim(writer_output.body[-500:], 500),
-                "scene_outputs": [item.model_dump(mode="json") for item in writer_output.scene_outputs[:4]],
                 "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:5]],
                 "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
                 "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:5]],
@@ -599,6 +595,8 @@ class LLMWebNovelReviewer:
                     "你审查的是网文体验而不是文学腔：看爽点兑现、问题梯子、沉浸感、规则可读性、"
                     "拖感是否仍有推进。所有 warn/fail issue 必须引用给定 evidence_id。"
                     "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
+                    "draft.body 是待评审的完整最终正文；正文问题必须以它为准。"
+                    "摘要与结构化状态、事件、时间候选用于交叉核验，不能代替最终正文。"
                     "canon invariant 优先于章节计划、摘要和本章声称；静默改写规则定义必须 fail。"
                 ),
             },
@@ -881,7 +879,7 @@ class LLMWebNovelReviewer:
             "writer_output": {
                 "title": writer_output.title,
                 "end_of_chapter_summary": writer_output.end_of_chapter_summary,
-                "scene_outputs": [item.model_dump(mode="json") for item in writer_output.scene_outputs[:3]],
+                "body": writer_output.body,
                 "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:4]],
                 "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
                 "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:4]],

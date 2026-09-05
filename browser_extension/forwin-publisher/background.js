@@ -636,10 +636,9 @@ async function inspectFanqieEditorState(tabId) {
     return { ok: false, wordCount: 0, trustedBodyTarget: null, currentUrl: '' };
   }
   try {
-    return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-      channel: PLATFORM_AGENT_CHANNEL,
-      action: 'inspect-fanqie-editor-state',
-    }) || { ok: false, wordCount: 0, trustedBodyTarget: null, currentUrl: '' };
+    return await sendPlatformAgentMessage(
+      tabId, 'inspect-fanqie-editor-state', {}, 5000, TOP_FRAME_MESSAGE_OPTIONS,
+    ) || { ok: false, wordCount: 0, trustedBodyTarget: null, currentUrl: '' };
   } catch (_error) {
     return { ok: false, wordCount: 0, trustedBodyTarget: null, currentUrl: '' };
   }
@@ -692,11 +691,10 @@ async function probePlatformAgentResponsive(tabId) {
     return false;
   }
   try {
-    const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-      channel: PLATFORM_AGENT_CHANNEL,
-      action: 'inspect-login-state',
-    }, TOP_FRAME_MESSAGE_OPTIONS);
-    return Boolean(response);
+    const response = await sendPlatformAgentMessage(
+      tabId, 'inspect-login-state', {}, 5000, TOP_FRAME_MESSAGE_OPTIONS,
+    );
+    return response?.ok === true;
   } catch (_error) {
     return false;
   }
@@ -984,29 +982,7 @@ async function applyTrustedFanqieBodyInput(tabId, body, target) {
   try {
     await trustedClick(tabId, target.x, target.y);
     await sleep(250);
-    try {
-      const applied = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-        channel: PLATFORM_AGENT_CHANNEL,
-        action: 'apply-fanqie-trusted-body',
-        payload: { body: String(body || '') },
-        });
-      if (applied?.ok) {
-        await sleep(800);
-        const inspected = await inspectFanqieEditorState(tabId);
-        if (Number(inspected?.wordCount || 0) > 0) {
-          return;
-        }
-        await trustedFanqieEditorNudge(tabId, target);
-        const nudged = await inspectFanqieEditorState(tabId);
-        if (Number(nudged?.wordCount || 0) > 0) {
-          return;
-        }
-      }
-    } catch (_error) {
-      // Fall through to the debugger text path below.
-    }
-    await trustedClick(tabId, target.x, target.y);
-    await sleep(150);
+    // Native input updates the editor's saved state, including on draft retries.
     await trustedSelectAllAndDelete(tabId);
     await trustedInsertText(tabId, String(body || ''));
     await sleep(1200);
@@ -1244,15 +1220,6 @@ async function runUploadCommand(tabId, payload) {
             return response;
           }
           await navigateTab(activeTabId, verifyUrl);
-          const workflowTabId = await waitForPlatformWorkflowTab(
-            payload.platform,
-            activeTabId,
-            15000,
-            rootTabId,
-          );
-          if (workflowTabId) {
-            activeTabId = workflowTabId;
-          }
           const runnable = await waitForRunnableWorkflowTab(payload.platform, activeTabId, 12000);
           if (!runnable) {
             return {
@@ -1273,7 +1240,7 @@ async function runUploadCommand(tabId, payload) {
           }, {
             remote_book_id: response.resultPayload?.remote_book_id || '',
             remote_chapter_id: response.resultPayload?.remote_chapter_id || '',
-          });
+          }, verifyUrl);
         }
         return response;
       }
@@ -2162,6 +2129,7 @@ async function verifyFanqieDraftOnPage(
   chapterTitle,
   contentEvidence = {},
   expectedIdentity = {},
+  verifyUrl = '',
 ) {
   let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
     || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
@@ -2176,11 +2144,24 @@ async function verifyFanqieDraftOnPage(
     maxAttempts: 24,
     verify: async () => {
       try {
-        return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-          channel: PLATFORM_AGENT_CHANNEL,
-          action: 'verify-fanqie-draft',
-          payload: { chapterTitle, contentEvidence, expectedIdentity },
-        });
+        if (verifyUrl && String((await getTab(tabId))?.url || '') !== verifyUrl) {
+          await navigateTab(tabId, verifyUrl);
+          const runnable = await waitForRunnableWorkflowTab('fanqie', tabId, 12000);
+          if (!runnable) {
+            return null;
+          }
+        }
+        if (verifyUrl && String((await getTab(tabId))?.url || '') !== verifyUrl) {
+          return null;
+        }
+        const response = await sendPlatformAgentMessage(
+          tabId, 'verify-fanqie-draft', { chapterTitle, contentEvidence, expectedIdentity },
+          5000, TOP_FRAME_MESSAGE_OPTIONS,
+        );
+        if (verifyUrl && response?.ok && response.currentUrl !== verifyUrl) {
+          return null;
+        }
+        return response?.errorCode === 'platform-agent-timeout' ? null : response;
       } catch (_error) {
         ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
           || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2000);
@@ -2196,7 +2177,11 @@ async function verifyFanqieDraftOnPage(
     reload: async () => {
       try {
         tabReadyRegistry.reset(tabId, READY_CHANNELS.PLATFORM_AGENT);
-        await wrapCall(extensionApi.tabs, 'reload', tabId);
+        if (verifyUrl) {
+          await navigateTab(tabId, verifyUrl);
+        } else {
+          await wrapCall(extensionApi.tabs, 'reload', tabId);
+        }
         ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 8000);
         if (!ready) {
           ready = await probePlatformAgentResponsive(tabId);
@@ -2328,7 +2313,7 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (action === 'platform-agent-ready') {
-    if (sender?.tab?.id) {
+    if (sender?.tab?.id && sender.frameId === 0) {
       tabReadyRegistry.markReady(sender.tab.id, READY_CHANNELS.PLATFORM_AGENT);
     }
     sendResponse({ ok: true, payload: { ready: true } });

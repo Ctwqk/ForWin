@@ -8,6 +8,7 @@ const implementation = (name) => source.match(new RegExp(`^async function ${name
 
 function context(extra = {}) {
   return {
+    URL,
     TOP_FRAME_MESSAGE_OPTIONS: { frameId: 0 },
     READY_CHANNELS: { PLATFORM_AGENT: 'platform' },
     PLATFORM_AGENT_CHANNEL: 'platform',
@@ -86,4 +87,36 @@ test('Draft verification rejects a success reply from the wrong page', async () 
     sendPlatformAgentMessage: async () => ({ ok: true, currentUrl: 'https://fanqienovel.com/main/writer/' }),
   }));
   assert.equal(result, null);
+});
+
+test('Draft verification accepts the same book after Fanqie appends its title to the route', async () => {
+  const expected = 'https://fanqienovel.com/main/writer/chapter-manage/123?type=2';
+  const canonical = 'https://fanqienovel.com/main/writer/chapter-manage/123&%E4%B9%A6%E5%90%8D?type=2';
+  const navigations = [];
+  const result = await runInNewContext(`${implementation('verifyFanqieDraftOnPage')}\nverifyFanqieDraftOnPage(7,'第4章',{},{},${JSON.stringify(expected)})`, context({
+    getTab: async () => ({ url: canonical }),
+    navigateTab: async (_tab, url) => navigations.push(url),
+    waitForRunnableWorkflowTab: async () => true,
+    verifyFanqieDraftWithRetries: async ({ verify }) => verify(),
+    sendPlatformAgentMessage: async () => ({ ok: true, currentUrl: canonical }),
+  }));
+  assert.equal(result?.ok, true);
+  assert.deepEqual(navigations, []);
+});
+
+test('Fanqie title redirects still require the expected book, origin and draft tab', async () => {
+  const expected = 'https://fanqienovel.com/main/writer/chapter-manage/123?type=2';
+  for (const wrong of [
+    'https://fanqienovel.com/main/writer/chapter-manage/456&book?type=2',
+    'https://example.com/main/writer/chapter-manage/123&book?type=2',
+    'https://fanqienovel.com/main/writer/chapter-manage/123&book?type=1',
+  ]) {
+    const result = await runInNewContext(`${implementation('verifyFanqieDraftOnPage')}\nverifyFanqieDraftOnPage(7,'第4章',{},{},${JSON.stringify(expected)})`, context({
+      getTab: async () => ({ url: expected }),
+      waitForRunnableWorkflowTab: async () => true,
+      verifyFanqieDraftWithRetries: async ({ verify }) => verify(),
+      sendPlatformAgentMessage: async () => ({ ok: true, currentUrl: wrong }),
+    }));
+    assert.equal(result, null, wrong);
+  }
 });

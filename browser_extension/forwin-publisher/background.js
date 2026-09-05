@@ -2131,6 +2131,23 @@ async function verifyFanqieDraftOnPage(
   expectedIdentity = {},
   verifyUrl = '',
 ) {
+  // Fanqie canonicalizes /<bookId> to /<bookId>&<bookTitle> after loading.
+  const matchesVerifyPage = (value) => {
+    if (value === verifyUrl) return true;
+    try {
+      const expected = new URL(verifyUrl);
+      const actual = new URL(String(value || ''));
+      const route = /^\/main\/writer\/chapter-manage\/(\d+)(?:&[^/]*)?\/?$/;
+      const expectedBook = expected.pathname.match(route)?.[1];
+      return Boolean(expectedBook)
+        && actual.origin === expected.origin
+        && actual.pathname.match(route)?.[1] === expectedBook
+        && expected.searchParams.get('type') === '2'
+        && actual.searchParams.get('type') === '2';
+    } catch (_error) {
+      return false;
+    }
+  };
   let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
     || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
   if (!ready) {
@@ -2144,21 +2161,21 @@ async function verifyFanqieDraftOnPage(
     maxAttempts: 24,
     verify: async () => {
       try {
-        if (verifyUrl && String((await getTab(tabId))?.url || '') !== verifyUrl) {
+        if (verifyUrl && !matchesVerifyPage((await getTab(tabId))?.url)) {
           await navigateTab(tabId, verifyUrl);
           const runnable = await waitForRunnableWorkflowTab('fanqie', tabId, 12000);
           if (!runnable) {
             return null;
           }
         }
-        if (verifyUrl && String((await getTab(tabId))?.url || '') !== verifyUrl) {
+        if (verifyUrl && !matchesVerifyPage((await getTab(tabId))?.url)) {
           return null;
         }
         const response = await sendPlatformAgentMessage(
           tabId, 'verify-fanqie-draft', { chapterTitle, contentEvidence, expectedIdentity },
           5000, TOP_FRAME_MESSAGE_OPTIONS,
         );
-        if (verifyUrl && response?.ok && response.currentUrl !== verifyUrl) {
+        if (verifyUrl && response?.ok && !matchesVerifyPage(response.currentUrl)) {
           return null;
         }
         return response?.errorCode === 'platform-agent-timeout' ? null : response;

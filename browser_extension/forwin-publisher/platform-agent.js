@@ -2147,21 +2147,23 @@
     return fillInputExact(node, value, { perCharDelayMs: 40 });
   }
 
-  async function fillFanqieSequence() {
+  async function fillFanqieSequence(chapterTitle = '') {
     const node = document.querySelector('input.serial-input.byte-input.byte-input-size-default:not(.serial-editor-input-hint-area):not([placeholder])');
     if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
       return false;
     }
-    if (String(node.value || '').trim()) {
+    const matched = String(chapterTitle || '').match(/^\s*第\s*([1-9]\d*)\s*章/);
+    const wanted = matched ? matched[1] : (String(node.value || '').trim() || '1');
+    if (String(node.value || '').trim() === wanted) {
       return true;
     }
-    return fillInputExact(node, '1', { perCharDelayMs: 10 });
+    return fillInputExact(node, wanted, { perCharDelayMs: 10 });
   }
 
   function applyFanqieTrustedBody(value) {
     const text = String(value || '');
     const editor = document.querySelector('.ProseMirror[contenteditable="true"]');
-    const target = document.querySelector('.ProseMirror[contenteditable="true"] p') || editor;
+    const target = editor;
     if (!(target instanceof HTMLElement)) {
       return {
         ok: false,
@@ -3871,7 +3873,7 @@
       if (window.location.href.includes('fanqienovel.com')) {
         if (!payload.trustedBodyDone) {
           setDebugStep('run-upload-fanqie-sequence-start');
-          await fillFanqieSequence();
+          await fillFanqieSequence(payload.chapter_title);
           setDebugStep('run-upload-fanqie-sequence-done');
           setDebugStep('run-upload-fanqie-title-exact-start');
           await fillFanqieTitle(payload.chapter_title);
@@ -3903,7 +3905,7 @@
           };
         }
         setDebugStep('run-upload-fanqie-sequence-start-2');
-        await fillFanqieSequence();
+        await fillFanqieSequence(payload.chapter_title);
         setDebugStep('run-upload-fanqie-sequence-done-2');
         setDebugStep('run-upload-fanqie-title-exact-start-2');
         await fillFanqieTitle(payload.chapter_title);

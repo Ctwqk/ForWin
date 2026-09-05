@@ -4,14 +4,14 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js?v=0.1.60';
+} from './platforms.js?v=0.1.62';
 import {
   buildAttemptResult,
   buildExecutionReceipt,
   buildReconciliationRequest,
   buildRiskPauseRequest,
-} from './reconciliation.js?v=0.1.60';
-import { guardRiskInspection } from './risk-inspection.js?v=0.1.60';
+} from './reconciliation.js?v=0.1.62';
+import { guardRiskInspection } from './risk-inspection.js?v=0.1.62';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';

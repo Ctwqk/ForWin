@@ -20,15 +20,40 @@ function context(extra = {}) {
   };
 }
 
-test('Fanqie body replacement uses native select-all and text input despite a nonempty stale editor', async () => {
+test('Fanqie body replacement selects the complete editor and verifies native input', async () => {
   const calls = [];
   await runInNewContext(`${implementation('applyTrustedFanqieBodyInput')}\napplyTrustedFanqieBodyInput(7,'新正文',{x:10,y:10})`, context({
     attachDebugger: async () => calls.push('attach'), detachDebugger: async () => calls.push('detach'),
     trustedClick: async () => {}, inspectFanqieEditorState: async () => ({ wordCount: 999 }),
-    trustedSelectAllAndDelete: async () => calls.push('replace'),
+    trustedSelectAllAndDelete: async () => calls.push('unverified-shortcut'),
+    sendDebuggerCommand: async (_tab, _method, args) => {
+      const selecting = args.expression.includes('selectNodeContents');
+      calls.push(selecting ? 'select' : 'verify');
+      return { result: { value: true } };
+    },
     trustedInsertText: async (_tab, text) => calls.push(text),
   }));
-  assert.deepEqual(calls, ['attach', 'replace', '新正文', 'detach']);
+  assert.deepEqual(calls, ['attach', 'select', '新正文', 'verify', 'detach']);
+});
+
+test('Fanqie replacement stops before typing if the whole editor was not selected', async () => {
+  let inserted = false;
+  await assert.rejects(runInNewContext(`${implementation('applyTrustedFanqieBodyInput')}\napplyTrustedFanqieBodyInput(7,'新正文',{x:10,y:10})`, context({
+    attachDebugger: async () => {}, detachDebugger: async () => {}, trustedClick: async () => {},
+    trustedSelectAllAndDelete: async () => {},
+    sendDebuggerCommand: async () => ({ result: { value: false } }),
+    trustedInsertText: async () => { inserted = true; },
+  })), /选中/);
+  assert.equal(inserted, false);
+});
+
+test('Fanqie replacement rejects a body mismatch instead of reporting input complete', async () => {
+  let checks = 0;
+  await assert.rejects(runInNewContext(`${implementation('applyTrustedFanqieBodyInput')}\napplyTrustedFanqieBodyInput(7,'新正文',{x:10,y:10})`, context({
+    attachDebugger: async () => {}, detachDebugger: async () => {}, trustedClick: async () => {},
+    trustedSelectAllAndDelete: async () => {}, trustedInsertText: async () => {},
+    sendDebuggerCommand: async () => ({ result: { value: ++checks === 1 } }),
+  })), /不一致/);
 });
 
 test('Fanqie editor inspection is bounded and restricted to the top frame', async () => {

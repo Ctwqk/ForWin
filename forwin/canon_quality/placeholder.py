@@ -279,8 +279,21 @@ def extract_expected_protagonist_names(*values: str) -> set[str]:
         name = match.group(1).strip()
         if name and name not in PROTAGONIST_PLACEHOLDER_ROLES:
             names.add(name)
-    for match in re.finditer(r"(?:主角|主人公|主视角)\s*([\u4e00-\u9fff]{2,4})(?=是|为|在|，|,)", text):
+    for match in re.finditer(
+        r"固定(?:主角|主人公|主视角)\s*[：:是为]?\s*([\u4e00-\u9fff]{2,4})(?=[，,。；;、\s]|$)",
+        text,
+    ):
+        name = match.group(1)
+        if name not in PROTAGONIST_PLACEHOLDER_ROLES:
+            names.add(name)
+    for match in re.finditer(r"(?:主角|主人公|主视角)\s*(?![是为])([\u4e00-\u9fff]{2,4})(?=是|为|在|，|,)", text):
+        # A relationship clause such as “与主角时有冲突” does not name its subject.
         name = match.group(1).strip()
+        if (
+            text[:match.start()].rstrip().endswith(("与", "和", "同"))
+            and name.startswith(("时有", "有时", "时常", "偶有", "偶尔", "经常"))
+        ):
+            continue
         if name and name not in PROTAGONIST_PLACEHOLDER_ROLES and name not in _PROTAGONIST_NAME_STOPWORDS:
             names.add(name)
     for match in re.finditer(r'"name"\s*:\s*"([\u4e00-\u9fff]{2,4})"', text):

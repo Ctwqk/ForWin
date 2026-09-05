@@ -31,6 +31,9 @@ ENV FORWIN_DATABASE_URL="postgresql+psycopg://forwin:forwin@postgres:5432/forwin
 
 FROM python-base AS publisher-browser-runtime
 
+# Upload commands can occupy the extension beyond the default 90-second heartbeat window.
+ENV FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS=300
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*

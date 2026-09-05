@@ -1444,10 +1444,12 @@
     const wanted = normalized === 'female' || normalized.includes('女') ? '0' : '1';
     const input = document.querySelector(`input[name="pindao"][value="${wanted}"]`);
     if (input instanceof HTMLInputElement) {
-      input.checked = true;
-      input.click();
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+      const label = input.closest('label');
+      if (label instanceof HTMLElement) {
+        label.click();
+      } else {
+        input.click();
+      }
       return true;
     }
     return false;

@@ -1183,9 +1183,12 @@ class BookStateRepository:
                     metadata = payload.get("metadata")
                     if (
                         path == "metadata.writer_location"
-                        and isinstance(metadata, dict)
+                        and (metadata is None or isinstance(metadata, dict))
                     ):
-                        metadata.pop("writer_location")
+                        if metadata is None:
+                            payload["metadata"] = {}
+                        else:
+                            metadata.pop("writer_location")
                         continue
                     raise ValueError(failure)
                 parts = path.split(".")

@@ -41,6 +41,9 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         if isinstance(item, dict)
     ]
     open_signals = [item for item in quality.get("open_signals", []) or [] if isinstance(item, dict)]
+    operator_retry_constraints = [
+        item for item in quality.get("operator_retry_constraints", []) or [] if isinstance(item, dict)
+    ]
     active_obligations = [
         item
         for item in quality.get("active_narrative_obligations", []) or []
@@ -67,6 +70,7 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         invariant_constraints,
         character_state_constraints,
         open_signals,
+        operator_retry_constraints,
         active_obligations,
         structural_patch_debt,
         future_plan_audit_summary,
@@ -91,6 +95,7 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
     )
     sections = [
         *_final_chapter_constraint_section(is_final_chapter),
+        *_operator_retry_constraint_sections(operator_retry_constraints),
         *_invariant_constraint_sections(invariant_constraints),
         *_countdown_constraint_sections(countdown_constraints, profiles=countdown_profiles),
         *_character_state_constraint_sections(character_state_constraints),
@@ -141,6 +146,29 @@ def _final_chapter_constraint_section(is_final_chapter: bool) -> list[Constraint
                     "  · 终章不得以追兵逼近、被困、关键道具损坏、准备公开、正要关闭、等待下一步等主线未完成动作作结。",
                     "  · 如果写到关闭方法、关键道具、坐标或入口，必须在本章完成使用、关闭或公开；不要只把它们作为下一步任务。",
                     "  · 如需留余味，只能留在主线危机已解决之后，作为轻量后日谈或续作暗线。",
+                ]
+            ),
+        )
+    ]
+
+
+def _operator_retry_constraint_sections(items: list[dict]) -> list[ConstraintSection]:
+    if not items:
+        return []
+    latest = items[-1]
+    reason = str(latest.get("reason") or "").strip()
+    if not reason:
+        return []
+    return [
+        ConstraintSection(
+            key="operator_retry",
+            priority=12,
+            must_inject=True,
+            text="\n".join(
+                [
+                    "  · 操作员定向重写约束：",
+                    f"    · {reason}",
+                    "    · 此约束用于本次重写，优先于旧摘要和默认章节计划；不得静默忽略或反向执行。",
                 ]
             ),
         )

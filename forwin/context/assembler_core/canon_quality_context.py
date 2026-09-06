@@ -7,8 +7,10 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from forwin.audit.events import DecisionEventType
 from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
+from forwin.models.audit import DecisionEvent
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ChapterPlan
 
@@ -45,6 +47,7 @@ def _build_canon_quality_context(
         "invariant_constraints": [],
         "character_state_constraints": [],
         "open_signals": [],
+        "operator_retry_constraints": [],
         "active_narrative_obligations": [],
         "active_structural_patch_debt": [],
         "future_plan_audit_summary": {},
@@ -159,6 +162,11 @@ def _build_canon_quality_context(
             }
             for signal in repo.list_open_signals(project_id, before_chapter=chapter_number, limit=10)
         ]
+        operator_retry_constraints = _operator_retry_constraints(
+            session=session,
+            project_id=project_id,
+            chapter_number=int(chapter_number or 0),
+        )
         active_narrative_obligations = [
             {
                 "id": obligation.id,
@@ -222,6 +230,7 @@ def _build_canon_quality_context(
             "invariant_constraints": invariant_constraints,
             "character_state_constraints": character_state_constraints,
             "open_signals": open_signals,
+            "operator_retry_constraints": operator_retry_constraints,
             "active_narrative_obligations": active_narrative_obligations,
             "active_structural_patch_debt": active_structural_patch_debt,
             "future_plan_audit_summary": future_plan_audit_summary,
@@ -332,6 +341,40 @@ def _accepted_future_chapter_anchor_constraints(
             }
         )
     return anchors
+
+
+def _operator_retry_constraints(
+    *,
+    session,
+    project_id: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    """Surface the latest human retry reason to the next rewrite prompt."""
+
+    if chapter_number <= 0:
+        return []
+    event = session.execute(
+        select(DecisionEvent)
+        .where(
+            DecisionEvent.project_id == project_id,
+            DecisionEvent.chapter_number == chapter_number,
+            DecisionEvent.event_family == "audit_action",
+            DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            DecisionEvent.actor_type.in_(("api", "manual_ui")),
+        )
+        .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    reason = str(getattr(event, "reason", "") or "").strip()
+    if not reason:
+        return []
+    return [
+        {
+            "chapter_number": chapter_number,
+            "reason": reason,
+            "event_id": str(getattr(event, "id", "") or ""),
+        }
+    ]
 
 
 def _book_state_rule_invariant_constraints(

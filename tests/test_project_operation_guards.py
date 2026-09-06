@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 
 from forwin.application.projects import generation as project_generation
 from forwin.application.projects import genesis as project_genesis
+from forwin.audit.events import DecisionEventType
 from forwin.api_schema import (
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
@@ -21,7 +23,10 @@ from forwin.api_schema import (
 )
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
+from forwin.models.audit import DecisionEvent
 from forwin.models.planning_control import BandCheckpoint
+from forwin.models.canon import CanonCommitRecord
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
@@ -79,6 +84,69 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
             session.commit()
             return project
+
+    def _accepted_chapter_commit(
+        self,
+        *,
+        project: Project,
+        chapter: ChapterPlan,
+    ) -> CanonCommitRecord:
+        """Create the prior commit the accepted-retry marker must preserve."""
+        with self.session_factory() as session:
+            draft = ChapterDraft(
+                id=f"draft-{chapter.id}",
+                chapter_plan_id=chapter.id,
+                version=1,
+                body_text="The originally accepted chapter.",
+            )
+            session.add(draft)
+            session.flush()
+            review = ChapterReview(
+                id=f"review-{chapter.id}",
+                draft_id=draft.id,
+                verdict="pass",
+            )
+            session.add(review)
+            session.flush()
+            candidate = CandidateDraftRecord(
+                id=f"candidate-{chapter.id}",
+                project_id=project.id,
+                chapter_plan_id=chapter.id,
+                chapter_number=chapter.chapter_number,
+                candidate_draft_id=draft.id,
+                review_id=review.id,
+                status="accepted",
+            )
+            session.add(candidate)
+            session.flush()
+            old_commit = CanonCommitRecord(
+                id=f"commit-{chapter.id}",
+                idempotency_key=f"commit-key-{chapter.id}",
+                candidate_id=candidate.id,
+                project_id=project.id,
+                chapter_number=chapter.chapter_number,
+            )
+            session.add(old_commit)
+            session.commit()
+            return old_commit
+
+    def _rewrite_marker(self, session, project_id: str, chapter_number: int):
+        event = (
+            session.query(DecisionEvent)
+            .filter_by(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="audit_action",
+                event_type=DecisionEventType.RETRY_ATTEMPT,
+                actor_type="api",
+            )
+            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+            .first()
+        )
+        if event is None:
+            return None
+        payload = json.loads(event.payload_json or "{}")
+        return SimpleNamespace(**payload) if "previous_commit_id" in payload else None
 
     def test_project_detail_overlays_active_generation_task_stage(self) -> None:
         project = self._create_project(project_id="proj-active-detail")
@@ -633,6 +701,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
             session.commit()
 
+        with self.session_factory() as session:
+            accepted_chapter = session.get(ChapterPlan, "plan-review-retry-accepted")
+            self.assertIsNotNone(accepted_chapter)
+            old_commit = self._accepted_chapter_commit(
+                project=project,
+                chapter=accepted_chapter,
+            )
+
         payload = api_module.retry_chapter_review(
             project.id,
             3,
@@ -648,6 +724,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
             self.assertEqual(plan.status, "planned")
             self.assertEqual(plan.acceptance_mode, "")
             self.assertEqual(plan.repair_attempt_count, 0)
+            marker = self._rewrite_marker(session, project.id, 3)
+            self.assertIsNotNone(marker)
+            self.assertEqual(marker.previous_commit_id, old_commit.id)
 
     def test_retry_chapter_review_resets_drafted_candidate_to_planned(self) -> None:
         project = self._create_project(project_id="proj-review-retry-drafted")

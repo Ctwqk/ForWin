@@ -13,6 +13,8 @@ from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_plan_revision,
 )
+from forwin.api_schema import ChapterReviewRetryRequest
+from forwin.audit.events import DecisionEventType
 from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.outbox_events import (
     CANON_PHASE3_REQUESTED,
@@ -37,6 +39,8 @@ from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.subworld import SubWorldRosterItem
+from forwin.models.maintenance import PostCanonMaintenanceRun
+from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 from forwin.naming import (
     EntityAdmissionDecision,
     EntityAdmissionPlan,
@@ -48,6 +52,8 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+from tests.http_runtime_harness import HttpRuntimeHarness
+from forwin.config import InfrastructureConfig
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,17 @@ class PreparedCanon:
     candidate_id: str
     obligation_id: str
     roster_item_id: str
+
+
+@dataclass(frozen=True)
+class HistoricalRewriteScenario:
+    Session: sessionmaker[Session]
+    project_id: str
+    chapter_two_id: str
+    old_commit_id: str
+    successor_candidate_id: str
+    successor_draft_id: str
+    rewritten_plan: CanonCommitPlan
 
 
 @pytest.fixture
@@ -282,6 +299,466 @@ def _rebuild_plan(
         audit_events=plan.audit_events,
         schema_version=plan.schema_version,
     )
+
+
+def _prepare_chapter_candidate(
+    session: Session,
+    *,
+    project_id: str,
+    chapter: ChapterPlan,
+    version: int,
+    body: str,
+    summary: str,
+    delta_id: str,
+    delta_summary: str,
+    node_id: str,
+) -> CanonCommitPlan:
+    output = WriterOutput(
+        project_id=project_id,
+        chapter_number=chapter.chapter_number,
+        title=chapter.title,
+        body=body,
+        char_count=len(body),
+        end_of_chapter_summary=summary,
+    )
+    draft = ChapterDraft(
+        chapter_plan_id=chapter.id,
+        version=version,
+        body_text=output.body,
+        summary=output.end_of_chapter_summary,
+        char_count=output.char_count,
+    )
+    session.add(draft)
+    session.flush()
+    review = ChapterReview(
+        draft_id=draft.id,
+        verdict="pass",
+        issues_json="[]",
+        review_meta_json='{"verdict":"pass"}',
+    )
+    session.add(review)
+    session.flush()
+    candidate = CandidateDraftRepository(session).create_reviewed_version(
+        project_id=project_id,
+        chapter_plan=chapter,
+        draft=draft,
+        review=review,
+        writer_output=output,
+        plan_revision=candidate_plan_revision(chapter),
+        policy_version=1,
+    )
+    approved = ApprovedGraphDeltaSet(
+        project_id=project_id,
+        chapter_number=chapter.chapter_number,
+        graph_deltas=[
+            GraphDelta(
+                id=delta_id,
+                project_id=project_id,
+                chapter_number=chapter.chapter_number,
+                summary=delta_summary,
+                node_patches=[
+                    NodePatch(
+                        node_id=node_id,
+                        node_type="event",
+                        op="create",
+                        new_value={
+                            "id": node_id,
+                            "project_id": project_id,
+                            "node_type": "event",
+                            "name": delta_summary,
+                            "description": delta_summary,
+                        },
+                    )
+                ],
+            )
+        ],
+        approved_by=["book_state_review"],
+        review_verdict_id=review.id,
+    )
+    prepared = CanonPreparationService().prepare_from_approved(
+        session=session,
+        candidate_id=candidate.id,
+        approved_book_state_changes=approved,
+        entity_admission_plan=EntityAdmissionPlan(
+            project_id=project_id,
+            chapter_number=chapter.chapter_number,
+            candidate_fingerprint=writer_output_admission_fingerprint(output),
+        ),
+        acceptance_mode="normal",
+        repair_attempt_count=0,
+        residual_review_issues=[],
+        canon_risk_level="low",
+    )
+    assert prepared.plan is not None
+    return prepared.plan
+
+
+def _complete_post_canon_barrier(
+    session: Session,
+    *,
+    commit_id: str,
+    project_id: str,
+    chapter_number: int,
+    candidate_id: str,
+) -> None:
+    for step_name in POST_CANON_STEP_NAMES:
+        result = {}
+        if step_name == POST_CANON_STEP_NAMES[-1]:
+            result = {
+                ORDER_CONTROLS_KEY: {
+                    "status": "succeeded",
+                    "result": {"blocking_reasons": []},
+                }
+            }
+        session.add(
+            PostCanonMaintenanceRun(
+                id=f"post-canon-{commit_id}-{step_name}",
+                canon_commit_id=commit_id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                candidate_id=candidate_id,
+                step_name=step_name,
+                idempotency_key=f"post-canon-key-{commit_id}-{step_name}",
+                status="succeeded",
+                result_json=json.dumps(result, sort_keys=True),
+            )
+        )
+
+
+def _rewrite_marker(
+    session: Session, project_id: str, chapter_number: int
+) -> dict[str, object] | None:
+    event = session.scalar(
+        select(DecisionEvent)
+        .where(
+            DecisionEvent.project_id == project_id,
+            DecisionEvent.chapter_number == chapter_number,
+            DecisionEvent.event_family == "audit_action",
+            DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            DecisionEvent.actor_type == "api",
+        )
+        .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+    )
+    if event is None:
+        return None
+    payload = json.loads(event.payload_json or "{}")
+    return payload if "previous_commit_id" in payload else None
+
+
+@pytest.fixture
+def historical_rewrite_scenario() -> HistoricalRewriteScenario:
+    engine = get_engine(postgres_test_url("historical-canon-rewrite"))
+    init_db(engine)
+    SessionFactory = get_session_factory(engine)
+    with SessionFactory.begin() as session:
+        updater = StateUpdater(session)
+        project = updater.create_project(
+            title="Historical Canon",
+            premise="A corrected chapter must replace its old state contribution.",
+            genre="thriller",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
+        arc = updater.create_arc_plan(project.id, "Rewrite arc", chapter_start=2)
+        chapter_one = updater.create_chapter_plan(
+            project.id, arc.id, 1, "Chapter one", "Base event", ["Commit chapter one"]
+        )
+        chapter_two = updater.create_chapter_plan(
+            project.id, arc.id, 2, "Chapter two", "Original event", ["Commit chapter two"]
+        )
+        chapter_three = updater.create_chapter_plan(
+            project.id, arc.id, 3, "Chapter three", "Later consequence", ["Commit chapter three"]
+        )
+        base_plan = _prepare_chapter_candidate(
+            session,
+            project_id=project.id,
+            chapter=chapter_one,
+            version=1,
+            body="The base event enters Canon.",
+            summary="The base event becomes Canon.",
+            delta_id="delta-base-event",
+            delta_summary="base event",
+            node_id="event-base",
+        )
+
+    base_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(base_plan)
+    assert base_outcome.blocked is False
+    with SessionFactory.begin() as session:
+        _complete_post_canon_barrier(
+            session,
+            commit_id=base_outcome.commit_id,
+            project_id=project.id,
+            chapter_number=1,
+            candidate_id=base_plan.candidate_id,
+        )
+        chapter_two = session.get(ChapterPlan, chapter_two.id)
+        assert chapter_two is not None
+        original_plan = _prepare_chapter_candidate(
+            session,
+            project_id=project.id,
+            chapter=chapter_two,
+            version=1,
+            body="The obsolete braking event enters Canon.",
+            summary="The obsolete braking event becomes Canon.",
+            delta_id="delta-obsolete-braking",
+            delta_summary="obsolete braking event",
+            node_id="event-obsolete-braking",
+        )
+
+    old_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(
+        original_plan
+    )
+    assert old_outcome.blocked is False
+    with SessionFactory.begin() as session:
+        _complete_post_canon_barrier(
+            session,
+            commit_id=old_outcome.commit_id,
+            project_id=project.id,
+            chapter_number=2,
+            candidate_id=original_plan.candidate_id,
+        )
+        chapter_three = session.get(ChapterPlan, chapter_three.id)
+        assert chapter_three is not None
+        successor_plan = _prepare_chapter_candidate(
+            session,
+            project_id=project.id,
+            chapter=chapter_three,
+            version=1,
+            body="The later accepted consequence follows the first event.",
+            summary="The consequence is accepted after chapter two.",
+            delta_id="delta-later-consequence",
+            delta_summary="later accepted consequence",
+            node_id="event-later-consequence",
+        )
+        successor_candidate = session.get(
+            CandidateDraftRecord, successor_plan.candidate_id
+        )
+        assert successor_candidate is not None
+        successor_draft_id = successor_candidate.candidate_draft_id
+    successor_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(
+        successor_plan
+    )
+    assert successor_outcome.blocked is False
+
+    api = HttpRuntimeHarness(
+        session_factory=SessionFactory,
+        engine=engine,
+        config=InfrastructureConfig(
+            database_url=postgres_test_url("historical-canon-rewrite"),
+            minimax_api_key="saved-key",
+            minimax_base_url="https://api.minimaxi.com/v1",
+            minimax_model="MiniMax-M2.7",
+        ),
+    )
+    retry = api.retry_chapter_review(
+        project.id,
+        2,
+        ChapterReviewRetryRequest(
+            reason="correct historical drift",
+            allow_accepted=True,
+        ),
+    )
+    assert retry.ok is True
+
+    with SessionFactory.begin() as session:
+        chapter_two = session.get(ChapterPlan, chapter_two.id)
+        assert chapter_two is not None
+        rewritten_plan = _prepare_chapter_candidate(
+            session,
+            project_id=project.id,
+            chapter=chapter_two,
+            version=2,
+            body="The corrected custody-only event replaces the old event.",
+            summary="Only the custody event is Canon.",
+            delta_id="delta-corrected-custody",
+            delta_summary="corrected custody-only event",
+            node_id="event-corrected-custody",
+        )
+
+    yield HistoricalRewriteScenario(
+        Session=SessionFactory,
+        project_id=project.id,
+        chapter_two_id=chapter_two.id,
+        old_commit_id=old_outcome.commit_id,
+        successor_candidate_id=successor_plan.candidate_id,
+        successor_draft_id=successor_draft_id,
+        rewritten_plan=rewritten_plan,
+    )
+    engine.dispose()
+
+
+def _active_delta_summaries(
+    SessionFactory: sessionmaker[Session], project_id: str, chapter_number: int
+) -> list[str]:
+    with SessionFactory() as session:
+        return list(
+            session.scalars(
+                select(GraphDeltaRow.summary)
+                .where(
+                    GraphDeltaRow.project_id == project_id,
+                    GraphDeltaRow.chapter_number == chapter_number,
+                )
+                .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+            )
+        )
+
+
+def _world_snapshot(
+    SessionFactory: sessionmaker[Session], project_id: str, chapter_number: int
+) -> str:
+    with SessionFactory() as session:
+        snapshot = session.scalar(
+            select(WorldSnapshotRow)
+            .where(
+                WorldSnapshotRow.project_id == project_id,
+                WorldSnapshotRow.as_of_chapter == chapter_number,
+            )
+            .order_by(WorldSnapshotRow.built_at.desc(), WorldSnapshotRow.id.desc())
+        )
+        assert snapshot is not None
+        return snapshot.world_node_state_index_json
+
+
+def test_historical_rewrite_replaces_old_delta_and_replays_later_accepted_deltas(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    with historical_rewrite_scenario.Session() as session:
+        marker = _rewrite_marker(
+            session,
+            historical_rewrite_scenario.project_id,
+            2,
+        )
+        assert marker is not None
+        assert marker["previous_commit_id"] == historical_rewrite_scenario.old_commit_id
+
+    outcome = CanonAdmissionService(
+        session_factory=historical_rewrite_scenario.Session
+    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert outcome.commit_id == historical_rewrite_scenario.rewritten_plan.canon_commit_id
+    assert outcome.commit_id != historical_rewrite_scenario.old_commit_id
+    assert outcome.idempotent is False
+    assert outcome.compile_result is not None
+    assert outcome.compile_result.committed is True
+    assert _active_delta_summaries(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        2,
+    ) == ["corrected custody-only event"]
+    assert _active_delta_summaries(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        3,
+    ) == ["later accepted consequence"]
+    assert "obsolete braking event" not in _world_snapshot(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        3,
+    )
+    assert "later accepted consequence" in _world_snapshot(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        3,
+    )
+    with historical_rewrite_scenario.Session() as session:
+        old_commit = session.get(
+            CanonCommitRecord, historical_rewrite_scenario.old_commit_id
+        )
+        successor_candidate = session.get(
+            CandidateDraftRecord,
+            historical_rewrite_scenario.successor_candidate_id,
+        )
+        successor_draft = session.get(
+            ChapterDraft,
+            historical_rewrite_scenario.successor_draft_id,
+        )
+        assert old_commit is not None
+        assert old_commit.status == "superseded"
+        assert successor_candidate is not None
+        assert successor_candidate.status == "accepted"
+        assert successor_draft is not None
+        assert successor_draft.body_text == (
+            "The later accepted consequence follows the first event."
+        )
+
+
+def test_historical_rewrite_rejects_planned_candidate_without_retry_marker(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    with historical_rewrite_scenario.Session.begin() as session:
+        marker = session.scalar(
+            select(DecisionEvent)
+            .where(
+                DecisionEvent.project_id
+                == historical_rewrite_scenario.project_id,
+                DecisionEvent.chapter_number == 2,
+                DecisionEvent.event_family == "audit_action",
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+                DecisionEvent.actor_type == "api",
+            )
+            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+        )
+        if marker is not None:
+            session.delete(marker)
+
+    outcome = CanonAdmissionService(
+        session_factory=historical_rewrite_scenario.Session
+    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
+
+    assert outcome.blocked is True
+    assert outcome.stale is True
+    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
+
+
+def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    before_deltas = _active_delta_summaries(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        2,
+    )
+    before_snapshot = _world_snapshot(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        3,
+    )
+
+    def fail_after_replacement_book_state(stage: str) -> None:
+        if stage == "book_state":
+            raise RuntimeError("injected historical replacement failure")
+
+    outcome = CanonAdmissionService(
+        session_factory=historical_rewrite_scenario.Session
+    ).commit_plan(
+        historical_rewrite_scenario.rewritten_plan,
+        failure_injector=fail_after_replacement_book_state,
+    )
+
+    assert outcome.blocked is True
+    assert "injected historical replacement failure" in outcome.failure_reason
+    assert _active_delta_summaries(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        2,
+    ) == before_deltas == ["obsolete braking event"]
+    assert _world_snapshot(
+        historical_rewrite_scenario.Session,
+        historical_rewrite_scenario.project_id,
+        3,
+    ) == before_snapshot
+    with historical_rewrite_scenario.Session() as session:
+        old_commit = session.get(
+            CanonCommitRecord, historical_rewrite_scenario.old_commit_id
+        )
+        successor_candidate = session.get(
+            CandidateDraftRecord,
+            historical_rewrite_scenario.successor_candidate_id,
+        )
+        assert old_commit is not None
+        assert old_commit.status == "committed"
+        assert successor_candidate is not None
+        assert successor_candidate.status == "accepted"
 
 
 @pytest.mark.parametrize(

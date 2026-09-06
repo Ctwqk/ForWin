@@ -9,6 +9,10 @@ from sqlalchemy import select
 
 from forwin.application.read_models import build_project_detail
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.historical_rewrite import (
+    HistoricalCanonRewriteRepository,
+    HistoricalRewriteInvalid,
+)
 from forwin.api_schema import (
     CandidateDraftDetail,
     ChapterDecisionLayerInfo,
@@ -952,7 +956,9 @@ def retry_chapter_review(
     continue_requested_chapters = 0
     session = get_session()
     try:
-        project = session.get(Project, project_id)
+        project = session.execute(
+            select(Project).where(Project.id == project_id).with_for_update()
+        ).scalar_one_or_none()
         if project is None:
             raise HTTPException(404, "项目不存在")
         if project_has_active_generation_task(project_id, session=session):
@@ -975,6 +981,16 @@ def retry_chapter_review(
                 400,
                 f"第{chapter_number}章不是可 retry 状态（当前 {previous_status or 'unknown'}）",
             )
+        if previous_status == "accepted":
+            try:
+                marker = HistoricalCanonRewriteRepository(session).mark_pending(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    reason=reason,
+                )
+                marker.related_object_id = str(plan.id)
+            except HistoricalRewriteInvalid as exc:
+                raise HTTPException(409, str(exc)) from exc
         plan.status = "planned"
         plan.acceptance_mode = ""
         plan.repair_attempt_count = 0
@@ -993,23 +1009,24 @@ def retry_chapter_review(
                     derive_chapter_task_contract(cleaned_goals)
                 )
         session.add(plan)
-        log_decision_event(
-            session,
-            project_id=project_id,
-            event_family="audit_action",
-            event_type=DecisionEventType.RETRY_ATTEMPT,
-            actor_type="api",
-            scope="chapter",
-            summary=f"第{chapter_number}章 review 候选已重置为 planned，等待重写。",
-            reason=reason,
-            payload={
-                "chapter_number": chapter_number,
-                "previous_status": previous_status,
-            },
-            chapter_number=chapter_number,
-            related_object_type="chapter",
-            related_object_id=str(plan.id),
-        )
+        if previous_status != "accepted":
+            log_decision_event(
+                session,
+                project_id=project_id,
+                event_family="audit_action",
+                event_type=DecisionEventType.RETRY_ATTEMPT,
+                actor_type="api",
+                scope="chapter",
+                summary=f"第{chapter_number}章 review 候选已重置为 planned，等待重写。",
+                reason=reason,
+                payload={
+                    "chapter_number": chapter_number,
+                    "previous_status": previous_status,
+                },
+                chapter_number=chapter_number,
+                related_object_type="chapter",
+                related_object_id=str(plan.id),
+            )
         if req.continue_generation:
             workset = build_continue_generation_workset(
                 session,

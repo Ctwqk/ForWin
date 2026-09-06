@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from sqlalchemy import func, select
+import pytest
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.context.assembler_core import assemble_context
 from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.models import ArcPlanVersion, ChapterPlan
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow, WorldNodeStateRow
+from forwin.models.book_state import (
+    BookReaderExperienceDeltaRow,
+    BookReaderPromiseRow,
+    GraphDeltaPatchRow,
+    GraphDeltaRow,
+    WorldNodeStateRow,
+)
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionOverlay,
@@ -35,6 +42,223 @@ def _create_project(session, title: str = "BookState 测试") -> str:
         runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     return project.id
+
+
+@pytest.mark.parametrize("old_value", ["Genesis name", None])
+def test_historical_invalidation_restores_base_structure_or_fails_closed(
+    old_value,
+) -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="base-item",
+                project_id=project_id,
+                node_type="event",
+                name="Genesis name",
+            )
+        )
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="rename-base",
+                        project_id=project_id,
+                        chapter_number=1,
+                        node_patches=[
+                            NodePatch(
+                                node_id="base-item",
+                                node_type="event",
+                                op="set",
+                                field_path="name",
+                                old_value=old_value,
+                                new_value="Retired name",
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+        assert result.committed
+        # A non-GraphDelta row is not a Canon materialization to discard.
+        repo.create_world_node(
+            WorldNode(
+                id="external-item",
+                project_id=project_id,
+                node_type="event",
+                name="Independent material",
+                created_at_chapter=1,
+            )
+        )
+
+    if old_value is None:
+        with pytest.raises(ValueError, match="cannot restore historical base"):
+            with Session.begin() as session:
+                BookStateRepository(session).invalidate_project_range(
+                    project_id,
+                    from_chapter=1,
+                    through_chapter=1,
+                )
+        with Session() as session:
+            assert (
+                BookStateRepository(session).get_world_node("base-item").name
+                == "Retired name"
+            )
+    else:
+        with Session.begin() as session:
+            repo = BookStateRepository(session)
+            repo.invalidate_project_range(project_id, from_chapter=1, through_chapter=1)
+            assert repo.get_world_node("base-item").name == "Genesis name"
+            assert repo.get_world_node("external-item").name == "Independent material"
+    engine.dispose()
+
+
+def test_historical_invalidation_retires_reader_experience_by_delta_provenance() -> (
+    None
+):
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="old-reader-delta",
+                        project_id=project_id,
+                        chapter_number=1,
+                        metadata={
+                            "reader_experience_delta": {
+                                "reader_experience_delta_id": "retired-reader-experience",
+                                "reader_state_after": "Obsolete event",
+                            }
+                        },
+                    )
+                ],
+            )
+        )
+        assert result.committed
+        BookStateRepository(session).invalidate_project_range(
+            project_id,
+            from_chapter=1,
+            through_chapter=1,
+        )
+        assert session.scalar(select(func.count(BookReaderExperienceDeltaRow.id))) == 0
+        assert session.scalar(select(func.count(BookReaderPromiseRow.id))) == 0
+    engine.dispose()
+
+
+def test_historical_invalidation_rejects_recreated_base_identity() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        for chapter, name in ((0, "Genesis event"), (1, "Overwritten event")):
+            result = BookStateCompiler(session).compile(
+                ApprovedGraphDeltaSet(
+                    project_id=project_id,
+                    chapter_number=chapter,
+                    graph_deltas=[
+                        GraphDelta(
+                            id=f"create-shared-{chapter}",
+                            project_id=project_id,
+                            chapter_number=chapter,
+                            node_patches=[
+                                NodePatch(
+                                    node_id="shared-event",
+                                    node_type="event",
+                                    op="create",
+                                    new_value={
+                                        "id": "shared-event",
+                                        "project_id": project_id,
+                                        "node_type": "event",
+                                        "name": name,
+                                    },
+                                )
+                            ],
+                        )
+                    ],
+                )
+            )
+            assert result.committed
+    with pytest.raises(ValueError, match="cannot restore historical base"):
+        with Session.begin() as session:
+            BookStateRepository(session).invalidate_project_range(
+                project_id,
+                from_chapter=1,
+                through_chapter=1,
+            )
+    with Session() as session:
+        assert BookStateRepository(session).get_world_node("shared-event") is not None
+    engine.dispose()
+
+
+def test_historical_invalidation_rejects_unversioned_base_promise_metadata() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        for chapter, patch in (
+            (
+                0,
+                {
+                    "promise_id": "base-promise",
+                    "op": "create",
+                    "new_value": {"status": "open"},
+                },
+            ),
+            (
+                1,
+                {
+                    "promise_id": "base-promise",
+                    "op": "set",
+                    "field_path": "status",
+                    "old_value": "open",
+                    "new_value": "resolved",
+                    "evidence_refs": ["obsolete-event"],
+                },
+            ),
+        ):
+            result = BookStateCompiler(session).compile(
+                ApprovedGraphDeltaSet(
+                    project_id=project_id,
+                    chapter_number=chapter,
+                    graph_deltas=[
+                        GraphDelta(
+                            id=f"promise-delta-{chapter}",
+                            project_id=project_id,
+                            chapter_number=chapter,
+                            metadata={"reader_promise_patches": [patch]},
+                        )
+                    ],
+                )
+            )
+            assert result.committed
+    with pytest.raises(ValueError, match="cannot restore historical base"):
+        with Session.begin() as session:
+            BookStateRepository(session).invalidate_project_range(
+                project_id,
+                from_chapter=1,
+                through_chapter=1,
+            )
+    with Session() as session:
+        promise = BookStateRepository(session).list_reader_promises_native(project_id)[
+            0
+        ]
+        assert promise.status == "resolved"
+        assert "obsolete-event" in promise.source_refs
+    engine.dispose()
 
 
 def test_repository_roundtrip_loads_runtime_with_map_and_cognition() -> None:

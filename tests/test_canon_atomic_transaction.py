@@ -367,6 +367,7 @@ def _prepare_chapter_candidate(
                             "node_type": "event",
                             "name": delta_summary,
                             "description": delta_summary,
+                            "state": {"event": delta_summary},
                         },
                     )
                 ],
@@ -635,7 +636,9 @@ def test_historical_rewrite_replaces_old_delta_and_replays_later_accepted_deltas
     ).commit_plan(historical_rewrite_scenario.rewritten_plan)
 
     assert outcome.blocked is False, outcome.failure_reason
-    assert outcome.commit_id == historical_rewrite_scenario.rewritten_plan.canon_commit_id
+    assert (
+        outcome.commit_id == historical_rewrite_scenario.rewritten_plan.canon_commit_id
+    )
     assert outcome.commit_id != historical_rewrite_scenario.old_commit_id
     assert outcome.idempotent is False
     assert outcome.compile_result is not None
@@ -674,12 +677,50 @@ def test_historical_rewrite_replaces_old_delta_and_replays_later_accepted_deltas
         )
         assert old_commit is not None
         assert old_commit.status == "superseded"
+        assert session.get(WorldNodeRow, "event-obsolete-braking") is None
+        assert session.get(WorldNodeRow, "event-base") is not None
+        assert old_commit.chapter_number < 0
+        old_result = json.loads(old_commit.result_json)
+        assert old_result["original_chapter_number"] == 2
+        assert old_result["superseded_by_commit_id"] == outcome.commit_id
+        assert old_result["retired_graph_delta_ids"] == ["delta-obsolete-braking"]
+        marker = _rewrite_marker(session, historical_rewrite_scenario.project_id, 2)
+        assert marker["replacement_commit_id"] == outcome.commit_id
+        successor_commit = session.scalar(
+            select(CanonCommitRecord).where(
+                CanonCommitRecord.project_id == historical_rewrite_scenario.project_id,
+                CanonCommitRecord.chapter_number == 3,
+            )
+        )
+        assert (
+            session.get(WorldSnapshotRow, successor_commit.world_snapshot_id)
+            is not None
+        )
+        assert "corrected custody-only event" in _world_snapshot(
+            historical_rewrite_scenario.Session,
+            historical_rewrite_scenario.project_id,
+            3,
+        )
         assert successor_candidate is not None
         assert successor_candidate.status == "accepted"
         assert successor_draft is not None
         assert successor_draft.body_text == (
             "The later accepted consequence follows the first event."
         )
+        previous_candidate = session.get(CandidateDraftRecord, old_commit.candidate_id)
+        previous_plan = CanonCommitPlan.model_validate_json(
+            previous_candidate.canon_commit_plan_json
+        )
+    repeated = CanonAdmissionService(
+        session_factory=historical_rewrite_scenario.Session
+    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
+    assert repeated.idempotent is True
+    assert repeated.commit_id == outcome.commit_id
+    obsolete_retry = CanonAdmissionService(
+        session_factory=historical_rewrite_scenario.Session
+    ).commit_plan(previous_plan)
+    assert obsolete_retry.stale is True
+    assert "superseded" in obsolete_retry.failure_reason
 
 
 def test_historical_rewrite_rejects_planned_candidate_without_retry_marker(
@@ -689,8 +730,7 @@ def test_historical_rewrite_rejects_planned_candidate_without_retry_marker(
         marker = session.scalar(
             select(DecisionEvent)
             .where(
-                DecisionEvent.project_id
-                == historical_rewrite_scenario.project_id,
+                DecisionEvent.project_id == historical_rewrite_scenario.project_id,
                 DecisionEvent.chapter_number == 2,
                 DecisionEvent.event_family == "audit_action",
                 DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
@@ -710,8 +750,10 @@ def test_historical_rewrite_rejects_planned_candidate_without_retry_marker(
     assert "historical rewrite marker missing or invalid" in outcome.failure_reason
 
 
+@pytest.mark.parametrize("failure_stage", ["book_state", "outbox"])
 def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
     historical_rewrite_scenario: HistoricalRewriteScenario,
+    failure_stage: str,
 ) -> None:
     before_deltas = _active_delta_summaries(
         historical_rewrite_scenario.Session,
@@ -725,7 +767,7 @@ def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
     )
 
     def fail_after_replacement_book_state(stage: str) -> None:
-        if stage == "book_state":
+        if stage == failure_stage:
             raise RuntimeError("injected historical replacement failure")
 
     outcome = CanonAdmissionService(
@@ -737,16 +779,23 @@ def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
 
     assert outcome.blocked is True
     assert "injected historical replacement failure" in outcome.failure_reason
-    assert _active_delta_summaries(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        2,
-    ) == before_deltas == ["obsolete braking event"]
-    assert _world_snapshot(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        3,
-    ) == before_snapshot
+    assert (
+        _active_delta_summaries(
+            historical_rewrite_scenario.Session,
+            historical_rewrite_scenario.project_id,
+            2,
+        )
+        == before_deltas
+        == ["obsolete braking event"]
+    )
+    assert (
+        _world_snapshot(
+            historical_rewrite_scenario.Session,
+            historical_rewrite_scenario.project_id,
+            3,
+        )
+        == before_snapshot
+    )
     with historical_rewrite_scenario.Session() as session:
         old_commit = session.get(
             CanonCommitRecord, historical_rewrite_scenario.old_commit_id
@@ -759,6 +808,75 @@ def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
         assert old_commit.status == "committed"
         assert successor_candidate is not None
         assert successor_candidate.status == "accepted"
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_historical_rewrite_backfills_only_an_unambiguous_accepted_api_retry(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    ambiguous: bool,
+) -> None:
+    scenario = historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        event = session.scalar(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == scenario.project_id,
+                DecisionEvent.chapter_number == 2,
+                DecisionEvent.actor_type == "api",
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            )
+        )
+        payload = json.loads(event.payload_json)
+        payload.pop("previous_commit_id", None)
+        event.payload_json = json.dumps(payload)
+        if ambiguous:
+            session.add(
+                DecisionEvent(
+                    project_id=scenario.project_id,
+                    chapter_number=2,
+                    actor_type="api",
+                    event_family="audit_action",
+                    event_type=DecisionEventType.RETRY_ATTEMPT,
+                    payload_json=event.payload_json,
+                )
+            )
+
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    if ambiguous:
+        assert outcome.stale is True
+        assert "historical rewrite marker missing or invalid" in outcome.failure_reason
+    else:
+        assert outcome.blocked is False, outcome.failure_reason
+        with scenario.Session() as session:
+            marker = _rewrite_marker(session, scenario.project_id, 2)
+            assert marker["previous_commit_id"] == scenario.old_commit_id
+            assert marker["replacement_commit_id"] == outcome.commit_id
+
+
+@pytest.mark.parametrize("marker_value", ["wrong-commit", None, ""])
+def test_historical_rewrite_does_not_repair_an_invalid_marker(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    marker_value: str | None,
+) -> None:
+    scenario = historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        event = session.scalar(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == scenario.project_id,
+                DecisionEvent.chapter_number == 2,
+                DecisionEvent.actor_type == "api",
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            )
+        )
+        payload = json.loads(event.payload_json)
+        payload["previous_commit_id"] = marker_value
+        event.payload_json = json.dumps(payload)
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    assert outcome.stale is True
+    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
 
 
 @pytest.mark.parametrize(

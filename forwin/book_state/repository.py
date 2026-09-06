@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import NarrativeControlGraph
+from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.map.models import MapEdgeRow, MapNodeRow
 from forwin.models.book_state import (
@@ -788,6 +789,354 @@ class BookStateRepository:
             allowed_for_canon=bool(getattr(row, "allowed_for_canon", True)),
             metadata=_loads(row.metadata_json, {}),
         )
+
+    def retire_chapter_deltas(self, project_id: str, chapter_number: int) -> list[str]:
+        """Remove only the replaced chapter's ledger contribution in this transaction."""
+        delta_ids = list(
+            self.session.scalars(
+                select(GraphDeltaRow.id)
+                .where(
+                    GraphDeltaRow.project_id == project_id,
+                    GraphDeltaRow.chapter_number == chapter_number,
+                )
+                .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+            )
+        )
+        for model in (GraphDeltaPatchRow, CognitionOverlayPatchRow):
+            self.session.execute(
+                delete(model).where(
+                    model.project_id == project_id,
+                    model.delta_id.in_(delta_ids),
+                )
+            )
+        self.session.execute(
+            delete(GraphDeltaRow).where(
+                GraphDeltaRow.project_id == project_id,
+                GraphDeltaRow.id.in_(delta_ids),
+            )
+        )
+        self.session.flush()
+        return delta_ids
+
+    def invalidate_project_range(
+        self,
+        project_id: str,
+        *,
+        from_chapter: int,
+        through_chapter: int,
+    ) -> None:
+        """Discard range materializations while retaining the GraphDelta log."""
+        deltas = self.list_graph_deltas(
+            project_id,
+            after_chapter=from_chapter - 1,
+            through_chapter=through_chapter,
+        )
+        self._rewind_materialized_rows(project_id, deltas, from_chapter=from_chapter)
+        for model, chapter_field in (
+            (WorldSnapshotRow, WorldSnapshotRow.as_of_chapter),
+            (MapSnapshotRow, MapSnapshotRow.as_of_chapter),
+            (BookCognitionSnapshotRow, BookCognitionSnapshotRow.as_of_chapter),
+            (CognitionOverlayRow, CognitionOverlayRow.as_of_chapter),
+        ):
+            self.session.execute(
+                delete(model).where(
+                    model.project_id == project_id,
+                    chapter_field >= from_chapter,
+                    chapter_field <= through_chapter,
+                )
+            )
+        delta_ids = {delta.id for delta in deltas}
+        self.session.execute(
+            delete(WorldNodeStateRow).where(
+                WorldNodeStateRow.project_id == project_id,
+                WorldNodeStateRow.source_delta_id.in_(delta_ids),
+            )
+        )
+        experience_ids = {
+            payload["reader_experience_delta_id"]
+            for delta in deltas
+            if isinstance(
+                payload := delta.metadata.get("reader_experience_delta"), dict
+            )
+            and payload.get("reader_experience_delta_id")
+        }
+        self.session.execute(
+            delete(BookReaderExperienceDeltaRow).where(
+                BookReaderExperienceDeltaRow.project_id == project_id,
+                BookReaderExperienceDeltaRow.reader_experience_delta_id.in_(
+                    experience_ids
+                ),
+            )
+        )
+        self.session.flush()
+
+    def _rewind_materialized_rows(
+        self,
+        project_id: str,
+        deltas: list[GraphDelta],
+        *,
+        from_chapter: int,
+    ) -> None:
+        """Use patch provenance, since legacy creates may have chapter zero metadata."""
+        bindings = {
+            "node": (WorldNodeRow, _world_node_from_row, self.create_world_node),
+            "edge": (WorldEdgeRow, _world_edge_from_row, self.create_world_edge),
+            "fact": (FactNodeRow, _fact_node_from_row, self.create_fact_node),
+            "map_node": (MapNodeRow, _map_node_from_row, self.create_map_node),
+            "map_edge": (MapEdgeRow, _map_edge_from_row, self.create_map_edge),
+            "narrative_node": (
+                NarrativeNodeRow,
+                _narrative_node_from_row,
+                self.create_narrative_node,
+            ),
+            "narrative_edge": (
+                NarrativeEdgeRow,
+                _narrative_edge_from_row,
+                self.create_narrative_edge,
+            ),
+            "reader_promise": (
+                BookReaderPromiseRow,
+                _reader_promise_from_row,
+                self.upsert_reader_promise,
+            ),
+        }
+        patches: list[tuple[str, str, dict]] = []
+        for delta in deltas:
+            patches.extend(
+                ("node", patch.node_id, patch.model_dump(mode="json"))
+                for patch in delta.node_patches
+            )
+            patches.extend(
+                ("edge", patch.edge_id, patch.model_dump(mode="json"))
+                for patch in delta.edge_patches
+            )
+            patches.extend(
+                ("fact", patch.fact_id, patch.model_dump(mode="json"))
+                for patch in delta.fact_patches
+            )
+            patches.extend(
+                (patch.target_type, patch.target_id, patch.model_dump(mode="json"))
+                for patch in delta.map_patches
+            )
+            for patch in delta.narrative_patches:
+                if patch.op == "create":
+                    kind, _, target_id = patch.target_ref.partition(":")
+                    if not target_id:
+                        target_id = patch.target_ref
+                    patches.append(
+                        (
+                            "narrative_edge"
+                            if kind == "narrative_edge"
+                            else "narrative_node",
+                            target_id,
+                            patch.model_dump(mode="json"),
+                        )
+                    )
+            for patch in delta.metadata.get("reader_promise_patches", []):
+                patches.append(
+                    ("reader_promise", str(patch.get("promise_id") or ""), patch)
+                )
+            experience = delta.metadata.get("reader_experience_delta")
+            if isinstance(experience, dict):
+                promise_id = str(
+                    experience.get("promise_id")
+                    or f"promise:{experience.get('reader_experience_delta_id')}"
+                )
+                patches.append(("reader_promise", promise_id, {"op": "create"}))
+        created = {
+            (kind, target)
+            for kind, target, patch in patches
+            if patch.get("op") == "create"
+        }
+        prior_refs = set(
+            self.session.scalars(
+                select(GraphDeltaPatchRow.target_ref).where(
+                    GraphDeltaPatchRow.project_id == project_id,
+                    GraphDeltaPatchRow.chapter_number < from_chapter,
+                )
+            )
+        )
+        prior_world = self.latest_world_snapshot(project_id, from_chapter - 1)
+        if prior_world is not None:
+            prior_refs.update(
+                f"node:{target}" for target in prior_world.world_node_state_index
+            )
+            prior_refs.update(
+                f"edge:{target}" for target in prior_world.active_edge_ids
+            )
+            prior_refs.update(
+                f"fact:{target}" for target in prior_world.active_fact_ids
+            )
+        prior_map = self.latest_map_snapshot(project_id, from_chapter - 1)
+        if prior_map is not None:
+            prior_refs.update(
+                f"map_node:{target}" for target in prior_map.map_node_index
+            )
+            prior_refs.update(
+                f"map_edge:{target}" for target in prior_map.map_edge_index
+            )
+        for delta in self.list_graph_deltas(
+            project_id, through_chapter=from_chapter - 1
+        ):
+            for patch in delta.metadata.get("reader_promise_patches", []):
+                prior_refs.add(f"reader_promise:{patch.get('promise_id')}")
+            experience = delta.metadata.get("reader_experience_delta")
+            if isinstance(experience, dict):
+                promise_id = str(
+                    experience.get("promise_id")
+                    or f"promise:{experience.get('reader_experience_delta_id')}"
+                )
+                prior_refs.add(f"reader_promise:{promise_id}")
+        if collisions := sorted(
+            f"{kind}:{target}"
+            for kind, target in created
+            if f"{kind}:{target}" in prior_refs
+        ):
+            raise ValueError(
+                f"cannot restore historical base: recreated identities {collisions}"
+            )
+        # Structural base rows are overwritten in place; snapshots only retain
+        # world state. Undo their field changes before compiling against the base.
+        for kind, target, patch in reversed(patches):
+            if (kind, target) in created:
+                continue
+            if kind == "reader_promise":
+                # Promise compilation also appends evidence and overwrites source
+                # metadata, for which field-level old_value is not a before-image.
+                raise ValueError(
+                    f"cannot restore historical base reader_promise:{target}: "
+                    "unversioned evidence and metadata"
+                )
+            field_path = str(patch.get("field_path") or "")
+            if kind == "node" and (
+                field_path == "state" or field_path.startswith("state.")
+            ):
+                continue
+            if patch.get("op") == "deactivate":
+                field_path = "is_active"
+            if kind == "fact" and not field_path:
+                field_path = "state"
+            if kind not in bindings or not field_path or patch.get("old_value") is None:
+                raise ValueError(
+                    f"cannot restore historical base {kind}:{target}:{field_path}"
+                )
+            model, decode, persist = bindings[kind]
+            key_column = model.promise_id if kind == "reader_promise" else model.id
+            row = self.session.scalar(
+                select(model).where(
+                    model.project_id == project_id,
+                    key_column == target,
+                )
+            )
+            if row is None:
+                raise ValueError(
+                    f"cannot restore historical base {kind}:{target}: missing row"
+                )
+            value = decode(row)
+            payload = value.model_dump(mode="json")
+            apply_path_patch(payload, field_path, patch["old_value"])
+            persist(type(value).model_validate(payload))
+        for kind, target in created:
+            if kind not in bindings:
+                raise ValueError(f"cannot restore historical base {kind}:{target}")
+            model = bindings[kind][0]
+            key_column = model.promise_id if kind == "reader_promise" else model.id
+            self.session.execute(
+                delete(model).where(
+                    model.project_id == project_id,
+                    key_column == target,
+                )
+            )
+
+    def rebuild_project_range(
+        self,
+        project_id: str,
+        *,
+        from_chapter: int,
+        through_chapter: int,
+    ) -> list[int]:
+        """Replay retained accepted successors without re-inserting their ledger or drafts."""
+        from forwin.book_state.compiler import BookStateCompiler
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.models.project import ChapterPlan
+
+        compiler = BookStateCompiler(self.session)
+        runtime = compiler.projection.load_runtime_as_of(
+            project_id,
+            as_of_chapter=max(from_chapter - 1, 0),
+        )
+        deltas_by_chapter: dict[int, list[GraphDelta]] = {}
+        for delta in self.list_graph_deltas(
+            project_id,
+            after_chapter=from_chapter - 1,
+            through_chapter=through_chapter,
+        ):
+            deltas_by_chapter.setdefault(delta.chapter_number, []).append(delta)
+        commits = list(
+            self.session.scalars(
+                select(CanonCommitRecord)
+                .join(
+                    ChapterPlan,
+                    (ChapterPlan.project_id == CanonCommitRecord.project_id)
+                    & (ChapterPlan.chapter_number == CanonCommitRecord.chapter_number),
+                )
+                .where(
+                    CanonCommitRecord.project_id == project_id,
+                    CanonCommitRecord.chapter_number >= from_chapter,
+                    CanonCommitRecord.chapter_number <= through_chapter,
+                    CanonCommitRecord.status == "committed",
+                    ChapterPlan.status == "accepted",
+                )
+                .order_by(CanonCommitRecord.chapter_number)
+            )
+        )
+        if set(deltas_by_chapter) - {commit.chapter_number for commit in commits}:
+            raise ValueError(
+                "historical rewrite successor deltas lack an accepted Canon commit"
+            )
+        replayed = []
+        for commit in commits:
+            deltas = deltas_by_chapter.get(commit.chapter_number, [])
+            for delta in deltas:
+                compiler.projection.apply_delta_to_runtime(runtime, delta)
+            for delta in deltas:
+                compiler._persist_delta_side_effects(runtime, delta)
+            world, map_snapshot, cognition = compiler.projection.persist_snapshots(
+                runtime,
+                as_of_chapter=commit.chapter_number,
+                as_of_story_time=next(
+                    (
+                        delta.story_time
+                        for delta in reversed(deltas)
+                        if delta.story_time
+                    ),
+                    "",
+                ),
+                source_delta_ids=[delta.id for delta in deltas],
+                active_world_line_ids=list(
+                    dict.fromkeys(
+                        delta.world_line_id for delta in deltas if delta.world_line_id
+                    )
+                ),
+            )
+            commit.world_snapshot_id = world.id
+            commit.map_snapshot_id = map_snapshot.id
+            result = _loads(commit.result_json, {})
+            if isinstance(result.get("compile_result"), dict):
+                result["compile_result"].update(
+                    {
+                        "world_snapshot_id": world.id,
+                        "map_snapshot_id": map_snapshot.id,
+                        "cognition_snapshot_ids": [
+                            snapshot.id for snapshot in cognition
+                        ],
+                    }
+                )
+                commit.result_json = _dump(result)
+            runtime.as_of_chapter = commit.chapter_number
+            replayed.append(commit.chapter_number)
+        self.session.flush()
+        return replayed
 
     # ------------------------------------------------------------------
     # Runtime loading

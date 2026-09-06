@@ -31,6 +31,7 @@ from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileRe
 from forwin.runtime.policy_store import ProjectPolicyStore
 
 from .entity_admission import EntityAdmissionCommitter
+from .historical_rewrite import HistoricalCanonRewriteService, HistoricalRewriteInvalid
 from .plan import CanonCommitPlan
 from .types import CanonAdmissionOutcome, CanonWorldEditOutcome
 
@@ -87,6 +88,8 @@ class CanonAdmissionService:
                     .with_for_update()
                 ).scalar_one_or_none()
                 if prior is not None:
+                    if prior.status == "superseded":
+                        raise CanonStaleVersion("Canon commit has been superseded")
                     return _outcome_from_record(prior, idempotent=True)
 
                 self._require_previous_post_canon_barrier(
@@ -115,6 +118,16 @@ class CanonAdmissionService:
                     .where(CandidateDraftRecord.id == plan.candidate_id)
                     .with_for_update()
                 ).scalar_one_or_none()
+                rewrite = None
+                try:
+                    if chapter is not None and chapter.status != "accepted":
+                        rewrite = HistoricalCanonRewriteService(
+                            session
+                        ).prepare_replacement(plan)
+                except HistoricalRewriteInvalid as exc:
+                    raise CanonStaleVersion(str(exc)) from exc
+                if rewrite is not None:
+                    rewrite.retire_old_contribution()
                 self._revalidate_locked_plan(
                     session=session,
                     project=project,
@@ -140,6 +153,8 @@ class CanonAdmissionService:
                     raise CanonStaleVersion(
                         "BookState deltas already exist without a Canon commit record"
                     )
+                if rewrite is not None:
+                    rewrite.rebuild_successor_projections()
                 session.flush()
                 inject("book_state")
 
@@ -216,6 +231,13 @@ class CanonAdmissionService:
                     "commit_id": commit_id,
                     "compile_result": compile_result.model_dump(mode="json"),
                 }
+                if rewrite is not None:
+                    rewrite.mark_prior_commit_superseded()
+                    result_payload["historical_rewrite"] = {
+                        "superseded_commit_id": rewrite.previous.id,
+                        "retired_delta_ids": rewrite.retired_delta_ids,
+                        "replayed_chapters": rewrite.replayed_chapters,
+                    }
                 session.add(
                     CanonCommitRecord(
                         id=commit_id,

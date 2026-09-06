@@ -5,8 +5,10 @@
 set -euo pipefail
 
 readonly IMAGE='forwin-forwin:compat-24a477b'
-readonly DOCKER_CONTEXT="${FORWIN_DOCKER_CONTEXT:-colima-swarmbridged}"
+readonly BUILD_DOCKER_CONTEXT="${FORWIN_BUILD_DOCKER_CONTEXT:-colima-swarmbridged}"
+readonly SERVICE_DOCKER_CONTEXT="${FORWIN_SERVICE_DOCKER_CONTEXT:-swarm-manager-150}"
 readonly LAYER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TARGET_NODE_HOSTNAME='colima-swarmbridged'
 readonly -a TARGET_SERVICES=(
   forwin-app-swarm
   forwin-mcp-swarm
@@ -26,20 +28,41 @@ if [[ "${FORWIN_COMPAT_DEPLOY_APPROVED:-}" != '1' ]]; then
   exit 64
 fi
 
-docker_cmd() {
-  docker --context "$DOCKER_CONTEXT" "$@"
+service_docker_cmd() {
+  docker --context "$SERVICE_DOCKER_CONTEXT" "$@"
 }
 
 service_image() {
-  docker_cmd service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$1"
+  service_docker_cmd service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' "$1"
 }
 
 service_replicas() {
-  docker_cmd service inspect --format '{{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{else}}0{{end}}' "$1"
+  service_docker_cmd service inspect --format '{{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{else}}0{{end}}' "$1"
 }
 
 require_service() {
-  docker_cmd service inspect "$1" >/dev/null
+  service_docker_cmd service inspect "$1" >/dev/null
+}
+
+require_manager_context() {
+  local control_available
+  control_available="$(service_docker_cmd info --format '{{.Swarm.ControlAvailable}}')"
+  if [[ "$control_available" != 'true' ]]; then
+    printf 'service Docker context %s is not a Swarm manager\n' "$SERVICE_DOCKER_CONTEXT" >&2
+    return 1
+  fi
+}
+
+require_target_placement() {
+  local service constraints normalized expected
+  service="$1"
+  expected="node.hostname==${TARGET_NODE_HOSTNAME}"
+  constraints="$(service_docker_cmd service inspect --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{printf \"%s\\n\" .}}{{end}}' "$service")"
+  normalized="$(printf '%s\n' "$constraints" | tr -d '[:space:]')"
+  if ! printf '%s\n' "$normalized" | grep -Fxq "$expected"; then
+    printf 'target %s is not constrained to %s\n' "$service" "$expected" >&2
+    return 1
+  fi
 }
 
 is_expected_image() {
@@ -59,20 +82,20 @@ wait_for_convergence() {
     return 1
   fi
   while (( elapsed <= MAX_WAIT_SECONDS )); do
-    running="$(docker_cmd service ps --filter desired-state=running --format '{{.CurrentState}}' "$service" | awk '/^Running/{count++} END{print count+0}')"
+    running="$(service_docker_cmd service ps --filter desired-state=running --format '{{.CurrentState}}' "$service" | awk '/^Running/{count++} END{print count+0}')"
     if [[ "$running" -eq "$expected" ]]; then
       return 0
     fi
-    if docker_cmd service ps --no-trunc "$service" | grep -Eq 'Rejected|Failed'; then
+    if service_docker_cmd service ps --no-trunc "$service" | grep -Eq 'Rejected|Failed'; then
       printf 'service %s has a failed task:\n' "$service" >&2
-      docker_cmd service ps --no-trunc "$service" >&2
+      service_docker_cmd service ps --no-trunc "$service" >&2
       return 1
     fi
     sleep "$POLL_SECONDS"
     ((elapsed += POLL_SECONDS))
   done
   printf 'service %s did not converge within %ss:\n' "$service" "$MAX_WAIT_SECONDS" >&2
-  docker_cmd service ps --no-trunc "$service" >&2
+  service_docker_cmd service ps --no-trunc "$service" >&2
   return 1
 }
 
@@ -91,7 +114,7 @@ rollback_attempted_targets() {
     "${attempted_indexes[*]}" >&2
   for index in "${attempted_indexes[@]}"; do
     service="${TARGET_SERVICES[$index]}"
-    if ! docker_cmd service update --detach=false --image "${target_before[$index]}" "$service"; then
+    if ! service_docker_cmd service update --detach=false --resolve-image never --image "${target_before[$index]}" "$service"; then
       printf 'rollback update failed for %s\n' "$service" >&2
       rollback_failed=1
       continue
@@ -120,12 +143,14 @@ on_error() {
 
 trap on_error ERR
 
-# All existence and image-availability checks complete before the first update.
-FORWIN_DOCKER_CONTEXT="$DOCKER_CONTEXT" "$LAYER_DIR/build_compat_image.sh"
-docker_cmd image inspect "$IMAGE" >/dev/null
+# Build and inspect the image only in the worker context. Service inspection
+# and every mutation use the separate Swarm-manager context.
+FORWIN_BUILD_DOCKER_CONTEXT="$BUILD_DOCKER_CONTEXT" "$LAYER_DIR/build_compat_image.sh"
+require_manager_context
 for index in "${!TARGET_SERVICES[@]}"; do
   service="${TARGET_SERVICES[$index]}"
   require_service "$service"
+  require_target_placement "$service"
   target_before[$index]="$(service_image "$service")"
 done
 for index in "${!PROTECTED_SERVICES[@]}"; do
@@ -139,7 +164,7 @@ for index in "${!TARGET_SERVICES[@]}"; do
   # Include a target before attempting its update: Swarm may have accepted a
   # partial spec change even when the client reports an error.
   attempted_indexes+=("$index")
-  docker_cmd service update --detach=false --image "$IMAGE" "$service"
+  service_docker_cmd service update --detach=false --resolve-image never --image "$IMAGE" "$service"
   actual="$(service_image "$service")"
   if ! is_expected_image "$actual"; then
     printf 'unexpected image for %s: %s\n' "$service" "$actual" >&2

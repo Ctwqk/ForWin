@@ -22,18 +22,29 @@ done
 cat >"$test_dir/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+context=''
 if [[ "${1:-}" == '--context' ]]; then
+  context="$2"
   shift 2
 fi
 case "${1:-}" in
   build)
+    [[ "$context" == 'fake-worker' ]]
     exit 0
     ;;
   image)
+    [[ "$context" == 'fake-worker' ]]
     [[ "${2:-}" == 'inspect' ]]
     exit 0
     ;;
+  info)
+    [[ "$context" == 'fake-manager' ]]
+    [[ "${2:-}" == '--format' ]]
+    printf 'true\n'
+    exit 0
+    ;;
   service)
+    [[ "$context" == 'fake-manager' ]]
     subcommand="${2:-}"
     shift 2
     case "$subcommand" in
@@ -43,6 +54,8 @@ case "${1:-}" in
           service="$3"
           if [[ "$format" == *'Replicas'* ]]; then
             printf '1\n'
+          elif [[ "$format" == *'Placement.Constraints'* ]]; then
+            printf 'node.hostname==colima-swarmbridged\n'
           elif [[ "$format" == *'ContainerSpec.Image'* ]]; then
             image="$(cat "$FORWIN_FAKE_STATE/$service")"
             if [[ "$service" == 'forwin-mcp-swarm' && "$image" == 'forwin-forwin:compat-24a477b' ]]; then
@@ -60,7 +73,7 @@ case "${1:-}" in
         service=''
         while (($#)); do
           case "$1" in
-            --detach=false)
+            --detach=false|--resolve-image|never)
               shift
               ;;
             --image)
@@ -92,7 +105,8 @@ chmod 755 "$test_dir/bin/docker"
 set +e
 PATH="$test_dir/bin:$PATH" \
 FORWIN_FAKE_STATE="$test_dir/state" \
-FORWIN_DOCKER_CONTEXT='fake-swarm' \
+FORWIN_BUILD_DOCKER_CONTEXT='fake-worker' \
+FORWIN_SERVICE_DOCKER_CONTEXT='fake-manager' \
 FORWIN_COMPAT_DEPLOY_APPROVED=1 \
 "$LAYER_DIR/deploy_compat_services.sh" >"$test_dir/output" 2>&1
 status=$?

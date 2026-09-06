@@ -114,7 +114,7 @@ rollback_attempted_targets() {
     "${attempted_indexes[*]}" >&2
   for index in "${attempted_indexes[@]}"; do
     service="${TARGET_SERVICES[$index]}"
-    if ! service_docker_cmd service update --detach=false --resolve-image never --image "${target_before[$index]}" "$service"; then
+    if ! service_docker_cmd service update --detach=false --no-resolve-image --image "${target_before[$index]}" "$service"; then
       printf 'rollback update failed for %s\n' "$service" >&2
       rollback_failed=1
       continue
@@ -164,7 +164,7 @@ for index in "${!TARGET_SERVICES[@]}"; do
   # Include a target before attempting its update: Swarm may have accepted a
   # partial spec change even when the client reports an error.
   attempted_indexes+=("$index")
-  service_docker_cmd service update --detach=false --resolve-image never --image "$IMAGE" "$service"
+  service_docker_cmd service update --detach=false --no-resolve-image --image "$IMAGE" "$service"
   actual="$(service_image "$service")"
   if ! is_expected_image "$actual"; then
     printf 'unexpected image for %s: %s\n' "$service" "$actual" >&2

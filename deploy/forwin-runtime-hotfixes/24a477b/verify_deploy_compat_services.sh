@@ -73,7 +73,7 @@ case "${1:-}" in
         service=''
         while (($#)); do
           case "$1" in
-            --detach=false|--resolve-image|never)
+            --detach=false|--no-resolve-image)
               shift
               ;;
             --image)

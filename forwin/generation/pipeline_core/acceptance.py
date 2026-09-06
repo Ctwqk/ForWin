@@ -64,6 +64,8 @@ class AcceptanceStage:
             if candidate is None or candidate.candidate_draft_id != latest_draft.id:
                 raise ValueError(f"第{chapter_number}章缺少 v5 candidate record")
 
+            artifact_path = latest_draft.llm_raw_response
+            writer_output = self._load_writer_output_from_meta(artifact_path)
             if candidate.status == "failed":
                 reopen_failed_historical_candidate_for_review(
                     session,
@@ -72,11 +74,12 @@ class AcceptanceStage:
                     candidate_id=candidate.id,
                     draft_id=latest_draft.id,
                     review_id=latest_review.id,
+                    actor_type=actor_type,
+                    source=source,
+                    writer_output=writer_output,
+                    artifact_path=artifact_path,
                 )
 
-            writer_output = self._load_writer_output_from_meta(
-                latest_draft.llm_raw_response
-            )
             verdict = self._load_review_verdict(latest_review)
             repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)
             residual_issues = self._review_issue_payloads(verdict)

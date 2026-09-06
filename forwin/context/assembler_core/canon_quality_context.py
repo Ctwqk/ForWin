@@ -108,6 +108,11 @@ def _build_canon_quality_context(
                 project_id=project_id,
                 before_chapter=int(chapter_number or 0),
             ),
+            *_accepted_future_chapter_anchor_constraints(
+                session=session,
+                project_id=project_id,
+                chapter_number=int(chapter_number or 0),
+            ),
         ]
         latest_custody_by_character: dict[str, dict[str, Any]] = {}
         for transition in repo.list_character_transitions(
@@ -267,6 +272,66 @@ def _invariant_constraints_from_countdowns(countdown_constraints: list[dict[str,
             }
         )
     return result
+
+
+def _accepted_future_chapter_anchor_constraints(
+    *,
+    session,
+    project_id: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    """Keep a historical rewrite compatible with the nearest accepted canon."""
+
+    rows = session.execute(
+        select(ChapterPlan, ChapterDraft)
+        .join(
+            CandidateDraftRecord,
+            CandidateDraftRecord.chapter_plan_id == ChapterPlan.id,
+        )
+        .join(
+            ChapterDraft,
+            ChapterDraft.id == CandidateDraftRecord.candidate_draft_id,
+        )
+        .where(
+            ChapterPlan.project_id == project_id,
+            ChapterPlan.status == "accepted",
+            CandidateDraftRecord.status == "accepted",
+            ChapterPlan.chapter_number > int(chapter_number or 0),
+        )
+        .order_by(ChapterPlan.chapter_number.asc())
+        .limit(3)
+    ).all()
+    anchors: list[dict[str, Any]] = []
+    for plan, draft in rows:
+        accepted_chapter = int(plan.chapter_number or 0)
+        if accepted_chapter <= 0:
+            continue
+        anchors.append(
+            {
+                "invariant_key": f"accepted_future_chapter:{accepted_chapter}",
+                "kind": "accepted_future_anchor",
+                "subject_key": f"chapter:{accepted_chapter}",
+                "label": f"第{accepted_chapter}章已接受结果",
+                "current_value": {
+                    "chapter_number": accepted_chapter,
+                    "title": str(plan.title or "").strip(),
+                    "summary": str(draft.summary or "").strip(),
+                },
+                "status": "accepted",
+                "latest_chapter": accepted_chapter,
+                "constraints": {
+                    "immutable_definition": True,
+                    "historical_rewrite_anchor": True,
+                    "must_remain_compatible": True,
+                },
+                "evidence_refs": [
+                    f"accepted_chapter:{accepted_chapter}",
+                    f"candidate_draft:{CandidateDraftRecord.__name__}:{accepted_chapter}",
+                ],
+                "source": "accepted_future_chapter",
+            }
+        )
+    return anchors
 
 
 def _book_state_rule_invariant_constraints(

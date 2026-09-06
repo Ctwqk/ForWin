@@ -242,12 +242,22 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
         "    · 这些状态优先于前情摘要、章节计划和旧设定；改写它们必须在正文内写出明确桥接事件。",
     ]
     selected = list(items[:8])
-    selected.extend(
-        item
-        for item in items[8:]
-        if str(item.get("kind") or "") == "active_rule"
-        and bool((item.get("constraints") or {}).get("immutable_definition"))
-    )
+    selected_keys = {
+        str(item.get("invariant_key") or "").strip()
+        for item in selected
+        if str(item.get("invariant_key") or "").strip()
+    }
+    for item in items[8:]:
+        invariant_key = str(item.get("invariant_key") or "").strip()
+        kind = str(item.get("kind") or "")
+        if invariant_key in selected_keys:
+            continue
+        if kind == "accepted_future_anchor" or (
+            kind == "active_rule"
+            and bool((item.get("constraints") or {}).get("immutable_definition"))
+        ):
+            selected.append(item)
+            selected_keys.add(invariant_key)
     for item in selected:
         invariant_key = str(item.get("invariant_key") or "").strip()
         kind = str(item.get("kind") or "custom").strip()
@@ -287,6 +297,18 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
                 f"    · {label}：当前 active rule 仍生效；canon 精确定义为 {definition}；"
                 "本章必须逐项遵守，不得静默改写、换名或用同义表述改变触发条件、效果、例外和代价；"
                 "撤销、取代或豁免必须有明确桥接事件与 canon 证据。"
+            )
+            continue
+        if kind == "accepted_future_anchor":
+            anchor = current_value if isinstance(current_value, dict) else {}
+            anchor_chapter = int(anchor.get("chapter_number") or latest_chapter or 0)
+            anchor_title = str(anchor.get("title") or "").strip()
+            anchor_summary = str(anchor.get("summary") or "").strip()
+            lines.append(
+                "    · 已接受后续章节的冻结锚点："
+                f"第{anchor_chapter}章 {anchor_title}；结果={anchor_summary}。"
+                "这是历史章节重写：本章必须作为该结果的前置事件保持兼容，"
+                "不得提前完成、重排、否定或改写锚点结果。"
             )
             continue
         lines.append(

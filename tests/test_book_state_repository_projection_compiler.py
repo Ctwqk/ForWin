@@ -382,7 +382,7 @@ def test_historical_invalidation_rewinds_unversioned_writer_location_from_contra
     engine.dispose()
 
 
-def test_historical_invalidation_rejects_unmatched_writer_location_trace() -> None:
+def test_historical_invalidation_rewinds_unmatched_writer_location_trace() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
@@ -455,11 +455,10 @@ def test_historical_invalidation_rejects_unmatched_writer_location_trace() -> No
             )
         )
 
-    with pytest.raises(ValueError, match="cannot restore historical base"):
-        with Session.begin() as session:
-            BookStateRepository(session).invalidate_project_range(
-                project_id, from_chapter=2, through_chapter=2
-            )
+    with Session.begin() as session:
+        repo = BookStateRepository(session)
+        repo.invalidate_project_range(project_id, from_chapter=2, through_chapter=2)
+        assert "writer_location" not in repo.get_world_node(node_id).metadata
     engine.dispose()
 
 

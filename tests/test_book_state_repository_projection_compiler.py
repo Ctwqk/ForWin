@@ -273,7 +273,10 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
                 WorldSnapshotRow, base.world_snapshot_id
             ).objective_graph_digest = "0" * 64
 
-    if proof != "valid":
+    requires_fail_closed = proof != "valid" and not (
+        rewound_path == "metadata.writer_location" and proof == "missing-checkpoint"
+    )
+    if requires_fail_closed:
         with pytest.raises(ValueError, match="cannot restore historical base"):
             with Session.begin() as session:
                 BookStateRepository(session).invalidate_project_range(
@@ -308,6 +311,74 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
         assert repo.get_world_node(node_id).metadata == before_metadata
         assert session.get(GraphDeltaRow, "obsolete-control") is not None
         assert session.get(WorldSnapshotRow, base.world_snapshot_id) is not None
+    engine.dispose()
+
+
+def test_historical_invalidation_rewinds_unversioned_writer_location_from_contract(
+) -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    node_id = "item_node-blue-copper"
+    location = {
+        "reported_old": "",
+        "reported_new": "旧库六号货位",
+    }
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id=node_id,
+                project_id=project_id,
+                node_type="item",
+                metadata={"source": "arc_plan_seed"},
+            )
+        )
+        compiler = BookStateCompiler(session)
+        base = compiler.compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="base-without-metadata-provenance",
+                        project_id=project_id,
+                        chapter_number=1,
+                    )
+                ],
+            )
+        )
+        assert base.committed
+        replaced = compiler.compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=2,
+                graph_deltas=[
+                    GraphDelta(
+                        id="writer-location-contract",
+                        project_id=project_id,
+                        chapter_number=2,
+                        node_patches=[
+                            NodePatch(
+                                node_id=node_id,
+                                node_type="item",
+                                op="set",
+                                field_path="metadata.writer_location",
+                                old_value=None,
+                                new_value=location,
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+        assert replaced.committed
+
+    with Session.begin() as session:
+        repo = BookStateRepository(session)
+        repo.invalidate_project_range(project_id, from_chapter=2, through_chapter=2)
+        assert "writer_location" not in repo.get_world_node(node_id).metadata
     engine.dispose()
 
 

@@ -1009,7 +1009,7 @@ class BookStateRepository:
             )
         # Structural base rows are overwritten in place; snapshots only retain
         # world state. Undo their field changes before compiling against the base.
-        missing_metadata: set[tuple[str, str]] = set()
+        missing_metadata: dict[tuple[str, str], Any] = {}
         for kind, target, patch in reversed(patches):
             if (kind, target) in created:
                 continue
@@ -1037,7 +1037,9 @@ class BookStateRepository:
                 )
                 and patch.get("old_value") is None
             ):
-                missing_metadata.add((target, field_path))
+                missing_metadata.setdefault(
+                    (target, field_path), deepcopy(patch.get("new_value"))
+                )
                 continue
             if kind not in bindings or not field_path or patch.get("old_value") is None:
                 raise ValueError(
@@ -1079,7 +1081,7 @@ class BookStateRepository:
         self,
         project_id: str,
         from_chapter: int,
-        missing: set[tuple[str, str]],
+        missing: dict[tuple[str, str], Any],
         snapshot: WorldSnapshot | None,
         prior_deltas: list[GraphDelta],
     ) -> None:
@@ -1174,6 +1176,20 @@ class BookStateRepository:
                 if not any(
                     path == prefix or path.startswith(prefix + ".") for prefix in known
                 ):
+                    # This audit-only field is emitted by WriterContractDeltaBuilder
+                    # from the pre-chapter runtime; a null old_value therefore
+                    # proves that it was absent at the rewind boundary. Snapshots
+                    # do not retain node metadata, so there may be no prior graph
+                    # patch to replay for a Genesis-seeded node.
+                    expected = missing[(node_id, path)]
+                    metadata = payload.get("metadata")
+                    if (
+                        path == "metadata.writer_location"
+                        and isinstance(metadata, dict)
+                        and metadata.get("writer_location") == expected
+                    ):
+                        metadata.pop("writer_location")
+                        continue
                     raise ValueError(failure)
                 parts = path.split(".")
                 previous = before

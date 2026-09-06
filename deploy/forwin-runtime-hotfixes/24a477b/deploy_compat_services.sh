@@ -57,7 +57,7 @@ require_target_placement() {
   local service constraints normalized expected
   service="$1"
   expected="node.hostname==${TARGET_NODE_HOSTNAME}"
-  constraints="$(service_docker_cmd service inspect --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{printf \"%s\\n\" .}}{{end}}' "$service")"
+  constraints="$(service_docker_cmd service inspect --format '{{range .Spec.TaskTemplate.Placement.Constraints}}{{printf "%s\n" .}}{{end}}' "$service")"
   normalized="$(printf '%s\n' "$constraints" | tr -d '[:space:]')"
   if ! printf '%s\n' "$normalized" | grep -Fxq "$expected"; then
     printf 'target %s is not constrained to %s\n' "$service" "$expected" >&2

@@ -158,7 +158,7 @@ class CanonAdmissionService:
                     )
                 if rewrite is not None:
                     compile_result = rewrite.rebuild_successor_projections(
-                        compile_result
+                        compile_result, compiler=BookStateCompiler(session)
                     )
                 session.flush()
                 inject("book_state")

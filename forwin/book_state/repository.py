@@ -30,7 +30,6 @@ from forwin.models.book_state import (
     WorldSnapshotRow,
 )
 from forwin.protocol.book_state import (
-    BookStateCompileResult,
     CognitionOverlay,
     CognitionPatch,
     CognitionSnapshot,
@@ -828,91 +827,16 @@ class BookStateRepository:
         self.session.flush()
         return delta_ids
 
-    def replay_retained_chapter_deltas(
-        self,
-        compile_result: BookStateCompileResult,
-        *,
-        delta_ids: list[str],
-    ) -> BookStateCompileResult:
-        """Restore accepted standalone edits after the replacement chapter contribution."""
-        from forwin.book_state.compiler import BookStateCompiler
-
-        compiler = BookStateCompiler(self.session)
-        project_id = compile_result.project_id
-        chapter_number = compile_result.chapter_number
-        runtime = compiler.projection.load_runtime_as_of(
-            project_id, as_of_chapter=chapter_number
-        )
-        retained_ids = set(delta_ids)
-        deltas = [
-            delta
-            for delta in self.list_graph_deltas(
-                project_id,
-                after_chapter=chapter_number - 1,
-                through_chapter=chapter_number,
-            )
-            if delta.id in retained_ids
-        ]
-        if {delta.id for delta in deltas} != retained_ids:
-            raise ValueError("historical rewrite delta manifest missing or invalid")
-        for delta in deltas:
-            compiler.projection.apply_delta_to_runtime(runtime, delta)
-        for delta in deltas:
-            compiler._persist_delta_side_effects(runtime, delta)
-        provisional_world = self.session.get(
-            WorldSnapshotRow, compile_result.world_snapshot_id
-        )
-        if provisional_world is None:
-            raise ValueError("historical rewrite replacement snapshot is missing")
-        story_time = provisional_world.as_of_story_time
-        world_line_ids = list(
-            dict.fromkeys(
-                [
-                    *_loads(provisional_world.active_world_line_ids_json, []),
-                    *(delta.world_line_id for delta in deltas if delta.world_line_id),
-                ]
-            )
-        )
-        # Supersede the provisional compile snapshots; two snapshots created in
-        # one transaction otherwise have the same timestamp and random ID order.
-        for model, snapshot_ids in (
-            (WorldSnapshotRow, [compile_result.world_snapshot_id]),
-            (MapSnapshotRow, [compile_result.map_snapshot_id]),
-            (BookCognitionSnapshotRow, compile_result.cognition_snapshot_ids),
-        ):
-            self.session.execute(
-                delete(model).where(
-                    model.project_id == project_id,
-                    model.id.in_(snapshot_ids),
-                )
-            )
-        world, map_snapshot, cognition = compiler.projection.persist_snapshots(
-            runtime,
-            as_of_chapter=chapter_number,
-            source_delta_ids=[*compile_result.graph_delta_ids, *delta_ids],
-            active_world_line_ids=world_line_ids,
-            as_of_story_time=next(
-                (delta.story_time for delta in reversed(deltas) if delta.story_time),
-                story_time,
-            ),
-        )
-        return compile_result.model_copy(
-            update={
-                "world_snapshot_id": world.id,
-                "map_snapshot_id": map_snapshot.id,
-                "cognition_snapshot_ids": [snapshot.id for snapshot in cognition],
-            }
-        )
-
     def invalidate_project_range(
         self,
         project_id: str,
         *,
         from_chapter: int,
         through_chapter: int,
+        ordered_deltas: list[GraphDelta] | None = None,
     ) -> None:
         """Discard range materializations while retaining the GraphDelta log."""
-        deltas = self.list_graph_deltas(
+        deltas = ordered_deltas if ordered_deltas is not None else self.list_graph_deltas(
             project_id,
             after_chapter=from_chapter - 1,
             through_chapter=through_chapter,
@@ -963,7 +887,7 @@ class BookStateRepository:
         *,
         from_chapter: int,
     ) -> None:
-        """Use patch provenance, since legacy creates may have chapter zero metadata."""
+        """Use patch provenance, since older creates may have chapter zero metadata."""
         bindings = {
             "node": (WorldNodeRow, _world_node_from_row, self.create_world_node),
             "edge": (WorldEdgeRow, _world_edge_from_row, self.create_world_edge),
@@ -1133,96 +1057,6 @@ class BookStateRepository:
                     key_column == target,
                 )
             )
-
-    def rebuild_project_range(
-        self,
-        project_id: str,
-        *,
-        from_chapter: int,
-        through_chapter: int,
-    ) -> list[int]:
-        """Replay retained accepted successors without re-inserting their ledger or drafts."""
-        from forwin.book_state.compiler import BookStateCompiler
-        from forwin.models.canon import CanonCommitRecord
-        from forwin.models.project import ChapterPlan
-
-        compiler = BookStateCompiler(self.session)
-        runtime = compiler.projection.load_runtime_as_of(
-            project_id,
-            as_of_chapter=max(from_chapter - 1, 0),
-        )
-        deltas_by_chapter: dict[int, list[GraphDelta]] = {}
-        for delta in self.list_graph_deltas(
-            project_id,
-            after_chapter=from_chapter - 1,
-            through_chapter=through_chapter,
-        ):
-            deltas_by_chapter.setdefault(delta.chapter_number, []).append(delta)
-        commits = list(
-            self.session.scalars(
-                select(CanonCommitRecord)
-                .join(
-                    ChapterPlan,
-                    (ChapterPlan.project_id == CanonCommitRecord.project_id)
-                    & (ChapterPlan.chapter_number == CanonCommitRecord.chapter_number),
-                )
-                .where(
-                    CanonCommitRecord.project_id == project_id,
-                    CanonCommitRecord.chapter_number >= from_chapter,
-                    CanonCommitRecord.chapter_number <= through_chapter,
-                    CanonCommitRecord.status == "committed",
-                    ChapterPlan.status == "accepted",
-                )
-                .order_by(CanonCommitRecord.chapter_number)
-            )
-        )
-        if set(deltas_by_chapter) - {commit.chapter_number for commit in commits}:
-            raise ValueError(
-                "historical rewrite successor deltas lack an accepted Canon commit"
-            )
-        replayed = []
-        for commit in commits:
-            deltas = deltas_by_chapter.get(commit.chapter_number, [])
-            for delta in deltas:
-                compiler.projection.apply_delta_to_runtime(runtime, delta)
-            for delta in deltas:
-                compiler._persist_delta_side_effects(runtime, delta)
-            world, map_snapshot, cognition = compiler.projection.persist_snapshots(
-                runtime,
-                as_of_chapter=commit.chapter_number,
-                as_of_story_time=next(
-                    (
-                        delta.story_time
-                        for delta in reversed(deltas)
-                        if delta.story_time
-                    ),
-                    "",
-                ),
-                source_delta_ids=[delta.id for delta in deltas],
-                active_world_line_ids=list(
-                    dict.fromkeys(
-                        delta.world_line_id for delta in deltas if delta.world_line_id
-                    )
-                ),
-            )
-            commit.world_snapshot_id = world.id
-            commit.map_snapshot_id = map_snapshot.id
-            result = _loads(commit.result_json, {})
-            if isinstance(result.get("compile_result"), dict):
-                result["compile_result"].update(
-                    {
-                        "world_snapshot_id": world.id,
-                        "map_snapshot_id": map_snapshot.id,
-                        "cognition_snapshot_ids": [
-                            snapshot.id for snapshot in cognition
-                        ],
-                    }
-                )
-                commit.result_json = _dump(result)
-            runtime.as_of_chapter = commit.chapter_number
-            replayed.append(commit.chapter_number)
-        self.session.flush()
-        return replayed
 
     # ------------------------------------------------------------------
     # Runtime loading

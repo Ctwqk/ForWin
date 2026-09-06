@@ -24,6 +24,7 @@ from forwin.canon.outbox_events import (
 )
 from forwin.canon.plan import CanonCommitPlan
 from forwin.canon.preparation import CanonPreparationService
+from forwin.book_state.projection import BookStateProjection
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
     GraphDeltaRow,
@@ -48,7 +49,12 @@ from forwin.naming import (
     writer_output_admission_fingerprint,
 )
 import forwin.outbox.store as outbox_store
-from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NodePatch
+from forwin.protocol.book_state import (
+    ApprovedGraphDeltaSet,
+    CognitionPatch,
+    GraphDelta,
+    NodePatch,
+)
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -313,6 +319,7 @@ def _prepare_chapter_candidate(
     delta_id: str,
     delta_summary: str,
     node_id: str,
+    graph_deltas: list[GraphDelta] | None = None,
 ) -> CanonCommitPlan:
     output = WriterOutput(
         project_id=project_id,
@@ -351,7 +358,7 @@ def _prepare_chapter_candidate(
     approved = ApprovedGraphDeltaSet(
         project_id=project_id,
         chapter_number=chapter.chapter_number,
-        graph_deltas=[
+        graph_deltas=graph_deltas if graph_deltas is not None else [
             GraphDelta(
                 id=delta_id,
                 project_id=project_id,
@@ -448,7 +455,10 @@ def _rewrite_marker(
 
 
 @pytest.fixture
-def historical_rewrite_scenario() -> HistoricalRewriteScenario:
+def historical_rewrite_scenario(
+    request: pytest.FixtureRequest,
+) -> HistoricalRewriteScenario:
+    ordered_successor = getattr(request, "param", None) == "manifest_order"
     engine = get_engine(postgres_test_url("historical-canon-rewrite"))
     init_db(engine)
     SessionFactory = get_session_factory(engine)
@@ -479,7 +489,7 @@ def historical_rewrite_scenario() -> HistoricalRewriteScenario:
             summary="The base event becomes Canon.",
             delta_id="delta-base-event",
             delta_summary="base event",
-            node_id="event-base",
+            node_id="event-order" if ordered_successor else "event-base",
         )
 
     base_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(base_plan)
@@ -530,6 +540,26 @@ def historical_rewrite_scenario() -> HistoricalRewriteScenario:
             delta_id="delta-later-consequence",
             delta_summary="later accepted consequence",
             node_id="event-later-consequence",
+            graph_deltas=[
+                GraphDelta(
+                    id=delta_id,
+                    project_id=project.id,
+                    chapter_number=3,
+                    node_patches=[
+                        NodePatch(
+                            node_id="event-order",
+                            node_type="event",
+                            op="set",
+                            field_path="state.phase",
+                            new_value=phase,
+                        )
+                    ],
+                )
+                for delta_id, phase in (
+                    ("z-first", "intermediate"),
+                    ("a-second", "final"),
+                )
+            ] if ordered_successor else None,
         )
         successor_candidate = session.get(
             CandidateDraftRecord, successor_plan.candidate_id
@@ -941,7 +971,80 @@ def test_historical_rewrite_ignores_only_well_formed_consumed_markers(
         assert "historical rewrite marker missing or invalid" in outcome.failure_reason
 
 
-def _commit_same_chapter_world_edit(scenario: HistoricalRewriteScenario) -> None:
+@pytest.mark.parametrize(
+    "historical_rewrite_scenario", ["manifest_order"], indirect=True
+)
+def test_historical_rewrite_replays_successor_manifest_order_not_delta_id_order(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    scenario = historical_rewrite_scenario
+    with scenario.Session() as session:
+        successor = session.scalar(
+            select(CanonCommitRecord).where(
+                CanonCommitRecord.candidate_id == scenario.successor_candidate_id
+            )
+        )
+        assert json.loads(successor.graph_delta_ids_json) == ["z-first", "a-second"]
+        # PostgreSQL now() gives both rows the transaction's timestamp, so the
+        # persisted ID order disagrees with the accepted contribution order.
+        assert session.get(GraphDeltaRow, "z-first").created_at == session.get(
+            GraphDeltaRow, "a-second"
+        ).created_at
+    assert json.loads(_world_snapshot(scenario.Session, scenario.project_id, 3))[
+        "event-order"
+    ]["phase"] == "final"
+
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert json.loads(_world_snapshot(scenario.Session, scenario.project_id, 3))[
+        "event-order"
+    ]["phase"] == "final"
+
+
+def test_historical_rewrite_applies_retained_first_cognition_patch_once(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    scenario = historical_rewrite_scenario
+    _commit_same_chapter_world_edit(
+        scenario,
+        node_id="event-order",
+        cognition_patches=[
+            CognitionPatch(
+                observer_type="character",
+                observer_id="new-observer",
+                op="append",
+                field_path="visible_refs",
+                new_value="event-order",
+                evidence_refs=["proof-1"],
+            )
+        ],
+    )
+
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+
+    assert outcome.blocked is False, outcome.failure_reason
+    with scenario.Session() as session:
+        for chapter_number in (2, 3):
+            runtime = BookStateProjection(session).load_runtime_as_of(
+                scenario.project_id, as_of_chapter=chapter_number
+            )
+            cognition_snapshot = runtime.cognition_by_observer[
+                ("character", "new-observer")
+            ]
+            assert cognition_snapshot.evidence_by_ref["event-order"] == ["proof-1"]
+
+
+def _commit_same_chapter_world_edit(
+    scenario: HistoricalRewriteScenario,
+    *,
+    node_id: str = "event-independent-edit",
+    cognition_patches: list[CognitionPatch] | None = None,
+) -> None:
     with scenario.Session.begin() as session:
         proposal = KnowledgeEditProposalRow(
             id="independent-world-edit",
@@ -968,13 +1071,14 @@ def _commit_same_chapter_world_edit(scenario: HistoricalRewriteScenario) -> None
                         world_line_id="independent-world-line",
                         story_time="independent edit time",
                         summary="independent world edit",
+                        cognition_patches=cognition_patches or [],
                         node_patches=[
                             NodePatch(
-                                node_id="event-independent-edit",
+                                node_id=node_id,
                                 node_type="event",
                                 op="create",
                                 new_value={
-                                    "id": "event-independent-edit",
+                                    "id": node_id,
                                     "project_id": scenario.project_id,
                                     "node_type": "event",
                                     "name": "independent world edit",

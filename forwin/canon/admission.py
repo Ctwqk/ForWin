@@ -143,8 +143,7 @@ class CanonAdmissionService:
                 candidate_repository = CandidateDraftRepository(session)
                 candidate_repository.transition(plan.candidate_id, "committing")
 
-                compiler = BookStateCompiler(session)
-                compile_result = compiler.compile(
+                compile_result = BookStateCompiler(session).compile(
                     plan.approved_book_state_changes,
                     compiler_run_id=f"canon-commit-{commit_id}",
                 )
@@ -159,7 +158,7 @@ class CanonAdmissionService:
                     )
                 if rewrite is not None:
                     compile_result = rewrite.rebuild_successor_projections(
-                        compile_result, compiler=compiler
+                        compile_result, compiler=BookStateCompiler(session)
                     )
                 session.flush()
                 inject("book_state")

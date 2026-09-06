@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.review_recovery import reopen_failed_historical_candidate_for_review
 from forwin.audit.events import DecisionActorType, DecisionEventType
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.maintenance.deferred import (
@@ -62,6 +63,16 @@ class AcceptanceStage:
             )
             if candidate is None or candidate.candidate_draft_id != latest_draft.id:
                 raise ValueError(f"第{chapter_number}章缺少 v5 candidate record")
+
+            if candidate.status == "failed":
+                reopen_failed_historical_candidate_for_review(
+                    session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    candidate_id=candidate.id,
+                    draft_id=latest_draft.id,
+                    review_id=latest_review.id,
+                )
 
             writer_output = self._load_writer_output_from_meta(
                 latest_draft.llm_raw_response

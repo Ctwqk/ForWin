@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,19 @@ MAX_ERROR_LENGTH = 4000
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def any_outbox_events_exist(session: Session, *, event_ids: Sequence[str]) -> bool:
+    """Read stable event identity without exposing outbox rows to other owners."""
+    return bool(
+        session.scalar(
+            select(
+                select(OutboxEvent.id)
+                .where(OutboxEvent.event_id.in_(event_ids))
+                .exists()
+            )
+        )
+    )
 
 
 def enqueue_outbox_event(

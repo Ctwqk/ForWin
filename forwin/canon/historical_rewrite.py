@@ -152,7 +152,9 @@ class HistoricalCanonRewriteRepository:
                 )
         return delta_ids, retained_ids
 
-    def pending_marker(self, previous: CanonCommitRecord) -> DecisionEvent:
+    def pending_marker(
+        self, previous: CanonCommitRecord, *, persist_backfill: bool = True
+    ) -> DecisionEvent:
         events = list(
             self.session.scalars(
                 select(DecisionEvent)
@@ -213,8 +215,11 @@ class HistoricalCanonRewriteRepository:
                     "historical rewrite marker missing or invalid"
                 )
             payload["previous_commit_id"] = previous.id
-            event.payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            self.session.flush()
+            if persist_backfill:
+                event.payload_json = json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True
+                )
+                self.session.flush()
         if payload.get("previous_commit_id") != previous.id:
             raise HistoricalRewriteInvalid(
                 "historical rewrite marker missing or invalid"
@@ -492,7 +497,7 @@ class HistoricalCanonRewriteService:
         self.session = session
 
     def prepare_replacement(
-        self, plan: CanonCommitPlan
+        self, plan: CanonCommitPlan, *, persist_marker_backfill: bool = True
     ) -> HistoricalCanonReplacement | None:
         records = HistoricalCanonRewriteRepository(self.session).committed_records(
             plan.project_id,
@@ -561,7 +566,9 @@ class HistoricalCanonRewriteService:
         # Canon manifests retain compile order even when transaction timestamps
         # tie. Accepted standalone edits follow their chapter contribution.
         ordered_deltas = [deltas_by_id[delta_id] for delta_id in delta_ids]
-        marker = repository.pending_marker(previous)
+        marker = repository.pending_marker(
+            previous, persist_backfill=persist_marker_backfill
+        )
         return HistoricalCanonReplacement(
             self.session,
             plan,

@@ -1009,7 +1009,7 @@ class BookStateRepository:
             )
         # Structural base rows are overwritten in place; snapshots only retain
         # world state. Undo their field changes before compiling against the base.
-        missing_metadata: dict[tuple[str, str], Any] = {}
+        missing_metadata: dict[tuple[str, str], list[Any]] = {}
         for kind, target, patch in reversed(patches):
             if (kind, target) in created:
                 continue
@@ -1037,9 +1037,10 @@ class BookStateRepository:
                 )
                 and patch.get("old_value") is None
             ):
-                missing_metadata.setdefault(
-                    (target, field_path), deepcopy(patch.get("new_value"))
-                )
+                values = missing_metadata.setdefault((target, field_path), [])
+                new_value = deepcopy(patch.get("new_value"))
+                if not any(value == new_value for value in values):
+                    values.append(new_value)
                 continue
             if kind not in bindings or not field_path or patch.get("old_value") is None:
                 raise ValueError(
@@ -1081,7 +1082,7 @@ class BookStateRepository:
         self,
         project_id: str,
         from_chapter: int,
-        missing: dict[tuple[str, str], Any],
+        missing: dict[tuple[str, str], list[Any]],
         snapshot: WorldSnapshot | None,
         prior_deltas: list[GraphDelta],
     ) -> None:
@@ -1181,12 +1182,18 @@ class BookStateRepository:
                     # proves that it was absent at the rewind boundary. Snapshots
                     # do not retain node metadata, so there may be no prior graph
                     # patch to replay for a Genesis-seeded node.
-                    expected = missing[(node_id, path)]
+                    expected_values = missing[(node_id, path)]
                     metadata = payload.get("metadata")
                     if (
                         path == "metadata.writer_location"
                         and isinstance(metadata, dict)
-                        and metadata.get("writer_location") == expected
+                        and (
+                            "writer_location" not in metadata
+                            or any(
+                                metadata.get("writer_location") == value
+                                for value in expected_values
+                            )
+                        )
                     ):
                         metadata.pop("writer_location")
                         continue

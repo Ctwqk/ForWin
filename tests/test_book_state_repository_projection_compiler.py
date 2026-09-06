@@ -382,6 +382,87 @@ def test_historical_invalidation_rewinds_unversioned_writer_location_from_contra
     engine.dispose()
 
 
+def test_historical_invalidation_rejects_unmatched_writer_location_trace() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    node_id = "item_node-blue-copper"
+    recorded_location = {
+        "reported_old": "",
+        "reported_new": "旧库六号货位",
+    }
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id=node_id,
+                project_id=project_id,
+                node_type="item",
+                metadata={"source": "arc_plan_seed"},
+            )
+        )
+        compiler = BookStateCompiler(session)
+        assert compiler.compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="base-without-metadata-provenance",
+                        project_id=project_id,
+                        chapter_number=1,
+                    )
+                ],
+            )
+        ).committed
+        assert compiler.compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=2,
+                graph_deltas=[
+                    GraphDelta(
+                        id="writer-location-contract",
+                        project_id=project_id,
+                        chapter_number=2,
+                        node_patches=[
+                            NodePatch(
+                                node_id=node_id,
+                                node_type="item",
+                                op="set",
+                                field_path="metadata.writer_location",
+                                old_value=None,
+                                new_value=recorded_location,
+                            )
+                        ],
+                    )
+                ],
+            )
+        ).committed
+        node = repo.get_world_node(node_id)
+        assert node is not None
+        repo.create_world_node(
+            node.model_copy(
+                update={
+                    "metadata": {
+                        **node.metadata,
+                        "writer_location": {
+                            "reported_old": "",
+                            "reported_new": "不在受审补丁中的位置",
+                        },
+                    }
+                }
+            )
+        )
+
+    with pytest.raises(ValueError, match="cannot restore historical base"):
+        with Session.begin() as session:
+            BookStateRepository(session).invalidate_project_range(
+                project_id, from_chapter=2, through_chapter=2
+            )
+    engine.dispose()
+
+
 def test_historical_invalidation_rejects_recreated_base_identity() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)

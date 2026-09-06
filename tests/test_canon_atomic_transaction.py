@@ -1191,6 +1191,65 @@ def test_failed_historical_reapproval_rejects_stale_authorization(
         )
 
 
+def test_failed_historical_reapproval_rejects_equal_marker_timestamp_without_mutation(
+    historical_rewrite_scenario, monkeypatch, tmp_path
+):
+    from fastapi import HTTPException
+
+    scenario = historical_rewrite_scenario
+    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
+    _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
+    with scenario.Session.begin() as session:
+        candidate = session.get(
+            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
+        )
+        marker = session.scalar(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == scenario.project_id,
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            )
+        )
+        candidate.created_at = marker.created_at
+        session.flush()
+        assert candidate.created_at == marker.created_at
+
+    def snapshot():
+        with scenario.Session() as session:
+            return {
+                model.__tablename__: [
+                    tuple(
+                        getattr(row, column.name) for column in model.__table__.columns
+                    )
+                    for row in session.scalars(select(model).order_by(model.id))
+                ]
+                for model in (
+                    Project,
+                    CandidateDraftRecord,
+                    ChapterDraft,
+                    ChapterReview,
+                    ChapterPlan,
+                    CanonCommitRecord,
+                    DecisionEvent,
+                    GraphDeltaRow,
+                    WorldNodeRow,
+                    WorldSnapshotRow,
+                    MapSnapshotRow,
+                    OutboxEvent,
+                )
+            }
+
+    before = snapshot()
+    with pytest.raises(HTTPException) as error:
+        api.approve_chapter_review(
+            scenario.project_id,
+            2,
+            ChapterReviewApproveRequest(reason="retry marker ordering must be proven"),
+        )
+    assert error.value.status_code == 400
+    assert "not an authorized historical re-review" in error.value.detail
+    assert snapshot() == before
+
+
 def test_failed_ordinary_candidate_cannot_be_reapproved(
     prepared_canon, monkeypatch, tmp_path
 ):

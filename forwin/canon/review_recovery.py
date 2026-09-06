@@ -153,7 +153,7 @@ def reopen_failed_historical_candidate_for_review(
         or predecessor.canon_commit_id != replacement.previous.id
         or predecessor.chapter_plan_id != chapter.id
         or predecessor.version >= candidate.version
-        or candidate.created_at < replacement.marker.created_at
+        or candidate.created_at <= replacement.marker.created_at
     ):
         raise CandidateTransitionError(error)
     # This exception to failed's terminal state exists only at manual re-review.

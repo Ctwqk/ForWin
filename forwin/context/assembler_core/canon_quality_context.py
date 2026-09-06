@@ -295,7 +295,7 @@ def _accepted_future_chapter_anchor_constraints(
         .where(
             ChapterPlan.project_id == project_id,
             ChapterPlan.status == "accepted",
-            CandidateDraftRecord.status == "accepted",
+            CandidateDraftRecord.canon_status == "canon",
             ChapterPlan.chapter_number > int(chapter_number or 0),
         )
         .order_by(ChapterPlan.chapter_number.asc())

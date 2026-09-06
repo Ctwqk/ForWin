@@ -25,6 +25,7 @@ from forwin.canon.outbox_events import (
 from forwin.canon.plan import CanonCommitPlan
 from forwin.canon.preparation import CanonPreparationService
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
     GraphDeltaRow,
@@ -54,6 +55,7 @@ from forwin.protocol.book_state import (
     CognitionPatch,
     GraphDelta,
     NodePatch,
+    WorldNode,
 )
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
@@ -459,6 +461,7 @@ def historical_rewrite_scenario(
     request: pytest.FixtureRequest,
 ) -> HistoricalRewriteScenario:
     ordered_successor = getattr(request, "param", None) == "manifest_order"
+    missing_metadata = getattr(request, "param", None) == "missing_old_metadata"
     engine = get_engine(postgres_test_url("historical-canon-rewrite"))
     init_db(engine)
     SessionFactory = get_session_factory(engine)
@@ -475,11 +478,53 @@ def historical_rewrite_scenario(
             project.id, arc.id, 1, "Chapter one", "Base event", ["Commit chapter one"]
         )
         chapter_two = updater.create_chapter_plan(
-            project.id, arc.id, 2, "Chapter two", "Original event", ["Commit chapter two"]
+            project.id,
+            arc.id,
+            2,
+            "Chapter two",
+            "Original event",
+            ["Commit chapter two"],
         )
         chapter_three = updater.create_chapter_plan(
-            project.id, arc.id, 3, "Chapter three", "Later consequence", ["Commit chapter three"]
+            project.id,
+            arc.id,
+            3,
+            "Chapter three",
+            "Later consequence",
+            ["Commit chapter three"],
         )
+        metadata_checkpoint = None
+        if missing_metadata:
+            repo = BookStateRepository(session)
+            repo.create_world_node(
+                WorldNode(
+                    id="site_state_node-ninth-workshop",
+                    project_id=project.id,
+                    node_type="site_state",
+                    metadata={
+                        "source": "map_generation",
+                        "writer_state": {"access": "open"},
+                    },
+                )
+            )
+            metadata_checkpoint = [
+                GraphDelta(
+                    id="delta-base-event",
+                    project_id=project.id,
+                    chapter_number=1,
+                    node_patches=[
+                        NodePatch(
+                            node_id="site_state_node-ninth-workshop",
+                            node_type="site_state",
+                            op="set",
+                            field_path="metadata",
+                            new_value=repo.get_world_node(
+                                "site_state_node-ninth-workshop"
+                            ).metadata,
+                        )
+                    ],
+                )
+            ]
         base_plan = _prepare_chapter_candidate(
             session,
             project_id=project.id,
@@ -490,9 +535,12 @@ def historical_rewrite_scenario(
             delta_id="delta-base-event",
             delta_summary="base event",
             node_id="event-order" if ordered_successor else "event-base",
+            graph_deltas=metadata_checkpoint,
         )
 
-    base_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(base_plan)
+    base_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(
+        base_plan
+    )
     assert base_outcome.blocked is False
     with SessionFactory.begin() as session:
         _complete_post_canon_barrier(
@@ -514,6 +562,24 @@ def historical_rewrite_scenario(
             delta_id="delta-obsolete-braking",
             delta_summary="obsolete braking event",
             node_id="event-obsolete-braking",
+            graph_deltas=[
+                GraphDelta(
+                    id="delta-obsolete-braking",
+                    project_id=project.id,
+                    chapter_number=2,
+                    node_patches=[
+                        NodePatch(
+                            node_id="site_state_node-ninth-workshop",
+                            node_type="site_state",
+                            op="set",
+                            field_path="metadata.writer_state.controlled_by",
+                            new_value="obsolete-owner",
+                        )
+                    ],
+                )
+            ]
+            if missing_metadata
+            else None,
         )
 
     old_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(
@@ -559,16 +625,35 @@ def historical_rewrite_scenario(
                     ("z-first", "intermediate"),
                     ("a-second", "final"),
                 )
-            ] if ordered_successor else None,
+            ]
+            if ordered_successor
+            else [
+                GraphDelta(
+                    id="delta-later-consequence",
+                    project_id=project.id,
+                    chapter_number=3,
+                    node_patches=[
+                        NodePatch(
+                            node_id="site_state_node-ninth-workshop",
+                            node_type="site_state",
+                            op="set",
+                            field_path="metadata.writer_state.usage",
+                            new_value="retained-successor",
+                        )
+                    ],
+                )
+            ]
+            if missing_metadata
+            else None,
         )
         successor_candidate = session.get(
             CandidateDraftRecord, successor_plan.candidate_id
         )
         assert successor_candidate is not None
         successor_draft_id = successor_candidate.candidate_draft_id
-    successor_outcome = CanonAdmissionService(session_factory=SessionFactory).commit_plan(
-        successor_plan
-    )
+    successor_outcome = CanonAdmissionService(
+        session_factory=SessionFactory
+    ).commit_plan(successor_plan)
     assert successor_outcome.blocked is False
 
     api = HttpRuntimeHarness(
@@ -1037,6 +1122,56 @@ def test_historical_rewrite_applies_retained_first_cognition_patch_once(
                 ("character", "new-observer")
             ]
             assert cognition_snapshot.evidence_by_ref["event-order"] == ["proof-1"]
+
+
+@pytest.mark.parametrize(
+    "historical_rewrite_scenario", ["missing_old_metadata"], indirect=True
+)
+@pytest.mark.parametrize("inject_failure", [False, True])
+def test_historical_rewrite_restores_verified_node_metadata_and_replays_atomically(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    inject_failure: bool,
+) -> None:
+    scenario = historical_rewrite_scenario
+    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
+
+    def after_replay(stage: str) -> None:
+        if inject_failure and stage == "book_state":
+            raise RuntimeError("after verified metadata replay")
+
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan, failure_injector=after_replay
+    )
+
+    if inject_failure:
+        assert outcome.blocked
+        assert "after verified metadata replay" in outcome.failure_reason
+        assert (
+            _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
+        )
+    else:
+        assert not outcome.blocked, outcome.failure_reason
+        assert not outcome.idempotent
+    with scenario.Session() as session:
+        metadata = (
+            BookStateRepository(session)
+            .get_world_node("site_state_node-ninth-workshop")
+            .metadata
+        )
+        expected = {"access": "open", "usage": "retained-successor"}
+        if inject_failure:
+            expected["controlled_by"] = "obsolete-owner"
+        assert metadata["writer_state"] == expected
+        old_commit = session.get(CanonCommitRecord, scenario.old_commit_id)
+        assert old_commit.status == ("committed" if inject_failure else "superseded")
+        marker = _rewrite_marker(session, scenario.project_id, 2)
+        assert ("replacement_commit_id" in marker) is not inject_failure
+        successor = session.get(CandidateDraftRecord, scenario.successor_candidate_id)
+        assert successor.status == "accepted"
+        assert (
+            session.get(ChapterDraft, scenario.successor_draft_id).body_text
+            == "The later accepted consequence follows the first event."
+        )
 
 
 def _commit_same_chapter_world_edit(

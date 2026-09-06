@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
+import json
 from typing import Any
 
 from forwin.book_state.cognition import CognitionView
@@ -208,6 +210,20 @@ class ObjectiveWorldGraph:
                 for fact_id, fact in self.facts_by_id.items()
             },
         }
+
+    def objective_digest(self) -> str:
+        """Canonical fingerprint shared by snapshot writes and before-image checks."""
+        snapshot = self.snapshot()
+        payload = {
+            "nodes": snapshot["nodes_by_id"],
+            "edges": snapshot["edges_by_id"],
+            "facts": snapshot["facts_by_id"],
+            "states": snapshot["states_by_node_id"],
+        }
+        raw = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class BookStateRuntime:

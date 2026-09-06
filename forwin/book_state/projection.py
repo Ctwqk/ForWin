@@ -157,14 +157,7 @@ class BookStateProjection:
             as_of_chapter=as_of_chapter,
             as_of_story_time=as_of_story_time,
             base_snapshot_id=base_snapshot_id,
-            objective_graph_digest=_digest(
-                {
-                    "nodes": runtime.world.nodes_by_id,
-                    "edges": runtime.world.edges_by_id,
-                    "facts": runtime.world.facts_by_id,
-                    "states": runtime.world.states_by_node_id,
-                }
-            ),
+            objective_graph_digest=runtime.world.objective_digest(),
             map_graph_digest=_digest(
                 {
                     "nodes": runtime.map.nodes_by_id,

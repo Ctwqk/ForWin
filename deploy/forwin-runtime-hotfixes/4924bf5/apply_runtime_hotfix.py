@@ -26,6 +26,14 @@ EXPECTED_SOURCE_SHA256 = {
     "forwin/book_state/runtime.py": "e494a1eade394ea6313794ccc6f281c3e100b7b2398d9402b445e21cd3c72be0",
     "forwin/book_state/projection.py": "b84ebb60539e46525d72004b981ee4596c74023560475c170e9683bf365ec044",
 }
+EXPECTED_FINAL_SHA256 = {
+    "forwin/canon/historical_rewrite.py": "963692eb8a036aca8cdfad84c9d34a38d2ab6fdf8b7905b871ced5380a1ae004",
+    "forwin/canon/admission.py": "289704ad11dd805d2aa47cf9e8d7e02ea1175a0389a9e2f2fee0a6c613ac4cbf",
+    "forwin/application/projects/reviews.py": "44813857aaa4e28c55295be753386160560da6c9436a199ef12e334fa28906ce",
+    "forwin/book_state/repository.py": "baaa98b2ee2e18217cb5e364af699dbd41bbdd9df160f0af5a3c5b9bae388f8c",
+    "forwin/book_state/runtime.py": "e494a1eade394ea6313794ccc6f281c3e100b7b2398d9402b445e21cd3c72be0",
+    "forwin/book_state/projection.py": "b84ebb60539e46525d72004b981ee4596c74023560475c170e9683bf365ec044",
+}
 
 
 def sha256(path: Path) -> str:
@@ -64,6 +72,15 @@ def install_exact_source(*, source_root: Path, relative_path: str) -> Path:
     target.write_bytes(source.read_bytes())
     assert_sha256(target, expected, label="installed hotfix source")
     return target
+
+
+def verify_staged_source_manifest(source_root: Path) -> None:
+    for relative_path, expected in sorted(EXPECTED_SOURCE_SHA256.items()):
+        assert_sha256(
+            source_root / relative_path,
+            expected,
+            label="staged hotfix source",
+        )
 
 
 def patch_reviews_for_stable_runtime(path: Path) -> None:
@@ -346,6 +363,8 @@ def main() -> None:
     for relative_path, expected in EXPECTED_COMPATIBILITY_SENTINEL_SHA256.items():
         assert_sha256(APP_ROOT / relative_path, expected, label="compatibility base")
     assert_absent(APP_ROOT / "forwin/canon/historical_rewrite.py")
+    # Validate the complete staged manifest before the first target write.
+    verify_staged_source_manifest(source_root)
 
     historical = install_exact_source(
         source_root=source_root,
@@ -368,7 +387,21 @@ def main() -> None:
     patch_historical_rewrite_for_stable_plan(historical)
     patch_reviews_for_stable_runtime(reviews)
     patch_admission_for_stable_runtime(admission)
-    for target in (historical, admission, reviews, repository, runtime, projection):
+    installed = {
+        "forwin/canon/historical_rewrite.py": historical,
+        "forwin/canon/admission.py": admission,
+        "forwin/application/projects/reviews.py": reviews,
+        "forwin/book_state/repository.py": repository,
+        "forwin/book_state/runtime.py": runtime,
+        "forwin/book_state/projection.py": projection,
+    }
+    for relative_path, target in installed.items():
+        assert_sha256(
+            target,
+            EXPECTED_FINAL_SHA256[relative_path],
+            label="final installed hotfix",
+        )
+    for target in installed.values():
         py_compile.compile(str(target), doraise=True)
 
 

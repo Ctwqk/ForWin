@@ -164,6 +164,14 @@ def test_historical_invalidation_retires_reader_experience_by_delta_provenance()
     ["valid", "missing-snapshot", "wrong-digest", "missing-checkpoint"],
 )
 @pytest.mark.parametrize(
+    ("rewound_path", "obsolete_value"),
+    [
+        ("metadata.writer_state.controlled_by", "obsolete-owner"),
+        ("metadata.writer_location", "obsolete-location"),
+    ],
+    ids=["writer-state", "writer-location"],
+)
+@pytest.mark.parametrize(
     "writer_state",
     [
         None,
@@ -176,6 +184,8 @@ def test_historical_invalidation_retires_reader_experience_by_delta_provenance()
 def test_historical_invalidation_recovers_missing_node_metadata_before_image(
     writer_state,
     proof,
+    rewound_path,
+    obsolete_value,
 ) -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
@@ -247,8 +257,8 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
                                 node_id=node_id,
                                 node_type="site_state",
                                 op="set",
-                                field_path="metadata.writer_state.controlled_by",
-                                new_value="obsolete-owner",
+                                field_path=rewound_path,
+                                new_value=obsolete_value,
                             )
                         ],
                     )
@@ -270,12 +280,11 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
                     project_id, from_chapter=2, through_chapter=2
                 )
         with Session() as session:
-            assert (
-                BookStateRepository(session)
-                .get_world_node(node_id)
-                .metadata["writer_state"]["controlled_by"]
-                == "obsolete-owner"
-            )
+            metadata = BookStateRepository(session).get_world_node(node_id).metadata
+            if rewound_path == "metadata.writer_state.controlled_by":
+                assert metadata["writer_state"]["controlled_by"] == obsolete_value
+            else:
+                assert metadata["writer_location"] == obsolete_value
             assert session.get(WorldSnapshotRow, replaced.world_snapshot_id) is not None
         engine.dispose()
         return
@@ -287,12 +296,11 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
             assert repo.get_world_node(node_id).metadata == before_metadata
             raise RuntimeError("after verified metadata rewind")
     with Session() as session:
-        assert (
-            BookStateRepository(session)
-            .get_world_node(node_id)
-            .metadata["writer_state"]["controlled_by"]
-            == "obsolete-owner"
-        )
+        metadata = BookStateRepository(session).get_world_node(node_id).metadata
+        if rewound_path == "metadata.writer_state.controlled_by":
+            assert metadata["writer_state"]["controlled_by"] == obsolete_value
+        else:
+            assert metadata["writer_location"] == obsolete_value
         assert session.get(WorldSnapshotRow, replaced.world_snapshot_id) is not None
     with Session.begin() as session:
         repo = BookStateRepository(session)

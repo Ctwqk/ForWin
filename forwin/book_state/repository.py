@@ -1031,7 +1031,10 @@ class BookStateRepository:
                 field_path = "state"
             if (
                 kind == "node"
-                and field_path.startswith("metadata.writer_state.")
+                and (
+                    field_path.startswith("metadata.writer_state.")
+                    or field_path == "metadata.writer_location"
+                )
                 and patch.get("old_value") is None
             ):
                 missing_metadata.add((target, field_path))

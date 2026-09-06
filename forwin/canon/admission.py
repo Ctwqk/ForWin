@@ -134,6 +134,9 @@ class CanonAdmissionService:
                     chapter=chapter,
                     candidate=candidate,
                     plan=plan,
+                    retained_chapter_delta_ids=frozenset(rewrite.retained_delta_ids)
+                    if rewrite
+                    else frozenset(),
                 )
 
                 commit_id = plan.canon_commit_id
@@ -154,7 +157,9 @@ class CanonAdmissionService:
                         "BookState deltas already exist without a Canon commit record"
                     )
                 if rewrite is not None:
-                    rewrite.rebuild_successor_projections()
+                    compile_result = rewrite.rebuild_successor_projections(
+                        compile_result
+                    )
                 session.flush()
                 inject("book_state")
 
@@ -335,6 +340,7 @@ class CanonAdmissionService:
         chapter: ChapterPlan | None,
         candidate: CandidateDraftRecord | None,
         plan: CanonCommitPlan,
+        retained_chapter_delta_ids: frozenset[str] = frozenset(),
     ) -> None:
         if chapter is None:
             raise CanonStaleVersion("chapter plan no longer exists")
@@ -418,16 +424,15 @@ class CanonAdmissionService:
         )
         if book_state_chapter != plan.expected_book_state_chapter:
             raise CanonStaleVersion("BookState version changed")
-        current_chapter_delta_count = int(
-            session.scalar(
-                select(func.count(GraphDeltaRow.id)).where(
+        current_chapter_delta_ids = set(
+            session.scalars(
+                select(GraphDeltaRow.id).where(
                     GraphDeltaRow.project_id == plan.project_id,
                     GraphDeltaRow.chapter_number == plan.chapter_number,
                 )
             )
-            or 0
         )
-        if current_chapter_delta_count:
+        if current_chapter_delta_ids != retained_chapter_delta_ids:
             raise CanonStaleVersion("BookState already contains this chapter")
 
     def commit_world_edit(

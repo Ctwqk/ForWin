@@ -34,6 +34,7 @@ from forwin.models.book_state import (
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.entity import Entity, EntityAlias
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
@@ -877,6 +878,227 @@ def test_historical_rewrite_does_not_repair_an_invalid_marker(
     )
     assert outcome.stale is True
     assert "historical rewrite marker missing or invalid" in outcome.failure_reason
+
+
+@pytest.mark.parametrize("replacement_marker", [None, "", " ", 0, False, [], {}, 123])
+def test_historical_rewrite_rejects_invalid_consumption_marker(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    replacement_marker,
+) -> None:
+    scenario = historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        event = session.scalar(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == scenario.project_id,
+                DecisionEvent.chapter_number == 2,
+                DecisionEvent.actor_type == "api",
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            )
+        )
+        payload = json.loads(event.payload_json)
+        payload["replacement_commit_id"] = replacement_marker
+        event.payload_json = json.dumps(payload)
+    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    assert outcome.stale is True
+    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
+    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
+
+
+@pytest.mark.parametrize("consumed_value", [123, "older-replacement"])
+def test_historical_rewrite_ignores_only_well_formed_consumed_markers(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    consumed_value,
+) -> None:
+    scenario = historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        session.add(
+            DecisionEvent(
+                project_id=scenario.project_id,
+                chapter_number=2,
+                actor_type="api",
+                event_family="audit_action",
+                event_type=DecisionEventType.RETRY_ATTEMPT,
+                payload_json=json.dumps(
+                    {
+                        "chapter_number": 2,
+                        "previous_status": "accepted",
+                        "previous_commit_id": "older-commit",
+                        "replacement_commit_id": consumed_value,
+                    }
+                ),
+            )
+        )
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    if isinstance(consumed_value, str):
+        assert outcome.blocked is False, outcome.failure_reason
+    else:
+        assert outcome.stale is True
+        assert "historical rewrite marker missing or invalid" in outcome.failure_reason
+
+
+def _commit_same_chapter_world_edit(scenario: HistoricalRewriteScenario) -> None:
+    with scenario.Session.begin() as session:
+        proposal = KnowledgeEditProposalRow(
+            id="independent-world-edit",
+            project_id=scenario.project_id,
+            source="world_studio",
+            status="pending",
+        )
+        session.add(proposal)
+        session.flush()
+        result = CanonAdmissionService().commit_world_edit(
+            session=session,
+            project_id=scenario.project_id,
+            proposal_id=proposal.id,
+            approved_changes=ApprovedGraphDeltaSet(
+                project_id=scenario.project_id,
+                chapter_number=2,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta-independent-world-edit",
+                        project_id=scenario.project_id,
+                        chapter_number=2,
+                        source_type="world_edit",
+                        source_id=proposal.id,
+                        world_line_id="independent-world-line",
+                        story_time="independent edit time",
+                        summary="independent world edit",
+                        node_patches=[
+                            NodePatch(
+                                node_id="event-independent-edit",
+                                node_type="event",
+                                op="create",
+                                new_value={
+                                    "id": "event-independent-edit",
+                                    "project_id": scenario.project_id,
+                                    "node_type": "event",
+                                    "name": "independent world edit",
+                                    "state": {"event": "independent world edit"},
+                                },
+                            )
+                        ],
+                    )
+                ],
+            ),
+            reason="Independent accepted world edit",
+            trigger="test",
+        )
+        assert result.compile_result.committed is True
+
+
+def test_historical_rewrite_preserves_same_chapter_standalone_world_edit(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+) -> None:
+    scenario = historical_rewrite_scenario
+    _commit_same_chapter_world_edit(scenario)
+    with scenario.Session() as session:
+        original_edit = session.get(GraphDeltaRow, "delta-independent-world-edit")
+        original_edit_created_at = original_edit.created_at
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    assert outcome.blocked is False, outcome.failure_reason
+    assert set(_active_delta_summaries(scenario.Session, scenario.project_id, 2)) == {
+        "corrected custody-only event",
+        "independent world edit",
+    }
+    for chapter_number in (2, 3):
+        snapshot = _world_snapshot(
+            scenario.Session, scenario.project_id, chapter_number
+        )
+        assert "independent world edit" in snapshot
+        assert "corrected custody-only event" in snapshot
+        assert "obsolete braking event" not in snapshot
+    with scenario.Session() as session:
+        edit = session.get(GraphDeltaRow, "delta-independent-world-edit")
+        assert edit.created_at == original_edit_created_at
+        proposal = session.get(KnowledgeEditProposalRow, "independent-world-edit")
+        assert proposal.status == "accepted"
+        assert proposal.graph_delta_id == edit.id
+        assert session.get(WorldNodeRow, "event-independent-edit") is not None
+        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
+        assert json.loads(previous.result_json)["retired_graph_delta_ids"] == [
+            "delta-obsolete-braking"
+        ]
+        replacement = session.get(CanonCommitRecord, outcome.commit_id)
+        assert json.loads(replacement.graph_delta_ids_json) == [
+            "delta-corrected-custody"
+        ]
+        snapshot = session.get(WorldSnapshotRow, replacement.world_snapshot_id)
+        assert "independent world edit" in snapshot.world_node_state_index_json
+        assert "independent-world-line" in json.loads(
+            snapshot.active_world_line_ids_json
+        )
+        assert snapshot.as_of_story_time == "independent edit time"
+
+
+@pytest.mark.parametrize(
+    "record_ids",
+    [
+        "not json",
+        "null",
+        "{}",
+        "[]",
+        "[null]",
+        '[""]',
+        '["delta-obsolete-braking", "delta-obsolete-braking"]',
+        '["delta-missing"]',
+        '["delta-base-event"]',
+        '["delta-obsolete-braking", "delta-independent-world-edit"]',
+    ],
+)
+def test_historical_rewrite_rejects_invalid_commit_delta_manifest_without_mutation(
+    historical_rewrite_scenario: HistoricalRewriteScenario,
+    record_ids: str,
+) -> None:
+    scenario = historical_rewrite_scenario
+    _commit_same_chapter_world_edit(scenario)
+    with scenario.Session.begin() as session:
+        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
+        previous.graph_delta_ids_json = record_ids
+        previous_result = previous.result_json
+        event = session.scalar(
+            select(DecisionEvent).where(
+                DecisionEvent.project_id == scenario.project_id,
+                DecisionEvent.chapter_number == 2,
+                DecisionEvent.actor_type == "api",
+                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
+            )
+        )
+        payload = json.loads(event.payload_json)
+        payload.pop("previous_commit_id")
+        event.payload_json = json.dumps(payload)
+        previous_marker = event.payload_json
+        event_id = event.id
+    before_deltas = _active_delta_summaries(scenario.Session, scenario.project_id, 2)
+    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
+    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
+        scenario.rewritten_plan
+    )
+    assert outcome.stale is True
+    assert (
+        "historical rewrite delta manifest missing or invalid" in outcome.failure_reason
+    )
+    assert (
+        _active_delta_summaries(scenario.Session, scenario.project_id, 2)
+        == before_deltas
+    )
+    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
+    with scenario.Session() as session:
+        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
+        assert previous.status == "committed"
+        assert previous.chapter_number == 2
+        assert previous.result_json == previous_result
+        assert session.get(DecisionEvent, event_id).payload_json == previous_marker
+        candidate = session.get(
+            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
+        )
+        assert candidate.status == "ready_for_canon"
 
 
 @pytest.mark.parametrize(

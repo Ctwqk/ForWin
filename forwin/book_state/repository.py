@@ -30,6 +30,7 @@ from forwin.models.book_state import (
     WorldSnapshotRow,
 )
 from forwin.protocol.book_state import (
+    BookStateCompileResult,
     CognitionOverlay,
     CognitionPatch,
     CognitionSnapshot,
@@ -790,18 +791,27 @@ class BookStateRepository:
             metadata=_loads(row.metadata_json, {}),
         )
 
-    def retire_chapter_deltas(self, project_id: str, chapter_number: int) -> list[str]:
+    def retire_chapter_deltas(
+        self,
+        project_id: str,
+        chapter_number: int,
+        *,
+        delta_ids: list[str],
+    ) -> list[str]:
         """Remove only the replaced chapter's ledger contribution in this transaction."""
-        delta_ids = list(
+        existing_ids = list(
             self.session.scalars(
                 select(GraphDeltaRow.id)
                 .where(
                     GraphDeltaRow.project_id == project_id,
                     GraphDeltaRow.chapter_number == chapter_number,
+                    GraphDeltaRow.id.in_(delta_ids),
                 )
                 .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
             )
         )
+        if len(set(delta_ids)) != len(delta_ids) or set(existing_ids) != set(delta_ids):
+            raise ValueError("historical rewrite delta manifest missing or invalid")
         for model in (GraphDeltaPatchRow, CognitionOverlayPatchRow):
             self.session.execute(
                 delete(model).where(
@@ -817,6 +827,82 @@ class BookStateRepository:
         )
         self.session.flush()
         return delta_ids
+
+    def replay_retained_chapter_deltas(
+        self,
+        compile_result: BookStateCompileResult,
+        *,
+        delta_ids: list[str],
+    ) -> BookStateCompileResult:
+        """Restore accepted standalone edits after the replacement chapter contribution."""
+        from forwin.book_state.compiler import BookStateCompiler
+
+        compiler = BookStateCompiler(self.session)
+        project_id = compile_result.project_id
+        chapter_number = compile_result.chapter_number
+        runtime = compiler.projection.load_runtime_as_of(
+            project_id, as_of_chapter=chapter_number
+        )
+        retained_ids = set(delta_ids)
+        deltas = [
+            delta
+            for delta in self.list_graph_deltas(
+                project_id,
+                after_chapter=chapter_number - 1,
+                through_chapter=chapter_number,
+            )
+            if delta.id in retained_ids
+        ]
+        if {delta.id for delta in deltas} != retained_ids:
+            raise ValueError("historical rewrite delta manifest missing or invalid")
+        for delta in deltas:
+            compiler.projection.apply_delta_to_runtime(runtime, delta)
+        for delta in deltas:
+            compiler._persist_delta_side_effects(runtime, delta)
+        provisional_world = self.session.get(
+            WorldSnapshotRow, compile_result.world_snapshot_id
+        )
+        if provisional_world is None:
+            raise ValueError("historical rewrite replacement snapshot is missing")
+        story_time = provisional_world.as_of_story_time
+        world_line_ids = list(
+            dict.fromkeys(
+                [
+                    *_loads(provisional_world.active_world_line_ids_json, []),
+                    *(delta.world_line_id for delta in deltas if delta.world_line_id),
+                ]
+            )
+        )
+        # Supersede the provisional compile snapshots; two snapshots created in
+        # one transaction otherwise have the same timestamp and random ID order.
+        for model, snapshot_ids in (
+            (WorldSnapshotRow, [compile_result.world_snapshot_id]),
+            (MapSnapshotRow, [compile_result.map_snapshot_id]),
+            (BookCognitionSnapshotRow, compile_result.cognition_snapshot_ids),
+        ):
+            self.session.execute(
+                delete(model).where(
+                    model.project_id == project_id,
+                    model.id.in_(snapshot_ids),
+                )
+            )
+        world, map_snapshot, cognition = compiler.projection.persist_snapshots(
+            runtime,
+            as_of_chapter=chapter_number,
+            source_delta_ids=[*compile_result.graph_delta_ids, *delta_ids],
+            active_world_line_ids=world_line_ids,
+            as_of_story_time=next(
+                (delta.story_time for delta in reversed(deltas) if delta.story_time),
+                story_time,
+            ),
+        )
+        return compile_result.model_copy(
+            update={
+                "world_snapshot_id": world.id,
+                "map_snapshot_id": map_snapshot.id,
+                "cognition_snapshot_ids": [snapshot.id for snapshot in cognition],
+            }
+        )
 
     def invalidate_project_range(
         self,

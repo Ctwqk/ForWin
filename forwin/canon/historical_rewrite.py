@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.repository import BookStateRepository
 from forwin.models.audit import DecisionEvent
+from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.project import ChapterPlan
+from forwin.protocol.book_state import BookStateCompileResult
 
 from .plan import CanonCommitPlan
 
@@ -25,6 +28,18 @@ def _payload(event: DecisionEvent) -> dict:
     except (TypeError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _delta_manifest(value: object) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+        or len(set(value)) != len(value)
+    ):
+        raise HistoricalRewriteInvalid(
+            "historical rewrite delta manifest missing or invalid"
+        )
+    return value
 
 
 class HistoricalCanonRewriteRepository:
@@ -80,6 +95,57 @@ class HistoricalCanonRewriteRepository:
         self.session.flush()
         return event
 
+    def validate_contribution(
+        self, previous: CanonCommitRecord
+    ) -> tuple[list[str], list[str]]:
+        """Validate ownership before backfilling a marker or retiring any rows."""
+        try:
+            delta_ids = _delta_manifest(json.loads(previous.graph_delta_ids_json))
+            result = json.loads(previous.result_json)
+            compiled_ids = _delta_manifest(result["compile_result"]["graph_delta_ids"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HistoricalRewriteInvalid(
+                "historical rewrite delta manifest missing or invalid"
+            ) from exc
+        if set(delta_ids) != set(compiled_ids):
+            raise HistoricalRewriteInvalid(
+                "historical rewrite delta manifest missing or invalid"
+            )
+        chapter_ids = list(
+            self.session.scalars(
+                select(GraphDeltaRow.id)
+                .where(
+                    GraphDeltaRow.project_id == previous.project_id,
+                    GraphDeltaRow.chapter_number == previous.chapter_number,
+                )
+                .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+                .with_for_update()
+            )
+        )
+        owned_ids = set(delta_ids)
+        if not owned_ids.issubset(chapter_ids):
+            raise HistoricalRewriteInvalid(
+                "historical rewrite delta manifest missing or invalid"
+            )
+        retained_ids = [
+            delta_id for delta_id in chapter_ids if delta_id not in owned_ids
+        ]
+        if retained_ids:
+            world_edit_ids = set(
+                self.session.scalars(
+                    select(KnowledgeEditProposalRow.graph_delta_id).where(
+                        KnowledgeEditProposalRow.project_id == previous.project_id,
+                        KnowledgeEditProposalRow.status == "accepted",
+                        KnowledgeEditProposalRow.graph_delta_id.in_(retained_ids),
+                    )
+                )
+            )
+            if world_edit_ids != set(retained_ids):
+                raise HistoricalRewriteInvalid(
+                    "historical rewrite delta manifest missing or invalid"
+                )
+        return delta_ids, retained_ids
+
     def pending_marker(self, previous: CanonCommitRecord) -> DecisionEvent:
         events = list(
             self.session.scalars(
@@ -94,12 +160,19 @@ class HistoricalCanonRewriteRepository:
                 .with_for_update()
             )
         )
-        pending = [
-            event
-            for event in events
-            if _payload(event).get("previous_status") == "accepted"
-            and not _payload(event).get("replacement_commit_id")
-        ]
+        pending = []
+        for event in events:
+            payload = _payload(event)
+            if payload.get("previous_status") != "accepted":
+                continue
+            if "replacement_commit_id" in payload:
+                replacement_id = payload["replacement_commit_id"]
+                if not isinstance(replacement_id, str) or not replacement_id.strip():
+                    raise HistoricalRewriteInvalid(
+                        "historical rewrite marker missing or invalid"
+                    )
+                continue
+            pending.append(event)
         if len(pending) != 1:
             raise HistoricalRewriteInvalid(
                 "historical rewrite marker missing or invalid"
@@ -150,19 +223,12 @@ class HistoricalCanonReplacement:
     previous: CanonCommitRecord
     marker: DecisionEvent
     through_chapter: int
-    retired_delta_ids: list[str] = field(default_factory=list)
+    retired_delta_ids: list[str]
+    retained_delta_ids: list[str]
     replayed_chapters: list[int] = field(default_factory=list)
 
     def retire_old_contribution(self) -> None:
         repo = BookStateRepository(self.session)
-        self.retired_delta_ids = [
-            delta.id
-            for delta in repo.list_graph_deltas(
-                self.plan.project_id,
-                after_chapter=self.plan.chapter_number - 1,
-                through_chapter=self.plan.chapter_number,
-            )
-        ]
         result = json.loads(self.previous.result_json or "{}")
         result["retired_graph_delta_ids"] = self.retired_delta_ids
         self.previous.result_json = json.dumps(
@@ -177,16 +243,25 @@ class HistoricalCanonReplacement:
         repo.retire_chapter_deltas(
             self.plan.project_id,
             self.plan.chapter_number,
+            delta_ids=self.retired_delta_ids,
         )
 
-    def rebuild_successor_projections(self) -> None:
-        self.replayed_chapters = BookStateRepository(
-            self.session
-        ).rebuild_project_range(
+    def rebuild_successor_projections(
+        self,
+        compile_result: BookStateCompileResult,
+    ) -> BookStateCompileResult:
+        repo = BookStateRepository(self.session)
+        if self.retained_delta_ids:
+            compile_result = repo.replay_retained_chapter_deltas(
+                compile_result,
+                delta_ids=self.retained_delta_ids,
+            )
+        self.replayed_chapters = repo.rebuild_project_range(
             self.plan.project_id,
             from_chapter=self.plan.chapter_number + 1,
             through_chapter=self.through_chapter,
         )
+        return compile_result
 
     def mark_prior_commit_superseded(self) -> None:
         # Project locking in admission serializes allocation. Keep the original
@@ -236,7 +311,11 @@ class HistoricalCanonRewriteService:
                 "historical rewrite marker missing or invalid"
             )
         previous = records[0]
-        marker = HistoricalCanonRewriteRepository(self.session).pending_marker(previous)
+        repository = HistoricalCanonRewriteRepository(self.session)
+        retired_delta_ids, retained_delta_ids = repository.validate_contribution(
+            previous
+        )
+        marker = repository.pending_marker(previous)
         through_chapter = BookStateRepository(self.session).latest_available_chapter(
             plan.project_id
         )
@@ -260,5 +339,11 @@ class HistoricalCanonRewriteService:
                 "historical rewrite has a nonaccepted successor"
             )
         return HistoricalCanonReplacement(
-            self.session, plan, previous, marker, through_chapter
+            self.session,
+            plan,
+            previous,
+            marker,
+            through_chapter,
+            retired_delta_ids,
+            retained_delta_ids,
         )

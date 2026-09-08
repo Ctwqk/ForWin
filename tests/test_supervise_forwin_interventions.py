@@ -339,6 +339,72 @@ def test_upload_jobs_snapshot_ignores_failed_jobs_superseded_by_success(monkeypa
     assert [item["kind"] for item in blocked] == []
 
 
+def test_system_python_completes_upload_queue_scan_without_zip_strict_error() -> None:
+    """The queue scan must not crash when an operator invokes the script with macOS Python 3.9."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path == "/api/publishers/upload-jobs?limit=5":
+                payload = [
+                    {
+                        "job_id": "job-system-python",
+                        "task_kind": "chapter_upload",
+                        "platform": "fanqie",
+                        "status": "succeeded",
+                        "book_name": "Book",
+                        "chapter_title": "Chapter",
+                        "publish": False,
+                    }
+                ]
+            elif self.path == "/api/publishers/platforms":
+                payload = []
+            elif self.path == "/api/settings/codex/health":
+                payload = {"enabled": True, "healthy": True, "status": "ok"}
+            else:
+                self.send_error(404)
+                return
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A002
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        proc = subprocess.run(
+            [
+                "python3",
+                "scripts/supervise_forwin_interventions.py",
+                "--api-base",
+                base_url,
+                "--mcp-url",
+                f"{base_url}/mcp",
+                "--upload-job-limit",
+                "5",
+                "--skip-github",
+                "--no-fail-on-blocked",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert proc.returncode == 0, proc.stderr
+    assert '"checked_upload_jobs"' in proc.stdout
+
+
 def test_classify_generation_tasks_ignores_project_tasks_superseded_by_completed() -> None:
     blocked: list[dict] = []
     actions: list[dict] = []

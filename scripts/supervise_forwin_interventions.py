@@ -397,7 +397,7 @@ def upload_jobs_snapshot(
         return {"ok": False, "error": response.get("error") or "unexpected upload jobs response", "jobs": []}
     jobs = [_summarize_upload_job(item) for item in payload if isinstance(item, dict)]
     recovered_upload_keys: set[tuple[str, str, bool]] = set()
-    for raw, job in zip([item for item in payload if isinstance(item, dict)], jobs, strict=False):
+    for raw, job in zip([item for item in payload if isinstance(item, dict)], jobs):
         status = str(job.get("status") or "").lower()
         recovery_key = (
             str(job.get("platform") or ""),

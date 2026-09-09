@@ -1,4 +1,4 @@
-FROM node:22-slim AS world-studio-builder
+FROM node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS world-studio-builder
 
 WORKDIR /app/frontend/world-studio
 
@@ -8,11 +8,11 @@ COPY frontend/world-studio/index.html frontend/world-studio/tsconfig.json fronte
 COPY frontend/world-studio/src/ src/
 RUN npm run build
 
-FROM python:3.13-slim AS python-base
+FROM python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS python-base
 
 WORKDIR /app
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.10.3@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3 /uv /usr/local/bin/uv
 ARG FORWIN_SOURCE_REVISION=unknown
 LABEL org.opencontainers.image.revision=$FORWIN_SOURCE_REVISION
 ENV FORWIN_SOURCE_REVISION=$FORWIN_SOURCE_REVISION

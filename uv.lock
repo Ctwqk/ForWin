@@ -435,7 +435,7 @@ wheels = [
 [[package]]
 name = "forwin"
 version = "0.5.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "cryptography" },

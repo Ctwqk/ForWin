@@ -25,7 +25,9 @@ class SchemaRevisionMismatchError(RuntimeError):
         super().__init__(
             f"[{self.code}] ForWin database schema is "
             f"{current_revision or 'unstamped'}, expected {expected_revision}. "
-            "Recreate the database and run `alembic upgrade head`."
+            "Back up the database, verify its migration history, and apply the "
+            "supported forward migrations with `alembic upgrade head`. "
+            "Do not recreate an existing database."
         )
 
 
@@ -103,8 +105,9 @@ def require_v5_schema(engine: Engine) -> None:
         raise RuntimeError("ForWin migration head is missing.")
     if not inspect(engine).has_table("alembic_version"):
         raise RuntimeError(
-            "ForWin database has no v5 schema marker. Recreate the database and "
-            "run `alembic upgrade head`."
+            "ForWin database has no v5 schema marker. Back up the database and "
+            "inspect its migration history before applying a supported forward "
+            "migration. Do not recreate or blindly stamp an existing database."
         )
     with engine.connect() as conn:
         current = conn.execute(

@@ -12,12 +12,19 @@ FROM python:3.13-slim AS python-base
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+ARG FORWIN_SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.revision=$FORWIN_SOURCE_REVISION
+ENV FORWIN_SOURCE_REVISION=$FORWIN_SOURCE_REVISION
+ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_PYTHON_DOWNLOADS=never
+
+COPY pyproject.toml uv.lock ./
 COPY alembic.ini .
 COPY forwin/ forwin/
 COPY forwin_skills/ forwin_skills/
 
-RUN pip install --no-cache-dir . py-spy
+RUN uv sync --frozen --no-dev --extra runtime --no-editable
 COPY --from=world-studio-builder /app/frontend/world-studio/dist/ frontend/world-studio/dist/
 COPY browser_extension/ browser_extension/
 COPY scripts/ scripts/

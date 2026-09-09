@@ -315,6 +315,7 @@ else
   CHECK_LINES+=("- [ ] Docker compose config skipped; docker compose unavailable")
 fi
 
+run_in_worktree "runtime source policy" "$PYTHON_BIN" scripts/check_runtime_source.py --base "$BASE_REF"
 run_in_worktree "operator readiness" "$PYTHON_BIN" scripts/check_codex_operator_ready.py
 
 if [[ "$SKIP_TESTS" == false ]]; then

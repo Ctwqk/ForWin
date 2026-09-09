@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+runtime = [
+    "py-spy==0.4.2",
+]
 test = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",

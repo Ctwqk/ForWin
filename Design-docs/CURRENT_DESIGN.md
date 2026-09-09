@@ -198,7 +198,7 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 - 本文：现有设计的完整叙述。
 - [CURRENT_ARCHITECTURE](CURRENT_ARCHITECTURE.md)：精简的架构与代码边界。
 - [DESIGN_STATUS](DESIGN_STATUS.md)：旧文档权威性与当前状态。
-- [前轮收口修订](../docs/superpowers/specs/2026-09-04-v5-closure-design.md)：架构收口与发布验收顺序。
+- [前轮收口修订](https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/docs/superpowers/specs/2026-09-04-v5-closure-design.md)：架构收口与发布验收顺序。
 - [前轮验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)：历史分支整合、测试、消融和未完成发布证明。
 - [本轮修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)及[验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)：外部评审三个问题的实现、证据与边界。
 

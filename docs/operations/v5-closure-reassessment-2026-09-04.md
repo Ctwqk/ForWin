@@ -38,7 +38,7 @@ R27状态来自2026-09-04隔离MCP的project_get/chapter_get/task_active_generat
 
 ## 设计收缩
 
-采用 [收口修订](../superpowers/specs/2026-09-04-v5-closure-design.md)：冻结主架构和B0，取消外部签名前置门，恢复不可变commit record，预RC诊断仅按受影响范围复验。保留最终全新200章、无热修、真实停服恢复、Canon事务与lease fencing、publisher不重复外部效果。
+采用 [收口修订](https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/docs/superpowers/specs/2026-09-04-v5-closure-design.md)：冻结主架构和B0，取消外部签名前置门，恢复不可变commit record，预RC诊断仅按受影响范围复验。保留最终全新200章、无热修、真实停服恢复、Canon事务与lease fencing、publisher不重复外部效果。
 
 现有严格matrix collector仍要求完整输入；保留旧诊断证据不会让partial矩阵自动通过。新正文修复改变运行行为，必须使用新候选验证，不能把R27归档重新盖章为新版本PASS。
 

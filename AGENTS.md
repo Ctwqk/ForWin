@@ -2,6 +2,13 @@
 
 Use the `forwin` MCP server for project, Genesis, task, and chapter truth whenever it is configured. Do not inspect the SQLite database or send ad hoc `curl` requests for those workflows when an equivalent `forwin` MCP tool exists.
 
+## Current Design Entry
+
+- Read `Design-docs/CURRENT_DESIGN.md` and `docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md` first. The latter is the approved current roadmap; consult historical plans only for specific evidence.
+- This roadmap supersedes duplicate historical L200/matrix prerequisites. Its Stage 1 acceptance is a smoke followed by a fresh offline L100 with frozen source/model/policy.
+- Preserve deployed data with forward Alembic migrations; never rewrite the deployed baseline or recreate a production database to implement this roadmap.
+- Build all runtime roles from the authoritative source and dependency lock. Do not add production source copies or runtime string-replacement hotfix paths. Existing rollback materials stay read-only until a full replacement image is verified.
+
 ## Codex Coding Workspace
 
 - Treat GitHub `Ctwqk/ForWin` on `master` as the source-of-truth code branch.

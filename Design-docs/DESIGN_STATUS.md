@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-09-04
+更新时间：2026-09-09
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -12,6 +12,12 @@
 - `legacy-compatibility`：只描述兼容、迁移、投影或历史边界。
 - `historical-plan`：已执行或被后续设计覆盖的实施计划，不作为目标架构依据。
 - `future-product-backlog`：后续产品化方向，不作为当前后端缺口。
+
+## 当前路线图
+
+[2026-09-09 三阶段设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md) 是已批准的实施契约。其优先级高于旧路线图中的重复 L200/矩阵要求和破坏性迁移约定。实施进度见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)；未完成项不能解释成当前能力。
+
+历史运行只证明当时的源码、模型和策略。下文历史长跑待办不再是本轮前置条件。
 
 ## 当前入口
 

@@ -4,6 +4,8 @@ AI-assisted long-form Chinese web novel generation and publishing system.
 
 ForWin is built around an instance-owned FastAPI runtime, durable generation workers, PostgreSQL-backed project state, publishing workflows, and explicit audit / review layers for long-running writing projects.
 
+Current implementation: [current design](Design-docs/CURRENT_DESIGN.md). Approved work and acceptance order: [three-stage roadmap](docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md). Implementation evidence is tracked separately from proposals and historical runs.
+
 ## Engineering Summary
 
 While the user-facing surface is a novel-generation platform, the engineering substance is a multi-stage **content production and admission pipeline** for LLM-produced text:

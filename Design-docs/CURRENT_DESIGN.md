@@ -1,5 +1,7 @@
 # ForWin 当前设计
 
+> 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页的既有实现描述以源码为准；新版本身份、冻结、修订核验和 5% 限制在逐包实施。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
+
 更新：2026-09-04。范围：当前源码实际实现及本轮已验证的收口修改。
 
 当前设计以已集成的 `master@0a06cfa` 为基础，包含随后按外部评审落实的修复验证、trace补传和同日调度修复。分支整合与前轮消融见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)，本轮边界见[运行自主性修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)，本地证据见[修复验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。

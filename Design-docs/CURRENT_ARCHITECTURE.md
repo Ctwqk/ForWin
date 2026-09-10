@@ -64,6 +64,8 @@ Genesis / Writer / Review 主链
 
 LLM 正文评审与 repair escalation 使用完整拼接后的 `WriterOutput.body`。`scene_outputs` 中的拼接前草稿不得作为第二份正文送审；原场景产物保留供诊断及结构化地图检查。摘要、状态、事件、时间候选与 Canon invariants 用于交叉核验，不替代最终正文。
 
+BookState 规则进入 active invariant 前由 `book_state/rule_status.py` 解释明确生命周期值。已撤回、暂停、失效或未知值不能被重新标为生效；显式 `state.status` 即使空或 null 也不回退到 node.active，只有字段缺失才使用节点状态。读取不改写历史，仍然生效的规则定义和桥接约束保持。此边界来自隔离 smoke 的真实 BODY→抽取→状态→Writer 输入缺陷复现。
+
 RepairVerifier使用完整原稿/修复稿及全部合同，逐条记录pass/fail/unknown和可核对引用；聚合字段为true/false/null。证据不足或超时不冒充通过，也不创建新质量门；已证实失败、主review和hard residual的阻断仍有效。有证据语义反对最多复核一次，未验证信息透传API/UI。
 
 章节 review 详情固定返回五个有序、互不代替的 `decision_layers`：

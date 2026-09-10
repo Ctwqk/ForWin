@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from forwin.audit.events import DecisionEventType
+from forwin.book_state.rule_status import normalize_rule_status
 from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
 from forwin.models.audit import DecisionEvent
@@ -396,8 +397,10 @@ def _book_state_rule_invariant_constraints(
         if str(node.node_type or "") != "rule":
             continue
         state = runtime.world.get_state(node.id)
-        status = str(state.get("status") or node.status or "active").strip()
-        if not node.is_active or status in {"inactive", "retired", "deleted", "revoked"}:
+        # A present state value is authoritative even when empty or unknown.
+        # Only an absent field falls back to the node's declared lifecycle.
+        status = state.get("status", node.status)
+        if not node.is_active or normalize_rule_status(status) != "active":
             continue
         current_value = _canonical_rule_definition(node)
         if not current_value:

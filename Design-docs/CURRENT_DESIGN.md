@@ -105,7 +105,9 @@ Genesis 提供明确地点路线时，handoff 在现有 BookMap owner 内保留�
 
 路线原文的 `control/access` 与 `hazard/risk` 在同一导入入口归一化到现有来源 metadata；不同字段同时出现时保留全部不同原文，不用后者覆盖前者。Genesis 预览复用该归一化，Writer 展示通行条件和风险说明，主审查沿现有地图 metadata 读取。自然语言条件不转成权限 ID 或风险分数，不代表人物已经获得许可或风险事件已经发生；隐藏路线仍遵守原可见性边界。
 
-Genesis 路线使用同一 typed contract：新完整 Map 必须明确提供 `edges`（可为空），每条路线显式声明端点、耗时原文 `duration_text`、交通方式 `mode`、条件 `conditions`、风险 `risks` 及方向/显隐/通行规则引用。旧 `travel_time` 数值按小时解释，带单位字符串与有限旧别名由唯一 parser 处理；原始字典和字段路径随来源 metadata 保留。费用文案不冒充耗时，范围/约数保持未知；多个耗时来源冲突或不可比较、未知字段及错误类型明确报出路径，不能静默替换成程序化路线。生成、完整/定向修订、patch、Map 锁定和导入均执行相关校验；失败保留原 revision。旧 revision 可读取，预览对无法解析的可见路线显示信息不完整，隐藏路线仍过滤。SubWorld 级显式路线也保留独立身份、类型和显隐状态；程序化默认连接与现存已部署地图不因此重建。[路线合同修复记录](../docs/superpowers/reports/2026-09-10-genesis-route-contract.md)区分输入传递验证与真实生成验收。
+Genesis 路线使用同一 typed contract：新完整 Map 必须明确提供 `overview / topology_rules / submaps / regions / nodes / edges` 六字段，每条路线显式声明端点、耗时原文 `duration_text`、交通方式 `mode`、条件 `conditions`、风险 `risks` 及方向/显隐/通行规则引用。旧 `travel_time` 数值按小时解释，带单位字符串与有限旧别名由唯一 parser 处理；原始字典和字段路径随来源 metadata 保留。费用文案不冒充耗时，范围/约数保持未知；多个耗时来源冲突或不可比较、未知字段及错误类型明确报出路径，不能静默替换成程序化路线。生成、完整/定向修订、patch、Map 锁定和导入均执行相关校验；失败保留原 revision。旧 revision 可读取，预览对无法解析的可见路线显示信息不完整，隐藏路线仍过滤。SubWorld 级显式路线也保留独立身份、类型和显隐状态；程序化默认连接与现存已部署地图不因此重建。[路线合同修复记录](../docs/superpowers/reports/2026-09-10-genesis-route-contract.md)区分输入传递验证与真实生成验收。
+
+完整 Map 的模型 schema 描述六字段及既有层级结构；新生成在默认值补齐前验证字段、ID、端点和 SubWorld/Region/Node 归属，完整修订保留有限旧路线输入形式。定向修订和 patch 检查合并后的地图；Map 锁定、归一化和导入共用引用校验。子 Region 可以先于父 Region 出现，ID 优先于重名地点；无效引用、重复 ID、错误容器不能通过补默认地理或改换父级变成成功。初始 World 和手工输入仍可补齐省略的稳定 ID，明确空集合保持为空，历史读取不新增硬门。[完整地图修复记录](../docs/superpowers/reports/2026-09-10-genesis-map-completeness.md)保留写前失败证据与验收边界。
 
 Writer 获取当前可见 BookMap 路线和写前来源约束，即使人物位置未解析或地图被裁剪也保留已有路线，并标明不完整。主 BODY reviewer 获取当前地图及来源证据，以当前 BookMap 优先；客观隐藏路线不等于角色已知。确定性移动检查识别运行地点 ID、唯一 Genesis 来源 ID/名称，以及明确的中文/数字复合时长；复合自由文本位置不猜测映射。它仍不能证明最终正文的每一段移动都正确，真实长跑须独立审读最终 BODY。[已暂停 L100 的失败与修复边界](../docs/superpowers/reports/2026-09-10-stage1-map-failure.md)记录了这一限制。
 

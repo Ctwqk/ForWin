@@ -303,6 +303,7 @@ def test_unsupported_visible_route_read_preserves_source_and_reports_incomplete_
 
 def test_invalid_generated_route_does_not_fall_back_to_a_different_map():
     source = atlas()
+    source["topology_rules"] = []
     source["edges"][0]["unhandled_access"] = "需要额外许可"
     calls = []
     client = SimpleNamespace(api_key="test", codex_enabled=False, last_call_result=None)

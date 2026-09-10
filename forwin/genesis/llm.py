@@ -3,9 +3,8 @@ from __future__ import annotations
 from typing import Any
 from forwin.map.genesis_route import (
     GenesisRouteContractError,
-    genesis_map_output_schema,
-    parse_genesis_routes,
 )
+from forwin.map.genesis_atlas import genesis_map_output_schema, validate_complete_genesis_map
 from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,
     mark_latest_attempt_parse_failure,
@@ -338,12 +337,12 @@ def _call_json_with_trace_impl(
                 else "genesis",
                 stage_key=stage_key,
                 codex_allowed=not is_chapter_plan,
-                output_schema=genesis_map_output_schema() if stage_key == "map" else {"type": "object"},
+                output_schema=genesis_map_output_schema(canonical_routes=stage_key == "map") if stage_key in {"map", "map:refine"} else {"type": "object"},
             )
             try:
                 payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
-                if stage_key == "map":
-                    parse_genesis_routes(payload.get("edges"), canonical=True)
+                if stage_key in {"map", "map:refine"}:
+                    validate_complete_genesis_map(payload, canonical_routes=stage_key == "map")
             except Exception as exc:  # noqa: BLE001
                 mark_latest_attempt_parse_failure(
                     self.llm_client,

@@ -190,6 +190,17 @@ The fresh `5524e36` candidate passed 3156 tests and both complete role-image che
 - [x] Verify regressions and the unchanged actual-source replay; root related suite 144 passed and independent route suite 98 passed (overlapping), with no remaining blocker. Same actual Map retains 8/8 durations, 13/13 conditions, 8/8 modes and 8/8 risks. See [contract report](../reports/2026-09-10-genesis-route-contract.md); no BODY qualification.
 - [ ] Freeze a new source candidate, complete whole QA and both images, then a fresh smoke followed by an independent L100. This held Map and all earlier failed samples remain evidence only.
 
+### Task 16: Validate complete Genesis maps before normalization
+
+The fresh `b61a718` candidate passed 3203 tests and both exact role images. Its Map response contains only thirteen `edges`, matching an output schema that accidentally describes only that field. Normalization supplies default geography with three nodes; all twenty-six route endpoint references are unresolved. The sample remains unlocked at revision 6 with no writing task. Preserve its SHA-verified request, response and canonical revision as failure evidence.
+
+**Design:** Define the existing six-part MapAtlas output in full, reuse the route contract, and validate authored identities and references before normalization can substitute defaults. Full generation requires all six fields; complete refinement retains finite legacy route compatibility. A targeted refinement or patch validates the merged map, not the isolated target. Map lock and import share the same reference checks. Historical reads remain available, initial World scaffolds remain possible, and no deployed map or held sample is rewritten.
+
+- [x] Preserve actual artifacts and reproduce unresolved endpoints; add failing complete-output and atomic write tests (18 failed / 1 passed before implementation).
+- [x] Implement the complete output contract and shared reference validation without a new map owner or model gate.
+- [x] Verify valid maps, malformed structure, dangling/cross-parent references, duplicate identities, explicit empty sections, complete/targeted changes and unchanged rejected revisions. Root related 235 passed; independent final 167 passed (overlapping), no remaining blocker. Current design and [failure report](../reports/2026-09-10-genesis-map-completeness.md) updated.
+- [ ] Freeze new source, run complete QA and both images, then a fresh smoke followed by a separate L100 and ending review. Earlier engineering passes and held maps cannot qualify this candidate.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

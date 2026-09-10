@@ -355,19 +355,6 @@ def parse_genesis_routes(
     return routes
 
 
-def genesis_map_output_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "required": ["edges"],
-        "properties": {
-            "edges": {
-                "type": "array",
-                "items": GenesisRoute.model_json_schema(by_alias=True),
-            }
-        },
-    }
-
-
 def genesis_route_prompt_contract() -> str:
     return (
         "每条新路线使用唯一字段契约：from/to 为既有地点或 SubWorld 引用，id 保持稳定，"

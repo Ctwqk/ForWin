@@ -17,7 +17,9 @@
 
 后续 `03143ef` 已通过 3123 项全量回归、4 项跳过、6 subtests，编译及关键静态检查通过，完整 Ruff 对原基线没有新增诊断；运行和浏览器镜像均按完整源码与依赖锁验证。其新项目在 Genesis Map 阶段发现十二项路线权限/风险原文漏传，尚无章节任务，不能称新 smoke 正文失败或通过。已沿现有地图 owner 修复并通过 192 项相关回归，该轮独立复审后形成 0b3c49a 候选，见[地图报告](../superpowers/reports/2026-09-10-stage1-map-failure.md)。
 
-最新候选 `5524e36` 完成 3156 项全量回归和两类完整镜像验证，修复了当前重写合同传递。其全新 smoke 在 Map revision 7 发现耗时、条件及交通方式字段漏传，尚无章节任务；当前 Task 15 正在统一路线合同并重新验证。旧 `0b3c49a` smoke 在第 3 章三次修复后停止，仅接纳 1–2 章。两轮均不能算 smoke20 或 L100 通过，见[修复合同记录](../superpowers/reports/2026-09-10-repair-writer-contract.md)和[路线合同记录](../superpowers/reports/2026-09-10-genesis-route-contract.md)。
+此前候选 `5524e36` 完成 3156 项全量回归和两类完整镜像验证，修复了当前重写合同传递。其全新 smoke 在 Map revision 7 发现耗时、条件及交通方式字段漏传，尚无章节任务；当前 Task 15 正在统一路线合同并重新验证。旧 `0b3c49a` smoke 在第 3 章三次修复后停止，仅接纳 1–2 章。两轮均不能算 smoke20 或 L100 通过，见[修复合同记录](../superpowers/reports/2026-09-10-repair-writer-contract.md)和[路线合同记录](../superpowers/reports/2026-09-10-genesis-route-contract.md)。
+
+候选 `b61a718` 已完成路线合同修复后的 3203 项全量回归和两类精确角色镜像验证。全新项目在 Map revision 6 暴露完整输出 schema 仅包含路线的问题：默认地理与十三条路线的端点不匹配；尚无章节任务。当前 Task 16 修复完整六字段生成与共享引用校验，保留原样本；详见[完整地图记录](../superpowers/reports/2026-09-10-genesis-map-completeness.md)。这仍不是 smoke20 或 L100 通过。
 
 ## 运行基线调查
 

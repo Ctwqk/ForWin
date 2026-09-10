@@ -31,7 +31,7 @@ from forwin.audit.events import (
 )
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import Project
-from forwin.map.genesis_route import parse_genesis_routes
+from forwin.map.genesis_atlas import validate_genesis_map_references
 from forwin.state.updater import StateUpdater
 
 from .name_suggestions import GenesisNameSuggestionService
@@ -464,7 +464,7 @@ class GenesisWorkspaceService:
         pack = self.load_pack(revision)
         if stage_key == "map":
             map_atlas = _pack_stage_payload(pack, "map")
-            parse_genesis_routes(map_atlas.get("edges", []))
+            validate_genesis_map_references(map_atlas)
         stage_states = (
             pack.get("stage_states")
             if isinstance(pack.get("stage_states"), dict)

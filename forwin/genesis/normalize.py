@@ -6,7 +6,8 @@ from forwin.genesis.constants import (
     logger,
 )
 from typing import Any
-from forwin.map.genesis_route import parse_genesis_routes
+from forwin.map.genesis_route import GenesisRouteContractError, parse_genesis_routes
+from forwin.map.genesis_atlas import validate_genesis_map_references, with_genesis_map_identities
 from forwin.world_templates import (
     default_minimum_extension_pack,
     default_minimum_world_system,
@@ -115,6 +116,8 @@ def _normalize_world_root_payload(
         normalized = {"world_bible": normalized}
     if isinstance(normalized.get("world"), dict):
         normalized = normalized.get("world") or {}
+    if "map_atlas" in normalized and not isinstance(normalized["map_atlas"], dict):
+        raise GenesisRouteContractError("world.map_atlas", "expected a map object", normalized["map_atlas"])
     result = _deep_merge(_empty_stage_world(), fallback if isinstance(fallback, dict) else {})
     result["minimum_world_system"] = _deep_merge(
         default_minimum_world_system(),
@@ -230,20 +233,19 @@ def _normalize_blueprint_payload(
 
 def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any], world_bible: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = payload if isinstance(payload, dict) else {}
+    normalized = with_genesis_map_identities({**fallback, **normalized})
+    validate_genesis_map_references(normalized)
     culture_profile_ids = {
         str(item.get("id", "")).strip()
         for item in ((world_bible or {}).get("culture_profiles") or [])
         if isinstance(item, dict) and str(item.get("id", "")).strip()
     }
-    submaps = [item for item in (normalized.get("submaps") or fallback.get("submaps") or []) if isinstance(item, dict)]
+    submaps = normalized.get("submaps", fallback.get("submaps", []))
     normalized_submaps = []
     subworld_ids: set[str] = set()
-    subworld_names: set[str] = set()
     subworld_name_to_id: dict[str, str] = {}
-    for index, item in enumerate(submaps, start=1):
-        subworld_id = str(item.get("id", "")).strip() or f"subworld-{index}"
-        if subworld_id in subworld_ids:
-            subworld_id = f"{subworld_id}-{index}"
+    for item in submaps:
+        subworld_id = item["id"]
         culture_profile_id = str(item.get("culture_profile_id", "")).strip()
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
@@ -267,39 +269,31 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
             }
         )
         subworld_ids.add(subworld_id)
-        subworld_names.add(name)
         subworld_name_to_id[name] = subworld_id
-    regions_raw = [item for item in (normalized.get("regions") or fallback.get("regions") or []) if isinstance(item, dict)]
+    regions_raw = normalized.get("regions", fallback.get("regions", []))
     normalized_regions: list[dict[str, Any]] = []
     region_ids: set[str] = set()
-    level_one_ids: dict[str, set[str]] = {}
+    name_counts = {}
+    for item in normalized_submaps:
+        name_counts[item["name"]] = name_counts.get(item["name"], 0) + 1
+    subworld_id_to_name = {
+        item["id"]: item["name"]
+        if name_counts[item["name"]] == 1 and (item["name"] not in subworld_ids or item["name"] == item["id"])
+        else item["id"]
+        for item in normalized_submaps
+    }
     for index, item in enumerate(regions_raw, start=1):
         name = str(item.get("name", "")).strip() or f"地区{index}"
         subworld_name = str(item.get("subworld_name", "")).strip()
-        if not subworld_name or subworld_name not in subworld_names:
-            subworld_name = next(iter(subworld_names), "")
+        subworld_name = subworld_id_to_name.get(subworld_name, subworld_name)
+        if not subworld_name:
+            subworld_name = next(iter(subworld_id_to_name.values()), "")
         level = int(item.get("level", 1) or 1)
-        if level not in {1, 2}:
-            level = 1
-        region_id = str(item.get("id", "")).strip() or f"region-{index}"
-        if region_id in region_ids:
-            region_id = f"{region_id}-{index}"
+        region_id = item["id"]
         parent_region_id = str(item.get("parent_region_id", "")).strip()
         culture_profile_id = str(item.get("culture_profile_id", "")).strip()
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
-        if level == 1:
-            parent_region_id = ""
-            level_one_ids.setdefault(subworld_name, set()).add(region_id)
-        else:
-            valid_parents = level_one_ids.setdefault(subworld_name, set())
-            if parent_region_id not in valid_parents:
-                parent_region_id = next(iter(valid_parents), "")
-                if not parent_region_id:
-                    level = 1
-            if level == 1:
-                parent_region_id = ""
-                level_one_ids.setdefault(subworld_name, set()).add(region_id)
         normalized_regions.append(
             {
                 "id": region_id,
@@ -319,21 +313,14 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
         )
         region_ids.add(region_id)
     normalized_nodes = []
-    node_ids: set[str] = set()
-    for index, item in enumerate((normalized.get("nodes") or fallback.get("nodes") or []), start=1):
-        if not isinstance(item, dict):
-            continue
-        node_id = str(item.get("id", "")).strip() or f"node-{index}"
-        if node_id in node_ids:
-            node_id = f"{node_id}-{index}"
+    for item in normalized.get("nodes", fallback.get("nodes", [])):
+        node_id = item["id"]
         parent_subworld = str(item.get("parent_subworld", "")).strip()
-        if parent_subworld in subworld_name_to_id:
+        if parent_subworld not in subworld_ids and parent_subworld in subworld_name_to_id:
             parent_subworld = subworld_name_to_id[parent_subworld]
         elif parent_subworld not in subworld_ids:
             parent_subworld = next(iter(subworld_ids), "")
         parent_region_id = str(item.get("parent_region_id", "")).strip()
-        if parent_region_id and parent_region_id not in region_ids:
-            parent_region_id = ""
         culture_profile_id = str(item.get("culture_profile_id", "")).strip()
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
@@ -354,10 +341,9 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
                 "resources": [str(value).strip() for value in (item.get("resources") or []) if str(value).strip()],
             }
         )
-        node_ids.add(node_id)
     result = {
         "overview": str(normalized.get("overview", "")).strip() or str(fallback.get("overview", "")),
-        "topology_rules": [str(item).strip() for item in (normalized.get("topology_rules") or fallback.get("topology_rules") or []) if str(item).strip()],
+        "topology_rules": [str(item).strip() for item in normalized.get("topology_rules", fallback.get("topology_rules", [])) if str(item).strip()],
         "submaps": normalized_submaps,
         "regions": normalized_regions,
         "nodes": normalized_nodes,
@@ -365,6 +351,7 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
             normalized["edges"] if "edges" in normalized else fallback.get("edges", [])
         )],
     }
+    validate_genesis_map_references(result)
     return result
 
 def _normalize_story_engine_payload(

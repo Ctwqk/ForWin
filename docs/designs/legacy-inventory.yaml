@@ -58,18 +58,23 @@ entries:
     owner_area: genesis_map
     paths:
       - forwin/map/genesis_route.py
+      - forwin/map/genesis_atlas.py
     allow_patterns:
       - Legacy dictionaries remain immutable evidence
       - _LEGACY
       - _validate_legacy_scalars
       - legacy_kind
+      - including merged legacy edits
     reason: >
       The approved three-stage roadmap preserves existing Genesis revisions.
       This single input parser reads their finite route aliases, including
       numeric travel_time in hours, without rewriting historical dictionaries
       or retaining a second route implementation. New complete map generation
       uses the canonical typed schema. Unsupported fields and contradictions
-      are rejected; this is an explicit retained input-compatibility debt.
+      are rejected. The shared atlas boundary also retains the existing node
+      parent aliases and omitted-ID autofill for editable input; new complete
+      model maps declare canonical identities. This is an explicit retained
+      input-compatibility debt.
     removal_phase: after_genesis_route_input_retirement
     verification:
       - tests/test_genesis_route_schema.py

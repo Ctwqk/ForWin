@@ -10,7 +10,8 @@ from forwin.models.subworld import project_scoped_subworld_id
 from forwin.protocol.book_state import MapEdge
 
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
-from .genesis_route import GenesisRouteContractError, parse_genesis_routes
+from .genesis_route import parse_genesis_routes
+from .genesis_atlas import validate_genesis_map_references, with_genesis_map_identities
 
 _DEFAULT_REGION_ROLES = ["主舞台核心区", "权力中心区", "危险边缘区"]
 _SAFE_NODE_TYPES = {
@@ -34,7 +35,7 @@ def build_subworld_map_specs_from_genesis(
     genesis_revision_id: str = "",
     map_atlas: dict[str, Any] | None = None,
 ) -> list[SubWorldMapSpec]:
-    atlas = map_atlas if isinstance(map_atlas, dict) else {}
+    atlas = with_genesis_map_identities(map_atlas if isinstance(map_atlas, dict) else {})
     submaps = _normalized_submaps(atlas)
     regions = [item for item in (atlas.get("regions") or []) if isinstance(item, dict)]
     nodes = [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)]
@@ -110,14 +111,14 @@ def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> 
     Travel time is only the leading explicit duration. Procedural waits and
     conditions remain verbatim evidence, never guessed numerical weights.
     """
+    map_atlas = with_genesis_map_identities(map_atlas)
+    validate_genesis_map_references(map_atlas)
     nodes = [item for item in map_atlas.get("nodes", []) if isinstance(item, dict)]
     by_ref: dict[str, str] = {}
     names: dict[str, set[str]] = {}
     for node in nodes:
         source_id = str(node.get("id") or "").strip()
         if source_id:
-            if source_id in by_ref:
-                raise ValueError(f"duplicate authored map node: {source_id}")
             by_ref[source_id] = source_id
             names.setdefault(str(node.get("name") or source_id), set()).add(source_id)
     for name, ids in names.items():
@@ -125,23 +126,14 @@ def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> 
             by_ref[name] = next(iter(ids))
     result: list[MapEdge] = []
     subworld_refs = {str(item.get(key) or "") for item in map_atlas.get("submaps", []) if isinstance(item, dict) for key in ("id", "name")}
-    subworld_id_by_ref = {str(item.get(key) or ""): str(item.get("id") or "")
-                         for item in map_atlas.get("submaps", []) if isinstance(item, dict) for key in ("id", "name")}
-    node_parent_by_id = {str(node.get("id") or ""): str(node.get("parent_subworld") or node.get("parent_subworld_id") or node.get("subworld_id") or node.get("subworld_name") or "") for node in nodes}
     for index, parsed in enumerate(parse_genesis_routes(map_atlas.get("edges", []))):
-        row, route = parsed.source_row, parsed.route
+        route = parsed.route
         left, right = route.from_ref, route.to_ref
         if left not in by_ref or right not in by_ref:
             # Subworld-level edges are handled by the existing interconnection adapter.
             if left in subworld_refs and right in subworld_refs:
                 continue
             raise ValueError(f"authored map route has unresolved endpoint: {left} -> {right}")
-        for side, endpoint, parent in (("from", left, parsed.from_subworld_ref), ("to", right, parsed.to_subworld_ref)):
-            if parent:
-                declared = subworld_id_by_ref.get(parent)
-                actual = subworld_id_by_ref.get(node_parent_by_id[by_ref[endpoint]])
-                if not declared or declared != actual:
-                    raise GenesisRouteContractError(parsed.source_path + f".{side}_subworld", "route parent does not match node ownership", row)
         source_id = parsed.source_id(index)
         result.append(MapEdge(
             id=f"atlas_edge_{uuid5(NAMESPACE_URL, project_id + '|' + source_id).hex[:16]}",

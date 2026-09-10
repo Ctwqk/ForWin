@@ -175,9 +175,10 @@ class RetrievalBroker:
         )
         pack = self._filter_writer_safe_world_context(pack)
         estimate = self._estimate_pack_with_components(pack)
+        current_names = {entity.name for entity in pack.active_entities}
 
         while estimate > self.context_budget_chars:
-            without_unrelated = _drop_unrelated_genesis_reference(pack)
+            without_unrelated = _drop_unrelated_genesis_reference(pack, current_names)
             if without_unrelated is not None:
                 pack = without_unrelated
                 estimate = self._estimate_pack_with_components(pack)

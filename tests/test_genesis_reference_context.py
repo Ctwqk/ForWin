@@ -14,6 +14,7 @@ from forwin.protocol.context import EntitySnapshot, WritingPack
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.retrieval.broker_core.broker import RetrievalBroker
+from forwin.retrieval.broker_core.helpers import _budget_genesis_references
 from forwin.review.context_builder import build_review_context_pack
 from forwin.review.llm_webnovel import LLMWebNovelReviewer
 from forwin.review.webnovel import WebNovelExperienceReviewer
@@ -161,6 +162,29 @@ def test_budget_discards_unrelated_source_before_current_canon():
     assert len(trimmed.previous_chapter_summaries) == 3
     assert trimmed.genesis_reference_facts == []
     assert trimmed.genesis_reference_omitted_count == 1
+
+
+def test_reference_quota_includes_the_existing_component_separator_cost():
+    context = _context(world={"world_bible": {"history_slice": "第一年开始"}})
+    encoded = json.dumps(context.genesis_reference_facts[0].model_dump(mode="json"), ensure_ascii=False)
+    trimmed = _budget_genesis_references(context, len(encoded))
+    assert trimmed.genesis_reference_facts == []
+    assert trimmed.genesis_reference_omitted_count == 1
+
+
+def test_reference_relevance_does_not_change_when_its_entity_is_trimmed():
+    context = _context(world={"story_engine": {"core_cast": [
+        {"name": "人物7", "secret": "曾经改账。" * 200},
+    ]}})
+    context.active_entities = [EntitySnapshot(
+        entity_id=f"e{i}", kind="character", name=f"人物{i}",
+        description="人" * 240, current_state={},
+    ) for i in range(8)]
+    context.previous_chapter_summaries = ["第1章接受的事实", "第2章接受的事实", "第3章接受的事实"]
+    trimmed = RetrievalBroker()._trim_pack(context)
+    assert len(trimmed.active_entities) < 8
+    assert [fact.subject for fact in trimmed.genesis_reference_facts] == ["人物7"]
+    assert trimmed.genesis_reference_omitted_count == 0
 
 
 def test_retrieval_merge_preserves_available_nested_cognition_for_both_models():

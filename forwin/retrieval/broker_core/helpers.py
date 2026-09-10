@@ -142,7 +142,7 @@ def _budget_genesis_references(pack: ChapterContextPack, max_chars: int) -> Chap
     remaining_chars = max(0, max_chars)
     selected = []
     for fact in pack.genesis_reference_facts:
-        size = len(json.dumps(fact.model_dump(mode="json"), ensure_ascii=False))
+        size = len(json.dumps(fact.model_dump(mode="json"), ensure_ascii=False)) + 1
         if size <= remaining_chars:
             selected.append(fact)
             remaining_chars -= size
@@ -154,10 +154,9 @@ def _budget_genesis_references(pack: ChapterContextPack, max_chars: int) -> Chap
     })
 
 
-def _drop_unrelated_genesis_reference(pack: ChapterContextPack) -> ChapterContextPack | None:
+def _drop_unrelated_genesis_reference(pack: ChapterContextPack, current_names: set[str]) -> ChapterContextPack | None:
     """Under pressure, offstage source background precedes current Canon eviction."""
     chapter_text = "\n".join([pack.chapter_plan_title, pack.chapter_plan_one_line, *pack.chapter_goals])
-    current_names = {entity.name for entity in pack.active_entities}
     for index in range(len(pack.genesis_reference_facts) - 1, -1, -1):
         fact = pack.genesis_reference_facts[index]
         if (fact.category == "character_secret" and fact.subject not in current_names

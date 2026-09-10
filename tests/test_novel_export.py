@@ -169,7 +169,7 @@ def test_handler_freezes_publication_observation_before_io_and_rebuilds(
     assert manifest == payload["snapshot"]
 
 
-def test_real_full_suffix_replacement_and_world_edit_rebuild_each_book_revision(
+def test_real_full_suffix_replacement_and_retained_world_edit_rebuild_each_book_revision(
     prepared_canon,
 ):
     from forwin.canon.revision_service import (
@@ -202,9 +202,29 @@ def test_real_full_suffix_replacement_and_world_edit_rebuild_each_book_revision(
         prepared.plan, revision_model_identity=revision_model_identity(writer)
     )
     assert not outcome.blocked, outcome
-    atomic._commit_same_chapter_world_edit(
+    with prepared_canon.Session() as session:
+        assert session.get(Project, ids[0]).book_revision == 3
+        assert sorted(
+            json.loads(row.payload_json)["book_revision"]
+            for row in session.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == ids[0],
+                    OutboxEvent.event_type == NOVEL_EXPORT_REQUESTED,
+                )
+            )
+        ) == [1, 2, 3]
+
+    # Preserve a pre-boundary world edit and its original export request.
+    # The current API rejects world edits on books with accepted chapters.
+    atomic._seed_retained_legacy_world_edit(
         SimpleNamespace(Session=prepared_canon.Session, project_id=ids[0])
     )
+    from forwin.canon.projection_lock import lock_projection_project
+    from forwin.novel_export.events import enqueue_book_export
+
+    with prepared_canon.Session.begin() as session:
+        lock_projection_project(session, ids[0])
+        enqueue_book_export(session, session.get(Project, ids[0]))
     with prepared_canon.Session.begin() as session:
         versions = [
             capture_snapshot(
@@ -235,6 +255,41 @@ def test_real_full_suffix_replacement_and_world_edit_rebuild_each_book_revision(
         assert sorted(
             json.loads(row.payload_json)["book_revision"] for row in requests
         ) == [1, 2, 3, 4]
+
+
+def test_pre_acceptance_world_edit_api_enqueues_current_export_request(prepared_canon):
+    from forwin.api_schema import WorldEditProposalReviewRequest
+    from forwin.http.adapters.api_proposal_routes import build_handlers
+    from tests.test_world_edit_history_boundary import _proposal
+
+    proposal_id = _proposal(prepared_canon, 0)
+    result = build_handlers(get_session=prepared_canon.Session)[
+        "approve_project_proposal"
+    ](
+        prepared_canon.project_id,
+        proposal_id,
+        WorldEditProposalReviewRequest(status="accepted", reason="Writing premise"),
+    )
+    assert result.status == "accepted"
+    with prepared_canon.Session() as session:
+        project = session.get(Project, prepared_canon.project_id)
+        assert project.book_revision == 1
+        requests = list(
+            session.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.aggregate_id == project.id,
+                    OutboxEvent.event_type == NOVEL_EXPORT_REQUESTED,
+                )
+            )
+        )
+        assert len(requests) == 1
+        assert requests[0].event_id == f"novel-export:{project.id}:1"
+        assert requests[0].status == "pending"
+        payload = json.loads(requests[0].payload_json)
+        assert payload["project_id"] == project.id
+        assert payload["book_revision"] == 1
+        assert payload["display_title"] == project.title
+        assert payload["snapshot"] is None
 
 
 def test_stale_claim_cannot_capture_or_overwrite_the_new_claim_snapshot(

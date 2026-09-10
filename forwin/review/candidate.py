@@ -26,7 +26,6 @@ from forwin.storage import ArtifactStore
 
 from .candidate_autofix import (
     apply_canon_name_drift_autofix,
-    apply_placeholder_leakage_autofix,
 )
 from .results import merge_repair_verification
 
@@ -106,25 +105,21 @@ class CandidateReviewService:
             context=request.context,
             writer_output=output,
         )
-        for autofix in (
-            apply_canon_name_drift_autofix,
-            apply_placeholder_leakage_autofix,
-        ):
-            fixed = autofix(output, review)
-            if fixed is not None:
-                output = self._plan_entities(
-                    session=request.session,
-                    project_id=request.project_id,
-                    chapter_number=request.chapter_number,
-                    writer_output=fixed,
-                )
-                review = self._review(
-                    repo=request.repo,
-                    checker=request.checker,
-                    project_id=request.project_id,
-                    context=request.context,
-                    writer_output=output,
-                )
+        fixed = apply_canon_name_drift_autofix(output, review)
+        if fixed is not None:
+            output = self._plan_entities(
+                session=request.session,
+                project_id=request.project_id,
+                chapter_number=request.chapter_number,
+                writer_output=fixed,
+            )
+            review = self._review(
+                repo=request.repo,
+                checker=request.checker,
+                project_id=request.project_id,
+                context=request.context,
+                writer_output=output,
+            )
         if verification is not None:
             result = self.repair_verifier.verify(
                 original_output=verification.original_output,

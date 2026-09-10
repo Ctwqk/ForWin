@@ -52,41 +52,6 @@ def apply_canon_name_drift_autofix(
     return WriterOutput.model_validate(payload)
 
 
-def apply_placeholder_leakage_autofix(
-    writer_output: WriterOutput,
-    review: ReviewVerdict,
-) -> WriterOutput | None:
-    body = str(writer_output.body or "")
-    if "工作人员" not in body and "工作人员" not in str(
-        writer_output.end_of_chapter_summary or ""
-    ):
-        return None
-    should_replace = any(
-        str(issue.rule_name or "") == "bare_role_placeholder_leakage"
-        and str(issue.severity or "") == "error"
-        for issue in review.issues
-    )
-    if not should_replace:
-        return None
-    replacement = "具体见证人"
-    replacements = {"工作人员": replacement}
-    payload = replace_canon_name_strings(
-        writer_output.model_dump(mode="python"),
-        replacements,
-    )
-    payload["char_count"] = len(str(payload.get("body") or ""))
-    generation_meta = dict(payload.get("generation_meta") or {})
-    previous_autofix = generation_meta.get("placeholder_leakage_autofix")
-    if isinstance(previous_autofix, dict):
-        autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
-        autofix_meta.update(replacements)
-    else:
-        autofix_meta = replacements
-    generation_meta["placeholder_leakage_autofix"] = autofix_meta
-    payload["generation_meta"] = generation_meta
-    return WriterOutput.model_validate(payload)
-
-
 def replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
     if isinstance(value, str):
         result = value

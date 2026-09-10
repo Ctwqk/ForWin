@@ -4,7 +4,6 @@ import re
 
 from .signals import CanonQualitySignal, make_signal_id
 
-
 BLOCKED_BODY_PLACEHOLDERS = ("一名相关人员", "相关人员")
 BLOCKED_INTERNAL_STATE_KEYS = (
     "memory_reset",
@@ -171,23 +170,18 @@ def _analyze_bare_role_placeholder(
     body: str,
 ) -> CanonQualitySignal | None:
     for placeholder in BARE_ROLE_PLACEHOLDERS:
-        standalone = re.search(
-            rf"(^|[。！？\n\r])\s*({re.escape(placeholder)})\s*[。！？]?(?=$|[。！？\n\r])",
-            body,
-        )
         label_context = re.search(
-            rf"(签名|署名|徽章|证件|标记|权限|名字|姓名)[^。！？\n\r]{{0,20}}({re.escape(placeholder)})",
-            body,
-        )
-        actor_context = re.search(
-            rf"({re.escape(placeholder)})(?:停下|走近|抬头|伸手|看|说|问|冷笑|追|拦|取|的声音)",
+            rf"(签名|署名|名字|姓名)(?:人|者|栏|处)?(?:上|中|内|里)?\s*"
+            rf"(?:[：:为是]|(?:写|填|标|记)(?:着|为|成|的是))\s*[“\"「‘']?"
+            rf"({re.escape(placeholder)})(?=$|[”\"」’'，,。！？；;：:\s])",
             body,
         )
         role_as_name = re.search(
-            rf"(队长|巡检员|操作员|守卫)[，,、：:\s]*({re.escape(placeholder)})(?=[。”，,、\s])",
+            rf"(队长|巡检员|操作员|守卫)(?:名叫|名为|叫作)\s*[“\"「‘']?"
+            rf"({re.escape(placeholder)})(?=$|[”\"」’'，,。！？；;：:\s])",
             body,
         )
-        match = standalone or label_context or actor_context or role_as_name
+        match = label_context or role_as_name
         if match is None:
             continue
         start = match.start(2) if match.lastindex and match.lastindex >= 2 else match.start(1)

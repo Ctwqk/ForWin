@@ -201,6 +201,19 @@ The fresh `b61a718` candidate passed 3203 tests and both exact role images. Its 
 - [x] Verify valid maps, malformed structure, dangling/cross-parent references, duplicate identities, explicit empty sections, complete/targeted changes and unchanged rejected revisions. Root related 235 passed; independent final 167 passed (overlapping), no remaining blocker. Current design and [failure report](../reports/2026-09-10-genesis-map-completeness.md) updated.
 - [ ] Freeze new source, run complete QA and both images, then a fresh smoke followed by a separate L100 and ending review. Earlier engineering passes and held maps cannot qualify this candidate.
 
+### Task 17: Diagnose accepted continuity failures and remove invented role aliases
+
+The frozen `00610f2` candidate passed 3240 tests and both complete role images. Its fresh smoke accepted chapters 1–3, but independent reading found a changed ledger carrier and reversed refund/approval order. Canonical safe pause was requested during chapter 4; this is failed smoke evidence, not a qualified replacement for L100. Preserve the accepted identities, full BODY, raw model artifacts, finite provider failures and gate results.
+
+**Confirmed code defect:** ordinary unnamed staff actions trigger `bare_role_placeholder_leakage`; an automatic fix then globally replaces `工作人员` with the invented alias `具体见证人`, including structured evidence. The raw Writer result and persisted output prove this mutation. Remove that unsupported semantic replacement and constrain deterministic role-label detection to explicit identity placeholders. Ordinary role descriptions remain valid; genuine missing names and internal state keys still follow the existing review and finite repair path. Keep exact canonical name correction and its re-review unchanged.
+
+**Continuity investigation:** trace the actual writer/reviewer inputs, history selection, extraction and budgeting before choosing a correction. Do not assume that improving role handling fixes the missing chronology, add a novel-specific date rule, relax quality gates or patch the failed runtime.
+
+- [x] Preserve accepted chapters 1–3 and hash-verified original artifacts; request canonical safe pause without restarting the task.
+- [x] Reproduce ordinary-role false positives and unsupported global replacement; remove the duplicate semantic rewrite and verify genuine placeholder handling through the review owner. Initial 8 failed / 2 passed; independent findings added identity-slot, word-boundary, role-list and no-op local repair cases. Final root related 103 passed; independent 87 plus 3 canonical-name probes passed (overlapping). Same raw BODY replay verifies 17 ordinary roles were globally replaced only by the old code. See [failure and repair evidence](../reports/2026-09-10-accepted-continuity-failure.md).
+- [ ] Establish the cross-chapter history-loss cause from actual inputs and add general regressions for the chosen correction.
+- [ ] Independently review, update current documentation, freeze a new candidate and repeat whole QA, both images, fresh smoke and separate L100 with ending review.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

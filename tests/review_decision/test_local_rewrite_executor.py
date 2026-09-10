@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
+from forwin.canon_quality.placeholder import analyze_placeholder_leakage
+from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.review.decision.rules.repair_v2 import decide_repair_v2
+from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 
 
@@ -110,3 +116,35 @@ def test_unsupported_issue_returns_unsupported() -> None:
     )
 
     assert result.status == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "林川核对登记表，姓名：工作人员。",
+        "林川看见签名人：相关人员。",
+        "{{角色}}核对登记表，姓名：工作人员。",
+    ],
+)
+def test_real_identity_placeholder_routes_to_writer_without_inventing_a_name(body):
+    draft = _output(body)
+    before = draft.model_dump(mode="python")
+    signals = analyze_placeholder_leakage(
+        project_id=draft.project_id, chapter_number=draft.chapter_number, body=body,
+    )
+    assert signals and all(signal.severity == "error" for signal in signals)
+    decision = decide_repair_v2(DecisionInput(
+        project_id=draft.project_id, chapter_number=draft.chapter_number,
+        review=ReviewVerdict(verdict="fail"), signals=signals, open_obligations=[],
+        attempts_completed=0, prior_scope_history=[], budget=None,
+        target_total_chapters=20, plan_layer_health=PlanLayerHealth(),
+    ))
+    assert decision.outcome == "local_repair"
+    result = LocalRewriteExecutor().execute(
+        draft=draft, issue_kind=decision.sub_action["issue_kind"], signals=signals,
+        context_pack={"active_entities": [{"kind": "character", "name": "林川"}]},
+    )
+    assert result.status == "needs_writer"
+    assert result.writer_output is None
+    assert result.instruction
+    assert draft.model_dump(mode="python") == before

@@ -29,7 +29,18 @@ class LocalRewriteExecutor:
     ) -> RewriteResult:
         del signals
         kind = str(issue_kind or "").strip()
-        if kind in {"placeholder_leakage", "bare_role_placeholder_leakage"}:
+        if kind == "bare_role_placeholder_leakage":
+            return RewriteResult(
+                status="needs_writer",
+                issue_kind=kind,
+                mode="identity_placeholder_requires_writer",
+                instruction=(
+                    "Resolve the identity placeholder using the existing canon and "
+                    "repair contract; do not invent an alias or assign the first "
+                    "available character to an unidentified role."
+                ),
+            )
+        if kind == "placeholder_leakage":
             return self._rewrite_placeholder(
                 draft=draft,
                 issue_kind=kind,
@@ -81,6 +92,16 @@ class LocalRewriteExecutor:
                 instruction=(
                     "rewrite placeholder leakage with explicit canon anchors from "
                     f"context_pack; missing anchors: {', '.join(missing)}"
+                ),
+            )
+        if not replacements:
+            return RewriteResult(
+                status="needs_writer",
+                issue_kind=issue_kind,
+                mode="unsupported_placeholder_syntax",
+                instruction=(
+                    "Repair the reported placeholder using the existing canon and "
+                    "repair contract; no deterministic replacement is available."
                 ),
             )
         for token, value in replacements.items():

@@ -81,7 +81,7 @@ class BodyReviewer:
                     )
                 ],
             )
-        if "工作人员" in writer_output.body:
+        if "姓名：工作人员" in writer_output.body:
             return ReviewVerdict(
                 verdict="fail",
                 issues=[
@@ -152,11 +152,10 @@ def test_autofix_rechecks_each_final_body_before_persisting_its_review(
     assert reviewer.bodies == [
         "林明让工作人员留下。",
         "林川让工作人员留下。",
-        "林川让具体见证人留下。",
     ]
     assert original.body == "林明让工作人员留下。"
-    assert evaluated.output.body == "林川让具体见证人留下。"
-    assert evaluated.review.review_summary == "reviewed:林川让具体见证人留下。"
+    assert evaluated.output.body == "林川让工作人员留下。"
+    assert evaluated.review.review_summary == "reviewed:林川让工作人员留下。"
     assert list(session.scalars(select(ChapterDraft))) == []
     persisted = owner.persist(
         session=session,
@@ -165,8 +164,8 @@ def test_autofix_rechecks_each_final_body_before_persisting_its_review(
         chapter_plan=chapter,
         evaluation=evaluated,
     )
-    assert persisted.output.body == "林川让具体见证人留下。"
-    assert persisted.draft.body_text == "林川让具体见证人留下。"
+    assert persisted.output.body == "林川让工作人员留下。"
+    assert persisted.draft.body_text == "林川让工作人员留下。"
     assert persisted.review_row.draft_id == persisted.draft.id
     assert persisted.review_row.verdict == "pass"
     candidate = session.get(CandidateDraftRecord, persisted.candidate_id)
@@ -198,14 +197,14 @@ def test_repair_verification_uses_evaluated_output_and_preserves_unknown(
     evaluated = owner.evaluate(
         _request(module, session, _output(title=title)),
         verification=module.CandidateRepairVerification(
-            original_output=_output("林川让具体见证人留下。"),
+            original_output=_output("林川让工作人员留下。"),
             before_review=ReviewVerdict(verdict="fail"),
             instruction=RepairInstruction(
                 repair_scope="draft", failure_type="mixed", must_preserve=must_preserve
             ),
         ),
     )
-    assert evaluated.output.body == "林川让具体见证人留下。"
+    assert evaluated.output.body == "林川让工作人员留下。"
     assert evaluated.review.verdict == want_verdict
     assert (
         evaluated.review.repair_verification.preserved_all_must_preserve
@@ -229,4 +228,26 @@ def test_review_error_propagates_without_persisting_draft(database, tmp_path):
         owner.evaluate(_request(module, session, _output()))
     assert caught.value is error
     assert list(session.scalars(select(ChapterDraft))) == []
+    assert list(session.scalars(select(CandidateDraftRecord))) == []
+
+
+def test_placeholder_review_does_not_invent_an_alias_or_rewrite_evidence(
+    database, tmp_path
+):
+    session, _ = database
+    reviewer = BodyReviewer()
+    module, owner = _owner(session, tmp_path, reviewer)
+    original = _output("林川看见登记表写着：姓名：工作人员。")
+    original.generation_meta = {"source_quote": "姓名：工作人员"}
+    before = original.model_dump(mode="python")
+    evaluated = owner.evaluate(_request(module, session, original))
+    assert evaluated.output.body == before["body"]
+    assert evaluated.output.end_of_chapter_summary == before["end_of_chapter_summary"]
+    assert evaluated.output.generation_meta["source_quote"] == "姓名：工作人员"
+    assert evaluated.review.verdict == "fail"
+    assert [issue.rule_name for issue in evaluated.review.issues] == [
+        "bare_role_placeholder_leakage"
+    ]
+    assert reviewer.bodies == [before["body"]]
+    assert original.model_dump(mode="python") == before
     assert list(session.scalars(select(CandidateDraftRecord))) == []

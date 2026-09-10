@@ -26,6 +26,7 @@ from forwin.observability import (
     redact_payload,
     stack_hash,
 )
+from forwin.protocol.context import ChapterContextPack, EntitySnapshot, PlotThreadSnapshot
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.runtime.policy import RuntimePolicy
 from forwin.storage import ArtifactStore
@@ -645,45 +646,22 @@ class RetrievalObservabilityTests(unittest.TestCase):
             memory_index=FakeMemoryIndex(),
         )
 
-        pack = type(
-            "Pack",
-            (),
-            {
-                "previous_chapter_summaries": ["s1", "s2"],
-                "active_entities": [
-                    type("Entity", (), {"importance": 10, "name": "A"})(),
-                    type("Entity", (), {"importance": 1, "name": "B"})(),
-                ],
-                "active_threads": [
-                    type("Thread", (), {"priority": 1, "name": "T1"})(),
-                    type("Thread", (), {"priority": 2, "name": "T2"})(),
-                ],
-                "active_relations": [],
-                "retrieved_memories": [],
-                "chapter_plan_title": "title",
-                "chapter_plan_one_line": "line",
-                "chapter_goals": [],
-                "project_id": "project",
-                "chapter_number": 2,
-                "model_copy": lambda self, update: type(
-                    "Pack",
-                    (),
-                    {
-                        **self.__dict__,
-                        **update,
-                        "model_dump": self.model_dump,
-                        "model_copy": self.model_copy,
-                    },
-                )(),
-                "model_dump": lambda self, mode="json": {
-                    "previous_chapter_summaries": self.previous_chapter_summaries,
-                    "active_entities": [item.name for item in self.active_entities],
-                    "active_threads": [item.name for item in self.active_threads],
-                    "active_relations": [],
-                    "retrieved_memories": [],
-                },
-            },
-        )()
+        pack = ChapterContextPack(
+            project_id="project", project_title="Book", premise="Premise",
+            genre="Mystery", setting_summary="City", chapter_number=2,
+            chapter_plan_title="title", chapter_plan_one_line="line", chapter_goals=[],
+            previous_chapter_summaries=["s1", "s2"],
+            active_entities=[
+                EntitySnapshot(entity_id="a", kind="character", name="A", importance=10,
+                               description="", current_state={}),
+                EntitySnapshot(entity_id="b", kind="character", name="B", importance=1,
+                               description="", current_state={}),
+            ],
+            active_threads=[
+                PlotThreadSnapshot(thread_id="t1", name="T1", description="", status="active", priority=1),
+                PlotThreadSnapshot(thread_id="t2", name="T2", description="", status="active", priority=2),
+            ],
+        )
 
         broker._finalize_context_summary(
             base_pack=pack, pack=broker._trim_pack(pack), memories=[]

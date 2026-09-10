@@ -40,6 +40,7 @@ from forwin.protocol import (
     WriterOutput,
 )
 from forwin.protocol.book_state import WorldNode
+from forwin.protocol.context import ChapterContextPack, EntitySnapshot, PlotThreadSnapshot
 from forwin.protocol.review import ContinuityIssue
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.review.candidate_autofix import apply_canon_name_drift_autofix
@@ -575,7 +576,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(drafts[0]["region_source"], "runtime_generated")
 
     def test_writer_prompt_includes_subworld_rules_and_entry_targets(self) -> None:
-        context = SimpleNamespace(
+        context = ChapterContextPack(
             project_title="书",
             genre="玄幻",
             premise="前提",
@@ -585,7 +586,7 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_plan_one_line="开场",
             chapter_goals=["推进主线"],
             previous_chapter_summaries=[],
-            active_entities=[SimpleNamespace(name="阿青", description="允许角色")],
+            active_entities=[EntitySnapshot(entity_id="aqing", kind="character", name="阿青", description="允许角色", current_state={})],
             active_threads=[],
             active_relations=[],
             timeline=None,
@@ -614,7 +615,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("命名人物只能使用允许名单里的名字", content)
 
     def test_writer_prompt_includes_recent_thread_beats_for_canon_names(self) -> None:
-        context = SimpleNamespace(
+        context = ChapterContextPack(
             project_title="测试书",
             genre="都市悬疑",
             premise="陆明追查母亲留下的空白遗书。",
@@ -624,9 +625,10 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_plan_one_line="提取回声残片",
             chapter_goals=["揭示母亲与回声账本有关"],
             previous_chapter_summaries=["陆明发现母亲留下的空白遗书。"],
-            active_entities=[SimpleNamespace(name="陆明", description="主角")],
+            active_entities=[EntitySnapshot(entity_id="luming", kind="character", name="陆明", description="主角", current_state={})],
             active_threads=[
-                SimpleNamespace(
+                PlotThreadSnapshot(
+                    thread_id="letter", status="active", priority=2,
                     name="空白遗书",
                     description="母亲线索",
                     recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
@@ -659,7 +661,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("不得把前情中已经出现的姓名扩写、替换或另造别名", content)
 
     def test_writer_prompt_does_not_drop_canon_name_thread_after_three_threads(self) -> None:
-        context = SimpleNamespace(
+        context = ChapterContextPack(
             project_title="测试书",
             genre="都市悬疑",
             premise="陆明追查母亲留下的空白遗书。",
@@ -669,15 +671,15 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_plan_one_line="提取回声残片",
             chapter_goals=["揭示母亲与回声账本有关"],
             previous_chapter_summaries=["陆明发现母亲留下的空白遗书。"],
-            active_entities=[SimpleNamespace(name="陆明", description="主角")],
+            active_entities=[EntitySnapshot(entity_id="luming", kind="character", name="陆明", description="主角", current_state={})],
             active_threads=[
-                SimpleNamespace(name="合作与危机", description="", status="resolved", priority=2, recent_beats=["合作线已暂时收束。"]),
-                SimpleNamespace(name="母亲线索", description="", status="active", priority=2, recent_beats=["火灾录音确认是母亲的声音。"]),
-                SimpleNamespace(name="神秘短信", description="", status="active", priority=2, recent_beats=["短信要求下午三点到旧港。"]),
-                SimpleNamespace(name="空白遗书", description="", status="active", priority=2, recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]),
-                SimpleNamespace(name="记忆删除", description="", status="active", priority=2, recent_beats=["公共记忆正在被系统性抹除。"]),
-                SimpleNamespace(name="许安出现", description="", status="active", priority=2, recent_beats=["许安提供旧港火灾档案。"]),
-                SimpleNamespace(name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["陆明检索陈伯伦，发现记录消失。"]),
+                PlotThreadSnapshot(thread_id="thread-1", name="合作与危机", description="", status="resolved", priority=2, recent_beats=["合作线已暂时收束。"]),
+                PlotThreadSnapshot(thread_id="thread-2", name="母亲线索", description="", status="active", priority=2, recent_beats=["火灾录音确认是母亲的声音。"]),
+                PlotThreadSnapshot(thread_id="thread-3", name="神秘短信", description="", status="active", priority=2, recent_beats=["短信要求下午三点到旧港。"]),
+                PlotThreadSnapshot(thread_id="thread-4", name="空白遗书", description="", status="active", priority=2, recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]),
+                PlotThreadSnapshot(thread_id="thread-5", name="记忆删除", description="", status="active", priority=2, recent_beats=["公共记忆正在被系统性抹除。"]),
+                PlotThreadSnapshot(thread_id="thread-6", name="许安出现", description="", status="active", priority=2, recent_beats=["许安提供旧港火灾档案。"]),
+                PlotThreadSnapshot(thread_id="thread-7", name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["陆明检索陈伯伦，发现记录消失。"]),
             ],
             active_relations=[],
             timeline=None,

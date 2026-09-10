@@ -36,3 +36,5 @@
 私有证据：`runs/forwin-stage1-smoke-23b8cb78ed99-ce0b85/` 下的 canonical Genesis/BODY、`body-review-0001.json`、`body-review-0002.json`、`backstory-diagnosis/` 与 terminal 导出。报告不包含凭据、供应商账户信息或完整原始请求。
 
 最后的 helper 提取复审发现条目分隔符计费与裁剪后人物相关性重算的细微差异。两项先以实际边界测试复现，再恢复提取前语义。此前启动的 `28f34c3` 全量运行由操作者中断，仅有 329 项通过的部分结果，不计作完整验收；中断记录和冻结文件校验保留，后续源码重新冻结全量。
+
+`b8f9487` 的冻结全量结果为 **4 failed、3119 passed、4 skipped、6 subtests**，351.33 秒。四项均为旧测试的精简 Pack/SimpleNamespace 缺少新增协议字段；实际 Writer/Retrieval 调用使用 ChapterContextPack。后续仅将四处测试替身替换为真实 ChapterContextPack、EntitySnapshot 和 PlotThreadSnapshot，保留全部原断言及裁剪参数；88 项相关测试通过，生产代码未为测试替身增加兼容分支。该全量失败与准备但未启动的 smoke 保留，替换提交须重新全量验证。

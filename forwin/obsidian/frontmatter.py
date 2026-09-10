@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 LOCKED_FIELDS = [
     "Canon Summary",
     "Current State",
@@ -13,6 +12,19 @@ LOCKED_FIELDS = [
     "Evidence",
 ]
 EDITABLE_FIELDS = ["Manual Notes", "Human Questions", "Proposed Correction"]
+
+
+def frontmatter_hidden(frontmatter: dict[str, Any]) -> bool:
+    visibility = str(frontmatter.get("visibility", "") or "").lower()
+    truth = str(frontmatter.get("truth_relation", "") or "").lower()
+    status = str(frontmatter.get("status", "") or "").lower()
+    node_type = str(frontmatter.get("node_type", "") or "").lower()
+    return (
+        visibility in {"hidden", "secret", "must_not_reveal"}
+        or truth in {"hidden", "secret"}
+        or status in {"hidden", "secret"}
+        or node_type in {"secret"}
+    )
 
 
 def dump_frontmatter(payload: dict[str, Any]) -> str:

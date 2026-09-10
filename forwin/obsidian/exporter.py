@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.visibility import node_page_visibility
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import KnowledgeProjectionStore
 from forwin.models.project import Project
@@ -390,9 +391,7 @@ class ObsidianExporter:
             node_id=node.id,
             node_type=str(node.node_type),
             as_of_chapter=as_of_chapter,
-            visibility=node.metadata.get(
-                "reader_visibility", node.metadata.get("visibility", "reader_known")
-            ),
+            visibility=node_page_visibility(node),
             truth_relation=node.metadata.get("truth_relation", "true"),
             source_refs=node.source_refs or [f"book_state:node:{node.id}"],
         )
@@ -443,9 +442,7 @@ class ObsidianExporter:
             node_id=node.id,
             node_type=f"map_{node.node_type}",
             as_of_chapter=as_of_chapter,
-            visibility=node.visibility_default
-            if hasattr(node, "visibility_default")
-            else "reader_known",
+            visibility=node_page_visibility(node),
             source_refs=[f"book_state:map_node:{node.id}"],
         )
         sections = {

@@ -12,12 +12,9 @@ from .helpers import (
 )
 
 from .visibility import (
-    _book_state_node_hidden,
     _book_state_edge_hidden,
     _book_state_fact_hidden,
-    _map_node_hidden,
     _map_edge_hidden,
-    _frontmatter_hidden,
 )
 
 from .broker import (
@@ -33,11 +30,8 @@ __all__ = [
     '_active_personality_contexts',
     '_truncate',
     '_extract_source_digest',
-    '_book_state_node_hidden',
     '_book_state_edge_hidden',
     '_book_state_fact_hidden',
-    '_map_node_hidden',
     '_map_edge_hidden',
-    '_frontmatter_hidden',
     'RetrievalBroker',
 ]

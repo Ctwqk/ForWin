@@ -513,6 +513,12 @@ class LLMWebNovelReviewer:
             add_evidence("time:advance", "time", writer_output.time_advance.model_dump_json())
         for item in context.recent_canon_events[:5]:
             add_evidence(item.evidence_id or f"canon_event:{item.event_id}", "canon_event", item.summary)
+        previous_summaries = []
+        for index, summary in enumerate(context.previous_chapter_summaries, start=1):
+            # Input positions identify these retained strings, not chapter numbers.
+            evidence_id = f"history:summary:{index}"
+            previous_summaries.append({"evidence_id": evidence_id, "summary": summary})
+            add_evidence(evidence_id, "accepted_history_summary", summary)
         for item in context.recent_rule_events[:5]:
             add_evidence(item.evidence_id or f"rule_event:{item.event_id}", "rule_event", item.summary)
         for index, item in enumerate(context.recent_review_notes[:5], start=1):
@@ -544,6 +550,7 @@ class LLMWebNovelReviewer:
             )
         rule_claims = _draft_rule_claims(writer_output)
         return {
+            "previous_chapter_summaries": previous_summaries,
             "chapter": {
                 "number": context.chapter_number,
                 "title": context.chapter_plan_title,
@@ -634,6 +641,9 @@ class LLMWebNovelReviewer:
                     "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
                     "draft.body 是待评审的完整最终正文；正文问题必须以它为准。"
                     "摘要与结构化状态、事件、时间候选用于交叉核验，不能代替最终正文。"
+                    "previous_chapter_summaries 是保留的正式前文摘要，全文在该字段中；"
+                    "核对本章是否无解释地推翻既有事实或重复已完成的进展，引用 history:summary 与 draft:body。"
+                    "摘要证据编号只表示输入顺序，不是实际章号；摘要未记载的细节不能当作已证实的事实。"
                     "genesis_reference_facts 保留写前来源原文和字段路径；用它核对同一历史事件、行为人与时间。"
                     "同一历史事实的无解释改写属于因果一致性错误，须引用来源与最终正文证据。"
                     "character_secret 是作者背景，不等于人物已知或本章必须揭露；遵守既有知情与揭示边界。"

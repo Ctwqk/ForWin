@@ -97,6 +97,12 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
 
+`knowledge_system_context` 是不进入 Writer prompt 的溯源副本，保留在 context 中，但不参与 Writer 软预算，避免挤掉实际可见的摘要和记忆。其余预算、裁剪优先级及超限语义保持；这仍是字符估算，不是精确 token 限额。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
+
+五种 Writer 提示共用世界页渲染，读取可见页面的 `Canon Summary`；具备实体来源的单个世界/地图页还读取 `Current State`，共享每页 220 字内容限额。书籍、overview 等聚合页的状态可能混有隐藏信息，只保留概要；frontmatter、人工笔记或待批准修订不当作 Canon。页面属性与内嵌 frontmatter 任一标记为隐藏时都不展开，秘密页仍不开放；可见性及真假关系随内容呈现，读者可见不等于所有角色知情。
+
+WorldNode/MapNode 的隐藏状态判断由一个 BookState owner 供检索、导出和读侧共用。导出不丢弃源节点的隐藏 status/tags；知识上下文用请求时点的 Canon 复核旧页面显隐，缺失的实际实体来源保持隐藏，书籍合成 ID 与地图 ID 分别处理。未来页面在排序和限额前排除；旧投影已经被覆盖而没有历史页时保持缺失，不把当前状态当成历史状态。只调整上下文副本，已存页面、正文和 hash 不改写，主 reviewer 仍取得完整保留页面。上述接线不能补回摘要、状态抽取或现有 memory 前 500 字之外未保留的事实，也不能证明后续计划和真实正文一致；见[已接纳连续性失败记录](../docs/superpowers/reports/2026-09-10-accepted-continuity-failure.md)。
+
 `GenesisContextProvider` 从冻结 revision 提供一份只读来源事实视图：`world_bible.history_slice`、`axioms` 和具名 `core_cast.secret`，保留完整原文、类别、人物和字段路径。相同视图经过 Chapter/Review context 进入各写作模式及主 BODY reviewer，审查证据引用绑定 Genesis revision 与原字段。视图最多 64 条、序列化条目合计 12000 字符，超限整条省略并显式记录遗漏数，不把截断句当完整事实；章计划提及的人物优先于其余 cast。实际 RetrievalBroker 再按调用者总预算的四分之一裁剪整条来源并累计遗漏；总预算仍紧张时，章节与当前人物均未涉及的秘密先于当前 Canon 上下文撤掉。完整 Genesis、文化词库和未来场景模板不随之灌入。
 
 这些信息不直接创建 Canon、人物知情或揭示许可：`character_secret` 是作者背景，仍遵守当前知情状态与 `must_not_reveal`。当前状态以已接纳 BookState 为准；同一历史事件不能被新计划静默改写。主审查同时收到现有的禁止揭示、揭示阶梯、人物认知、观察者可见状态和允许误导线索，并以完整最终正文核对来源，区分客观陈述、角色谎言/猜测与不同事件，不通过年份关键词判错。缺失来源表示证据不完整。[历史事实漏传失败报告](../docs/superpowers/reports/2026-09-10-stage1-genesis-reference-failure.md)区分输入传递验证与真实生成验收。

@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.visibility import node_page_visibility
 from forwin.models.canon_quality import CanonQualitySignalRow
 from forwin.models.knowledge import KnowledgeProjectionPageRow
+from forwin.obsidian.frontmatter import frontmatter_hidden
 from forwin.protocol.world_model import (
     EvidenceRef,
     WorldContextPack,
@@ -59,7 +61,29 @@ class KnowledgeContextQuery:
             project_id=project_id,
             terms=terms,
             max_pages=max_pages,
+            as_of_chapter=as_of,
         )
+        # Old projections may predate a visibility change or omit status/tags.
+        # Apply current as-of Canon visibility to copies, retaining full content
+        # for the reviewer without modifying the stored projection or its hash.
+        for index, page in enumerate(pages):
+            source_id = (
+                page.canonical_source_id
+                if page.canonical_source_type == "book_state_node"
+                else str(page.frontmatter.get("node_id") or "")
+            )
+            if not source_id or page.page_type in {"book", "overview"}:
+                continue
+            graph = runtime.map if page.page_type == "map_node" else runtime.world
+            node = graph.nodes_by_id.get(source_id)
+            labels = {
+                "visibility": node_page_visibility(node),
+                "truth_relation": node.metadata.get("truth_relation", "true"),
+            } if node is not None else {"visibility": "hidden"}
+            if frontmatter_hidden(labels):
+                pages[index] = page.model_copy(update={"frontmatter": {
+                    **page.frontmatter, "visibility": "hidden",
+                }})
         conflicts = self._active_quality_conflicts(project_id)
         snapshot_id = (
             snapshot.id if snapshot is not None else f"book_state:{project_id}:{as_of}"
@@ -95,8 +119,12 @@ class KnowledgeContextQuery:
         project_id: str,
         terms: list[str],
         max_pages: int,
+        as_of_chapter: int,
     ) -> list[WorldModelPage]:
-        rows = KnowledgePageRepository(self.session).list_canonical_rows(project_id)
+        rows = [
+            row for row in KnowledgePageRepository(self.session).list_canonical_rows(project_id)
+            if int(row.as_of_chapter or 0) <= as_of_chapter
+        ]
 
         def score(row: KnowledgeProjectionPageRow) -> tuple[int, int, str]:
             text = (

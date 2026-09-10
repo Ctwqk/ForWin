@@ -155,6 +155,7 @@ def test_absent_repair_contract_does_not_change_ordinary_context_budget():
     context = _context()
     payload = context.model_dump(mode="json")
     for key in (
+        "knowledge_system_context",  # Provenance is not part of the Writer input.
         "genesis_reference_facts",
         "genesis_reference_omitted_count",
         "repair_contract",

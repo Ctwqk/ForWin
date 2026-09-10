@@ -9,6 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.visibility import book_state_node_hidden
 from forwin.context import assemble_context
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
@@ -39,7 +40,7 @@ from forwin.protocol.context import (
     WritingPack,
 )
 from forwin.protocol.world_model import WorldContextPack
-from forwin.obsidian.frontmatter import parse_sections
+from forwin.obsidian.frontmatter import frontmatter_hidden, parse_sections
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (
@@ -58,10 +59,7 @@ from .helpers import (
 from .visibility import (
     _book_state_edge_hidden,
     _book_state_fact_hidden,
-    _book_state_node_hidden,
-    _frontmatter_hidden,
     _map_edge_hidden,
-    _map_node_hidden,
 )
 
 
@@ -480,7 +478,7 @@ class RetrievalBroker:
         map_edges = repo.list_map_edges(project_id)
         if not include_hidden_truth:
             visible_node_ids = {
-                node.id for node in nodes if not _book_state_node_hidden(node)
+                node.id for node in nodes if not book_state_node_hidden(node)
             }
             nodes = [node for node in nodes if node.id in visible_node_ids]
             edges = [
@@ -492,7 +490,7 @@ class RetrievalBroker:
             ]
             facts = [fact for fact in facts if not _book_state_fact_hidden(fact)]
             map_edges = [edge for edge in map_edges if not _map_edge_hidden(edge)]
-            map_nodes = [node for node in map_nodes if not _map_node_hidden(node)]
+            map_nodes = [node for node in map_nodes if not book_state_node_hidden(node)]
 
         book_state_snapshot = (
             snapshot.model_dump(mode="json") if snapshot is not None else {}
@@ -583,7 +581,7 @@ class RetrievalBroker:
         pages: list[dict[str, object]] = []
         for row in rows:
             frontmatter = load_json(row.frontmatter_json, {})
-            if not include_hidden_truth and _frontmatter_hidden(frontmatter):
+            if not include_hidden_truth and frontmatter_hidden(frontmatter):
                 continue
             sections = parse_sections(row.markdown or "")
             pages.append(
@@ -857,7 +855,9 @@ class RetrievalBroker:
 
     @staticmethod
     def _estimate_chars(pack: ChapterContextPack) -> int:
-        payload = pack.model_dump(mode="json")
+        # This provenance view is not rendered by any Writer prompt. Keep it
+        # intact on the pack without letting it evict visible history.
+        payload = pack.model_dump(mode="json", exclude={"knowledge_system_context"})
         # An absent optional source view adds no Writer prompt content. Keep
         # existing no-Genesis retention unchanged when this feature is unused.
         if not payload.get("genesis_reference_facts"):

@@ -17,6 +17,7 @@ def validate_subworld_map(
     region_edges: list[RegionEdge],
     map_nodes: list[MapNode],
     map_edges: list[MapEdge],
+    check_connectivity: bool = True,
 ) -> MapValidationReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -68,8 +69,9 @@ def validate_subworld_map(
             if float(getattr(edge, field_name) or 0.0) < 0:
                 errors.append(f"edge {edge.id} has negative {field_name}")
 
-    reachable = _reachable_nodes(map_nodes, map_edges, include_hidden=True)
-    if map_nodes and len(reachable) != len(map_nodes):
+    reachable = _reachable_nodes(map_nodes, map_edges, include_hidden=True,
+                                 ignore_direction=spec.authored_edges is not None)
+    if check_connectivity and map_nodes and len(reachable) != len(map_nodes):
         missing = sorted(set(node_by_id) - reachable)
         errors.append(f"subworld graph is disconnected: {missing[:5]}")
 
@@ -81,12 +83,13 @@ def validate_subworld_map(
             if edge.edge_type != "hidden_route" and edge.status != "hidden" and edge.discovered_by_default
         ],
         include_hidden=False,
+        ignore_direction=spec.authored_edges is not None,
     )
     if map_nodes and objective_visible and len(objective_visible) != len(map_nodes):
         warnings.append("some nodes require hidden or undiscovered routes")
 
     target_edges = max(0, round(spec.target_node_count * spec.target_edge_density))
-    if len(map_edges) < max(1, int(target_edges * 0.6)):
+    if spec.authored_edges is None and len(map_edges) < max(1, int(target_edges * 0.6)):
         errors.append("map density too low")
     if len(map_edges) > max(1, int(target_edges * 1.6)):
         warnings.append("map density above target")
@@ -112,11 +115,22 @@ def validate_subworld_map(
     )
 
 
+def book_map_connectivity_errors(nodes: list[MapNode], edges: list[MapEdge]) -> list[str]:
+    # Structural connectivity has no arbitrary start node. Route reachability
+    # remains directional in MapGraph; importing a one-way road never reverses it.
+    reachable = _reachable_nodes(nodes, edges, include_hidden=True, ignore_direction=True)
+    if nodes and len(reachable) != len(nodes):
+        missing = sorted({node.id for node in nodes} - reachable)
+        return [f"book map graph is disconnected: {missing[:5]}"]
+    return []
+
+
 def _reachable_nodes(
     map_nodes: list[MapNode],
     map_edges: list[MapEdge],
     *,
     include_hidden: bool,
+    ignore_direction: bool = False,
 ) -> set[str]:
     if not map_nodes:
         return set()
@@ -127,7 +141,7 @@ def _reachable_nodes(
         if not include_hidden and (edge.edge_type == "hidden_route" or edge.status == "hidden" or not edge.discovered_by_default):
             continue
         adjacency[edge.from_node_id].append(edge.to_node_id)
-        if edge.bidirectional:
+        if edge.bidirectional or ignore_direction:
             adjacency[edge.to_node_id].append(edge.from_node_id)
     start = map_nodes[0].id
     seen = {start}

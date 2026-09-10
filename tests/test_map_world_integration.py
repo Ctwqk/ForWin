@@ -204,7 +204,7 @@ def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:
         first_spec = build_subworld_map_specs_from_genesis(
             project_id="p1",
             genesis_revision_id="rev1",
-            map_atlas={**atlas, "submaps": atlas["submaps"][:1], "regions": atlas["regions"][:1], "nodes": atlas["nodes"][:1]},
+            map_atlas={**atlas, "submaps": atlas["submaps"][:1], "regions": atlas["regions"][:1], "nodes": atlas["nodes"][:1], "edges": []},
         )[0]
         create_or_update_book_map(session, [first_spec])
 
@@ -257,7 +257,8 @@ def test_arc_map_expansion_uses_explicit_atlas_cross_subworld_edges() -> None:
         first_spec = build_subworld_map_specs_from_genesis(
             project_id="p1",
             genesis_revision_id="rev1",
-            map_atlas={**atlas, "submaps": atlas["submaps"][:1], "regions": atlas["regions"][:1], "nodes": atlas["nodes"][:1]},
+            # Before expansion the destination and its route are both absent.
+            map_atlas={**atlas, "submaps": atlas["submaps"][:1], "regions": atlas["regions"][:1], "nodes": atlas["nodes"][:1], "edges": []},
         )[0]
         create_or_update_book_map(session, [first_spec])
 

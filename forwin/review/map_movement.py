@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from forwin.book_state.cognition import CognitionView
@@ -9,52 +8,25 @@ from forwin.protocol.book_state import CognitionOverlay, MapEdge, MapNode
 from forwin.protocol.context import ChapterContextPack, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.utils.duration import duration_hours
 
 
 def _duration_to_travel_time_budget(text: str) -> float | None:
     normalized = str(text or "").strip()
     if not normalized:
         return None
+    explicit = duration_hours(normalized)
+    if explicit is not None:
+        return explicit
     if "一炷香" in normalized:
         return 0.5
     if "片刻" in normalized or "须臾" in normalized:
         return 0.25
-    if "半个时辰" in normalized:
-        return 1.0
-    if "时辰" in normalized:
-        return _extract_duration_number(normalized, default=1.0) * 2.0
-    if "小时" in normalized:
-        return _extract_duration_number(normalized, default=1.0)
     if "半日" in normalized or "半天" in normalized:
         return 12.0
-    if any(token in normalized for token in ("次日", "翌日", "第二天", "一天", "一日")):
+    if any(token in normalized for token in ("次日", "翌日", "第二天")):
         return 24.0
-    if "天" in normalized or "日" in normalized:
-        return _extract_duration_number(normalized, default=1.0) * 24.0
     return None
-
-
-def _extract_duration_number(text: str, *, default: float) -> float:
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
-    if match:
-        return float(match.group(1))
-    chinese_numbers = {
-        "一": 1.0,
-        "二": 2.0,
-        "两": 2.0,
-        "三": 3.0,
-        "四": 4.0,
-        "五": 5.0,
-        "六": 6.0,
-        "七": 7.0,
-        "八": 8.0,
-        "九": 9.0,
-        "十": 10.0,
-    }
-    for key, value in chinese_numbers.items():
-        if key in text:
-            return value
-    return default
 
 
 def _edge_from_path_id(graph: MapGraph, edge_id: str) -> MapEdge | None:
@@ -148,7 +120,6 @@ class MapMovementReviewer:
                 objective_nodes = parsed_objective_nodes
                 objective_edges = parsed_objective_edges
         node_by_id = {node.id: node for node in nodes}
-        node_id_by_name = {node.name: node.id for node in nodes if node.name}
         graph = MapGraph(nodes=nodes, edges=edges)
         objective_graph = MapGraph(nodes=objective_nodes, edges=objective_edges)
         cognition_by_observer = self._observer_cognition_views(map_context)
@@ -159,8 +130,8 @@ class MapMovementReviewer:
         total_travel_time = 0.0
         used_observer_known_path = False
         for previous, current in zip(ordered_scenes, ordered_scenes[1:]):
-            previous_id = self._resolve_scene_location_id(previous.scene_location_id, node_by_id, node_id_by_name)
-            current_id = self._resolve_scene_location_id(current.scene_location_id, node_by_id, node_id_by_name)
+            previous_id = self._resolve_scene_location_id(previous.scene_location_id, node_by_id)
+            current_id = self._resolve_scene_location_id(current.scene_location_id, node_by_id)
             if not previous_id or not current_id or previous_id == current_id:
                 continue
             observer = self._scene_observer(previous, current, map_context)
@@ -486,14 +457,14 @@ class MapMovementReviewer:
     def _resolve_scene_location_id(
         raw_location: str,
         node_by_id: dict[str, MapNode],
-        node_id_by_name: dict[str, str],
     ) -> str:
         text = str(raw_location or "").strip()
         if not text:
             return ""
         if text in node_by_id:
             return text
-        return node_id_by_name.get(text, "")
+        matches = {node.id for node in node_by_id.values() if node.name == text or node.metadata.get("source_node_id") == text}
+        return next(iter(matches)) if len(matches) == 1 else ""
 
     @staticmethod
     def _chapter_travel_time_budget(

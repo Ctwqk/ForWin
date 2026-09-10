@@ -1,8 +1,11 @@
 """Context assembler - builds ChapterContextPack from current state."""
 from __future__ import annotations
 import logging
+from types import SimpleNamespace
 
 from forwin.book_state.map_graph import MapGraph
+from forwin.map.genesis_adapter import genesis_edge_endpoints
+from forwin.map.visibility import genesis_edge_visibility
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,24 @@ def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dic
             node_lines.append(f"{name}{f'@{parent_region}' if parent_region else ''}")
         if node_lines:
             parts.append(f"Genesis 地点：{'、'.join(node_lines)}")
+    node_names = {str(node.get("id")): str(node.get("name") or node.get("id")) for node in nodes if isinstance(node, dict)}
+    route_lines: list[str] = []
+    for edge in map_atlas.get("edges", []) or []:
+        if not isinstance(edge, dict):
+            continue
+        if not _visible_map_edge(SimpleNamespace(
+            **genesis_edge_visibility(edge),
+            edge_type=edge.get("edge_type", edge.get("kind", "path")),
+        )):
+            continue
+        left, right = genesis_edge_endpoints(edge)
+        cost = str(edge.get("travel_cost") or "耗时未知")
+        arrow = "→" if str(edge.get("bidirectional", True)).lower() in {"false", "0", "no"} else "↔"
+        route_lines.append(f"{node_names.get(left, left)}{arrow}{node_names.get(right, right)}：{cost}")
+    if route_lines:
+        parts.append("Genesis 路线约束：" + "；".join(route_lines[:24]))
+        if len(route_lines) > 24:
+            parts.append(f"另有{len(route_lines) - 24}条路线未在摘要展开")
     if runtime_region_drafts:
         draft_lines: list[str] = []
         for draft in runtime_region_drafts[:8]:
@@ -231,7 +252,7 @@ def _build_map_context(repo_session, project_id: str, entities: list, genesis_st
                         "node_id": neighbor_id,
                         "name": node_by_id[neighbor_id].name,
                         "edge_id": edge.id,
-                        "travel_time": edge.travel_time,
+                        "travel_time": None if edge.metadata.get("travel_time_known") is False else edge.travel_time,
                         "risk_level": edge.risk_level,
                     }
                     for neighbor_id, edge in neighbors
@@ -241,7 +262,7 @@ def _build_map_context(repo_session, project_id: str, entities: list, genesis_st
                     {
                         "node_id": neighbor_id,
                         "name": node_by_id[neighbor_id].name,
-                        "travel_time": edge.travel_time,
+                        "travel_time": None if edge.metadata.get("travel_time_known") is False else edge.travel_time,
                     }
                     for neighbor_id, edge in neighbors
                     if neighbor_id in node_by_id
@@ -278,7 +299,7 @@ def _build_map_context(repo_session, project_id: str, entities: list, genesis_st
                         "node_id": neighbor_id,
                         "name": node_by_id[neighbor_id].name,
                         "edge_id": edge.id,
-                        "travel_time": edge.travel_time,
+                        "travel_time": None if edge.metadata.get("travel_time_known") is False else edge.travel_time,
                         "risk_level": edge.risk_level,
                     }
                     for neighbor_id, edge in neighbors
@@ -288,7 +309,7 @@ def _build_map_context(repo_session, project_id: str, entities: list, genesis_st
                     {
                         "node_id": neighbor_id,
                         "name": node_by_id[neighbor_id].name,
-                        "travel_time": edge.travel_time,
+                        "travel_time": None if edge.metadata.get("travel_time_known") is False else edge.travel_time,
                     }
                     for neighbor_id, edge in neighbors
                     if neighbor_id in node_by_id
@@ -369,6 +390,7 @@ def _map_node_payloads(nodes) -> list[dict]:
             "default_danger_level": node.default_danger_level,
             "access_level": node.access_level,
             "status": node.status,
+            "metadata": dict(node.metadata),
         }
         for node in nodes
     ]
@@ -391,6 +413,8 @@ def _map_edge_payload(edge) -> dict:
         "status": edge.status,
         "discovered_by_default": edge.discovered_by_default,
         "visibility_default": edge.visibility_default,
+        "access_rule_id": edge.access_rule_id,
+        "metadata": dict(edge.metadata),
     }
 
 

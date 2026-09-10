@@ -29,10 +29,26 @@ class _CandidateEdge:
     metadata: dict | None = None
 
 
-def generate_subworld_map(spec: SubWorldMapSpec) -> MapGenerationResult:
+def generate_subworld_map(spec: SubWorldMapSpec, *, check_connectivity: bool = True) -> MapGenerationResult:
     rng = random.Random(spec.generation_seed)
     regions, region_edges = _generate_region_graph(spec, rng)
     nodes = _generate_region_nodes(spec, regions, rng)
+    if spec.authored_edges is not None:
+        node_by_source = {node.metadata["source_node_id"]: node for node in nodes}
+        edges = [edge.model_copy(update={
+            "subworld_id": spec.subworld_id,
+            "from_node_id": node_by_source[edge.from_node_id].id,
+            "to_node_id": node_by_source[edge.to_node_id].id,
+        }) for edge in spec.authored_edges]
+        regions = _attach_region_node_ids(regions, nodes)
+        report = validate_subworld_map(spec=spec, regions=regions, region_edges=[], map_nodes=nodes, map_edges=edges, check_connectivity=check_connectivity)
+        return MapGenerationResult(
+            project_id=spec.project_id, subworld_id=spec.subworld_id,
+            generation_seed=spec.generation_seed, algorithm="genesis_authored_topology",
+            regions=regions, region_edges=[], map_nodes=nodes, map_edges=edges,
+            validation_report=report,
+            summary={"algorithm": "genesis_authored_topology", "node_count": len(nodes), "edge_count": len(edges)},
+        )
     candidates = _generate_candidate_edges(spec, regions, region_edges, nodes, rng)
     mst_candidates = _build_mst(nodes, [candidate for candidate in candidates if not candidate.hidden])
     target_edge_count = max(len(nodes) - 1, round(len(nodes) * spec.target_edge_density))
@@ -138,7 +154,7 @@ def _generate_region_nodes(
 ) -> list[MapNode]:
     nodes: list[MapNode] = []
     region_by_role = {str(region.metadata.get("role", region.name)): region for region in regions}
-    for index, region in enumerate(regions):
+    for index, region in enumerate(regions if spec.authored_edges is None else []):
         for role, node_type in (("entry", "waypoint"), ("hub", "settlement"), ("boundary", "waypoint")):
             nodes.append(_node(spec, region, node_type, _baseline_node_name(region.name, role), role, len(nodes), rng, region_index=index))
 

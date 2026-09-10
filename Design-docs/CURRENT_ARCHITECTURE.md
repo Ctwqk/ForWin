@@ -2,7 +2,7 @@
 
 > 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述当前源码；部署与真实运行证据见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。新版本身份、冻结、后缀修订核验、5% 限制及反馈链路已在开发分支接入，最终候选验证和部署仍以执行计划为准。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
 
-更新时间：2026-09-09
+更新时间：2026-09-10
 
 完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。
 
@@ -134,6 +134,8 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 ## 地图红线
 
 `SubWorld` 只表示大陆、星球、位面、异世界、星区等大尺度地图容器。城市、宗门外门、客栈、遗迹入口、炼丹塔等局部舞台必须进入 `Region / MapNode / site_state`，不得作为新的 `SubWorld` 语义写回设计或代码。
+
+明确的 Genesis 地点路线由 `genesis_adapter → generator/service → MapRepository` 保留并物化，缺失引用拒绝，跨区路线使用原地点端点；没有明确路线时才程序化生成。结构检查在跨区边齐全后于 savepoint 内执行，不补造路线、不改变单向寻路、不重写旧地图。时长解析共用 `utils.duration`，未知耗时不作为瞬时移动展示。当前可见地图进入 Writer，当前客观/可见图及写前来源进入现有 BODY reviewer；规则检查仍保留自由文本地点未知的边界，详见 [当前设计](CURRENT_DESIGN.md#5-genesis计划和写作)。
 
 ## 2026-07 Integrated Runtime Updates
 

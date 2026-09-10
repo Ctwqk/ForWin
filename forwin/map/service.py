@@ -23,6 +23,7 @@ from .protocol import (
     SubWorldMapSpec,
 )
 from .repository import MapRepository
+from .validator import book_map_connectivity_errors
 
 
 def create_or_update_subworld_map(
@@ -63,7 +64,17 @@ def create_or_update_book_map(
     errors: list[str] = []
     try:
         for spec in specs:
-            result = create_or_update_subworld_map(session, spec, commit=False)
+            if spec.authored_edges is None:
+                result = create_or_update_subworld_map(session, spec, commit=False)
+            else:
+                # Node routes may leave this subworld and return through another.
+                # Validate connectivity after all real interconnections exist,
+                # inside the same savepoint; never add a route to satisfy a check.
+                result = generate_subworld_map(spec, check_connectivity=False)
+                if result.validation_report.valid:
+                    repo = MapRepository(session)
+                    repo.ensure_subworld_map_metadata(spec)
+                    repo.persist_generation_result(spec=spec, result=result)
             subworld_results.append(result)
             errors.extend(result.validation_report.errors)
         if errors:
@@ -90,6 +101,16 @@ def create_or_update_book_map(
             if connection.project_id != project_id:
                 raise ValueError("all InterSubWorldConnectionSpec entries must share project_id")
             inter_edges.append(_persist_inter_subworld_connection(repo, connection))
+        if any(spec.authored_edges is not None for spec in specs):
+            errors.extend(book_map_connectivity_errors(repo.list_map_nodes(project_id), repo.list_map_edges(project_id)))
+            if errors:
+                nested.rollback()
+                return BookMapGenerationResult(
+                    project_id=project_id, subworld_results=subworld_results,
+                    validation_report=MapValidationReport(valid=False, errors=errors),
+                    summary={"subworld_count": len(subworld_results), "inter_subworld_edge_count": 0,
+                             "interconnection_source": resolved_interconnection_source},
+                )
         site_state_bindings = _ensure_site_state_map_bindings(session, project_id)
     except Exception:
         nested.rollback()
@@ -170,7 +191,7 @@ def ensure_book_map_from_genesis_atlas(
         genesis_revision_id=genesis_revision_id,
         required_subworld_ids={spec.subworld_id for spec in missing_specs},
     )
-    if not interconnections:
+    if not interconnections and interconnection_source != "atlas_edges":
         interconnections = _arc_expansion_default_interconnections(
             project_id=project_id,
             existing_subworld_ids=existing_subworld_ids,
@@ -345,6 +366,33 @@ def build_interconnections_from_genesis_atlas(
     genesis_revision_id: str = "",
     required_subworld_ids: set[str] | None = None,
 ) -> tuple[list[InterSubWorldConnectionSpec], str]:
+    from .genesis_adapter import authored_edges_from_atlas, genesis_edge_endpoints
+
+    authored = authored_edges_from_atlas(project_id=project_id, map_atlas=map_atlas)
+    connections: list[InterSubWorldConnectionSpec] = []
+    if authored is not None:
+        subworld_by_node = {
+            anchor.source_node_id: spec.subworld_id
+            for spec in specs for anchor in spec.required_anchor_nodes
+        }
+        for edge in authored:
+            left = subworld_by_node.get(edge.from_node_id)
+            right = subworld_by_node.get(edge.to_node_id)
+            if not left or not right or left == right:
+                continue
+            if required_subworld_ids and not ({left, right} & required_subworld_ids):
+                continue
+            connections.append(InterSubWorldConnectionSpec(
+                project_id=project_id, from_subworld_id=left, to_subworld_id=right,
+                edge_type=edge.edge_type, bidirectional=edge.bidirectional,
+                hidden=edge.status == "hidden", distance=edge.distance,
+                access_rule_id=edge.access_rule_id,
+                travel_time=edge.travel_time, travel_cost=edge.travel_cost,
+                risk_level=edge.risk_level, narrative_cost=edge.narrative_cost,
+                metadata={**edge.metadata, "authored_node_route": True,
+                          "source_status": edge.status, "source_discovered": edge.discovered_by_default,
+                          "source_visibility": edge.visibility_default, "genesis_revision_id": genesis_revision_id},
+            ))
     subworld_by_ref: dict[str, str] = {}
     for spec in specs:
         for ref in [spec.subworld_id, spec.logical_subworld_id, spec.name]:
@@ -354,9 +402,12 @@ def build_interconnections_from_genesis_atlas(
     node_subworld_by_ref = _atlas_node_subworld_lookup(map_atlas, subworld_by_ref)
     required = set(required_subworld_ids or [])
     available = {spec.subworld_id for spec in specs}
-    connections: list[InterSubWorldConnectionSpec] = []
     seen_pairs: set[tuple[str, str]] = set()
     for edge in [item for item in (map_atlas.get("edges") or []) if isinstance(item, dict)]:
+        if authored is not None:
+            left_ref, right_ref = genesis_edge_endpoints(edge)
+            if left_ref in node_subworld_by_ref and right_ref in node_subworld_by_ref:
+                continue  # Already normalized, including independent parallel routes.
         from_subworld_id = _resolve_atlas_edge_subworld(
             edge=edge,
             subworld_keys=["from_subworld_id", "source_subworld_id", "from_subworld", "source_subworld"],
@@ -410,7 +461,7 @@ def build_interconnections_from_genesis_atlas(
                 },
             )
         )
-    return connections, "atlas_edges" if connections else "default_chain"
+    return connections, "atlas_edges" if connections or authored is not None else "default_chain"
 
 
 def _atlas_node_subworld_lookup(
@@ -516,6 +567,18 @@ def _persist_inter_subworld_connection(
     repo: MapRepository,
     connection: InterSubWorldConnectionSpec,
 ) -> MapEdge:
+    authored = connection.metadata.get("authored_node_route") is True
+    if authored:
+        nodes = repo.list_map_nodes(connection.project_id)
+        def resolve(source_ref: str, subworld_id: str) -> str:
+            matches = [node.id for node in nodes if node.subworld_id == subworld_id and node.metadata.get("source_node_id") == source_ref]
+            if len(matches) != 1:
+                raise ValueError(f"authored route endpoint missing or ambiguous: {source_ref}")
+            return matches[0]
+        connection = connection.model_copy(update={
+            "from_node_id": resolve(connection.metadata["source_from_ref"], connection.from_subworld_id),
+            "to_node_id": resolve(connection.metadata["source_to_ref"], connection.to_subworld_id),
+        })
     from_node_id = connection.from_node_id or _ensure_exit_node(
         repo,
         project_id=connection.project_id,
@@ -540,6 +603,7 @@ def _persist_inter_subworld_connection(
             from_node_id,
             to_node_id,
             connection.edge_type,
+            *([connection.metadata["source_edge_id"]] if authored else []),
         ),
         project_id=connection.project_id,
         subworld_id=connection.from_subworld_id,
@@ -548,14 +612,14 @@ def _persist_inter_subworld_connection(
         edge_type=connection.edge_type,
         bidirectional=connection.bidirectional,
         distance=round(connection.distance * multiplier, 2),
-        travel_time=round(connection.travel_time * multiplier, 2),
+        travel_time=connection.travel_time if authored else round(connection.travel_time * multiplier, 2),
         travel_cost=round(connection.travel_cost * multiplier, 2),
         risk_level=round(connection.risk_level * multiplier, 2),
         narrative_cost=round(connection.narrative_cost * multiplier, 2),
         access_rule_id=connection.access_rule_id,
-        status="hidden" if connection.hidden else "open",
-        discovered_by_default=not connection.hidden,
-        visibility_default="hidden" if connection.hidden else "visible",
+        status=connection.metadata["source_status"] if authored else "hidden" if connection.hidden else "open",
+        discovered_by_default=connection.metadata["source_discovered"] if authored else not connection.hidden,
+        visibility_default=connection.metadata["source_visibility"] if authored else "hidden" if connection.hidden else "visible",
         metadata={
             **connection.metadata,
             "inter_subworld_edge": True,

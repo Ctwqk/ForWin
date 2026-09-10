@@ -358,7 +358,35 @@ class LLMWebNovelReviewer:
             },
         }
 
+    @staticmethod
+    def _map_review_payload(context: ReviewContextPack, body: str) -> dict[str, Any]:
+        """A bounded view of the current BookMap, not a newly inferred map."""
+        result: dict[str, Any] = {}
+        for key in ("objective_review_graph", "review_graph"):
+            graph = context.map_context.get(key)
+            if not isinstance(graph, dict):
+                continue
+            nodes = [node for node in graph.get("map_nodes", []) if isinstance(node, dict)]
+            edges = [edge for edge in graph.get("map_edges", []) if isinstance(edge, dict)]
+            mentioned = {node.get("id") for node in nodes if node.get("name") and str(node["name"]) in body}
+            edges = sorted(edges, key=lambda edge: not ({edge.get("from_node_id"), edge.get("to_node_id")} & mentioned))
+            selected = edges[:64]
+            ids = {edge.get(key) for edge in selected for key in ("from_node_id", "to_node_id")}
+            result[key] = {
+                "available": graph.get("available", True),
+                "node_count": len(nodes), "edge_count": len(edges),
+                "truncated": len(edges) > len(selected),
+                "map_nodes": [{"id": node.get("id"), "name": node.get("name")} for node in nodes if node.get("id") in ids],
+                "map_edges": [{key: edge[key] for key in (
+                    "id", "from_node_id", "to_node_id", "edge_type", "bidirectional",
+                    "travel_time", "status", "discovered_by_default", "visibility_default", "access_rule_id", "metadata",
+                ) if key in edge} for edge in selected],
+            }
+            break
+        return result
+
     def _llm_payload(self, context: ReviewContextPack, writer_output: WriterOutput) -> dict[str, Any]:
+        map_context = self._map_review_payload(context, writer_output.body)
         evidence_index: list[dict[str, Any]] = []
         seen_evidence_ids: set[str] = set()
 
@@ -398,6 +426,10 @@ class LLMWebNovelReviewer:
             )
         if context.timeline is not None:
             add_evidence("world:timeline", "world", context.timeline.model_dump_json())
+        if context.genesis_map_overview:
+            add_evidence("world:genesis_map", "map", context.genesis_map_overview, limit=1000)
+        if map_context:
+            add_evidence("world:map", "map", json.dumps(map_context, ensure_ascii=False), limit=1000)
         if context.world_pressure is not None:
             add_evidence("world:pressure", "world", context.world_pressure.model_dump_json())
         if getattr(context, "world_context", None) is not None:
@@ -518,6 +550,8 @@ class LLMWebNovelReviewer:
                 ),
             },
             "world": {
+                "genesis_map_overview": context.genesis_map_overview,
+                "map_context": map_context,
                 "timeline": context.timeline.model_dump(mode="json") if context.timeline is not None else {},
                 "world_pressure": (
                     context.world_pressure.model_dump(mode="json") if context.world_pressure is not None else {}
@@ -571,6 +605,11 @@ class LLMWebNovelReviewer:
                     "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
                     "draft.body 是待评审的完整最终正文；正文问题必须以它为准。"
                     "摘要与结构化状态、事件、时间候选用于交叉核验，不能代替最终正文。"
+                    "根据地图路线约束核对正文人物的出发、抵达和经过时间；手续等待与移动耗时须区分。"
+                    "场景元数据中的地点或整章时长不能覆盖正文内更具体的时间地点事实。"
+                    "当前BookMap是运行地图；Genesis总览只是写前来源。travel_time单位为小时，"
+                    "metadata.travel_time_known=false时耗时未知，不能把存储占位0当瞬移许可。"
+                    "原文手续和等待条件须一并核对；objective地图存在的隐藏路线不等于人物已知。"
                     "canon invariant 优先于章节计划、摘要和本章声称；静默改写规则定义必须 fail。"
                     "已接受后续章节的冻结锚点同样属于 canon invariant：历史重写不得提前完成、重排、否定或改写其结果。"
                 ),

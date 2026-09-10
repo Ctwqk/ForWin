@@ -4,11 +4,14 @@ import hashlib
 import json
 import re
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from forwin.models.subworld import project_scoped_subworld_id
+from forwin.protocol.book_state import MapEdge, MapEdgeType
+from forwin.utils.duration import duration_hours
 
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
-
+from .visibility import genesis_edge_visibility
 
 _DEFAULT_REGION_ROLES = ["主舞台核心区", "权力中心区", "危险边缘区"]
 _SAFE_NODE_TYPES = {
@@ -36,6 +39,7 @@ def build_subworld_map_specs_from_genesis(
     submaps = _normalized_submaps(atlas)
     regions = [item for item in (atlas.get("regions") or []) if isinstance(item, dict)]
     nodes = [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)]
+    authored = authored_edges_from_atlas(project_id=project_id, map_atlas=atlas)
     specs: list[SubWorldMapSpec] = []
     for submap in submaps:
         logical_subworld_id = str(submap["id"])
@@ -50,8 +54,16 @@ def build_subworld_map_specs_from_genesis(
             region_roles=region_roles,
             region_name_by_id=region_name_by_id,
         )
-        target_region_count = max(3, len(region_roles))
-        target_node_count = max(12, target_region_count * 3 + len(anchors))
+        local_edges = None
+        if authored is not None:
+            anchors = [anchor for anchor in anchors if anchor.source_node_id]
+            if not anchors:
+                raise ValueError(f"authored map subworld has no locations: {logical_subworld_id}")
+            region_roles = _unique([anchor.region_role for anchor in anchors])
+            local_ids = {anchor.source_node_id for anchor in anchors}
+            local_edges = [edge for edge in authored if edge.from_node_id in local_ids and edge.to_node_id in local_ids]
+        target_region_count = len(region_roles) if authored is not None else max(3, len(region_roles))
+        target_node_count = len(anchors) if authored is not None else max(12, target_region_count * 3 + len(anchors))
         specs.append(
             SubWorldMapSpec(
                 project_id=project_id,
@@ -81,6 +93,7 @@ def build_subworld_map_specs_from_genesis(
                 target_edge_density=1.6,
                 required_region_roles=region_roles,
                 required_anchor_nodes=anchors,
+                authored_edges=local_edges,
                 required_connection_roles=_connection_roles(atlas, submap),
                 danger_profile={"base": _danger_base(submap, region_rows, node_rows)},
                 resource_profile={"themes": list(submap.get("resource_themes", []) or [])},
@@ -90,6 +103,82 @@ def build_subworld_map_specs_from_genesis(
             )
         )
     return specs
+
+
+def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> list[MapEdge] | None:
+    """Normalize node-to-node Genesis routes once for local and cross-world IO.
+
+    Travel time is only the leading explicit duration. Procedural waits and
+    conditions remain verbatim evidence, never guessed numerical weights.
+    """
+    nodes = [item for item in map_atlas.get("nodes", []) if isinstance(item, dict)]
+    by_ref: dict[str, str] = {}
+    names: dict[str, set[str]] = {}
+    for node in nodes:
+        source_id = str(node.get("id") or "").strip()
+        if source_id:
+            if source_id in by_ref:
+                raise ValueError(f"duplicate authored map node: {source_id}")
+            by_ref[source_id] = source_id
+            names.setdefault(str(node.get("name") or source_id), set()).add(source_id)
+    for name, ids in names.items():
+        if len(ids) == 1 and name not in by_ref:
+            by_ref[name] = next(iter(ids))
+    result: list[MapEdge] = []
+    seen: set[str] = set()
+    subworld_refs = {str(item.get(key) or "") for item in map_atlas.get("submaps", []) if isinstance(item, dict) for key in ("id", "name")}
+    for index, row in enumerate(map_atlas.get("edges", []) or []):
+        if not isinstance(row, dict):
+            continue
+        left, right = genesis_edge_endpoints(row)
+        if left not in by_ref or right not in by_ref:
+            # Subworld-level edges are handled by the existing interconnection adapter.
+            if left in subworld_refs and right in subworld_refs:
+                continue
+            raise ValueError(f"authored map route has unresolved endpoint: {left} -> {right}")
+        source_id = str(row.get("id") or row.get("edge_id") or f"route-{index}-{hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}")
+        if source_id in seen:
+            raise ValueError(f"duplicate authored map edge: {source_id}")
+        seen.add(source_id)
+        cost = str(row.get("travel_cost") or "")
+        hours = duration_hours(re.split(r"[；;]", cost, maxsplit=1)[0])
+        # Numeric travel_time is already expressed in the BookMap hour unit.
+        if isinstance(row.get("travel_time"), (int, float)) and not isinstance(row["travel_time"], bool):
+            hours = float(row["travel_time"])
+            if not 0 <= hours < float("inf"):
+                raise ValueError(f"invalid authored travel time: {source_id}")
+        kind = str(row.get("edge_type") or row.get("kind") or row.get("type") or "path")
+        kind = kind if kind in {item.value for item in MapEdgeType} else "path"
+        result.append(MapEdge(
+            id=f"atlas_edge_{uuid5(NAMESPACE_URL, project_id + '|' + source_id).hex[:16]}",
+            project_id=project_id, from_node_id=by_ref[left], to_node_id=by_ref[right],
+            edge_type=kind, bidirectional=str(row.get("bidirectional", True)).lower() not in {"false", "0", "no"},
+            travel_time=hours if hours is not None else 0.0,
+            **genesis_edge_visibility(row),
+            access_rule_id=str(row.get("access_rule_id") or ""),
+            metadata={"source": "genesis_atlas_edges", "source_edge_id": source_id,
+                      "source_from_ref": by_ref[left], "source_to_ref": by_ref[right],
+                      "source_travel_cost": cost, "travel_time_known": hours is not None,
+                      "source_relation": str(row.get("relation") or kind),
+                      "source_control": str(row.get("control") or ""),
+                      "source_hazard": str(row.get("hazard") or "")},
+        ))
+    return result or None
+
+
+def genesis_edge_endpoints(row: dict[str, Any]) -> tuple[str, str]:
+    def endpoint(keys: tuple[str, ...]) -> str:
+        for key in keys:
+            raw = row.get(key)
+            if isinstance(raw, dict):
+                raw = raw.get("id") or raw.get("node_id") or raw.get("name") or raw.get("subworld_id")
+            if raw:
+                return str(raw).strip()
+        return ""
+    return (
+        endpoint(("from_node_id", "source_node_id", "from_node", "source_node", "from", "source", "from_subworld_id", "source_subworld_id", "from_subworld", "source_subworld")),
+        endpoint(("to_node_id", "target_node_id", "to_node", "target_node", "to", "target", "to_subworld_id", "target_subworld_id", "to_subworld", "target_subworld")),
+    )
 
 
 def _normalized_submaps(atlas: dict[str, Any]) -> list[dict[str, Any]]:
@@ -247,15 +336,15 @@ def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str
     ]
     roles: list[str] = []
     for value in values:
-        if "传送" in value or "门" in value:
-            roles.append("传送阵")
         if "山" in value:
             roles.append("山路")
         if "水" in value or "河" in value:
             roles.append("水路")
         if "路" in value or "移动" in value:
             roles.append("官道")
-    return _unique(roles) or ["官道", "山路", "传送阵"]
+    # Free-form travel rules include negations and ordinary doors/checkpoints.
+    # Only an explicit structured route may introduce supernatural transport.
+    return _unique(roles) or ["官道"]
 
 
 def _danger_base(

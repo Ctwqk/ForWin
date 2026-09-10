@@ -152,7 +152,7 @@ def _book_state_neighbors(graph, location_id: str, map_nodes_by_id: dict[str, Ma
                 "node_id": node.id,
                 "name": node.name,
                 "edge_id": edge.id,
-                "travel_time": edge.travel_time,
+                "travel_time": None if edge.metadata.get("travel_time_known") is False else edge.travel_time,
                 "risk_level": edge.risk_level,
             }
         )

@@ -2,7 +2,7 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-更新：2026-09-09。范围：`codex/three-stage-improvements` 已提交的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构与合格反馈链路。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
+更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路及地图约束传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。
 
@@ -96,6 +96,10 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 本轮已删除主 LLM review 和 repair escalation 的旧 scene 正文输入，改为完整最终 body；结构化状态/事件/时间和 Canon invariants 仍用于核验。场景原始产物没有被销毁，地图检查仍可使用位置等结构化数据。
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
+
+Genesis 提供明确地点路线时，handoff 在现有 BookMap owner 内保留原始端点、方向、独立平行路线、显隐状态、发现状态和通行规则。行程的明确时长转为小时；登记、排队和许可等条件保留原文，无法解析的耗时保持未知。只有没有明确地点路线的输入才使用程序化地图生成；不因“门禁”字样生成传送门，也不为通过连通性检查补造路线。全部跨区路线落库后在同一 savepoint 内核验结构弱连通性，失败完整回滚；实际寻路仍按单向/双向限制。旧作品地图不被自动重建。
+
+Writer 获取当前可见 BookMap 路线和写前来源约束，即使人物位置未解析或地图被裁剪也保留已有路线，并标明不完整。主 BODY reviewer 获取当前地图及来源证据，以当前 BookMap 优先；客观隐藏路线不等于角色已知。确定性移动检查识别运行地点 ID、唯一 Genesis 来源 ID/名称，以及明确的中文/数字复合时长；复合自由文本位置不猜测映射。它仍不能证明最终正文的每一段移动都正确，真实长跑须独立审读最终 BODY。[已暂停 L100 的失败与修复边界](../docs/superpowers/reports/2026-09-10-stage1-map-failure.md)记录了这一限制。
 
 ## 6. Review、修复和接纳资格
 

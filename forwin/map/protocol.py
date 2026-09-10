@@ -69,6 +69,9 @@ class SubWorldMapSpec(_MapProtocolModel):
     target_edge_density: float = Field(default=1.6, ge=1.0)
     required_region_roles: list[str] = Field(default_factory=list)
     required_anchor_nodes: list[MapAnchorNodeSpec] = Field(default_factory=list)
+    # None means procedural generation. A list (including []) is authored
+    # topology: preserve its routes without synthesizing missing connections.
+    authored_edges: list[MapEdge] | None = None
     required_connection_roles: list[str] = Field(default_factory=list)
     danger_profile: dict[str, Any] = Field(default_factory=dict)
     resource_profile: dict[str, Any] = Field(default_factory=dict)
@@ -78,7 +81,9 @@ class SubWorldMapSpec(_MapProtocolModel):
 
     @model_validator(mode="after")
     def _target_counts_cover_required_baseline(self) -> "SubWorldMapSpec":
-        minimum_nodes = len(self.required_anchor_nodes) + self.target_region_count * 3
+        minimum_nodes = len(self.required_anchor_nodes)
+        if self.authored_edges is None:
+            minimum_nodes += self.target_region_count * 3
         if self.target_node_count < minimum_nodes:
             raise ValueError(
                 "target_node_count must cover required anchors plus three baseline nodes per region"

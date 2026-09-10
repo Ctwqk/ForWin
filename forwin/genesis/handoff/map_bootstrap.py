@@ -110,7 +110,7 @@ class GenesisMapBootstrap:
         result = create_or_update_book_map(
             session,
             specs,
-            interconnections=interconnections if interconnections else None,
+            interconnections=interconnections if interconnection_source == "atlas_edges" else interconnections or None,
             interconnection_source=interconnection_source,
             commit=False,
         )

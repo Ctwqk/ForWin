@@ -392,6 +392,10 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
 
 
 def _map_runtime_section(context: ChapterContextPack) -> str | None:
+    from types import SimpleNamespace
+
+    from forwin.map.visibility import is_writer_visible_map_edge
+
     map_context = getattr(context, "map_context", {}) or {}
     if not isinstance(map_context, dict) or not int(map_context.get("map_node_count") or 0):
         return None
@@ -414,7 +418,8 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
             lines.append(location_line)
             nearby_nodes = item.get("nearby_nodes") if isinstance(item.get("nearby_nodes"), list) else []
             nearby = [
-                f"{str(node.get('name', '') or node.get('node_id', '')).strip()}({float(node.get('travel_time') or 0):.1f})"
+                f"{str(node.get('name', '') or node.get('node_id', '')).strip()}"
+                + (f"({float(node['travel_time']):.3g}小时)" if node.get("travel_time") is not None else "(耗时未知)")
                 for node in nearby_nodes[:5]
                 if isinstance(node, dict) and str(node.get("name", "") or node.get("node_id", "")).strip()
             ]
@@ -431,6 +436,27 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
                     if isinstance(item, dict) and str(item.get("name", "") or item.get("node_id", "")).strip()
                 )
             )
+    graph = map_context.get("review_graph")
+    if isinstance(graph, dict):
+        names = {node.get("id"): str(node.get("name") or node.get("id")) for node in graph.get("map_nodes", []) if isinstance(node, dict)}
+        routes = [edge for edge in graph.get("map_edges", []) if isinstance(edge, dict) and is_writer_visible_map_edge(SimpleNamespace(**edge))]
+        if routes:
+            lines.append("  · 当前BookMap路线（小时为数值单位；优先于Genesis写前总览；未知耗时不可当作零）：")
+        if graph.get("available") is False:
+            lines.append("  · 当前地图上下文不完整；只展示已提供路线，未列出的路线和条件保持未知。")
+        for edge in routes[:24]:
+            metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+            hours = edge.get("travel_time") if metadata.get("travel_time_known") is not False else None
+            duration = f"{float(hours):.3g}小时" if hours is not None else "耗时未知"
+            source_cost = str(metadata.get("source_travel_cost") or "")
+            controls = str(metadata.get("source_control") or "")
+            access_rule = str(edge.get("access_rule_id") or "")
+            arrow = "↔" if edge.get("bidirectional") else "→"
+            lines.append(f"    · {names.get(edge.get('from_node_id'), edge.get('from_node_id'))}{arrow}{names.get(edge.get('to_node_id'), edge.get('to_node_id'))}：{duration}；来源约束：{source_cost or '未提供'}{('；通行条件：' + controls) if controls else ''}")
+            if access_rule:
+                lines.append(f"      · 通行规则引用：{access_rule}；须满足对应规则，未知规则不视为许可。")
+        if len(routes) > 24:
+            lines.append(f"  · 另有{len(routes) - 24}条可见路线未展开，不代表不存在。")
     return "\n".join(lines)
 
 

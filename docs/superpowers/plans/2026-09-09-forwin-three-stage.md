@@ -86,8 +86,8 @@
 **Files:** existing long-run harness and operating evidence under `docs/operations/`.
 
 - [x] Run per-package related tests, then full pytest, Ruff and compileall from one source candidate. Frozen `c62f6d0`: 2658 passed, 4 skipped, 6 subtests passed; compileall/F/E9 clean. Full Ruff 1179 versus original 1219, not zero warnings.
-- [ ] Validate restore/migration in isolation, build full images, record source/image/model/effective policy.
-- [ ] Run approximately 20-chapter offline smoke, then fresh 100-chapter offline project with supported automatic pause/delegation policy.
+- [x] Validate restore/migration in isolation, build full images, record source/image/model/effective policy. The restored production backup passed through `0004_revision_validation`; frozen `c62f6d0` role images passed actual execution checks. Full policy readback changed only three supported automation fields.
+- [ ] Run approximately 20-chapter offline smoke, then fresh 100-chapter offline project with supported automatic pause/delegation policy. Isolated smoke project `693a1a7df3124c1088f2201e9581f023`, task `08104286cb5b`, started with `run_until_chapter=20`; first chapter accepted, ongoing. Preserve actual model retries/fallback and usage gaps. L100 not started.
 - [ ] Verify finite repair, recovery idempotency and intended ending; record failures honestly. Use isolated publisher adapters for serial safety.
 - [ ] Close Stage 1 only with actual evidence; do not mechanically continue a failed candidate as the same release identity.
 
@@ -96,19 +96,19 @@
 **Files:** `forwin/generation/pipeline.py`, `pipeline_core/`, `review/repair/`, current runtime collaborators and fixed-response fixtures.
 
 - [x] Freeze Writer behavior and replace both real callers with the concrete execution owner; delete the old mixin. `de3d854`: 344 related tests, independent 110, root 73 (overlapping).
-- [ ] Complete Review/Repair and Canon preparation separation from full Pipeline callbacks; replace callers and remove obsolete entries.
-- [ ] Run A1 reviewer, A2 context and A3 maintenance experiments independently with labelled positive/negative samples. Prove stale-consumer safety before changing maintenance barriers.
-- [ ] Run A4 only if Writer evidence justifies it; do not keep a permanent second writer.
-- [ ] Collect costs, latency, repair, intervention, hard blockers and independent narrative evaluation; reject serious misses, prefer ≥15% cost/latency benefit without serious regression.
-- [ ] Keep/delete/insufficient-evidence decisions and sources; clean experimental flags/copies, run full regression.
+- [x] Complete Review/Repair and Canon preparation separation from full Pipeline callbacks; replace callers and remove obsolete entries. `59b2bbb`: 387 related tests, independent 153; original transactions, budget, pause and trace behavior retained.
+- [x] Replay A1/A2 with the same nine frozen response keys and independent labels. A1 keep after two known severe misses; A2 insufficient, retained. A3's consumer/version proof is insufficient; maintenance cadence and barrier stay unchanged.
+- [x] Evaluate A4 condition: not justified by current evidence, not started; no permanent second writer.
+- [x] Record measured and missing quantities explicitly. Offline calls/input characters measured; real tokens, latency and narrative preference unmeasured. No claimed ≥15% production benefit or real-model paired trial. See [ablation report](../reports/2026-09-09-stage2-ablation.md), `45faa90`.
+- [ ] Run final full regression after integration. No production experiment flags or alternative implementations were retained.
 
 ### Task 8: Feedback correctness and finite loop (Stage 3)
 
 **Files:** `models/publisher.py`, comment ingest, `audience/{feedback,actions}.py`, `simulation/world.py`, `state/repo.py`, feedback context and planning consumers, forward migrations.
 
-- [ ] Separate source chapter/publication revision and observed/ingested/analyzed times from current generation progress.
-- [ ] Query uncompleted analysis before pagination; version completion including zero signals; bounded failures, content-edit hash and scoped idempotency.
-- [ ] Test 100 comments with batch size 8, zero signals, out-of-order/backfill and duplicate book titles.
+- [x] Separate source chapter/publication revision and observed/ingested/analyzed times from current generation progress. `99dcd6b`, forward migration `0005_comment_analysis`; old provenance stays unknown.
+- [x] Query uncompleted analysis before pagination; version completion including zero signals; bounded failures, content-edit hash and scoped idempotency. Exact old input restoration reactivates completed evidence; project binding can be resolved independently of chapter binding. Caller rollback/crash limit documented; automatic consumer transaction integration follows.
+- [x] Test 100 comments with batch size 8, zero signals, out-of-order/backfill and duplicate book titles. 75 package/probe tests; independent 54 plus final 32 (overlapping), including both independently reproduced defects.
 - [ ] One aggregation/decision owner, correct all-comment denominators, distinct scoped authors, prediction and directional action mapping.
 - [ ] Track proposed/selected/actually-included/applied/observed separately; only record Writer inputs after trimming.
 - [ ] Demonstrate one traceable accepted future adjustment and one justified rejection using low/late/conflicting/repeated-single-reader evidence.

@@ -7,11 +7,10 @@ publication, readership, or causal benefit is claimed by this replay.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from forwin.audience.body_observation import FeedbackBodyObservationService
 from forwin.candidate_drafts import CandidateDraftRepository, candidate_plan_revision
@@ -226,24 +225,30 @@ def _publication_fixture(runtime, project_id, commit_id):
 
 
 def _ingest(runtime, project_id, remote_id, bodies, *, prefix, single_author=False):
-    now = datetime.now(UTC).isoformat()
-    runtime.comment_sync.ingest_comments_batch(
-        client_id="offline-fixture",
-        platform="qidian",
-        comments=[
-            {
-                "project_id": project_id,
-                "work_id": "offline-book",
-                "chapter_id": remote_id,
-                "remote_comment_id": f"{prefix}-{i}",
-                "author_id": "same-reader" if single_author else f"{prefix}-reader-{i}",
-                "body": body,
-                "created_at": now,
-                "observed_at": now,
-            }
-            for i, body in enumerate(bodies)
-        ],
-    )
+    # Canon timestamps come from PostgreSQL. Give this simulated platform and
+    # ingestion the same clock, independent of host/VM millisecond clock skew.
+    # Real late/pre-body feedback remains rejected by the unchanged effect owner.
+    with runtime.session_factory() as session:
+        now = session.scalar(select(func.clock_timestamp()))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("forwin.publisher_runtime.comment_sync.utc_now", lambda: now)
+        runtime.comment_sync.ingest_comments_batch(
+            client_id="offline-fixture",
+            platform="qidian",
+            comments=[
+                {
+                    "project_id": project_id,
+                    "work_id": "offline-book",
+                    "chapter_id": remote_id,
+                    "remote_comment_id": f"{prefix}-{i}",
+                    "author_id": "same-reader" if single_author else f"{prefix}-reader-{i}",
+                    "body": body,
+                    "created_at": now.isoformat(),
+                    "observed_at": now.isoformat(),
+                }
+                for i, body in enumerate(bodies)
+            ],
+        )
 
 
 @pytest.fixture

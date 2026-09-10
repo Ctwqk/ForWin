@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 import httpx
 
+from forwin.api_schema.policy import RuntimePolicyResponse, RuntimePolicyUpdateRequest
+
 from .models import (
     ActiveTaskCheckView,
     BandCheckpointView,
@@ -356,6 +358,23 @@ class ForWinAPIClient:
             task=await self._safe_task_get(task_id, fallback_payload=payload),
         )
 
+    async def project_get_runtime_policy(self, *, project_id: str) -> RuntimePolicyResponse:
+        payload = await self._request_json("GET", f"/api/projects/{project_id}/policy")
+        return RuntimePolicyResponse.model_validate(payload)
+
+    async def project_update_runtime_policy(
+        self,
+        *,
+        project_id: str,
+        request: RuntimePolicyUpdateRequest,
+    ) -> RuntimePolicyResponse:
+        payload = await self._request_json(
+            "PUT",
+            f"/api/projects/{project_id}/policy",
+            json=request.model_dump(mode="json"),
+        )
+        return RuntimePolicyResponse.model_validate(payload)
+
     async def project_set_gate_delegate(
         self,
         *,
@@ -368,43 +387,27 @@ class ForWinAPIClient:
             raise ValueError("reason is required")
         if delegate not in {"human", "spark"}:
             raise ValueError("delegate must be human or spark")
-        current = await self._request_json(
-            "GET",
-            f"/api/projects/{project_id}/policy",
+        current = await self.project_get_runtime_policy(project_id=project_id)
+        policy = current.policy
+        saved = await self.project_update_runtime_policy(
+            project_id=project_id,
+            request=RuntimePolicyUpdateRequest(
+                expected_version=current.version,
+                quality_profile=policy.quality_profile,
+                model_profile_id=policy.model_profile_id,
+                min_chapter_chars=policy.chapter_length.min_chars,
+                target_chapter_chars=policy.chapter_length.target_chars,
+                max_chapter_chars=policy.chapter_length.max_chars,
+                review_interval_chapters=policy.pause.review_interval_chapters,
+                manual_checkpoints=policy.pause.manual_checkpoints,
+                band_checkpoint_action=policy.pause.band_checkpoint_action,
+                gate_delegate=delegate,
+                reason=normalized_reason,
+            ),
         )
-        policy = current.get("policy") if isinstance(current, dict) else None
-        if not isinstance(policy, dict):
-            raise RuntimeError("Expected project runtime policy from ForWin API.")
-        chapter_length = policy.get("chapter_length") or {}
-        pause = policy.get("pause") or {}
-        if not isinstance(chapter_length, dict) or not isinstance(pause, dict):
-            raise RuntimeError("Project runtime policy is malformed.")
-        payload = await self._request_json(
-            "PUT",
-            f"/api/projects/{project_id}/policy",
-            json={
-                "expected_version": int(current.get("version", 0) or 0),
-                "quality_profile": str(policy.get("quality_profile", "standard")),
-                "model_profile_id": str(policy.get("model_profile_id", "")),
-                "min_chapter_chars": int(chapter_length.get("min_chars", 0) or 0),
-                "target_chapter_chars": int(chapter_length.get("target_chars", 0) or 0),
-                "max_chapter_chars": int(chapter_length.get("max_chars", 0) or 0),
-                "review_interval_chapters": int(
-                    pause.get("review_interval_chapters", 0) or 0
-                ),
-                "manual_checkpoints": bool(pause.get("manual_checkpoints", True)),
-                "band_checkpoint_action": str(
-                    pause.get("band_checkpoint_action", "pause_on_warn")
-                ),
-                "gate_delegate": delegate,
-                "reason": normalized_reason,
-            },
-        )
-        if not isinstance(payload, dict):
-            raise RuntimeError("Expected project runtime policy payload from ForWin API.")
         return MutationResult(
-            ok=bool(payload.get("ok", True)),
-            message=str(payload.get("message", "")),
+            ok=saved.ok,
+            message=saved.message,
             project=await self.project_get(project_id),
         )
 

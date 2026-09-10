@@ -548,6 +548,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "genesis_stage_lock",
                     "project_start_writing",
                     "project_continue_generation",
+                    "project_get_runtime_policy",
+                    "project_update_runtime_policy",
                     "project_set_gate_delegate",
                     "project_decision_events",
                     "gate_ledger_report",

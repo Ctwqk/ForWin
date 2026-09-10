@@ -9,6 +9,8 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+from forwin.api_schema.policy import RuntimePolicyResponse, RuntimePolicyUpdateRequest
+
 from .client import ForWinAPIClient
 from .models import (
     BandCheckpointView,
@@ -264,6 +266,26 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             auto_continue=auto_continue,
             run_until_chapter=run_until_chapter,
         )
+
+    @register_read_tool(
+        "project_get_runtime_policy",
+        "Read a project's complete canonical runtime policy and current version. Use this when inspecting policy before an update; the response contains policy choices without infrastructure credentials.",
+    )
+    async def project_get_runtime_policy(project_id: str) -> RuntimePolicyResponse:
+        return await client.project_get_runtime_policy(project_id=project_id)
+
+    # FastMCP compresses presentation titles and additionalProperties:false in
+    # its published schema. RuntimePolicyUpdateRequest and the API still reject
+    # unknown fields; keep that canonical validation instead of patching schemas.
+    @register_write_tool(
+        "project_update_runtime_policy",
+        "Update project runtime policy through the canonical policy API. Use this when changing project policy: read the current policy first, pass its version as expected_version, and provide every editable setting to preserve other choices. A reason is required; stale versions and invalid settings are rejected. Existing task policy snapshots remain owned by their tasks.",
+    )
+    async def project_update_runtime_policy(
+        project_id: str,
+        request: RuntimePolicyUpdateRequest,
+    ) -> RuntimePolicyResponse:
+        return await client.project_update_runtime_policy(project_id=project_id, request=request)
 
     @register_write_tool(
         "project_set_gate_delegate",

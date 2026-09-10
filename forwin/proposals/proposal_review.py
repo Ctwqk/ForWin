@@ -12,7 +12,7 @@ from forwin.canon import (
     CanonWriteFailure,
 )
 from forwin.models.knowledge import KnowledgeEditProposalRow
-from forwin.proposals.structured_patch import proposal_to_graph_delta
+from forwin.proposals.structured_patch import proposal_chapter, proposal_to_graph_delta
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 
 
@@ -20,21 +20,6 @@ from forwin.protocol.book_state import ApprovedGraphDeltaSet
 class ProposalReviewResult:
     row: KnowledgeEditProposalRow
     projection_refresh: dict[str, Any] = field(default_factory=dict)
-
-
-def proposal_chapter(row: KnowledgeEditProposalRow) -> int:
-    payload = _load_patch_json(row.proposed_patch_json)
-    frontmatter = (
-        payload.get("frontmatter")
-        if isinstance(payload.get("frontmatter"), dict)
-        else {}
-    )
-    try:
-        return int(
-            frontmatter.get("as_of_chapter") or payload.get("as_of_chapter") or 0
-        )
-    except (TypeError, ValueError):
-        return 0
 
 
 def approve_world_edit_proposal(
@@ -100,13 +85,3 @@ def _load_pending_proposal(
     if row.status not in {"pending", "proposed"}:
         raise HTTPException(status_code=409, detail=f"proposal already {row.status}")
     return row
-
-
-def _load_patch_json(raw: str) -> dict[str, Any]:
-    import json
-
-    try:
-        payload = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}

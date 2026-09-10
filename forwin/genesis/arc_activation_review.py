@@ -8,10 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.repository import BookStateRepository
-from forwin.models.draft import ChapterDraft
 from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
-from forwin.models.project import ChapterPlan
+from forwin.review.query import ReviewQuery
 
 
 @dataclass(frozen=True)
@@ -124,27 +123,12 @@ def _accepted_chapter_summaries(
     before_chapter: int,
     limit: int,
 ) -> list[dict[str, Any]]:
-    plans = list(
-        session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.status == "accepted",
-                ChapterPlan.chapter_number < int(before_chapter or 0),
-            )
-            .order_by(ChapterPlan.chapter_number.desc())
-            .limit(limit)
-        ).scalars()
+    chapters = ReviewQuery(session).accepted_chapter_drafts(
+        project_id, before_chapter=before_chapter, limit=limit,
     )
     rows: list[dict[str, Any]] = []
-    for plan in reversed(plans):
-        draft = session.execute(
-            select(ChapterDraft)
-            .where(ChapterDraft.chapter_plan_id == plan.id)
-            .order_by(ChapterDraft.version.desc(), ChapterDraft.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        summary = str(getattr(draft, "summary", "") or plan.one_line or "").strip()
+    for plan, draft in reversed(chapters):
+        summary = str(draft.summary or "").strip()
         rows.append(
             {
                 "chapter_number": int(plan.chapter_number or 0),

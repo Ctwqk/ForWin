@@ -585,9 +585,11 @@ def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership()
         "from forwin.proposals.proposal_review import approve_world_edit_proposal"
         in proposal_api
     )
-    assert (
-        "from forwin.proposals.structured_patch import proposal_to_graph_delta"
-        in proposal_review
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "forwin.proposals.structured_patch"
+        and any(alias.name == "proposal_to_graph_delta" for alias in node.names)
+        for node in ast.walk(ast.parse(proposal_review))
     )
     assert 'trigger: str = "proposal_approve"' in proposal_review
     assert '"source": row.source' in structured_patch

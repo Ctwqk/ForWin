@@ -7,8 +7,9 @@
 - 开发分支：`codex/three-stage-improvements`；源码起点 `521228871a5752ebe8572c057caa9f4944bb0295`。
 - 设计文档已更新，旧 L200/重复矩阵要求已被本轮 smoke + 离线 L100 替代。
 - 已从 HEAD 退休三个过期路线图全文；固定 Git 历史入口在 `Design-docs/DESIGN_STATUS.md`。
-- P1 版本/冻结、完整后缀修订、5% 容量及向前迁移已提交并完成独立评审，冻结的 `c62f6d0` 全量回归和角色镜像验证通过。Stage 2 职责重构及消融结论已提交；Stage 3 评论→计划→实际 Writer/BODY→后续观察已在 `34d1ea0` 收拢并通过相关回归。可选导出正在独立审查，最终整合全量验证和实际长跑尚未完成。
+- P1 版本/冻结、完整后缀修订、5% 容量及向前迁移、Stage 2 职责重构、Stage 3 合格反馈链路和可选 Markdown/manifest 导出均已提交并经独立审查。隔离实跑发现的规则生命周期读侧缺陷已在 `1f9a9ad` 修复；该冻结源码全量回归 2986 项通过、4 项跳过。真实长跑、最终浏览器镜像及生产切换尚未完成，不能用工程测试代替这些结果。
 - 没有修改生产作品、发布新内容或把隔离测试回执写入生产。
+- 外部 review 的正式历史读侧污染与世界编辑绕过后继核验已复现并补强，详见[review 跟进](../superpowers/reports/2026-09-09-review-followup.md)。这些后续改动须重新冻结做全量回归，不能借用 `1f9a9ad` 的通过记录。旧版本 L100 仅生成了未锁定 brief，尚未开始正文，已暂缓，下一次写作使用新的完整候选。
 
 ## 运行基线调查
 
@@ -71,7 +72,11 @@ CLI `forwin --help`、生成/Pubisher服务导入和浏览器 `chromium --versio
 | 运行入口 | `.venv/bin/python scripts/check_codex_operator_ready.py` | API/MCP健康、插件配置、Swarm角色、Python环境通过 |
 | 活跃生成任务 | `forwin.task_active_generation_check` | 0；仅说明调查时状态 |
 
-`c62f6d02329b5d766569f37159fe57f16907c7ad` 的独立源码归档（tree `5da6f38651decfef0cadb4b13b9e4346fc566ccb`）完成全量 pytest：**2658 passed、4 skipped、6 subtests passed**，用时287.98秒。归档导入路径已经核对，未从正在进行后续开发的 checkout 导入。compileall、F/E9 Ruff 和源码守卫通过；默认完整 Ruff 为1179项，同规则原始基线1219项，新引入诊断已修正，不能称为全库零告警。[20章隔离 smoke](../superpowers/reports/2026-09-09-stage1-smoke.md)已启动并发现一个评审未拦住的首章时间矛盾；任务和完整结尾仍待实际完成，全新离线 L100 未启动。
+`c62f6d02329b5d766569f37159fe57f16907c7ad` 的独立源码归档（tree `5da6f38651decfef0cadb4b13b9e4346fc566ccb`）完成全量 pytest：**2658 passed、4 skipped、6 subtests passed**，用时287.98秒。归档导入路径已经核对，未从正在进行后续开发的 checkout 导入。compileall、F/E9 Ruff 和源码守卫通过；默认完整 Ruff 为1179项，同规则原始基线1219项，新引入诊断已修正，不能称为全库零告警。[20章隔离 smoke](../superpowers/reports/2026-09-09-stage1-smoke.md)在接纳五章后发现规则生命周期读侧缺陷及时间/位置连续性问题，已通过正式 MCP 安全暂停；20章及结尾未完成。旧运行没有热修复或冒充通过，修复后的全新离线 L100 单独记录身份和结果。
+
+整合导出和规则修复后的 `1f9a9ad197a88ff7907c63b9d3692496a1c53072`（tree `fac2a1ca6161dfc000ba37746e7c262ca0bb7a62`）在冻结归档运行完整 pytest：**2986 passed、4 skipped、5 warnings、6 subtests passed**，用时325.15秒。导入路径及642个生产 Python 文件 hash 已核对。compileall、F/E9 和源码守卫通过；默认 Ruff 1035项，相对原始1219项基线没有新增路径/代码/消息诊断，行号漂移不计作新问题。此前 `bb1d2b4` 全量的五项失败来自新独立导出事件和旧路径清单的测试接线；`dbed88e` 保留原三个 Canon 恢复事件的完整断言、另验第四个导出事件并修正精确路径清单，原五项复验通过后才进行本次全量运行。
+
+同一 `1f9a9ad` 完整运行镜像为 `sha256:0088fcf995f845f1a1e3d6d86b21f16556da8009a0026259d5646248f96a00e2`，实际只读、无网络容器验证源码文件、锁文件、完整 revision、arm64架构、各角色导入和 CLI 通过，迁移链 head 为 `0007_feedback_actions`。这不代表浏览器角色也已通过：浏览器构建触发低磁盘保护，之后的验证也因空间不足停止；未验证产物及两个经核实的独占构建缓存已精确清理，生产/回滚镜像、数据卷与旧 smoke 镜像保留。最终浏览器镜像与真实运行验收仍待完成。
 
 Stage 3 的向前迁移另在原生产备份的全新隔离 PostgreSQL 副本验证至 `0007_feedback_actions`：101 张原表及全部原字段值保留（仅旧发布任务状态与已核实的 binding 章号按已审契约转换），额外 `npc_intent_snapshots` 原样保留；23 个不确定任务对应 23 个 reserved 保护、15 处标题差异保留、18 个已核实章绑定、0 个伪造公开保护或回执。分析器/聚合/行动新增字段没有把旧证据猜成合格。私有报告保存完整迁移源码 hash，本次未修改生产数据库；最终部署仍须停妥后重新备份。
 
@@ -123,10 +128,14 @@ Stage 1 曾暂停未经修正的反馈输入，保留采集、展示和历史，
 
 浏览器镜像验证完成后，回收本轮暂不运行的浏览器检查镜像及其两个独占构建层，保留上述验证记录；隔离smoke继续使用冻结的完整运行镜像。生产部署需从最终源码构建其完整角色镜像，不能把已回收检查镜像当作现存部署产物。
 
+后续 `1f9a9ad` 浏览器构建再次触发空间保护后，用户授权清理宿主。已清理可重建包缓存、未使用的旧程序版本及构建产物，并回收虚拟机已删除文件的空闲块。最后一次宿主实测可用 14.14 GiB；该次 trim 前后净增 1.84 GiB，未把 guest 报告数当成宿主实际收益。源码、运行数据、凭据、冻结证据及生产回滚镜像保留，未因清理修改生成状态。
+
 ## Stage 2 / Stage 3 已提交工作
 
 `de3d854` 完成 Writer owner，`59b2bbb` 完成 Review/Repair 与 Canon 准备职责拆分：真实调用者迁移，旧 Stage 删除，保留有限输入、原异常/取消、预算和同事务 trace。Writer 相关344项、独立110项、根代理73项；后续 Review/Repair/Canon 相关387项、根代理153项通过，计数重叠。详见[A0 报告](../superpowers/reports/2026-09-09-stage2-owner-refactor.md)。
 
 `45faa90` 记录同九个固定响应键的消融：A1 保留，A2/A3 证据不足保留，A4 尚无同输入预算的真实模型对照，不保留第二套 Writer。不能把输入字符节省写成已验证 token/质量收益。详见[消融报告](../superpowers/reports/2026-09-09-stage2-ablation.md)。
 
-Stage 3 的 `99dcd6b`、`83ab5cb`、`34d1ea0` 分别实现评论来源/版本化完成、独立提交消费和合格反馈链路。聚合按全部评论计分母、按平台区别作者；冲突和证据不足只观察。选用、实际输入、计划应用、正文观察和关联变化分别留证；正文默认 unknown，关联不声称因果。真实 owner 的有限样本包含五次唯一 Canon 接纳及四类合理拒绝输入，模型/质量/发布响应为显式冻结 fixture；见[有限样本](../superpowers/reports/2026-09-09-stage3-feedback-finite-loop.md)。独立整合审查72项及根代理最终相关91项通过，计数重叠；[整合报告](../superpowers/reports/2026-09-09-stage3-feedback-integration.md)记录 stale ORM、malformed 历史、快照时间顺序修复。最终同源码全量回归仍待完成。
+Stage 3 的 `99dcd6b`、`83ab5cb`、`34d1ea0` 分别实现评论来源/版本化完成、独立提交消费和合格反馈链路。聚合按全部评论计分母、按平台区别作者；冲突和证据不足只观察。选用、实际输入、计划应用、正文观察和关联变化分别留证；正文默认 unknown，关联不声称因果。真实 owner 的有限样本包含五次唯一 Canon 接纳及四类合理拒绝输入，模型/质量/发布响应为显式冻结 fixture；见[有限样本](../superpowers/reports/2026-09-09-stage3-feedback-finite-loop.md)。独立整合审查72项及根代理最终相关91项通过，计数重叠；[整合报告](../superpowers/reports/2026-09-09-stage3-feedback-integration.md)记录 stale ORM、malformed 历史、快照时间顺序修复。已包含在上述 `1f9a9ad` 同源码全量回归中。
+
+`bb1d2b4` 完成可选的[Markdown 与 manifest 导出](../superpowers/reports/2026-09-09-novel-export.md)：唯一 Canon 事务内只追加独立 outbox 请求，处理者先冻结保留的书本版本，再做受文件描述符保护的原子 IO。重试、乱序、原根路径被替换及保留的正文 hash 冲突均有回归；没有创建 Git 远端、小说仓库或绕过 Canon 的导入入口。

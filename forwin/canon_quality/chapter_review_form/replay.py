@@ -10,9 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.canon_quality.service import analyze_writer_output_quality
-from forwin.models import CandidateDraftRecord, ChapterDraft, ChapterPlan
+from forwin.models import ChapterPlan
+from forwin.models.canon import CanonCommitRecord
 from forwin.models.canon_quality import CharacterStateTransitionRow, CountdownLedgerRow
 from forwin.protocol.writer import WriterOutput
+from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 
 from .replay_state import ReplayRangeOptions, ReplayState, state_file_path, write_state_atomic
 
@@ -57,31 +59,36 @@ class ReplayChapterResult(BaseModel):
     error_message: str = ""
 
 
+def _active_accepted_chapters(project_id: str):
+    return (
+        select(ChapterPlan, CanonCommitRecord)
+        .join(CanonCommitRecord, CanonCommitRecord.id == ChapterPlan.active_commit_id)
+        .where(
+            ChapterPlan.project_id == project_id,
+            ChapterPlan.status == "accepted",
+            CanonCommitRecord.status == "committed",
+            CanonCommitRecord.project_id == ChapterPlan.project_id,
+            CanonCommitRecord.chapter_plan_id == ChapterPlan.id,
+            CanonCommitRecord.chapter_number == ChapterPlan.chapter_number,
+        )
+    )
+
+
 def load_accepted_draft_ref(*, session: Session, project_id: str, chapter_number: int) -> AcceptedDraftRef:
     row = session.execute(
-        select(CandidateDraftRecord, ChapterDraft, ChapterPlan)
-        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
-        .join(ChapterPlan, ChapterPlan.id == CandidateDraftRecord.chapter_plan_id)
-        .where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.chapter_number == int(chapter_number),
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-        )
-        .order_by(
-            CandidateDraftRecord.version.desc(),
-            CandidateDraftRecord.updated_at.desc(),
-            ChapterDraft.version.desc(),
-            ChapterDraft.created_at.desc(),
-            CandidateDraftRecord.id.desc(),
-        )
-        .limit(1)
-    ).first()
-    if row is None:
+        _active_accepted_chapters(project_id)
+        .where(ChapterPlan.chapter_number == int(chapter_number))
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    draft = (
+        load_latest_drafts_by_plan_id(session, [row[0].id]).get(row[0].id)
+        if row is not None else None
+    )
+    if row is None or draft is None:
         raise ChapterDraftNotFound(
             f"accepted draft not found for project={project_id} chapter={chapter_number}"
         )
-    _candidate, draft, plan = row
+    plan, commit = row
     body = str(draft.body_text or "")
     if not body.strip():
         raise ChapterDraftNotFound(
@@ -92,7 +99,7 @@ def load_accepted_draft_ref(*, session: Session, project_id: str, chapter_number
         chapter_number=int(chapter_number),
         plan_id=str(plan.id or ""),
         draft_id=str(draft.id or ""),
-        title=str(plan.title or f"第{chapter_number}章"),
+        title=str(commit.chapter_title or f"第{chapter_number}章"),
         body=body,
         summary=str(draft.summary or ""),
         char_count=int(draft.char_count or len(body)),
@@ -135,13 +142,9 @@ def find_missing_accepted_chapters(
 
 def latest_accepted_chapter(*, session: Session, project_id: str) -> int:
     value = session.execute(
-        select(CandidateDraftRecord.chapter_number)
-        .where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-        )
-        .order_by(CandidateDraftRecord.chapter_number.desc())
+        _active_accepted_chapters(project_id)
+        .with_only_columns(ChapterPlan.chapter_number)
+        .order_by(ChapterPlan.chapter_number.desc())
         .limit(1)
     ).scalar_one_or_none()
     if value is None:

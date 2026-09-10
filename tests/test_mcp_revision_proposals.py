@@ -13,7 +13,7 @@ from forwin.canon.admission import CanonAdmissionService
 from forwin.config import InfrastructureConfig
 from forwin.mcp.client import ForWinAPIClient
 from forwin.mcp.http import build_mcp_server
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan, Project
 from tests import test_canon_atomic_transaction as atomic_tests
 from tests.http_runtime_harness import HttpRuntimeHarness
@@ -188,20 +188,78 @@ def test_mcp_chapter_body_and_identity_share_one_revision_during_concurrent_comm
     assert committed.is_set()
 
 
-def test_legacy_accepted_without_pointer_does_not_invent_canon_identity(runtime):
+def test_legacy_accepted_without_pointer_refuses_formal_body_and_retains_history(
+    runtime,
+):
+    retry(runtime, replacement_body="Unaccepted replacement is not formal history.")
     with runtime.fixture.Session.begin() as session:
         session.get(
             ChapterPlan, runtime.fixture.chapter_plan_id
         ).active_commit_id = None
         session.get(Project, runtime.fixture.project_id).book_revision = 0
-    result = call(
+        draft_ids = set(session.scalars(select(ChapterDraft.id)))
+        review_ids = set(session.scalars(select(ChapterReview.id)))
+    with pytest.raises(ToolError, match="409.*Canon.*身份不完整"):
+        call(
+            runtime.server,
+            "chapter_get",
+            {"project_id": runtime.fixture.project_id, "chapter_number": 1},
+        )
+    chapters = call(
         runtime.server,
-        "chapter_get",
-        {"project_id": runtime.fixture.project_id, "chapter_number": 1},
-    )
-    assert result["body"] == "Shen Linchuan enters the archive."
-    assert result["active_commit_id"] == result["candidate_id"] == ""
-    assert result["acceptance_revision"] == result["book_revision"] == 0
+        "chapter_list",
+        {"project_id": runtime.fixture.project_id},
+    )["chapters"]
+    assert chapters[0]["status"] == "accepted"
+    assert chapters[0]["char_count"] == 0
+    with runtime.fixture.Session() as session:
+        assert set(session.scalars(select(ChapterDraft.id))) == draft_ids
+        assert set(session.scalars(select(ChapterReview.id))) == review_ids
+        session.scalar(
+            select(Project)
+            .where(Project.id == runtime.fixture.project_id)
+            .with_for_update(nowait=True)
+        )
+
+
+@pytest.mark.parametrize("status", ["draft", "planned"])
+def test_unaccepted_chapter_get_preserves_candidate_body_and_missing_draft_semantics(
+    runtime, status
+):
+    with runtime.fixture.Session.begin() as session:
+        first = session.get(ChapterPlan, runtime.fixture.chapter_plan_id)
+        chapter = ChapterPlan(
+            project_id=first.project_id,
+            arc_plan_id=first.arc_plan_id,
+            chapter_number=2,
+            title="Unaccepted chapter",
+            status=status,
+        )
+        session.add(chapter)
+        session.flush()
+        if status == "draft":
+            session.add_all(
+                [
+                    ChapterDraft(
+                        chapter_plan_id=chapter.id,
+                        version=1,
+                        body_text="First candidate",
+                    ),
+                    ChapterDraft(
+                        chapter_plan_id=chapter.id,
+                        version=2,
+                        body_text="Repaired candidate",
+                    ),
+                ]
+            )
+    arguments = {"project_id": runtime.fixture.project_id, "chapter_number": 2}
+    if status == "draft":
+        result = call(runtime.server, "chapter_get", arguments)
+        assert result["body"] == "Repaired candidate"
+        assert result["active_commit_id"] == result["candidate_id"] == ""
+    else:
+        with pytest.raises(ToolError, match="404.*尚未生成"):
+            call(runtime.server, "chapter_get", arguments)
 
 
 def test_hash_mismatch_refuses_identity_and_releases_shared_lock(runtime):

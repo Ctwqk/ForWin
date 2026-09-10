@@ -100,7 +100,7 @@
 - [x] Replay A1/A2 with the same nine frozen response keys and independent labels. A1 keep after two known severe misses; A2 insufficient, retained. A3's consumer/version proof is insufficient; maintenance cadence and barrier stay unchanged.
 - [x] Evaluate A4 condition: later smoke revealed 8 Writer calls and an unblocked scene/stitch time contradiction. A paired single/scene quality comparison remains absent; insufficient evidence to replace Scene, no permanent second writer. See the smoke report.
 - [x] Record measured and missing quantities explicitly. Offline calls/input characters measured; real tokens, latency and narrative preference unmeasured. No claimed ≥15% production benefit or real-model paired trial. See [ablation report](../reports/2026-09-09-stage2-ablation.md), `45faa90`.
-- [ ] Run final full regression after integration. No production experiment flags or alternative implementations were retained.
+- [x] Run final full regression after integration. Frozen `1f9a9ad` (tree `fac2a1ca6161`): 2986 passed, 4 skipped, 6 subtests passed / 325.15s; imports use the archived source. Compileall, F/E9 and the source guard pass. Full Ruff: 1035 versus baseline 1219, zero new path/code/message diagnostic signatures. No production experiment flags or alternative implementations were retained. Long-run, final browser image and deployment acceptance remain separate open items.
 
 ### Task 8: Feedback correctness and finite loop (Stage 3)
 
@@ -121,6 +121,15 @@
 - [x] Export Markdown + manifest keyed by book revision with stable chapter/commit/hash/base/receipt references; no raw comments or credentials. Freeze a retained snapshot before IO, with capture-time publication semantics and a read-only rebuild path.
 - [x] Test retry deduplication, out-of-order delivery, export failure independence and no frozen-content bypass. Independent review fixed retained BODY-hash contradiction and root-directory replacement; original probes plus Canon/export/Obsidian regression: 96 passed. See [export report](../reports/2026-09-09-novel-export.md).
 - Conditional Git management not selected: no demonstrated need beyond the local Markdown/manifest workflow. No repository, remote or direct Canon import was added; existing proposal/admission remains the only editing boundary.
+
+### Task 10: External review follow-up before final candidate acceptance
+
+- [x] Reproduce pending-revision pollution through real accepted history; bind summaries, notes, Arc, pacing and Band checks to active Canon identities. Preserve missing-evidence blocking and ordinary unaccepted draft reads.
+- [x] Reproduce world-edit acceptance without successor validation, including future envelopes mutating historical shared metadata. Restrict that entry to pre-acceptance projects under the Canon project lock; share proposal chapter parsing and recheck concurrent revisions.
+- [x] Fix the manual CQ replay reader using the same active version contract; four actual sole-Canon acceptance regressions and 39 related replay tests pass.
+- [ ] Invalidate reuse of stale Band checkpoint approval after an accepted revision; independent PostgreSQL reproduction found the previous PASS bypassed current BODY checks.
+- [ ] Freeze all review fixes and run whole-candidate regression and role-image verification. The earlier `1f9a9ad` pass does not cover this follow-up.
+- [ ] Start the fresh L100 only on the new verified candidate; retain the held pre-writing run as separate evidence. Close Task 6 with actual output and ending evidence.
 
 ## Initial evidence
 

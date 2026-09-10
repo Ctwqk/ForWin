@@ -847,12 +847,15 @@ def test_failed_ordinary_candidate_cannot_be_reapproved(
         )
 
 
-def _commit_same_chapter_world_edit(
+def _seed_retained_legacy_world_edit(
     scenario: HistoricalRewriteScenario,
     *,
     node_id: str = "event-independent-edit",
     cognition_patches: list[CognitionPatch] | None = None,
 ) -> None:
+    """Retain pre-boundary world edits; new approvals cannot take this path."""
+    from forwin.book_state.compiler import BookStateCompiler
+
     with scenario.Session.begin() as session:
         proposal = KnowledgeEditProposalRow(
             id="independent-world-edit",
@@ -862,11 +865,8 @@ def _commit_same_chapter_world_edit(
         )
         session.add(proposal)
         session.flush()
-        result = CanonAdmissionService().commit_world_edit(
-            session=session,
-            project_id=scenario.project_id,
-            proposal_id=proposal.id,
-            approved_changes=ApprovedGraphDeltaSet(
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
                 project_id=scenario.project_id,
                 chapter_number=2,
                 graph_deltas=[
@@ -897,10 +897,12 @@ def _commit_same_chapter_world_edit(
                     )
                 ],
             ),
-            reason="Independent accepted world edit",
-            trigger="test",
+            compiler_run_id="retained-legacy-world-edit",
         )
-        assert result.compile_result.committed is True
+        assert result.committed is True
+        proposal.status = "accepted"
+        proposal.graph_delta_id = result.graph_delta_ids[0]
+        session.get(Project, scenario.project_id).book_revision += 1
 
 
 
@@ -973,7 +975,7 @@ def test_cached_artifact_and_old_manual_approval_cannot_bypass_revision_proposal
 @pytest.mark.parametrize("with_cognition",[False,True])
 def test_rejected_old_replay_preserves_independent_world_edits(historical_rewrite_scenario,with_cognition):
     scenario=historical_rewrite_scenario
-    _commit_same_chapter_world_edit(scenario,cognition_patches=[CognitionPatch(observer_type="character",observer_id="observer",
+    _seed_retained_legacy_world_edit(scenario,cognition_patches=[CognitionPatch(observer_type="character",observer_id="observer",
         op="append",field_path="visible_refs",new_value="event-independent-edit",evidence_refs=["proof-1"])] if with_cognition else [])
     before=_retained_mainline(scenario)
     outcome=CanonAdmissionService(session_factory=scenario.Session).commit_plan(scenario.rewritten_plan)

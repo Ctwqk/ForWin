@@ -48,7 +48,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
 | accepted 世界事实 | `BookState + GraphDelta + Snapshot` | Context/review/repair 通过 `BookStateQuery` 读取；投影不是另一个 Canon |
 | 地图拓扑与可达性 | `BookMap / Scheme C` | SubWorld 是大陆/位面等大尺度容器，局部舞台归 Region/MapNode/site state |
 | candidate → accepted | `CanonAdmissionService.commit_plan` | 人工/LLM 审批和 pipeline 都不能直接写 accepted |
-| 运行时世界编辑 | generic proposal → `CanonAdmissionService.commit_world_edit` | Obsidian 不能反向导入直接写 Canon |
+| 写前世界编辑 | generic proposal → `CanonAdmissionService.commit_world_edit` | 仅限尚无 accepted/active 章节的项目；已有正式历史须走章节修订及完整后缀核验，Obsidian 不能反向导入 |
 | 外部发布动作 | publisher job/attempt/lease/receipt + browser journal/reconciliation | 生成流程不能直接操作第三方网页；未知外部结果先核对，不盲目重复 |
 
 “单一事实源”是每种事实有明确 owner，不是所有状态都塞进一张表。地图拓扑、计划、候选、accepted 世界、任务和外部发布回执承担不同职责；它们之间的引用、版本和提交身份必须一致。
@@ -134,6 +134,10 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 
 历史修订先保存候选，原 accepted 主线继续有效；在隔离 BookState 中重新抽取修改章并核验直到 accepted 尾章的完整后缀。旧 GraphDelta 只作为证据，不能以重放成功替代正文核验。结果绑定 base revision、完整范围、候选 hash 和引用；fail 或关键 unknown 拒绝自动替换。短事务内再次核对主线、冻结事实及发布 attempt，然后原子切换整个修订集合。正文未变但接纳上下文变化的后继也产生新接纳身份，保留旧证据。支持边界及并发/失败回归见[修订报告](../docs/superpowers/reports/2026-09-09-p1-2-revision-evidence.md)。
 
+正式摘要、评审、Arc 激活材料、节奏分析和 Band 核验沿 `ChapterPlan.active_commit_id → CanonCommitRecord → CandidateDraftRecord → ChapterDraft` 读取；评审使用 candidate 绑定的 `review_id`。窗口先按稳定章节限额，再读取对应稿件。保存或拒绝修订不改变正式输入，成功接纳后才切换。accepted 身份损坏时不回退到最新候选：章节正文 API 返回 409，Band 核验保留阻断；摘要缺失保持未知，不以计划概要补造事实。
+
+世界编辑的局部 BookState gate 不能替代完整后缀核验；即使标记未来章节，编辑也可能修改历史读取共用的实体元数据。因此当前 `commit_world_edit` 在项目锁内拒绝任何已有 accepted/active 章节的项目，人工强制批准不能绕过。未来计划调整仍走 Planning；世界编辑接入同一完整后缀核验前不开放这一入口。写前世界编辑仍可使用，章号解析由一个 owner 同时供 envelope、delta 和新建事实使用。
+
 ## 8. Canon 后的维护、投影和恢复
 
 post-Canon maintenance 按 planning → arc → world → feedback 顺序执行，分别更新计划、下一章 Arc resolution、世界压力和反馈。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
@@ -144,7 +148,7 @@ Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻
 
 这一边界保障顺序一致性，但增加延迟和实现复杂度。不能仅因模块名含 projection 就整体删除：必须先证明下游消费者能接受落后数据，并按步骤做消融。Canon 已接纳的本章不因投影故障回滚。
 
-Knowledge Projection、Obsidian export、LLM KB、chapter memory 和 World Studio 读视图从 Canon 派生，失败通过 outbox/checkpoint/replay 恢复。Qdrant 是检索索引，MinIO 是产物存储，都不是独立 Canon。Obsidian 的人工 section 进入单独 human index；正式事实编辑仍走 generic proposal。
+Knowledge Projection、Obsidian export、LLM KB、chapter memory 和 World Studio 读视图从 Canon 派生，失败通过 outbox/checkpoint/replay 恢复。Qdrant 是检索索引，MinIO 是产物存储，都不是独立 Canon。Obsidian 的人工 section 进入单独 human index；写前事实编辑走 generic proposal，已有正式章节的事实变更须通过章节修订及完整后缀核验。
 
 小说 Markdown + manifest 是独立的 outbox 导出：先从保留 Canon 历史冻结目标 book revision 和内容身份，再原子写本地版本文件并推进 current。重试复用冻结快照，旧事件不回退当前版本；只读 rebuild 可重建已导出的版本。接纳事务不执行文件 IO，导出失败不回滚 Canon。发布回执引用明确是捕获时观察值，不伪称过去时点的完整发布状态。当前没有每书 Git 仓库、远端同步或绕过 proposal 的正文导入；边界见[导出报告](../docs/superpowers/reports/2026-09-09-novel-export.md)。
 

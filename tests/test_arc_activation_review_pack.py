@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
 from forwin.genesis.planning import _plan_arc_chapters
-from forwin.book_state.repository import BookStateRepository
 from forwin.models import (
     ArcPlanVersion,
+    CandidateDraftRecord,
+    CanonCommitRecord,
     ChapterDraft,
     ChapterPlan,
+    ChapterReview,
     DecisionEvent,
     NarrativeObligationRow,
     Project,
@@ -46,14 +50,34 @@ def test_arc_activation_review_pack_collects_canon_and_quarantines_feedback() ->
             )
             session.add(plan)
             session.flush()
-            session.add(
-                ChapterDraft(
-                    chapter_plan_id=plan.id,
-                    version=1,
-                    body_text="林夜获得玄铁令。",
-                    summary="林夜获得玄铁令并进入问心阁。",
-                )
+            draft = ChapterDraft(
+                chapter_plan_id=plan.id,
+                version=1,
+                body_text="林夜获得玄铁令。",
+                summary="林夜获得玄铁令并进入问心阁。",
             )
+            session.add(draft)
+            session.flush()
+            review = ChapterReview(draft_id=draft.id, verdict="pass")
+            session.add(review)
+            session.flush()
+            candidate = CandidateDraftRecord(
+                project_id=project.id, chapter_plan_id=plan.id, chapter_number=1,
+                candidate_draft_id=draft.id, review_id=review.id,
+                body_hash=sha256(draft.body_text.encode()).hexdigest(),
+                status="accepted", canon_status="committed",
+            )
+            session.add(candidate)
+            session.flush()
+            commit = CanonCommitRecord(
+                idempotency_key=f"arc-pack:{candidate.id}", candidate_id=candidate.id,
+                project_id=project.id, chapter_plan_id=plan.id, chapter_number=1,
+                chapter_title=plan.title,
+            )
+            session.add(commit)
+            session.flush()
+            plan.active_commit_id = commit.id
+            project.book_revision = 1
             repo = BookStateRepository(session)
             repo.create_world_node(
                 WorldNode(

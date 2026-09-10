@@ -468,7 +468,10 @@ class CanonAdmissionService:
         trigger: str,
     ) -> CanonWorldEditOutcome:
         project = session.execute(
-            select(Project).where(Project.id == project_id).with_for_update()
+            select(Project)
+            .where(Project.id == project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
         if project is None:
             raise CanonStaleVersion("project no longer exists")
@@ -476,6 +479,7 @@ class CanonAdmissionService:
             select(KnowledgeEditProposalRow)
             .where(KnowledgeEditProposalRow.id == proposal_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
         if proposal is None or proposal.project_id != project_id:
             raise CanonStaleVersion("world edit proposal no longer exists")
@@ -490,16 +494,34 @@ class CanonAdmissionService:
         )
 
         lock_project_chapters(session, project_id)
+        from_chapter = min(
+            [
+                approved_changes.chapter_number,
+                *(delta.chapter_number for delta in approved_changes.graph_deltas),
+            ]
+        )
         require_revision_unprotected(
             session,
             project_id=project_id,
-            from_chapter=min(
-                [
-                    approved_changes.chapter_number,
-                    *(delta.chapter_number for delta in approved_changes.graph_deltas),
-                ]
-            ),
+            from_chapter=from_chapter,
         )
+        affected_accepted_chapter = session.scalar(
+            select(ChapterPlan.chapter_number)
+            .where(
+                ChapterPlan.project_id == project_id,
+                (ChapterPlan.status == "accepted")
+                | ChapterPlan.active_commit_id.is_not(None),
+            )
+            .limit(1)
+        )
+        if affected_accepted_chapter is not None:
+            # World edits also mutate shared node/fact metadata. A future delta
+            # number alone cannot preserve prior as-of reads or validate their BODY.
+            # Until this path can use full-suffix validation, keep it pre-acceptance.
+            raise CanonWriteFailure(
+                "world edits on a project with accepted history require full-suffix "
+                "revision validation; submit a chapter revision"
+            )
         compile_result = BookStateCompiler(session).compile(
             approved_changes,
             compiler_run_id=f"canon-world-edit-{proposal.id}",

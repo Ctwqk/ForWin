@@ -102,7 +102,9 @@ immutable CandidateDraftRecord
 -> projection / phase3 maintenance / publisher outbox consumers
 ```
 
-`forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都提交持久化的 `CanonCommitPlan`。旧 `commit()`、`BookStateDirectCommitService`、`BookStateCanonPort`、`_commit_book_state_canon`、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除。运行期世界编辑 proposal 也只能经 `CanonAdmissionService.commit_world_edit` 写 BookState。
+`forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都提交持久化的 `CanonCommitPlan`。旧 `commit()`、`BookStateDirectCommitService`、`BookStateCanonPort`、`_commit_book_state_canon`、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除。写前世界编辑 proposal 也只能经 `CanonAdmissionService.commit_world_edit` 写 BookState；它在项目锁内拒绝已有 accepted/active 章节的项目。未来章号也不能证明共享实体元数据不会改变历史，局部 gate 与强制审批不替代完整后缀核验。
+
+正式章节消费者共用 `state.query_helpers` 的 active Canon 稿件选择和 candidate 绑定评审。`ReviewQuery` 先按稳定章节取窗口，再供上下文和 Arc 激活读取；节奏分析、Band 核验使用相同版本合同。未接纳稿件仍可按最新候选展示；accepted 身份缺失不回退，正文 API 返回 409，Band 核验阻断，空摘要不替换成计划概要。
 
 post-Canon maintenance 按 planning → arc → world → feedback 顺序运行，并完成 order controls。第2章起，Canon 提交强制要求前章四步与 controls 成功且没有未解除的 future/checkpoint/manual 阻断；它不同于可重建的知识投影。trace以冻结payload同事务进入既有outbox，异步上传失败不回滚已成功业务；补传不重跑模型，内容SHA区分不同trace对象。
 
@@ -119,7 +121,7 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 
 ## 投影层
 
-`Knowledge Projection`、`Obsidian Vault`、Karpathy-style `LLM KB`、chapter memory index 和 World Studio 视图都必须可从 BookState 重建。它们不是 canon writer；章节接纳只写 deterministic outbox，投影失败重试且不能回滚 accepted state。Obsidian 是单向 export 投影，保留的人工 section 独立进入 human index；Canon 编辑必须通过 generic proposal，不存在 reverse import。
+`Knowledge Projection`、`Obsidian Vault`、Karpathy-style `LLM KB`、chapter memory index 和 World Studio 视图都必须可从 BookState 重建。它们不是 canon writer；章节接纳只写 deterministic outbox，投影失败重试且不能回滚 accepted state。Obsidian 是单向 export 投影，保留的人工 section 独立进入 human index；写前编辑走 generic proposal，正式历史修订走完整后缀核验，不存在 reverse import。
 
 `novel_export` 在普通 Canon、历史修订及 world edit 成功事务中只追加独立的版本请求，不改变原三类 Canon recovery 事件。outbox handler 依据保留历史重建目标 book revision，核对真实 BODY hash，把有限 manifest 持久冻结后再写 Markdown。发布引用标记为捕获时所见，不虚构目标 revision 当时的发布状态。每书文件锁、固定目录 FD 与原子 current 指针保证重试不重复、乱序不回退；文件副本丢失可由冻结请求及 Canon 历史重建，故障不回滚接纳。默认在 `artifact_root/novel_exports`，不包含原始评论、读者身份、trace 或凭据。本轮只提供文件导出，未引入 Git 仓库/远端管理或直接导入 Canon；见[导出报告](../docs/superpowers/reports/2026-09-09-novel-export.md)。
 

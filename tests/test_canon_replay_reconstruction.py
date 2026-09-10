@@ -47,8 +47,8 @@ def test_reconstruct_writer_output_raises_when_no_committed_draft_exists() -> No
     try:
         session_factory = get_session_factory(engine)
         with session_factory() as session:
-            project, _arc, _plan, _draft = seed_project_with_accepted_chapter(session, chapter_number=1)
-            session.query(CandidateDraftRecord).delete()
+            project, _arc, plan, _draft = seed_project_with_accepted_chapter(session, chapter_number=1)
+            plan.active_commit_id = None
             session.commit()
 
         with session_factory() as session:
@@ -60,7 +60,7 @@ def test_reconstruct_writer_output_raises_when_no_committed_draft_exists() -> No
         engine.dispose()
 
 
-def test_reconstruct_writer_output_uses_latest_committed_candidate_for_chapter() -> None:
+def test_reconstruct_writer_output_ignores_unselected_candidate_for_chapter() -> None:
     engine = get_engine(postgres_test_url("canon-replay-latest"))
     init_db(engine)
     try:
@@ -98,8 +98,8 @@ def test_reconstruct_writer_output_uses_latest_committed_candidate_for_chapter()
         with session_factory() as session:
             output = reconstruct_writer_output(session=session, project_id=project.id, chapter_number=1)
 
-        assert output.body == "新正文，主倒计时还有58分钟。"
-        assert output.end_of_chapter_summary == "新摘要"
+        assert output.body == "旧正文"
+        assert output.end_of_chapter_summary == "第1章摘要"
     finally:
         engine.dispose()
 

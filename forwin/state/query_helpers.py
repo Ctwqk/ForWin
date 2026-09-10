@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.canon import CanonCommitRecord
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -103,18 +103,19 @@ def load_latest_drafts_by_plan_id(
 ) -> dict[str, ChapterDraft]:
     """Return active accepted text, or the newest draft for an unaccepted plan."""
     ids = _as_list(chapter_plan_ids)
-    active_ids = set(
-        session.scalars(
-            select(ChapterPlan.id).where(
-                ChapterPlan.id.in_(ids), ChapterPlan.active_commit_id.is_not(None)
-            )
-        )
-    )
+    plans = session.execute(
+        select(ChapterPlan.id, ChapterPlan.status, ChapterPlan.active_commit_id)
+        .where(ChapterPlan.id.in_(ids))
+    ).all()
+    active_ids = {plan_id for plan_id, _, active_commit_id in plans if active_commit_id}
     drafts = _load_latest_partitioned_rows(
         session,
         ChapterDraft,
         ChapterDraft.chapter_plan_id,
-        [plan_id for plan_id in ids if plan_id not in active_ids],
+        [
+            plan_id for plan_id, status, active_commit_id in plans
+            if status != "accepted" and not active_commit_id
+        ],
         order_by=(
             ChapterDraft.version.desc(),
             ChapterDraft.created_at.desc(),
@@ -138,6 +139,25 @@ def load_latest_drafts_by_plan_id(
     )
     drafts.update({draft.chapter_plan_id: draft for draft in active_drafts})
     return drafts
+
+
+def load_candidate_reviews_by_draft_id(
+    session: Session,
+    draft_ids: Iterable[str],
+) -> dict[str, ChapterReview]:
+    """Read the review bound to each candidate, never a later unrelated review."""
+    ids = _as_list(draft_ids)
+    if not ids:
+        return {}
+    reviews = session.scalars(
+        select(ChapterReview)
+        .join(CandidateDraftRecord, CandidateDraftRecord.review_id == ChapterReview.id)
+        .where(
+            CandidateDraftRecord.candidate_draft_id.in_(ids),
+            ChapterReview.draft_id == CandidateDraftRecord.candidate_draft_id,
+        )
+    )
+    return {review.draft_id: review for review in reviews}
 
 
 def load_latest_rewrite_attempts_by_chapter(

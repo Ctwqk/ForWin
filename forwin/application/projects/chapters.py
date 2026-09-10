@@ -128,6 +128,8 @@ def get_chapter(
 
         draft = load_latest_drafts_by_plan_id(session, [plan.id]).get(plan.id)
         if draft is None:
+            if plan.status == "accepted":
+                raise HTTPException(409, f"第{chapter_number}章 Canon 身份不完整")
             raise HTTPException(404, f"第{chapter_number}章尚未生成")
         commit = session.get(CanonCommitRecord, plan.active_commit_id) if plan.active_commit_id else None
         candidate = session.get(CandidateDraftRecord, commit.candidate_id) if commit else None

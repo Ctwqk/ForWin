@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -16,8 +17,10 @@ from forwin.experience.service import (
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
 from forwin.models import (
     ArcPlanVersion,
+    CandidateDraftRecord,
     ChapterDraft,
     ChapterPlan,
+    ChapterReview,
     CommentSignalCandidate,
     FeedbackActionRecord,
     Project,
@@ -25,6 +28,7 @@ from forwin.models import (
     SignalWindowAggregate,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.canon import CanonCommitRecord
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.stage_analysis import PacingStrategist
 from forwin.protocol.context import (
@@ -434,15 +438,43 @@ def test_story_based_pacing_blocker_remains_without_feedback(feedback_sessions) 
         )
         session.add(plan)
         session.flush()
-        session.add(
-            ChapterDraft(
-                chapter_plan_id=plan.id,
-                version=1,
-                body_text="过短",
-                summary="证据出现。",
-                char_count=2,
-            )
+        draft = ChapterDraft(
+            chapter_plan_id=plan.id,
+            version=1,
+            body_text="过短",
+            summary="证据出现。",
+            char_count=2,
         )
+        session.add(draft)
+        session.flush()
+        review = ChapterReview(draft_id=draft.id, verdict="pass")
+        session.add(review)
+        session.flush()
+        candidate = CandidateDraftRecord(
+            project_id=project.id,
+            chapter_plan_id=plan.id,
+            chapter_number=1,
+            candidate_draft_id=draft.id,
+            review_id=review.id,
+            body_hash=hashlib.sha256(draft.body_text.encode()).hexdigest(),
+            status="accepted",
+            canon_status="canon",
+        )
+        session.add(candidate)
+        session.flush()
+        commit = CanonCommitRecord(
+            idempotency_key=f"{plan.id}:accepted",
+            project_id=project.id,
+            chapter_plan_id=plan.id,
+            chapter_number=1,
+            candidate_id=candidate.id,
+            chapter_title=plan.title,
+            status="committed",
+        )
+        session.add(commit)
+        session.flush()
+        plan.active_commit_id = commit.id
+        candidate.canon_commit_id = commit.id
         project_id = project.id
 
     with Session() as session:

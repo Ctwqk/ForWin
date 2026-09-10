@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, ChapterReview, Project
+from forwin.models.canon import CanonCommitRecord
 
 
 def seed_project_with_accepted_chapter(session, *, chapter_number: int = 1, body: str = "主倒计时还有59分钟。"):
@@ -46,17 +49,31 @@ def seed_accepted_chapter(session, *, project: Project, arc: ArcPlanVersion, cha
     review = ChapterReview(id=f"review-{chapter_number}", draft_id=draft.id, verdict="pass")
     session.add(review)
     session.flush()
-    session.add(
-        CandidateDraftRecord(
-            project_id=project.id,
-            chapter_plan_id=plan.id,
-            chapter_number=chapter_number,
-            candidate_draft_id=draft.id,
-            review_id=review.id,
-            status="canon_committed",
-            canon_status="canon",
-        )
+    candidate = CandidateDraftRecord(
+        project_id=project.id,
+        chapter_plan_id=plan.id,
+        chapter_number=chapter_number,
+        candidate_draft_id=draft.id,
+        review_id=review.id,
+        body_hash=hashlib.sha256(body.encode()).hexdigest(),
+        status="accepted",
+        canon_status="canon",
     )
+    session.add(candidate)
+    session.flush()
+    commit = CanonCommitRecord(
+        idempotency_key=f"{plan.id}:accepted",
+        project_id=project.id,
+        chapter_plan_id=plan.id,
+        chapter_number=chapter_number,
+        chapter_title=plan.title,
+        candidate_id=candidate.id,
+        status="committed",
+    )
+    session.add(commit)
+    session.flush()
+    plan.active_commit_id = commit.id
+    candidate.canon_commit_id = commit.id
     session.flush()
     return plan, draft
 

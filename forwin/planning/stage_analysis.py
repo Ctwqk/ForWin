@@ -10,7 +10,6 @@ from forwin.book_state.query import BookStateQuery
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcPlanVersion,
-    ChapterDraft,
     ChapterPlan,
     Project,
     ProjectReplanEvent,
@@ -21,6 +20,7 @@ from forwin.planning.goals import load_goals_json
 from forwin.book_state.thread_sampling import sample_active_threads
 from forwin.protocol import SubWorldPlanDelta
 from forwin.subworld_manager import SubWorldManager
+from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 
 
 @dataclass(slots=True)
@@ -104,17 +104,26 @@ class PacingStrategist:
         project_id: str,
         chapter_number: int,
     ) -> PacingAssessment:
-        recent_rows = session.execute(
-            select(ChapterDraft.char_count)
-            .join(ChapterPlan, ChapterDraft.chapter_plan_id == ChapterPlan.id)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number <= chapter_number,
+        # Limit stable chapters before loading their active accepted drafts.
+        recent_plan_ids = list(
+            session.scalars(
+                select(ChapterPlan.id)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number <= chapter_number,
+                    ChapterPlan.status == "accepted",
+                    ChapterPlan.active_commit_id.is_not(None),
+                )
+                .order_by(ChapterPlan.chapter_number.desc())
+                .limit(self.window_size)
             )
-            .order_by(ChapterPlan.chapter_number.desc())
-            .limit(self.window_size)
-        ).all()
-        recent_char_counts = [int(row[0] or 0) for row in reversed(recent_rows)]
+        )
+        drafts = load_latest_drafts_by_plan_id(session, recent_plan_ids)
+        recent_char_counts = [
+            int(drafts[plan_id].char_count or 0)
+            for plan_id in reversed(recent_plan_ids)
+            if plan_id in drafts
+        ]
 
         sampled = sample_active_threads(
             session=session,

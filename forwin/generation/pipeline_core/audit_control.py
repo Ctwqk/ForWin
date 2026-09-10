@@ -15,10 +15,7 @@ from forwin.generation.pipeline_core.common import (
     logger,
 )
 from forwin.models.audit import DecisionEvent
-from forwin.models.draft import (
-    ChapterDraft,
-    ChapterReview,
-)
+from forwin.models.draft import ChapterReview
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ChapterPlan, Project
@@ -44,6 +41,10 @@ from forwin.review.plan_checks import (
     evaluate_next_band_task_compatibility,
     evaluate_resource_closure_risk,
     evaluate_task_contract,
+)
+from forwin.state.query_helpers import (
+    load_candidate_reviews_by_draft_id,
+    load_latest_drafts_by_plan_id,
 )
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
@@ -709,6 +710,7 @@ class AuditControlStage:
                 ChapterPlan.chapter_number <= int(band_row.chapter_end or 0),
             )
             .order_by(ChapterPlan.chapter_number.asc())
+            .populate_existing()
             .all()
         )
         unresolved = [
@@ -728,24 +730,46 @@ class AuditControlStage:
         unresolved_review_chapters: list[int] = []
         review_fail_chapters: list[int] = []
         review_metas: list[dict[str, Any]] = []
+        drafts = load_latest_drafts_by_plan_id(session, [plan.id for plan in band_plans])
+        accepted_reviews = load_candidate_reviews_by_draft_id(
+            session,
+            [
+                drafts[plan.id].id for plan in band_plans
+                if plan.status == "accepted" and plan.id in drafts
+            ],
+        )
         for plan in band_plans:
             if str(plan.status or "") == "needs_review":
                 unresolved_review_chapters.append(int(plan.chapter_number or 0))
-            latest_draft = (
-                session.query(ChapterDraft)
-                .filter(ChapterDraft.chapter_plan_id == plan.id)
-                .order_by(ChapterDraft.version.desc())
-                .first()
-            )
+            latest_draft = drafts.get(plan.id)
+            if plan.status == "accepted" and (
+                latest_draft is None
+                or not str(latest_draft.body_text or "").strip()
+                or latest_draft.id not in accepted_reviews
+            ):
+                issues.append(
+                    BandCheckpointIssueInfo(
+                        code="accepted_chapter_evidence_missing",
+                        severity="error",
+                        issue_group=issue_group_for_issue(code="intra_band_consistency"),
+                        description=f"第 {plan.chapter_number} 章缺少有效 Canon 正文或绑定评审。",
+                        detail=f"chapter_plan_id={plan.id}",
+                    )
+                )
+                continue
             if latest_draft is None:
                 continue
             chapter_bodies.append(str(latest_draft.body_text or ""))
             chapter_summaries.append(str(latest_draft.summary or ""))
             latest_review = (
-                session.query(ChapterReview)
-                .filter(ChapterReview.draft_id == latest_draft.id)
-                .order_by(ChapterReview.created_at.desc(), ChapterReview.id.desc())
-                .first()
+                accepted_reviews.get(latest_draft.id)
+                if plan.status == "accepted"
+                else (
+                    session.query(ChapterReview)
+                    .filter(ChapterReview.draft_id == latest_draft.id)
+                    .order_by(ChapterReview.created_at.desc(), ChapterReview.id.desc())
+                    .first()
+                )
             )
             if latest_review is not None and str(latest_review.verdict or "") == "fail":
                 review_fail_chapters.append(int(plan.chapter_number or 0))

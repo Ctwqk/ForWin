@@ -14,4 +14,4 @@ desired_signal_change 由 Mapper 唯一定义，正向热度增加与负向问�
 
 独立复核运行原始缺陷 probes、效果、接线、BODY、评论消费共 **67 passed / 3.39s**；再运行[真实 owner 有限闭环](2026-09-09-stage3-feedback-finite-loop.md) **5 passed / 3.14s**，没有剩余审查阻断。根代理额外验证计划/CAS/Band/Subworld/Trope/接线 **98 passed / 5.91s**。这些计数有重叠，不代替最终全库候选验证。
 
-恢复原生产备份的隔离副本至 `0007_feedback_actions` 已通过，并保留全部既有表/字段证据；具体许可变更和发布保护计数见[运行实施记录](../../operations/three-stage-implementation-2026-09-09.md)。尚未进行生产部署。当前代码和有限夹具验证不代表真实读者收益，也不代替正在进行的 Stage 1 smoke 与未启动的 L100。
+恢复原生产备份的隔离副本至 `0007_feedback_actions` 已通过，并保留全部既有表/字段证据；具体许可变更和发布保护计数见[运行实施记录](../../operations/three-stage-implementation-2026-09-09.md)。最终冻结源码 `1f9a9ad` 的完整回归为 2986 passed、4 skipped、6 subtests passed，已覆盖本链路。尚未进行生产部署。当前代码和有限夹具验证不代表真实读者收益，也不代替 Stage 1 的真实长跑与结尾验收；旧 smoke 在五章后安全暂停，保留为缺陷证据。

@@ -73,6 +73,27 @@ def test_runtime_string_patch_is_rejected(tmp_path: Path) -> None:
     assert _check(root).returncode == 1
 
 
+def test_atomic_deploy_state_write_does_not_count_as_source_patch(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "deploy/state.py").write_text(
+        "import os\n"
+        "MIGRATION = ['/app/.venv/bin/python', '-m', 'forwin.migrations']\n"
+        "def finish_write(temporary, state_path):\n"
+        "    os.replace(temporary, state_path)\n"
+    )
+    result = _check(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_atomic_overwrite_of_runtime_source_remains_rejected(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "deploy/patch.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "os.replace('/tmp/patched.py', Path('/app/forwin/service.py'))\n"
+    )
+    assert _check(root).returncode == 1
+
+
 def test_removing_retired_rollback_copy_is_allowed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     old = root / "deploy/forwin-runtime-hotfixes/old/runtime-files/forwin/old.py"

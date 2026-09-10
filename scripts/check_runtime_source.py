@@ -6,9 +6,51 @@ while retained. This is a release hygiene check, not a runtime security boundary
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 from pathlib import Path
+
+
+def _without_data_file_replacements(contents: str) -> str:
+    """Distinguish Python file renames from text replacement without a file exemption."""
+    try:
+        tree = ast.parse(contents)
+    except SyntaxError:
+        return contents
+    encoded = contents.encode("utf-8")
+    lines = encoded.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    masked = bytearray(encoded)
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "replace"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+        ):
+            continue
+        destinations = list(node.args[1:2]) + [
+            keyword.value for keyword in node.keywords if keyword.arg == "dst"
+        ]
+        if not destinations:
+            continue
+        literals = " ".join(
+            child.value
+            for destination in destinations
+            for child in ast.walk(destination)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        )
+        if "/app" in literals and "forwin" in literals:
+            continue  # Explicit atomic source overwrite is still a runtime patch.
+        function = node.func
+        start = offsets[function.lineno - 1] + function.col_offset
+        end = offsets[function.end_lineno - 1] + function.end_col_offset
+        masked[start:end] = b" " * (end - start)
+    return masked.decode("utf-8")
 
 
 def violations(repo: Path, base: str) -> list[str]:
@@ -41,7 +83,12 @@ def violations(repo: Path, base: str) -> list[str]:
                 continue
             contents = path.read_text()
             writes_runtime = "/app" in contents and "forwin" in contents
-            replaces_source = re.search(r"\.replace\s*\(|\breplace_once\s*\(|\bsed\s+-i", contents)
+            inspected = (
+                _without_data_file_replacements(contents)
+                if relative.suffix == ".py"
+                else contents
+            )
+            replaces_source = re.search(r"\.replace\s*\(|\breplace_once\s*\(|\bsed\s+-i", inspected)
             if writes_runtime and replaces_source:
                 errors.append(f"{name}: runtime source substitution is not a release path")
     return errors

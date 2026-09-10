@@ -133,8 +133,8 @@ class WebNovelExperienceReviewer:
             active_threads=list(context.active_threads),
             timeline=context.timeline,
             world_pressure=context.world_pressure,
-            reader_feedback=context.reader_feedback,
-            audience_hints=context.audience_hints,
+            reader_feedback=None,
+            audience_hints=None,
             reader_promise=context.reader_promise,
             arc_payoff_map=context.arc_payoff_map,
             band_delight_schedule=context.band_delight_schedule,
@@ -153,16 +153,7 @@ class WebNovelExperienceReviewer:
 
     @staticmethod
     def _confirmed_signal_refs(context: ReviewContextPack) -> list[str]:
-        feedback = context.reader_feedback
-        if feedback is None:
-            return []
-        refs: list[str] = []
-        for signal in feedback.confirmed_signals:
-            key = str(signal.signal_key or "").strip()
-            if not key:
-                continue
-            refs.append(f"audience_signal:{key}")
-        return refs
+        return []
 
     def _review_with_heuristics(
         self,

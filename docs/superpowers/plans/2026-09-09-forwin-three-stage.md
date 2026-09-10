@@ -31,8 +31,8 @@
 
 - [x] Record baseline source and read-only runtime inventory. App/generation/MCP currently run `compat-6809782`; publisher/outbox/browser run `deploy-d4fceac68343`.
 - [x] Save approved spec and make current docs/Agent navigation point to it; explicitly supersede duplicate L200 and destructive migration language.
-- [ ] First reproduce checker failure for added source-copy / runtime patch and valid ordinary source edits with temporary Git repositories.
-- [ ] Implement source enforcement in existing pre-PR path and frozen-lock full-image build.
+- [x] First reproduce checker failure for added source-copy / runtime patch and valid ordinary source edits with temporary Git repositories.
+- [x] Implement source enforcement in existing pre-PR path and frozen-lock full-image build.
 - [ ] Verify missing compatibility behavior with source and targeted tests before retiring rollback assembly files.
 - [ ] Build full role images and record source/image/lock identities; retain rollback evidence until verified.
 
@@ -77,9 +77,9 @@
 
 **Files:** production feedback context providers, reviewer inputs, planning/experience/world-simulation consumers, corresponding tests.
 
-- [ ] Prove existing stored feedback cannot automatically rewrite plot/global rules or block content before P2 fixes.
-- [ ] Preserve collection, display and existing rows; neutralize unqualified feedback at automated consumer boundaries without a new permanent mode.
-- [ ] Test no-comment and existing-feedback production, review and planning; review/commit separately.
+- [x] Prove existing stored feedback cannot automatically rewrite plot/global rules or block content before P2 fixes.
+- [x] Preserve collection, display and existing rows; neutralize unqualified feedback at automated consumer boundaries without a new permanent mode.
+- [x] Test no-comment and existing-feedback production, review and planning; independent review complete, 59 related tests passed.
 
 ### Task 6: Frozen candidate acceptance (P1-4)
 

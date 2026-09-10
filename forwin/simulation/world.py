@@ -16,7 +16,6 @@ from forwin.audience.feedback import (
 )
 from forwin.models import (
     CommentSignalCandidate,
-    Project,
     PublisherRawComment,
     WorldSimulationTurn,
     new_id,
@@ -658,7 +657,6 @@ class WorldSimulator:
         project_id: str,
         chapter_number: int,
     ) -> WorldTurnDraft:
-        project = session.get(Project, project_id)
         sampled = sample_active_threads(
             session=session,
             project_id=project_id,
@@ -679,62 +677,19 @@ class WorldSimulator:
             )
             if chapter_number - reference_chapter >= 2:
                 stale_threads.append(thread.name)
-        feedback = _load_reader_feedback(
-            session,
-            project.title if project else "",
-            project_id=project_id,
-            chapter_number=chapter_number,
-            limit=8,
-            llm_client=self.llm_client,
-        )
-
         llm_turn = self._simulate_with_llm(
             chapter_number=chapter_number,
             active_threads=active_threads,
             stale_threads=stale_threads,
-            feedback_summary=str(feedback.get("summary") or ""),
         )
         if llm_turn is not None:
             return llm_turn
 
-        dominant_sentiment = str(feedback.get("dominant_sentiment") or "neutral")
         pressure_level = "steady"
         shifts: list[str] = []
         if stale_threads:
             pressure_level = "rising" if len(stale_threads) == 1 else "critical"
             shifts.append(f"悬置线程：{'、'.join(stale_threads)}")
-        if dominant_sentiment.startswith("risk:"):
-            pressure_level = "critical"
-            shifts.append("读者指出当前情节存在明显风险点")
-        elif dominant_sentiment.startswith("pacing:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对当前节奏存在持续担忧")
-        elif dominant_sentiment.startswith("confusion:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者困惑点正在放大世界压迫感")
-        elif dominant_sentiment.startswith("character_heat:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者热度正在推高后续兑现压力")
-        elif dominant_sentiment.startswith("relationship_interest:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对关系线的持续关注正在推高互动兑现压力")
-        elif dominant_sentiment.startswith("prediction:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者猜测正在放大谜面兑现与 managed ambiguity 的压力")
-        elif dominant_sentiment == "negative":
-            pressure_level = "critical" if stale_threads else "rising"
-            shifts.append("读者对最近推进节奏表达了明显担忧")
-        elif dominant_sentiment == "curious":
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对悬念的追问正在放大世界压迫感")
-        elif dominant_sentiment == "positive":
-            shifts.append("读者期待正在推高后续兑现压力")
         if chapter_number >= 3:
             shifts.append("世界正在对主角行动产生连锁反应")
             if pressure_level == "steady":
@@ -758,7 +713,6 @@ class WorldSimulator:
         chapter_number: int,
         active_threads: list[SampledThread],
         stale_threads: list[str],
-        feedback_summary: str,
     ) -> WorldTurnDraft | None:
         if self.llm_client is None:
             return None
@@ -774,7 +728,6 @@ class WorldSimulator:
                     f"当前章节：第 {chapter_number} 章\n"
                     f"活跃线程数：{len(active_threads)}\n"
                     f"悬置线程：{json.dumps(stale_threads, ensure_ascii=False)}\n\n"
-                    f"读者反馈摘要：{feedback_summary}\n\n"
                     '返回格式：{"pressure_level":"steady|rising|critical","pressure_summary":"一句中文总结","notable_shifts":["变化1","变化2"]}'
                 ),
             },
@@ -840,37 +793,6 @@ class WorldSimulator:
             or f"第{chapter_number}章后，世界压力为 {level}。",
             notable_shifts=notable or ["世界仍在对主角行动做出反应"],
         )
-
-
-def _load_reader_feedback(
-    session: Session,
-    project_title: str,
-    *,
-    project_id: str = "",
-    chapter_number: int = 0,
-    limit: int = 6,
-    llm_client=None,
-) -> dict[str, object]:
-    snapshot = build_reader_feedback_snapshot(
-        session,
-        project_title,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        limit=limit,
-        llm_client=llm_client,
-        analyze_missing=True,
-    )
-    return {
-        "dominant_sentiment": snapshot["dominant_sentiment"],
-        "summary": snapshot["feedback_summary"],
-        "highlights": [
-            str(comment.body_text or "")[:120]
-            for comment in snapshot["recent_comments"]
-        ],
-        "signals": snapshot["signals"],
-    }
-
-
 def save_world_turn(
     *,
     session: Session,

@@ -1033,7 +1033,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(len(feedback_action_queries), 1)
 
-    def test_pacing_strategist_uses_medium_window_audience_signal_only(self) -> None:
+    def test_pacing_strategist_quarantines_medium_window_audience_signal(self) -> None:
         project = self._create_project()
         strategist = PacingStrategist()
 
@@ -1087,10 +1087,9 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.session.commit()
 
         with_medium = strategist.analyze(session=self.session, project_id=project.id, chapter_number=5)
-        self.assertEqual(with_medium.verdict, "audience_pacing_concern")
-        self.assertEqual(with_medium.risk_level, "medium")
+        self.assertEqual(with_medium, no_medium)
 
-    def test_arc_envelope_manager_passes_long_window_audience_trends_to_director(self) -> None:
+    def test_arc_envelope_manager_quarantines_long_window_audience_trends(self) -> None:
         project = self._create_project()
         self.session.add(
             SignalWindowAggregate(
@@ -1149,7 +1148,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
         self.assertEqual(structure.phase_layout, ["setup", "pressure", "turn", "payoff"])
         assert director.last_kwargs is not None
-        self.assertEqual(director.last_kwargs["audience_trends"], ["主角动机:confusion:confirmed"])
+        self.assertEqual(director.last_kwargs["audience_trends"], [])
 
     def test_score_v1_and_repo_trends_surface_rising_signal(self) -> None:
         project = self._create_project()
@@ -1204,10 +1203,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(trends[0].trend_type, "rising")
         self.assertGreater(trends[0].current_score, trends[0].previous_score)
 
-    def test_arc_envelope_manager_calibrates_overlay_from_audience_signals(self) -> None:
-        from forwin.planning.arc_envelope import ArcStructureDraftData
-        from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
-
+    def test_arc_envelope_manager_quarantines_audience_calibration(self) -> None:
         project = self._create_project()
         self.session.add_all(
             [
@@ -1277,76 +1273,9 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             session=self.session,
             project_id=project.id,
         )
-        self.assertTrue(profile.boost_reward_density)
-        self.assertTrue(profile.clarify_rule_legibility)
-        self.assertTrue(profile.protect_character_heat)
-
-        chapter_plans = [
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=1,
-                title="第一章",
-                one_line="开局承压",
-                goals_json='["推进主线"]',
-            ),
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=2,
-                title="第二章",
-                one_line="压力扩大",
-                goals_json='["确认代价"]',
-            ),
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=3,
-                title="第三章",
-                one_line="悬念抬升",
-                goals_json='["抬高问题"]',
-            ),
-        ]
-        structure = ArcStructureDraftData(
-            phase_layout=["setup", "pressure", "payoff"],
-            key_beats=["开局承压", "确认代价", "抬高问题"],
-            thread_priorities=[],
-            hotspot_candidates=[],
-            compression_candidates=[],
-            reader_promise=ReaderPromise(
-                genre_promise="悬疑网文",
-                pleasure_promise="稳定给出悬念和兑现",
-                core_pleasures=["悬念", "翻盘"],
-                ambiguity_mode="stable",
-                world_legibility_target="规则必须看得懂",
-            ),
-            arc_payoff_map=ArcPayoffMap(ambiguity_constraints=["翻盘必须遵守代价"]),
-        )
-        schedule = manager._derive_band_delight_schedule(  # noqa: SLF001
-            band_id="band:1:3",
-            chapter_start=1,
-            chapter_end=3,
-            structure=structure,
-            active_band=chapter_plans,
-            calibration=profile,
-        )
-        plan = manager._derive_chapter_experience_plan(  # noqa: SLF001
-            chapter_number=2,
-            structure=structure,
-            schedule=schedule,
-            chapter_plan=chapter_plans[1],
-            calibration=profile,
-        )
-
-        reward_categories = [item.category for item in schedule.scheduled_rewards]
-        self.assertGreaterEqual(reward_categories.count("power"), 3)
-        self.assertIn("emotion", reward_categories)
-        self.assertTrue(any("规则" in item.question_resolve or "代价" in item.question_resolve for item in schedule.curiosity_beats))
-        self.assertTrue(any("规则" in item or "代价" in item for item in plan.rule_anchors))
-        self.assertIn("relationship", plan.minimum_progress_channels)
+        self.assertFalse(profile.boost_reward_density)
+        self.assertFalse(profile.clarify_rule_legibility)
+        self.assertFalse(profile.protect_character_heat)
 
 
 if __name__ == "__main__":

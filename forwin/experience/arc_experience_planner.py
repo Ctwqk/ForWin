@@ -40,7 +40,6 @@ class ArcExperiencePlanningService:
         chapter_plans: list[ChapterPlan],
         audience_trends: list[str],
     ) -> dict[str, Any]:
-        trend_text = " ".join(str(item) for item in audience_trends)
         core_pleasures = ["稳定微回报", "阶段性翻盘", "真相逐层揭开"]
         macro_payoffs: list[dict[str, Any]] = []
         if structure.key_beats:
@@ -54,23 +53,8 @@ class ArcExperiencePlanningService:
                     "success_signal": "读者确认真相正在逼近",
                 }
             )
-        if "character_heat" in trend_text or "relationship_interest" in trend_text:
-            core_pleasures.append("角色关系与地位波动")
-            macro_payoffs.append(
-                {
-                    "payoff_id": "payoff-emotion",
-                    "category": "emotion",
-                    "template_id": "emotion-knife-turn",
-                    "target_chapter_hint": "arc-late",
-                    "setup_requirement": "建立关键角色连结",
-                    "success_signal": "关系站位出现明确变化",
-                }
-            )
         world_legibility = "关键冲突的规则与代价必须能被读者读懂。"
         ambiguity_constraints = ["关键结果必须能回指既有线索与规则。"]
-        if "confusion" in trend_text or "risk" in trend_text or "prediction" in trend_text:
-            world_legibility = "每个关键反转都要让读者看得懂代价、边界与因果。"
-            ambiguity_constraints.append("所有认知反转都必须回指前文线索。")
         return {
             "reader_promise": {
                 "genre_promise": f"{project.genre}网文",

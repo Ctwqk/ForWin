@@ -19,7 +19,7 @@ from forwin.protocol.book_state import FactNode, WorldNode
 from tests.postgres import postgres_test_url
 
 
-def test_arc_activation_review_pack_collects_canon_feedback() -> None:
+def test_arc_activation_review_pack_collects_canon_and_quarantines_feedback() -> None:
     engine = get_engine(postgres_test_url("arc_activation_review_pack"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -125,7 +125,7 @@ def test_arc_activation_review_pack_collects_canon_feedback() -> None:
         assert payload["book_state_facts"][0]["proposition"] == "林夜持有玄铁令。"
         assert payload["open_obligations"][0]["priority"] == "P0"
         assert payload["recent_director_imbalance"][0]["summary"] == "连续两章缺少兑现。"
-        assert payload["audience_signals"][0]["signal_type"] == "pacing"
+        assert payload["audience_signals"] == []
     finally:
         engine.dispose()
 

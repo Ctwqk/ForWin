@@ -1,0 +1,74 @@
+# 三阶段路线图实施证据
+
+当前路线图：[批准设计](../superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本记录区分工程实现、隔离验证和实际生产，不宣称 Stage 1 已完成。
+
+## 当前状态
+
+- 开发分支：`codex/three-stage-improvements`；源码起点 `521228871a5752ebe8572c057caa9f4944bb0295`。
+- 设计文档已更新，旧 L200/重复矩阵要求已被本轮 smoke + 离线 L100 替代。
+- 已从 HEAD 退休三个过期路线图全文；固定 Git 历史入口在 `Design-docs/DESIGN_STATUS.md`。
+- P1-1 版本/冻结、P1-3 容量正在实现及回归；P2 临时隔离已通过独立评审与59项相关回归；完整后继核验、阶段长跑和 Stage 2/3 尚未验收。
+- 没有修改生产作品、发布新内容或把隔离测试回执写入生产。
+
+## 运行基线调查
+
+只读容器源文件哈希比较：生产 `forwin/` 有575个 Python 文件，起点源码有585个，合并路径集合中289项不同。这是文件级差异数量，不是缺失修复数。
+
+| 角色 | 调查时运行镜像 |
+|---|---|
+| API / generation / MCP | `forwin-forwin:compat-6809782` |
+| publisher worker / outbox | `forwin-forwin:deploy-d4fceac68343` |
+| publisher browser | `forwin-publisher-browser:deploy-d4fceac68343` |
+
+compat 镜像 digest 为 `sha256:4b35847d8c3596761aa7e1db7c4cf30765971e385caaa9863eda4af4a9f4dbac`，其标签仍记录基础 `57241ff0e4e2` 与 hotfix `68097821d24f408c5132c2acd82d5d3c174d013b`。常规发布不能把这些补丁标签当作完整主线源码身份。
+
+11个历史热修复目录均可关联源码提交（`00f6071`、`0b1f446`、`24a477b`、`3738779`、`456d209`、`4924bf5`、`49b008f8f210`、`4c1d32d`、`6809782`、`6c54ba4`、`af2cd7e`），主题为历史修订锚点/排序/重审证据/Writer位置元数据。目录仍只读保留，不能以“已在主线找到同名模块”替代兼容恢复验证。
+
+## P1-0 构建验证
+
+源码 `6d37047873bec116fa0f0b32319a5025f71693eb` 从 `git archive` 的干净内容构建，无历史补丁参与；这是本工作包的构建检查，尚未包含后续未提交的版本/容量改动。
+
+| 产物 | digest |
+|---|---|
+| `forwin-runtime` | `sha256:aecf6dbf8b5b52732df8f413885ba9e2429674e582263d599e60c440d4ae1f5f` |
+| `publisher-browser-runtime` | `sha256:332befda62dd892876d69a22f5076690b2d553f7e500988c22ed4be83948a67d` |
+
+两者 OCI revision 标签均等于上述完整源码 SHA。Dockerfile 从同一 `uv.lock` 使用 frozen install；Python、Node和uv镜像输入固定到构建实际解析的digest；Python打包后端版本固定。apt仓库内容仍受发行版仓库更新影响，因此这些证据不承诺未来逐字节相同镜像digest。
+
+CLI `forwin --help`、生成/Pubisher服务导入和浏览器 `chromium --version` 均成功。第一次构建的 CLI 缺失由显式 build-system 修复，失败没有被当作通过。
+
+新增 `scripts/check_runtime_source.py` 已接入既有 pre-PR 检查：拒绝新生产源码副本、修改保留热修复目录、以compat为普通镜像基底，以及运行时源码字符串替换；允许普通源码改动和经核验后的旧材料删除。此检查是发布卫生约束，不代替运行时事务边界。
+
+## 备份和迁移调查
+
+- 已创建生产 PostgreSQL 一致性备份并核对manifest/checksum及archive目录；本地副本仅保存在被Git忽略且去掉组/其他读取权限的工作证据目录。
+- 原库PostgreSQL16.13，旧镜像pg_dump17.10生成archive1.16。隔离PG16恢复时，pg_restore17输出的`SET transaction_timeout = 0`不被PG16支持；仅在恢复流中删除这一条会话设置后成功恢复，原备份未改动。
+- 隔离恢复得到101张表；schema revision=`0001_v5_baseline`；负章节Canon记录数=0；publisher job表尚无`canon_commit_id`等新身份列。
+- 当前主线迁移链对该副本执行upgrade明确失败：无法定位`0001_v5_baseline`。主线只保留`0001_v5_recovery`，不能重建数据库或盲目stamp来跳过差异。
+- 恢复用临时测试数据库已由测试harness回收。备份与源码哈希证据保留；MinIO/Qdrant未做全量备份，此次未改变它们。
+- **生产切换前仍需**：可审计的旧基线向前迁移、旧publisher内容身份/结果的明确处置、隔离恢复验证及新功能回归。未满足前保留当前回滚材料。
+
+## 测试证据
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 修改前基线 | `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` | 8 passed |
+| P1-0检查/诊断 | `.venv/bin/python -m pytest -q tests/test_v5_recovery_schema.py tests/test_runtime_source_policy.py` | 14 passed |
+| 运行入口 | `.venv/bin/python scripts/check_codex_operator_ready.py` | API/MCP健康、插件配置、Swarm角色、Python环境通过 |
+| 活跃生成任务 | `forwin.task_active_generation_check` | 0；仅说明调查时状态 |
+
+全量pytest、Ruff、P1-1/P1-2/P1-3并发与迁移验收、20章smoke及全新离线L100尚未在同一个最终候选上完成，不能以本表替代。
+
+## 临时评论隔离
+
+现有评论、聚合和旧行动记录不再自动注入 Writer、评审、经验规划、Arc 激活或世界规则。采集、展示和历史记录保留，没有增加长期开关。原世界模拟入口附带的自动评论分析调用也已暂停；Stage 3 必须补齐独立的完整消费语义后再恢复合格自动输入。
+
+独立评审未发现该包阻断缺陷；真实隔离 PostgreSQL 相关回归 59 passed。覆盖无评论和强烈旧信号输入的差异、原有正文阻断保留，以及规划/评审边界。
+
+## 构建期间磁盘故障与恢复
+
+本轮重复角色构建触发宿主磁盘耗尽，随后本地 Colima 虚拟机报告 I/O 错误，测试 PostgreSQL/Qdrant 和 MCP 一度不健康。释放未使用磁盘块后，正常停止并启动 swarmbridged 虚拟机，服务恢复；没有删除数据卷、重建业务库或改写任务结果。恢复后 operator readiness 通过，MCP确认 active generation task=0；数据库回归重新运行。
+
+只清理本轮创建的两张检查镜像和按ID核对的本轮构建缓存，保留生产镜像、回滚材料、备份和用户文件。镜像digest证据仍保留。
+
+独立评审还发现浏览器登录shell会丢失虚拟环境PATH。提交 `66e7218` 固定现有 `FORWIN_EXTENSION_PYTHON=/app/.venv/bin/python` 并取消Docker默认登录shell；旧检查镜像配合此显式变量的登录shell导入Playwright验证通过。该提交的完整镜像复验因磁盘故障尚未完成，须在最终候选构建时补验。

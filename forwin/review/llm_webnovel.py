@@ -487,20 +487,6 @@ class LLMWebNovelReviewer:
                 "canon_quality_signal",
                 str(signal.get("description") or signal.get("signal_type") or ""),
             )
-        if context.reader_feedback is not None:
-            for signal in context.reader_feedback.confirmed_signals[:8]:
-                signal_key = str(signal.signal_key or "").strip()
-                if not signal_key:
-                    continue
-                add_evidence(
-                    f"audience_signal:{signal_key}",
-                    "audience_signal",
-                    (
-                        f"{signal.target_name or '整体'}:{signal.signal_type}:"
-                        f"{signal.level}, hits={signal.hit_count}, severity={signal.max_severity}"
-                    ),
-                )
-
         rule_claims = _draft_rule_claims(writer_output)
         return {
             "chapter": {
@@ -541,21 +527,9 @@ class LLMWebNovelReviewer:
                 "world_context": context.world_context.model_dump(mode="json"),
             },
             "audience": {
-                "reader_feedback": (
-                    context.reader_feedback.model_dump(mode="json")
-                    if context.reader_feedback is not None
-                    else {}
-                ),
-                "confirmed_signals": (
-                    [item.model_dump(mode="json") for item in context.reader_feedback.confirmed_signals]
-                    if context.reader_feedback is not None
-                    else []
-                ),
-                "audience_hints": (
-                    context.audience_hints.model_dump(mode="json")
-                    if context.audience_hints is not None
-                    else {}
-                ),
+                "reader_feedback": {},
+                "confirmed_signals": [],
+                "audience_hints": {},
                 "recent_review_notes": [item.model_dump(mode="json") for item in context.recent_review_notes[:5]],
             },
             "personality": list(context.active_personality_contexts[:8]),
@@ -782,15 +756,7 @@ class LLMWebNovelReviewer:
 
     @staticmethod
     def _confirmed_signal_refs(context: ReviewContextPack) -> list[str]:
-        feedback = context.reader_feedback
-        if feedback is None:
-            return []
-        refs: list[str] = []
-        for signal in feedback.confirmed_signals:
-            key = str(signal.signal_key or "").strip()
-            if key:
-                refs.append(f"audience_signal:{key}")
-        return refs
+        return []
 
     @staticmethod
     def _fallback_issue_evidence_refs(

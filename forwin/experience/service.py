@@ -88,33 +88,4 @@ class ExperiencePlanningService:
         session: Session,
         project_id: str,
     ) -> AudienceCalibrationProfile:
-        trends = load_long_window_audience_trend_views(session, project_id)
-        profile = AudienceCalibrationProfile()
-        for trend in trends:
-            strong_signal = trend.current_level in {"confirmed", "watchlist"} or trend.current_score >= 0.28
-            if trend.signal_type == "pacing" and strong_signal and trend.trend_type != "falling":
-                profile.boost_reward_density = True
-                profile.favor_visible_payoff = True
-                profile.reduce_setup_ratio = True
-            elif trend.signal_type in {"confusion", "risk"} and strong_signal:
-                profile.clarify_rule_legibility = True
-                category = str(getattr(trend, "target_name", "") or "").strip()
-                if category and category != "整体":
-                    profile.avoid_trope_categories = _append_unique(
-                        profile.avoid_trope_categories,
-                        category,
-                    )
-            elif trend.signal_type in {"character_heat", "relationship_interest"} and strong_signal and trend.trend_type != "falling":
-                profile.protect_character_heat = True
-            elif trend.signal_type == "prediction" and strong_signal:
-                profile.hold_managed_ambiguity = True
-            elif trend.signal_type in {"status", "scale", "growth"} and strong_signal:
-                profile.boost_status_payoff = True
-        return profile
-
-
-def _append_unique(values: list[str] | None, value: str) -> list[str]:
-    result = [item for item in values or [] if str(item).strip()]
-    if value and value not in result:
-        result.append(value)
-    return result
+        return AudienceCalibrationProfile()

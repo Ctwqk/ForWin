@@ -19,7 +19,6 @@ from forwin.models import (
 )
 from forwin.experience.service import (
     AudienceCalibrationProfile,
-    load_long_window_audience_trends,
 )
 from forwin.experience.types import ArcExperienceBundle
 from forwin.planning.arc_envelope_resolver import BaseEnvelopeContext
@@ -147,7 +146,7 @@ class ArcEnvelopeManager:
             chapter_plans=chapter_plans,
             activation_chapter=activation_chapter,
         )
-        audience_trends = load_long_window_audience_trends(session, project.id)
+        audience_trends: list[str] = []
         structure_result = self.planning.arc_structure.ensure_structure(
             session=session,
             project=project,
@@ -461,7 +460,7 @@ class ArcEnvelopeManager:
         policy: ArcPolicyTier,
         base_target_size: int,
     ) -> ArcStructureDraftData:
-        audience_trends = load_long_window_audience_trends(session, project.id)
+        audience_trends: list[str] = []
         structure, drafted_payload = self.planning.arc_structure.build_structure_draft(
             project=project,
             total_chapters=total_chapters,

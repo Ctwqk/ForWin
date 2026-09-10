@@ -67,16 +67,6 @@ def build_review_context_pack(
         if review_query is not None
         else []
     )
-    reader_feedback = context.reader_feedback
-    if (
-        reader_feedback is None
-        and repo is not None
-        and hasattr(repo, "get_recent_reader_feedback")
-    ):
-        reader_feedback = repo.get_recent_reader_feedback(
-            context.project_id,
-            before_chapter=context.chapter_number,
-        )
     map_context = dict(context.map_context)
     map_context.update(_build_reviewer_only_map_context(repo=repo, context=context))
     canon_quality_context = getattr(context, "canon_quality_context", {}) or {}
@@ -114,8 +104,8 @@ def build_review_context_pack(
         active_threads=active_threads,
         timeline=context.timeline,
         world_pressure=context.world_pressure,
-        reader_feedback=reader_feedback,
-        audience_hints=context.audience_hints,
+        reader_feedback=None,
+        audience_hints=None,
         reader_promise=context.reader_promise,
         arc_payoff_map=context.arc_payoff_map,
         band_delight_schedule=band,

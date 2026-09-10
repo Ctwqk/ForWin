@@ -12,7 +12,6 @@ from forwin.models.draft import ChapterDraft
 from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
-from forwin.models.publisher import SignalWindowAggregate
 
 
 @dataclass(frozen=True)
@@ -113,7 +112,7 @@ def build_arc_activation_review_pack(
             project_id=project_id,
             limit=6,
         ),
-        audience_signals=_audience_signals(session, project_id=project_id, limit=6),
+        audience_signals=[],
         faction_snapshot=faction_snapshot,
     )
 
@@ -219,44 +218,6 @@ def _recent_director_events(
         }
         for row in rows
     ]
-
-
-def _audience_signals(
-    session: Session,
-    *,
-    project_id: str,
-    limit: int,
-) -> list[dict[str, Any]]:
-    rows = list(
-        session.execute(
-            select(SignalWindowAggregate)
-            .where(
-                SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.signal_level.in_(
-                    ("confirmed", "watchlist", "candidate")
-                ),
-            )
-            .order_by(
-                SignalWindowAggregate.window_chapter_end.desc(),
-                SignalWindowAggregate.max_severity.desc(),
-                SignalWindowAggregate.unique_user_count.desc(),
-            )
-            .limit(limit)
-        ).scalars()
-    )
-    return [
-        {
-            "signal_key": row.signal_key,
-            "signal_type": row.signal_type,
-            "target_name": row.target_name,
-            "signal_level": row.signal_level,
-            "window_chapter_start": int(row.window_chapter_start or 0),
-            "window_chapter_end": int(row.window_chapter_end or 0),
-        }
-        for row in rows
-    ]
-
-
 def _json_load(raw: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw or "{}")

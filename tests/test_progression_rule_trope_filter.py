@@ -61,7 +61,7 @@ def test_scheduler_filters_progression_rule_blocked_template_ids(monkeypatch) ->
     load_trope_template_library.cache_clear()
 
 
-def test_feedback_calibration_sets_visible_payoff_for_pacing_signal() -> None:
+def test_feedback_calibration_is_quarantined_for_pacing_signal() -> None:
     session = _session()
     session.add(
         SignalWindowAggregate(
@@ -88,6 +88,6 @@ def test_feedback_calibration_sets_visible_payoff_for_pacing_signal() -> None:
         project_id="p1",
     )
 
-    assert profile.boost_reward_density is True
-    assert profile.favor_visible_payoff is True
-    assert profile.reduce_setup_ratio is True
+    assert profile.boost_reward_density is False
+    assert profile.favor_visible_payoff is False
+    assert profile.reduce_setup_ratio is False

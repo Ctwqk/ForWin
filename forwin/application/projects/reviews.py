@@ -23,10 +23,6 @@ from forwin.api_schema import (
 from forwin.application.read_models import build_project_detail
 from forwin.audit.events import DecisionEventType
 from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.canon.historical_rewrite import (
-    HistoricalCanonRewriteRepository,
-    HistoricalRewriteInvalid,
-)
 from forwin.generation.continue_workset import (
     build_continue_generation_workset,
 )
@@ -35,6 +31,7 @@ from forwin.generation.review_auto_retry import (
     prior_auto_review_retry_count,
     reset_chapter_for_auto_review_retry,
 )
+from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan, Project
@@ -46,6 +43,7 @@ from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
 
 from .common import _load_json_object
+from .revision_review import record_revision_retry
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
@@ -792,9 +790,21 @@ def approve_chapter_review(
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
+    identity_session = get_session()
+    try:
+        current_project = identity_session.get(Project, project_id)
+        book_revision = int(current_project.book_revision or 0) if current_project else 0
+        current_chapter = identity_session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number
+        ))
+        commit_id = result.get("canon_commit_id") or (current_chapter.active_commit_id if current_chapter else "")
+        accepted_commit = identity_session.get(CanonCommitRecord, commit_id) if commit_id else None
+        candidate_id = accepted_commit.candidate_id if accepted_commit else ""
+    finally:
+        identity_session.close()
     accepted_status = str(result.get("status") or "accepted")
     message = result["message"]
-    if req.continue_generation and accepted_status == "accepted":
+    if req.continue_generation and accepted_status == "accepted" and result.get("revision_status") != "blocked":
         session = get_session()
         try:
             workset = build_continue_generation_workset(
@@ -811,6 +821,8 @@ def approve_chapter_review(
                 project_id=project_id,
                 chapter_number=chapter_number,
                 status=accepted_status,
+                candidate_id=candidate_id,
+                book_revision=book_revision,
                 message=message,
                 task_id=task_id,
                 frozen_artifact=result.get("frozen_artifact") or "",
@@ -825,8 +837,8 @@ def approve_chapter_review(
             raise HTTPException(409, str(exc)) from exc
         update_task(
             task_id,
-            frozen_artifacts=[result["frozen_artifact"]]
-            if result["frozen_artifact"]
+            frozen_artifacts=[result.get("frozen_artifact")]
+            if result.get("frozen_artifact")
             else [],
         )
         message = f"{message} 已启动后续章节继续执行。"
@@ -853,6 +865,8 @@ def approve_chapter_review(
         project_id=project_id,
         chapter_number=chapter_number,
         status=accepted_status,
+        candidate_id=candidate_id,
+        book_revision=book_revision,
         message=message,
         task_id=task_id,
         frozen_artifact=result.get("frozen_artifact") or "",
@@ -958,6 +972,7 @@ def retry_chapter_review(
     reason = require_reason(req.reason, action="重试 review 章节")
     task_id = ""
     continue_requested_chapters = 0
+    proposal_id = ""
     session = get_session()
     try:
         project = session.execute(
@@ -985,16 +1000,7 @@ def retry_chapter_review(
                 400,
                 f"第{chapter_number}章不是可 retry 状态（当前 {previous_status or 'unknown'}）",
             )
-        if previous_status == "accepted":
-            try:
-                marker = HistoricalCanonRewriteRepository(session).mark_pending(
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    reason=reason,
-                )
-                marker.related_object_id = str(plan.id)
-            except HistoricalRewriteInvalid as exc:
-                raise HTTPException(409, str(exc)) from exc
+        proposal_id = record_revision_retry(session,project=project,chapter=plan,request=req,reason=reason)
         if previous_status != "accepted":
             plan.status = "planned"
             plan.acceptance_mode = ""
@@ -1040,12 +1046,15 @@ def retry_chapter_review(
             )
             continue_requested_chapters = int(workset.requested_chapters or 0)
         retained_status = str(plan.status)
+        book_revision = int(project.book_revision or 0)
         session.commit()
     finally:
         session.close()
 
     message = (f"第{chapter_number}章修订请求已记录；原接纳版本继续生效，等待完整后缀核验。"
                if previous_status == "accepted" else f"第{chapter_number}章已重置为 planned。")
+    if req.replacement_body is not None:
+        message = f"第{chapter_number}章新修订候选已保存；原接纳版本继续生效，approve 将核验完整后缀。"
     if req.continue_generation and continue_requested_chapters > 0:
         try:
             task_id = create_continue_generation_task(
@@ -1064,6 +1073,8 @@ def retry_chapter_review(
         project_id=project_id,
         chapter_number=chapter_number,
         status=retained_status,
+        candidate_id=proposal_id,
+        book_revision=book_revision,
         message=message,
         task_id=task_id,
         frozen_artifact="",

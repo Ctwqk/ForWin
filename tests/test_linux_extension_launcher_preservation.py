@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 
 class LauncherProfilePreservationTests(unittest.TestCase):
@@ -69,7 +69,7 @@ esac
         }
         return subprocess.run(
             [self.bash, str(self.scripts / "launch_linux_extension_browser.sh")],
-            env=env, capture_output=True, text=True, timeout=10,
+            env=env, capture_output=True, text=True, timeout=10, check=False,
         )
 
     def test_inactive_qualified_profile_keeps_unresolved_journal(self):

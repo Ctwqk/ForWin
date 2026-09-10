@@ -15,7 +15,6 @@ from .chapter_review_form import FORM_SCHEMA_VERSION
 from .repository import CanonQualityRepository
 from .types import CanonQualityAnalysisResult, QualityAnalysisCachePayload
 
-
 QUALITY_ANALYSIS_VERSION = "v1"
 
 
@@ -148,9 +147,14 @@ def persist_quality_projection(
     payload: QualityAnalysisCachePayload,
 ) -> None:
     repo.supersede_chapter_signals(project_id, chapter_number)
-    repo.save_signals(payload.analysis.signals)
-    repo.save_character_transitions(payload.character_transitions)
-    repo.save_countdown_entries(payload.countdown_entries)
+    signals = repo.save_signals(payload.analysis.signals)
+    characters = repo.save_character_transitions(payload.character_transitions)
+    countdowns = repo.save_countdown_entries(payload.countdown_entries)
+    repo.record_projection(payload, source_row_ids={
+        "signals": [row.id for row in signals],
+        "character_transitions": [row.id for row in characters],
+        "countdown_entries": [row.id for row in countdowns],
+    })
 
 
 def result_for_caller(

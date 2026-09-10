@@ -46,6 +46,8 @@ class CanonCommitPlan(_FrozenCanonModel):
     expected_previous_accepted_chapter: int
     expected_book_state_chapter: int
     expected_book_revision: int = 0
+    revision_validation_id: str = ""
+    quality_admission_run_id: str = ""
     approved_book_state_changes: ApprovedGraphDeltaSet
     entity_admission_plan: EntityAdmissionPlan
     acceptance_mode: str = "normal"
@@ -91,6 +93,8 @@ class CanonCommitPlan(_FrozenCanonModel):
         expected_previous_accepted_chapter: int,
         expected_book_state_chapter: int,
         expected_book_revision: int = 0,
+        revision_validation_id: str = "",
+        quality_admission_run_id: str = "",
         approved_book_state_changes: ApprovedGraphDeltaSet,
         entity_admission_plan: EntityAdmissionPlan,
         acceptance_mode: str = "normal",
@@ -125,6 +129,8 @@ class CanonCommitPlan(_FrozenCanonModel):
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
             expected_book_revision=expected_book_revision,
+            revision_validation_id=revision_validation_id,
+            quality_admission_run_id=quality_admission_run_id,
         )
         normalized_commit_id = canon_commit_id(idempotency_key)
         normalized_outbox = build_canon_recovery_events(
@@ -146,6 +152,8 @@ class CanonCommitPlan(_FrozenCanonModel):
         return cls(
             schema_version=schema_version,
             expected_book_revision=max(0, int(expected_book_revision)),
+            revision_validation_id=revision_validation_id,
+            quality_admission_run_id=quality_admission_run_id,
             project_id=normalized_project_id,
             chapter_number=normalized_chapter,
             candidate_id=str(candidate_id or "").strip(),
@@ -186,6 +194,8 @@ def _idempotency_key(
     approved_book_state_changes: ApprovedGraphDeltaSet,
     entity_admission_plan: EntityAdmissionPlan,
     expected_book_revision: int = 0,
+    revision_validation_id: str = "",
+    quality_admission_run_id: str = "",
 ) -> str:
     payload = {
         "schema_version": "v1",
@@ -203,6 +213,10 @@ def _idempotency_key(
             entity_admission_plan.candidate_fingerprint or ""
         ),
     }
+    if revision_validation_id:
+        payload["revision_validation_id"] = revision_validation_id
+    if quality_admission_run_id:
+        payload["quality_admission_run_id"] = quality_admission_run_id
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

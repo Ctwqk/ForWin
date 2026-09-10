@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
-import json
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+import forwin.outbox.store as outbox_store
+from forwin.api_schema import ChapterReviewApproveRequest, ChapterReviewRetryRequest
+from forwin.audit.events import DecisionEventType
+from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_plan_revision,
 )
-from forwin.api_schema import ChapterReviewApproveRequest, ChapterReviewRetryRequest
-from forwin.audit.events import DecisionEventType
 from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.outbox_events import (
     CANON_PHASE3_REQUESTED,
@@ -27,8 +30,9 @@ from forwin.canon.preparation import (
     BookStatePreparationOutcome,
     CanonPreparationService,
 )
-from forwin.book_state.projection import BookStateProjection
-from forwin.book_state.repository import BookStateRepository
+from forwin.config import InfrastructureConfig
+from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
     GraphDeltaRow,
@@ -40,19 +44,16 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.entity import Entity, EntityAlias
 from forwin.models.knowledge import KnowledgeEditProposalRow
-from forwin.models.audit import DecisionEvent
+from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.subworld import SubWorldRosterItem
-from forwin.models.maintenance import PostCanonMaintenanceRun
-from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 from forwin.naming import (
     EntityAdmissionDecision,
     EntityAdmissionPlan,
     writer_output_admission_fingerprint,
 )
-import forwin.outbox.store as outbox_store
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionPatch,
@@ -61,12 +62,11 @@ from forwin.protocol.book_state import (
     WorldNode,
 )
 from forwin.protocol.writer import WriterOutput
-from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
-from tests.postgres import postgres_test_url
 from tests.http_runtime_harness import HttpRuntimeHarness
-from forwin.config import InfrastructureConfig
+from tests.postgres import postgres_test_url
 
 
 @dataclass(frozen=True)
@@ -477,7 +477,9 @@ def historical_rewrite_scenario(
             premise="A corrected chapter must replace its old state contribution.",
             genre="thriller",
             runtime_policy=RuntimePolicy.for_profile("standard"),
+            automation_json='{"primary_publish_platform":"qidian"}',
         )
+        project.target_total_chapters = 20
         arc = updater.create_arc_plan(project.id, "Rewrite arc", chapter_start=2)
         chapter_one = updater.create_chapter_plan(
             project.id, arc.id, 1, "Chapter one", "Base event", ["Commit chapter one"]
@@ -740,110 +742,6 @@ def _world_snapshot(
         return snapshot.world_node_state_index_json
 
 
-def test_historical_rewrite_replaces_old_delta_and_replays_later_accepted_deltas(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-) -> None:
-    with historical_rewrite_scenario.Session() as session:
-        marker = _rewrite_marker(
-            session,
-            historical_rewrite_scenario.project_id,
-            2,
-        )
-        assert marker is not None
-        assert marker["previous_commit_id"] == historical_rewrite_scenario.old_commit_id
-
-    outcome = CanonAdmissionService(
-        session_factory=historical_rewrite_scenario.Session
-    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
-
-    assert outcome.blocked is False, outcome.failure_reason
-    assert (
-        outcome.commit_id == historical_rewrite_scenario.rewritten_plan.canon_commit_id
-    )
-    assert outcome.commit_id != historical_rewrite_scenario.old_commit_id
-    assert outcome.idempotent is False
-    assert outcome.compile_result is not None
-    assert outcome.compile_result.committed is True
-    assert _active_delta_summaries(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        2,
-    ) == ["corrected custody-only event"]
-    assert _active_delta_summaries(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        3,
-    ) == ["later accepted consequence"]
-    assert "obsolete braking event" not in _world_snapshot(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        3,
-    )
-    assert "later accepted consequence" in _world_snapshot(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        3,
-    )
-    with historical_rewrite_scenario.Session() as session:
-        old_commit = session.get(
-            CanonCommitRecord, historical_rewrite_scenario.old_commit_id
-        )
-        successor_candidate = session.get(
-            CandidateDraftRecord,
-            historical_rewrite_scenario.successor_candidate_id,
-        )
-        successor_draft = session.get(
-            ChapterDraft,
-            historical_rewrite_scenario.successor_draft_id,
-        )
-        assert old_commit is not None
-        assert old_commit.status == "superseded"
-        assert session.get(WorldNodeRow, "event-obsolete-braking") is None
-        assert session.get(WorldNodeRow, "event-base") is not None
-        assert old_commit.chapter_number < 0
-        old_result = json.loads(old_commit.result_json)
-        assert old_result["original_chapter_number"] == 2
-        assert old_result["superseded_by_commit_id"] == outcome.commit_id
-        assert old_result["retired_graph_delta_ids"] == ["delta-obsolete-braking"]
-        marker = _rewrite_marker(session, historical_rewrite_scenario.project_id, 2)
-        assert marker["replacement_commit_id"] == outcome.commit_id
-        successor_commit = session.scalar(
-            select(CanonCommitRecord).where(
-                CanonCommitRecord.project_id == historical_rewrite_scenario.project_id,
-                CanonCommitRecord.chapter_number == 3,
-            )
-        )
-        assert (
-            session.get(WorldSnapshotRow, successor_commit.world_snapshot_id)
-            is not None
-        )
-        assert "corrected custody-only event" in _world_snapshot(
-            historical_rewrite_scenario.Session,
-            historical_rewrite_scenario.project_id,
-            3,
-        )
-        assert successor_candidate is not None
-        assert successor_candidate.status == "accepted"
-        assert successor_draft is not None
-        assert successor_draft.body_text == (
-            "The later accepted consequence follows the first event."
-        )
-        previous_candidate = session.get(CandidateDraftRecord, old_commit.candidate_id)
-        previous_plan = CanonCommitPlan.model_validate_json(
-            previous_candidate.canon_commit_plan_json
-        )
-    repeated = CanonAdmissionService(
-        session_factory=historical_rewrite_scenario.Session
-    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
-    assert repeated.idempotent is True
-    assert repeated.commit_id == outcome.commit_id
-    obsolete_retry = CanonAdmissionService(
-        session_factory=historical_rewrite_scenario.Session
-    ).commit_plan(previous_plan)
-    assert obsolete_retry.stale is True
-    assert "superseded" in obsolete_retry.failure_reason
-
-
 def _review_api(scenario, monkeypatch, tmp_path):
     config = InfrastructureConfig(
         database_url=scenario.Session.kw["bind"].url.render_as_string(
@@ -891,7 +789,7 @@ def _review_api(scenario, monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline.canon_preparation,
         "quality_evaluator",
-        lambda **_kwargs: SimpleNamespace(blocked=False),
+        lambda **_kwargs: SimpleNamespace(blocked=False,quality_admission_run_id=""),
     )
     monkeypatch.setattr(
         pipeline.canon_preparation.book_state_preparer,
@@ -908,770 +806,6 @@ def _review_api(scenario, monkeypatch, tmp_path):
     return HttpRuntimeHarness(
         session_factory=scenario.Session, config=config, pipeline=pipeline
     ), pipeline
-
-
-def _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch):
-    with scenario.Session.begin() as session:
-        session.get(ChapterPlan, scenario.chapter_two_id).status = "needs_review"
-    commit = pipeline.canon_admission.commit_plan
-    monkeypatch.setattr(
-        pipeline.canon_admission,
-        "commit_plan",
-        lambda plan: commit(plan, failure_injector=_fail_at("book_state")),
-    )
-    outcome = api.approve_chapter_review(
-        scenario.project_id,
-        2,
-        ChapterReviewApproveRequest(reason="review unchanged rewrite"),
-    )
-    assert outcome.status == "needs_review"
-    assert "book_state" in outcome.frozen_artifact
-    monkeypatch.setattr(pipeline.canon_admission, "commit_plan", commit)
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "failed"
-        assert (
-            json.loads(candidate.canon_commit_plan_json)["acceptance_mode"]
-            == "human_approved"
-        )
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status == "committed"
-        )
-        assert (
-            session.get(CanonCommitRecord, scenario.rewritten_plan.canon_commit_id)
-            is None
-        )
-        assert "replacement_commit_id" not in _rewrite_marker(
-            session, scenario.project_id, 2
-        )
-
-
-def _fail_automated_historical_commit(scenario):
-    # The worker prepares a reviewed candidate in normal mode, commits the
-    # preparation, then leaves the chapter needs_review on atomic failure.
-    assert scenario.rewritten_plan.acceptance_mode == "normal"
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan, failure_injector=_fail_at("book_state")
-    )
-    assert outcome.block_kind == "canon_write_failed"
-    with scenario.Session.begin() as session:
-        session.get(ChapterPlan, scenario.chapter_two_id).status = "needs_review"
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "failed"
-        assert (
-            json.loads(candidate.canon_commit_plan_json)["acceptance_mode"] == "normal"
-        )
-
-
-def _store_recovery_artifact(
-    scenario, pipeline, monkeypatch, *, changes=None, fingerprint="missing"
-):
-    from forwin.generation.pipeline_core.finalization import FinalizationStage
-
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
-        output = pipeline._load_writer_output_from_meta(draft.llm_raw_response)
-    if changes:
-        output = output.model_copy(update=changes)
-    paths = pipeline.artifact_store.save_writer_output(
-        project_id=scenario.project_id, chapter_number=2, writer_output=output
-    )
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
-        draft.llm_raw_response = paths["meta_path"]
-        candidate.writer_artifact_ref = paths["meta_path"]
-        metadata = json.loads(candidate.metadata_json)
-        if fingerprint == "missing":
-            metadata.pop("writer_output_admission_fingerprint")
-        elif fingerprint != "keep":
-            metadata["writer_output_admission_fingerprint"] = fingerprint
-        metadata["unrelated_evidence"] = {"preserve": [1, None, "unchanged"]}
-        candidate.metadata_json = json.dumps(metadata)
-    monkeypatch.setattr(
-        pipeline,
-        "_load_writer_output_from_meta",
-        FinalizationStage._load_writer_output_from_meta.__get__(pipeline),
-    )
-    return paths["meta_path"]
-
-
-def _recovery_evidence_snapshot(scenario):
-    with scenario.Session() as session:
-        return {
-            model.__tablename__: [
-                tuple(getattr(row, column.name) for column in model.__table__.columns)
-                for row in session.scalars(select(model).order_by(model.id))
-            ]
-            for model in (
-                CandidateDraftRecord,
-                ChapterDraft,
-                ChapterReview,
-                ChapterPlan,
-                CanonCommitRecord,
-                DecisionEvent,
-                GraphDeltaRow,
-                WorldSnapshotRow,
-                OutboxEvent,
-            )
-        }
-
-
-def test_failed_historical_recovery_verifies_full_artifact_for_absent_fingerprint(
-    historical_rewrite_scenario, monkeypatch, tmp_path
-):
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_automated_historical_commit(scenario)
-    _store_recovery_artifact(scenario, pipeline, monkeypatch)
-    with scenario.Session() as session:
-        before = json.loads(
-            session.get(
-                CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-            ).metadata_json
-        )
-    result = api.approve_chapter_review(
-        scenario.project_id,
-        2,
-        ChapterReviewApproveRequest(reason="verify exact persisted writer artifact"),
-    )
-    assert result.status == "maintenance_pending"
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        metadata = json.loads(candidate.metadata_json)
-        assert (
-            metadata.pop("writer_output_admission_fingerprint")
-            == scenario.rewritten_plan.entity_admission_plan.candidate_fingerprint
-        )
-        assert metadata == before
-        assert candidate.status == "accepted"
-        assert (
-            json.loads(candidate.canon_commit_plan_json)["acceptance_mode"]
-            == "human_approved"
-        )
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        "missing_artifact",
-        "body",
-        "project",
-        "chapter",
-        "title",
-        "full_hash",
-        "supplied_null",
-        "supplied_empty",
-        "supplied_wrong",
-        "supplied_nonstring",
-        "present_hash_changed_artifact",
-        "equal_timestamp",
-        "missing_marker",
-    ],
-)
-def test_failed_historical_artifact_recovery_rejects_without_writing(
-    historical_rewrite_scenario, monkeypatch, tmp_path, invalid
-):
-    from fastapi import HTTPException
-
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_automated_historical_commit(scenario)
-    changes = {
-        "body": {"body": "not the reviewed body"},
-        "project": {"project_id": "another-project"},
-        "chapter": {"chapter_number": 3},
-        "title": {"title": "unreviewed title"},
-        "full_hash": {"prompt_revision_hash": "unreviewed-nonbody-field"},
-        "present_hash_changed_artifact": {
-            "prompt_revision_hash": "unreviewed-nonbody-field"
-        },
-    }.get(invalid)
-    fingerprint = {
-        "supplied_null": None,
-        "supplied_empty": "",
-        "supplied_wrong": "wrong",
-        "supplied_nonstring": 123,
-        "present_hash_changed_artifact": "keep",
-    }.get(invalid, "missing")
-    _store_recovery_artifact(
-        scenario, pipeline, monkeypatch, changes=changes, fingerprint=fingerprint
-    )
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        if invalid == "missing_artifact":
-            draft = session.get(ChapterDraft, candidate.candidate_draft_id)
-            draft.llm_raw_response += ".missing"
-        elif invalid in {"equal_timestamp", "missing_marker"}:
-            marker = session.scalar(
-                select(DecisionEvent).where(
-                    DecisionEvent.project_id == scenario.project_id,
-                    DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-                )
-            )
-            if invalid == "equal_timestamp":
-                candidate.created_at = marker.created_at
-            else:
-                session.delete(marker)
-    before = _recovery_evidence_snapshot(scenario)
-    with pytest.raises(HTTPException) as error:
-        api.approve_chapter_review(
-            scenario.project_id,
-            2,
-            ChapterReviewApproveRequest(reason="reject unproven artifact"),
-        )
-    assert error.value.status_code == (404 if invalid == "missing_artifact" else 400)
-    assert _recovery_evidence_snapshot(scenario) == before
-
-
-def test_failed_historical_artifact_backfill_rolls_back_with_review_transaction(
-    historical_rewrite_scenario, monkeypatch, tmp_path
-):
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_automated_historical_commit(scenario)
-    _store_recovery_artifact(scenario, pipeline, monkeypatch)
-    before = _recovery_evidence_snapshot(scenario)
-
-    def fail_after_recovery(**kwargs):
-        candidate = kwargs["session"].get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "needs_review"
-        assert (
-            json.loads(candidate.metadata_json)["writer_output_admission_fingerprint"]
-            == scenario.rewritten_plan.entity_admission_plan.candidate_fingerprint
-        )
-        raise RuntimeError("injected preparation failure after verified recovery")
-
-    monkeypatch.setattr(pipeline.canon_preparation, "prepare", fail_after_recovery)
-    with pytest.raises(RuntimeError, match="injected preparation failure"):
-        api.approve_chapter_review(
-            scenario.project_id,
-            2,
-            ChapterReviewApproveRequest(reason="verify atomic recovery"),
-        )
-    assert _recovery_evidence_snapshot(scenario) == before
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        "candidate_reference",
-        "empty_candidate_reference",
-        "draft_reference_race",
-        "both_reference_race",
-    ],
-)
-def test_failed_historical_artifact_path_binding_rejects_without_writing(
-    historical_rewrite_scenario, monkeypatch, tmp_path, invalid
-):
-    from fastapi import HTTPException
-
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_automated_historical_commit(scenario)
-    artifact_path = _store_recovery_artifact(scenario, pipeline, monkeypatch)
-    expected = []
-    if invalid in {"candidate_reference", "empty_candidate_reference"}:
-        with scenario.Session.begin() as session:
-            candidate = session.get(
-                CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-            )
-            candidate.writer_artifact_ref = (
-                ""
-                if invalid == "empty_candidate_reference"
-                else artifact_path + ".other"
-            )
-        expected.append(_recovery_evidence_snapshot(scenario))
-    else:
-        load = pipeline._load_writer_output_from_meta
-
-        def retarget_after_read(path):
-            output = load(path)
-            with scenario.Session.begin() as session:
-                candidate = session.get(
-                    CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-                )
-                draft = session.get(ChapterDraft, candidate.candidate_draft_id)
-                draft.llm_raw_response = artifact_path + ".retargeted"
-                if invalid == "both_reference_race":
-                    candidate.writer_artifact_ref = draft.llm_raw_response
-            # The request may not undo this independent writer's mutation, but
-            # it must not add a fingerprint or reopen/admit the candidate.
-            expected.append(_recovery_evidence_snapshot(scenario))
-            return output
-
-        monkeypatch.setattr(
-            pipeline, "_load_writer_output_from_meta", retarget_after_read
-        )
-    with pytest.raises(HTTPException) as error:
-        api.approve_chapter_review(
-            scenario.project_id,
-            2,
-            ChapterReviewApproveRequest(reason="reject unbound artifact path"),
-        )
-    assert error.value.status_code == 400
-    assert _recovery_evidence_snapshot(scenario) == expected[0]
-
-
-def test_failed_historical_normal_plan_can_enter_manual_review(
-    historical_rewrite_scenario, monkeypatch, tmp_path
-):
-    scenario = historical_rewrite_scenario
-    api, _pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    before = _world_snapshot(scenario.Session, scenario.project_id, 3)
-    _fail_automated_historical_commit(scenario)
-    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        identity = (
-            candidate.candidate_draft_id,
-            candidate.review_id,
-            candidate.version,
-            candidate.body_hash,
-        )
-        assert "replacement_commit_id" not in _rewrite_marker(
-            session, scenario.project_id, 2
-        )
-    outcome = api.approve_chapter_review(
-        scenario.project_id,
-        2,
-        ChapterReviewApproveRequest(
-            reason="manually approve the unchanged reviewed worker candidate"
-        ),
-    )
-    assert outcome.status == "maintenance_pending"
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "accepted"
-        assert (
-            candidate.candidate_draft_id,
-            candidate.review_id,
-            candidate.version,
-            candidate.body_hash,
-        ) == identity
-        assert (
-            json.loads(candidate.canon_commit_plan_json)["acceptance_mode"]
-            == "human_approved"
-        )
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status
-            == "superseded"
-        )
-
-
-@pytest.mark.parametrize("mode", ["normal", "human_approved"])
-@pytest.mark.parametrize(
-    "actor,source",
-    [
-        ("system", "chapter_review_approve_api"),
-        ("api", "direct"),
-        ("manual_ui", "direct"),
-    ],
-)
-def test_failed_historical_recovery_requires_manual_api_entry(
-    historical_rewrite_scenario, monkeypatch, tmp_path, mode, actor, source
-):
-    from forwin.candidate_drafts import CandidateTransitionError
-
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    if mode == "normal":
-        _fail_automated_historical_commit(scenario)
-    else:
-        _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        plan_before = candidate.canon_commit_plan_json
-        marker_before = _rewrite_marker(session, scenario.project_id, 2)
-    with pytest.raises(CandidateTransitionError):
-        pipeline.accept_review(
-            scenario.project_id,
-            2,
-            actor_type=actor,
-            source=source,
-            reason="not the manual API entry",
-        )
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "failed"
-        assert candidate.canon_commit_plan_json == plan_before
-        assert _rewrite_marker(session, scenario.project_id, 2) == marker_before
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status == "committed"
-        )
-
-
-@pytest.mark.parametrize(
-    "mode",
-    [None, "", "gate_approved", "force_accept_after_repair", "normal ", "missing"],
-)
-def test_failed_historical_recovery_rejects_nonexplicit_plan_modes(
-    historical_rewrite_scenario, monkeypatch, tmp_path, mode
-):
-    from fastapi import HTTPException
-
-    scenario = historical_rewrite_scenario
-    api, _pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_automated_historical_commit(scenario)
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        plan = json.loads(candidate.canon_commit_plan_json)
-        if mode == "missing":
-            del plan["acceptance_mode"]
-        else:
-            plan["acceptance_mode"] = mode
-        candidate.canon_commit_plan_json = json.dumps(plan)
-        before = candidate.canon_commit_plan_json
-    with pytest.raises(HTTPException) as error:
-        api.approve_chapter_review(
-            scenario.project_id,
-            2,
-            ChapterReviewApproveRequest(reason="reject invalid prior mode"),
-        )
-    assert error.value.status_code == 400
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "failed"
-        assert candidate.canon_commit_plan_json == before
-
-
-@pytest.mark.parametrize("pre_marker", ["current", "backfill"])
-def test_failed_historical_candidate_can_be_reapproved_after_atomic_rollback(
-    historical_rewrite_scenario, monkeypatch, tmp_path, pre_marker
-):
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    before = _world_snapshot(scenario.Session, scenario.project_id, 3)
-    _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
-    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        immutable = (
-            candidate.candidate_draft_id,
-            candidate.review_id,
-            candidate.version,
-            candidate.body_hash,
-        )
-        if pre_marker == "backfill":
-            marker = session.scalar(
-                select(DecisionEvent).where(
-                    DecisionEvent.project_id == scenario.project_id,
-                    DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-                )
-            )
-            payload = json.loads(marker.payload_json)
-            payload.pop("previous_commit_id")
-            marker.payload_json = json.dumps(payload)
-    outcome = api.approve_chapter_review(
-        scenario.project_id,
-        2,
-        ChapterReviewApproveRequest(reason="runtime repaired; same reviewed body"),
-    )
-    assert outcome.status == "maintenance_pending"
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "accepted"
-        assert (
-            candidate.candidate_draft_id,
-            candidate.review_id,
-            candidate.version,
-            candidate.body_hash,
-        ) == immutable
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status
-            == "superseded"
-        )
-        assert (
-            _rewrite_marker(session, scenario.project_id, 2)["replacement_commit_id"]
-            == candidate.canon_commit_id
-        )
-    successor = _world_snapshot(scenario.Session, scenario.project_id, 3)
-    assert "corrected custody-only event" in successor
-    assert "old drifted event" not in successor
-
-
-@pytest.mark.parametrize("pre_marker", ["current", "backfill"])
-@pytest.mark.parametrize("gate", ["quality", "book_state"])
-def test_failed_historical_reapproval_reruns_gates_without_mutating_marker(
-    historical_rewrite_scenario, monkeypatch, tmp_path, pre_marker, gate
-):
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
-    with scenario.Session.begin() as session:
-        marker = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        if pre_marker == "backfill":
-            payload = json.loads(marker.payload_json)
-            payload.pop("previous_commit_id")
-            marker.payload_json = json.dumps(payload)
-        before = marker.payload_json
-    if gate == "book_state":
-        blocker = "current BookState gate blocked"
-        monkeypatch.setattr(
-            pipeline.canon_preparation.book_state_preparer,
-            "prepare",
-            lambda **_kwargs: BookStatePreparationOutcome(blocked_path=blocker),
-        )
-    else:
-        blocker = "current quality gate blocked"
-        monkeypatch.setattr(
-            pipeline.canon_preparation,
-            "quality_evaluator",
-            lambda **_kwargs: SimpleNamespace(
-                blocked=True, blocked_path=blocker, gate_result=None
-            ),
-        )
-    outcome = api.approve_chapter_review(
-        scenario.project_id,
-        2,
-        ChapterReviewApproveRequest(reason="recheck current gates"),
-    )
-    assert outcome.status == "needs_review"
-    assert outcome.frozen_artifact == blocker
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "needs_review"
-        assert session.get(DecisionEvent, marker.id).payload_json == before
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status == "committed"
-        )
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        "missing_marker",
-        "wrong_marker",
-        "consumed_marker",
-        "null_marker",
-        "ambiguous_backfill",
-        "missing_plan",
-        "unrecognized_plan_mode",
-        "wrong_plan_candidate",
-        "stale_plan_revision",
-        "stale_policy",
-        "wrong_version",
-        "wrong_review",
-        "changed_review",
-        "changed_body",
-        "not_eligible",
-        "drafted_chapter",
-        "invalid_manifest",
-        "existing_outbox",
-    ],
-)
-def test_failed_historical_reapproval_rejects_stale_authorization(
-    historical_rewrite_scenario, monkeypatch, tmp_path, invalid
-):
-    from fastapi import HTTPException
-
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        marker = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        if invalid == "missing_marker":
-            session.delete(marker)
-        elif invalid in {
-            "wrong_marker",
-            "consumed_marker",
-            "null_marker",
-            "ambiguous_backfill",
-        }:
-            payload = json.loads(marker.payload_json)
-            if invalid == "wrong_marker":
-                payload["previous_commit_id"] = "another-commit"
-            elif invalid == "ambiguous_backfill":
-                payload.pop("previous_commit_id")
-                session.add(
-                    DecisionEvent(
-                        project_id=scenario.project_id,
-                        chapter_number=2,
-                        event_type=DecisionEventType.RETRY_ATTEMPT,
-                        event_family="audit_action",
-                        actor_type="api",
-                        payload_json=json.dumps(payload),
-                    )
-                )
-            else:
-                payload["replacement_commit_id"] = (
-                    None if invalid == "null_marker" else "consumed"
-                )
-            marker.payload_json = json.dumps(payload)
-        elif invalid in {"missing_plan", "unrecognized_plan_mode", "wrong_plan_candidate"}:
-            plan = json.loads(candidate.canon_commit_plan_json)
-            if invalid == "missing_plan":
-                plan = {}
-            elif invalid == "unrecognized_plan_mode":
-                plan["acceptance_mode"] = "unrecognized"
-            else:
-                plan["candidate_id"] = scenario.successor_candidate_id
-            candidate.canon_commit_plan_json = json.dumps(plan)
-        elif invalid == "stale_plan_revision":
-            session.get(ChapterPlan, scenario.chapter_two_id).title = "changed plan"
-        elif invalid == "stale_policy":
-            session.get(Project, scenario.project_id).runtime_policy_version = 2
-        elif invalid == "wrong_version":
-            candidate.version = 7
-        elif invalid == "wrong_review":
-            candidate.review_id = session.get(
-                CandidateDraftRecord, scenario.successor_candidate_id
-            ).review_id
-        elif invalid == "changed_review":
-            session.get(
-                ChapterReview, candidate.review_id
-            ).review_meta_json = '{"verdict":"warn"}'
-        elif invalid == "changed_body":
-            session.get(
-                ChapterDraft, candidate.candidate_draft_id
-            ).body_text = "unreviewed replacement"
-        elif invalid == "not_eligible":
-            candidate.eligibility_decision_json = '{"eligible":false}'
-        elif invalid == "drafted_chapter":
-            session.get(ChapterPlan, scenario.chapter_two_id).status = "drafted"
-        elif invalid == "existing_outbox":
-            event = scenario.rewritten_plan.outbox_events[0]
-            outbox_store.enqueue_outbox_event(
-                session,
-                aggregate_type=event.aggregate_type,
-                aggregate_id=event.aggregate_id,
-                event_type=event.event_type,
-                payload=event.payload,
-                event_id=event.event_id,
-            )
-        else:
-            session.get(
-                CanonCommitRecord, scenario.old_commit_id
-            ).graph_delta_ids_json = '["missing-delta"]'
-        snapshot = (
-            candidate.canon_commit_plan_json,
-            candidate.eligibility_decision_json,
-            marker.payload_json,
-        )
-    with pytest.raises(HTTPException) as error:
-        api.approve_chapter_review(
-            scenario.project_id, 2, ChapterReviewApproveRequest(reason="recheck")
-        )
-    assert error.value.status_code == 400
-    with scenario.Session() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "failed"
-        assert (
-            candidate.canon_commit_plan_json,
-            candidate.eligibility_decision_json,
-        ) == snapshot[:2]
-        if invalid != "missing_marker":
-            assert session.get(DecisionEvent, marker.id).payload_json == snapshot[2]
-        assert (
-            session.get(CanonCommitRecord, scenario.old_commit_id).status == "committed"
-        )
-
-
-def test_failed_historical_reapproval_rejects_equal_marker_timestamp_without_mutation(
-    historical_rewrite_scenario, monkeypatch, tmp_path
-):
-    from fastapi import HTTPException
-
-    scenario = historical_rewrite_scenario
-    api, pipeline = _review_api(scenario, monkeypatch, tmp_path)
-    _fail_reviewed_historical_commit(scenario, api, pipeline, monkeypatch)
-    with scenario.Session.begin() as session:
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        marker = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        candidate.created_at = marker.created_at
-        session.flush()
-        assert candidate.created_at == marker.created_at
-
-    def snapshot():
-        with scenario.Session() as session:
-            return {
-                model.__tablename__: [
-                    tuple(
-                        getattr(row, column.name) for column in model.__table__.columns
-                    )
-                    for row in session.scalars(select(model).order_by(model.id))
-                ]
-                for model in (
-                    Project,
-                    CandidateDraftRecord,
-                    ChapterDraft,
-                    ChapterReview,
-                    ChapterPlan,
-                    CanonCommitRecord,
-                    DecisionEvent,
-                    GraphDeltaRow,
-                    WorldNodeRow,
-                    WorldSnapshotRow,
-                    MapSnapshotRow,
-                    OutboxEvent,
-                )
-            }
-
-    before = snapshot()
-    with pytest.raises(HTTPException) as error:
-        api.approve_chapter_review(
-            scenario.project_id,
-            2,
-            ChapterReviewApproveRequest(reason="retry marker ordering must be proven"),
-        )
-    assert error.value.status_code == 400
-    assert "not an authorized historical re-review" in error.value.detail
-    assert snapshot() == before
 
 
 def test_failed_ordinary_candidate_cannot_be_reapproved(
@@ -1710,341 +844,6 @@ def test_failed_ordinary_candidate_cannot_be_reapproved(
         assert (
             session.get(CandidateDraftRecord, prepared_canon.candidate_id).status
             == "failed"
-        )
-
-
-def test_historical_rewrite_rejects_planned_candidate_without_retry_marker(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-) -> None:
-    with historical_rewrite_scenario.Session.begin() as session:
-        marker = session.scalar(
-            select(DecisionEvent)
-            .where(
-                DecisionEvent.project_id == historical_rewrite_scenario.project_id,
-                DecisionEvent.chapter_number == 2,
-                DecisionEvent.event_family == "audit_action",
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-                DecisionEvent.actor_type == "api",
-            )
-            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
-        )
-        if marker is not None:
-            session.delete(marker)
-
-    outcome = CanonAdmissionService(
-        session_factory=historical_rewrite_scenario.Session
-    ).commit_plan(historical_rewrite_scenario.rewritten_plan)
-
-    assert outcome.blocked is True
-    assert outcome.stale is True
-    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
-
-
-@pytest.mark.parametrize("failure_stage", ["book_state", "outbox"])
-def test_historical_rewrite_rolls_back_when_replacement_commit_fails(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    failure_stage: str,
-) -> None:
-    before_deltas = _active_delta_summaries(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        2,
-    )
-    before_snapshot = _world_snapshot(
-        historical_rewrite_scenario.Session,
-        historical_rewrite_scenario.project_id,
-        3,
-    )
-
-    def fail_after_replacement_book_state(stage: str) -> None:
-        if stage == failure_stage:
-            raise RuntimeError("injected historical replacement failure")
-
-    outcome = CanonAdmissionService(
-        session_factory=historical_rewrite_scenario.Session
-    ).commit_plan(
-        historical_rewrite_scenario.rewritten_plan,
-        failure_injector=fail_after_replacement_book_state,
-    )
-
-    assert outcome.blocked is True
-    assert "injected historical replacement failure" in outcome.failure_reason
-    assert (
-        _active_delta_summaries(
-            historical_rewrite_scenario.Session,
-            historical_rewrite_scenario.project_id,
-            2,
-        )
-        == before_deltas
-        == ["obsolete braking event"]
-    )
-    assert (
-        _world_snapshot(
-            historical_rewrite_scenario.Session,
-            historical_rewrite_scenario.project_id,
-            3,
-        )
-        == before_snapshot
-    )
-    with historical_rewrite_scenario.Session() as session:
-        old_commit = session.get(
-            CanonCommitRecord, historical_rewrite_scenario.old_commit_id
-        )
-        successor_candidate = session.get(
-            CandidateDraftRecord,
-            historical_rewrite_scenario.successor_candidate_id,
-        )
-        assert old_commit is not None
-        assert old_commit.status == "committed"
-        assert successor_candidate is not None
-        assert successor_candidate.status == "accepted"
-
-
-@pytest.mark.parametrize("ambiguous", [False, True])
-def test_historical_rewrite_backfills_only_an_unambiguous_accepted_api_retry(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    ambiguous: bool,
-) -> None:
-    scenario = historical_rewrite_scenario
-    with scenario.Session.begin() as session:
-        event = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.chapter_number == 2,
-                DecisionEvent.actor_type == "api",
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        payload = json.loads(event.payload_json)
-        payload.pop("previous_commit_id", None)
-        event.payload_json = json.dumps(payload)
-        if ambiguous:
-            session.add(
-                DecisionEvent(
-                    project_id=scenario.project_id,
-                    chapter_number=2,
-                    actor_type="api",
-                    event_family="audit_action",
-                    event_type=DecisionEventType.RETRY_ATTEMPT,
-                    payload_json=event.payload_json,
-                )
-            )
-
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    if ambiguous:
-        assert outcome.stale is True
-        assert "historical rewrite marker missing or invalid" in outcome.failure_reason
-    else:
-        assert outcome.blocked is False, outcome.failure_reason
-        with scenario.Session() as session:
-            marker = _rewrite_marker(session, scenario.project_id, 2)
-            assert marker["previous_commit_id"] == scenario.old_commit_id
-            assert marker["replacement_commit_id"] == outcome.commit_id
-
-
-@pytest.mark.parametrize("marker_value", ["wrong-commit", None, ""])
-def test_historical_rewrite_does_not_repair_an_invalid_marker(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    marker_value: str | None,
-) -> None:
-    scenario = historical_rewrite_scenario
-    with scenario.Session.begin() as session:
-        event = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.chapter_number == 2,
-                DecisionEvent.actor_type == "api",
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        payload = json.loads(event.payload_json)
-        payload["previous_commit_id"] = marker_value
-        event.payload_json = json.dumps(payload)
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    assert outcome.stale is True
-    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
-
-
-@pytest.mark.parametrize("replacement_marker", [None, "", " ", 0, False, [], {}, 123])
-def test_historical_rewrite_rejects_invalid_consumption_marker(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    replacement_marker,
-) -> None:
-    scenario = historical_rewrite_scenario
-    with scenario.Session.begin() as session:
-        event = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.chapter_number == 2,
-                DecisionEvent.actor_type == "api",
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        payload = json.loads(event.payload_json)
-        payload["replacement_commit_id"] = replacement_marker
-        event.payload_json = json.dumps(payload)
-    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    assert outcome.stale is True
-    assert "historical rewrite marker missing or invalid" in outcome.failure_reason
-    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
-
-
-@pytest.mark.parametrize("consumed_value", [123, "older-replacement"])
-def test_historical_rewrite_ignores_only_well_formed_consumed_markers(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    consumed_value,
-) -> None:
-    scenario = historical_rewrite_scenario
-    with scenario.Session.begin() as session:
-        session.add(
-            DecisionEvent(
-                project_id=scenario.project_id,
-                chapter_number=2,
-                actor_type="api",
-                event_family="audit_action",
-                event_type=DecisionEventType.RETRY_ATTEMPT,
-                payload_json=json.dumps(
-                    {
-                        "chapter_number": 2,
-                        "previous_status": "accepted",
-                        "previous_commit_id": "older-commit",
-                        "replacement_commit_id": consumed_value,
-                    }
-                ),
-            )
-        )
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    if isinstance(consumed_value, str):
-        assert outcome.blocked is False, outcome.failure_reason
-    else:
-        assert outcome.stale is True
-        assert "historical rewrite marker missing or invalid" in outcome.failure_reason
-
-
-@pytest.mark.parametrize(
-    "historical_rewrite_scenario", ["manifest_order"], indirect=True
-)
-def test_historical_rewrite_replays_successor_manifest_order_not_delta_id_order(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-) -> None:
-    scenario = historical_rewrite_scenario
-    with scenario.Session() as session:
-        successor = session.scalar(
-            select(CanonCommitRecord).where(
-                CanonCommitRecord.candidate_id == scenario.successor_candidate_id
-            )
-        )
-        assert json.loads(successor.graph_delta_ids_json) == ["z-first", "a-second"]
-        # PostgreSQL now() gives both rows the transaction's timestamp, so the
-        # persisted ID order disagrees with the accepted contribution order.
-        assert session.get(GraphDeltaRow, "z-first").created_at == session.get(
-            GraphDeltaRow, "a-second"
-        ).created_at
-    assert json.loads(_world_snapshot(scenario.Session, scenario.project_id, 3))[
-        "event-order"
-    ]["phase"] == "final"
-
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-
-    assert outcome.blocked is False, outcome.failure_reason
-    assert json.loads(_world_snapshot(scenario.Session, scenario.project_id, 3))[
-        "event-order"
-    ]["phase"] == "final"
-
-
-def test_historical_rewrite_applies_retained_first_cognition_patch_once(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-) -> None:
-    scenario = historical_rewrite_scenario
-    _commit_same_chapter_world_edit(
-        scenario,
-        node_id="event-order",
-        cognition_patches=[
-            CognitionPatch(
-                observer_type="character",
-                observer_id="new-observer",
-                op="append",
-                field_path="visible_refs",
-                new_value="event-order",
-                evidence_refs=["proof-1"],
-            )
-        ],
-    )
-
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-
-    assert outcome.blocked is False, outcome.failure_reason
-    with scenario.Session() as session:
-        for chapter_number in (2, 3):
-            runtime = BookStateProjection(session).load_runtime_as_of(
-                scenario.project_id, as_of_chapter=chapter_number
-            )
-            cognition_snapshot = runtime.cognition_by_observer[
-                ("character", "new-observer")
-            ]
-            assert cognition_snapshot.evidence_by_ref["event-order"] == ["proof-1"]
-
-
-@pytest.mark.parametrize(
-    "historical_rewrite_scenario", ["missing_old_metadata"], indirect=True
-)
-@pytest.mark.parametrize("inject_failure", [False, True])
-def test_historical_rewrite_restores_verified_node_metadata_and_replays_atomically(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    inject_failure: bool,
-) -> None:
-    scenario = historical_rewrite_scenario
-    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
-
-    def after_replay(stage: str) -> None:
-        if inject_failure and stage == "book_state":
-            raise RuntimeError("after verified metadata replay")
-
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan, failure_injector=after_replay
-    )
-
-    if inject_failure:
-        assert outcome.blocked
-        assert "after verified metadata replay" in outcome.failure_reason
-        assert (
-            _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
-        )
-    else:
-        assert not outcome.blocked, outcome.failure_reason
-        assert not outcome.idempotent
-    with scenario.Session() as session:
-        metadata = (
-            BookStateRepository(session)
-            .get_world_node("site_state_node-ninth-workshop")
-            .metadata
-        )
-        expected = {"access": "open", "usage": "retained-successor"}
-        if inject_failure:
-            expected["controlled_by"] = "obsolete-owner"
-        assert metadata["writer_state"] == expected
-        old_commit = session.get(CanonCommitRecord, scenario.old_commit_id)
-        assert old_commit.status == ("committed" if inject_failure else "superseded")
-        marker = _rewrite_marker(session, scenario.project_id, 2)
-        assert ("replacement_commit_id" in marker) is not inject_failure
-        successor = session.get(CandidateDraftRecord, scenario.successor_candidate_id)
-        assert successor.status == "accepted"
-        assert (
-            session.get(ChapterDraft, scenario.successor_draft_id).body_text
-            == "The later accepted consequence follows the first event."
         )
 
 
@@ -2104,114 +903,97 @@ def _commit_same_chapter_world_edit(
         assert result.compile_result.committed is True
 
 
-def test_historical_rewrite_preserves_same_chapter_standalone_world_edit(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-) -> None:
-    scenario = historical_rewrite_scenario
-    _commit_same_chapter_world_edit(scenario)
+
+def _retained_mainline(scenario):
+    from forwin.models.base import Base
+    names=("canon_commit_records","world_nodes","world_node_states","world_edges","fact_nodes",
+        "graph_deltas","graph_delta_patches","world_snapshots","map_snapshots","cognition_overlays",
+        "book_cognition_snapshots","outbox_events")
     with scenario.Session() as session:
-        original_edit = session.get(GraphDeltaRow, "delta-independent-world-edit")
-        original_edit_created_at = original_edit.created_at
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    assert outcome.blocked is False, outcome.failure_reason
-    assert set(_active_delta_summaries(scenario.Session, scenario.project_id, 2)) == {
-        "corrected custody-only event",
-        "independent world edit",
-    }
-    for chapter_number in (2, 3):
-        snapshot = _world_snapshot(
-            scenario.Session, scenario.project_id, chapter_number
-        )
-        assert "independent world edit" in snapshot
-        assert "corrected custody-only event" in snapshot
-        assert "obsolete braking event" not in snapshot
-    with scenario.Session() as session:
-        edit = session.get(GraphDeltaRow, "delta-independent-world-edit")
-        assert edit.created_at == original_edit_created_at
-        proposal = session.get(KnowledgeEditProposalRow, "independent-world-edit")
-        assert proposal.status == "accepted"
-        assert proposal.graph_delta_id == edit.id
-        assert session.get(WorldNodeRow, "event-independent-edit") is not None
-        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
-        assert json.loads(previous.result_json)["retired_graph_delta_ids"] == [
-            "delta-obsolete-braking"
-        ]
-        replacement = session.get(CanonCommitRecord, outcome.commit_id)
-        assert json.loads(replacement.graph_delta_ids_json) == [
-            "delta-corrected-custody"
-        ]
-        snapshot = session.get(WorldSnapshotRow, replacement.world_snapshot_id)
-        assert "independent world edit" in snapshot.world_node_state_index_json
-        assert "independent-world-line" in json.loads(
-            snapshot.active_world_line_ids_json
-        )
-        assert snapshot.as_of_story_time == "independent edit time"
+        result={name:[dict(row) for row in session.execute(select(Base.metadata.tables[name]).where(
+            Base.metadata.tables[name].c.project_id==scenario.project_id)).mappings()]
+            for name in names if "project_id" in Base.metadata.tables[name].c}
+        result["chapters"]=[(row.id,row.chapter_number,row.active_commit_id,row.status) for row in session.scalars(
+            select(ChapterPlan).where(ChapterPlan.project_id==scenario.project_id).order_by(ChapterPlan.chapter_number))]
+        result["book_revision"]=session.get(Project,scenario.project_id).book_revision
+        result["successor_body"]=session.get(ChapterDraft,scenario.successor_draft_id).body_text
+        return result
 
 
-@pytest.mark.parametrize(
-    "record_ids",
-    [
-        "not json",
-        "null",
-        "{}",
-        "[]",
-        "[null]",
-        '[""]',
-        '["delta-obsolete-braking", "delta-obsolete-braking"]',
-        '["delta-missing"]',
-        '["delta-base-event"]',
-        '["delta-obsolete-braking", "delta-independent-world-edit"]',
-    ],
-)
-def test_historical_rewrite_rejects_invalid_commit_delta_manifest_without_mutation(
-    historical_rewrite_scenario: HistoricalRewriteScenario,
-    record_ids: str,
-) -> None:
-    scenario = historical_rewrite_scenario
-    _commit_same_chapter_world_edit(scenario)
+@pytest.mark.parametrize("historical_rewrite_scenario",[None,"manifest_order","missing_old_metadata"],indirect=True)
+def test_replay_only_historical_plan_cannot_authorize_replacement(historical_rewrite_scenario):
+    scenario=historical_rewrite_scenario
+    before=_retained_mainline(scenario)
+    stages=[]
+    outcome=CanonAdmissionService(session_factory=scenario.Session).commit_plan(scenario.rewritten_plan,failure_injector=stages.append)
+    assert outcome.blocked and outcome.stale
+    assert "full-suffix validation" in outcome.failure_reason
+    assert stages==[], "no writer runs before reliable full-suffix approval"
+    assert _retained_mainline(scenario)==before
+
+
+@pytest.mark.parametrize("marker_state",["missing","invalid","consumed","ambiguous","backfill"])
+def test_retry_marker_alone_never_authorizes_accepted_rewrite(historical_rewrite_scenario,marker_state):
+    scenario=historical_rewrite_scenario
     with scenario.Session.begin() as session:
-        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
-        previous.graph_delta_ids_json = record_ids
-        previous_result = previous.result_json
-        event = session.scalar(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == scenario.project_id,
-                DecisionEvent.chapter_number == 2,
-                DecisionEvent.actor_type == "api",
-                DecisionEvent.event_type == DecisionEventType.RETRY_ATTEMPT,
-            )
-        )
-        payload = json.loads(event.payload_json)
-        payload.pop("previous_commit_id")
-        event.payload_json = json.dumps(payload)
-        previous_marker = event.payload_json
-        event_id = event.id
-    before_deltas = _active_delta_summaries(scenario.Session, scenario.project_id, 2)
-    before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
-    outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan
-    )
-    assert outcome.stale is True
-    assert (
-        "historical rewrite delta manifest missing or invalid" in outcome.failure_reason
-    )
-    assert (
-        _active_delta_summaries(scenario.Session, scenario.project_id, 2)
-        == before_deltas
-    )
-    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
-    with scenario.Session() as session:
-        previous = session.get(CanonCommitRecord, scenario.old_commit_id)
-        assert previous.status == "committed"
-        assert previous.chapter_number == 2
-        assert previous.result_json == previous_result
-        assert session.get(DecisionEvent, event_id).payload_json == previous_marker
-        candidate = session.get(
-            CandidateDraftRecord, scenario.rewritten_plan.candidate_id
-        )
-        assert candidate.status == "ready_for_canon"
+        marker=session.scalar(select(DecisionEvent).where(DecisionEvent.project_id==scenario.project_id,
+            DecisionEvent.event_type==DecisionEventType.RETRY_ATTEMPT))
+        if marker_state=="missing": session.delete(marker)
+        elif marker_state=="invalid": marker.payload_json="not json"
+        elif marker_state=="consumed": marker.payload_json=json.dumps({"replacement_commit_id":"unrelated"})
+        elif marker_state=="backfill": marker.payload_json=json.dumps({"previous_status":"accepted"})
+        else: session.add(DecisionEvent(project_id=scenario.project_id,chapter_number=2,event_type=DecisionEventType.RETRY_ATTEMPT,
+            actor_type="api",payload_json=marker.payload_json))
+    before=_retained_mainline(scenario)
+    outcome=CanonAdmissionService(session_factory=scenario.Session).commit_plan(scenario.rewritten_plan)
+    assert outcome.blocked and "full-suffix validation" in outcome.failure_reason
+    assert _retained_mainline(scenario)==before
+
+
+@pytest.mark.parametrize("candidate_state",["failed","reviewed","ready_for_canon"])
+@pytest.mark.parametrize("artifact",["missing","stale-body","valid-old-output"])
+def test_cached_artifact_and_old_manual_approval_cannot_bypass_revision_proposal(historical_rewrite_scenario,candidate_state,artifact):
+    from forwin.generation.pipeline_core.acceptance import AcceptanceStage
+    from forwin.state.repo import StateRepository
+    scenario=historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        candidate=session.get(CandidateDraftRecord,scenario.rewritten_plan.candidate_id)
+        candidate.status=candidate_state
+        candidate.writer_artifact_ref=artifact
+    before=_retained_mainline(scenario)
+    class Pipeline(AcceptanceStage):
+        _SessionFactory=scenario.Session
+        def _make_state_helpers(self,session): return StateRepository(session),StateUpdater(session),None
+        def _load_writer_output_from_meta(self,path): pytest.fail("old artifacts do not authorize a historical proposal")
+    with pytest.raises(ValueError,match="distinct real revision proposal"):
+        Pipeline().accept_review(scenario.project_id,2,reason="manual retry",source="chapter_review_approve_api")
+    assert _retained_mainline(scenario)==before
+
+
+@pytest.mark.parametrize("with_cognition",[False,True])
+def test_rejected_old_replay_preserves_independent_world_edits(historical_rewrite_scenario,with_cognition):
+    scenario=historical_rewrite_scenario
+    _commit_same_chapter_world_edit(scenario,cognition_patches=[CognitionPatch(observer_type="character",observer_id="observer",
+        op="append",field_path="visible_refs",new_value="event-independent-edit",evidence_refs=["proof-1"])] if with_cognition else [])
+    before=_retained_mainline(scenario)
+    outcome=CanonAdmissionService(session_factory=scenario.Session).commit_plan(scenario.rewritten_plan)
+    assert outcome.blocked and "full-suffix validation" in outcome.failure_reason
+    assert _retained_mainline(scenario)==before
+    if with_cognition:
+        with scenario.Session() as session:
+            runtime=BookStateProjection(session).load_runtime_as_of(scenario.project_id,as_of_chapter=2)
+            assert runtime.cognition_by_observer[("character","observer")].evidence_by_ref["event-independent-edit"]==["proof-1"]
+
+
+@pytest.mark.parametrize("manifest",["not json","null","{}","[]",'[null]','[""]','["delta-obsolete-braking","delta-obsolete-braking"]','["delta-missing"]','["delta-base-event"]'])
+def test_invalid_old_delta_manifest_cannot_become_revision_evidence(historical_rewrite_scenario,manifest):
+    scenario=historical_rewrite_scenario
+    with scenario.Session.begin() as session:
+        session.get(CanonCommitRecord,scenario.old_commit_id).graph_delta_ids_json=manifest
+    before=_retained_mainline(scenario)
+    outcome=CanonAdmissionService(session_factory=scenario.Session).commit_plan(scenario.rewritten_plan)
+    assert outcome.blocked and "full-suffix validation" in outcome.failure_reason
+    assert _retained_mainline(scenario)==before
 
 
 @pytest.mark.parametrize(

@@ -76,7 +76,7 @@ def test_legacy_upgrade_preserves_history_and_makes_current_schema_usable():
         )
         assert (
             conn.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0003_serial_capacity"
+            == "0004_revision_validation"
         )
     run_migrations(engine.url.render_as_string(hide_password=False))
     engine.dispose()
@@ -362,7 +362,7 @@ def test_fresh_entrypoint_uses_main_chain_and_unknown_or_unstamped_stores_are_no
     with fresh.begin() as conn:
         assert (
             conn.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0003_serial_capacity"
+            == "0004_revision_validation"
         )
         conn.execute(text("UPDATE alembic_version SET version_num='unknown_revision'"))
     from alembic.util.exc import CommandError

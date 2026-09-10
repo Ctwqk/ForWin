@@ -228,6 +228,7 @@ def build_project_summaries(
                 automation=normalize_project_automation(project.automation_json),
                 runtime_policy=policy_record.policy,
                 runtime_policy_version=policy_record.version,
+                book_revision=int(project.book_revision or 0),
                 latest_stage=latest_stage.stage_label if latest_stage else "",
                 pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",
                 pacing_summary=latest_stage.pacing_summary if latest_stage else "",

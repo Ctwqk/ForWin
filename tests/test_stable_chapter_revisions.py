@@ -97,7 +97,7 @@ def test_historical_acceptance_fails_closed_without_full_suffix_validation(
     )
     with fixture.Session.begin() as session:
         with pytest.raises(HistoricalRewriteInvalid, match="full.suffix validation"):
-            HistoricalCanonRewriteService(session).prepare_replacement(fixture.plan)
+            HistoricalCanonRewriteService(session).require_first_acceptance(fixture.plan)
         assert session.scalar(select(CanonCommitRecord.chapter_number)) == 1
 
 

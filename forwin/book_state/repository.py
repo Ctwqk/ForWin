@@ -88,6 +88,8 @@ class BookStateRepository:
     # ------------------------------------------------------------------
 
     def create_world_node(self, node: WorldNode) -> WorldNodeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, node.project_id)
         row = self.session.get(WorldNodeRow, node.id)
         if row is None:
             row = WorldNodeRow(id=node.id, project_id=node.project_id, node_type=str(node.node_type))
@@ -129,6 +131,8 @@ class BookStateRepository:
         as_of_story_time: str = "",
         source_delta_id: str = "",
     ) -> WorldNodeStateRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, project_id)
         row = WorldNodeStateRow(
             project_id=project_id,
             node_id=node_id,
@@ -143,6 +147,8 @@ class BookStateRepository:
         return row
 
     def create_world_edge(self, edge: WorldEdge) -> WorldEdgeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, edge.project_id)
         row = self.session.get(WorldEdgeRow, edge.id)
         if row is None:
             row = WorldEdgeRow(id=edge.id, project_id=edge.project_id)
@@ -175,6 +181,8 @@ class BookStateRepository:
         return row
 
     def create_fact_node(self, fact: FactNode) -> FactNodeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, fact.project_id)
         row = self.session.get(FactNodeRow, fact.id)
         if row is None:
             row = FactNodeRow(id=fact.id, project_id=fact.project_id, proposition=fact.proposition)
@@ -298,6 +306,8 @@ class BookStateRepository:
         ]
 
     def upsert_reader_promise(self, promise: ReaderPromise) -> BookReaderPromiseRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, promise.project_id)
         row = self.session.execute(
             select(BookReaderPromiseRow).where(
                 BookReaderPromiseRow.project_id == promise.project_id,
@@ -329,6 +339,8 @@ class BookStateRepository:
         self,
         reader_delta: ReaderExperienceDeltaRecord,
     ) -> BookReaderExperienceDeltaRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, reader_delta.project_id)
         row = self.session.execute(
             select(BookReaderExperienceDeltaRow).where(
                 BookReaderExperienceDeltaRow.project_id == reader_delta.project_id,
@@ -412,6 +424,8 @@ class BookStateRepository:
         }
 
     def create_map_node(self, node: MapNode) -> MapNodeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, node.project_id)
         row = self.session.get(MapNodeRow, node.id)
         if row is None:
             row = MapNodeRow(id=node.id, project_id=node.project_id, node_type=str(node.node_type))
@@ -440,6 +454,8 @@ class BookStateRepository:
         return row
 
     def create_map_edge(self, edge: MapEdge) -> MapEdgeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, edge.project_id)
         row = self.session.get(MapEdgeRow, edge.id)
         if row is None:
             row = MapEdgeRow(id=edge.id, project_id=edge.project_id)
@@ -470,6 +486,8 @@ class BookStateRepository:
     # ------------------------------------------------------------------
 
     def create_narrative_node(self, node: NarrativeNode) -> NarrativeNodeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, node.project_id)
         row = self.session.get(NarrativeNodeRow, node.id)
         if row is None:
             row = NarrativeNodeRow(id=node.id, project_id=node.project_id, node_type=node.node_type)
@@ -482,6 +500,8 @@ class BookStateRepository:
         return row
 
     def create_narrative_edge(self, edge: NarrativeEdge) -> NarrativeEdgeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, edge.project_id)
         row = self.session.get(NarrativeEdgeRow, edge.id)
         if row is None:
             row = NarrativeEdgeRow(id=edge.id, project_id=edge.project_id)
@@ -495,6 +515,8 @@ class BookStateRepository:
         return row
 
     def upsert_cognition_overlay(self, overlay: CognitionOverlay) -> CognitionOverlayRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, overlay.project_id)
         row = self.session.get(CognitionOverlayRow, overlay.id)
         if row is None:
             row = CognitionOverlayRow(
@@ -550,6 +572,8 @@ class BookStateRepository:
     # ------------------------------------------------------------------
 
     def append_graph_delta(self, delta: GraphDelta) -> GraphDeltaRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, delta.project_id)
         row = GraphDeltaRow(
             id=delta.id,
             project_id=delta.project_id,
@@ -656,23 +680,8 @@ class BookStateRepository:
         # Retain the entire ledger, but never replay retired acceptance evidence.
         # Unowned deltas include Genesis, standalone edits and the current
         # transaction's provisional compile, which do not yet have a commit.
-        from forwin.models.canon import CanonCommitRecord
-        from forwin.models.project import ChapterPlan
-        manifests = self.session.execute(select(
-            CanonCommitRecord.id, CanonCommitRecord.graph_delta_ids_json
-        ).where(CanonCommitRecord.project_id == project_id,
-                CanonCommitRecord.chapter_number > after_chapter,
-                CanonCommitRecord.chapter_number <= through_chapter)).all()
-        active_ids = set(self.session.scalars(select(ChapterPlan.active_commit_id).where(
-            ChapterPlan.project_id == project_id)))
-        owned, effective = set(), set()
-        for commit_id, raw in manifests:
-            ids = json.loads(raw)
-            if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
-                raise ValueError("Canon delta manifest is invalid")
-            owned.update(ids)
-            if commit_id in active_ids:
-                effective.update(ids)
+        from forwin.canon.identity import canon_delta_ownership
+        owned, effective = canon_delta_ownership(self.session, project_id)
         rows = [row for row in rows if row.id not in owned or row.id in effective]
         patch_rows = list(
             self.session.execute(
@@ -820,6 +829,8 @@ class BookStateRepository:
         delta_ids: list[str],
     ) -> list[str]:
         """Remove only the replaced chapter's ledger contribution in this transaction."""
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, project_id)
         existing_ids = list(
             self.session.scalars(
                 select(GraphDeltaRow.id)
@@ -858,6 +869,8 @@ class BookStateRepository:
         ordered_deltas: list[GraphDelta] | None = None,
     ) -> None:
         """Discard range materializations while retaining the GraphDelta log."""
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, project_id)
         deltas = ordered_deltas if ordered_deltas is not None else self.list_graph_deltas(
             project_id,
             after_chapter=from_chapter - 1,
@@ -980,11 +993,19 @@ class BookStateRepository:
             for kind, target, patch in patches
             if patch.get("op") == "create"
         }
+        from forwin.canon.identity import canon_delta_ownership
+
+        owned, effective = canon_delta_ownership(self.session, project_id)
+        # Retired acceptance patches are immutable history, not identities in
+        # the current prefix. Keep unowned references conservatively, including
+        # Genesis edits and references whose provenance cannot be established.
         prior_refs = set(
             self.session.scalars(
                 select(GraphDeltaPatchRow.target_ref).where(
                     GraphDeltaPatchRow.project_id == project_id,
                     GraphDeltaPatchRow.chapter_number < from_chapter,
+                    GraphDeltaPatchRow.delta_id.not_in(owned)
+                    | GraphDeltaPatchRow.delta_id.in_(effective),
                 )
             )
         )
@@ -1329,6 +1350,9 @@ class BookStateRepository:
             .scalars()
             .all()
         )
+        from forwin.canon.identity import canon_delta_ownership
+        owned, effective = canon_delta_ownership(self.session, project_id)
+        rows = [row for row in rows if row.source_delta_id not in owned or row.source_delta_id in effective]
         states: dict[str, dict[str, Any]] = {}
         for row in rows:
             if row.node_id in states:
@@ -1406,6 +1430,23 @@ class BookStateRepository:
             .scalars()
             .all()
         )
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.models.project import ChapterPlan
+        owned_snapshots = set()
+        active_snapshots = set()
+        active_ids = set(self.session.scalars(select(ChapterPlan.active_commit_id).where(ChapterPlan.project_id == project_id)))
+        for commit in self.session.scalars(select(CanonCommitRecord).where(CanonCommitRecord.project_id == project_id)):
+            ids = set(_loads(commit.result_json, {}).get("compile_result", {}).get("cognition_snapshot_ids", []))
+            owned_snapshots.update(ids)
+            if commit.id in active_ids:
+                active_snapshots.update(ids)
+        owned_overlays = set()
+        active_overlays = set()
+        for snapshot in self.session.scalars(select(BookCognitionSnapshotRow).where(BookCognitionSnapshotRow.id.in_(owned_snapshots))):
+            owned_overlays.add(snapshot.overlay_id)
+            if snapshot.id in active_snapshots:
+                active_overlays.add(snapshot.overlay_id)
+        rows = [row for row in rows if row.id not in owned_overlays or row.id in active_overlays]
         wanted = set(observer_keys or [])
         overlays: dict[tuple[str, str], CognitionOverlay] = {}
         for row in rows:
@@ -1500,6 +1541,8 @@ class BookStateRepository:
         return max([int(value or 0) for value in values] or [0])
 
     def persist_world_snapshot(self, snapshot: WorldSnapshot) -> WorldSnapshotRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, snapshot.project_id)
         row = WorldSnapshotRow(
             id=snapshot.id,
             project_id=snapshot.project_id,
@@ -1526,6 +1569,8 @@ class BookStateRepository:
         return row
 
     def persist_map_snapshot(self, snapshot: MapSnapshot) -> MapSnapshotRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, snapshot.project_id)
         row = MapSnapshotRow(
             id=snapshot.id,
             project_id=snapshot.project_id,
@@ -1541,6 +1586,8 @@ class BookStateRepository:
         return row
 
     def persist_cognition_snapshot(self, snapshot: CognitionSnapshot) -> BookCognitionSnapshotRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, snapshot.project_id)
         row = BookCognitionSnapshotRow(
             id=snapshot.id,
             project_id=snapshot.project_id,

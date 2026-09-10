@@ -127,3 +127,19 @@ class CanonPublicationProtection(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )
+
+
+class CanonRevisionValidationRecord(Base):
+    """Immutable full-suffix evidence; only Canon admission records its consumption."""
+
+    __tablename__ = "canon_revision_validations"
+    __table_args__ = (Index("ix_canon_revision_candidate", "project_id", "candidate_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    candidate_id: Mapped[str] = mapped_column(String, ForeignKey("candidate_draft_records.id"), nullable=False)
+    base_book_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    accepted_book_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

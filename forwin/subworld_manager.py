@@ -82,6 +82,8 @@ class SubWorldManager:
         self.director = director
 
     def ensure_registry(self, session: Session, project_id: str) -> str:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(session, project_id)
         global_core = session.execute(
             select(SubWorld)
             .where(
@@ -726,6 +728,8 @@ class SubWorldManager:
         canon_by_id: dict[str, object],
         canon_by_name: dict[str, object],
     ) -> bool:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(session, roster_item.project_id)
         metadata = _load_json(roster_item.metadata_json, {})
         character = next(
             (
@@ -857,6 +861,8 @@ class SubWorldManager:
         activation_chapter: int,
         metadata: dict | None = None,
     ) -> None:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(session, project_id)
         lookup_keys: list[tuple[str, str, str]] = [
             (subworld_id, "character", character_id)
             for character_id in _metadata_character_ids(metadata)

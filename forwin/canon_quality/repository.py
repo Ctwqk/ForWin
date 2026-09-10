@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.models.canon import CanonCommitRecord
 from forwin.models.canon_quality import (
     ArtifactCollectionLedgerRow,
     CanonAdmissionRunRow,
@@ -17,7 +18,9 @@ from forwin.models.canon_quality import (
     RevealRegistryEntryRow,
 )
 from forwin.models.draft import CandidateDraftRecord
+from forwin.models.project import ChapterPlan
 
+from . import acceptance
 from .signals import (
     ArtifactLedgerEntry,
     CanonAdmissionGateResult,
@@ -32,6 +35,18 @@ from .signals import (
 class CanonQualityRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    def record_projection(self, payload, *, source_row_ids):
+        acceptance.record_projection(self.session, payload, source_row_ids)
+
+    def bind_acceptance(self, **kwargs):
+        return acceptance.bind_acceptance(self.session, **kwargs)
+
+    def restore_prefix(self, **kwargs):
+        return acceptance.restore_prefix(self.session, **kwargs)
+
+    def activate_candidate_projection(self, **kwargs):
+        return acceptance.activate_candidate_projection(self.session, **kwargs)
 
     def find_quality_analysis_run(
         self,
@@ -132,7 +147,7 @@ class CanonQualityRepository:
         *,
         before_chapter: int | None = None,
         severity: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[CanonQualitySignal]:
         query = select(CanonQualitySignalRow).where(
             CanonQualitySignalRow.project_id == project_id,
@@ -142,11 +157,18 @@ class CanonQualityRepository:
             query = query.where(CanonQualitySignalRow.chapter_number < int(before_chapter))
         if severity:
             query = query.where(CanonQualitySignalRow.severity == severity)
-        rows = self.session.execute(
-            query.order_by(CanonQualitySignalRow.chapter_number.desc(), CanonQualitySignalRow.created_at.desc())
-            .limit(max(1, int(limit or 1)))
-        ).scalars().all()
-        return [_signal_from_row(row) for row in rows]
+        query = query.order_by(CanonQualitySignalRow.chapter_number.desc(), CanonQualitySignalRow.created_at.desc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit or 1)))
+        rows = self.session.execute(query).scalars().all()
+        snapshots = acceptance.active_projections(self.session, project_id, before_chapter)
+        if acceptance.is_candidate_context(self.session, project_id):
+            rows = []
+        result = [_signal_from_row(row) for row in rows if row.chapter_number not in snapshots]
+        result.extend(CanonQualitySignal.model_validate(raw) for snapshot in snapshots.values() for raw in snapshot["signals"]
+            if raw.get("status") == "open" and (severity is None or raw.get("severity") == severity))
+        result.sort(key=lambda item: item.chapter_number, reverse=True)
+        return result if limit is None else result[:max(1, int(limit or 1))]
 
     def save_admission_run(
         self,
@@ -154,6 +176,7 @@ class CanonQualityRepository:
         *,
         signals: list[CanonQualitySignal],
     ) -> CanonAdmissionRunRow:
+        snapshot = acceptance.take_projection(self.session, result, signals)
         row = CanonAdmissionRunRow(
             project_id=result.project_id,
             chapter_number=result.chapter_number,
@@ -171,6 +194,8 @@ class CanonQualityRepository:
             warning_issue_count=result.warning_issue_count,
             gate_summary=result.gate_summary,
             signals_json=_json([signal.model_dump(mode="json") for signal in signals]),
+            projection_json=acceptance.encoded(snapshot) if snapshot is not None else "",
+            projection_fingerprint=acceptance.digest(snapshot) if snapshot is not None else "",
         )
         self.session.add(row)
         self.session.flush()
@@ -215,6 +240,9 @@ class CanonQualityRepository:
             project_id=project_id,
             before_chapter=before_chapter,
         )
+        if acceptance.is_candidate_context(self.session, project_id):
+            rows = []
+        rows = acceptance.projected_rows(rows, acceptance.active_projections(self.session, project_id, before_chapter), "character_transitions")
         if not include_superseded:
             rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
         return [
@@ -277,6 +305,9 @@ class CanonQualityRepository:
             project_id=project_id,
             before_chapter=before_chapter,
         )
+        if acceptance.is_candidate_context(self.session, project_id):
+            rows = []
+        rows = acceptance.projected_rows(rows, acceptance.active_projections(self.session, project_id, before_chapter), "countdown_entries")
         if not include_superseded:
             rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
         result: list[dict[str, Any]] = []
@@ -336,21 +367,27 @@ class CanonQualityRepository:
         *,
         before_chapter: int | None = None,
     ) -> dict[int, str]:
-        query = select(CandidateDraftRecord).where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-            CandidateDraftRecord.candidate_draft_id != "",
+        query = (
+            select(ChapterPlan.chapter_number, CandidateDraftRecord.candidate_draft_id)
+            .join(CanonCommitRecord, CanonCommitRecord.id == ChapterPlan.active_commit_id)
+            .join(CandidateDraftRecord, CandidateDraftRecord.id == CanonCommitRecord.candidate_id)
+            .where(
+                ChapterPlan.project_id == project_id,
+                CanonCommitRecord.project_id == project_id,
+                CanonCommitRecord.chapter_plan_id == ChapterPlan.id,
+                CanonCommitRecord.chapter_number == ChapterPlan.chapter_number,
+                CandidateDraftRecord.project_id == project_id,
+                CandidateDraftRecord.chapter_plan_id == ChapterPlan.id,
+                CandidateDraftRecord.chapter_number == ChapterPlan.chapter_number,
+                CandidateDraftRecord.candidate_draft_id != "",
+            )
         )
         if before_chapter is not None:
-            query = query.where(CandidateDraftRecord.chapter_number < int(before_chapter))
-        rows = self.session.execute(
-            query.order_by(CandidateDraftRecord.chapter_number.asc(), CandidateDraftRecord.updated_at.asc())
-        ).scalars().all()
-        result: dict[int, str] = {}
-        for row in rows:
-            result[int(row.chapter_number or 0)] = str(row.candidate_draft_id or "")
-        return result
+            query = query.where(ChapterPlan.chapter_number < int(before_chapter))
+        return {
+            int(number): str(draft_id)
+            for number, draft_id in self.session.execute(query)
+        }
 
     def save_artifact_entries(self, entries: list[ArtifactLedgerEntry]) -> list[ArtifactCollectionLedgerRow]:
         rows: list[ArtifactCollectionLedgerRow] = []

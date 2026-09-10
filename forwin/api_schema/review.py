@@ -10,6 +10,12 @@ from forwin.protocol.review import RepairVerification
 
 class ChapterDetail(BaseModel):
     chapter_number: int
+    chapter_plan_id: str = ""
+    active_commit_id: str = ""
+    candidate_id: str = ""
+    body_sha256: str = ""
+    book_revision: int = 0
+    acceptance_revision: int = 0
     title: str
     body: str
     char_count: int
@@ -146,9 +152,14 @@ class ChapterReviewRetryRequest(BaseModel):
     continue_generation: bool = False
     reason: str = ""
     allow_accepted: bool = False
+    replacement_body: str | None = None
+    replacement_title: str | None = None
+    expected_book_revision: int | None = None
 
 
 class ChapterReviewApproveResponse(BaseModel):
+    candidate_id: str = ""
+    book_revision: int = 0
     ok: bool
     project_id: str
     chapter_number: int

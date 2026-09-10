@@ -82,9 +82,10 @@ class EntityAdmissionResult:
 
 
 class LLMEntityAdmissionClassifier:
-    def __init__(self, llm_client: Any, *, max_schema_retries: int = 1) -> None:
+    def __init__(self, llm_client: Any, *, max_schema_retries: int = 1, historical_full_input: bool = False) -> None:
         self.llm_client = llm_client
-        self.max_schema_retries = max(0, int(max_schema_retries))
+        self.historical_full_input = historical_full_input
+        self.max_schema_retries = 0 if historical_full_input else max(0, int(max_schema_retries))
 
     def classify(
         self,
@@ -151,7 +152,7 @@ class LLMEntityAdmissionClassifier:
                             == "genre_candidate"
                         ],
                         "title": writer_output.title,
-                        "body_excerpt": str(writer_output.body or "")[:2400],
+                        "body_excerpt": str(writer_output.body or "") if self.historical_full_input else str(writer_output.body or "")[:2400],
                         "summary": writer_output.end_of_chapter_summary,
                         "mention_evidence": [
                             {
@@ -163,12 +164,14 @@ class LLMEntityAdmissionClassifier:
                             }
                             for name in names
                         ],
-                        "existing_characters": entity_rows[:80],
+                        "existing_characters": entity_rows if self.historical_full_input else entity_rows[:80],
                     },
                     ensure_ascii=False,
                 ),
             },
         ]
+        if self.historical_full_input and sum(len(m["content"]) for m in base_messages) > 120000:
+            raise ValueError("historical entity input exceeds complete-input budget")
         last_raw = ""
         last_error = ""
         for attempt_index in range(self.max_schema_retries + 1):
@@ -191,7 +194,7 @@ class LLMEntityAdmissionClassifier:
                 self.llm_client,
                 messages,
                 temperature=0.2 if attempt_index == 0 else 0.0,
-                max_tokens=600,
+                max_tokens=12000 if self.historical_full_input else 600,
                 response_format={"type": "json_object"},
                 output_schema=_ENTITY_ADMISSION_OUTPUT_SCHEMA,
                 task_family="entity_admission",

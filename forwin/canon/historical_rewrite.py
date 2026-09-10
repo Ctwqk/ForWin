@@ -118,9 +118,7 @@ class HistoricalCanonRewriteService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def prepare_replacement(
-        self, plan: CanonCommitPlan, *, persist_marker_backfill: bool = True
-    ):
+    def require_first_acceptance(self, plan: CanonCommitPlan) -> None:
         # Replaying old deltas is not semantic validation of successor bodies.
         # Never invalidate snapshots or mutate original evidence to make a retry pass.
         if self.session.scalar(

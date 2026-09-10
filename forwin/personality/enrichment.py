@@ -9,8 +9,14 @@ from forwin.book_state import BookStateRepository
 from forwin.audit.events import DecisionEventType
 from forwin.models import DecisionEvent
 from forwin.models.base import new_id
+from forwin.models.book_state import WorldEdgeRow
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.models import PersonalityLoadout, PersonalitySkillRef
+from forwin.personality.mutations import (
+    PersonalityUpdateConflict,
+    lock_current_character,
+    write_personality_fields,
+)
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
 from forwin.protocol.book_state import WorldEdge, WorldNode
 
@@ -52,7 +58,7 @@ class RelationshipPersonalityEnricher:
 
         diffs: list[dict[str, Any]] = []
         for node, target_node in ((source, target), (target, source)):
-            diff = self._add_pattern(node, target_node.id, skill_id)
+            diff = self._add_pattern(node, target_node.id, skill_id, relation=relation)
             if diff:
                 diffs.append(diff)
         if diffs:
@@ -101,8 +107,20 @@ class RelationshipPersonalityEnricher:
         return None
 
     def _add_pattern(
-        self, node: WorldNode, target_character_id: str, skill_id: str
+        self, node: WorldNode, target_character_id: str, skill_id: str,
+        *, relation: WorldEdge,
     ) -> dict[str, Any]:
+        row, node = lock_current_character(self.session, node.project_id, node.id)
+        edge_row = self.session.get(WorldEdgeRow, relation.id, populate_existing=True)
+        current_relation = next((edge for edge in self.repo.list_world_edges(node.project_id)
+            if edge.id == relation.id), None) if edge_row is not None else None
+        if (
+            current_relation is None or not current_relation.is_active
+            or current_relation.source_id != relation.source_id
+            or current_relation.target_id != relation.target_id
+            or self._skill_for_relation(current_relation) != skill_id
+        ):
+            raise PersonalityUpdateConflict("relationship changed; retry against current state")
         metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
         assignment = (
             metadata.get("personality_assignment") if isinstance(metadata, dict) else {}
@@ -123,9 +141,7 @@ class RelationshipPersonalityEnricher:
             PersonalitySkillRef(skill=skill_id, weight=0.48, target=target_character_id)
         )
         new_loadout = _compact_loadout(loadout)
-        profile["personality_loadout"] = new_loadout
-        updated = node.model_copy(update={"profile": profile})
-        self.repo.create_world_node(updated)
+        write_personality_fields(self.session, row, loadout=new_loadout)
         return {
             "character_id": node.id,
             "target_character_id": target_character_id,

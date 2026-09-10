@@ -169,18 +169,31 @@ def test_countdown_history_uses_only_committed_draft_ledgers() -> None:
             )
             session.add(accepted_review)
             session.flush()
-            session.add(
-                CandidateDraftRecord(
-                    project_id=project.id,
-                    chapter_plan_id=plan.id,
-                    chapter_number=1,
-                    candidate_draft_id=accepted_draft.id,
-                    review_id=accepted_review.id,
-                    status="canon_committed",
-                    canon_status="canon",
-                )
+            accepted_candidate = CandidateDraftRecord(
+                project_id=project.id,
+                chapter_plan_id=plan.id,
+                chapter_number=1,
+                candidate_draft_id=accepted_draft.id,
+                review_id=accepted_review.id,
+                status="accepted",
+                canon_status="canon",
             )
+            session.add(accepted_candidate)
             session.flush()
+            from forwin.models.canon import CanonCommitRecord
+
+            commit = CanonCommitRecord(
+                idempotency_key="accepted-countdown-fixture",
+                candidate_id=accepted_candidate.id,
+                project_id=project.id,
+                chapter_plan_id=plan.id,
+                chapter_number=1,
+                chapter_title=plan.title,
+            )
+            session.add(commit)
+            session.flush()
+            plan.active_commit_id = commit.id
+            plan.status = "accepted"
             repo = CanonQualityRepository(session)
             repo.save_countdown_entries(
                 [

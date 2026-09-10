@@ -1,66 +1,67 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import logging
+from dataclasses import replace
+from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.canon.types import CanonQualityGateOutcome
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
+from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
+from forwin.canon_quality.repository import CanonQualityRepository
+from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_quality.signals import CanonAdmissionGateResult, dedupe_signals
 from forwin.generation.pipeline_core.common import (
     _payoff_test_for_deferred_issue,
     _priority_for_deferred_issue,
     _summary_for_deferred_issue,
 )
-from typing import Any
-from forwin.models.project import ChapterPlan
-from forwin.narrative_obligations.types import NarrativeObligation
-from forwin.protocol.review import ReviewVerdict
-from forwin.canon_quality.service import analyze_writer_output_quality
+from forwin.generation.pipeline_core.structural_patches import (
+    _persist_structural_patch_outcome,
+)
+from forwin.models import new_id
+from forwin.models.draft import (
+    ChapterDraft,
+    ChapterReview,
+)
+from forwin.models.narrative_obligation import NarrativeObligationRow
+from forwin.models.phase import BandExperiencePlan
+from forwin.models.project import ChapterPlan, Project
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
+from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.observability.llm_trace import safe_prompt_trace_attempts
 from forwin.observability.payloads import (
     attempt_group_ids,
     audit_payload,
     safe_error_summary,
 )
-from forwin.observability.llm_trace import safe_prompt_trace_attempts
-from forwin.models.phase import BandExperiencePlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
-from forwin.canon_quality.repository import CanonQualityRepository
-from forwin.models.draft import (
-    ChapterDraft,
-    ChapterReview,
-)
-from forwin.skills import summarize_skill_layers
-from forwin.audit.events import DecisionEventType
-from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
-from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
-from forwin.canon_quality.gate import evaluate_canon_admission
-from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.models.narrative_obligation import NarrativeObligationRow
-from forwin.narrative_obligations.types import NarrativePlanPatch
-from forwin.models import new_id
-from forwin.models.project import Project
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-from forwin.state.repo import StateRepository
+from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.engine import AutoDecisionEngine
+from forwin.review.decision.rules.commit_with_obligation import (
+    decide_commit_with_obligation,
+)
+from forwin.review.decision.rules.obligation_scope import (
+    BandScopeCandidate,
+    decide_obligation_scope,
+)
 from forwin.review.decision.rules.review_outcome import (
     build_review_outcome_rules,
     review_action_from_decision,
 )
-from forwin.review.decision.rules.obligation_scope import decide_obligation_scope
-from forwin.review.decision.rules.commit_with_obligation import (
-    decide_commit_with_obligation,
-)
 from forwin.review.decision.rules.structural_patch import decide_structural_patch
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
-from forwin.generation.pipeline_core.structural_patches import (
-    _persist_structural_patch_outcome,
-)
-from forwin.state.updater import StateUpdater
 from forwin.review.issue_groups import issue_group_for_issue
+from forwin.skills import summarize_skill_layers
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ def _persist_canon_quality_attempt_trace(
                 },
             },
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "Failed to persist canon-quality LLM attempt trace for chapter %d.",
             chapter_number,
@@ -422,7 +423,7 @@ def _apply_canon_quality_gate(
         require_evidence_for_block=True,
         resolved_obligation_ids=draft_resolved_obligation_ids,
     )
-    CanonQualityRepository(session).save_admission_run(
+    admission_run = CanonQualityRepository(session).save_admission_run(
         gate_result, signals=gate_signals
     )
     gate_outcome = _canon_quality_gate_outcome(
@@ -448,7 +449,7 @@ def _apply_canon_quality_gate(
         ),
     )
     if gate_result.commit_allowed:
-        return CanonQualityGateOutcome(gate_result=gate_result)
+        return CanonQualityGateOutcome(gate_result=gate_result, quality_admission_run_id=admission_run.id)
     frozen_path = ""
     if self.policy.canon.hard_floor:
         frozen_path = self.artifact_store.save_frozen_candidate(
@@ -985,7 +986,7 @@ class QualityDiagnosticsStage:
                 },
             )
             artifact_manifest.append(manifest)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "Failed to persist observability diagnostic artifact.", exc_info=True
             )
@@ -1033,8 +1034,8 @@ class QualityDiagnosticsStage:
                 event_type=DecisionEventType.FALLBACK_PROFILE_SWITCHED,
                 scope="chapter",
                 summary=(
-                    f"writer fallback: {str(item.get('from_model') or '-')} -> "
-                    f"{str(item.get('to_model') or '-')}"
+                    f"writer fallback: {item.get('from_model') or '-'!s} -> "
+                    f"{item.get('to_model') or '-'!s}"
                 ),
                 payload=audit_payload(
                     stage=parent_stage,

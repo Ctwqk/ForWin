@@ -3,10 +3,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -417,6 +417,7 @@ forwin_build_image image forwin-runtime "$REVISION"
     result = subprocess.run(
         ["bash", "-c", script, "test", str(extension)],
         env=env,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -449,6 +450,7 @@ if forwin_sync_and_deploy forwin ForWin master host target; then exit 4; fi
     result = subprocess.run(
         ["bash", "-c", script, "test", str(extension)],
         env=env,
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -490,6 +492,7 @@ def test_maintenance_runs_real_unified_migration_in_isolated_legacy_postgres(
         env=env,
         text=True,
         capture_output=True,
+        check=False,
     )
     assert result.returncode == (1 if active else 0), result.stderr
     if not active:
@@ -514,9 +517,11 @@ def test_maintenance_runs_real_unified_migration_in_isolated_legacy_postgres(
             env=env,
             text=True,
             capture_output=True,
+            check=False,
         )
         assert verify.returncode == 0, verify.stderr
     from alembic.script import ScriptDirectory
+
     from forwin.models.base import alembic_config
 
     head = ScriptDirectory.from_config(

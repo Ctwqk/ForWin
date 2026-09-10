@@ -37,7 +37,10 @@ class BookStateCompiler:
         approved_changes: ApprovedGraphDeltaSet,
         *,
         compiler_run_id: str = "",
+        acceptance_identity: str = "",
     ) -> BookStateCompileResult:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, approved_changes.project_id)
         requested_delta_ids = [delta.id for delta in approved_changes.graph_deltas]
         existing_delta_projects = self.repo.graph_delta_projects(requested_delta_ids)
         cross_project_delta_ids = sorted(
@@ -138,6 +141,7 @@ class BookStateCompiler:
             as_of_chapter=approved_changes.chapter_number,
             as_of_story_time=story_time,
             source_delta_ids=[delta.id for delta in deltas],
+            acceptance_identity=acceptance_identity,
             active_world_line_ids=_unique(delta.world_line_id for delta in deltas if delta.world_line_id),
         )
         self.session.flush()

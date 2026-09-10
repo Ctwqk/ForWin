@@ -117,6 +117,7 @@ class ProjectSummary(ProjectArcSnapshotFields):
     )
     runtime_policy: RuntimePolicy
     runtime_policy_version: int
+    book_revision: int = 0
     latest_stage: str = ""
     pacing_verdict: str = ""
     pacing_summary: str = ""
@@ -196,6 +197,7 @@ class ProjectDetail(ProjectArcSnapshotFields):
     )
     runtime_policy: RuntimePolicy
     runtime_policy_version: int
+    book_revision: int = 0
     characters: list[EntityInfo] = []
     locations: list[EntityInfo] = []
     factions: list[EntityInfo] = []

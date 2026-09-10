@@ -22,6 +22,7 @@ from .models import (
     MutationResult,
     ProjectDecisionEventsView,
     ProjectListView,
+    ProjectView,
     StageKey,
     TaskListView,
     WorldModelConflictListView,
@@ -88,14 +89,14 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         "project_list",
         "List ForWin projects. Use this when you need the authoritative project roster before choosing a project_id. Do not inspect the database directly for this.",
     )
-    async def project_list():
+    async def project_list() -> ProjectListView:
         return ProjectListView(projects=await client.project_list())
 
     @register_read_tool(
         "project_get",
         "Get one ForWin project's current state. Use this when you need creation_status, can_start_writing, next_gate, or chapter progress for a known project_id.",
     )
-    async def project_get(project_id: str):
+    async def project_get(project_id: str) -> ProjectView:
         return await client.project_get(project_id)
 
     @register_read_tool(
@@ -384,7 +385,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "chapter_review_retry",
-        "Reset one drafted or needs_review chapter back to planned for regeneration. Use this when a chapter review gate is stale or must be rerun and there is no active generation task; set continue_generation to start the retry task.",
+        "Retry a drafted or needs_review chapter. Use this when no generation task is active and a chapter needs regeneration or a historical revision. For an accepted chapter, set allow_accepted and provide replacement_body, optional replacement_title, and expected_book_revision from project_get to save a distinct revision proposal; chapter_review_approve validates its entire accepted suffix before adoption. Without a replacement body, accepted retry only records a revision request and preserves the active version.",
     )
     async def chapter_review_retry(
         project_id: str,
@@ -392,6 +393,9 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         reason: str,
         continue_generation: bool = False,
         allow_accepted: bool = False,
+        replacement_body: str | None = None,
+        replacement_title: str | None = None,
+        expected_book_revision: int | None = None,
     ) -> ChapterReviewApproveView:
         return await client.chapter_review_retry(
             project_id=project_id,
@@ -399,6 +403,9 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             reason=reason,
             continue_generation=continue_generation,
             allow_accepted=allow_accepted,
+            replacement_body=replacement_body,
+            replacement_title=replacement_title,
+            expected_book_revision=expected_book_revision,
         )
 
     @register_read_tool(

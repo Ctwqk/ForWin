@@ -420,8 +420,9 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
             calls.append("canon_quality_repo")
             return None
 
-        def save_admission_run(self, gate_result, *, signals) -> None:
+        def save_admission_run(self, gate_result, *, signals):
             calls.append("save_admission")
+            return SimpleNamespace(id="quality-admission-run")
 
     class _Session:
         def get(self, _model, _id):
@@ -539,8 +540,9 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         def __init__(self, _session) -> None:
             return None
 
-        def save_admission_run(self, gate_result, *, signals) -> None:
+        def save_admission_run(self, gate_result, *, signals):
             calls.append("save_admission")
+            return SimpleNamespace(id="quality-admission-run")
 
     class _Session:
         def get(self, _model, _id):

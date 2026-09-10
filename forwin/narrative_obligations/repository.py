@@ -8,16 +8,48 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.base import new_id
-from forwin.models.narrative_obligation import NarrativeObligationRow, NarrativePlanPatchRow
+from forwin.models.narrative_obligation import (
+    NarrativeObligationRow,
+    NarrativePlanPatchRow,
+)
 
+from . import candidate, history
 from .types import NarrativeObligation, NarrativePlanPatch
+
+
+def lock_projection_project(session, project_id):
+    # Canon imports this repository; resolve its shared lock only at runtime.
+    from forwin.canon.projection_lock import lock_projection_project as lock
+
+    return lock(session, project_id)
 
 
 class NarrativeObligationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def restore_prefix(self, **kwargs):
+        return history.restore_prefix(self.session, **kwargs)
+
+    def set_candidate_acceptance(self, **kwargs):
+        return candidate.set_candidate_acceptance(self.session, **kwargs)
+
+    def apply_reviewed_resolutions(self, **kwargs):
+        return candidate.apply_reviewed_resolutions(self.session, **kwargs)
+
+    def install_candidate_projection(self, **kwargs):
+        return candidate.install_candidate_projection(self.session, **kwargs)
+
+    def _locked_obligation(self, obligation_id):
+        with self.session.no_autoflush:
+            project_id = self.session.scalar(select(NarrativeObligationRow.project_id).where(NarrativeObligationRow.id == obligation_id))
+        if project_id is None:
+            return None
+        lock_projection_project(self.session, project_id)
+        return self.session.scalar(select(NarrativeObligationRow).where(NarrativeObligationRow.id == obligation_id).with_for_update().execution_options(populate_existing=True))
+
     def create_obligation(self, obligation: NarrativeObligation) -> NarrativeObligation:
+        lock_projection_project(self.session, obligation.project_id)
         item = obligation.model_copy(update={"id": obligation.id or new_id()})
         row = NarrativeObligationRow(
             id=item.id,
@@ -50,9 +82,11 @@ class NarrativeObligationRepository:
         )
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="create", before=None, chapter_number=item.origin_chapter_number)
         return self._obligation_from_row(row)
 
     def create_plan_patch(self, patch: NarrativePlanPatch) -> NarrativePlanPatch:
+        lock_projection_project(self.session, patch.project_id)
         item = patch.model_copy(update={"id": patch.id or new_id()})
         row = NarrativePlanPatchRow(
             id=item.id,
@@ -92,9 +126,10 @@ class NarrativeObligationRepository:
         *,
         linked_plan_patch_ids: list[str],
     ) -> NarrativeObligation | None:
-        row = self.session.get(NarrativeObligationRow, obligation_id)
+        row = self._locked_obligation(obligation_id)
         if row is None:
             return None
+        before = history.before_mutation(self.session, row)
         row.status = "planned"
         row.linked_plan_patch_ids_json = _json(linked_plan_patch_ids)
         future_chapters: list[int] = []
@@ -105,19 +140,25 @@ class NarrativeObligationRepository:
         row.linked_future_chapters_json = _json(sorted(set(future_chapters)))
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="planned", before=before, chapter_number=row.origin_chapter_number)
         return self._obligation_from_row(row)
 
-    def activate_planned_for_chapter(self, project_id: str, *, origin_chapter_number: int) -> list[NarrativeObligation]:
+    def activate_planned_for_chapter(self, project_id: str, *, origin_chapter_number: int, acceptance_id: str = "", draft_id: str = "") -> list[NarrativeObligation]:
+        lock_projection_project(self.session, project_id)
+        candidate.validate_activation(self.session, project_id=project_id, chapter_number=origin_chapter_number, acceptance_id=acceptance_id, draft_id=draft_id)
         rows = self.session.execute(
             select(NarrativeObligationRow).where(
                 NarrativeObligationRow.project_id == project_id,
                 NarrativeObligationRow.origin_chapter_number == int(origin_chapter_number or 0),
                 NarrativeObligationRow.status == "planned",
-            )
+                *([NarrativeObligationRow.origin_draft_id == draft_id] if draft_id else []),
+            ).with_for_update()
         ).scalars().all()
         for row in rows:
+            before = history.before_mutation(self.session, row)
             row.status = "active"
             self.session.add(row)
+            history.record_mutation(self.session, row, operation="activate", before=before, chapter_number=origin_chapter_number, acceptance_id=acceptance_id)
         self.session.flush()
         return [self._obligation_from_row(row) for row in rows]
 
@@ -129,9 +170,10 @@ class NarrativeObligationRepository:
         evidence_refs: list[str],
         resolution_chapter: int = 0,
     ) -> NarrativeObligation | None:
-        row = self.session.get(NarrativeObligationRow, obligation_id)
+        row = self._locked_obligation(obligation_id)
         if row is None:
             return None
+        before = history.before_mutation(self.session, row)
         row.status = "resolved"
         row.resolved_at = datetime.now(UTC)
         row.resolution_chapter = int(resolution_chapter or row.resolution_chapter or 0)
@@ -141,30 +183,35 @@ class NarrativeObligationRepository:
         row.metadata_json = _json(metadata)
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="resolve", before=before, chapter_number=resolution_chapter)
         return self._obligation_from_row(row)
 
-    def expire_obligation(self, obligation_id: str, *, reason: str) -> NarrativeObligation | None:
-        row = self.session.get(NarrativeObligationRow, obligation_id)
+    def expire_obligation(self, obligation_id: str, *, reason: str, chapter_number: int = 0) -> NarrativeObligation | None:
+        row = self._locked_obligation(obligation_id)
         if row is None:
             return None
+        before = history.before_mutation(self.session, row)
         row.status = "expired"
         metadata = _loads(row.metadata_json, {})
         metadata["expire_reason"] = str(reason or "")
         row.metadata_json = _json(metadata)
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="expire", before=before, chapter_number=chapter_number)
         return self._obligation_from_row(row)
 
-    def block_expired_obligation(self, obligation_id: str) -> NarrativeObligation | None:
-        row = self.session.get(NarrativeObligationRow, obligation_id)
+    def block_expired_obligation(self, obligation_id: str, *, chapter_number: int = 0) -> NarrativeObligation | None:
+        row = self._locked_obligation(obligation_id)
         if row is None:
             return None
+        before = history.before_mutation(self.session, row)
         row.status = "blocked"
         metadata = _loads(row.metadata_json, {})
         metadata["blocked_after_expiry"] = True
         row.metadata_json = _json(metadata)
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="block", before=before, chapter_number=chapter_number)
         return self._obligation_from_row(row)
 
     def waive_obligation(
@@ -177,9 +224,10 @@ class NarrativeObligationRepository:
         normalized_actor = str(actor or "").strip()
         if not normalized_actor or normalized_actor == "system":
             raise ValueError("waive_obligation requires a human actor")
-        row = self.session.get(NarrativeObligationRow, obligation_id)
+        row = self._locked_obligation(obligation_id)
         if row is None:
             return None
+        before = history.before_mutation(self.session, row)
         row.status = "waived"
         row.waive_reason = str(reason or "").strip()
         metadata = _loads(row.metadata_json, {})
@@ -187,6 +235,7 @@ class NarrativeObligationRepository:
         row.metadata_json = _json(metadata)
         self.session.add(row)
         self.session.flush()
+        history.record_mutation(self.session, row, operation="waive", before=before, actor=normalized_actor)
         return self._obligation_from_row(row)
 
     def list_active_for_context(self, project_id: str, *, chapter_number: int) -> list[NarrativeObligation]:
@@ -199,6 +248,8 @@ class NarrativeObligationRepository:
         ).scalars().all()
         result: list[NarrativeObligation] = []
         for row in rows:
+            if not history.active_origin(self.session, row):
+                continue
             item = self._obligation_from_row(row)
             result.append(
                 item.model_copy(

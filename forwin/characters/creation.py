@@ -153,6 +153,11 @@ class CharacterCreationHelper:
             node_type="character",
             as_of_chapter=int(request.created_at_chapter or 0),
             state=dict(request.state),
+            source_delta_id=(
+                request.source_ref
+                if request.source == "book_state_graph_delta"
+                else ""
+            ),
         )
         decision_ids = [
             self._save_event(

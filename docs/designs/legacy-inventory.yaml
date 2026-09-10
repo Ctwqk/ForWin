@@ -701,6 +701,7 @@ entries:
     paths:
       - forwin/legacy_migrations
       - forwin/models/base.py
+      - scripts/forwin_deploy_maintenance.py
     allow_patterns:
       - legacy
       - Legacy
@@ -716,6 +717,28 @@ entries:
       - isolated_backup_restore
     delete_when:
       - retain immutable bridge history for existing databases and backup restoration
+    status: retained
+
+  - id: canon.obligation_provenance_boundary
+    category: test_doc_followup
+    owner_area: canon
+    paths:
+      - forwin/narrative_obligations/candidate.py
+      - forwin/narrative_obligations/history.py
+    allow_patterns:
+      - Legacy ordinary caller receives no fabricated acceptance proof
+      - Ordinary legacy read; strict restore_prefix rejects it
+    reason: >
+      These comments document the distinction between ordinary diagnostic reads
+      and strict historical acceptance evidence. Existing unbound callers cannot
+      fabricate provenance or authorize a historical revision; missing proof
+      remains unknown. No alternate acceptance entry is retained.
+    removal_phase: keep
+    verification:
+      - tests/test_obligation_acceptance_history.py
+      - tests/test_revision_full_suffix.py
+    delete_when:
+      - retain the documented provenance boundary while old evidence remains readable
     status: retained
 
   - id: schema.bootstrap_legacy_columns

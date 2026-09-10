@@ -311,6 +311,7 @@ def build_project_detail(
         automation=normalize_project_automation(project.automation_json),
         runtime_policy=policy_record.policy,
         runtime_policy_version=policy_record.version,
+        book_revision=int(project.book_revision or 0),
         characters=characters,
         locations=locations,
         factions=factions,

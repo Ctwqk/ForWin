@@ -233,6 +233,12 @@ class ChapterSummaryView(BaseModel):
 
 
 class ChapterDetailView(ChapterSummaryView):
+    chapter_plan_id: str = ""
+    active_commit_id: str = ""
+    candidate_id: str = ""
+    body_sha256: str = ""
+    book_revision: int = 0
+    acceptance_revision: int = 0
     body: str = ""
     version: int = 1
     residual_review_issues: list[dict[str, Any]] = Field(default_factory=list)
@@ -259,6 +265,7 @@ class ProjectView(BaseModel):
     needs_review_chapter_count: int = 0
     gate_delegate: str = "human"
     runtime_policy_version: int = 0
+    book_revision: int = 0
     latest_stage: str = ""
     next_gate: str = ""
     genesis_stage_overview: list[StageStateView] = Field(default_factory=list)
@@ -332,6 +339,8 @@ class ChapterReviewApproveView(BaseModel):
     project_id: str
     chapter_number: int
     status: str
+    candidate_id: str = ""
+    book_revision: int = 0
     message: str = ""
     task_id: str = ""
     frozen_artifact: str = ""

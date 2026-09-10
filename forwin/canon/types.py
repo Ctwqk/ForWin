@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 class CanonQualityGateOutcome:
     blocked_path: str = ""
     gate_result: CanonAdmissionGateResult | None = None
+    quality_admission_run_id: str = ""
 
     @property
     def blocked(self) -> bool:

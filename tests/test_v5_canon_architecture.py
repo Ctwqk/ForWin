@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from forwin.api_schema import (
@@ -15,7 +16,7 @@ def _source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_book_state_compiler_has_one_production_caller() -> None:
+def test_book_state_compiler_stays_inside_canon_and_private_validation() -> None:
     callers = []
     for path in sorted((ROOT / "forwin").rglob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
@@ -24,7 +25,34 @@ def test_book_state_compiler_has_one_production_caller() -> None:
         if "BookStateCompiler(" in path.read_text(encoding="utf-8"):
             callers.append(relative)
 
-    assert callers == ["forwin/canon/admission.py"]
+    assert callers == [
+        "forwin/canon/admission.py",
+        "forwin/canon/revision_commit.py",
+        "forwin/canon/revision_evaluator.py",
+    ]
+
+
+def test_historical_commit_has_only_the_existing_canon_owner_entry() -> None:
+    callers = {"commit_revision": [], "HistoricalBodyEvaluator": []}
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in callers
+            ):
+                callers[node.func.id].append(path.relative_to(ROOT).as_posix())
+    assert callers == {
+        "commit_revision": ["forwin/canon/admission.py"],
+        "HistoricalBodyEvaluator": ["forwin/canon/revision_service.py"],
+    }
+    assert "with CandidateReplica(snapshot) as replica:" in _source(
+        "forwin/canon/revision_service.py"
+    )
+    assert "with CandidateReplica(current) as replica:" in _source(
+        "forwin/canon/revision_commit.py"
+    )
 
 
 def test_canon_path_has_no_synchronous_projection_or_external_side_effects() -> None:
@@ -69,11 +97,14 @@ def test_old_canon_and_book_state_write_entrypoints_stay_deleted() -> None:
     assert "_commit_book_state_canon" not in production_source
 
 
-def test_only_canon_admission_assigns_accepted_chapter_status() -> None:
+def test_only_canon_admission_and_its_revision_branch_assign_accepted_status() -> None:
     offenders = []
     for path in sorted((ROOT / "forwin").rglob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
-        if relative == "forwin/canon/admission.py":
+        if relative in {
+            "forwin/canon/admission.py",
+            "forwin/canon/revision_commit.py",
+        }:
             continue
         source = path.read_text(encoding="utf-8")
         if (

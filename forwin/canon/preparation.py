@@ -400,6 +400,7 @@ class CanonPreparationService:
             repair_attempt_count=repair_attempt_count,
             residual_review_issues=residual_review_issues,
             canon_risk_level=canon_risk_level,
+            quality_admission_run_id=getattr(quality_outcome, "quality_admission_run_id", ""),
         )
 
     def prepare_from_approved(
@@ -413,6 +414,7 @@ class CanonPreparationService:
         repair_attempt_count: int,
         residual_review_issues: list[dict[str, Any]],
         canon_risk_level: str,
+        quality_admission_run_id: str = "",
     ) -> CanonPreparationOutcome:
         repository = CandidateDraftRepository(session)
         candidate = repository.get(candidate_id, for_update=True)
@@ -490,6 +492,7 @@ class CanonPreparationService:
             expected_previous_accepted_chapter=expected_previous_accepted_chapter,
             expected_book_state_chapter=expected_book_state_chapter,
             expected_book_revision=project.book_revision,
+            quality_admission_run_id=quality_admission_run_id,
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
             acceptance_mode=acceptance_mode,

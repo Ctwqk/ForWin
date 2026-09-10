@@ -314,6 +314,8 @@ class StateUpdater:
         activation_chapter: int = 0,
         metadata: dict | None = None,
     ) -> SubWorldRosterItem:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, project_id)
         row = SubWorldRosterItem(
             id=new_id(),
             project_id=project_id,

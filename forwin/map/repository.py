@@ -45,6 +45,8 @@ class MapRepository:
         self.session = session
 
     def ensure_subworld_map_metadata(self, spec: SubWorldMapSpec) -> SubWorld:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, spec.project_id)
         row = self.session.get(SubWorld, spec.subworld_id)
         if row is not None and row.project_id != spec.project_id:
             raise ValueError("subworld belongs to a different project")
@@ -238,6 +240,8 @@ class MapRepository:
         return row
 
     def upsert_map_node(self, node: MapNode) -> MapNodeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, node.project_id)
         if node.subworld_id:
             self._require_owned_subworld(node.project_id, node.subworld_id)
         row = self.session.get(MapNodeRow, node.id)
@@ -276,6 +280,8 @@ class MapRepository:
         return row
 
     def upsert_map_edge(self, edge: MapEdge) -> MapEdgeRow:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, edge.project_id)
         _ensure_non_negative_edge(edge)
         if edge.subworld_id:
             self._require_owned_subworld(edge.project_id, edge.subworld_id)
@@ -422,6 +428,8 @@ class MapRepository:
         return runtime
 
     def _delete_orphan_inter_subworld_edges(self, project_id: str) -> None:
+        from forwin.canon.projection_lock import lock_projection_project
+        lock_projection_project(self.session, project_id)
         node_ids = {
             row[0]
             for row in self.session.execute(

@@ -228,4 +228,19 @@ class CanonAdmissionRunRow(Base):
     warning_issue_count: Mapped[int] = mapped_column(Integer, default=0)
     gate_summary: Mapped[str] = mapped_column(Text, default="")
     signals_json: Mapped[str] = mapped_column(Text, default="[]")
+    projection_json: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    projection_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class CanonQualityAcceptanceEvidenceRow(Base):
+    __tablename__ = "canon_quality_acceptance_evidence"
+    __table_args__ = (Index("ix_canon_quality_acceptance_project_chapter", "project_id", "chapter_number"),)
+    acceptance_id: Mapped[str] = mapped_column(String, ForeignKey("canon_commit_records.id"), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    draft_id: Mapped[str] = mapped_column(String, ForeignKey("chapter_drafts.id"), nullable=False)
+    body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_admission_run_id: Mapped[str | None] = mapped_column(String, ForeignKey("canon_admission_runs.id"), nullable=True)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())

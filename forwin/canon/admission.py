@@ -61,12 +61,16 @@ class CanonAdmissionService:
         plan: CanonCommitPlan,
         *,
         failure_injector: Callable[[str], None] | None = None,
+        revision_model_identity: dict | None = None,
     ) -> CanonAdmissionOutcome:
         from forwin.production.capacity import CapacityWait, SerialCapacityService
 
         if self.session_factory is None:
             raise RuntimeError("CanonAdmissionService requires a session factory")
         inject = failure_injector or _ignore_failure_stage
+        if plan.revision_validation_id:
+            from .revision_commit import commit_revision
+            return commit_revision(self,plan,model_identity=revision_model_identity,failure_injector=inject)
         try:
             with self.session_factory.begin() as session:
                 project = session.execute(
@@ -133,7 +137,7 @@ class CanonAdmissionService:
                 ).scalar_one_or_none()
                 try:
                     if chapter is not None:
-                        HistoricalCanonRewriteService(session).prepare_replacement(plan)
+                        HistoricalCanonRewriteService(session).require_first_acceptance(plan)
                 except HistoricalRewriteInvalid as exc:
                     raise CanonStaleVersion(str(exc)) from exc
                 self._revalidate_locked_plan(
@@ -169,18 +173,12 @@ class CanonAdmissionService:
                     EntityAdmissionCommitter(session).apply(
                         project_id=plan.project_id,
                         plan=plan.entity_admission_plan,
+                        acceptance_id=commit_id,
                     )
                 except ValueError as exc:
                     raise CanonStaleVersion(str(exc)) from exc
                 session.flush()
                 inject("entity")
-
-                NarrativeObligationRepository(session).activate_planned_for_chapter(
-                    plan.project_id,
-                    origin_chapter_number=plan.chapter_number,
-                )
-                session.flush()
-                inject("obligation")
 
                 assert chapter is not None
                 chapter.status = "accepted"
@@ -270,6 +268,18 @@ class CanonAdmissionService:
                     )
                 )
                 session.flush()
+                NarrativeObligationRepository(session).activate_planned_for_chapter(
+                    plan.project_id,
+                    origin_chapter_number=plan.chapter_number,
+                    acceptance_id=commit_id, draft_id=candidate.candidate_draft_id,
+                )
+                session.flush()
+                inject("obligation")
+
+                from forwin.canon_quality.repository import CanonQualityRepository
+                CanonQualityRepository(session).bind_acceptance(project_id=project.id,chapter_number=chapter.chapter_number,
+                    draft_id=candidate.candidate_draft_id,acceptance_id=commit_id,
+                    quality_admission_run_id=getattr(plan,"quality_admission_run_id",""))
                 chapter.active_commit_id = commit_id
                 project.book_revision += 1
                 capacity.consume_commit(plan.project_id, plan.chapter_number)

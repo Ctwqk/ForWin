@@ -513,6 +513,9 @@ class ForWinAPIClient:
         reason: str,
         continue_generation: bool = False,
         allow_accepted: bool = False,
+        replacement_body: str | None = None,
+        replacement_title: str | None = None,
+        expected_book_revision: int | None = None,
     ) -> ChapterReviewApproveView:
         if chapter_number < 1:
             raise ValueError("chapter_number must be positive")
@@ -526,6 +529,9 @@ class ForWinAPIClient:
                 "continue_generation": bool(continue_generation),
                 "reason": normalized_reason,
                 "allow_accepted": bool(allow_accepted),
+                "replacement_body": replacement_body,
+                "replacement_title": replacement_title,
+                "expected_book_revision": expected_book_revision,
             },
         )
         if not isinstance(payload, dict):
@@ -725,6 +731,7 @@ class ForWinAPIClient:
             needs_review_chapter_count=int(raw.get("needs_review_chapter_count", 0) or 0),
             gate_delegate=str(pause_policy.get("gate_delegate", "human") or "human"),
             runtime_policy_version=int(raw.get("runtime_policy_version", 0) or 0),
+            book_revision=int(raw.get("book_revision", 0) or 0),
             latest_stage=str(raw.get("latest_stage", "")),
             next_gate=str(raw.get("next_gate", "")),
             genesis_stage_overview=self._stage_state_list(raw.get("genesis_stage_overview") or []),
@@ -818,6 +825,12 @@ class ForWinAPIClient:
 
     def _chapter_detail_view(self, raw: dict[str, Any]) -> ChapterDetailView:
         return ChapterDetailView(
+            chapter_plan_id=str(raw.get("chapter_plan_id", "")),
+            active_commit_id=str(raw.get("active_commit_id", "")),
+            candidate_id=str(raw.get("candidate_id", "")),
+            body_sha256=str(raw.get("body_sha256", "")),
+            book_revision=int(raw.get("book_revision", 0) or 0),
+            acceptance_revision=int(raw.get("acceptance_revision", 0) or 0),
             chapter_number=int(raw.get("chapter_number", 0) or 0),
             title=str(raw.get("title", "")),
             status=str(raw.get("status", "")),

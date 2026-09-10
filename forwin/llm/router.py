@@ -385,7 +385,7 @@ class LLMCallRouter:
             "task_family": intent.task_family,
             "stage_key": intent.stage_key,
             "llm_task_route": "codex_bridge",
-            "requested_temperature": float(kwargs.get("temperature") or 0.85),
+            "requested_temperature": float(kwargs["temperature"] if kwargs.get("temperature") is not None else 0.85),
             "requested_max_tokens": int(kwargs.get("max_tokens") or 16384),
             "error_class": failure.__class__.__name__ if failure else "",
             "error_message": str(failure or ""),

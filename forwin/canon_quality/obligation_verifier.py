@@ -11,7 +11,6 @@ from forwin.narrative_obligations.types import (
     ObligationResolutionCandidate,
 )
 
-
 _CAUSAL_MARKERS = ("因为", "为了", "所以", "原因", "动机", "才会", "承认")
 _DRAFT_PREVERIFY_TYPES = {
     "motivation_gap",
@@ -189,12 +188,13 @@ def expire_unresolved_obligations_after_acceptance(
         expired = repo.expire_obligation(
             obligation.id,
             reason="deadline passed after accepted chapter",
+            chapter_number=chapter_number,
         )
         if expired is None:
             continue
         expired_ids.append(expired.id)
         if expired.blocking_policy == "block_at_deadline":
-            blocked = repo.block_expired_obligation(expired.id)
+            blocked = repo.block_expired_obligation(expired.id, chapter_number=chapter_number)
             if blocked is not None:
                 blocked_ids.append(blocked.id)
     return {

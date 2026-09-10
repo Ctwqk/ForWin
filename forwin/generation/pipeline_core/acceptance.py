@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.canon.review_recovery import reopen_failed_historical_candidate_for_review
 from forwin.audit.events import DecisionActorType, DecisionEventType
-from forwin.review.issue_groups import issue_group_for_issue
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
     record_deferred_maintenance,
 )
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.review.issue_groups import issue_group_for_issue
 
 
 class AcceptanceStage:
@@ -35,6 +34,28 @@ class AcceptanceStage:
             if chapter_plan is None:
                 raise ValueError(f"第{chapter_number}章不存在")
             chapter_status = str(chapter_plan.status or "")
+            if chapter_status == "accepted":
+                import json
+
+                from forwin.canon.revision_service import (
+                    RevisionValidationService,
+                    revision_model_identity,
+                )
+                from forwin.models.canon import CanonCommitRecord
+                candidate = CandidateDraftRepository(session).latest_for_chapter(project_id=project_id,chapter_number=chapter_number)
+                active = session.get(CanonCommitRecord,chapter_plan.active_commit_id)
+                if candidate is None or active is None or candidate.id == active.candidate_id or not json.loads(candidate.metadata_json or "{}").get("revision_proposal"):
+                    raise ValueError("accepted chapter requires a distinct real revision proposal")
+                candidate_id = candidate.id
+                session.rollback()
+                preparation = RevisionValidationService(session_factory=self._SessionFactory,writer=self.writer,
+                    policy=self.canon_preparation_context.policy).prepare(project_id=project_id,candidate_id=candidate_id)
+                if preparation.blocked:
+                    return {"status":"accepted","message":"修订未通过完整后缀核验；原接纳版本继续生效。", "frozen_artifact":preparation.blocked_path,"revision_status":"blocked"}
+                outcome = self.canon_admission.commit_plan(preparation.plan,revision_model_identity=revision_model_identity(self.writer))
+                if outcome.blocked:
+                    return {"status":"accepted","message":"修订提交被拒绝；原接纳版本继续生效。", "frozen_artifact":outcome.blocked_path,"revision_status":"blocked"}
+                return {"status":"accepted","message":"修订及完整后缀已通过核验并原子接纳。", "canon_commit_id":outcome.commit_id,"frozen_artifact":"","revision_status":"accepted"}
             if chapter_status not in {"drafted", "needs_review"}:
                 raise ValueError(
                     f"第{chapter_number}章不是可接受状态（当前 "
@@ -67,18 +88,7 @@ class AcceptanceStage:
             artifact_path = latest_draft.llm_raw_response
             writer_output = self._load_writer_output_from_meta(artifact_path)
             if candidate.status == "failed":
-                reopen_failed_historical_candidate_for_review(
-                    session,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    candidate_id=candidate.id,
-                    draft_id=latest_draft.id,
-                    review_id=latest_review.id,
-                    actor_type=actor_type,
-                    source=source,
-                    writer_output=writer_output,
-                    artifact_path=artifact_path,
-                )
+                raise ValueError("failed candidate requires a fresh reviewed version")
 
             verdict = self._load_review_verdict(latest_review)
             repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)

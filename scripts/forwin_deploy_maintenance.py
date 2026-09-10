@@ -5,14 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 
 def schema_heads():
     from alembic.migration import MigrationContext
+
     from forwin.config import InfrastructureConfig
     from forwin.models.base import get_engine
 
@@ -112,7 +113,7 @@ def main():
                 }
             )
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - report failure without leaking runtime credentials.
         # The parent keeps the migration_started phase on unknown outcomes.
         print(
             f"maintenance {args.phase} failed; preserve the release and inspect the task",

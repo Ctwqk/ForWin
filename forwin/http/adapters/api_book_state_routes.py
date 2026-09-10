@@ -25,6 +25,7 @@ from forwin.personality.context import build_active_personality_context
 from forwin.personality.enrichment import RelationshipPersonalityEnricher
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.metrics import build_character_personality_metrics
+from forwin.personality.mutations import apply_assignment, PersonalityUpdateConflict
 from forwin.personality.models import (
     CharacterPersonalityPolicy,
     PersonalityAssignmentRequest,
@@ -339,10 +340,13 @@ def build_handlers(
         )
         with get_session() as session:
             require_project(session, project_id)
-            result = RelationshipPersonalityEnricher(
-                session,
-                personality_library=_personality_library(),
-            ).enrich_project(project_id, reason=reason)
+            try:
+                result = RelationshipPersonalityEnricher(
+                    session,
+                    personality_library=_personality_library(),
+                ).enrich_project(project_id, reason=reason)
+            except PersonalityUpdateConflict as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             session.commit()
             return {
                 "schema_version": "character.relationship_personality_enrichment.v1",
@@ -548,19 +552,17 @@ def build_handlers(
                     if result.report.status == "valid_needs_review":
                         needs_review += 1
                     if not dry_run:
-                        profile = dict(node.profile)
-                        metadata = dict(node.metadata)
-                        profile["personality_loadout"] = result.loadout.model_dump(
-                            mode="json", exclude_none=True
+                        mutation = _apply_personality_assignment(
+                            session, original=node,
+                            loadout=result.loadout.model_dump(mode="json", exclude_none=True),
+                            assignment=result.report.model_dump(mode="json"), mode="backfill",
                         )
-                        metadata["personality_assignment"] = result.report.model_dump(
-                            mode="json"
-                        )
-                        repo.create_world_node(
-                            node.model_copy(
-                                update={"profile": profile, "metadata": metadata}
-                            )
-                        )
+                        if not mutation.applied:
+                            assigned -= 1
+                            preserved += 1
+                            fallback_used -= int(result.report.assignment_mode == "fallback_minimal")
+                            needs_review -= int(result.report.status == "valid_needs_review")
+                            continue
                 items.append(
                     {
                         "character_id": node.id,
@@ -638,11 +640,6 @@ def build_handlers(
                 raise HTTPException(
                     status_code=400, detail="reason is required when force=true"
                 )
-            old_loadout = (
-                dict(node.profile.get("personality_loadout") or {})
-                if isinstance(node.profile, dict)
-                else {}
-            )
             policy = CharacterPersonalityPolicyResolver(session).resolve_for_project(
                 project_id
             )
@@ -677,15 +674,21 @@ def build_handlers(
                     policy=policy,
                 )
             )
-            profile = dict(node.profile)
-            metadata = dict(node.metadata)
             new_loadout = result.loadout.model_dump(mode="json", exclude_none=True)
-            diff = _loadout_diff(old_loadout, new_loadout, reason=req.reason)
-            profile["personality_loadout"] = new_loadout
-            metadata["personality_assignment"] = result.report.model_dump(mode="json")
-            repo.create_world_node(
-                node.model_copy(update={"profile": profile, "metadata": metadata})
+            mutation = _apply_personality_assignment(
+                session, original=node, loadout=new_loadout,
+                assignment=result.report.model_dump(mode="json"), mode="reassign",
+                respect_manual=req.respect_manual_override and not req.force,
             )
+            if not mutation.applied:
+                return {
+                    "schema_version": "character.personality_reassign.v1",
+                    "project_id": project_id, "character_id": character_id,
+                    "preserved": True,
+                    "personality_assignment": mutation.current.metadata.get("personality_assignment", {}),
+                }
+            old_loadout = dict(mutation.before.profile.get("personality_loadout") or {})
+            diff = _loadout_diff(old_loadout, new_loadout, reason=req.reason)
             StateUpdater(session).save_decision_event(
                 DecisionEventInfo(
                     project_id=project_id,
@@ -814,10 +817,7 @@ def build_handlers(
             node = _get_character_node(
                 repo, project_id, character_id, as_of_chapter=None
             )
-            profile = dict(node.profile)
-            profile["personality_loadout"] = loadout_payload
-            metadata = dict(node.metadata)
-            metadata["personality_assignment"] = {
+            assignment = {
                 "assignment_id": f"manual_{str(character_id or '').strip()}",
                 "policy_version": "character_personality_assignment.v1",
                 "assignment_mode": "manual_world_studio",
@@ -827,8 +827,10 @@ def build_handlers(
                 "selected_skill_ids": sorted(loadout.active_skill_ids()),
                 "reason": req.reason,
             }
-            updated = node.model_copy(update={"profile": profile, "metadata": metadata})
-            repo.create_world_node(updated)
+            updated = _apply_personality_assignment(
+                session, original=node, loadout=loadout_payload,
+                assignment=assignment, mode="manual",
+            ).current
             StateUpdater(session).save_decision_event(
                 DecisionEventInfo(
                     project_id=project_id,
@@ -880,6 +882,13 @@ def build_handlers(
         "get_character_personality_loadout": get_character_personality_loadout,
         "set_character_personality_loadout": set_character_personality_loadout,
     }
+
+
+def _apply_personality_assignment(session, **kwargs):
+    try:
+        return apply_assignment(session, **kwargs)
+    except PersonalityUpdateConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _get_character_node(

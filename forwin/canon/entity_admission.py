@@ -6,11 +6,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.repository import BookStateRepository
 from forwin.audit.events import DecisionEventType
+from forwin.book_state.repository import BookStateRepository
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
-from forwin.models.audit import DecisionEvent
 from forwin.models.subworld import SubWorldRosterItem
 from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
 
@@ -26,6 +26,7 @@ class EntityAdmissionCommitter:
         *,
         project_id: str,
         plan: EntityAdmissionPlan,
+        acceptance_id: str = "",
     ) -> None:
         if plan.project_id != project_id:
             raise ValueError("Entity admission project mismatch")
@@ -34,6 +35,11 @@ class EntityAdmissionCommitter:
                 "Blocked entity admission plan reached Canon: "
                 + ", ".join(plan.plan_conflicts)
             )
+        before = None
+        if acceptance_id:
+            from .revision_registry import registry_rows, registry_scope
+            scope = registry_scope(self.session, project_id, plan)
+            before = registry_rows(self.session, project_id, scope)
         for decision in plan.decisions:
             if decision.action == "background_generic":
                 self._record_event(
@@ -72,6 +78,12 @@ class EntityAdmissionCommitter:
                 entity=entity,
                 decision=decision,
             )
+
+        if before is not None:
+            from .revision_registry import save_registry_evidence
+            self.session.flush()
+            save_registry_evidence(self.session, project_id=project_id, plan=plan,
+                acceptance_id=acceptance_id, scope=scope, before=before)
 
     def _register_character(
         self,

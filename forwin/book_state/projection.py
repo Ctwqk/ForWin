@@ -149,6 +149,7 @@ class BookStateProjection:
         source_delta_ids: list[str] | None = None,
         active_world_line_ids: list[str] | None = None,
         open_gap_ids: list[str] | None = None,
+        acceptance_identity: str = "",
     ) -> tuple[WorldSnapshot, MapSnapshot, list[CognitionSnapshot]]:
         source_delta_ids = source_delta_ids or []
         world_snapshot = WorldSnapshot(
@@ -228,7 +229,7 @@ class BookStateProjection:
                 observer_type=view.observer_type,
                 observer_id=view.observer_id,
                 as_of_chapter=as_of_chapter,
-                overlay_id=f"cog_{runtime.project_id}_{view.observer_type}_{view.observer_id}_{as_of_chapter}",
+                overlay_id=f"cog_{runtime.project_id}_{view.observer_type}_{view.observer_id}_{as_of_chapter}" + (f"_{acceptance_identity}" if acceptance_identity else ""),
                 visible_refs=sorted(view.visible_refs),
                 suspected_refs=sorted(view.suspected_refs),
                 confirmed_refs=sorted(view.confirmed_refs),
@@ -239,14 +240,11 @@ class BookStateProjection:
         self.repo.persist_world_snapshot(world_snapshot)
         self.repo.persist_map_snapshot(map_snapshot)
         for view in runtime.cognition_by_observer.values():
-            self.repo.upsert_cognition_overlay(
-                self.repo.overlay_from_view(
-                    view,
-                    project_id=runtime.project_id,
-                    as_of_chapter=as_of_chapter,
-                    as_of_story_time=as_of_story_time,
-                )
-            )
+            overlay = self.repo.overlay_from_view(view, project_id=runtime.project_id,
+                as_of_chapter=as_of_chapter, as_of_story_time=as_of_story_time)
+            if acceptance_identity:
+                overlay = overlay.model_copy(update={"id":overlay.id + "_" + acceptance_identity})
+            self.repo.upsert_cognition_overlay(overlay)
         for snapshot in cognition_snapshots:
             self.repo.persist_cognition_snapshot(snapshot)
         self.session.flush()

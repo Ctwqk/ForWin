@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
@@ -108,6 +110,13 @@ def get_chapter(
 ) -> ChapterDetail:
     session = get_session()
     try:
+        # Keep the returned body, active identity and project version in one
+        # short read snapshot while Canon owners take the exclusive Project lock.
+        project = session.scalar(
+            select(Project).where(Project.id == project_id).with_for_update(read=True)
+        )
+        if project is None:
+            raise HTTPException(404, "项目不存在")
         plan = session.execute(
             select(ChapterPlan).where(
                 ChapterPlan.project_id == project_id,
@@ -120,6 +129,18 @@ def get_chapter(
         draft = load_latest_drafts_by_plan_id(session, [plan.id]).get(plan.id)
         if draft is None:
             raise HTTPException(404, f"第{chapter_number}章尚未生成")
+        commit = session.get(CanonCommitRecord, plan.active_commit_id) if plan.active_commit_id else None
+        candidate = session.get(CandidateDraftRecord, commit.candidate_id) if commit else None
+        body_hash = sha256(draft.body_text.encode()).hexdigest()
+        if commit and (
+            candidate is None
+            or candidate.candidate_draft_id != draft.id
+            or candidate.body_hash != body_hash
+            or commit.chapter_plan_id != plan.id
+            or commit.project_id != project_id
+            or commit.chapter_number != chapter_number
+        ):
+            raise HTTPException(409, f"第{chapter_number}章 Canon 身份不完整")
         has_review = (
             session.execute(
                 select(ChapterReview.id)
@@ -131,7 +152,13 @@ def get_chapter(
 
         return ChapterDetail(
             chapter_number=chapter_number,
-            title=plan.title,
+            chapter_plan_id=plan.id,
+            active_commit_id=commit.id if commit else "",
+            candidate_id=candidate.id if candidate else "",
+            body_sha256=body_hash,
+            book_revision=int(project.book_revision or 0),
+            acceptance_revision=int(commit.acceptance_revision) if commit else 0,
+            title=commit.chapter_title if commit else plan.title,
             body=draft.body_text,
             char_count=draft.char_count,
             summary=draft.summary,

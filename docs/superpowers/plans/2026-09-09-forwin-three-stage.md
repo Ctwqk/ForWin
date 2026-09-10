@@ -33,8 +33,8 @@
 - [x] Save approved spec and make current docs/Agent navigation point to it; explicitly supersede duplicate L200 and destructive migration language.
 - [x] First reproduce checker failure for added source-copy / runtime patch and valid ordinary source edits with temporary Git repositories.
 - [x] Implement source enforcement in existing pre-PR path and frozen-lock full-image build.
-- [ ] Verify missing compatibility behavior with source and targeted tests before retiring rollback assembly files.
-- [ ] Build full role images and record source/image/lock identities; retain rollback evidence until verified.
+- [x] Verify missing compatibility behavior with source and targeted tests before retiring rollback assembly files. `a0898fe` retires 11 directories after complete-image checks and historical regression; immutable Git history and production rollback images remain.
+- [x] Build full role images and record source/image/lock identities; retain rollback evidence until verified. Both `c62f6d0` targets passed actual imports/CLI/browser checks; the unused candidate browser image was subsequently reclaimed for disk capacity, with evidence retained. Final deployment rebuilds its final source.
 
 ### Task 2: Stable revisions and publication protection (P1-1)
 
@@ -55,11 +55,11 @@
 
 **Interfaces:** A durable result binds base book revision, complete affected range, candidate/content hashes, coverage and evidence; pass/fail/unknown. Final Canon transaction checks identical baseline and publication protection before switching all required revisions.
 
-- [ ] Reproduce key removal, knowledge/death/time/place conflicts, wording-only validation, unknown/timeout and partial coverage.
-- [ ] Build isolated candidate state and re-run existing checks against every successor body; old delta replay alone never earns pass.
-- [ ] Preserve original deltas/snapshots and construct new acceptance identities where their context changes.
-- [ ] Atomically switch the validated set and enqueue external work only after admission; inject failures at each transaction stage.
-- [ ] Verify simultaneous successor edits and publication invalidate prepared results; commit reviewed package.
+- [x] Reproduce key removal, knowledge/death/time/place conflicts, wording-only validation, unknown/timeout and partial coverage.
+- [x] Build isolated candidate state and re-run existing checks against every successor body; old delta replay alone never earns pass.
+- [x] Preserve original deltas/snapshots and construct new acceptance identities where their context changes.
+- [x] Atomically switch the validated set and enqueue external work only after admission; inject failures at each transaction stage.
+- [x] Verify simultaneous successor edits and publication invalidate prepared results; commit reviewed package. `c62f6d0`; explicit unsupported legacy provenance / changed-origin obligation cases remain unknown, documented in the revision evidence report.
 
 ### Task 4: Serial capacity and continued publishing (P1-3)
 
@@ -85,7 +85,7 @@
 
 **Files:** existing long-run harness and operating evidence under `docs/operations/`.
 
-- [ ] Run per-package related tests, then full pytest, Ruff and compileall from one source candidate.
+- [x] Run per-package related tests, then full pytest, Ruff and compileall from one source candidate. Frozen `c62f6d0`: 2658 passed, 4 skipped, 6 subtests passed; compileall/F/E9 clean. Full Ruff 1179 versus original 1219, not zero warnings.
 - [ ] Validate restore/migration in isolation, build full images, record source/image/model/effective policy.
 - [ ] Run approximately 20-chapter offline smoke, then fresh 100-chapter offline project with supported automatic pause/delegation policy.
 - [ ] Verify finite repair, recovery idempotency and intended ending; record failures honestly. Use isolated publisher adapters for serial safety.
@@ -95,7 +95,8 @@
 
 **Files:** `forwin/generation/pipeline.py`, `pipeline_core/`, `review/repair/`, current runtime collaborators and fixed-response fixtures.
 
-- [ ] Freeze behavior, separate Writer, Review/Repair and Canon preparation from full Pipeline callbacks; replace callers and remove obsolete entries.
+- [x] Freeze Writer behavior and replace both real callers with the concrete execution owner; delete the old mixin. `de3d854`: 344 related tests, independent 110, root 73 (overlapping).
+- [ ] Complete Review/Repair and Canon preparation separation from full Pipeline callbacks; replace callers and remove obsolete entries.
 - [ ] Run A1 reviewer, A2 context and A3 maintenance experiments independently with labelled positive/negative samples. Prove stale-consumer safety before changing maintenance barriers.
 - [ ] Run A4 only if Writer evidence justifies it; do not keep a permanent second writer.
 - [ ] Collect costs, latency, repair, intervention, hard blockers and independent narrative evaluation; reject serious misses, prefer ≥15% cost/latency benefit without serious regression.

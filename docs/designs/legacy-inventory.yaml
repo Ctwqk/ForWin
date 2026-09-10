@@ -741,6 +741,28 @@ entries:
       - retain the documented provenance boundary while old evidence remains readable
     status: retained
 
+  - id: audience.feedback_evidence_boundary
+    category: test_doc_followup
+    owner_area: audience
+    paths:
+      - forwin/audience/body_observation.py
+      - forwin/context/providers/feedback_provider.py
+    allow_patterns:
+      - Missing legacy evidence is recorded as unknown
+      - Legacy string packs and raw reader comments are not canonical hints
+    reason: >
+      These comments document rejection of unqualified old feedback inputs and
+      unknown BODY evidence. They do not retain an alternate hint consumer or
+      fabricate past action execution from the current mutable plan.
+    removal_phase: keep
+    verification:
+      - tests/test_feedback_body_observation.py
+      - tests/test_feedback_quarantine.py
+      - tests/test_architecture_boundaries.py
+    delete_when:
+      - retain the documented qualification boundary while old feedback history is readable
+    status: retained
+
   - id: schema.bootstrap_legacy_columns
     category: deleted
     owner_area: database

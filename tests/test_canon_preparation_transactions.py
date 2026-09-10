@@ -7,6 +7,12 @@ from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
 from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.outbox_events import (
+    CANON_PHASE3_REQUESTED,
+    CANON_PROJECTION_REQUESTED,
+    CANON_PUBLISHER_REQUESTED,
+    canon_event_id,
+)
 from forwin.canon.preparation import (
     BookStatePreparationOutcome,
     CanonPreparationService,
@@ -18,6 +24,7 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
+from forwin.novel_export.events import NOVEL_EXPORT_REQUESTED
 from forwin.observability.pipeline_trace import (
     PipelineAuditContext,
     PipelineTraceRecorder,
@@ -133,7 +140,34 @@ def test_manual_preparation_is_committed_before_independent_atomic_admission(
             session.get(CandidateDraftRecord, prepared.candidate_id).status
             == "accepted"
         )
-        assert len(list(session.scalars(select(OutboxEvent)))) == 3
+        events = list(session.scalars(select(OutboxEvent)))
+        assert len(events) == 4
+        events_by_type = {event.event_type: event for event in events}
+        recovery_types = {
+            CANON_PROJECTION_REQUESTED,
+            CANON_PHASE3_REQUESTED,
+            CANON_PUBLISHER_REQUESTED,
+        }
+        assert set(events_by_type) == recovery_types | {NOVEL_EXPORT_REQUESTED}
+        for event_type in recovery_types:
+            event = events_by_type[event_type]
+            assert event.event_id == canon_event_id(
+                commits[0].idempotency_key, event_type
+            )
+            payload = json.loads(event.payload_json)
+            assert payload["canon_commit_id"] == commits[0].id
+            assert payload["canon_idempotency_key"] == commits[0].idempotency_key
+            assert payload["project_id"] == prepared.project_id
+            assert payload["chapter_number"] == 1
+            assert payload["candidate_id"] == prepared.candidate_id
+        export = events_by_type[NOVEL_EXPORT_REQUESTED]
+        assert export.event_id == f"novel-export:{prepared.project_id}:1"
+        assert export.aggregate_type == "project"
+        assert export.aggregate_id == prepared.project_id
+        export_payload = json.loads(export.payload_json)
+        assert export_payload["project_id"] == prepared.project_id
+        assert export_payload["book_revision"] == 1
+        assert export_payload["snapshot"] is None
         approved = session.scalar(
             select(DecisionEvent).where(
                 DecisionEvent.event_type == DecisionEventType.REVIEW_APPROVED

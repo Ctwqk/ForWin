@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -45,6 +46,7 @@ from forwin.naming import (
     EntityAdmissionPlan,
     writer_output_admission_fingerprint,
 )
+from forwin.novel_export.events import NOVEL_EXPORT_REQUESTED
 from forwin.observability.ports import NullObservability
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NodePatch
 from forwin.protocol.writer import WriterOutput
@@ -305,12 +307,43 @@ def _assert_single_committed_state(fixture: RecoveryFixture) -> None:
                 )
             )
         )
-        assert {event.event_type for event in outbox_events} == set(
+        assert len(CANON_RECOVERY_EVENT_TYPES) == 3
+        assert NOVEL_EXPORT_REQUESTED not in CANON_RECOVERY_EVENT_TYPES
+        recovery_events = [
+            event
+            for event in outbox_events
+            if event.event_type in CANON_RECOVERY_EVENT_TYPES
+        ]
+        assert len(recovery_events) == 3
+        assert {event.event_type for event in recovery_events} == set(
             CANON_RECOVERY_EVENT_TYPES
         )
-        assert {event.event_id for event in outbox_events} == {
+        assert {event.event_id for event in recovery_events} == {
             canon_event_id(fixture.plan.idempotency_key, event_type)
             for event_type in CANON_RECOVERY_EVENT_TYPES
+        }
+        expected_events = {
+            event.event_id: event for event in fixture.plan.outbox_events
+        }
+        for event in recovery_events:
+            expected = expected_events[event.event_id]
+            assert event.aggregate_type == expected.aggregate_type
+            assert event.aggregate_id == expected.aggregate_id
+            assert json.loads(event.payload_json) == expected.payload
+        exports = [
+            event for event in outbox_events
+            if event.event_type == NOVEL_EXPORT_REQUESTED
+        ]
+        assert len(outbox_events) == 4
+        assert len(exports) == 1
+        assert exports[0].event_id == f"novel-export:{fixture.project_id}:1"
+        assert exports[0].aggregate_type == "project"
+        assert json.loads(exports[0].payload_json) == {
+            "schema_version": 1,
+            "project_id": fixture.project_id,
+            "book_revision": 1,
+            "display_title": "Worker Canon Recovery",
+            "snapshot": None,
         }
         deferred = list(
             session.scalars(

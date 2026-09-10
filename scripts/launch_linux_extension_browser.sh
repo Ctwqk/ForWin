@@ -20,7 +20,6 @@ SESSION_RESTORE_SCRIPT="$REPO_ROOT/scripts/restore_linux_extension_browser_sessi
 HEARTBEAT_CHECK_SCRIPT="$REPO_ROOT/scripts/check_publisher_browser_heartbeat.py"
 PYTHON_BIN="${FORWIN_EXTENSION_PYTHON:-}"
 HEARTBEAT_WAIT_SECONDS="${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75}"
-AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE="${FORWIN_EXTENSION_AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE:-true}"
 RUNTIME_MONITOR_INTERVAL_SECONDS="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS:-30}"
 RUNTIME_MONITOR_FAILURES="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES:-2}"
 RESTORE_BACKEND_SESSIONS="${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"
@@ -146,11 +145,6 @@ clear_stale_profile_locks() {
   fi
 }
 
-reset_profile_dir() {
-  rm -rf "$PROFILE_DIR"
-  mkdir -p "$PROFILE_DIR"
-}
-
 select_display_mode() {
   case "${DISPLAY_MODE,,}" in
     external)
@@ -266,8 +260,8 @@ qualify_profile_if_needed() {
     if [[ "$qualified_ok" != "true" ]] || [[ "$active_ok" != "true" ]]; then
       if is_truthy "$AUTO_QUALIFY_PROFILE"; then
         if [[ "$active_ok" != "true" ]]; then
-          echo "Extension profile is qualified but inactive; resetting it before requalification."
-          reset_profile_dir
+          echo "Extension profile is qualified but inactive; preserving its publication journal and refusing automatic reset." >&2
+          exit 1
         else
           echo "Extension profile is not qualified yet; bootstrapping it with the configured backend URL."
         fi
@@ -382,40 +376,24 @@ fi
 
 trap cleanup_display EXIT
 
-launch_attempt=1
-max_launch_attempts=1
-if is_truthy "$AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE"; then
-  max_launch_attempts=2
+"$CHROME_BIN" "${CHROME_ARGS[@]}" &
+CHROME_PID=$!
+
+if is_truthy "$RESTORE_BACKEND_SESSIONS" && [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
+  if ! "$PYTHON_BIN" "$SESSION_RESTORE_SCRIPT" --cdp-url "http://127.0.0.1:$REMOTE_DEBUGGING_PORT"; then
+    echo "Warning: failed to restore backend browser sessions into the Linux extension browser." >&2
+  fi
 fi
 
-while (( launch_attempt <= max_launch_attempts )); do
-  "$CHROME_BIN" "${CHROME_ARGS[@]}" &
-  CHROME_PID=$!
-
-  if is_truthy "$RESTORE_BACKEND_SESSIONS" && [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
-    if ! "$PYTHON_BIN" "$SESSION_RESTORE_SCRIPT" --cdp-url "http://127.0.0.1:$REMOTE_DEBUGGING_PORT"; then
-      echo "Warning: failed to restore backend browser sessions into the Linux extension browser." >&2
-    fi
+if [[ "$HEARTBEAT_WAIT_SECONDS" =~ ^[0-9]+$ ]] && [[ "$HEARTBEAT_WAIT_SECONDS" -gt 0 ]]; then
+  echo "Waiting up to ${HEARTBEAT_WAIT_SECONDS}s for preferred publisher client heartbeat..."
+  if ! "$PYTHON_BIN" "$HEARTBEAT_CHECK_SCRIPT" --wait-seconds "$HEARTBEAT_WAIT_SECONDS"; then
+    echo "Linux extension browser did not register a recent preferred-client heartbeat." >&2
+    kill "$CHROME_PID" >/dev/null 2>&1 || true
+    wait "$CHROME_PID" >/dev/null 2>&1 || true
+    echo "Preserving the existing profile and publication journal for recovery." >&2
+    exit 1
   fi
-
-  if [[ "$HEARTBEAT_WAIT_SECONDS" =~ ^[0-9]+$ ]] && [[ "$HEARTBEAT_WAIT_SECONDS" -gt 0 ]]; then
-    echo "Waiting up to ${HEARTBEAT_WAIT_SECONDS}s for preferred publisher client heartbeat..."
-    if ! "$PYTHON_BIN" "$HEARTBEAT_CHECK_SCRIPT" --wait-seconds "$HEARTBEAT_WAIT_SECONDS"; then
-      echo "Linux extension browser did not register a recent preferred-client heartbeat." >&2
-      kill "$CHROME_PID" >/dev/null 2>&1 || true
-      wait "$CHROME_PID" >/dev/null 2>&1 || true
-      if (( launch_attempt < max_launch_attempts )); then
-        echo "Resetting the Linux extension profile and retrying with a fresh qualified profile..."
-        reset_profile_dir
-        qualify_profile_if_needed
-        launch_attempt=$((launch_attempt + 1))
-        continue
-      fi
-      exit 1
-    fi
-  fi
-
-  break
-done
+fi
 
 monitor_runtime_health

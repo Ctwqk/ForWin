@@ -1,0 +1,47 @@
+--- a/bin/deploy-github-sync.sh
++++ b/bin/deploy-github-sync.sh
+@@ -192,6 +192,12 @@
+   git -C "$repo_dir" fetch --prune origin "$branch" >/dev/null
+   git -C "$repo_dir" checkout "$branch" >/dev/null
+   git -C "$repo_dir" merge --ff-only "origin/$branch" >/dev/null
++}
++
++load_forwin_extension() {
++  local extension="$REPO_ROOT/ForWin/deploy/swarm/deploy-sync-extension.sh"
++  [ -f "$extension" ] || { log "missing ForWin source deployment extension"; return 1; }
++  source "$extension"
+ }
+-
++
+ load_vp_extension() {
+@@ -696,16 +702,8 @@
+-
++
+   case "$project" in
+     forwin)
+-      local forwin_services="forwin-app-swarm forwin-mcp-swarm forwin-generation-worker-swarm forwin-publisher-worker-swarm forwin-outbox-worker-swarm forwin-publisher-browser-swarm"
+-      images="$(build_forwin_images "$commit")" || {
+-        record_state "$project" "$repo_name" "$branch" "$commit" "$images" "$forwin_services" failed
+-        return 1
+-      }
+-      services="$(deploy_forwin_services $images)" || {
+-        rollback_services "$forwin_services"
+-        record_state "$project" "$repo_name" "$branch" "$commit" "$images" "$forwin_services" failed
+-        return 1
+-      }
++      forwin_deploy_project "$project" "$repo_name" "$branch" "$commit"
++      return $?
+       ;;
+     vp-app)
+       images="$(build_vp_app_images "$commit")" || {
+@@ -776,8 +774,9 @@
+   case "$project" in
+     forwin)
+       prepare_repo "ForWin" "git@github.com:Ctwqk/ForWin.git" "master"
++      load_forwin_extension || return $?
+       stage_from_repo "$project" "ForWin" "."
+-      sync_and_deploy "$project" "ForWin" "master" "10.0.0.126" "/Users/magi1/ForWin-swarm" \
++      forwin_sync_and_deploy "$project" "ForWin" "master" "10.0.0.126" "/Users/magi1/ForWin-swarm" \
+         ".git/" ".env" ".venv/" "__pycache__/" "*.pyc" "data/" "output/" ".claude/" ".codex/" ".codex-tmp/" ".mcp.json" ".playwright-cli/" ".playwright-mcp/" "browser_extension/dist/" "frontend/world-studio/node_modules/" "frontend/world-studio/dist/" "frontend/world-studio/tsconfig.tsbuildinfo"
+       ;;
+     vp-app)

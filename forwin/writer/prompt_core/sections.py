@@ -9,7 +9,11 @@ import json
 import re
 
 from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
-from forwin.obsidian.frontmatter import frontmatter_hidden, parse_frontmatter, parse_sections
+from forwin.obsidian.frontmatter import (
+    frontmatter_hidden,
+    parse_frontmatter,
+    parse_sections,
+)
 from forwin.protocol.book_state import WorldNodeType
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.world_model import WorldModelPage

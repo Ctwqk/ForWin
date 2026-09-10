@@ -66,6 +66,7 @@
 - 已删除的 provisional/Scenario/旧世界状态/反向导入不重新实现；原规则库和回归 fixture 保留。
 - 旧 L200/历史矩阵不再阻塞本轮；真实运行记录保留其原始通过、失败或不完整结论。
 - 当前生产的旧 migration revision 与主线不同，完整源码升级必须先通过向前迁移及隔离恢复验证。
+- 11个旧热修复源码副本已在完整候选镜像与兼容回归通过后从当前树退休；[原目录及装配脚本](https://github.com/Ctwqk/ForWin/tree/521228871a5752ebe8572c057caa9f4944bb0295/deploy/forwin-runtime-hotfixes)保留在基线历史，现有回滚镜像保留。普通构建只使用根目录 Dockerfile 和唯一 `forwin/` 源码树，不恢复运行时字符串拼补。
 
 以下全文已存在于不可变源码提交 `521228871a5752ebe8572c057caa9f4944bb0295`，从当前树退休，未改写 Git 历史：
 

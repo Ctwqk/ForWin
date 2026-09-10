@@ -18,6 +18,17 @@ def _without_data_file_replacements(contents: str) -> str:
         tree = ast.parse(contents)
     except SyntaxError:
         return contents
+    assignments: dict[str, list[ast.expr]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                assignments.setdefault(target.id, []).append(value)
     encoded = contents.encode("utf-8")
     lines = encoded.splitlines(keepends=True)
     offsets = [0]
@@ -38,6 +49,18 @@ def _without_data_file_replacements(contents: str) -> str:
         ]
         if not destinations:
             continue
+        # Resolve simple static targets, conservatively across scopes. This is
+        # a hygiene check, not a general Python data-flow or security analysis.
+        pending = list(destinations)
+        seen_names: set[str] = set()
+        while pending:
+            expression = pending.pop()
+            for child in ast.walk(expression):
+                if isinstance(child, ast.Name) and child.id not in seen_names:
+                    seen_names.add(child.id)
+                    values = assignments.get(child.id, [])
+                    destinations.extend(values)
+                    pending.extend(values)
         literals = " ".join(
             child.value
             for destination in destinations

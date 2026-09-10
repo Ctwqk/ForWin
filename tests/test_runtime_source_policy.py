@@ -94,6 +94,16 @@ def test_atomic_overwrite_of_runtime_source_remains_rejected(tmp_path: Path) -> 
     assert _check(root).returncode == 1
 
 
+def test_atomic_runtime_overwrite_through_static_target_is_rejected(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "deploy/patch.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "target = Path('/app/forwin/service.py')\n"
+        "os.replace('/tmp/patched.py', target)\n"
+    )
+    assert _check(root).returncode == 1
+
+
 def test_removing_retired_rollback_copy_is_allowed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     old = root / "deploy/forwin-runtime-hotfixes/old/runtime-files/forwin/old.py"

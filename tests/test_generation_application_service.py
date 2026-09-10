@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from tests.postgres import postgres_test_url
 
 from forwin.application.errors import ActiveGenerationTaskError, ProjectNotFound
 from forwin.application.generation import (
@@ -21,6 +20,7 @@ from forwin.models.project import Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
+from tests.postgres import postgres_test_url
 
 
 @pytest.fixture

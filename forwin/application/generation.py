@@ -4,11 +4,8 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.canon.admission import CanonAdmissionService
-from forwin.canon.plan import CanonCommitPlan
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,6 +16,14 @@ from forwin.application.errors import (
     PermanentConfigurationError,
     ProjectNotFound,
 )
+from forwin.audit.events import (
+    DecisionEventInfo,
+    DecisionEventType,
+    ensure_decision_event_type,
+)
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.plan import CanonCommitPlan
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_payload import (
     GenerationExecutionContext,
@@ -30,18 +35,13 @@ from forwin.generation.task_repository import (
     GenerationTaskRepository,
     new_task_id,
 )
-from forwin.audit.events import (
-    DecisionEventInfo,
-    DecisionEventType,
-    ensure_decision_event_type,
-)
-from forwin.models.project import ChapterPlan, Project
-from forwin.models.audit import DecisionEvent
-from forwin.models.task import GenerationTask
 from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
     record_deferred_maintenance,
 )
+from forwin.models.audit import DecisionEvent
+from forwin.models.project import ChapterPlan, Project
+from forwin.models.task import GenerationTask
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
 
@@ -206,7 +206,7 @@ class GenerationApplicationService:
             task.lease_epoch if lease_epoch is None else lease_epoch
         )
         if task.cancel_requested:
-            acknowledged_at = datetime.now(timezone.utc)
+            acknowledged_at = datetime.now(UTC)
             self._task_updater(
                 worker_id=normalized_worker_id,
                 lease_epoch=normalized_lease_epoch,
@@ -220,7 +220,7 @@ class GenerationApplicationService:
             )
             return
         if task.pause_requested:
-            acknowledged_at = datetime.now(timezone.utc)
+            acknowledged_at = datetime.now(UTC)
             self._task_updater(
                 worker_id=normalized_worker_id,
                 lease_epoch=normalized_lease_epoch,
@@ -401,7 +401,7 @@ class GenerationApplicationService:
                 if normalized.get("status") == "capacity_wait":
                     from datetime import timedelta
 
-                    task.lease_expires_at = datetime.now(timezone.utc) + timedelta(
+                    task.lease_expires_at = datetime.now(UTC) + timedelta(
                         seconds=30
                     )
                     task.resume_from_chapter = int(
@@ -727,5 +727,5 @@ def _lease_expired(value: datetime | None) -> bool:
         return False
     normalized = value
     if normalized.tzinfo is None:
-        normalized = normalized.replace(tzinfo=timezone.utc)
-    return normalized <= datetime.now(timezone.utc)
+        normalized = normalized.replace(tzinfo=UTC)
+    return normalized <= datetime.now(UTC)

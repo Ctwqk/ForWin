@@ -14,7 +14,6 @@ from forwin import models
 from forwin.models import Base
 from forwin.models import base as model_base
 
-
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_MODULE = "forwin.migrations.versions.0001_v5_baseline"
 RECOVERY_TABLES = {
@@ -516,6 +515,7 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
 
 def test_existing_baseline_is_preserved_under_forward_revision_chain() -> None:
     import hashlib
+
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 

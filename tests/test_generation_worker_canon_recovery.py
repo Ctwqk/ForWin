@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +25,7 @@ from forwin.generation.pipeline_core.result import RunResult
 from forwin.generation.task_lease import claim_generation_task
 from forwin.generation.task_payload import execution_payload, payload_to_json
 from forwin.generation.worker import run_one_generation_task
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
     GraphDeltaRow,
@@ -35,7 +36,6 @@ from forwin.models.book_state import (
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.entity import Entity, EntityAlias
-from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan
@@ -236,7 +236,7 @@ def _claim(fixture: RecoveryFixture) -> None:
 
 
 def _expire_lease(fixture: RecoveryFixture) -> None:
-    expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).replace(tzinfo=None)
+    expired = (datetime.now(UTC) - timedelta(minutes=5)).replace(tzinfo=None)
     with fixture.Session.begin() as session:
         task = session.get(GenerationTask, fixture.task_id)
         assert task is not None
@@ -533,6 +533,7 @@ def test_stale_worker_epoch_cannot_enter_canon_transaction(
 
 def test_new_capacity_wait_does_not_recover_old_chapter_as_its_own(recovery_fixture):
     import json
+
     from forwin.application.generation import EnqueueGenerationCommand
     from forwin.models.project import Project
 
@@ -581,17 +582,18 @@ def test_new_capacity_wait_does_not_recover_old_chapter_as_its_own(recovery_fixt
 
 def test_offline_canon_publisher_outbox_is_successful_noop(recovery_fixture):
     import json
-    from datetime import datetime, UTC, timedelta
+    from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
-    from forwin.models.draft import CandidateDraftRecord
-    from forwin.models.canon import CanonCommitRecord
-    from forwin.production.capacity import SerialCapacityService
+
     from forwin.canon.outbox_events import CANON_PUBLISHER_REQUESTED
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.models.draft import CandidateDraftRecord
+    from forwin.outbox.worker import OutboxClaim
+    from forwin.production.capacity import SerialCapacityService
     from forwin.publisher_runtime.canon_jobs import (
         CanonPublisherJobService,
         build_canon_publisher_outbox_handlers,
     )
-    from forwin.outbox.worker import OutboxClaim
 
     fixture = recovery_fixture
     with fixture.Session.begin() as session:
@@ -651,6 +653,7 @@ def test_capacity_wait_resumes_its_prepared_candidate_without_writer(
     recovery_fixture, monkeypatch
 ):
     import json
+
     from forwin.models.project import Project
 
     fixture = recovery_fixture
@@ -662,7 +665,7 @@ def test_capacity_wait_resumes_its_prepared_candidate_without_writer(
         task = session.get(GenerationTask, fixture.task_id)
         task.status = "capacity_wait"
         task.resume_from_chapter = 1
-        task.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        task.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
         session.get(Project, fixture.project_id).automation_json = "{}"
     application, pipeline = _recovery_application(fixture, monkeypatch)
     first = run_one_generation_task(application_service=application, worker_id="wait-1")
@@ -674,7 +677,7 @@ def test_capacity_wait_resumes_its_prepared_candidate_without_writer(
         )
         assert session.scalar(select(func.count(CanonCommitRecord.id))) == 0
         task = session.get(GenerationTask, fixture.task_id)
-        task.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        task.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
         session.get(
             Project, fixture.project_id
         ).automation_json = '{"primary_publish_platform":"qidian"}'
@@ -688,13 +691,14 @@ def test_capacity_wait_resumes_its_prepared_candidate_without_writer(
 
 
 def test_enqueued_start_does_not_override_recorded_progress_on_crash(recovery_fixture):
+    from datetime import UTC, datetime, timedelta
+
     from forwin.application.generation import EnqueueGenerationCommand
-    from forwin.models.project import Project
     from forwin.generation.task_lease import (
-        generation_task_resume_from_chapter,
         claim_generation_task,
+        generation_task_resume_from_chapter,
     )
-    from datetime import datetime, UTC, timedelta
+    from forwin.models.project import Project
 
     fixture = recovery_fixture
     CanonAdmissionService(session_factory=fixture.Session).commit_plan(fixture.plan)

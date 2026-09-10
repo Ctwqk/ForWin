@@ -54,10 +54,11 @@ def test_mutation_authorization_persists_protection_before_external_action():
 
 def test_submitted_binding_protects_chapter_after_job_deletion():
     from sqlalchemy import delete
+
     from forwin.models.publisher import (
-        PublisherWorkBinding,
         PublisherChapterBinding,
         PublisherUploadJob,
+        PublisherWorkBinding,
     )
     from forwin.publisher_runtime.bindings import _normalize_publish_state
     from forwin.publisher_runtime.protection import require_revision_unprotected

@@ -71,12 +71,16 @@ def assert_mainline_unchanged(runtime):
 
 
 def test_mcp_revision_input_and_identity_output_schema():
-    catalog = tools(build_mcp_server(api_client=ForWinAPIClient(base_url="http://invalid")))
+    catalog = tools(
+        build_mcp_server(api_client=ForWinAPIClient(base_url="http://invalid"))
+    )
     retry_tool = catalog["chapter_review_retry"]
     assert {"replacement_body", "replacement_title", "expected_book_revision"} <= (
         retry_tool.inputSchema["properties"].keys()
     )
-    assert {"candidate_id", "book_revision"} <= retry_tool.outputSchema["properties"].keys()
+    assert {"candidate_id", "book_revision"} <= retry_tool.outputSchema[
+        "properties"
+    ].keys()
     assert "book_revision" in catalog["project_get"].outputSchema["properties"]
 
 
@@ -182,3 +186,42 @@ def test_mcp_chapter_body_and_identity_share_one_revision_during_concurrent_comm
         assert result["active_commit_id"] == runtime.accepted.commit_id
         futures[0].result(timeout=2)
     assert committed.is_set()
+
+
+def test_legacy_accepted_without_pointer_does_not_invent_canon_identity(runtime):
+    with runtime.fixture.Session.begin() as session:
+        session.get(
+            ChapterPlan, runtime.fixture.chapter_plan_id
+        ).active_commit_id = None
+        session.get(Project, runtime.fixture.project_id).book_revision = 0
+    result = call(
+        runtime.server,
+        "chapter_get",
+        {"project_id": runtime.fixture.project_id, "chapter_number": 1},
+    )
+    assert result["body"] == "Shen Linchuan enters the archive."
+    assert result["active_commit_id"] == result["candidate_id"] == ""
+    assert result["acceptance_revision"] == result["book_revision"] == 0
+
+
+def test_hash_mismatch_refuses_identity_and_releases_shared_lock(runtime):
+    with runtime.fixture.Session.begin() as session:
+        draft = session.scalar(
+            select(ChapterDraft).where(
+                ChapterDraft.chapter_plan_id == runtime.fixture.chapter_plan_id
+            )
+        )
+        draft.body_text = "Body no longer matches its accepted evidence."
+    with pytest.raises(ToolError, match="409.*Canon"):
+        call(
+            runtime.server,
+            "chapter_get",
+            {"project_id": runtime.fixture.project_id, "chapter_number": 1},
+        )
+    with runtime.fixture.Session.begin() as session:
+        project = session.scalar(
+            select(Project)
+            .where(Project.id == runtime.fixture.project_id)
+            .with_for_update(nowait=True)
+        )
+        assert project.id == runtime.fixture.project_id

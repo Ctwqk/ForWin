@@ -40,13 +40,14 @@ FROM python-base AS publisher-browser-runtime
 
 # Upload commands can occupy the extension beyond the default 90-second heartbeat window.
 ENV FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS=300
+ENV FORWIN_EXTENSION_PYTHON=/app/.venv/bin/python
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m playwright install --with-deps chromium
 
-CMD ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
+CMD ["bash", "-c", "exec scripts/launch_linux_extension_browser.sh"]
 
 FROM python-base AS forwin-runtime
 

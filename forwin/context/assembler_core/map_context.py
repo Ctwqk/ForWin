@@ -4,7 +4,7 @@ import logging
 from types import SimpleNamespace
 
 from forwin.book_state.map_graph import MapGraph
-from forwin.map.genesis_adapter import genesis_edge_endpoints, genesis_edge_source_constraints
+from forwin.map.genesis_route import GenesisRouteContractError, parse_genesis_route
 from forwin.map.visibility import genesis_edge_visibility
 
 
@@ -55,23 +55,35 @@ def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dic
             parts.append(f"Genesis 地点：{'、'.join(node_lines)}")
     node_names = {str(node.get("id")): str(node.get("name") or node.get("id")) for node in nodes if isinstance(node, dict)}
     route_lines: list[str] = []
-    for edge in map_atlas.get("edges", []) or []:
+    edge_rows = map_atlas.get("edges", [])
+    if not isinstance(edge_rows, list):
+        edge_rows = []
+        route_lines.append("world.map_atlas.edges 无法解析：应为路线列表；路线信息不完整。")
+    for index, edge in enumerate(edge_rows):
         if not isinstance(edge, dict):
+            route_lines.append(f"world.map_atlas.edges[{index}] 无法解析：应为路线对象；路线信息不完整。")
             continue
         if not _visible_map_edge(SimpleNamespace(
             **genesis_edge_visibility(edge),
-            edge_type=edge.get("edge_type", edge.get("kind", "path")),
+            edge_type=edge.get("edge_type") or edge.get("kind") or edge.get("type") or "path",
         )):
             continue
-        left, right = genesis_edge_endpoints(edge)
-        cost = str(edge.get("travel_cost") or "耗时未知")
-        arrow = "→" if str(edge.get("bidirectional", True)).lower() in {"false", "0", "no"} else "↔"
-        constraints = genesis_edge_source_constraints(edge)
-        details = [cost]
-        if constraints["source_control"]:
-            details.append("通行条件：" + constraints["source_control"])
-        if constraints["source_hazard"]:
-            details.append("风险说明：" + constraints["source_hazard"])
+        try:
+            route = parse_genesis_route(edge, path=f"world.map_atlas.edges[{index}]").route
+        except GenesisRouteContractError as exc:
+            route_lines.append(f"路线无法解析：{exc}；路线信息不完整。")
+            continue
+        if not _visible_map_edge(route):
+            continue
+        left, right = route.from_ref, route.to_ref
+        arrow = "↔" if route.bidirectional else "→"
+        details = [route.duration_text or "耗时未知"]
+        if route.mode:
+            details.append("交通方式：" + route.mode)
+        if route.conditions:
+            details.append("通行条件：" + "；".join(route.conditions))
+        if route.risks:
+            details.append("风险说明：" + "；".join(route.risks))
         route_lines.append(f"{node_names.get(left, left)}{arrow}{node_names.get(right, right)}：{'；'.join(details)}")
     if route_lines:
         parts.append("Genesis 路线约束：" + "；".join(route_lines[:24]))

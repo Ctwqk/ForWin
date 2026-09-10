@@ -13,9 +13,11 @@
 - 第一组 review 修复已提交为 `40bec1f`。后续 Band 旧放行证据、修订后继维护身份及短事务边界也已补强；根代理组合 117 项通过，独立入口/调用链 16 项通过。全量与完整镜像验证使用最终冻结候选另行记录，不把这些重叠局部计数当作真实百章结果。
 - 2026-09-10 的地图修复保留明确路线、补齐 Writer/BODY reviewer 证据和时长解析，相关 78 项通过。实际原始 atlas 的前后纯函数回放证明 0.01 小时传送门已变为原设定的 10/15 分钟路径；自由文本复合位置仍未知。新修复的全量、镜像及新 smoke/L100 待单独验证，见[失败报告](../superpowers/reports/2026-09-10-stage1-map-failure.md)。
 
-最新验收失败：地图修复候选 `23b8cb7` 已完成 3105 项全量回归及两类精确镜像验证，但新 smoke 在接纳第 2 章后安全暂停。第 1–2 章把锁定的四年前核心核查意见写为两年前；已定位 Genesis 来源事实在 Writer 与主 BODY reviewer 输入中的漏传，并按现有上下文链修复。原样本冻结，替换候选的完整 QA、镜像、新 smoke 和独立 L100 仍须另验，见[历史事实失败报告](../superpowers/reports/2026-09-10-stage1-genesis-reference-failure.md)。
+历史验收失败：地图修复候选 `23b8cb7` 已完成 3105 项全量回归及两类精确镜像验证，但新 smoke 在接纳第 2 章后安全暂停。第 1–2 章把锁定的四年前核心核查意见写为两年前；已定位 Genesis 来源事实在 Writer 与主 BODY reviewer 输入中的漏传，并按现有上下文链修复。原样本冻结，替换候选的完整 QA、镜像、新 smoke 和独立 L100 仍须另验，见[历史事实失败报告](../superpowers/reports/2026-09-10-stage1-genesis-reference-failure.md)。
 
-后续 `03143ef` 已通过 3123 项全量回归、4 项跳过、6 subtests，编译及关键静态检查通过，完整 Ruff 对原基线没有新增诊断；运行和浏览器镜像均按完整源码与依赖锁验证。其新项目在 Genesis Map 阶段发现十二项路线权限/风险原文漏传，尚无章节任务，不能称新 smoke 正文失败或通过。已沿现有地图 owner 修复并通过 192 项相关回归，当前执行 Task 13 的独立复审和重新冻结验收，见[地图报告](../superpowers/reports/2026-09-10-stage1-map-failure.md)。
+后续 `03143ef` 已通过 3123 项全量回归、4 项跳过、6 subtests，编译及关键静态检查通过，完整 Ruff 对原基线没有新增诊断；运行和浏览器镜像均按完整源码与依赖锁验证。其新项目在 Genesis Map 阶段发现十二项路线权限/风险原文漏传，尚无章节任务，不能称新 smoke 正文失败或通过。已沿现有地图 owner 修复并通过 192 项相关回归，该轮独立复审后形成 0b3c49a 候选，见[地图报告](../superpowers/reports/2026-09-10-stage1-map-failure.md)。
+
+最新候选 `5524e36` 完成 3156 项全量回归和两类完整镜像验证，修复了当前重写合同传递。其全新 smoke 在 Map revision 7 发现耗时、条件及交通方式字段漏传，尚无章节任务；当前 Task 15 正在统一路线合同并重新验证。旧 `0b3c49a` smoke 在第 3 章三次修复后停止，仅接纳 1–2 章。两轮均不能算 smoke20 或 L100 通过，见[修复合同记录](../superpowers/reports/2026-09-10-repair-writer-contract.md)和[路线合同记录](../superpowers/reports/2026-09-10-genesis-route-contract.md)。
 
 ## 运行基线调查
 

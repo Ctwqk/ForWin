@@ -6,6 +6,7 @@ from forwin.genesis.constants import (
     logger,
 )
 from typing import Any
+from forwin.map.genesis_route import parse_genesis_routes
 from forwin.world_templates import (
     default_minimum_extension_pack,
     default_minimum_world_system,
@@ -360,7 +361,9 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
         "submaps": normalized_submaps,
         "regions": normalized_regions,
         "nodes": normalized_nodes,
-        "edges": [item for item in (normalized.get("edges") or fallback.get("edges") or []) if isinstance(item, dict)],
+        "edges": [item.source_row for item in parse_genesis_routes(
+            normalized["edges"] if "edges" in normalized else fallback.get("edges", [])
+        )],
     }
     return result
 

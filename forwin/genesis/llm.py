@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from forwin.map.genesis_route import (
+    GenesisRouteContractError,
+    genesis_map_output_schema,
+    parse_genesis_routes,
+)
 from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,
     mark_latest_attempt_parse_failure,
@@ -333,10 +338,12 @@ def _call_json_with_trace_impl(
                 else "genesis",
                 stage_key=stage_key,
                 codex_allowed=not is_chapter_plan,
-                output_schema={"type": "object"},
+                output_schema=genesis_map_output_schema() if stage_key == "map" else {"type": "object"},
             )
             try:
                 payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
+                if stage_key == "map":
+                    parse_genesis_routes(payload.get("edges"), canonical=True)
             except Exception as exc:  # noqa: BLE001
                 mark_latest_attempt_parse_failure(
                     self.llm_client,
@@ -364,6 +371,10 @@ def _call_json_with_trace_impl(
                 attempts=attempts_payload,
                 output_summary={"mode": "success", "payload": payload},
             )
+        except GenesisRouteContractError:
+            # A model-authored route cannot be discarded in favor of a different
+            # scaffold after schema/contract failure. The prior revision survives.
+            raise
         except Exception as exc:  # noqa: BLE001
             attempts_payload.append(
                 {

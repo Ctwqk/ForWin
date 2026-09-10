@@ -7,11 +7,10 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from forwin.models.subworld import project_scoped_subworld_id
-from forwin.protocol.book_state import MapEdge, MapEdgeType
-from forwin.utils.duration import duration_hours
+from forwin.protocol.book_state import MapEdge
 
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
-from .visibility import genesis_edge_visibility
+from .genesis_route import GenesisRouteContractError, parse_genesis_routes
 
 _DEFAULT_REGION_ROLES = ["主舞台核心区", "权力中心区", "危险边缘区"]
 _SAFE_NODE_TYPES = {
@@ -105,22 +104,6 @@ def build_subworld_map_specs_from_genesis(
     return specs
 
 
-def genesis_edge_source_constraints(row: dict[str, Any]) -> dict[str, str]:
-    """Keep distinct authored prose; it does not grant access or quantify risk."""
-    def combined(*fields: str) -> str:
-        values: list[str] = []
-        for field in fields:
-            value = row.get(field)
-            if isinstance(value, str) and value.strip() and value not in values:
-                values.append(value)
-        return "；".join(values)
-
-    return {
-        "source_control": combined("control", "access"),
-        "source_hazard": combined("hazard", "risk"),
-    }
-
-
 def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> list[MapEdge] | None:
     """Normalize node-to-node Genesis routes once for local and cross-world IO.
 
@@ -141,59 +124,38 @@ def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> 
         if len(ids) == 1 and name not in by_ref:
             by_ref[name] = next(iter(ids))
     result: list[MapEdge] = []
-    seen: set[str] = set()
     subworld_refs = {str(item.get(key) or "") for item in map_atlas.get("submaps", []) if isinstance(item, dict) for key in ("id", "name")}
-    for index, row in enumerate(map_atlas.get("edges", []) or []):
-        if not isinstance(row, dict):
-            continue
-        left, right = genesis_edge_endpoints(row)
+    subworld_id_by_ref = {str(item.get(key) or ""): str(item.get("id") or "")
+                         for item in map_atlas.get("submaps", []) if isinstance(item, dict) for key in ("id", "name")}
+    node_parent_by_id = {str(node.get("id") or ""): str(node.get("parent_subworld") or node.get("parent_subworld_id") or node.get("subworld_id") or node.get("subworld_name") or "") for node in nodes}
+    for index, parsed in enumerate(parse_genesis_routes(map_atlas.get("edges", []))):
+        row, route = parsed.source_row, parsed.route
+        left, right = route.from_ref, route.to_ref
         if left not in by_ref or right not in by_ref:
             # Subworld-level edges are handled by the existing interconnection adapter.
             if left in subworld_refs and right in subworld_refs:
                 continue
             raise ValueError(f"authored map route has unresolved endpoint: {left} -> {right}")
-        source_id = str(row.get("id") or row.get("edge_id") or f"route-{index}-{hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]}")
-        if source_id in seen:
-            raise ValueError(f"duplicate authored map edge: {source_id}")
-        seen.add(source_id)
-        cost = str(row.get("travel_cost") or "")
-        hours = duration_hours(re.split(r"[；;]", cost, maxsplit=1)[0])
-        # Numeric travel_time is already expressed in the BookMap hour unit.
-        if isinstance(row.get("travel_time"), (int, float)) and not isinstance(row["travel_time"], bool):
-            hours = float(row["travel_time"])
-            if not 0 <= hours < float("inf"):
-                raise ValueError(f"invalid authored travel time: {source_id}")
-        kind = str(row.get("edge_type") or row.get("kind") or row.get("type") or "path")
-        kind = kind if kind in {item.value for item in MapEdgeType} else "path"
+        for side, endpoint, parent in (("from", left, parsed.from_subworld_ref), ("to", right, parsed.to_subworld_ref)):
+            if parent:
+                declared = subworld_id_by_ref.get(parent)
+                actual = subworld_id_by_ref.get(node_parent_by_id[by_ref[endpoint]])
+                if not declared or declared != actual:
+                    raise GenesisRouteContractError(parsed.source_path + f".{side}_subworld", "route parent does not match node ownership", row)
+        source_id = parsed.source_id(index)
         result.append(MapEdge(
             id=f"atlas_edge_{uuid5(NAMESPACE_URL, project_id + '|' + source_id).hex[:16]}",
             project_id=project_id, from_node_id=by_ref[left], to_node_id=by_ref[right],
-            edge_type=kind, bidirectional=str(row.get("bidirectional", True)).lower() not in {"false", "0", "no"},
-            travel_time=hours if hours is not None else 0.0,
-            **genesis_edge_visibility(row),
-            access_rule_id=str(row.get("access_rule_id") or ""),
+            edge_type=route.edge_type, bidirectional=route.bidirectional,
+            travel_time=parsed.hours if parsed.hours is not None else 0.0,
+            status=route.status, visibility_default=route.visibility_default,
+            discovered_by_default=route.discovered_by_default,
+            access_rule_id=route.access_rule_id,
             metadata={"source": "genesis_atlas_edges", "source_edge_id": source_id,
                       "source_from_ref": by_ref[left], "source_to_ref": by_ref[right],
-                      "source_travel_cost": cost, "travel_time_known": hours is not None,
-                      "source_relation": str(row.get("relation") or kind),
-                      **genesis_edge_source_constraints(row)},
+                      **parsed.metadata()},
         ))
     return result or None
-
-
-def genesis_edge_endpoints(row: dict[str, Any]) -> tuple[str, str]:
-    def endpoint(keys: tuple[str, ...]) -> str:
-        for key in keys:
-            raw = row.get(key)
-            if isinstance(raw, dict):
-                raw = raw.get("id") or raw.get("node_id") or raw.get("name") or raw.get("subworld_id")
-            if raw:
-                return str(raw).strip()
-        return ""
-    return (
-        endpoint(("from_node_id", "source_node_id", "from_node", "source_node", "from", "source", "from_subworld_id", "source_subworld_id", "from_subworld", "source_subworld")),
-        endpoint(("to_node_id", "target_node_id", "to_node", "target_node", "to", "target", "to_subworld_id", "target_subworld_id", "to_subworld", "target_subworld")),
-    )
 
 
 def _normalized_submaps(atlas: dict[str, Any]) -> list[dict[str, Any]]:

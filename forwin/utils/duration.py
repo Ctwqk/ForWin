@@ -8,6 +8,18 @@ _PART = re.compile(rf"(?P<number>{_NUMBER})\s*(?P<unit>分钟|小时|时辰|秒�
 _FACTORS = {"分钟": 1 / 60, "小时": 1, "时辰": 2, "秒钟": 1 / 3600, "秒": 1 / 3600, "天": 24, "日": 24}
 
 
+def is_non_exact_duration(text: str) -> bool:
+    """Recognize explicit range/bound/approximation syntax without assigning hours."""
+    unit = r"(?:分钟|小时|时辰|秒钟|秒|天|日)"
+    amount = rf"(?:{_NUMBER})\s*{unit}"
+    value = str(text or "").strip(" 。.,，")
+    return bool(re.fullmatch(
+        rf"(?:{_NUMBER})\s*(?:{unit})?\s*(?:至|到|[—–\-~～])\s*{amount}"
+        rf"|(?:约|大约|至少|至多|不超过|不少于)\s*{amount}"
+        rf"|{amount}\s*(?:左右|以上|以下|以内)", value,
+    ))
+
+
 def duration_hours(text: str) -> float | None:
     value = str(text or "").strip()
     value = re.sub(r"^.*(?:历时|耗时|共计|持续)", "", value)

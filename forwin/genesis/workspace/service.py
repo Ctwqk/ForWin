@@ -31,6 +31,7 @@ from forwin.audit.events import (
 )
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import Project
+from forwin.map.genesis_route import parse_genesis_routes
 from forwin.state.updater import StateUpdater
 
 from .name_suggestions import GenesisNameSuggestionService
@@ -461,6 +462,9 @@ class GenesisWorkspaceService:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         _ensure_revision_is_current(session, project, revision)
         pack = self.load_pack(revision)
+        if stage_key == "map":
+            map_atlas = _pack_stage_payload(pack, "map")
+            parse_genesis_routes(map_atlas.get("edges", []))
         stage_states = (
             pack.get("stage_states")
             if isinstance(pack.get("stage_states"), dict)

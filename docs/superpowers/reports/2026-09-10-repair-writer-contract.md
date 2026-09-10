@@ -24,4 +24,4 @@
 
 私有证据位于 `.superpowers/sdd/2026-09-09-forwin-three-stage/runs/forwin-stage1-smoke-0b3c49a04f98-f7e056/`：终态报告 `53-smoke-terminal-assessment.json`，正文版本与 hash、成本/门禁导出，以及 `repair-contract-diagnosis/` 下的失败回归和双源回放。四版 Writer 原始产物另按逐文件 SHA 留存；事件采样窗口存在潜在缺口，不宣称完整 trace 覆盖。
 
-新源码的全量 QA、完整角色镜像、新 smoke 和独立 L100 尚待执行。没有热修改失败运行、手工放行或生产部署。
+修复提交 `5524e362ed757a270801dd560d1984d185e7c7eb` 后，全量 QA 实际通过 3156 passed / 4 skipped，两类完整角色镜像均已验证。其新 smoke 在写作前的 Map revision 7 又发现路线字段合同不一致，尚未产生章节任务；详见[路线合同修复记录](2026-09-10-genesis-route-contract.md)。这轮工程验证不能替代 smoke20、独立 L100 或结尾验收。没有热修改失败运行、手工放行或生产部署。

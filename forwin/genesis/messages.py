@@ -8,6 +8,7 @@ from forwin.genesis.constants import (
     _GENESIS_SYSTEM_FOUNDATION,
 )
 from typing import Any
+from forwin.map.genesis_route import genesis_route_prompt_contract
 from forwin.models.project import Project
 from forwin.genesis.helpers import (
     _locked_stage_context,
@@ -64,6 +65,7 @@ def _build_stage_generation_messages(
         user_content = _prompt_sections(
             ("阶段", f"{label} ({stage_key})"),
             ("输出要求", "返回 MapAtlas JSON，至少包含 overview、topology_rules、submaps、regions、nodes、edges。"),
+            ("路线字段契约", genesis_route_prompt_contract()),
             ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
             ("已锁定阶段上下文（视为当前真值）", locked_context),
             ("BookBrief", book_brief),
@@ -167,6 +169,8 @@ def _build_stage_refine_messages(
     if target_path:
         sections.append(("目标路径", target_path))
         sections.append(("当前目标值", current_target))
+    if stage_key in {"map", "world"}:
+        sections.append(("路线字段契约", genesis_route_prompt_contract()))
     sections.extend(
         [
             ("当前阶段 JSON", current_payload),

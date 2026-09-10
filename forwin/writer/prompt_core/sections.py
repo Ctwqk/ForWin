@@ -491,11 +491,12 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
             hours = edge.get("travel_time") if metadata.get("travel_time_known") is not False else None
             duration = f"{float(hours):.3g}小时" if hours is not None else "耗时未知"
             source_cost = str(metadata.get("source_travel_cost") or "")
+            mode = str(metadata.get("source_mode") or "")
             controls = str(metadata.get("source_control") or "")
             hazards = str(metadata.get("source_hazard") or "")
             access_rule = str(edge.get("access_rule_id") or "")
             arrow = "↔" if edge.get("bidirectional") else "→"
-            lines.append(f"    · {names.get(edge.get('from_node_id'), edge.get('from_node_id'))}{arrow}{names.get(edge.get('to_node_id'), edge.get('to_node_id'))}：{duration}；来源约束：{source_cost or '未提供'}{('；通行条件：' + controls) if controls else ''}")
+            lines.append(f"    · {names.get(edge.get('from_node_id'), edge.get('from_node_id'))}{arrow}{names.get(edge.get('to_node_id'), edge.get('to_node_id'))}：{duration}；来源约束：{source_cost or '未提供'}{('；交通方式：' + mode) if mode else ''}{('；通行条件：' + controls) if controls else ''}")
             if hazards:
                 lines.append("      · 风险说明：" + hazards)
             if access_rule:

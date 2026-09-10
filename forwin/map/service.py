@@ -366,7 +366,8 @@ def build_interconnections_from_genesis_atlas(
     genesis_revision_id: str = "",
     required_subworld_ids: set[str] | None = None,
 ) -> tuple[list[InterSubWorldConnectionSpec], str]:
-    from .genesis_adapter import authored_edges_from_atlas, genesis_edge_endpoints
+    from .genesis_adapter import authored_edges_from_atlas
+    from .genesis_route import parse_genesis_routes
 
     authored = authored_edges_from_atlas(project_id=project_id, map_atlas=map_atlas)
     connections: list[InterSubWorldConnectionSpec] = []
@@ -402,61 +403,39 @@ def build_interconnections_from_genesis_atlas(
     node_subworld_by_ref = _atlas_node_subworld_lookup(map_atlas, subworld_by_ref)
     required = set(required_subworld_ids or [])
     available = {spec.subworld_id for spec in specs}
-    seen_pairs: set[tuple[str, str]] = set()
-    for edge in [item for item in (map_atlas.get("edges") or []) if isinstance(item, dict)]:
-        if authored is not None:
-            left_ref, right_ref = genesis_edge_endpoints(edge)
-            if left_ref in node_subworld_by_ref and right_ref in node_subworld_by_ref:
-                continue  # Already normalized, including independent parallel routes.
-        from_subworld_id = _resolve_atlas_edge_subworld(
-            edge=edge,
-            subworld_keys=["from_subworld_id", "source_subworld_id", "from_subworld", "source_subworld"],
-            node_keys=["from_node_id", "source_node_id", "from_node", "source_node", "from", "source"],
-            subworld_by_ref=subworld_by_ref,
-            node_subworld_by_ref=node_subworld_by_ref,
-        )
-        to_subworld_id = _resolve_atlas_edge_subworld(
-            edge=edge,
-            subworld_keys=["to_subworld_id", "target_subworld_id", "to_subworld", "target_subworld"],
-            node_keys=["to_node_id", "target_node_id", "to_node", "target_node", "to", "target"],
-            subworld_by_ref=subworld_by_ref,
-            node_subworld_by_ref=node_subworld_by_ref,
-        )
+    for index, parsed in enumerate(parse_genesis_routes(map_atlas.get("edges", []))):
+        route = parsed.route
+        left_ref, right_ref = route.from_ref, route.to_ref
+        if authored is not None and left_ref in node_subworld_by_ref and right_ref in node_subworld_by_ref:
+            continue  # Already normalized, including independent parallel routes.
+        from_subworld_id = subworld_by_ref.get(left_ref) or node_subworld_by_ref.get(left_ref)
+        to_subworld_id = subworld_by_ref.get(right_ref) or node_subworld_by_ref.get(right_ref)
         if not from_subworld_id or not to_subworld_id or from_subworld_id == to_subworld_id:
             continue
         if from_subworld_id not in available or to_subworld_id not in available:
             continue
         if required and from_subworld_id not in required and to_subworld_id not in required:
             continue
-        pair = tuple(sorted([from_subworld_id, to_subworld_id]))
-        if pair in seen_pairs:
-            continue
-        seen_pairs.add(pair)
-        source_edge_id = _text(edge.get("id") or edge.get("edge_id") or edge.get("source_edge_id"))
         connections.append(
             InterSubWorldConnectionSpec(
                 project_id=project_id,
                 from_subworld_id=from_subworld_id,
                 to_subworld_id=to_subworld_id,
-                edge_type="world_gate",
-                bidirectional=_truthy(edge.get("bidirectional"), default=True),
-                hidden=_edge_is_hidden(edge),
+                edge_type=route.edge_type,
+                bidirectional=route.bidirectional,
+                hidden=route.visibility_default == "hidden" or route.status == "hidden",
+                access_rule_id=route.access_rule_id,
+                travel_time=parsed.hours if parsed.hours is not None else 0.0,
                 metadata={
                     "source": "genesis_atlas_edges",
-                    "source_edge_id": source_edge_id,
-                    "source_edge_type": _text(edge.get("kind") or edge.get("edge_type") or edge.get("type")),
-                    "source_from_ref": _text(
-                        edge.get("from_node_id")
-                        or edge.get("source_node_id")
-                        or edge.get("from")
-                        or edge.get("source")
-                    ),
-                    "source_to_ref": _text(
-                        edge.get("to_node_id")
-                        or edge.get("target_node_id")
-                        or edge.get("to")
-                        or edge.get("target")
-                    ),
+                    "source_edge_id": parsed.source_id(index),
+                    "source_edge_type": route.edge_type,
+                    "source_from_ref": left_ref,
+                    "source_to_ref": right_ref,
+                    "source_status": route.status,
+                    "source_discovered": route.discovered_by_default,
+                    "source_visibility": route.visibility_default,
+                    **parsed.metadata(),
                     "genesis_revision_id": genesis_revision_id,
                 },
             )
@@ -488,32 +467,6 @@ def _atlas_node_subworld_lookup(
             if ref:
                 result[ref] = subworld_id
     return result
-
-
-def _resolve_atlas_edge_subworld(
-    *,
-    edge: dict[str, Any],
-    subworld_keys: list[str],
-    node_keys: list[str],
-    subworld_by_ref: dict[str, str],
-    node_subworld_by_ref: dict[str, str],
-) -> str:
-    for key in subworld_keys:
-        subworld_ref = _text(edge.get(key))
-        if subworld_ref:
-            resolved = subworld_by_ref.get(subworld_ref, subworld_ref if subworld_ref in subworld_by_ref.values() else "")
-            if resolved:
-                return resolved
-    for key in node_keys:
-        node_ref = _text(edge.get(key))
-        if not node_ref:
-            continue
-        if node_ref in node_subworld_by_ref:
-            return node_subworld_by_ref[node_ref]
-        resolved = subworld_by_ref.get(node_ref, node_ref if node_ref in subworld_by_ref.values() else "")
-        if resolved:
-            return resolved
-    return ""
 
 
 def _arc_expansion_default_interconnections(
@@ -568,6 +521,7 @@ def _persist_inter_subworld_connection(
     connection: InterSubWorldConnectionSpec,
 ) -> MapEdge:
     authored = connection.metadata.get("authored_node_route") is True
+    source_route = authored or "source_route" in connection.metadata
     if authored:
         nodes = repo.list_map_nodes(connection.project_id)
         def resolve(source_ref: str, subworld_id: str) -> str:
@@ -603,7 +557,7 @@ def _persist_inter_subworld_connection(
             from_node_id,
             to_node_id,
             connection.edge_type,
-            *([connection.metadata["source_edge_id"]] if authored else []),
+            *([connection.metadata["source_edge_id"]] if source_route else []),
         ),
         project_id=connection.project_id,
         subworld_id=connection.from_subworld_id,
@@ -612,14 +566,14 @@ def _persist_inter_subworld_connection(
         edge_type=connection.edge_type,
         bidirectional=connection.bidirectional,
         distance=round(connection.distance * multiplier, 2),
-        travel_time=connection.travel_time if authored else round(connection.travel_time * multiplier, 2),
+        travel_time=connection.travel_time if source_route else round(connection.travel_time * multiplier, 2),
         travel_cost=round(connection.travel_cost * multiplier, 2),
         risk_level=round(connection.risk_level * multiplier, 2),
         narrative_cost=round(connection.narrative_cost * multiplier, 2),
         access_rule_id=connection.access_rule_id,
-        status=connection.metadata["source_status"] if authored else "hidden" if connection.hidden else "open",
-        discovered_by_default=connection.metadata["source_discovered"] if authored else not connection.hidden,
-        visibility_default=connection.metadata["source_visibility"] if authored else "hidden" if connection.hidden else "visible",
+        status=connection.metadata["source_status"] if source_route else "hidden" if connection.hidden else "open",
+        discovered_by_default=connection.metadata["source_discovered"] if source_route else not connection.hidden,
+        visibility_default=connection.metadata["source_visibility"] if source_route else "hidden" if connection.hidden else "visible",
         metadata={
             **connection.metadata,
             "inter_subworld_edge": True,
@@ -718,24 +672,6 @@ def _text(value: Any) -> str:
                 return text
         return ""
     return str(value or "").strip()
-
-
-def _truthy(value: Any, *, default: bool = False) -> bool:
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "y", "on"}:
-        return True
-    if text in {"0", "false", "no", "n", "off"}:
-        return False
-    return default
-
-
-def _edge_is_hidden(edge: dict[str, Any]) -> bool:
-    status = str(edge.get("status", "") or edge.get("visibility", "") or "").strip().lower()
-    return _truthy(edge.get("hidden"), default=False) or status in {"hidden", "secret", "concealed"}
 
 
 def _latest_overlay(

@@ -13,6 +13,7 @@ from forwin.models.project import ChapterPlan
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import RepairInstruction
+from forwin.retrieval import RetrievalBroker
 from forwin.state.repo import StateRepository
 from tests.test_candidate_review_owner import database as _shared_database
 
@@ -24,15 +25,19 @@ def _owner():
         "A0 needs independent plan patch ownership"
     )
     module = importlib.import_module("forwin.review.repair.plan_patch")
+    broker = RetrievalBroker(context_budget_chars=50_000)
+    broker.build_chapter_context = (
+        lambda repo, project_id, plan: ChapterContextPack(
+            project_id=project_id, project_title="Book", premise="Fixture",
+            genre="fantasy", setting_summary="", chapter_number=plan.chapter_number,
+            chapter_plan_title=plan.title, chapter_plan_one_line="", chapter_goals=[],
+            chapter_experience_plan=repo.get_chapter_experience_plan(
+                project_id, plan.chapter_number
+            ),
+        )
+    )
     owner = module.RepairPlanPatchService(
-        retrieval_broker=SimpleNamespace(
-            build_chapter_context=lambda repo, project_id, plan: SimpleNamespace(
-                title=plan.title,
-                experience=repo.get_chapter_experience_plan(
-                    project_id, plan.chapter_number
-                ),
-            )
-        ),
+        retrieval_broker=broker,
         arc_envelope_manager=SimpleNamespace(
             _derive_chapter_experience_plan=lambda **kwargs: ChapterExperiencePlan(
                 question_hook=f"rebuilt {kwargs['chapter_number']}"
@@ -103,7 +108,7 @@ def test_chapter_patch_flushes_actual_plan_and_rebuilds_context(database):
     assert json.loads(chapter.goals_json) == ["取证"]
     assert json.loads(chapter.task_contract_json) == ["保持秘密"]
     assert json.loads(chapter.experience_plan_json)["question_hook"] == "Who?"
-    assert result.context.title == "新题"
+    assert result.context.chapter_plan_title == "新题"
     assert result.chapter_snapshot["title"] == "新题"
     assert result.chapter_snapshot["transient_overlay"] is False
     session.rollback()

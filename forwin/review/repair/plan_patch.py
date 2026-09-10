@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy.orm import Session
 
@@ -69,13 +69,6 @@ def chapter_experience_patch_payload(
     repair_instruction: RepairInstruction,
 ) -> dict[str, object]:
     repair_rule_anchors = countdown_repair_rule_anchors(repair_instruction.must_fix)
-    repair_rule_anchors.extend(
-        [
-            f"repair must fix: {item}"
-            for item in repair_instruction.must_fix[:3]
-            if str(item or "").strip()
-        ]
-    )
     update: dict[str, object] = {
         "planned_reward_tags": list(
             repair_instruction.design_patch.get("planned_reward_tags")
@@ -132,11 +125,12 @@ def chapter_experience_patch_payload(
         update["immersion_anchors"] = ["补入感官锚点", "让角色即时反应落地"]
     if repair_instruction.failure_type == "immersion" and not update["rule_anchors"]:
         update["rule_anchors"] = ["补清规则边界或代价，防止作者强行感"]
-    if repair_rule_anchors:
-        existing_rule_anchors = [
-            str(item) for item in update.get("rule_anchors", []) or []
-        ]
-        update["rule_anchors"] = [*repair_rule_anchors, *existing_rule_anchors]
+    # Generic repair text belongs to this rewrite, not the persistent plan.
+    existing_rule_anchors = [
+        str(item) for item in update.get("rule_anchors", []) or []
+        if not str(item).startswith("repair must fix:")
+    ]
+    update["rule_anchors"] = [*repair_rule_anchors, *existing_rule_anchors]
     if repair_instruction.failure_type == "stall" and not update["progress_markers"]:
         update["progress_markers"] = ["让主目标出现不可逆推进"]
     if repair_instruction.failure_type == "stall" and not update["question_hook"]:
@@ -360,6 +354,12 @@ class RepairPlanPatchService:
         self.arc_envelope_manager = arc_envelope_manager
 
     def apply(self, request: RepairPlanPatchRequest) -> RepairPlanPatchResult:
+        result = self._apply_plan_patch(request)
+        return replace(result, context=self.retrieval_broker.prepare_repair_context(
+            result.context, request.instruction
+        ))
+
+    def _apply_plan_patch(self, request: RepairPlanPatchRequest) -> RepairPlanPatchResult:
         session = request.session
         repo = request.repo
         project_id = request.project_id

@@ -167,6 +167,17 @@ The verified `03143ef` candidate has no chapter task in its fresh smoke yet. Its
 - [x] Verify local and cross-world persistence, independent review and the same immutable actual Map replay. Update current design and the map report. Related 192 passed; independent 52 passed (overlapping). Exact same-input replay at five layers improves 0/12 to 12/12 source conditions, travel cost remains 6/6. This proves input transport, not model compliance.
 - [ ] Freeze new source, full QA and both exact role images; start a fresh smoke before a separate L100. No runtime patch or reuse of held generated material as new qualification.
 
+### Task 14: Complete the current repair contract at the Writer boundary
+
+The frozen `0b3c49a` smoke stopped at chapter 3 after three ordinary repairs; only chapters 1–2 were accepted. Keep that sample and its terminal BODY, identities, costs and gates. A pure frozen-source replay and independent review found that all five Writer prompts receive only the first three `must_fix` entries and omit `must_preserve` / repair-specific `must_not_reveal`. This transport defect does not explain every narrative failure: the actual prompts still contain the accepted folder-state invariant, and a reviewer-suggested expansion can itself conflict with an earlier, finer-grained fact.
+
+**Design:** Give the current rewrite a transient typed view of the same three contract lists used by verification. Attach it after every plan rebuild and account for it in the existing soft context budget. Render all entries through one section shared by single, preview, breakdown, scene and stitch. Stop persisting generic repair instructions as cumulative experience-plan anchors. Keep existing countdown constraints, Canon priority, finite retries, verification and residual gates. Do not promote every earlier `must_fix` into a permanent rule or add a new approval/quality mechanism.
+
+- [x] Preserve terminal evidence and reproduce missing fourth fix, preservation and secrecy entries on frozen source without model calls.
+- [x] Add failing owner-to-prompt tests for all repair scopes, complete contract coverage, replacement/isolation and budget accounting. Initial 21 failed / 1 passed, then complete coverage and replacement regression pass.
+- [x] Implement the transient contract in existing protocol, plan-patch, retrieval and prompt owners; independently review and run related regressions. Root 108 + 39 and independent 30 tests passed (overlapping); [evidence and limits](../reports/2026-09-10-repair-writer-contract.md).
+- [ ] Freeze the new candidate, run complete QA and both role-image checks, then use a fresh smoke before a separate L100. Never resume the failed sample as qualification.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

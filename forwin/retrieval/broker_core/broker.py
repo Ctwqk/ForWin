@@ -31,6 +31,7 @@ from forwin.protocol.context import (
     PlanningPack,
     PlotThreadSnapshot,
     ReaderExperiencePack,
+    RepairContract,
     RelationSnapshot,
     RevealPack,
     ReviewPack,
@@ -158,6 +159,20 @@ class RetrievalBroker:
         )
 
         return pack
+
+    def prepare_repair_context(
+        self, pack: ChapterContextPack, contract: RepairContract
+    ) -> ChapterContextPack:
+        base = pack.model_copy(update={
+            "repair_contract": RepairContract.model_validate(
+                contract.model_dump(include=set(RepairContract.model_fields))
+            ),
+        })
+        trimmed = self._trim_pack(base)
+        self._finalize_context_summary(
+            base_pack=base, pack=trimmed, memories=base.retrieved_memories
+        )
+        return trimmed
 
     def _trim_pack(self, pack: ChapterContextPack) -> ChapterContextPack:
         pack = _budget_genesis_references(pack, self.context_budget_chars // 4)
@@ -849,6 +864,8 @@ class RetrievalBroker:
             payload.pop("genesis_reference_facts", None)
         if not payload.get("genesis_reference_omitted_count"):
             payload.pop("genesis_reference_omitted_count", None)
+        if payload.get("repair_contract") is None:
+            payload.pop("repair_contract", None)
         return len(json.dumps(payload, ensure_ascii=False))
 
     @classmethod

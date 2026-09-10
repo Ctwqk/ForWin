@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from forwin.protocol.context import LintSignal
+from forwin.protocol.context import LintSignal, RepairContract
 from forwin.protocol.experience import RewardTag
 
 RepairScope = Literal[
@@ -78,12 +78,9 @@ class ContinuityIssue(BaseModel):
     original_result: dict[str, object] = Field(default_factory=dict)
 
 
-class RepairInstruction(BaseModel):
+class RepairInstruction(RepairContract):
     repair_scope: RepairScope
     failure_type: RepairFailureType
-    must_fix: list[str] = Field(default_factory=list)
-    must_preserve: list[str] = Field(default_factory=list)
-    must_not_reveal: list[str] = Field(default_factory=list)
     required_delta_patch: dict[str, object] = Field(default_factory=dict)
     required_belief_patch: dict[str, object] = Field(default_factory=dict)
     required_hint_patch: dict[str, object] = Field(default_factory=dict)

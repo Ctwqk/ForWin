@@ -23,6 +23,7 @@ from .sections import (
     _normalize_char_targets,
     _personality_context_section,
     _previous_summaries_section,
+    _repair_contract_section,
     _retrieved_memories_section,
     _story_basics_section,
     _subworld_control_section,
@@ -95,6 +96,7 @@ def _scene_prompt_sections(
 ) -> str:
     sections: list[str | None] = [
         _story_basics_section(context),
+        _repair_contract_section(context),
         _chapter_plan_section(context, plan_title),
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
@@ -133,6 +135,7 @@ def build_single_chapter_draft_prompt(
     )
     user_sections = _join_sections(
         _story_basics_section(context),
+        _repair_contract_section(context),
         _canon_quality_context_section(context),
         _chapter_plan_section(context, "本章计划"),
         _previous_summaries_section(context, limit=3),
@@ -194,6 +197,7 @@ def build_preview_chapter_prompt(
     )
     user_sections = _join_sections(
         _story_basics_section(context),
+        _repair_contract_section(context),
         _chapter_plan_section(context, "预演章节计划"),
         _previous_summaries_section(context, limit=2),
         _active_entities_section(context, limit=5),

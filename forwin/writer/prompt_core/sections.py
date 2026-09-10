@@ -316,6 +316,25 @@ def _world_intent_section(context: ChapterContextPack) -> str | None:
     return "\n".join(lines)
 
 
+def _repair_contract_section(context: ChapterContextPack) -> str | None:
+    contract = context.repair_contract
+    if contract is None:
+        return None
+    lines = [
+        "【本次重写合同】",
+        "以下要求适用于本次修复的完整最终正文；必须同时满足，不能只修复前几项。",
+        "以已接纳 Canon 为事实依据；修复要求不授权改写 Canon、提前揭密或重演已完成事件。",
+    ]
+    for kind, label in (
+        ("must_fix", "必须修复"),
+        ("must_preserve", "必须保留"),
+        ("must_not_reveal", "不得揭示"),
+    ):
+        for index, value in enumerate(getattr(contract, kind), start=1):
+            lines.append(f"  · {label} {index}：{value}")
+    return "\n".join(lines)
+
+
 def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.previous_chapter_summaries:
         return None

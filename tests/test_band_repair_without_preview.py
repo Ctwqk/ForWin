@@ -3,8 +3,10 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from forwin.models.phase import BandExperiencePlan
+from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import RepairInstruction
+from forwin.retrieval import RetrievalBroker
 from forwin.review.repair.plan_patch import (
     RepairPlanPatchRequest,
     RepairPlanPatchService,
@@ -30,11 +32,15 @@ def test_band_schedule_repair_commits_without_preview_callback(database) -> None
         )
     )
     session.commit()
-    rebuilt_context = object()
+    rebuilt_context = ChapterContextPack(
+        project_id="book", project_title="Book", premise="Fixture", genre="fantasy",
+        setting_summary="", chapter_number=1, chapter_plan_title=chapter.title,
+        chapter_plan_one_line="", chapter_goals=[],
+    )
+    broker = RetrievalBroker(context_budget_chars=50_000)
+    broker.build_chapter_context = lambda *_args: rebuilt_context
     owner = RepairPlanPatchService(
-        retrieval_broker=SimpleNamespace(
-            build_chapter_context=lambda *_args: rebuilt_context
-        ),
+        retrieval_broker=broker,
         arc_envelope_manager=SimpleNamespace(
             _derive_chapter_experience_plan=lambda **_kwargs: ChapterExperiencePlan()
         ),
@@ -45,7 +51,7 @@ def test_band_schedule_repair_commits_without_preview_callback(database) -> None
             repo=StateRepository(session),
             project_id="book",
             chapter_plan=chapter,
-            context=None,
+            context=rebuilt_context,
             repair_scope="band_plan",
             instruction=RepairInstruction(
                 repair_scope="band_plan",
@@ -58,5 +64,7 @@ def test_band_schedule_repair_commits_without_preview_callback(database) -> None
     assert len(rows) == 1
     assert rows[0].id != "old"
     assert rows[0].stall_guard_max_gap == 1
-    assert result.context is rebuilt_context
+    assert result.context.model_dump(exclude={"repair_contract"}) == (
+        rebuilt_context.model_dump(exclude={"repair_contract"})
+    )
     assert result.failure_reason == ""

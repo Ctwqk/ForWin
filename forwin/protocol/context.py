@@ -222,6 +222,14 @@ class GenesisReferenceFact(BaseModel):
     text: str
 
 
+class RepairContract(BaseModel):
+    """Current rewrite requirements shared by Writer and repair verification."""
+
+    must_fix: list[str] = Field(default_factory=list)
+    must_preserve: list[str] = Field(default_factory=list)
+    must_not_reveal: list[str] = Field(default_factory=list)
+
+
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
 
@@ -243,6 +251,7 @@ class ChapterContextPack(BaseModel):
     chapter_plan_title: str
     chapter_plan_one_line: str
     chapter_goals: list[str]
+    repair_contract: RepairContract | None = None
 
     # History
     previous_chapter_summaries: list[str] = Field(

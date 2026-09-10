@@ -121,6 +121,8 @@ DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、
 
 RepairService 选择 scope，必要时修改未来计划，再重写、重新 review、验证 must_fix / must_preserve 和新风险。预算在当前 candidate/repair cycle 内计算。警告不自动变成必须修复；内容错误、合同错误与基础设施失败不能混为同一“重试”。
 
+当前重写通过 `ChapterContextPack.repair_contract` 接收与 verifier 同源的完整 `must_fix / must_preserve / must_not_reveal` 三列表。它在各 scope 完成计划重建后附加，纳入已有软上下文预算，再由单章、预演、场景拆分、场景生成和 stitch 共用一处完整渲染。合同不可按前三项截断；次要上下文依原规则裁剪，必需内容超过软预算时不静默删除合同，也不新增质量门。下一轮替换当前合同，普通初稿不携带；不再将通用纠错文本累积进持久化计划的规则锚点。现有倒计时专用提示和 Canon 优先级保持不变。此修复解决输入覆盖，不能保证模型输出或 reviewer 建议本身正确；真实 smoke 和 L100 仍需独立验收。
+
 标题属于修复合同里的可保留元数据：若合同精确保护当前标题，且本次计划没有显式改名，重写者应保留该标题。显式改名与旧 must_preserve 冲突时仍拒绝；本轮不靠删除 verifier 约束获得通过。
 
 RepairVerifier 对全部 must_fix、must_preserve、must_not_reveal 条件分别记录 pass / fail / unknown，并提供理由、判断方法和原稿/修复稿引用。规则只判断自己实际覆盖的条件；标题没变不等于人物认知等语义条件仍成立。语义验证使用完整原稿和最终正文，引用校验来源、逐字内容和字符偏移。有证据的语义反对最多交给同一verifier复核一次；超时不额外重试，不为补证据调用writer。

@@ -17,8 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from forwin.protocol.review import ReviewVerdict
 from forwin.planning.future_plan_audit import FuturePlanAuditRun
+from forwin.protocol.review import ReviewVerdict
+from forwin.writer.execution_errors import (
+    TransientLLMChapterFailure as TransientLLMChapterFailure,  # noqa: PLC0414 - public exception alias.
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +106,6 @@ def _future_plan_audit_checkpoint_payload(
     }
 
 
-class TransientLLMChapterFailure(RuntimeError):
-    """Current chapter failed because the upstream LLM looked temporarily unavailable."""
-
-    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
-        super().__init__(message)
-        self.cause = cause
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

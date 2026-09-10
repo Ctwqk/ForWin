@@ -12,6 +12,8 @@ from forwin.application.project_control.operations import (
     _checkpoint_action_gate_outcome,
 )
 from forwin.audit.gate_outcome import parse_gate_outcome
+from forwin.canon_quality.signals import CanonAdmissionGateResult
+from forwin.checker.hard_floor import HardFloorResult
 from forwin.generation.pipeline_core.audit_control import (
     AuditControlStage,
     _band_checkpoint_gate_outcome,
@@ -20,10 +22,12 @@ from forwin.generation.pipeline_core.chapter_execution_support import (
     hard_floor_gate_outcome,
 )
 from forwin.generation.pipeline_core.quality_gates import _canon_quality_gate_outcome
-from forwin.canon_quality.signals import CanonAdmissionGateResult
-from forwin.checker.hard_floor import HardFloorResult
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
+from forwin.observability.pipeline_trace import (
+    PipelineAuditContext,
+    PipelineTraceRecorder,
+)
 from forwin.planning.checkpoints import BandCheckpointIssueInfo
 from forwin.planning.future_plan_audit import FuturePlanAuditIssue, FuturePlanAuditRun
 from forwin.runtime.policy import RuntimePolicy
@@ -167,8 +171,9 @@ def test_generation_audit_deduplicates_reports_at_the_same_accepted_count(
 ) -> None:
     _add_accepted_plans(generation_audit_session, [1, 2, 3, 4, 5, 6])
     stage = AuditControlStage()
-    stage._audit_task_id = ""
-    stage._audit_root_event_id = ""
+    stage.trace_recorder = PipelineTraceRecorder(
+        audit=PipelineAuditContext(), artifact_store=None, observability=None,
+    )
     updater = StateUpdater(generation_audit_session)
 
     stage._record_generation_audit_report_if_due(

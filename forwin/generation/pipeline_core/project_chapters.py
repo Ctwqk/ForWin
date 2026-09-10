@@ -2,31 +2,34 @@ from __future__ import annotations
 
 import logging
 
-from forwin.production.capacity import CapacityWait
+from sqlalchemy.orm import Session
+
+from forwin.audit.events import DecisionEventType
+from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.types import CanonAdmissionOutcome
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
+from forwin.checker.rules import ContinuityChecker
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
-from forwin.maintenance import deferred as deferred_maintenance
+from forwin.generation.pipeline_core import chapter_execution_support
 from forwin.generation.pipeline_core.chapter_review_gate import (
     handle_chapter_review_gate,
 )
-from forwin.generation.pipeline_core import chapter_execution_support
-from forwin.generation.pipeline_core.result import RunResult
-from forwin.audit.events import DecisionEventType
-from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
+from forwin.generation.pipeline_core.result import RunResult
+from forwin.maintenance import deferred as deferred_maintenance
 from forwin.models.planning_control import BandCheckpoint
 from forwin.planning.future_plan_audit.models import FuturePlanAuditRun
-from forwin.checker.rules import ContinuityChecker
-from sqlalchemy.orm import Session
-from forwin.state.repo import StateRepository
-from forwin.state.updater import StateUpdater
+from forwin.production.capacity import CapacityWait
 from forwin.review.repair.service import (
     _canon_repair_scope,
     _canon_repair_scope_can_run,
 )
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+from forwin.writer.execution import WriterExecutionRequest
+from forwin.writer.execution_errors import is_transient_llm_like
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +85,16 @@ class ChapterExecutionStage:
                 if reserve is not None:
                     reserve(project_id, chapter_num)
             except CapacityWait as exc:
-                return RunResult(project_id=project_id, requested_chapters=requested_chapters,
-                    completed_chapters=completed_chapters, failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters, frozen_artifacts=frozen_artifacts,
-                    capacity_wait_reason=exc.reason, capacity_wait_chapter=chapter_num)
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    frozen_artifacts=frozen_artifacts,
+                    capacity_wait_reason=exc.reason,
+                    capacity_wait_chapter=chapter_num,
+                )
             post_canon_run_ids: list[str] = []
             try:
                 self._recover_post_canon_before_chapter(
@@ -318,14 +327,16 @@ class ChapterExecutionStage:
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                 )
-                writer_output = self._write_chapter_with_attention_fallback(
-                    context=context,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    updater=updater,
-                    paused_chapters=paused_chapters,
-                    frozen_artifacts=frozen_artifacts,
+                writer_result = self.writer_execution.execute(
+                    WriterExecutionRequest(
+                        context=context,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        updater=updater,
+                    )
                 )
+                frozen_artifacts.extend(writer_result.frozen_artifacts)
+                writer_output = writer_result.unwrap()
                 if writer_output is None:
                     if self._abort_requested():
                         return self._cancelled_result(
@@ -373,9 +384,7 @@ class ChapterExecutionStage:
                         writer_output=writer_output,
                     )
                 )
-                repair_attempt_count = int(
-                    chapter_plan.repair_attempt_count or 0
-                )
+                repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)
                 residual_review_issues = self._review_issue_payloads(verdict)
                 canon_risk_level = self._review_canon_risk(verdict)
                 session.commit()
@@ -438,8 +447,7 @@ class ChapterExecutionStage:
                             ),
                             chapter_number=chapter_num,
                             policy_version=int(
-                                getattr(evaluated_candidate, "policy_version", 0)
-                                or 0
+                                getattr(evaluated_candidate, "policy_version", 0) or 0
                             ),
                         )
                     )
@@ -933,10 +941,16 @@ class ChapterExecutionStage:
 
             except CapacityWait as exc:
                 session.rollback()
-                return RunResult(project_id=project_id, requested_chapters=requested_chapters,
-                    completed_chapters=completed_chapters, failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters, frozen_artifacts=frozen_artifacts,
-                    capacity_wait_reason=exc.reason, capacity_wait_chapter=chapter_num)
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    frozen_artifacts=frozen_artifacts,
+                    capacity_wait_reason=exc.reason,
+                    capacity_wait_chapter=chapter_num,
+                )
             except Exception as exc:
                 logger.exception("Chapter %d failed.", chapter_num)
                 session.rollback()
@@ -1004,9 +1018,9 @@ class ChapterExecutionStage:
                     paused_chapters=paused_chapters,
                 )
                 print(f"  ✗ 第{chapter_num}章失败: {exc}")
-                if isinstance(
-                    exc, TransientLLMChapterFailure
-                ) or self._is_transient_llm_like(exc):
+                if isinstance(exc, TransientLLMChapterFailure) or is_transient_llm_like(
+                    exc
+                ):
                     logger.warning(
                         "Stopping run after transient LLM failure on chapter %d to avoid cascading failures.",
                         chapter_num,

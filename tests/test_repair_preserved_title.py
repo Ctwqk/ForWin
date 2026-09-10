@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -19,6 +20,7 @@ from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.writer.execution import WriterExecutionResult
 from tests.postgres import postgres_test_url
 
 
@@ -91,7 +93,9 @@ def _run_title_repair(
         body="巳初二刻完成交割。" if keep_body_error else "辰正二刻完成交割。",
         end_of_chapter_summary="交割结束，准备离津。",
         scene_outputs=[
-            SceneOutput(scene_no=1, scene_objective="完成交割", text="场景记录原样保留。")
+            SceneOutput(
+                scene_no=1, scene_objective="完成交割", text="场景记录原样保留。"
+            )
         ],
         time_advance=TimeAdvance(
             new_time_label="辰正三刻", duration_description="交割后一刻"
@@ -124,7 +128,9 @@ def _run_title_repair(
         pipeline.repair_execution,
         _plan_writer_output_entities=lambda *, writer_output, **_kwargs: writer_output,
         _review_current_output=review_output,
-        _write_chapter_with_attention_fallback=lambda **_kwargs: rewritten,
+        writer_execution=SimpleNamespace(
+            execute=lambda _request: WriterExecutionResult(output=rewritten)
+        ),
     )
     output, review, forced_accept = pipeline.repair.review_candidate(
         execution=execution,
@@ -153,7 +159,9 @@ def _run_title_repair(
     return output, review, forced_accept, seen_outputs, rewritten
 
 
-def test_repair_keeps_exactly_protected_title_before_review_and_persistence(repair_runtime):
+def test_repair_keeps_exactly_protected_title_before_review_and_persistence(
+    repair_runtime,
+):
     output, review, forced_accept, seen_outputs, rewritten = _run_title_repair(
         repair_runtime, must_preserve=["第10章"]
     )
@@ -216,17 +224,21 @@ def test_preserving_title_does_not_accept_an_unfixed_body_error(repair_runtime):
     assert forced_accept is False
 
 
-def test_repair_event_reports_unknown_coverage_without_claiming_contract_success(repair_runtime):
+def test_repair_event_reports_unknown_coverage_without_claiming_contract_success(
+    repair_runtime,
+):
     from forwin.audit.events import DecisionEventType
     from forwin.models.audit import DecisionEvent
 
     _, review, _, _, _ = _run_title_repair(repair_runtime, must_preserve=["第10章"])
     assert review.repair_verification.fixed_all_must_fix is None
     _, session, chapter_plan = repair_runtime
-    event = session.scalars(select(DecisionEvent).where(
-        DecisionEvent.project_id == chapter_plan.project_id,
-        DecisionEvent.event_type == DecisionEventType.REPAIR_SUCCEEDED,
-    )).one()
+    event = session.scalars(
+        select(DecisionEvent).where(
+            DecisionEvent.project_id == chapter_plan.project_id,
+            DecisionEvent.event_type == DecisionEventType.REPAIR_SUCCEEDED,
+        )
+    ).one()
     assert "未验证" in event.summary
     assert "已修复。" not in event.summary
 
@@ -291,7 +303,12 @@ def test_legacy_stored_review_missing_aggregate_fields_still_defaults_to_failure
     project_id = chapter_plan.project_id
     draft = StateUpdater(session).save_draft(
         chapter_plan.id,
-        WriterOutput(chapter_number=10, title="旧记录", body="旧稿正文。", end_of_chapter_summary=""),
+        WriterOutput(
+            chapter_number=10,
+            title="旧记录",
+            body="旧稿正文。",
+            end_of_chapter_summary="",
+        ),
         raw_response="",
     )
     row = ChapterReview(
@@ -310,7 +327,9 @@ def test_legacy_stored_review_missing_aggregate_fields_still_defaults_to_failure
         assert reloaded.repair_verification.preserved_all_must_preserve is False
         assert candidate_ineligibility_reason(reloaded)
     api = get_chapter_review(
-        project_id, 10, get_session=pipeline._SessionFactory,
+        project_id,
+        10,
+        get_session=pipeline._SessionFactory,
         decision_refs_for_chapter_review=lambda _session, **_kwargs: [],
     )
     assert api.repair_verification.fixed_all_must_fix is False

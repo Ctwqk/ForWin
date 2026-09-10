@@ -1,17 +1,44 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from forwin.audit.events import (
+    DecisionEventType,
+)
+from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.generation.pipeline_core.common import (
     _future_plan_audit_checkpoint_payload,
     logger,
 )
-from typing import Any
-from forwin.planning.checkpoints import BandCheckpointIssueInfo
-from forwin.review.issue_groups import issue_group_for_issue
-from forwin.models.project import ChapterPlan
 from forwin.models.audit import DecisionEvent
-from forwin.planning.future_plan_audit import FuturePlanAuditRun
-import json
+from forwin.models.draft import (
+    ChapterDraft,
+    ChapterReview,
+)
+from forwin.models.phase import BandExperiencePlan
+from forwin.models.planning_control import BandCheckpoint
+from forwin.models.project import ChapterPlan, Project
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.planning.checkpoints import (
+    BandCheckpointDetail,
+    BandCheckpointIssueInfo,
+    band_is_first_chapter,
+    chapter_blocking_message,
+)
+from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
+from forwin.planning.health import PlanHealthService
+from forwin.planning.query import PlanningQuery
+from forwin.protocol.experience import BandDelightSchedule
+from forwin.review.decision.audit import (
+    build_decision_event_payload,
+    digest_decision_input,
+)
+from forwin.review.decision.types import Decision, DecisionInput
+from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.plan_checks import (
     band_combined_text,
     evaluate_band_obligation_contract,
@@ -22,37 +49,8 @@ from forwin.review.plan_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
-from forwin.planning.checkpoints import (
-    band_is_first_chapter,
-    BandCheckpointDetail,
-    chapter_blocking_message,
-)
-from forwin.audit.events import (
-    DecisionEventInfo,
-    DecisionEventType,
-    ensure_decision_event_type,
-)
-from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
-from forwin.models.planning_control import BandCheckpoint
-from forwin.protocol.experience import BandDelightSchedule
-from forwin.models.phase import BandExperiencePlan
-from forwin.models.draft import (
-    ChapterDraft,
-    ChapterReview,
-)
-from forwin.planning.future_plan_audit import FuturePlanAuditor
-from forwin.models.project import Project
-from sqlalchemy.orm import Session
-from forwin.state.updater import StateUpdater
-from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.planning.health import PlanHealthService
-from forwin.planning.query import PlanningQuery
-from forwin.review.decision.audit import (
-    build_decision_event_payload,
-    digest_decision_input,
-)
-from forwin.review.decision.types import Decision, DecisionInput
 from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
 
 
 def _future_plan_gate_outcome(
@@ -173,29 +171,25 @@ class AuditControlStage:
         parent_event_id: str = "",
         causal_root_id: str = "",
     ):
-        row = updater.save_decision_event(
-            DecisionEventInfo(
-                project_id=project_id,
-                task_id=task_id or self._audit_task_id,
-                band_id=band_id,
-                chapter_number=chapter_number,
-                scope=scope,
-                event_family=event_family,
-                event_type=ensure_decision_event_type(event_type),
-                actor_type=actor_type,
-                actor_id=actor_id,
-                summary=summary,
-                reason=reason,
-                payload=payload or {},
-                related_object_type=related_object_type,
-                related_object_id=related_object_id,
-                parent_event_id=parent_event_id,
-                causal_root_id=causal_root_id or self._audit_root_event_id,
-            )
+        return self.trace_recorder.record_event(
+            updater=updater,
+            project_id=project_id,
+            event_family=event_family,
+            event_type=event_type,
+            summary=summary,
+            reason=reason,
+            scope=scope,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            band_id=band_id,
+            chapter_number=chapter_number,
+            task_id=task_id,
+            related_object_type=related_object_type,
+            related_object_id=related_object_id,
+            payload=payload,
+            parent_event_id=parent_event_id,
+            causal_root_id=causal_root_id,
         )
-        if not self._audit_root_event_id:
-            self._audit_root_event_id = str(row.causal_root_id or row.id or "")
-        return row
 
     def _record_rule_decision_event(
         self,

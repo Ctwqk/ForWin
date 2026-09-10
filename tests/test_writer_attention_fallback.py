@@ -5,16 +5,18 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from forwin.config import InfrastructureConfig
 from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
+from forwin.config import InfrastructureConfig
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ChapterPlan
-from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from forwin.writer.execution import WriterExecutionRequest
+from forwin.writer.execution_errors import is_transient_llm_like
 from tests.postgres import postgres_test_url
 
 
@@ -53,7 +55,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             "'https://api.minimaxi.com/v1/chat/completions'"
         )
 
-        self.assertTrue(ChapterPipeline._is_transient_llm_like(exc))
+        self.assertTrue(is_transient_llm_like(exc))
 
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(
         self,
@@ -75,8 +77,6 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     generation_meta={"mode": "writer_preview"},
                 )
                 updater = Mock()
-                paused_chapters: list[int] = []
-                frozen_artifacts: list[str] = []
 
                 with (
                     patch.object(
@@ -90,14 +90,15 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                         return_value=preview_output,
                     ) as mocked_preview,
                 ):
-                    result = pipeline._write_chapter_with_attention_fallback(
-                        context=SimpleNamespace(chapter_number=1),
-                        project_id="project-1",
-                        chapter_number=1,
-                        updater=updater,
-                        paused_chapters=paused_chapters,
-                        frozen_artifacts=frozen_artifacts,
+                    execution_result = pipeline.writer_execution.execute(
+                        WriterExecutionRequest(
+                            context=SimpleNamespace(chapter_number=1),
+                            project_id="project-1",
+                            chapter_number=1,
+                            updater=updater,
+                        )
                     )
+                    result = execution_result.unwrap()
 
                 self.assertIs(result, preview_output)
                 self.assertTrue(result.generation_meta["fallback_from_writer_error"])
@@ -113,8 +114,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 )
                 self.assertFalse(preview_kwargs["retry_on_timeout"])
                 updater.mark_chapter_status.assert_not_called()
-                self.assertEqual(paused_chapters, [])
-                self.assertEqual(frozen_artifacts, [])
+                self.assertEqual(execution_result.frozen_artifacts, ())
             finally:
                 pipeline.llm_client.close()
                 pipeline.engine.dispose()
@@ -172,14 +172,14 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                         return_value=preview_output,
                     ),
                 ):
-                    result = pipeline._write_chapter_with_attention_fallback(
-                        context=SimpleNamespace(chapter_number=1),
-                        project_id="project-1",
-                        chapter_number=1,
-                        updater=updater,
-                        paused_chapters=[],
-                        frozen_artifacts=[],
-                    )
+                    result = pipeline.writer_execution.execute(
+                        WriterExecutionRequest(
+                            context=SimpleNamespace(chapter_number=1),
+                            project_id="project-1",
+                            chapter_number=1,
+                            updater=updater,
+                        )
+                    ).unwrap()
 
                 self.assertIs(result, preview_output)
                 infos = [
@@ -222,11 +222,11 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             captured: dict[str, str] = {}
 
             def fake_write_chapter(
-                context,  # noqa: ANN001
+                context,
                 *,
                 llm_preferred_provider_kind: str = "",
                 llm_preferred_model: str = "",
-                **_kwargs,  # noqa: ANN003
+                **_kwargs,
             ) -> WriterOutput:
                 captured["provider"] = llm_preferred_provider_kind
                 captured["model"] = llm_preferred_model
@@ -251,17 +251,17 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             with patch.object(
                 pipeline.writer, "write_chapter", side_effect=fake_write_chapter
             ):
-                result = pipeline._write_chapter_with_attention_fallback(
-                    context=SimpleNamespace(chapter_number=1),
-                    project_id="project-1",
-                    chapter_number=1,
-                    updater=updater,
-                    paused_chapters=[],
-                    frozen_artifacts=[],
-                    trace_stage_key="chapter_rewrite",
-                    llm_preferred_provider_kind="deepseek",
-                    llm_preferred_model="deepseek-reasoner",
-                )
+                result = pipeline.writer_execution.execute(
+                    WriterExecutionRequest(
+                        context=SimpleNamespace(chapter_number=1),
+                        project_id="project-1",
+                        chapter_number=1,
+                        updater=updater,
+                        trace_stage_key="chapter_rewrite",
+                        llm_preferred_provider_kind="deepseek",
+                        llm_preferred_model="deepseek-reasoner",
+                    )
+                ).unwrap()
 
             self.assertIsNotNone(result)
             self.assertEqual(
@@ -333,7 +333,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                         side_effect=RuntimeError("HTTP 529 Unknown Status Code"),
                     ),
                     patch(
-                        "forwin.generation.pipeline_core.writer_attention.time.sleep",
+                        "forwin.writer.execution.time.sleep",
                         return_value=None,
                     ),
                 ):

@@ -33,6 +33,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.writer.execution import WriterExecutionResult
 from tests.postgres import postgres_test_url
 
 
@@ -311,7 +312,9 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             _strict_progression_block=lambda **_kwargs: ("", "", ""),
             _manual_boundary_checkpoint=lambda *_args, **_kwargs: None,
             _audit_current_plan_before_write=lambda **kwargs: kwargs["context"],
-            _write_chapter_with_attention_fallback=lambda **_kwargs: writer_output,
+            writer_execution=SimpleNamespace(
+                execute=lambda _request: WriterExecutionResult(output=writer_output)
+            ),
             _review_issue_payloads=lambda _verdict: [],
             _review_canon_risk=lambda _verdict: "low",
             _resolve_gate_delegation=lambda **kwargs: (

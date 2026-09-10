@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from sqlalchemy import select, text
 
 from forwin.config import InfrastructureConfig
+from forwin.generation.pipeline import ChapterPipeline
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
@@ -14,7 +15,6 @@ from forwin.observability.ports import NullObservability
 from forwin.observability.query_service import ObservabilityQueryService
 from forwin.observability.service import ObservabilityService
 from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
-from forwin.generation.pipeline import ChapterPipeline
 from tests.postgres import postgres_test_url
 
 
@@ -207,7 +207,11 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
         )
         pipeline = ChapterPipeline.__new__(ChapterPipeline)
         pipeline.observability = obs
+        from forwin.observability.pipeline_trace import PipelineTraceRecorder
         pipeline._audit_task_id = "task-prompt-parent"
+        pipeline.trace_recorder = PipelineTraceRecorder(
+            audit=pipeline.audit_context, artifact_store=None, observability=obs,
+        )
         pipeline._audit_root_event_id = ""
 
         ctx = OperationContext(

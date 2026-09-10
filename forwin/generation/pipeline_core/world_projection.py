@@ -17,59 +17,7 @@ from forwin.maintenance.state import post_canon_control_blockers
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.planning_control import BandCheckpoint
 from forwin.planning.checkpoints import BandCheckpointDetail, BandCheckpointIssueInfo
-from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
-
-
-def _prompt_trace_success_summary(
-    writer_output: WriterOutput,
-) -> dict[str, object]:
-    generation_meta = getattr(writer_output, "generation_meta", {}) or {}
-    prompt_trace = (
-        generation_meta.get("prompt_trace") if isinstance(generation_meta, dict) else {}
-    )
-    attempts = (
-        prompt_trace.get("attempts", []) if isinstance(prompt_trace, dict) else []
-    )
-    if not isinstance(attempts, list):
-        attempts = []
-    successful = None
-    for item in attempts:
-        if not isinstance(item, dict):
-            continue
-        if int(item.get("output_chars") or 0) > 0 and not str(
-            item.get("error_class") or ""
-        ):
-            successful = item
-    if successful is None and attempts:
-        successful = next(
-            (item for item in reversed(attempts) if isinstance(item, dict)),
-            None,
-        )
-    if not isinstance(successful, dict):
-        return {
-            "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
-            "effective_model": "",
-            "effective_profile_id": "",
-            "successful_attempt_no": 0,
-            "attempt_group_id": "",
-            "output_chars": int(getattr(writer_output, "char_count", 0) or 0),
-            "fallback_chain": generation_meta.get("model_fallbacks", []),
-        }
-    return {
-        "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
-        "effective_model": str(successful.get("model") or ""),
-        "effective_profile_id": str(successful.get("profile_id") or ""),
-        "effective_profile_name": str(successful.get("profile_name") or ""),
-        "successful_attempt_no": int(successful.get("attempt_no") or 0),
-        "attempt_group_id": str(successful.get("attempt_group_id") or ""),
-        "output_chars": int(
-            successful.get("output_chars")
-            or getattr(writer_output, "char_count", 0)
-            or 0
-        ),
-        "fallback_chain": generation_meta.get("model_fallbacks", []),
-    }
 
 
 class PostCanonStage:
@@ -113,7 +61,7 @@ class PostCanonStage:
                 chapter_number=chapter_number,
             )
 
-        def run_controls(control_session: Session, commit) -> dict[str, Any]:  # noqa: ANN001
+        def run_controls(control_session: Session, commit) -> dict[str, Any]:
             repo, updater, _checker = self._make_state_helpers(control_session)
             candidate = control_session.get(CandidateDraftRecord, commit.candidate_id)
             if candidate is None:
@@ -368,10 +316,6 @@ class PostCanonStage:
     def _post_canon_worker_id(self, *, chapter_number: int, purpose: str) -> str:
         task_id = str(getattr(self, "_audit_task_id", "") or "direct")
         return f"pipeline:{task_id}:{int(chapter_number or 0)}:{purpose}"
-
-    @staticmethod
-    def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, object]:
-        return _prompt_trace_success_summary(writer_output)
 
 
 __all__ = ["PostCanonStage"]

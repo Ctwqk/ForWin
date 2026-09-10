@@ -8,17 +8,15 @@ from pathlib import Path
 
 import pytest
 
-import forwin.book_state as book_state
-import forwin.map as book_map
-import forwin.review as review
 import forwin.book_state.extraction as book_state_extraction
+import forwin.map as book_map
+from forwin import book_state, review
 from forwin.application.project_control import ProjectControlApplicationDeps
 from forwin.http.routes import (
     ApiRouteDeps,
     CoreDeps,
     PublisherDeps,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -619,7 +617,6 @@ def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> No
         "AuditControlStage",
         "ReviewWorkflowStage",
         "ChapterExecutionStage",
-        "WriterExecutionStage",
         "FinalizationStage",
     }.issubset(bases)
 

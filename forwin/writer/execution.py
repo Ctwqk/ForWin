@@ -1,55 +1,142 @@
+"""Independent Writer execution; the coordinator owns pause and chapter progress."""
+
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
+from forwin.audit.events import DecisionEventType
+from forwin.llm.compat import filter_supported_kwargs
+from forwin.observability.llm_trace import safe_prompt_trace_attempts
 from forwin.observability.payloads import (
     attempt_group_ids,
     audit_payload,
     event_error_payload,
     safe_error_summary,
 )
-from forwin.audit.events import DecisionEventType
-from forwin.state.updater import StateUpdater
-import time
-from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
+from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
+from forwin.skills import SkillPromptLayerBuilder, SkillRouter
+from forwin.state.updater import StateUpdater
+from forwin.storage import ArtifactStore
+
+from .chapter_writer import ChapterWriter
+from .execution_errors import (
+    TransientLLMChapterFailure,
+    error_category_from_attempts,
+    is_timeout_like,
+    is_transient_llm_like,
+    transient_retry_delay,
+)
+from .execution_telemetry import WriterExecutionTelemetry, prompt_trace_success_summary
 
 logger = logging.getLogger(__name__)
 
 
-class WriterExecutionStage:
-    """Owns the writer attention stage behavior."""
+@dataclass(frozen=True, slots=True)
+class WriterExecutionRequest:
+    context: ChapterContextPack
+    project_id: str
+    chapter_number: int
+    updater: StateUpdater
+    trace_stage_key: str = "chapter_draft"
+    llm_preferred_provider_kind: str = ""
+    llm_preferred_model: str = ""
 
-    def _write_chapter_with_attention_fallback(
+
+@dataclass(frozen=True, slots=True)
+class WriterExecutionResult:
+    output: WriterOutput | None = None
+    error: Exception | None = None
+    frozen_artifacts: tuple[str, ...] = ()
+
+    @property
+    def aborted(self) -> bool:
+        return self.output is None and self.error is None
+
+    def unwrap(self) -> WriterOutput | None:
+        if self.error is not None:
+            raise self.error
+        return self.output
+
+
+def _call_compatible(function, *args, **kwargs):
+    return function(*args, **filter_supported_kwargs(function, kwargs))
+
+
+class WriterExecution:
+    def __init__(
         self,
         *,
-        context,
-        project_id: str,
-        chapter_number: int,
-        updater: StateUpdater,
-        paused_chapters: list[int],
-        frozen_artifacts: list[str],
-        trace_stage_key: str = "chapter_draft",
-        llm_preferred_provider_kind: str = "",
-        llm_preferred_model: str = "",
+        policy: RuntimePolicy,
+        writer: ChapterWriter,
+        skill_router: SkillRouter,
+        skill_prompt_layer_builder: SkillPromptLayerBuilder,
+        artifact_store: ArtifactStore,
+        telemetry: WriterExecutionTelemetry,
+        should_abort: Callable[[], bool] | None = None,
+    ):
+        self.policy = policy
+        self.writer = writer
+        self.skill_router = skill_router
+        self.skill_prompt_layer_builder = skill_prompt_layer_builder
+        self.artifact_store = artifact_store
+        self.telemetry = telemetry
+        self.should_abort = should_abort
+
+    def execute(self, request: WriterExecutionRequest) -> WriterExecutionResult:
+        frozen_artifacts: list[str] = []
+        try:
+            output = self._execute(request, frozen_artifacts)
+        except Exception as exc:  # noqa: BLE001 - unwrap preserves the original failure.
+            # Callers propagate the original exception through unwrap, after
+            # retaining the artifacts this attempt produced.
+            return WriterExecutionResult(
+                error=exc, frozen_artifacts=tuple(frozen_artifacts)
+            )
+        return WriterExecutionResult(
+            output=output, frozen_artifacts=tuple(frozen_artifacts)
+        )
+
+    def _abort_requested(self) -> bool:
+        try:
+            return bool(self.should_abort and self.should_abort())
+        except Exception:
+            logger.debug("Ignoring abort predicate failure.", exc_info=True)
+            return False
+
+    def _execute(
+        self, request: WriterExecutionRequest, frozen_artifacts: list[str]
     ) -> WriterOutput | None:
+        context = request.context
+        project_id = request.project_id
+        chapter_number = request.chapter_number
+        updater = request.updater
+        trace_stage_key = request.trace_stage_key
+        llm_preferred_provider_kind = request.llm_preferred_provider_kind
+        llm_preferred_model = request.llm_preferred_model
         max_attempts = max(1, int(self.policy.writer_attention_retries))
         last_error: Exception | None = None
         last_failure_event_id = ""
         last_failed_attempt = 0
         saw_transient_error = False
-        writer_skill_layers = self._select_skill_layers(
-            scope="writer",
-            stage_key=trace_stage_key,
-            task_family="write_chapter",
+        writer_skill_layers = self.skill_prompt_layer_builder.build(
+            self.skill_router.select(
+                scope="writer",
+                stage_key=trace_stage_key,
+                task_family="write_chapter",
+            )
         )
         for attempt in range(1, max_attempts + 1):
             if self._abort_requested():
                 return None
             started_at = time.perf_counter()
-            model_profile_id, model_name = self._current_model_identity()
+            model_profile_id, model_name = self.telemetry.model_identity()
             try:
-                self._record_decision_event(
+                self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -60,7 +147,7 @@ class WriterExecutionStage:
                     payload=audit_payload(
                         stage="writing_chapter",
                         status="started",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         attempt_no=attempt,
                         max_attempts=max_attempts,
                         model_profile_id=model_profile_id,
@@ -69,7 +156,7 @@ class WriterExecutionStage:
                         preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
-                output = self._call_with_compatible_kwargs(
+                output = _call_compatible(
                     self.writer.write_chapter,
                     context,
                     skill_layers=writer_skill_layers,
@@ -78,14 +165,14 @@ class WriterExecutionStage:
                     llm_preferred_model=llm_preferred_model,
                 )
                 duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
-                self._record_model_fallback_payloads(
+                self.telemetry.record_model_fallbacks(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
                     parent_stage="writing_chapter",
                     events=output.generation_meta.get("model_fallbacks") or [],
                 )
-                self._record_decision_event(
+                self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -96,7 +183,7 @@ class WriterExecutionStage:
                     payload=audit_payload(
                         stage="writing_chapter",
                         status="succeeded",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         duration_ms=duration_ms,
                         attempt_no=attempt,
                         max_attempts=max_attempts,
@@ -106,7 +193,7 @@ class WriterExecutionStage:
                         preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
-                self._record_decision_event(
+                self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -117,7 +204,7 @@ class WriterExecutionStage:
                     payload=audit_payload(
                         stage="writing_chapter",
                         status="succeeded",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         duration_ms=duration_ms,
                         model_profile_id=model_profile_id,
                         model=model_name,
@@ -126,7 +213,7 @@ class WriterExecutionStage:
                         preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
-                self._record_decision_event(
+                self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -137,7 +224,7 @@ class WriterExecutionStage:
                     payload=audit_payload(
                         stage="writing_chapter",
                         status="succeeded",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         duration_ms=duration_ms,
                         char_count=int(getattr(output, "char_count", 0) or 0),
                         mode=str(
@@ -160,10 +247,10 @@ class WriterExecutionStage:
                 return output
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                is_transient = self._is_transient_llm_like(exc)
+                is_transient = is_transient_llm_like(exc)
                 saw_transient_error = saw_transient_error or is_transient
                 duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
-                self._record_model_fallback_payloads(
+                self.telemetry.record_model_fallbacks(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -172,18 +259,18 @@ class WriterExecutionStage:
                         getattr(
                             self.writer.llm_client,
                             "drain_model_fallback_events",
-                            lambda: [],
+                            list,
                         )()
                         or []
                     ),
                 )
-                llm_attempts = self._safe_prompt_trace_attempts(
-                    self._drain_llm_attempt_events(),
+                llm_attempts = safe_prompt_trace_attempts(
+                    self.telemetry.drain_attempts(),
                     fallback_attempt_no=attempt,
                     exc=exc,
                     duration_ms=duration_ms,
                 )
-                error_category = self._error_category_from_attempts(llm_attempts, exc)
+                error_category = error_category_from_attempts(llm_attempts, exc)
                 logger.warning(
                     "Writer failed for chapter %d on attempt %d/%d: %s",
                     chapter_number,
@@ -191,7 +278,7 @@ class WriterExecutionStage:
                     max_attempts,
                     exc,
                 )
-                failure_event = self._record_decision_event(
+                failure_event = self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -202,7 +289,7 @@ class WriterExecutionStage:
                     payload=event_error_payload(
                         exc,
                         stage="writing_chapter",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         duration_ms=duration_ms,
                         error_category=error_category,
                         attempt_no=attempt,
@@ -221,7 +308,7 @@ class WriterExecutionStage:
                 )
                 failed_attempts = drain_attempts() if callable(drain_attempts) else []
                 if failed_attempts:
-                    self._save_prompt_trace_payload(
+                    self.telemetry.save_prompt_trace(
                         session=updater.session,
                         updater=updater,
                         project_id=project_id,
@@ -254,7 +341,7 @@ class WriterExecutionStage:
                     )
                 last_failure_event_id = str(getattr(failure_event, "id", "") or "")
                 last_failed_attempt = attempt
-                self._record_failure_prompt_trace(
+                self.telemetry.record_failure_trace(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -267,14 +354,14 @@ class WriterExecutionStage:
                     attempts=llm_attempts,
                     skill_layers=writer_skill_layers,
                 )
-                if self._is_timeout_like(exc):
+                if is_timeout_like(exc):
                     logger.warning(
                         "Writer timeout detected for chapter %d; skipping extra retries.",
                         chapter_number,
                     )
                     break
                 if is_transient and attempt < max_attempts:
-                    delay = self._transient_retry_delay(attempt)
+                    delay = transient_retry_delay(attempt)
                     logger.warning(
                         "Transient LLM failure detected for chapter %d; waiting %.1f s before writer retry %d/%d.",
                         chapter_number,
@@ -282,7 +369,7 @@ class WriterExecutionStage:
                         attempt + 1,
                         max_attempts,
                     )
-                    self._record_decision_event(
+                    self.telemetry.record_event(
                         updater=updater,
                         project_id=project_id,
                         chapter_number=chapter_number,
@@ -293,7 +380,7 @@ class WriterExecutionStage:
                         payload=audit_payload(
                             stage="writing_chapter",
                             status="retry_scheduled",
-                            operation_id=self._audit_operation_id(),
+                            operation_id=self.telemetry.operation_id(),
                             attempt_no=attempt + 1,
                             previous_attempt=attempt,
                             delay_seconds=delay,
@@ -310,7 +397,7 @@ class WriterExecutionStage:
             preview_started_at = time.perf_counter()
             preview_max_attempts = 3 if saw_transient_error else 2
             preview_timeout_seconds = self.writer.single_call_timeout_seconds
-            preview_started_event = self._record_decision_event(
+            preview_started_event = self.telemetry.record_event(
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -322,7 +409,7 @@ class WriterExecutionStage:
                 payload=audit_payload(
                     stage="chapter_preview_fallback",
                     status="started",
-                    operation_id=self._audit_operation_id(),
+                    operation_id=self.telemetry.operation_id(),
                     source_error_class=last_error.__class__.__name__,
                     source_error_message=safe_error_summary(last_error),
                     source_attempt_no=last_failed_attempt,
@@ -331,7 +418,7 @@ class WriterExecutionStage:
                 ),
             )
             try:
-                preview_output = self._call_with_compatible_kwargs(
+                preview_output = _call_compatible(
                     self.writer.write_preview_chapter,
                     context,
                     skill_layers=writer_skill_layers,
@@ -346,8 +433,8 @@ class WriterExecutionStage:
                         "writer_fallback_error": str(last_error),
                     }
                 )
-                fallback_summary = self._prompt_trace_success_summary(preview_output)
-                self._record_decision_event(
+                fallback_summary = prompt_trace_success_summary(preview_output)
+                self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -359,7 +446,7 @@ class WriterExecutionStage:
                     payload=audit_payload(
                         stage="chapter_preview_fallback",
                         status="succeeded",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         source_error_class=last_error.__class__.__name__,
                         source_error_message=safe_error_summary(last_error),
                         source_attempt_no=last_failed_attempt,
@@ -385,16 +472,16 @@ class WriterExecutionStage:
                 preview_duration_ms = max(
                     0, int((time.perf_counter() - preview_started_at) * 1000)
                 )
-                preview_attempts = self._safe_prompt_trace_attempts(
-                    self._drain_llm_attempt_events(),
+                preview_attempts = safe_prompt_trace_attempts(
+                    self.telemetry.drain_attempts(),
                     fallback_attempt_no=0,
                     exc=preview_exc,
                     duration_ms=preview_duration_ms,
                 )
-                preview_error_category = self._error_category_from_attempts(
+                preview_error_category = error_category_from_attempts(
                     preview_attempts, preview_exc
                 )
-                preview_failure_event = self._record_decision_event(
+                preview_failure_event = self.telemetry.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -409,7 +496,7 @@ class WriterExecutionStage:
                     payload=event_error_payload(
                         preview_exc,
                         stage="chapter_preview_fallback",
-                        operation_id=self._audit_operation_id(),
+                        operation_id=self.telemetry.operation_id(),
                         duration_ms=preview_duration_ms,
                         error_category=preview_error_category,
                         source_error_class=last_error.__class__.__name__,
@@ -421,7 +508,7 @@ class WriterExecutionStage:
                         attempt_group_ids=attempt_group_ids(preview_attempts),
                     ),
                 )
-                self._record_failure_prompt_trace(
+                self.telemetry.record_failure_trace(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -459,6 +546,3 @@ class WriterExecutionStage:
                 str(last_error), cause=last_error
             ) from last_error
         raise last_error or RuntimeError("writer failed")
-
-
-__all__ = ["WriterExecutionStage"]

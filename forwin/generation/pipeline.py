@@ -13,9 +13,9 @@ from forwin.canon import (
 from forwin.director import ArcDirector
 from forwin.generation.gate_delegation import GateDelegationService
 from forwin.generation.pipeline_core.acceptance import AcceptanceStage
+from forwin.generation.pipeline_core.audit_control import AuditControlStage
 from forwin.generation.pipeline_core.finalization import FinalizationStage
 from forwin.generation.pipeline_core.gate_delegation import GateDelegationStage
-from forwin.generation.pipeline_core.audit_control import AuditControlStage
 from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
 from forwin.generation.pipeline_core.quality_gates import QualityDiagnosticsStage
 from forwin.generation.pipeline_core.repair_patches import RepairPlanningStage
@@ -23,10 +23,13 @@ from forwin.generation.pipeline_core.review_autofix import ReviewWorkflowStage
 from forwin.generation.pipeline_core.run_control import RunControlStage
 from forwin.generation.pipeline_core.runtime_helpers import RuntimeSupportStage
 from forwin.generation.pipeline_core.world_projection import PostCanonStage
-from forwin.generation.pipeline_core.writer_attention import WriterExecutionStage
 from forwin.genesis import BookGenesisService
-from forwin.model_adapter import ModelAdapter
 from forwin.maintenance.post_canon import PostCanonMaintenanceService
+from forwin.model_adapter import ModelAdapter
+from forwin.observability.pipeline_trace import (
+    PipelineAuditContext,
+    PipelineTraceRecorder,
+)
 from forwin.observability.ports import SpanHandle
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
@@ -45,6 +48,8 @@ from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
+from forwin.writer.execution import WriterExecution
+from forwin.writer.execution_telemetry import WriterExecutionTelemetry
 
 
 class ChapterPipeline(
@@ -56,7 +61,6 @@ class ChapterPipeline(
     RepairPlanningStage,
     GateDelegationStage,
     ChapterExecutionStage,
-    WriterExecutionStage,
     QualityDiagnosticsStage,
     PostCanonStage,
     FinalizationStage,
@@ -99,8 +103,9 @@ class ChapterPipeline(
         self.progress_callback = progress_callback
         self.should_abort = should_abort
         self.should_pause = should_pause
-        self._audit_task_id = str(task_id or "").strip()
-        self._audit_root_event_id = str(root_event_id or "").strip()
+        self.audit_context = PipelineAuditContext(
+            str(task_id or "").strip(), str(root_event_id or "").strip()
+        )
         self._audit_project_id = ""
         self._audit_updater: StateUpdater | None = None
         self._audit_stage_name = ""
@@ -121,6 +126,22 @@ class ChapterPipeline(
         self.artifact_store = artifact_store
         self.observability = observability
         self.writer = writer
+        self.trace_recorder = PipelineTraceRecorder(
+            audit=self.audit_context,
+            artifact_store=artifact_store,
+            observability=observability,
+        )
+        self.writer_execution = WriterExecution(
+            policy=policy,
+            writer=writer,
+            skill_router=skill_router,
+            skill_prompt_layer_builder=skill_prompt_layer_builder,
+            artifact_store=artifact_store,
+            telemetry=WriterExecutionTelemetry(
+                recorder=self.trace_recorder, writer=writer, model_client=llm_client
+            ),
+            should_abort=should_abort,
+        )
         self.stage_analyzer = stage_analyzer
         self.pacing_strategist = pacing_strategist
         self.replan_governor = replan_governor
@@ -174,14 +195,32 @@ class ChapterPipeline(
             _chapter_plan_snapshot=self._chapter_plan_snapshot,
             _band_plan_snapshot=self._band_plan_snapshot,
             _emit_progress=self._emit_progress,
-            _write_chapter_with_attention_fallback=(
-                self._write_chapter_with_attention_fallback
-            ),
+            writer_execution=self.writer_execution,
             _review_with_repair_verification=self._review_with_repair_verification,
             _chapter_experience_patch_payload=self._chapter_experience_patch_payload,
             _replace_band_schedule=self._replace_band_schedule,
             _band_schedule_patch_payload=self._band_schedule_patch_payload,
         )
+
+    @property
+    def _audit_task_id(self) -> str:
+        return self.audit_context.task_id
+
+    @_audit_task_id.setter
+    def _audit_task_id(self, value: str) -> None:
+        if not hasattr(self, "audit_context"):
+            self.audit_context = PipelineAuditContext()
+        self.audit_context.task_id = value
+
+    @property
+    def _audit_root_event_id(self) -> str:
+        return self.audit_context.root_event_id
+
+    @_audit_root_event_id.setter
+    def _audit_root_event_id(self, value: str) -> None:
+        if not hasattr(self, "audit_context"):
+            self.audit_context = PipelineAuditContext()
+        self.audit_context.root_event_id = value
 
     def close(self) -> None:
         runtime_container = self._runtime_container

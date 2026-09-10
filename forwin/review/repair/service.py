@@ -44,6 +44,7 @@ from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.writer.execution import WriterExecution, WriterExecutionRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,7 @@ class RepairExecution:
     _chapter_plan_snapshot: Callable[..., dict[str, object]]
     _band_plan_snapshot: Callable[..., dict[str, object]]
     _emit_progress: Callable[..., None]
-    _write_chapter_with_attention_fallback: Callable[..., WriterOutput | None]
+    writer_execution: WriterExecution
     _review_with_repair_verification: Callable[..., ReviewVerdict]
     _chapter_experience_patch_payload: Callable[..., dict[str, object]]
     _replace_band_schedule: Callable[..., None]
@@ -75,9 +76,7 @@ class RepairExecution:
 
 REVIEW_REPAIR_PHASE = "review_repair"
 CANON_REPAIR_PHASE = "canon_repair"
-_EXECUTABLE_REPAIR_OUTCOMES = frozenset(
-    {"local_repair", "chapter_patch", "band_patch"}
-)
+_EXECUTABLE_REPAIR_OUTCOMES = frozenset({"local_repair", "chapter_patch", "band_patch"})
 
 
 def _attempt_repair_phase(attempt: object) -> str:
@@ -108,16 +107,12 @@ def _attempts_for_draft_cycle(
         deferred: list[object] = []
         progressed = False
         for attempt in pending:
-            source_draft_id = str(
-                getattr(attempt, "source_draft_id", "") or ""
-            )
+            source_draft_id = str(getattr(attempt, "source_draft_id", "") or "")
             if source_draft_id not in reachable_draft_ids:
                 deferred.append(attempt)
                 continue
             selected.append(attempt)
-            result_draft_id = str(
-                getattr(attempt, "result_draft_id", "") or ""
-            )
+            result_draft_id = str(getattr(attempt, "result_draft_id", "") or "")
             if result_draft_id:
                 reachable_draft_ids.add(result_draft_id)
             progressed = True
@@ -138,12 +133,8 @@ def _draft_cycle_root_id(
     while root_draft_id:
         parent_draft_id = ""
         for attempt in reversed(attempts):
-            source_draft_id = str(
-                getattr(attempt, "source_draft_id", "") or ""
-            )
-            result_draft_id = str(
-                getattr(attempt, "result_draft_id", "") or ""
-            )
+            source_draft_id = str(getattr(attempt, "source_draft_id", "") or "")
+            result_draft_id = str(getattr(attempt, "result_draft_id", "") or "")
             if (
                 result_draft_id == root_draft_id
                 and source_draft_id
@@ -277,14 +268,16 @@ def _final_residual_from_engine_decision(decision: Decision) -> FinalResidualDec
 
 
 def _normalize_repair_decision(decision: Decision) -> Decision:
-    if decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES or decision.outcome == "manual_review":
+    if (
+        decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES
+        or decision.outcome == "manual_review"
+    ):
         return decision
     proposed_scope = str(decision.sub_action.get("scope") or "")
     return Decision(
         outcome="manual_review",
-        reason=(
-            f"{decision.reason}; " if decision.reason else ""
-        ) + f"{decision.outcome} is not executable by the chapter repair loop",
+        reason=(f"{decision.reason}; " if decision.reason else "")
+        + f"{decision.outcome} is not executable by the chapter repair loop",
         rule_id="repair_scope_not_executable",
         missing_evidence=list(
             dict.fromkeys([*decision.missing_evidence, "repair_executor_capability"])
@@ -597,9 +590,7 @@ def _run_repair_loop_for_phase(
         )
         phase_attempts = _attempts_for_repair_phase(cycle_attempts, repair_phase)
         phase_rewrite_limit = self.policy.review.effective_rewrite_limit(
-            has_blocking_issue=any(
-                issue.blocking for issue in current_review.issues
-            )
+            has_blocking_issue=any(issue.blocking for issue in current_review.issues)
         )
         repair_v2_input = DecisionInput(
             project_id=project_id,
@@ -643,7 +634,9 @@ def _run_repair_loop_for_phase(
             related_object_id=current_review_row.id,
             parent_event_id=str(current_review_event.id or ""),
         )
-        repair_can_run_locally = repair_v2_decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES
+        repair_can_run_locally = (
+            repair_v2_decision.outcome in _EXECUTABLE_REPAIR_OUTCOMES
+        )
         if not repair_can_run_locally:
             repair_event_id = str(getattr(repair_decision_event, "id", "") or "")
             return _apply_final_residual_decision(
@@ -825,19 +818,19 @@ def _run_repair_loop_for_phase(
                     project_id=project_id,
                     current_chapter=chapter_plan.chapter_number,
                 )
-                rewritten_output = self._write_chapter_with_attention_fallback(
-                    context=updated_context,
-                    project_id=project_id,
-                    chapter_number=chapter_plan.chapter_number,
-                    updater=updater,
-                    paused_chapters=[],
-                    frozen_artifacts=[],
-                    trace_stage_key="chapter_rewrite",
-                    llm_preferred_provider_kind=repair_model_preference[
-                        "preferred_provider_kind"
-                    ],
-                    llm_preferred_model=repair_model_preference["preferred_model"],
-                )
+                rewritten_output = self.writer_execution.execute(
+                    WriterExecutionRequest(
+                        context=updated_context,
+                        project_id=project_id,
+                        chapter_number=chapter_plan.chapter_number,
+                        updater=updater,
+                        trace_stage_key="chapter_rewrite",
+                        llm_preferred_provider_kind=repair_model_preference[
+                            "preferred_provider_kind"
+                        ],
+                        llm_preferred_model=repair_model_preference["preferred_model"],
+                    )
+                ).unwrap()
                 if self._pause_requested():
                     session.commit()
                     return current_output, current_review, False
@@ -1201,7 +1194,9 @@ def _apply_repair_patch(
     repair_instruction: RepairInstruction,
 ) -> tuple[dict[str, object], Any, dict[str, object], dict[str, object], str]:
     if getattr(chapter_plan, "active_commit_id", None) and repair_scope != "draft":
-        raise ValueError("accepted chapter plan requires an isolated candidate revision")
+        raise ValueError(
+            "accepted chapter plan requires an isolated candidate revision"
+        )
     current_plan = (
         repo.get_chapter_experience_plan(project_id, chapter_plan.chapter_number)
         or ChapterExperiencePlan()

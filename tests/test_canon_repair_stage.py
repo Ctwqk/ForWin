@@ -7,34 +7,34 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from tests.postgres import postgres_test_url
+from forwin.application.projects.reviews import get_chapter_review
 from forwin.canon import (
     CanonAdmissionOutcome,
     CanonQualityGateOutcome,
 )
-from forwin.checker.hard_floor import HardFloorResult
 from forwin.canon_quality.signals import CanonAdmissionGateResult
+from forwin.checker.hard_floor import HardFloorResult
 from forwin.config import InfrastructureConfig
-from forwin.models.base import Base, get_engine, get_session_factory
-from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.audit import DecisionEvent
-from forwin.models.phase import ChapterRewriteAttempt
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.generation.pipeline_core import project_chapters as project_chapters_module
 from forwin.generation.pipeline_core import quality_gates as quality_gates_module
+from forwin.models.audit import DecisionEvent
+from forwin.models.base import Base, get_engine, get_session_factory
+from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.phase import ChapterRewriteAttempt
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
+from forwin.protocol.writer import WriterOutput
+from forwin.review.decision.rules.repair_v2 import decide_repair_v2
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.review.repair import service as repair_service_module
 from forwin.review.repair.service import (
     _attempts_for_repair_phase,
     _review_from_canon_gate_block,
 )
-from forwin.application.projects.reviews import get_chapter_review
-from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.protocol.writer import WriterOutput
-from forwin.review.decision.rules.repair_v2 import decide_repair_v2
-from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from tests.postgres import postgres_test_url
 
 
 def _session_factory():
@@ -404,7 +404,6 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     class _ObligationRepo:
         def __init__(self, _session) -> None:
             calls.append("obligation_repo")
-            return None
 
         def list_active_for_context(self, *_args, **_kwargs):
             return []
@@ -418,7 +417,6 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     class _CanonQualityRepo:
         def __init__(self, _session) -> None:
             calls.append("canon_quality_repo")
-            return None
 
         def save_admission_run(self, gate_result, *, signals):
             calls.append("save_admission")
@@ -434,7 +432,6 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
 
         def _record_decision_event(self, **kwargs) -> None:
             calls.append(f"event:{kwargs['event_type']}")
-            return None
 
     monkeypatch.setattr(
         quality_gates_module,
@@ -819,11 +816,8 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
             context.chapter_number
         )
         pipeline.draft_review = WarnThenFailReviewHub()
-        pipeline._write_chapter_with_attention_fallback = lambda **kwargs: (
-            _writer_output(
-                int(kwargs["chapter_number"]),
-                marker=f"repair-{pipeline.draft_review.calls}",
-            )
+        pipeline.writer.write_chapter = lambda context: _writer_output(
+            int(context.chapter_number), marker=f"repair-{pipeline.draft_review.calls}",
         )
         monkeypatch.setattr(
             repair_service_module,

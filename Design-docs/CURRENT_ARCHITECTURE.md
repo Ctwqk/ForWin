@@ -119,9 +119,11 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 
 `Knowledge Projection`、`Obsidian Vault`、Karpathy-style `LLM KB`、chapter memory index 和 World Studio 视图都必须可从 BookState 重建。它们不是 canon writer；章节接纳只写 deterministic outbox，投影失败重试且不能回滚 accepted state。Obsidian 是单向 export 投影，保留的人工 section 独立进入 human index；Canon 编辑必须通过 generic proposal，不存在 reverse import。
 
+`novel_export` 在普通 Canon、历史修订及 world edit 成功事务中只追加独立的版本请求，不改变原三类 Canon recovery 事件。outbox handler 依据保留历史重建目标 book revision，核对真实 BODY hash，把有限 manifest 持久冻结后再写 Markdown。发布引用标记为捕获时所见，不虚构目标 revision 当时的发布状态。每书文件锁、固定目录 FD 与原子 current 指针保证重试不重复、乱序不回退；文件副本丢失可由冻结请求及 Canon 历史重建，故障不回滚接纳。默认在 `artifact_root/novel_exports`，不包含原始评论、读者身份、trace 或凭据。本轮只提供文件导出，未引入 Git 仓库/远端管理或直接导入 Canon；见[导出报告](../docs/superpowers/reports/2026-09-09-novel-export.md)。
+
 ## Schema 基线
 
-生产 schema 只由 Alembic 管理，当前唯一 revision 为 `0001_v5_baseline`。应用启动只校验 v5 revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
+生产 schema 只由 Alembic 管理，当前源码 head 为 `0007_feedback_actions`。应用启动只校验 revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表。已部署的旧 `0001_v5_baseline` 经准确版本及 schema 指纹检查后走事务内的向前桥接，再进入主迁移链；原 baseline 与历史数据保留，歧义拒绝迁移。已在生产备份的隔离副本验证，正式部署仍需停妥、重新备份和显式迁移，见[迁移操作说明](../docs/operations/legacy-forward-migration.md)。
 
 ## 地图红线
 

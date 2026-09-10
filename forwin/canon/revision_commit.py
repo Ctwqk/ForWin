@@ -293,6 +293,9 @@ def commit_revision(owner, plan, *, model_identity, failure_injector):
                 candidate.canon_commit_id = plans[0].canon_commit_id
                 candidate.canon_commit_plan_json = plans[0].model_dump_json()
                 project.book_revision += 1
+                from forwin.novel_export.events import enqueue_book_export
+
+                enqueue_book_export(session, project)
                 record.accepted_book_revision = project.book_revision
                 session.flush()
                 failure_injector("chapter")

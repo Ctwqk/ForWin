@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from forwin.review.candidate_autofix import apply_placeholder_leakage_autofix
-
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage
 from forwin.checker.reference_classifier import (
     looks_like_generic_character_reference,
@@ -9,6 +7,7 @@ from forwin.checker.reference_classifier import (
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.review.candidate_autofix import apply_placeholder_leakage_autofix
 
 
 def test_placeholder_in_signature_blocks_canon() -> None:

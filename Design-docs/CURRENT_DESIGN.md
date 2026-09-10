@@ -1,10 +1,10 @@
 # ForWin 当前设计
 
-> 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页的既有实现描述以源码为准；新版本身份、冻结、修订核验和 5% 限制在逐包实施。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
+> 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-更新：2026-09-04。范围：当前源码实际实现及本轮已验证的收口修改。
+更新：2026-09-09。范围：`codex/three-stage-improvements` 已提交的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构与合格反馈链路。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
-当前设计以已集成的 `master@0a06cfa` 为基础，包含随后按外部评审落实的修复验证、trace补传和同日调度修复。分支整合与前轮消融见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)，本轮边界见[运行自主性修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)，本地证据见[修复验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。
+源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。
 
 ## 1. 系统用途与边界
 
@@ -12,7 +12,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
 
 系统围绕一本书和顺序章节运行。不同项目可以并行生成；同一项目不能让相邻章节抢先提交。网页、World Studio、MCP、CLI 和定时生产只是不同入口，不各自拥有一套生成逻辑。
 
-当前没有多租户/RBAC/计费体系，也没有为了 v5 拆分数据库或重做微服务拓扑。v5 使用新 schema，不迁移旧项目、旧 task payload 和旧设置。正式版本发布是否完成与“代码已有实现”分开判断。
+当前没有多租户/RBAC/计费体系，也没有为了本轮拆分数据库或重做微服务拓扑。现存数据库必须先备份、在隔离副本验证，再使用 Alembic 向前迁移；不重写已部署 baseline，不丢弃旧项目或历史引用。应用启动只检查 schema，不偷偷升级。
 
 ## 2. 一条主流程
 
@@ -43,6 +43,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
 | 生成任务状态 | 数据库持久任务、lease、epoch、heartbeat | 进程内对象、task drawer 和日志不能覆盖数据库事实 |
 | 当前待审叙述 | 最终 `WriterOutput.body` | stitch 前 scene 文本是中间产物，不再作为并列正文送给主 LLM reviewer |
 | 草稿及修复历史 | `ChapterDraft`、`ChapterReview`、不可变 candidate 版本、rewrite attempts | 修复产生新候选，不能改写已接纳 Canon 来制造成功 |
+| 当前章节版本 | 稳定 `ChapterPlan.id`、`active_commit_id`、逐章 `acceptance_revision` 和 `Project.book_revision` | 历史提交号、正文身份与增量保留；不以负章节号归档旧版本 |
 | 实体身份准入 | `EntityRegistrar` 产出 `EntityAdmissionPlan`，Canon 事务落实 | 草稿期分类不得先写 Entity/EntityAlias；新名字须有完整准入决定，未解决、冲突、歧义 fail-closed |
 | accepted 世界事实 | `BookState + GraphDelta + Snapshot` | Context/review/repair 通过 `BookStateQuery` 读取；投影不是另一个 Canon |
 | 地图拓扑与可达性 | `BookMap / Scheme C` | SubWorld 是大陆/位面等大尺度容器，局部舞台归 Region/MapNode/site state |
@@ -64,7 +65,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
 
 这与早期设计里把 Genesis/Review 各写成独立 application class 的名字不同；当前实现由 ProjectApplicationService 归口，不能把旧类名当缺失功能。
 
-`RuntimeContainer` 是 pipeline 构造点，按运行角色构建所需服务。`ChapterPipeline` 通过显式协作者与 stage owner 组合；不存在旧 `WritingOrchestrator` 的跨模块函数赋值、动态模块代理或隐藏全局 API 状态。
+`RuntimeContainer` 是 pipeline 构造点，按运行角色构建所需服务。`ChapterPipeline` 保留顺序协调和任务控制；`WriterExecution`、`CandidateReviewService`、`RepairPlanPatchService` 与 `CanonPreparationService` 接收有限请求并承担具体职责。真实调用方已替换，旧 Writer/Review/Repair Stage 路径已删除；没有以完整 Pipeline 或万能回调袋作为新 owner 的依赖。
 
 RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只有质量 profile、模型 profile、章节长度和 pause/delegate 设置。任务执行使用创建时的 snapshot；后续项目设置不能悄悄改变已在跑的任务。
 
@@ -131,6 +132,8 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 
 中间失败应整体回滚；事务后的 worker 崩溃不能产生第二次 Canon 接纳。stale candidate、旧 lease owner、重复提交和重复 outbox 必须被拒绝或幂等处理。旧 StateUpdater accepted-state 双写已删除。
 
+历史修订先保存候选，原 accepted 主线继续有效；在隔离 BookState 中重新抽取修改章并核验直到 accepted 尾章的完整后缀。旧 GraphDelta 只作为证据，不能以重放成功替代正文核验。结果绑定 base revision、完整范围、候选 hash 和引用；fail 或关键 unknown 拒绝自动替换。短事务内再次核对主线、冻结事实及发布 attempt，然后原子切换整个修订集合。正文未变但接纳上下文变化的后继也产生新接纳身份，保留旧证据。支持边界及并发/失败回归见[修订报告](../docs/superpowers/reports/2026-09-09-p1-2-revision-evidence.md)。
+
 ## 8. Canon 后的维护、投影和恢复
 
 post-Canon maintenance 按 planning → arc → world → feedback 顺序执行，分别更新计划、下一章 Arc resolution、世界压力和反馈。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
@@ -143,9 +146,17 @@ Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻
 
 Knowledge Projection、Obsidian export、LLM KB、chapter memory 和 World Studio 读视图从 Canon 派生，失败通过 outbox/checkpoint/replay 恢复。Qdrant 是检索索引，MinIO 是产物存储，都不是独立 Canon。Obsidian 的人工 section 进入单独 human index；正式事实编辑仍走 generic proposal。
 
+小说 Markdown + manifest 是独立的 outbox 导出：先从保留 Canon 历史冻结目标 book revision 和内容身份，再原子写本地版本文件并推进 current。重试复用冻结快照，旧事件不回退当前版本；只读 rebuild 可重建已导出的版本。接纳事务不执行文件 IO，导出失败不回滚 Canon。发布回执引用明确是捕获时观察值，不伪称过去时点的完整发布状态。当前没有每书 Git 仓库、远端同步或绕过 proposal 的正文导入；边界见[导出报告](../docs/superpowers/reports/2026-09-09-novel-export.md)。
+
+反馈步骤先独立提交带来源/版本的评论分析，零信号也完成；后续聚合或计划事务失败不撤销已经完成的分析。唯一 aggregation owner 以全部评论为分母，区分方向与平台作者，冻结来源发布版本和证据。行动分别记录提议、选择、未来计划应用、裁剪后实际 Writer 输入、正文观察与后续变化；单一读者、低置信度、风险 watchlist 或相反方向不足以自动改纲。未来计划使用现有版本 CAS，拒绝已写/预约/接纳/发布历史，保留既定目标。合格提示的 canonical provider 已恢复，旧全局校准、世界规则自动改写及 review 反馈阻断仍禁用。正文观察默认 unknown，后续信号比较只称关联；[有限样本](../docs/superpowers/reports/2026-09-09-stage3-feedback-finite-loop.md)明确区分真实 owner 与冻结模型/发布输入。
+
 ## 9. Publisher 与自动生产
 
 Publisher 与生成是独立运行角色。Canon 后物化具有确定身份的发布任务；worker/browser 使用 attempt token、lease fencing、receipt、浏览器持久 journal 和只读 reconciliation 处理崩溃后的未知结果。
+
+外部动作前已经持久化章节版本保护；任意平台确认公开即永久冻结，未知结果或未核对的远端草稿不能因超时、任务删除或重启解除保护。冻结包括正文、读者标题和章节顺序。修订与发布按同一 Project/Chapter 锁序竞争并复核不可变载荷，旧版本 pending job 不会被误发。
+
+`daily_serial` 用显式主平台的连续公开前缀 P 计算存稿，当前 accepted 连续尾号 G 加持久预约 R 满足 `G + R - P <= min(N, max(3, ceil(N × 0.05)))`。入队、worker 开始新章和 Canon 接纳均有责任边界；预约服从任务 lease/epoch，重试同章不重复占位。达到上限是正常等待，发布仍可推进；N 下调不会删除旧存稿。明确隔离的 `factory_batch/soak_test` 不受发布前缀约束，也不会因此获得真实发布权限。
 
 防重的目标是同一 Canon/job 不产生重复外部效果；不能把数据库事务能力推导成第三方网页的全局 exactly-once 保证。上传后回执丢失等情况要核实外部状态。CAPTCHA/MFA/账号风险进入明确暂停，必须经受支持的人工恢复，不能自动绕过验证。
 
@@ -169,17 +180,15 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 ## 11. 已删除的设计
 
-下列内容不能再作为现行方案引用：多种 operation/checkpoint/copilot/reckless 模式、premium 空profile、RuntimeSettingsStore、governance_json、request-level policy override、旧review cutover flags、WritingOrchestrator动态拼装、旧world_model facade、legacy accepted-state双写、独立Scenario rehearsal、Provisional Band Preview、Obsidian reverse import、旧API/private alias、旧迁移链和手写schema升级器。
+下列内容不能再作为现行方案引用：多种 operation/checkpoint/copilot/reckless 模式、premium 空profile、RuntimeSettingsStore、governance_json、request-level policy override、旧review cutover flags、WritingOrchestrator动态拼装、旧world_model facade、legacy accepted-state双写、独立Scenario rehearsal、Provisional Band Preview、Obsidian reverse import、旧API/private alias、手写schema升级器。旧部署 baseline 仅作为经过 schema 指纹检查的 Alembic 向前桥接来源保留，不作为第二套生产 schema。
 
 保留的普通 writer preview fallback 与 Arc sizing `provisional_window` 不是已经删除的第二套 Provisional writer；保留的 BookState extraction gate 不是旧主 reviewer；两者不能仅凭旧名字相似误删。
 
 ## 12. 复杂度与消融重点
 
-在本轮修复前后的小幅变化范围内，代码规模约为：生产 Python 582文件/13.9万行，主测试约8.4万行，release harness约3.16万行实现及2.89万行测试。物理行数包含schema、空行和注释；它衡量维护表面积，不直接证明无用或运行开销。
+本轮先以固定响应验证 Writer、Review/Repair 和 Canon 准备拆分的行为等价，再进行单假设消融。A1 因两个已知严重漏拦保留 verifier；A2 只有输入字符节省而缺少质量/真实 token 对照，证据不足；A3 没有证明消费者能使用陈旧结果，保留四步 barrier。smoke 已显示 Scene/stitch 调用成本和时间矛盾，但没有同输入、同预算的单章 Writer 对照，A4 不据此替换现行 Writer。具体证据与缺失度量见[消融报告](../docs/superpowers/reports/2026-09-09-stage2-ablation.md)。未保留实验 mode 或第二套实现。
 
-从旧 master 到领先候选，生产 Python 相关树约增2.35万、删1.18万行；release harness新增约6.3万行（含Markdown和测试）。架构owner减少与代码总量增加同时发生，主要新增来自恢复/发布和验证工程。
-
-当前优先做可本地验证的消融，而非再建复杂框架：
+前轮仍有效的取舍如下；它们不是本轮新测量：
 
 | 对象 | 可证伪的问题 | 保留/删除依据 |
 | --- | --- | --- |
@@ -191,7 +200,7 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 | post-Canon四步barrier | 哪些步骤确实必须阻塞下一章？ | 25种内存输入对照确认当前硬依赖；保留业务四步，trace改为持久outbox补传，故障不重跑已成功业务 |
 | release harness验真层 | 哪些规则防真实错误，哪些只是反复证明脚本自身？ | 保留来源/镜像/状态/回执真实性；停止新增外部签名等前置门，后续按实验裁剪 |
 
-本轮不运行几十或几百章真实测试。消融结果与本地全量测试用于决定本轮可推送的代码；历史全新L200、恢复演练和正式部署门仍在发布设计中，但不伪称已经完成，也不作为本任务继续长跑的理由。
+真实验收使用约 20 章隔离 smoke，再使用全新离线 L100，要求固定源码/镜像/策略、有限修复及预先确定的收尾。smoke 已发现评审未拦住的连续性缺陷，运行中没有热修复；本地回归、accepted 行数和冻结模型 fixture 都不能替代真实完成结尾的证据。当前进度见[smoke 报告](../docs/superpowers/reports/2026-09-09-stage1-smoke.md)。
 
 ## 13. 文档入口
 

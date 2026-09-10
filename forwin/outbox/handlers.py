@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from pathlib import Path
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from forwin.knowledge_system.projection_jobs import build_projection_outbox_handlers
 from forwin.maintenance.events import build_post_canon_outbox_handlers
 from forwin.maintenance.trace_upload import build_trace_upload_outbox_handlers
+from forwin.novel_export.events import build_novel_export_handlers
 from forwin.outbox.worker import OutboxClaim
 from forwin.publisher_runtime.canon_jobs import (
     build_canon_publisher_outbox_handlers,
@@ -41,6 +42,10 @@ def build_default_outbox_handlers(
         else None
     )
     handler_maps = [
+        build_novel_export_handlers(
+            session_factory=session_factory,
+            root=Path(getattr(config, "artifact_root", "data/artifacts")) / "novel_exports",
+        ),
         build_projection_outbox_handlers(
             session_factory=session_factory,
             obsidian_root=obsidian_root,

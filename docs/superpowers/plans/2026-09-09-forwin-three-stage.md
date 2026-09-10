@@ -118,9 +118,9 @@
 
 **Files:** existing artifact/outbox owners and proposal import boundary.
 
-- [ ] Export Markdown + manifest keyed by book revision with stable chapter/commit/hash/base/receipt references; no raw comments or credentials.
-- [ ] Test retry deduplication, out-of-order delivery, export failure independence and no frozen-content bypass.
-- [ ] Add local private per-book Git only if an actual workflow needs it; importing edits only produces proposals.
+- [x] Export Markdown + manifest keyed by book revision with stable chapter/commit/hash/base/receipt references; no raw comments or credentials. Freeze a retained snapshot before IO, with capture-time publication semantics and a read-only rebuild path.
+- [x] Test retry deduplication, out-of-order delivery, export failure independence and no frozen-content bypass. Independent review fixed retained BODY-hash contradiction and root-directory replacement; original probes plus Canon/export/Obsidian regression: 96 passed. See [export report](../reports/2026-09-09-novel-export.md).
+- Conditional Git management not selected: no demonstrated need beyond the local Markdown/manifest workflow. No repository, remote or direct Canon import was added; existing proposal/admission remains the only editing boundary.
 
 ## Initial evidence
 

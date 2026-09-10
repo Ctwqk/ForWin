@@ -1046,7 +1046,7 @@ def test_atomic_commit_writes_all_authoritative_state_once(
     assert snapshot["entities"] == 1
     assert snapshot["aliases"] == 1
     assert int(snapshot["audit_events"]) >= 3
-    assert snapshot["outbox_events"] == 3
+    assert snapshot["outbox_events"] == 4
     assert snapshot["canon_commits"] == 1
     assert snapshot["chapter_status"] == "accepted"
     assert snapshot["obligation_status"] == "active"
@@ -1067,9 +1067,16 @@ def test_atomic_commit_writes_all_authoritative_state_once(
             CANON_PROJECTION_REQUESTED,
             CANON_PHASE3_REQUESTED,
             CANON_PUBLISHER_REQUESTED,
+            "novel.export.requested",
         }
         for row in outbox_rows:
             payload = json.loads(row.payload_json)
+            if row.event_type == "novel.export.requested":
+                assert row.event_id == f"novel-export:{prepared_canon.project_id}:1"
+                assert payload["project_id"] == prepared_canon.project_id
+                assert payload["book_revision"] == 1
+                assert payload["snapshot"] is None
+                continue
             assert row.event_id == canon_event_id(
                 prepared_canon.plan.idempotency_key,
                 row.event_type,

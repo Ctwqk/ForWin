@@ -282,6 +282,9 @@ class CanonAdmissionService:
                     quality_admission_run_id=getattr(plan,"quality_admission_run_id",""))
                 chapter.active_commit_id = commit_id
                 project.book_revision += 1
+                from forwin.novel_export.events import enqueue_book_export
+
+                enqueue_book_export(session, project)
                 capacity.consume_commit(plan.project_id, plan.chapter_number)
                 session.flush()
                 return CanonAdmissionOutcome(
@@ -512,6 +515,9 @@ class CanonAdmissionService:
             )
 
         project.book_revision += 1
+        from forwin.novel_export.events import enqueue_book_export
+
+        enqueue_book_export(session, project)
         proposal.status = "accepted"
         proposal.reviewed_at = datetime.now(UTC)
         proposal.review_reason = reason

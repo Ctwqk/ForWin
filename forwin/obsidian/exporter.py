@@ -767,9 +767,9 @@ def converge_managed_projection_files(
     )
 
 
-def ensure_managed_directory(root: Path, rel_path: str) -> None:
+def ensure_managed_directory(root: Path | int, rel_path: str) -> None:
     normalized = _managed_relative_path(rel_path)
-    directory_fd = os.open(root.resolve(), _DIRECTORY_OPEN_FLAGS)
+    directory_fd = _open_managed_root(root)
     try:
         for part in PurePosixPath(normalized).parts:
             try:
@@ -787,7 +787,7 @@ def ensure_managed_directory(root: Path, rel_path: str) -> None:
         os.close(directory_fd)
 
 
-def read_managed_text(root: Path, rel_path: str) -> str | None:
+def read_managed_text(root: Path | int, rel_path: str) -> str | None:
     with _managed_parent_fd(root, rel_path) as (parent_fd, name):
         current = _read_named_file(parent_fd, name)
     if current is None:
@@ -797,7 +797,7 @@ def read_managed_text(root: Path, rel_path: str) -> str | None:
 
 
 def write_managed_text_if_changed(
-    root: Path,
+    root: Path | int,
     rel_path: str,
     content: str,
     *,
@@ -944,11 +944,21 @@ def _delete_managed_file_if_unchanged(
         raise
 
 
+def _open_managed_root(root: Path | int) -> int:
+    # Descriptor callers retain directory identity across a rename or a path
+    # replacement. Duplicate ownership so helpers never close their caller's FD.
+    return (
+        os.dup(root)
+        if isinstance(root, int)
+        else os.open(root.resolve(), _DIRECTORY_OPEN_FLAGS)
+    )
+
+
 @contextmanager
-def _managed_parent_fd(root: Path, rel_path: str) -> Iterator[tuple[int, str]]:
+def _managed_parent_fd(root: Path | int, rel_path: str) -> Iterator[tuple[int, str]]:
     normalized = _managed_relative_path(rel_path)
     parts = PurePosixPath(normalized).parts
-    directory_fd = os.open(root.resolve(), _DIRECTORY_OPEN_FLAGS)
+    directory_fd = _open_managed_root(root)
     try:
         for part in parts[:-1]:
             child_fd = os.open(

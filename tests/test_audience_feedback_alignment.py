@@ -5,8 +5,14 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import inspect, select
-from tests_support import capture_select_statements
 
+from forwin.arc_sizing import policy_for_total_chapters
+from forwin.audience.feedback import (
+    classify_signal_level,
+    derive_audience_trends,
+    run_feedback_aggregation_pass,
+    score_signal_aggregate_v1,
+)
 from forwin.models import (
     ChapterPlan,
     CommentSignalCandidate,
@@ -18,19 +24,13 @@ from forwin.models import (
     new_id,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.audience.feedback import (
-    classify_signal_level,
-    derive_audience_trends,
-    run_feedback_aggregation_pass,
-    score_signal_aggregate_v1,
-)
-from forwin.arc_sizing import policy_for_total_chapters
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.stage_analysis import PacingStrategist
-from forwin.simulation.world import CommentAnalyzer
 from forwin.publishers.manager import PublisherManager
+from forwin.simulation.world import CommentAnalyzer
 from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
+from tests_support import capture_select_statements
 
 
 class _FakeLLM:
@@ -102,6 +102,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         chapter_title: str = "第一章",
         like_count: int = 0,
         reply_count: int = 0,
+        source_chapter_number: int | None = None,
     ) -> PublisherRawComment:
         row = PublisherRawComment(
             id=new_id(),
@@ -116,6 +117,8 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             like_count=like_count,
             reply_count=reply_count,
             raw_payload_json="{}",
+            source_chapter_number=source_chapter_number,
+            source_status="chapter_known" if source_chapter_number else "unknown",
         )
         self.session.add(row)
         self.session.flush()
@@ -133,10 +136,22 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         chapter_number: int,
         signal_level: str = "noise",
     ) -> CommentSignalCandidate:
+        source = self.session.get(PublisherRawComment, comment_id)
+        source.project_id = project_id
+        source.source_status = "chapter_known"
+        source.source_chapter_number = chapter_number
+        from forwin.audience.comment_analysis import CommentAnalysisStore
+        store = CommentAnalysisStore(analyzer_version="explicit-fixture")
+        records = store.begin(self.session, project_id=project_id, comments=[source], generation_chapter_number=chapter_number)
+        if records:
+            _, analysis = records[0]
+            store.complete(analysis, 0)
+            source.active_analysis_id = analysis.id
         row = CommentSignalCandidate(
             id=new_id(),
             project_id=project_id,
             source_comment_id=comment_id,
+            analysis_id=source.active_analysis_id,
             signal_type=signal_type,
             target_type=target_type,
             target_name=target_name,
@@ -209,6 +224,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
     def test_comment_analyzer_stores_multiple_llm_signals(self) -> None:
         project = self._create_project()
         comment = self._add_comment(
+            project_id=project.id,
             work_name=project.title,
             body="主角动机这里我有点看不懂，而且感觉节奏偏慢。",
             remote_comment_id="comment-llm-1",
@@ -259,9 +275,10 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual([row.signal_type for row in stored], ["confusion", "pacing"])
         self.assertEqual({row.target_name for row in stored}, {"主角动机", "节奏"})
 
-    def test_comment_analyzer_falls_back_to_keywords_when_llm_fails(self) -> None:
+    def test_comment_analyzer_records_retryable_failure_when_llm_fails(self) -> None:
         project = self._create_project()
         comment = self._add_comment(
+            project_id=project.id,
             work_name=project.title,
             body="为什么主角要这么做？这一段也太拖了。",
             remote_comment_id="comment-fallback-1",
@@ -278,16 +295,17 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             chapter_number=3,
         )
 
-        self.assertEqual(len(rows), 2)
-        self.assertEqual(
-            sorted((row.signal_type, row.target_type, row.severity) for row in rows),
-            [("confusion", "general", 1), ("pacing", "arc", 1)],
-        )
-        self.assertEqual({row.target_name for row in rows}, {""})
+        self.assertEqual(rows, [])
+        from forwin.models.publisher import CommentAnalysisRecord
+        record = self.session.scalars(select(CommentAnalysisRecord)).one()
+        self.assertEqual(record.status, "failed")
+        self.assertIn("LLM unavailable", record.last_error)
+        self.assertIsNone(record.analyzed_at)
 
     def test_comment_analyzer_uses_runtime_safe_optional_llm_timeout(self) -> None:
         project = self._create_project()
         comment = self._add_comment(
+            project_id=project.id,
             work_name=project.title,
             body="感觉节奏偏慢。",
             remote_comment_id="comment-timeout-1",
@@ -328,6 +346,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
     def test_comment_analyzer_accepts_extended_signal_type_schema(self) -> None:
         project = self._create_project()
         comment = self._add_comment(
+            project_id=project.id,
             work_name=project.title,
             body="我猜他们迟早会在一起，这条关系线肯定还要反转。",
             remote_comment_id="comment-llm-2",
@@ -729,6 +748,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
                 author_id=f"user-{index + 1}",
                 author_name=f"读者{index + 1}",
                 chapter_title="第一章",
+                source_chapter_number=1,
             )
         first_comment_id = self.session.execute(
             select(PublisherRawComment.id).order_by(PublisherRawComment.remote_comment_id.asc()).limit(1)
@@ -766,6 +786,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             author_id="user-platform",
             author_name="读者",
             chapter_title="第一章",
+                source_chapter_number=1,
         )
         row = self.session.execute(select(PublisherRawComment)).scalar_one()
         row.raw_payload_json = json.dumps(

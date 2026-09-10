@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -614,8 +625,10 @@ class PublisherRawComment(Base):
     __table_args__ = (
         UniqueConstraint(
             "platform_id",
+            "source_scope",
+            "work_id",
             "remote_comment_id",
-            name="uq_publisher_raw_comments_platform_remote",
+            name="uq_publisher_raw_comments_scoped_remote",
         ),
         Index("ix_publisher_raw_comments_work_name", "work_name"),
         Index("ix_publisher_raw_comments_project", "project_id"),
@@ -624,6 +637,33 @@ class PublisherRawComment(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, default="")
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    active_analysis_id: Mapped[str] = mapped_column(
+        String, default="", server_default=""
+    )
+    source_scope: Mapped[str] = mapped_column(String, default=new_id, nullable=False)
+    account_id: Mapped[str] = mapped_column(String, default="", server_default="")
+    work_binding_id: Mapped[str] = mapped_column(String, default="", server_default="")
+    source_status: Mapped[str] = mapped_column(
+        String, default="unknown", server_default="unknown"
+    )
+    source_chapter_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_chapter_plan_id: Mapped[str] = mapped_column(
+        String, default="", server_default=""
+    )
+    source_canon_commit_id: Mapped[str] = mapped_column(
+        String, default="", server_default=""
+    )
+    source_publication_id: Mapped[str] = mapped_column(
+        String, default="", server_default=""
+    )
+    content_sha256: Mapped[str] = mapped_column(
+        String(64), default="", server_default=""
+    )
+    source_sha256: Mapped[str] = mapped_column(
+        String(64), default="", server_default=""
+    )
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     remote_comment_id: Mapped[str] = mapped_column(String, nullable=False)
     work_id: Mapped[str] = mapped_column(String, default="")
     work_name: Mapped[str] = mapped_column(String, default="")
@@ -643,6 +683,44 @@ class PublisherRawComment(Base):
     )
 
 
+class CommentAnalysisRecord(Base):
+    """One completion/retry state for an exact comment body and analyzer version."""
+
+    __tablename__ = "comment_analysis_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_comment_id",
+            "content_sha256",
+            "source_sha256",
+            "analyzer_version",
+            name="uq_comment_analysis_version",
+        ),
+        Index("ix_comment_analysis_pending", "status", "next_retry_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    source_comment_id: Mapped[str] = mapped_column(
+        String, ForeignKey("publisher_raw_comments.id"), nullable=False
+    )
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    analyzer_version: Mapped[str] = mapped_column(String, nullable=False)
+    input_body: Mapped[str] = mapped_column(Text, nullable=False)
+    source_identity_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    signal_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    generation_chapter_number: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
 class CommentSignalCandidate(Base):
     __tablename__ = "comment_signal_candidates"
     __table_args__ = (
@@ -656,6 +734,9 @@ class CommentSignalCandidate(Base):
     )
     source_comment_id: Mapped[str] = mapped_column(
         String, ForeignKey("publisher_raw_comments.id"), nullable=False
+    )
+    analysis_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("comment_analysis_records.id"), nullable=True
     )
     signal_type: Mapped[str] = mapped_column(String, nullable=False)
     target_type: Mapped[str] = mapped_column(String, default="")
@@ -673,7 +754,9 @@ class SignalWindowAggregate(Base):
     __table_args__ = (
         Index(
             "ix_signal_window_agg_project_key_window",
-            "project_id", "signal_key", "window_type",
+            "project_id",
+            "signal_key",
+            "window_type",
         ),
     )
 

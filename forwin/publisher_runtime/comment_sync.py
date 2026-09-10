@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from forwin.audit.events import DecisionEventType
-from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherCommentSyncJob,
     PublisherConnectionState,
@@ -15,9 +16,14 @@ from forwin.models.publisher import (
 
 from .audit import PublisherAuditService, comment_sync_event_type
 from .browser_sessions import isoformat, utc_now
+from .comment_source import (
+    body_hash,
+    observed_time,
+    resolve_comment_source,
+    source_hash,
+)
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog
-from .upload_jobs import UploadJobService
 
 
 def as_int(value: Any, default: int = 0) -> int:
@@ -55,11 +61,11 @@ class CommentSyncService:
         self.platform_catalog.get(platform)
         with self.session_factory() as session:
             job = PublisherCommentSyncJob(
-                project_id=UploadJobService.resolve_project_id(
+                project_id=resolve_comment_source(
                     session,
-                    explicit_project_id=project_id,
-                    work_name=work_name,
-                ),
+                    platform=platform,
+                    item={"project_id": project_id, "work_id": work_id},
+                ).project_id,
                 platform_id=platform,
                 status="pending",
                 work_id=work_id,
@@ -265,7 +271,6 @@ class CommentSyncService:
 
         with self.session_factory() as session:
             self.connection_state.ensure_extension_client(session, client_id)
-            resolved_job_project_id = ""
             sync_job = None
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)
@@ -274,115 +279,123 @@ class CommentSyncService:
                     job.extension_client_id = client_id
                     job.status = "running"
                     job.started_at = job.started_at or now
-                    resolved_job_project_id = str(job.project_id or "").strip()
 
-            remote_ids = [
-                str(item.get("remote_comment_id", "")).strip()
-                for item in comments
-                if str(item.get("remote_comment_id", "")).strip()
-            ]
-            existing_rows = (
-                session.execute(
-                    select(PublisherRawComment).where(
-                        PublisherRawComment.platform_id == platform,
-                        PublisherRawComment.remote_comment_id.in_(remote_ids),
-                    )
-                )
-                .scalars()
-                .all()
-                if remote_ids
-                else []
-            )
-            row_map = {row.remote_comment_id: row for row in existing_rows}
-            valid_project_ids = set()
-            unique_project_ids_by_work_name: dict[str, str] = {}
-            if not resolved_job_project_id:
-                explicit_project_ids = {
-                    str(item.get("project_id", "")).strip()
-                    for item in comments
-                    if str(item.get("project_id", "")).strip()
-                }
-                if explicit_project_ids:
-                    valid_project_ids = set(
-                        session.execute(
-                            select(Project.id).where(
-                                Project.id.in_(explicit_project_ids)
-                            )
-                        )
-                        .scalars()
-                        .all()
-                    )
-                work_names = {
-                    str(item.get("work_name", "")).strip()
-                    for item in comments
-                    if str(item.get("work_name", "")).strip()
-                }
-                if work_names:
-                    title_rows = session.execute(
-                        select(Project.title, Project.id)
-                        .where(Project.title.in_(work_names))
-                        .order_by(Project.title.asc(), Project.id.asc())
-                    ).all()
-                    title_matches: dict[str, list[str]] = {}
-                    for title, project_id in title_rows:
-                        normalized_title = str(title or "").strip()
-                        normalized_project_id = str(project_id or "").strip()
-                        if not normalized_title or not normalized_project_id:
-                            continue
-                        title_matches.setdefault(normalized_title, []).append(
-                            normalized_project_id
-                        )
-                    unique_project_ids_by_work_name = {
-                        title: project_ids[0]
-                        for title, project_ids in title_matches.items()
-                        if len(project_ids) == 1
-                    }
-
-            for item in comments:
+            for item in sorted(
+                comments,
+                key=lambda row: (
+                    str(row.get("work_id", "")),
+                    str(row.get("remote_comment_id", "")),
+                    str(row.get("account_id", "")),
+                ),
+            ):
                 remote_comment_id = str(item.get("remote_comment_id", "")).strip()
                 if not remote_comment_id:
                     continue
-                row = row_map.get(remote_comment_id)
-                if row is None:
-                    row = PublisherRawComment(
-                        project_id=resolved_job_project_id,
+                source = resolve_comment_source(
+                    session, platform=platform, item=item, job=sync_job
+                )
+                inserted_id = session.scalar(
+                    pg_insert(PublisherRawComment)
+                    .values(
                         platform_id=platform,
                         remote_comment_id=remote_comment_id,
+                        ingested_at=now,
+                        **asdict(source),
                     )
-                    session.add(row)
-                    row_map[remote_comment_id] = row
+                    .on_conflict_do_nothing(
+                        constraint="uq_publisher_raw_comments_scoped_remote"
+                    )
+                    .returning(PublisherRawComment.id)
+                )
+                row = session.scalar(
+                    select(PublisherRawComment)
+                    .where(
+                        PublisherRawComment.platform_id == platform,
+                        PublisherRawComment.source_scope == source.source_scope,
+                        PublisherRawComment.work_id == source.work_id,
+                        PublisherRawComment.remote_comment_id == remote_comment_id,
+                    )
+                    .with_for_update()
+                )
+                if inserted_id:
                     inserted += 1
                 else:
                     updated += 1
-
-                explicit_project_id = str(item.get("project_id", "")).strip()
-                work_name = str(item.get("work_name", "")).strip()
-                if resolved_job_project_id:
-                    row.project_id = resolved_job_project_id
-                elif explicit_project_id and explicit_project_id in valid_project_ids:
-                    row.project_id = explicit_project_id
-                else:
-                    row.project_id = unique_project_ids_by_work_name.get(work_name, "")
+                observed = observed_time(item.get("observed_at")) or now.replace(
+                    tzinfo=None
+                )
+                if row.observed_at and observed < row.observed_at.replace(tzinfo=None):
+                    continue
+                if (
+                    row.project_id
+                    and source.project_id
+                    and row.project_id != source.project_id
+                ):
+                    raise ValueError(
+                        "comment remote identity conflicts with its persisted project"
+                    )
+                if (
+                    row.chapter_id
+                    and source.chapter_id
+                    and row.chapter_id != source.chapter_id
+                ):
+                    raise ValueError(
+                        "comment remote identity conflicts with its persisted chapter"
+                    )
+                # Work identity can be proven even when no remote chapter is known.
+                for name in ("project_id", "work_binding_id", "account_id", "chapter_id"):
+                    value = getattr(source, name)
+                    if value:
+                        setattr(row, name, value)
+                if source.source_status != "unknown":
+                    if row.source_status != "unknown" and (
+                        row.source_chapter_plan_id != source.source_chapter_plan_id
+                        or (
+                            row.source_canon_commit_id
+                            and source.source_canon_commit_id
+                            and row.source_canon_commit_id
+                            != source.source_canon_commit_id
+                        )
+                    ):
+                        raise ValueError(
+                            "comment source conflicts with previously proven publication identity"
+                        )
+                    for name, value in asdict(source).items():
+                        if value is not None and value != "":
+                            setattr(row, name, value)
                 if row.project_id:
                     touched_project_ids.add(str(row.project_id))
-                row.work_id = str(item.get("work_id", "")).strip()
-                row.work_name = work_name
-                row.chapter_id = str(item.get("chapter_id", "")).strip()
-                row.chapter_title = str(item.get("chapter_title", "")).strip()
+                row.work_name = str(
+                    item.get("work_name") or getattr(sync_job, "work_name", "") or ""
+                ).strip()
+                row.chapter_title = str(
+                    item.get("chapter_title")
+                    or getattr(sync_job, "chapter_title", "")
+                    or ""
+                ).strip()
                 row.author_id = str(item.get("author_id", "")).strip()
                 row.author_name = str(item.get("author_name", "")).strip()
                 row.body_text = str(item.get("body", "")).strip()
+                content_sha256 = body_hash(row.body_text)
+                if row.content_sha256 != content_sha256:
+                    row.active_analysis_id = ""
+                row.content_sha256 = content_sha256
                 row.parent_remote_comment_id = str(
                     item.get("parent_remote_comment_id", "")
                 ).strip()
                 row.remote_created_at = str(item.get("created_at", "")).strip()
+                row.observed_at = observed
                 row.like_count = max(0, as_int(item.get("like_count", 0)))
                 row.reply_count = max(0, as_int(item.get("reply_count", 0)))
                 row.raw_payload_json = json.dumps(
-                    item.get("raw_payload", item),
-                    ensure_ascii=False,
+                    item.get("raw_payload", item), ensure_ascii=False
                 )
                 row.synced_at = now
+                source_sha256 = source_hash(row)
+                if row.source_sha256 != source_sha256:
+                    row.active_analysis_id = ""
+                row.source_sha256 = source_sha256
+                session.flush()
 
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)

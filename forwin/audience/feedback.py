@@ -1,20 +1,19 @@
 """Phase B of the Audience Feedback Layer."""
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass
 import json
 import logging
+from collections import defaultdict
+from dataclasses import dataclass
 from typing import Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from forwin.audience.comment_analysis import current_signal_condition
 from forwin.models import (
-    ChapterPlan,
     CommentSignalCandidate,
     FeedbackActionRecord,
-    Project,
     PublisherCommentSyncJob,
     PublisherRawComment,
     ReaderScaleSnapshot,
@@ -337,42 +336,13 @@ def _comment_scope_filters(
     chapter_start: int,
     chapter_end: int,
 ) -> list[object]:
-    chapter_titles = [
-        str(item).strip()
-        for item in session.execute(
-            select(ChapterPlan.title).where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number >= chapter_start,
-                ChapterPlan.chapter_number <= chapter_end,
-            )
-        ).scalars().all()
-        if str(item).strip()
+    del session
+    return [
+        PublisherRawComment.project_id == project_id,
+        PublisherRawComment.source_status.in_(("chapter_known", "confirmed")),
+        PublisherRawComment.source_chapter_number >= chapter_start,
+        PublisherRawComment.source_chapter_number <= chapter_end,
     ]
-    has_project_scoped_comments = bool(
-        session.execute(
-            select(func.count(PublisherRawComment.id)).where(
-                PublisherRawComment.project_id == project_id
-            )
-        ).scalar_one()
-    )
-    filters: list[object] = []
-    if has_project_scoped_comments:
-        filters.append(PublisherRawComment.project_id == project_id)
-    else:
-        project_title = session.execute(
-            select(Project.title).where(Project.id == project_id).limit(1)
-        ).scalar_one_or_none()
-        normalized_title = str(project_title or "").strip()
-        if normalized_title:
-            filters.append(PublisherRawComment.work_name == normalized_title)
-    if chapter_titles:
-        filters.append(
-            or_(
-                PublisherRawComment.chapter_title.in_(chapter_titles),
-                PublisherRawComment.chapter_title == "",
-            )
-        )
-    return filters
 
 
 # ── Reader-scale estimation ──────────────────────────────────────────
@@ -568,6 +538,7 @@ class SignalAggregator:
                 select(CommentSignalCandidate)
                 .where(
                     CommentSignalCandidate.project_id == project_id,
+                    current_signal_condition(),
                     CommentSignalCandidate.chapter_number >= window_start,
                     CommentSignalCandidate.chapter_number <= window_end,
                 )
@@ -589,6 +560,7 @@ class SignalAggregator:
                 select(func.count(func.distinct(CommentSignalCandidate.source_comment_id)))
                 .where(
                     CommentSignalCandidate.project_id == project_id,
+                    current_signal_condition(),
                     CommentSignalCandidate.chapter_number >= window_start,
                     CommentSignalCandidate.chapter_number <= window_end,
                 )
@@ -723,6 +695,7 @@ def _update_candidate_levels(
         select(CommentSignalCandidate)
         .where(
             CommentSignalCandidate.project_id == project_id,
+                    current_signal_condition(),
             CommentSignalCandidate.signal_type == signal_type,
             CommentSignalCandidate.target_type == target_type,
         )

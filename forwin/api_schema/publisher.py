@@ -768,6 +768,9 @@ class PublisherLoginQrOneShotResponse(BaseModel):
 
 class PublisherRawCommentInput(BaseModel):
     remote_comment_id: str
+    project_id: str = ""
+    account_id: str = ""
+    observed_at: str = ""
     work_id: str = ""
     work_name: str = ""
     chapter_id: str = ""

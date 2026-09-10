@@ -1,29 +1,34 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
 import json
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from forwin.audience.comment_analysis import (
+    CommentAnalysisStore,
+    current_signal_condition,
+)
 from forwin.audience.feedback import (
     classify_signal_level,
     keyword_dominant_sentiment,
     keyword_feedback_summary,
 )
+from forwin.book_state.thread_sampling import SampledThread, sample_active_threads
+from forwin.llm.compat import call_chat_compat
 from forwin.models import (
     CommentSignalCandidate,
     PublisherRawComment,
     WorldSimulationTurn,
     new_id,
 )
-from forwin.book_state.thread_sampling import SampledThread, sample_active_threads
-from forwin.utils import parse_llm_json
-from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +221,24 @@ def _load_highlight_comments(
 class CommentAnalyzer:
     """Extracts structured comment signals in Phase 4."""
 
-    def __init__(self, *, llm_client=None) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client=None,
+        analyzer_version="comment-v2",
+        max_attempts=3,
+        retry_delay_seconds=60,
+    ) -> None:
         self.llm_client = llm_client
+        self.store = CommentAnalysisStore(
+            analyzer_version=analyzer_version
+            + (":llm" if llm_client is not None else ":keyword"),
+            max_attempts=max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+
+    def pending_comments(self, *, session, project_id, limit):
+        return self.store.pending(session, project_id=project_id, limit=limit)
 
     def analyze_and_store(
         self,
@@ -227,41 +248,39 @@ class CommentAnalyzer:
         comments: Sequence[PublisherRawComment],
         chapter_number: int = 0,
     ) -> list[CommentSignalCandidate]:
-        if not comments:
-            return []
-
-        comment_ids = [comment.id for comment in comments]
-        existing = set(
-            session.execute(
-                select(CommentSignalCandidate.source_comment_id).where(
-                    CommentSignalCandidate.source_comment_id.in_(comment_ids)
-                )
-            )
-            .scalars()
-            .all()
+        records = self.store.begin(
+            session,
+            project_id=project_id,
+            comments=comments,
+            generation_chapter_number=chapter_number,
         )
-        to_analyze = [comment for comment in comments if comment.id not in existing]
-        if not to_analyze:
+        if not records:
+            return []
+        try:
+            if self.llm_client is None:
+                drafts_by_comment = {
+                    comment.id: _keyword_fallback(comment.body_text or "")
+                    for comment, _ in records
+                }
+            else:
+                drafts_by_comment = self._analyze_comments_with_llm(
+                    [comment for comment, _ in records]
+                )
+        except Exception as exc:  # noqa: BLE001 -- persist bounded retry state for optional analysis
+            for _, record in records:
+                self.store.failed(record, exc)
+            session.flush()
             return []
 
-        drafts_by_comment = self._analyze_comments_with_llm(to_analyze)
-        if drafts_by_comment is None:
-            drafts_by_comment = {}
-            for comment in to_analyze:
-                body = str(comment.body_text or "").strip()
-                if not body:
-                    continue
-                fallback_signals = _keyword_fallback(body)
-                if fallback_signals:
-                    drafts_by_comment[comment.id] = fallback_signals
-
-        rows: list[CommentSignalCandidate] = []
-        for comment in to_analyze:
-            for draft in drafts_by_comment.get(comment.id, []):
+        rows = []
+        for comment, record in records:
+            drafts = drafts_by_comment.get(comment.id, [])
+            for draft in drafts:
                 row = CommentSignalCandidate(
                     id=new_id(),
                     project_id=project_id,
                     source_comment_id=comment.id,
+                    analysis_id=record.id,
                     signal_type=draft.signal_type,
                     target_type=draft.target_type,
                     target_name=draft.target_name,
@@ -269,12 +288,15 @@ class CommentAnalyzer:
                     confidence=draft.confidence,
                     evidence_span=draft.evidence_span,
                     signal_level="noise",
-                    chapter_number=chapter_number,
+                    chapter_number=(comment.source_chapter_number or 0)
+                    if comment.source_status in {"chapter_known", "confirmed"}
+                    else 0,
                 )
                 session.add(row)
                 rows.append(row)
-        if rows:
-            session.flush()
+            self.store.complete(record, len(drafts))
+            comment.active_analysis_id = record.id
+        session.flush()
         return rows
 
     def _analyze_comments_with_llm(
@@ -285,12 +307,11 @@ class CommentAnalyzer:
             return None
 
         comment_payload = [
-            {"comment_index": index, "body": str(comment.body_text or "").strip()[:300]}
+            {"comment_index": index, "body": str(comment.body_text or "").strip()}
             for index, comment in enumerate(comments)
-            if str(comment.body_text or "").strip()
         ]
         if not comment_payload:
-            return None
+            return {}
 
         prompt = [
             {"role": "system", "content": "你是网文评论分析器，只输出 JSON。"},
@@ -309,6 +330,8 @@ class CommentAnalyzer:
             },
         ]
 
+        before_events = len(getattr(self.llm_client, "llm_attempt_events", []) or [])
+        before_trace = copy.deepcopy(getattr(self.llm_client, "last_call_trace", None))
         try:
             try:
                 raw = call_chat_compat(
@@ -338,7 +361,21 @@ class CommentAnalyzer:
                 )
         except Exception:
             logger.warning("CommentAnalyzer LLM call failed.", exc_info=True)
-            return None
+            raise
+
+        events = list(getattr(self.llm_client, "llm_attempt_events", []) or [])[
+            before_events:
+        ]
+        trace = getattr(self.llm_client, "last_call_trace", None)
+        if trace != before_trace and isinstance(trace, dict):
+            events.append(trace)
+        if any(
+            row.get("finish_reason")
+            in {"length", "max_tokens", "content_filter", "error"}
+            or row.get("stop_reason") == "max_tokens"
+            for row in events
+        ):
+            raise ValueError("comment analysis response was truncated or filtered")
 
         try:
             payload = parse_llm_json(raw, error_prefix="CommentAnalyzer")
@@ -352,25 +389,26 @@ class CommentAnalyzer:
                 error=exc,
             )
             logger.warning("CommentAnalyzer JSON parse failed.", exc_info=True)
-            return None
+            raise
 
-        index_to_comment_id: dict[int, str] = {}
-        valid_comments = [
-            comment for comment in comments if str(comment.body_text or "").strip()
-        ]
-        for index, comment in enumerate(valid_comments):
-            index_to_comment_id[index] = comment.id
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("signals"), list
+        ):
+            raise TypeError("comment analysis requires an explicit signals array")
+        index_to_comment_id = {
+            index: comment.id for index, comment in enumerate(comments)
+        }
 
         result: dict[str, list[SignalDraft]] = {}
         for item in payload.get("signals") or []:
             if not isinstance(item, dict):
-                continue
+                raise TypeError("comment signal must be an object")
             idx = item.get("comment_index", item.get("index"))
-            if not isinstance(idx, int) or idx not in index_to_comment_id:
-                continue
+            if type(idx) is not int or idx not in index_to_comment_id:
+                raise ValueError("comment signal has an invalid source index")
             signal_type = str(item.get("signal_type") or "").strip().lower()
             if signal_type not in _VALID_SIGNAL_TYPES:
-                continue
+                raise ValueError("comment signal has an invalid type")
             target_type = str(item.get("target_type") or "general").strip().lower()
             if target_type not in _VALID_TARGET_TYPES:
                 target_type = "general"
@@ -394,7 +432,7 @@ class CommentAnalyzer:
             )
             result.setdefault(comment_id, []).append(draft)
 
-        return result if result else None
+        return result
 
 
 def load_recent_signals(
@@ -406,7 +444,8 @@ def load_recent_signals(
     before_chapter: int | None = None,
 ) -> list[CommentSignalCandidate]:
     stmt = select(CommentSignalCandidate).where(
-        CommentSignalCandidate.project_id == project_id
+        CommentSignalCandidate.project_id == project_id,
+        current_signal_condition(),
     )
 
     end_chapter = 0
@@ -520,6 +559,7 @@ def build_reader_feedback_snapshot(
         "confirmed_signals": [],
         "recent_comments": [],
         "signals": {},
+        "analysis_status": {},
     }
 
     title = str(project_title or "").strip()
@@ -531,29 +571,21 @@ def build_reader_feedback_snapshot(
         for item in (allowed_chapter_titles or [])
         if str(item).strip()
     }
-    has_project_scoped_comments = False
-    if project_id:
-        has_project_scoped_comments = bool(
-            session.execute(
-                select(func.count(PublisherRawComment.id)).where(
-                    PublisherRawComment.project_id == project_id
-                )
-            ).scalar_one()
-        )
-
-    stmt = select(PublisherRawComment)
-    if project_id and has_project_scoped_comments:
-        stmt = stmt.where(PublisherRawComment.project_id == project_id)
-    elif project_id:
-        stmt = stmt.where(
-            or_(
-                PublisherRawComment.project_id == project_id,
-                PublisherRawComment.project_id == "",
+    if not project_id:
+        return empty_snapshot
+    stmt = select(PublisherRawComment).where(
+        PublisherRawComment.project_id == project_id
+    )
+    analyzer = CommentAnalyzer(llm_client=llm_client)
+    if analyze_missing:
+        analyzer.analyze_and_store(
+            session=session,
+            project_id=project_id,
+            comments=analyzer.pending_comments(
+                session=session, project_id=project_id, limit=limit
             ),
-            PublisherRawComment.work_name == title,
+            chapter_number=chapter_number or max((before_chapter or 1) - 1, 0),
         )
-    else:
-        stmt = stmt.where(PublisherRawComment.work_name == title)
 
     if normalized_allowed_titles:
         stmt = stmt.where(
@@ -577,15 +609,6 @@ def build_reader_feedback_snapshot(
     )
     if not rows:
         return empty_snapshot
-
-    if analyze_missing and project_id:
-        analyzer = CommentAnalyzer(llm_client=llm_client)
-        analyzer.analyze_and_store(
-            session=session,
-            project_id=project_id,
-            comments=rows,
-            chapter_number=chapter_number or max((before_chapter or 1) - 1, 0),
-        )
 
     signal_rows: list[CommentSignalCandidate] = []
     aggregated_signals: dict[str, dict[str, Any]] = {}
@@ -642,6 +665,7 @@ def build_reader_feedback_snapshot(
         "confirmed_signals": confirmed_signals,
         "recent_comments": highlight_rows,
         "signals": aggregated_signals,
+        "analysis_status": analyzer.store.status(session, project_id=project_id),
     }
 
 
@@ -793,6 +817,8 @@ class WorldSimulator:
             or f"第{chapter_number}章后，世界压力为 {level}。",
             notable_shifts=notable or ["世界仍在对主角行动做出反应"],
         )
+
+
 def save_world_turn(
     *,
     session: Session,

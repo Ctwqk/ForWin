@@ -514,18 +514,21 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         assert drop_position[dependent] < drop_position[parent]
 
 
-def test_baseline_revision_is_rotated_and_is_the_only_revision() -> None:
-    migration = import_module(BASELINE_MODULE)
-    versions = sorted(
-        path.name
-        for path in (ROOT / "forwin/migrations/versions").glob("*.py")
-        if path.name != "__init__.py"
-    )
+def test_existing_baseline_is_preserved_under_forward_revision_chain() -> None:
+    import hashlib
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
 
-    assert versions == ["0001_v5_baseline.py"]
+    migration = import_module(BASELINE_MODULE)
+    baseline = ROOT / "forwin/migrations/versions/0001_v5_baseline.py"
+    # Freeze the source baseline adopted by the approved 2026-09-09 roadmap.
+    assert hashlib.sha256(baseline.read_bytes()).hexdigest() == "dbf12f7d43adac350d4a2a1ec8008912f17016d4b9a21c977986949db040c7d7"
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None
-    assert "Revision ID: 0001_v5_recovery" in migration.__doc__
+    scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert scripts.get_bases() == [migration.revision]
+    assert len(scripts.get_heads()) == 1
+    assert scripts.get_current_head() != migration.revision
 
 
 def test_require_v5_schema_rejects_old_baseline_stamp(

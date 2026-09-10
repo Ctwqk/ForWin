@@ -692,7 +692,30 @@ entries:
     verification:
       - inventory_check
     delete_when:
-      - never deleted unless migration history is intentionally rewritten
+      - retained as migration audit history; never rewrite a deployed baseline
+    status: retained
+
+  - id: migration.legacy_forward_bridge
+    category: migration_history_keep
+    owner_area: database
+    paths:
+      - forwin/legacy_migrations
+      - forwin/models/base.py
+    allow_patterns:
+      - legacy
+      - Legacy
+      - LEGACY
+    reason: >
+      The approved 2026-09-09 roadmap preserves deployed data. This finite
+      Alembic bridge is selected only by the explicit migration command for
+      the positively read 0001_v5_baseline revision. Startup remains read-only;
+      known schema drift, ambiguous publication, and active work are rejected.
+    removal_phase: keep
+    verification:
+      - tests/test_legacy_forward_migration.py
+      - isolated_backup_restore
+    delete_when:
+      - retain immutable bridge history for existing databases and backup restoration
     status: retained
 
   - id: schema.bootstrap_legacy_columns

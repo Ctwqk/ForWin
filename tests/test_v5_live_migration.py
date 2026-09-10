@@ -4,6 +4,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from forwin.models import Base
@@ -11,7 +12,7 @@ from tests.postgres import postgres_empty_test_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_REVISION = "0001_v5_recovery"
+EXPECTED_REVISION = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini"))).get_current_head()
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -54,3 +55,17 @@ def test_fresh_postgres_upgrade_downgrade_upgrade_cycle() -> None:
     restored_tables, restored_revision = _database_state(database_url)
     assert restored_tables == upgraded_tables
     assert restored_revision == EXPECTED_REVISION
+
+
+def test_migration_preserves_application_logger_availability() -> None:
+    import logging
+
+    logger = logging.getLogger("forwin.migration_observability_probe")
+    previous_disabled = logger.disabled
+    logger.disabled = False
+    try:
+        url = postgres_empty_test_url("migration-logging")
+        command.upgrade(_alembic_config(url), "head")
+        assert logger.disabled is False
+    finally:
+        logger.disabled = previous_disabled

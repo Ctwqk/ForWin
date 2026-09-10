@@ -26,7 +26,7 @@ class SchemaRevisionMismatchError(RuntimeError):
             f"[{self.code}] ForWin database schema is "
             f"{current_revision or 'unstamped'}, expected {expected_revision}. "
             "Back up the database, verify its migration history, and apply the "
-            "supported forward migrations with `alembic upgrade head`. "
+            "supported forward migrations with `python -m forwin.migrations`. "
             "Do not recreate an existing database."
         )
 
@@ -43,7 +43,7 @@ def _coerce_postgres_url(database_url: str) -> str:
             value = test_url
     try:
         url = make_url(value)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise ValueError(
             "ForWin requires FORWIN_DATABASE_URL to be a PostgreSQL SQLAlchemy URL."
         ) from exc
@@ -91,7 +91,36 @@ def alembic_config(database_url: str) -> AlembicConfig:
 
 def run_migrations(database_url: str) -> None:
     """Explicit deployment operation; application startup never mutates schema."""
-    alembic_command.upgrade(alembic_config(database_url), "head")
+    engine = get_engine(database_url)
+    try:
+        # One transaction covers the legacy bridge and the current chain. A
+        # later identity preflight refusal also rolls back the bridge changes.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(hashtext('forwin:schema-migration'))"
+                )
+            )
+            tables = set(inspect(connection).get_table_names())
+            revisions = []
+            if "alembic_version" in tables:
+                revisions = list(
+                    connection.scalars(text("SELECT version_num FROM alembic_version"))
+                )
+            if not revisions and tables - {"alembic_version"}:
+                raise RuntimeError(
+                    "Existing unstamped database requires migration-history inspection; refusing to create or stamp over it."
+                )
+            config = alembic_config(database_url)
+            config.attributes["connection"] = connection
+            if revisions == ["0001_v5_baseline"]:
+                legacy = alembic_config(database_url)
+                legacy.set_main_option("script_location", "forwin:legacy_migrations")
+                legacy.attributes["connection"] = connection
+                alembic_command.upgrade(legacy, "0001_v5_recovery")
+            alembic_command.upgrade(config, "head")
+    finally:
+        engine.dispose()
 
 
 def require_v5_schema(engine: Engine) -> None:

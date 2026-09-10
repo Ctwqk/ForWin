@@ -12,16 +12,15 @@ from forwin.application.project_control.operations import (
     _checkpoint_action_gate_outcome,
 )
 from forwin.audit.gate_outcome import parse_gate_outcome
+from forwin.canon.quality_preparation import _canon_quality_gate_outcome
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.generation.pipeline_core.audit_control import (
     AuditControlStage,
-    _band_checkpoint_gate_outcome,
 )
 from forwin.generation.pipeline_core.chapter_execution_support import (
     hard_floor_gate_outcome,
 )
-from forwin.canon.quality_preparation import _canon_quality_gate_outcome
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.observability.pipeline_trace import (
@@ -30,6 +29,7 @@ from forwin.observability.pipeline_trace import (
 )
 from forwin.planning.checkpoints import BandCheckpointIssueInfo
 from forwin.planning.future_plan_audit import FuturePlanAuditIssue, FuturePlanAuditRun
+from forwin.review.plan_checks import _band_checkpoint_gate_outcome
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 

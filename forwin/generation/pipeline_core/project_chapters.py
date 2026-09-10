@@ -187,6 +187,9 @@ class ChapterExecutionStage:
                     frozen_artifacts=frozen_artifacts,
                     current_chapter=max(0, chapter_num - 1),
                 )
+            # Persist deterministic checkpoint evidence and release its Project lock
+            # before delegated decisions, planning models, or Writer execution.
+            session.commit()
             manual_start_checkpoint = self._manual_boundary_checkpoint(
                 session,
                 project_id=project_id,

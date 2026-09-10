@@ -146,6 +146,8 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序执行�
 
 Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻断，不能混称为同一个审计。
 
+自动 Band checkpoint 的创建事件保存其实际输入身份及结果摘要。复查仍调用同一组确定性检查；正式接纳身份、相关计划、义务或约束变化后，旧 PASS/override 不再放行，重新核验追加记录而不覆盖原证据。维护恢复、继续生成及人工/Spark 批准均复核当前输入，失效或缺证据视为待核验。已成功的维护模型不因 checkpoint 失效而重跑；短事务在模型工作开始前释放项目锁。`continue` 主动跳过且从未创建检查时不等待不存在的记录，已存在的有效失败及未接纳前章仍阻断。
+
 这一边界保障顺序一致性，但增加延迟和实现复杂度。不能仅因模块名含 projection 就整体删除：必须先证明下游消费者能接受落后数据，并按步骤做消融。Canon 已接纳的本章不因投影故障回滚。
 
 Knowledge Projection、Obsidian export、LLM KB、chapter memory 和 World Studio 读视图从 Canon 派生，失败通过 outbox/checkpoint/replay 恢复。Qdrant 是检索索引，MinIO 是产物存储，都不是独立 Canon。Obsidian 的人工 section 进入单独 human index；写前事实编辑走 generic proposal，已有正式章节的事实变更须通过章节修订及完整后缀核验。

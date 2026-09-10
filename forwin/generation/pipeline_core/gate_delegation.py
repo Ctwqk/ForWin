@@ -81,6 +81,14 @@ class GateDelegationStage:
     ) -> bool:
         if str(getattr(checkpoint, "status", "") or "") not in {"pass", "warn"}:
             return False
+        automatic = str(getattr(checkpoint, "trigger_source", "")) == "auto_band_end"
+        evidence = None
+        if automatic:
+            from forwin.review.plan_checks import BandCheckpointEvaluator
+
+            evidence = BandCheckpointEvaluator(updater.session).inspect(checkpoint)
+            if not evidence.current:
+                return False
         try:
             issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))
         except (json.JSONDecodeError, TypeError):
@@ -104,6 +112,11 @@ class GateDelegationStage:
             related_object_type="band_checkpoint",
             related_object_id=str(getattr(checkpoint, "id", "") or ""),
             input_snapshot={
+                **(
+                    {"checkpoint_input_sha256": evidence.input_sha256}
+                    if evidence
+                    else {}
+                ),
                 "checkpoint": {
                     "id": str(getattr(checkpoint, "id", "") or ""),
                     "project_id": str(getattr(checkpoint, "project_id", "") or ""),
@@ -130,6 +143,24 @@ class GateDelegationStage:
         )
         if not outcome.approved:
             return False
+        if automatic:
+            from forwin.canon.projection_lock import lock_projection_project
+
+            lock_projection_project(updater.session, checkpoint.project_id)
+            evaluator = BandCheckpointEvaluator(updater.session)
+            current = evaluator.refresh(
+                checkpoint.project_id, checkpoint.boundary_chapter
+            )
+            current_evidence = evaluator.inspect(current)
+            if (
+                current is None
+                or current.id != checkpoint.id
+                or not current_evidence.current
+                or current_evidence.input_sha256 != evidence.input_sha256
+                or current_evidence.effective_status not in {"pass", "warn"}
+            ):
+                return False
+            checkpoint = current
         checkpoint.status = "overridden"
         checkpoint.reason = outcome.reason
         checkpoint.related_task_id = self._audit_task_id

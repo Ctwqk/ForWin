@@ -1344,7 +1344,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     band_id="band-1",
                     chapter_start=1,
                     chapter_end=1,
-                    trigger_source="auto_band_end",
+                    trigger_source="manual_boundary",
                     boundary_kind="band_end",
                     boundary_chapter=1,
                     status="warn",

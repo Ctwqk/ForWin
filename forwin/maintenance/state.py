@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import json
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from sqlalchemy import select
@@ -67,11 +67,16 @@ def post_canon_checkpoint_status(
         return ""
     checkpoint_id = str(checkpoint.get("id") or "").strip()
     if checkpoint_id and session is not None:
+        from forwin.canon.projection_lock import lock_projection_project
         from forwin.models.planning_control import BandCheckpoint
+        from forwin.review.plan_checks import BandCheckpointEvaluator
 
         current = session.get(BandCheckpoint, checkpoint_id)
         if current is not None:
-            return str(current.status or "").strip()
+            lock_projection_project(session, current.project_id)
+            session.refresh(current)
+            return BandCheckpointEvaluator(session).inspect(current).effective_status
+        return "pending"
     return str(checkpoint.get("status") or "").strip()
 
 

@@ -12,10 +12,12 @@ from forwin.api_schema import (
 )
 from forwin.models.draft import ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.review.plan_checks import BandCheckpointEvaluator
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
 )
+
 from .arc_snapshot import (
     _decision_timeline_by_project,
     _latest_band_checkpoint_by_project,
@@ -32,7 +34,6 @@ from .runtime_maps import (
     load_project_upload_stats,
     normalize_project_automation,
 )
-
 
 DisplayDatetime = Callable[[datetime | None], str]
 _GENESIS_STAGE_ORDER = (
@@ -174,6 +175,7 @@ def build_project_summaries(
             latest_replan=last_replan,
             review_interval_chapters=policy_record.policy.pause.review_interval_chapters,
             latest_band_checkpoint=latest_checkpoint,
+            checkpoint_effective_status=BandCheckpointEvaluator(session).inspect(latest_checkpoint).effective_status,
             decision_events=decision_timeline_map.get(project.id, []),
             future_constraints_enabled=policy_record.policy.planning.future_constraints,
         )

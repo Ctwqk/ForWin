@@ -127,7 +127,7 @@
 - [x] Reproduce pending-revision pollution through real accepted history; bind summaries, notes, Arc, pacing and Band checks to active Canon identities. Preserve missing-evidence blocking and ordinary unaccepted draft reads.
 - [x] Reproduce world-edit acceptance without successor validation, including future envelopes mutating historical shared metadata. Restrict that entry to pre-acceptance projects under the Canon project lock; share proposal chapter parsing and recheck concurrent revisions.
 - [x] Fix the manual CQ replay reader using the same active version contract; four actual sole-Canon acceptance regressions and 39 related replay tests pass.
-- [ ] Invalidate reuse of stale Band checkpoint approval after an accepted revision; independent PostgreSQL reproduction found the previous PASS bypassed current BODY checks.
+- [x] Invalidate reuse of stale Band checkpoint approval after an accepted revision; current inputs and deterministic results bind to existing events. Maintain recovery, read models, continue, human/Spark approval and short transaction boundaries. Core 23 PG cases, 13 action cases and 3 real caller cases; root combined 117 passed, independent action/caller 16 passed. Preserve continue's intentional skip without accepting existing failures.
 - [ ] Freeze all review fixes and run whole-candidate regression and role-image verification. The earlier `1f9a9ad` pass does not cover this follow-up.
 - [ ] Start the fresh L100 only on the new verified candidate; retain the held pre-writing run as separate evidence. Close Task 6 with actual output and ending evidence.
 

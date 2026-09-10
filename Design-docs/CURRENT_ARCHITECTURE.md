@@ -106,6 +106,8 @@ immutable CandidateDraftRecord
 
 正式章节消费者共用 `state.query_helpers` 的 active Canon 稿件选择和 candidate 绑定评审。`ReviewQuery` 先按稳定章节取窗口，再供上下文和 Arc 激活读取；节奏分析、Band 核验使用相同版本合同。未接纳稿件仍可按最新候选展示；accepted 身份缺失不回退，正文 API 返回 409，Band 核验阻断，空摘要不替换成计划概要。
 
+`review.plan_checks.BandCheckpointEvaluator` 归口原有确定性 Band 检查及版本有效性。创建事件的既有 payload 绑定实际输入和结果；相同输入可复用，失效结果只保留为历史，重评追加 checkpoint。读模型、维护屏障、继续生成、人工批准与 Spark 使用同一有效性合同，没有新增表、检查器或模型门。维护恢复按 active Canon 验证复用 candidate 的后继身份，不改写旧 candidate backref；成功维护只重评失效 checkpoint。需要写入的复核使用短 Project 锁，实际写作调用方在进入模型前结束该事务。
+
 post-Canon maintenance 按 planning → arc → world → feedback 顺序运行，并完成 order controls。第2章起，Canon 提交强制要求前章四步与 controls 成功且没有未解除的 future/checkpoint/manual 阻断；它不同于可重建的知识投影。trace以冻结payload同事务进入既有outbox，异步上传失败不回滚已成功业务；补传不重跑模型，内容SHA区分不同trace对象。
 
 旧 `world_model_v4` / world-v4 compatibility projection 与 `StateUpdater.apply_*` 写入已经从 accepted chapter runtime 删除。`state_changes`、`new_events`、`thread_beats`、`time_advance` 和 EntityAdmissionPlan 先转成同一 GraphDelta 合约，再经 BookState review/compile 一次落盘；后续只保留 Knowledge Projection refresh 等当前检索投影。

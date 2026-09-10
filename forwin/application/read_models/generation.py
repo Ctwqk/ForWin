@@ -4,13 +4,8 @@ import json
 from datetime import datetime
 from typing import Any, Callable
 
-
 from forwin.api_schema import (
     GenerationControlInfo,
-)
-from forwin.planning.checkpoints import (
-    BlockingReasonInfo,
-    chapter_blocking_message,
 )
 from forwin.audit.events import (
     DecisionEventInfo,
@@ -18,8 +13,12 @@ from forwin.audit.events import (
 )
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ChapterPlan, Project
-from .arc_snapshot import _band_checkpoint_detail
+from forwin.planning.checkpoints import (
+    BlockingReasonInfo,
+    chapter_blocking_message,
+)
 
+from .arc_snapshot import _band_checkpoint_detail
 
 DisplayDatetime = Callable[[datetime | None], str]
 _GENESIS_STAGE_ORDER = (
@@ -38,6 +37,7 @@ def _derive_blocking_reason(
     *,
     plans: list[ChapterPlan],
     latest_band_checkpoint: BandCheckpoint | None,
+    checkpoint_effective_status: str | None = None,
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
 ) -> BlockingReasonInfo:
@@ -190,7 +190,8 @@ def _derive_blocking_reason(
         "fail": "band_checkpoint_fail",
         "error": "band_checkpoint_fail",
     }
-    code = code_map.get(str(latest_band_checkpoint.status or ""))
+    status = latest_band_checkpoint.status if checkpoint_effective_status is None else checkpoint_effective_status
+    code = code_map.get(str(status or ""))
     if not code:
         return BlockingReasonInfo()
     return BlockingReasonInfo(
@@ -254,6 +255,7 @@ def build_generation_control(
     pause_requested: bool = False,
     can_pause: bool = False,
     latest_band_checkpoint: BandCheckpoint | None = None,
+    checkpoint_effective_status: str | None = None,
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
 ) -> GenerationControlInfo:
@@ -311,6 +313,7 @@ def build_generation_control(
     blocking_reason = _derive_blocking_reason(
         plans=plans,
         latest_band_checkpoint=latest_band_checkpoint,
+        checkpoint_effective_status=checkpoint_effective_status,
         decision_events=decision_events,
         future_constraints_enabled=future_constraints_enabled,
     )

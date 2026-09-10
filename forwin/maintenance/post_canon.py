@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from forwin.audience.consumption import consume_post_canon_comment_batch
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.canon.identity import active_commit_predicate, is_active_commit
+from forwin.canon.projection_lock import lock_projection_project
 from forwin.maintenance.events import (
     ORDER_CONTROLS_KEY,
     POST_CANON_STEP_NAMES,
@@ -29,9 +30,11 @@ from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
+from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import Project
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
+from forwin.review.plan_checks import BandCheckpointEvaluator
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.simulation.world import save_world_turn
 
@@ -395,45 +398,63 @@ class PostCanonMaintenanceService:
     ) -> dict[str, Any]:
         commit_id = str(canon_commit_id or "").strip()
         try:
+            completed = self._refresh_completed_order_controls(commit_id)
+            if completed is not None:
+                return completed
             with self.session_factory.begin() as session:
                 rows = self._locked_runs(session, commit_id)
                 self._require_all_steps_succeeded(rows, commit_id)
+                commit = session.get(CanonCommitRecord, commit_id)
+                if (
+                    commit is None
+                    or commit.status != "committed"
+                    or not is_active_commit(session, commit)
+                ):
+                    raise ValueError(f"Committed Canon not found: {commit_id}")
                 feedback = _row_for_step(rows, "feedback")
                 payload = _load_object(feedback.result_json)
                 controls = payload.get(ORDER_CONTROLS_KEY)
                 if isinstance(controls, dict) and controls.get("status") == "succeeded":
-                    result = controls.get("result")
-                    return dict(result) if isinstance(result, dict) else {}
-
-                commit = session.get(CanonCommitRecord, commit_id)
-                if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
-                    raise ValueError(f"Committed Canon not found: {commit_id}")
-                self._drain_llm_attempts()
-                result = dict(runner(session, commit) or {})
-                attempts = self._drain_llm_attempts()
-                trace = self._enqueue_step_trace(
-                    session=session,
-                    commit=commit,
+                    # Another runner completed while we waited. Release its rows
+                    # before entering the short Project-first refresh transaction.
+                    pass
+                else:
+                    self._drain_llm_attempts()
+                    result = dict(runner(session, commit) or {})
+                    attempts = self._drain_llm_attempts()
+                    trace = self._enqueue_step_trace(
+                        session=session,
+                        commit=commit,
+                        step_name="order_controls",
+                        attempts=attempts,
+                    )
+                    if trace:
+                        result["trace"] = trace
+                    json.dumps(result, ensure_ascii=False, sort_keys=True)
+                    blockers = _blocking_reasons(result)
+                    payload[ORDER_CONTROLS_KEY] = {
+                        "status": "blocked" if blockers else "succeeded",
+                        "continuation_blocked": bool(blockers),
+                        "completed_at": self._clock().isoformat(),
+                        "result": result,
+                    }
+                    feedback.result_json = json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    session.add(feedback)
+                    return result
+            completed = self._refresh_completed_order_controls(commit_id)
+            if completed is None:
+                raise PostCanonMaintenanceBusy(
+                    "Order controls changed during recovery",
+                    canon_commit_id=commit_id,
                     step_name="order_controls",
-                    attempts=attempts,
                 )
-                if trace:
-                    result["trace"] = trace
-                json.dumps(result, ensure_ascii=False, sort_keys=True)
-                blockers = _blocking_reasons(result)
-                payload[ORDER_CONTROLS_KEY] = {
-                    "status": "blocked" if blockers else "succeeded",
-                    "continuation_blocked": bool(blockers),
-                    "completed_at": self._clock().isoformat(),
-                    "result": result,
-                }
-                feedback.result_json = json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-                session.add(feedback)
-                return result
+            return completed
+        except PostCanonMaintenanceBusy:
+            raise
         except Exception as exc:
             self._discard_llm_attempts()
             self._record_order_controls_failure(commit_id, exc)
@@ -446,6 +467,74 @@ class PostCanonMaintenanceService:
                 run_id=feedback_run_id,
                 step_name="order_controls",
             ) from exc
+
+    def _refresh_completed_order_controls(
+        self, commit_id: str
+    ) -> dict[str, Any] | None:
+        with self.session_factory.begin() as session:
+            snapshot = session.scalar(
+                select(PostCanonMaintenanceRun.result_json).where(
+                    PostCanonMaintenanceRun.canon_commit_id == commit_id,
+                    PostCanonMaintenanceRun.step_name == "feedback",
+                )
+            )
+            controls = _load_object(snapshot).get(ORDER_CONTROLS_KEY)
+            if not isinstance(controls, dict) or controls.get("status") != "succeeded":
+                return None
+            project_id = session.scalar(
+                select(CanonCommitRecord.project_id).where(
+                    CanonCommitRecord.id == commit_id
+                )
+            )
+            if project_id is None:
+                raise ValueError(f"Committed Canon not found: {commit_id}")
+            lock_projection_project(session, project_id)
+            # The initial runner owns these rows while it calls its models. Never
+            # wait for those rows while holding the Project lock it may need.
+            rows = self._locked_runs(session, commit_id, skip_locked=True)
+            if len(rows) != len(POST_CANON_STEP_NAMES):
+                raise PostCanonMaintenanceBusy(
+                    "Order controls are owned by another runner",
+                    canon_commit_id=commit_id,
+                    step_name="order_controls",
+                )
+            self._require_all_steps_succeeded(rows, commit_id)
+            commit = session.get(CanonCommitRecord, commit_id)
+            if (
+                commit is None
+                or commit.status != "committed"
+                or not is_active_commit(session, commit)
+            ):
+                raise ValueError(f"Committed Canon not found: {commit_id}")
+            feedback = _row_for_step(rows, "feedback")
+            payload = _load_object(feedback.result_json)
+            controls = payload.get(ORDER_CONTROLS_KEY)
+            if not isinstance(controls, dict) or controls.get("status") != "succeeded":
+                return None
+            result = dict(controls.get("result") or {})
+            checkpoint = result.get("checkpoint")
+            if isinstance(checkpoint, dict) and checkpoint.get("id"):
+                current = session.get(BandCheckpoint, checkpoint["id"])
+                evaluator = BandCheckpointEvaluator(session)
+                if not evaluator.inspect(current).current:
+                    refreshed = evaluator.refresh(
+                        project_id=commit.project_id,
+                        chapter_number=commit.chapter_number,
+                    )
+                    result["checkpoint"] = (
+                        {
+                            "id": refreshed.id,
+                            "status": refreshed.status,
+                            "band_id": refreshed.band_id,
+                        }
+                        if refreshed is not None
+                        else {"id": checkpoint["id"], "status": "pending"}
+                    )
+                    payload[ORDER_CONTROLS_KEY] = {**controls, "result": result}
+                    feedback.result_json = json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True
+                    )
+            return result
 
     def heartbeat(self, claim: PostCanonRunClaim) -> None:
         timestamp = self._clock()
@@ -467,17 +556,31 @@ class PostCanonMaintenanceService:
 
     def _ensure_runs(self, canon_commit_id: str) -> None:
         with self.session_factory.begin() as session:
+            project_id = session.scalar(
+                select(CanonCommitRecord.project_id).where(
+                    CanonCommitRecord.id == canon_commit_id
+                )
+            )
+            if project_id is None:
+                raise ValueError(f"Committed Canon not found: {canon_commit_id}")
+            lock_projection_project(session, project_id)
             commit = session.execute(
                 select(CanonCommitRecord)
                 .where(CanonCommitRecord.id == canon_commit_id)
                 .with_for_update()
             ).scalar_one_or_none()
-            if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
+            if (
+                commit is None
+                or commit.status != "committed"
+                or not is_active_commit(session, commit)
+            ):
                 raise ValueError(f"Committed Canon not found: {canon_commit_id}")
             candidate = session.get(CandidateDraftRecord, commit.candidate_id)
             if (
                 candidate is None
-                or candidate.canon_commit_id != commit.id
+                or candidate.project_id != commit.project_id
+                or candidate.chapter_plan_id != commit.chapter_plan_id
+                or candidate.chapter_number != commit.chapter_number
                 or candidate.status != "accepted"
             ):
                 raise ValueError("Canon commit candidate is not accepted")
@@ -786,13 +889,14 @@ class PostCanonMaintenanceService:
         self,
         session: Session,
         canon_commit_id: str,
+        *, skip_locked: bool = False,
     ) -> list[PostCanonMaintenanceRun]:
         return list(
             session.execute(
                 select(PostCanonMaintenanceRun)
                 .where(PostCanonMaintenanceRun.canon_commit_id == canon_commit_id)
                 .order_by(PostCanonMaintenanceRun.created_at.asc())
-                .with_for_update()
+                .with_for_update(skip_locked=skip_locked)
             ).scalars()
         )
 

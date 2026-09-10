@@ -9,6 +9,7 @@ from forwin.application.read_models import (
     normalize_project_automation,
 )
 from forwin.api_schema import (
+    BlockingReasonInfo,
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,
     ProjectContinueGenerationRequest,
@@ -22,6 +23,10 @@ from forwin.generation.continue_workset import (
 from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.planning_control import BandCheckpoint
+from forwin.planning.checkpoints import normalize_checkpoint_status
+from forwin.review.plan_checks import BandCheckpointEvaluator
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 from .common import (
@@ -138,12 +143,43 @@ def continue_project_generation(
                 409,
                 f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}",
             )
+        checkpoint_block = None
+        policy = ProjectPolicyStore(session).load(project).policy
+        if policy.pause.band_checkpoint_action != "continue":
+            previous = session.scalar(
+                select(BandCheckpoint)
+                .where(
+                    BandCheckpoint.project_id == project_id,
+                    BandCheckpoint.trigger_source == "auto_band_end",
+                )
+                .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+                .limit(1)
+            )
+            if previous is not None:
+                evaluator = BandCheckpointEvaluator(session)
+                refreshed = evaluator.refresh(project_id, previous.boundary_chapter)
+                evidence = evaluator.inspect(refreshed)
+                status = normalize_checkpoint_status(evidence.effective_status)
+                if status not in {"pass", "overridden"}:
+                    code = {
+                        "pending": "band_checkpoint_pending",
+                        "warn": "band_checkpoint_warn",
+                        "fail": "band_checkpoint_fail",
+                        "error": "band_checkpoint_fail",
+                    }[status]
+                    checkpoint_block = BlockingReasonInfo(
+                        code=code,
+                        message="band checkpoint 需要处理当前核验结果后再继续。",
+                        chapter_number=previous.boundary_chapter,
+                        band_id=previous.band_id,
+                    )
         project_detail = build_project_detail(
             session=session,
             project=project,
             display_datetime=display_datetime,
         )
-        if project_detail.blocking_reason.code:
+        blocking_reason = checkpoint_block or project_detail.blocking_reason
+        if blocking_reason.code:
             log_decision_event(
                 session,
                 project_id=project_id,
@@ -151,16 +187,15 @@ def continue_project_generation(
                 event_type=DecisionEventType.HARD_GATE_HIT,
                 actor_type="api",
                 scope="project",
-                summary=project_detail.blocking_reason.message
-                or project_detail.blocking_reason.code,
-                payload={"blocking_reason": project_detail.blocking_reason.code},
-                band_id=project_detail.blocking_reason.band_id,
-                chapter_number=int(project_detail.blocking_reason.chapter_number or 0),
+                summary=blocking_reason.message or blocking_reason.code,
+                payload={"blocking_reason": blocking_reason.code},
+                band_id=blocking_reason.band_id,
+                chapter_number=int(blocking_reason.chapter_number or 0),
                 related_object_type="project",
                 related_object_id=project_id,
             )
             session.commit()
-            raise HTTPException(409, project_detail.blocking_reason.message)
+            raise HTTPException(409, blocking_reason.message)
         max_chapters = req.max_chapters if req is not None else None
         auto_continue = (
             True

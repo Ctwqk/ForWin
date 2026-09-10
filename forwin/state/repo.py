@@ -247,6 +247,7 @@ class StateRepository:
             return None
         return self.session.execute(
             select(BandExperiencePlan)
+            .execution_options(populate_existing=True)
             .where(
                 BandExperiencePlan.project_id == project_id,
                 BandExperiencePlan.arc_id == active_arc.id,
@@ -290,6 +291,7 @@ class StateRepository:
             return None
         row = self.session.execute(
             select(BandExperiencePlan)
+            .execution_options(populate_existing=True)
             .where(
                 BandExperiencePlan.project_id == project_id,
                 BandExperiencePlan.arc_id == active_arc.id,
@@ -311,6 +313,7 @@ class StateRepository:
                     ChapterPlan.chapter_number >= row.chapter_start,
                     ChapterPlan.chapter_number <= row.chapter_end,
                 )
+                .execution_options(populate_existing=True)
                 .order_by(ChapterPlan.chapter_number.asc())
             )
             .scalars()
@@ -336,6 +339,7 @@ class StateRepository:
     ) -> BandCheckpoint | None:
         return self.session.execute(
             select(BandCheckpoint)
+            .execution_options(populate_existing=True)
             .where(
                 BandCheckpoint.project_id == project_id,
                 BandCheckpoint.band_id == band_id,
@@ -351,7 +355,7 @@ class StateRepository:
         band_id: str = "",
         status: str = "",
     ) -> list[BandCheckpoint]:
-        stmt = select(BandCheckpoint).where(BandCheckpoint.project_id == project_id)
+        stmt = select(BandCheckpoint).where(BandCheckpoint.project_id == project_id).execution_options(populate_existing=True)
         if band_id:
             stmt = stmt.where(BandCheckpoint.band_id == band_id)
         if status:
@@ -550,6 +554,7 @@ class StateRepository:
         rows = (
             self.session.execute(
                 select(NarrativeConstraint)
+                .execution_options(populate_existing=True)
                 .where(
                     NarrativeConstraint.project_id == project_id,
                     NarrativeConstraint.status == "active",

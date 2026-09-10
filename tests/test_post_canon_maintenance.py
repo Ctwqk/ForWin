@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-import pytest
 
 from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion
 from forwin.generation.pipeline_core.world_projection import PostCanonStage
@@ -24,13 +24,16 @@ from forwin.maintenance.post_canon import (
     _ClaimHeartbeat,
     post_canon_idempotency_key,
 )
-from forwin.maintenance.state import post_canon_barrier_ready
+from forwin.maintenance.state import (
+    post_canon_barrier_ready,
+    post_canon_checkpoint_status,
+)
 from forwin.models.base import Base
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.planning_control import BandCheckpoint
-from forwin.models.project import Project, ChapterPlan
+from forwin.models.project import ChapterPlan, Project
 from forwin.runtime.policy import RuntimePolicy
 from forwin.storage.artifacts import ArtifactStore
 
@@ -414,50 +417,16 @@ def test_order_controls_reject_noncanonical_step_set() -> None:
 
 
 def test_run_materialization_rejects_unknown_step_rows() -> None:
-    commit = SimpleNamespace(
-        id="canon-1",
-        chapter_plan_id="plan-1", active_commit_id="canon-1",
-        idempotency_key="canon-key-1",
-        project_id="project-1",
-        chapter_number=1,
-        candidate_id="candidate-1",
-        status="committed",
-    )
-    candidate = SimpleNamespace(
-        canon_commit_id="canon-1",
-        status="accepted",
-    )
-    rows = [*_completed_rows(), _run("obsolete-step")]
-
-    class Result:
-        def __init__(self, values):
-            self.values = values
-
-        def scalar_one_or_none(self):
-            return self.values
-
-        def scalars(self):
-            return iter(self.values)
-
-    class FakeSession:
-        def __init__(self):
-            self.results = iter((Result(commit), Result(rows)))
-
-        def execute(self, _statement):
-            return next(self.results)
-
-        def get(self, _model, _identity):
-            return commit if _model is ChapterPlan else candidate
-
-        def add(self, _row) -> None:
-            raise AssertionError("unknown steps must fail before materialization")
-
-    service = SimpleNamespace(
-        session_factory=SimpleNamespace(begin=lambda: nullcontext(FakeSession()))
-    )
-
+    service, sessions, _calls = _durable_service()
+    with sessions.begin() as session:
+        session.add(PostCanonMaintenanceRun(
+            canon_commit_id="canon-1", project_id="project-1", chapter_number=1,
+            candidate_id="candidate-1", step_name="obsolete-step", idempotency_key="obsolete",
+        ))
     with pytest.raises(ValueError, match="unknown post-Canon steps"):
-        PostCanonMaintenanceService._ensure_runs(service, "canon-1")
+        service._ensure_runs("canon-1")
+    with sessions() as session:
+        assert len(list(session.scalars(select(PostCanonMaintenanceRun)))) == 1
 
 
 def test_phase3_event_requires_complete_canon_identity() -> None:
@@ -600,38 +569,8 @@ def test_live_checkpoint_status_overrides_stale_snapshot() -> None:
 
 
 def test_blocked_order_controls_are_re_evaluated_until_clear() -> None:
-    rows = _completed_rows()
-    feedback = rows[-1]
-    feedback.result_json = "{}"
-    commit = SimpleNamespace(
-        id="canon-1",
-        chapter_plan_id="plan-1", active_commit_id="canon-1",
-        project_id="project-1",
-        chapter_number=1,
-        status="committed",
-    )
-
-    class FakeSession:
-        def get(self, _model, _identity):
-            return commit
-
-        def add(self, _row) -> None:
-            return None
-
-    session = FakeSession()
-    session_factory = SimpleNamespace(begin=lambda: nullcontext(session))
-    llm_client = SimpleNamespace(drain_llm_attempt_events=lambda: [])
-    service = PostCanonMaintenanceService(
-        session_factory=session_factory,
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
-        arc_envelope_manager=object(),
-        world_simulator=object(),
-        artifact_store=object(),
-        llm_client=llm_client,
-    )
-    service._locked_runs = lambda _session, _commit_id: rows  # type: ignore[method-assign]
+    service, sessions, _calls = _durable_service()
+    service.run(canon_commit_id="canon-1", worker_id="worker-1")
     calls = 0
 
     results = iter(
@@ -652,6 +591,9 @@ def test_blocked_order_controls_are_re_evaluated_until_clear() -> None:
     assert first["blocking_reasons"] == ["future plan is inconsistent"]
     assert second["blocking_reasons"] == []
     assert calls == 2
+    with sessions() as session:
+        rows = list(session.scalars(select(PostCanonMaintenanceRun)))
+        feedback = next(row for row in rows if row.step_name == "feedback")
     controls = json.loads(feedback.result_json)[ORDER_CONTROLS_KEY]
     assert controls["status"] == "succeeded"
     assert controls["continuation_blocked"] is False
@@ -761,34 +703,23 @@ def test_canon_admission_rejects_incomplete_previous_barrier() -> None:
 
 
 def test_canon_admission_rejects_failed_previous_checkpoint() -> None:
-    previous = SimpleNamespace(id="canon-1")
-    rows = _completed_rows(checkpoint_status="fail")
-
-    class Result:
-        def __init__(self, values):
-            self.values = values
-
-        def scalar_one_or_none(self):
-            return self.values
-
-        def scalars(self):
-            return iter(self.values)
-
-    class FakeSession:
-        def __init__(self):
-            self.results = iter((Result(previous), Result(rows)))
-
-        def execute(self, _statement):
-            return next(self.results)
-
-        def get(self, _model, identity):
-            if identity == "checkpoint-1":
-                return SimpleNamespace(status="fail")
-            return None
-
-    with pytest.raises(CanonStaleVersion, match="incomplete post-Canon"):
+    service, sessions, _calls = _durable_service()
+    service.run(canon_commit_id="canon-1", worker_id="worker-1")
+    with sessions.begin() as session:
+        session.add(BandCheckpoint(
+            id="checkpoint-1", project_id="project-1", arc_id="arc-1", status="fail",
+            trigger_source="manual_boundary",
+            boundary_chapter=1, chapter_start=1, chapter_end=1,
+        ))
+        feedback = session.scalar(select(PostCanonMaintenanceRun).where(PostCanonMaintenanceRun.step_name == "feedback"))
+        feedback.result_json = json.dumps({ORDER_CONTROLS_KEY: {
+            "status": "succeeded", "result": {"checkpoint": {"id": "checkpoint-1", "status": "fail"}},
+        }})
+    with sessions() as session, pytest.raises(CanonStaleVersion, match="incomplete post-Canon"):
+        rows = list(session.scalars(select(PostCanonMaintenanceRun)))
+        assert post_canon_checkpoint_status(rows, session=session) == "fail"
         CanonAdmissionService._require_previous_post_canon_barrier(
-            session=FakeSession(),
+            session=session,
             plan=SimpleNamespace(project_id="project-1", chapter_number=2),
         )
 

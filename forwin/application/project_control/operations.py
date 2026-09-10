@@ -72,7 +72,9 @@ def _checkpoint_action_gate_outcome(
     blocked: bool = False,
     overridden_by: str = "",
 ) -> GateOutcome:
-    is_manual = str(getattr(checkpoint, "trigger_source", "") or "") == "manual_boundary"
+    is_manual = (
+        str(getattr(checkpoint, "trigger_source", "") or "") == "manual_boundary"
+    )
     scope = (
         "band"
         if str(getattr(checkpoint, "boundary_kind", "") or "") == "band_end"
@@ -269,11 +271,19 @@ def approve_band_checkpoint(
 ) -> BandCheckpointDetail:
     session = get_session()
     try:
+        from forwin.canon.projection_lock import lock_projection_project
+        from forwin.review.plan_checks import BandCheckpointEvaluator
+
+        lock_projection_project(session, project_id)
         row = latest_band_checkpoint_row(
             session, project_id=project_id, band_id=band_id
         )
         if row is None:
             raise HTTPException(404, "band checkpoint 不存在")
+        session.refresh(row, with_for_update=True)
+        evidence = BandCheckpointEvaluator(session).inspect(row)
+        if row.trigger_source == "auto_band_end" and not evidence.current:
+            raise HTTPException(409, "band checkpoint 核验证据已失效，请先重新核验。")
         parent = latest_related_decision_event(
             session,
             project_id=project_id,
@@ -308,7 +318,9 @@ def approve_band_checkpoint(
             summary="band checkpoint 已人工放行。",
             reason=reason,
             payload=attach_gate_outcome(
-                {},
+                {"checkpoint_input_sha256": evidence.input_sha256}
+                if row.trigger_source == "auto_band_end"
+                else {},
                 _checkpoint_action_gate_outcome(
                     row,
                     policy_version=int(
@@ -947,6 +959,7 @@ def override_band_experience(
         if pipeline is not None:
             arc_structure = repo.get_latest_arc_structure_draft(project_id)
             from forwin.review.repair.plan_patch import arc_structure_data_from_row
+
             structure_data = arc_structure_data_from_row(arc_structure)
             for chapter_number in range(
                 schedule.chapter_start, schedule.chapter_end + 1

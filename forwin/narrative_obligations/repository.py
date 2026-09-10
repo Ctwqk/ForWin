@@ -240,7 +240,7 @@ class NarrativeObligationRepository:
 
     def list_active_for_context(self, project_id: str, *, chapter_number: int) -> list[NarrativeObligation]:
         rows = self.session.execute(
-            select(NarrativeObligationRow).where(
+            select(NarrativeObligationRow).execution_options(populate_existing=True).where(
                 NarrativeObligationRow.project_id == project_id,
                 NarrativeObligationRow.status == "active",
                 NarrativeObligationRow.origin_chapter_number < int(chapter_number or 0),
@@ -293,7 +293,7 @@ class NarrativeObligationRepository:
 
     def list_planned_for_chapter(self, project_id: str, *, origin_chapter_number: int) -> list[NarrativeObligation]:
         rows = self.session.execute(
-            select(NarrativeObligationRow).where(
+            select(NarrativeObligationRow).execution_options(populate_existing=True).where(
                 NarrativeObligationRow.project_id == project_id,
                 NarrativeObligationRow.origin_chapter_number == int(origin_chapter_number or 0),
                 NarrativeObligationRow.status == "planned",

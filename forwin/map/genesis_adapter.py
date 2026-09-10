@@ -105,6 +105,22 @@ def build_subworld_map_specs_from_genesis(
     return specs
 
 
+def genesis_edge_source_constraints(row: dict[str, Any]) -> dict[str, str]:
+    """Keep distinct authored prose; it does not grant access or quantify risk."""
+    def combined(*fields: str) -> str:
+        values: list[str] = []
+        for field in fields:
+            value = row.get(field)
+            if isinstance(value, str) and value.strip() and value not in values:
+                values.append(value)
+        return "；".join(values)
+
+    return {
+        "source_control": combined("control", "access"),
+        "source_hazard": combined("hazard", "risk"),
+    }
+
+
 def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> list[MapEdge] | None:
     """Normalize node-to-node Genesis routes once for local and cross-world IO.
 
@@ -160,8 +176,7 @@ def authored_edges_from_atlas(*, project_id: str, map_atlas: dict[str, Any]) -> 
                       "source_from_ref": by_ref[left], "source_to_ref": by_ref[right],
                       "source_travel_cost": cost, "travel_time_known": hours is not None,
                       "source_relation": str(row.get("relation") or kind),
-                      "source_control": str(row.get("control") or ""),
-                      "source_hazard": str(row.get("hazard") or "")},
+                      **genesis_edge_source_constraints(row)},
         ))
     return result or None
 

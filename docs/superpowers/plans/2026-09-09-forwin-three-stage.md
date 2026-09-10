@@ -156,6 +156,16 @@ Verification commands: `.venv/bin/python -m pytest -q tests/test_genesis_route_c
 - [x] Preserve the distinction between author-only background, character knowledge, reveal permission, future intentions and accepted current state. Do not add a new checker, gate, model call or story-specific date rule.
 - [x] Test the real provider → assembler → final messages, including different historical events, literal quoted claims, hidden information, absent/malformed input and bounded omissions. Reproduce red before implementation, then run related regression and independent review.
 - [ ] Update the current design and failure report, freeze the reviewed source, run full QA and verify both role images. Start a new smoke, followed only after acceptance by a fresh separate L100; the failed sample cannot qualify the replacement source.
+  - `03143ef` completed 3123 passed / 4 skipped / 6 subtests and both exact role images. Fresh smoke preparation reached Genesis Map but no writing task: a route permission/risk input loss was found during review. Preserve this engineering pass and the held pre-writing run; follow Task 13 before another candidate starts.
+
+### Task 13: Preserve authored route permission and risk text
+
+The verified `03143ef` candidate has no chapter task in its fresh smoke yet. Its canonical Map contains six routes with twelve `access/risk` strings, but independent replay retains none in BookMap, Writer or main review. This is a pre-writing input-contract defect, not a failed BODY. Preserve that held run and its passing engineering evidence.
+
+- [x] Reproduce access/risk loss, including existing control/hazard, coexisting distinct values, hidden routes and actual final Writer/reviewer messages. Ten corrected contract assertions failed before implementation; the initial incomplete test fixtures were fixed before recording that red result.
+- [x] Normalize these original strings once in the existing Genesis edge adapter. Reuse the same result in Genesis preview; retain existing BookMap metadata and render both permission and risk in Writer. Do not invent access-rule IDs, risk scores, permissions granted or incidents that occurred.
+- [x] Verify local and cross-world persistence, independent review and the same immutable actual Map replay. Update current design and the map report. Related 192 passed; independent 52 passed (overlapping). Exact same-input replay at five layers improves 0/12 to 12/12 source conditions, travel cost remains 6/6. This proves input transport, not model compliance.
+- [ ] Freeze new source, full QA and both exact role images; start a fresh smoke before a separate L100. No runtime patch or reuse of held generated material as new qualification.
 
 ## Initial evidence
 

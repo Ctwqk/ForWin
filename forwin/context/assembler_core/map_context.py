@@ -4,7 +4,7 @@ import logging
 from types import SimpleNamespace
 
 from forwin.book_state.map_graph import MapGraph
-from forwin.map.genesis_adapter import genesis_edge_endpoints
+from forwin.map.genesis_adapter import genesis_edge_endpoints, genesis_edge_source_constraints
 from forwin.map.visibility import genesis_edge_visibility
 
 
@@ -66,7 +66,13 @@ def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dic
         left, right = genesis_edge_endpoints(edge)
         cost = str(edge.get("travel_cost") or "耗时未知")
         arrow = "→" if str(edge.get("bidirectional", True)).lower() in {"false", "0", "no"} else "↔"
-        route_lines.append(f"{node_names.get(left, left)}{arrow}{node_names.get(right, right)}：{cost}")
+        constraints = genesis_edge_source_constraints(edge)
+        details = [cost]
+        if constraints["source_control"]:
+            details.append("通行条件：" + constraints["source_control"])
+        if constraints["source_hazard"]:
+            details.append("风险说明：" + constraints["source_hazard"])
+        route_lines.append(f"{node_names.get(left, left)}{arrow}{node_names.get(right, right)}：{'；'.join(details)}")
     if route_lines:
         parts.append("Genesis 路线约束：" + "；".join(route_lines[:24]))
         if len(route_lines) > 24:

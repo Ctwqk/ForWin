@@ -401,3 +401,118 @@ def test_map_movement_resolves_stable_genesis_node_ids():
     verdict = MapMovementReviewer().review(context, output)
     assert verdict.verdict == "fail"
     assert verdict.issues[0].rule_name == "map_travel_time_exceeds_chapter_time"
+
+
+@pytest.mark.parametrize("fields", [
+    {"access": "需双方签署取件单", "risk": "退款记录不证明收款人已领取"},
+    {"control": "门卫只允许白天进入", "hazard": "雨后石阶可能湿滑"},
+    {"access": "需双方签署取件单", "control": "门卫只允许白天进入",
+     "risk": "退款记录不证明收款人已领取", "hazard": "雨后石阶可能湿滑"},
+])
+def test_route_source_conditions_survive_import_and_genesis_preview(fields):
+    source = atlas()
+    source["edges"][0].update(fields)
+    result = generate_subworld_map(build_subworld_map_specs_from_genesis(project_id="p", map_atlas=source)[0])
+    edge = next(e for e in result.map_edges if e.metadata["source_edge_id"] == "walk")
+    overview = _build_genesis_map_overview(source, [])
+    for field, value in fields.items():
+        metadata_key = "source_control" if field in {"access", "control"} else "source_hazard"
+        assert value in edge.metadata[metadata_key]
+        assert value in overview
+    assert edge.access_rule_id == ""  # Natural-language requirements are not IDs or grants.
+    assert edge.travel_time == pytest.approx(10 / 60)
+
+
+@pytest.mark.parametrize("stage", ["single", "preview", "breakdown", "scene", "stitch"])
+def test_current_route_conditions_reach_every_writer_without_genesis_fallback(stage):
+    from forwin.protocol.context import ChapterContextPack
+    from forwin.protocol.scene import ScenePlan
+    from forwin.writer.prompt_core import (
+        build_preview_chapter_prompt,
+        build_scene_breakdown_prompt,
+        build_scene_generation_prompt,
+        build_scene_stitch_prompt,
+        build_single_chapter_draft_prompt,
+    )
+
+    source = atlas()
+    source["edges"][0].update(access="需双方签署取件单", risk="退款记录不证明收款人已领取")
+    result = generate_subworld_map(build_subworld_map_specs_from_genesis(project_id="p", map_atlas=source)[0])
+    context = ChapterContextPack(project_id="p", project_title="核查", premise="核对原件", genre="悬疑",
+        setting_summary="办公区", chapter_goals=[], chapter_number=1,
+        chapter_plan_title="调档", chapter_plan_one_line="核对原件", map_context={
+            "map_node_count": len(result.map_nodes), "map_edge_count": len(result.map_edges),
+            "review_graph": {"available": False, "map_nodes": [n.model_dump(mode="json") for n in result.map_nodes],
+                             "map_edges": [e.model_dump(mode="json") for e in result.map_edges]},
+        })
+    builders = {
+        "single": lambda: build_single_chapter_draft_prompt(context),
+        "preview": lambda: build_preview_chapter_prompt(context),
+        "breakdown": lambda: build_scene_breakdown_prompt(context),
+        "scene": lambda: build_scene_generation_prompt(context, ScenePlan(scene_no=1, objective="核对原件")),
+        "stitch": lambda: build_scene_stitch_prompt(context, []),
+    }
+    text = "\n".join(message["content"] for message in builders[stage]())
+    assert "需双方签署取件单" in text
+    assert "退款记录不证明收款人已领取" in text
+
+
+def test_hidden_route_conditions_stay_out_of_writer_but_reach_objective_review():
+    from forwin.protocol.context import ChapterContextPack
+    from forwin.review.context_builder import build_review_context_pack
+    from forwin.writer.prompt_core.sections import _map_runtime_section
+
+    source = atlas()
+    source["edges"][0].update(access="仅夜间密令可通行", risk="暗道水位可能上涨", hidden=True)
+    result = generate_subworld_map(build_subworld_map_specs_from_genesis(project_id="p", map_atlas=source)[0])
+    graph = {"available": True, "map_nodes": [n.model_dump(mode="json") for n in result.map_nodes],
+             "map_edges": [e.model_dump(mode="json") for e in result.map_edges]}
+    context = ChapterContextPack(project_id="p", project_title="核查", premise="核对原件", genre="悬疑",
+        setting_summary="办公区", chapter_goals=[], chapter_number=1,
+        chapter_plan_title="调档", chapter_plan_one_line="核对原件", map_context={
+            "map_node_count": len(result.map_nodes), "map_edge_count": len(result.map_edges),
+            "review_graph": graph, "objective_review_graph": graph,
+        })
+    writer = _map_runtime_section(context) + _build_genesis_map_overview(source, [])
+    output = WriterOutput(chapter_number=1, title="调档", body="她尚不知道暗道存在。", end_of_chapter_summary="调档")
+    payload = LLMWebNovelReviewer()._llm_payload(build_review_context_pack(context=context), output)
+    for value in ("仅夜间密令可通行", "暗道水位可能上涨"):
+        assert value not in writer
+        assert value in json.dumps(payload["world"]["map_context"]["objective_review_graph"], ensure_ascii=False)
+    assert payload["draft"]["body"] == output.body
+
+
+def test_route_conditions_persist_for_local_and_cross_world_edges():
+    from forwin.map.service import (
+        ensure_book_map_from_genesis_atlas,
+        get_book_map_runtime,
+    )
+    from forwin.models import Project
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from tests.postgres import postgres_test_url
+
+    source = atlas()
+    source["submaps"].append({"id": "island", "name": "离岛"})
+    source["regions"].append({"id": "island-region", "name": "岛上港口", "subworld_name": "island"})
+    source["nodes"].append({"id": "port", "name": "港口", "parent_subworld": "island", "parent_region_id": "island-region"})
+    source["edges"].append({"id": "ferry", "from": "finance", "to": "port", "travel_cost": "两小时"})
+    for row in source["edges"]:
+        row.update(access="需持原件与预约单", control="不得代签", risk="签收不等于结案", hazard="涨潮可能停航")
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    factory = get_session_factory(engine)
+    with factory() as session:
+        session.add(Project(id="p", title="核查", premise="核查"))
+        session.commit()
+        ensure_book_map_from_genesis_atlas(session, project_id="p", map_atlas=source)
+        session.commit()
+    with factory() as session:
+        runtime = get_book_map_runtime(session, "p")
+        edges = {e.metadata["source_edge_id"]: e for e in runtime.map_edges_by_id.values()}
+        assert set(edges) == {"walk", "transfer", "ferry"}
+        for edge in edges.values():
+            assert "需持原件与预约单" in edge.metadata["source_control"]
+            assert "不得代签" in edge.metadata["source_control"]
+            assert "签收不等于结案" in edge.metadata["source_hazard"]
+            assert "涨潮可能停航" in edge.metadata["source_hazard"]
+            assert edge.access_rule_id == ""

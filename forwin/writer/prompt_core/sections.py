@@ -464,6 +464,7 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
         routes = [edge for edge in graph.get("map_edges", []) if isinstance(edge, dict) and is_writer_visible_map_edge(SimpleNamespace(**edge))]
         if routes:
             lines.append("  · 当前BookMap路线（小时为数值单位；优先于Genesis写前总览；未知耗时不可当作零）：")
+            lines.append("  · 原文通行条件不代表人物已获许可；风险说明不代表事件已经发生。")
         if graph.get("available") is False:
             lines.append("  · 当前地图上下文不完整；只展示已提供路线，未列出的路线和条件保持未知。")
         for edge in routes[:24]:
@@ -472,9 +473,12 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
             duration = f"{float(hours):.3g}小时" if hours is not None else "耗时未知"
             source_cost = str(metadata.get("source_travel_cost") or "")
             controls = str(metadata.get("source_control") or "")
+            hazards = str(metadata.get("source_hazard") or "")
             access_rule = str(edge.get("access_rule_id") or "")
             arrow = "↔" if edge.get("bidirectional") else "→"
             lines.append(f"    · {names.get(edge.get('from_node_id'), edge.get('from_node_id'))}{arrow}{names.get(edge.get('to_node_id'), edge.get('to_node_id'))}：{duration}；来源约束：{source_cost or '未提供'}{('；通行条件：' + controls) if controls else ''}")
+            if hazards:
+                lines.append("      · 风险说明：" + hazards)
             if access_rule:
                 lines.append(f"      · 通行规则引用：{access_rule}；须满足对应规则，未知规则不视为许可。")
         if len(routes) > 24:

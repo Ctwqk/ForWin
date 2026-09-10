@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from forwin.candidate_drafts import candidate_body_hash
 from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.llm_eval.cases import sample_context
 from forwin.models import Project
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.writer.prompt_core import _canon_quality_context_section
@@ -65,17 +67,30 @@ def test_historical_rewrite_context_freezes_next_accepted_chapter_outcome() -> N
             review = ChapterReview(draft_id=draft.id, verdict="pass")
             session.add(review)
             session.flush()
-            session.add(
-                CandidateDraftRecord(
-                    project_id=project.id,
-                    chapter_plan_id=accepted.id,
-                    chapter_number=75,
-                    candidate_draft_id=draft.id,
-                    review_id=review.id,
-                    status="accepted",
-                    canon_status="canon",
-                )
+            candidate = CandidateDraftRecord(
+                project_id=project.id,
+                chapter_plan_id=accepted.id,
+                chapter_number=75,
+                candidate_draft_id=draft.id,
+                body_hash=candidate_body_hash(draft.body_text),
+                review_id=review.id,
+                status="accepted",
+                canon_status="canon",
             )
+            session.add(candidate)
+            session.flush()
+            commit = CanonCommitRecord(
+                idempotency_key="future-context-75",
+                candidate_id=candidate.id,
+                project_id=project.id,
+                chapter_plan_id=accepted.id,
+                chapter_number=75,
+                chapter_title=accepted.title,
+            )
+            session.add(commit)
+            session.flush()
+            accepted.active_commit_id = commit.id
+            project.book_revision = 1
 
         with session_factory() as session:
             context = _build_canon_quality_context(

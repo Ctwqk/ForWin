@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect
 
 from forwin.book_state import BookStateRepository
+from forwin.candidate_drafts import candidate_body_hash
 from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.models import (
     ArcPlanVersion,
@@ -15,6 +16,7 @@ from forwin.models import (
     Project,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.canon import CanonCommitRecord
 from forwin.planning.future_plan_audit import (
     FuturePlanAuditIssue,
     FuturePlanAuditRepository,
@@ -221,18 +223,31 @@ def test_canon_quality_context_infers_recent_canon_release_without_transition_ro
             review = ChapterReview(draft_id=draft.id, verdict="pass")
             session.add(review)
             session.flush()
-            session.add(
-                CandidateDraftRecord(
-                    project_id=project.id,
-                    chapter_plan_id=plan.id,
-                    chapter_number=31,
-                    candidate_draft_id=draft.id,
-                    review_id=review.id,
-                    version=1,
-                    status="canon_committed",
-                    canon_status="canon",
-                )
+            candidate = CandidateDraftRecord(
+                project_id=project.id,
+                chapter_plan_id=plan.id,
+                chapter_number=31,
+                candidate_draft_id=draft.id,
+                body_hash=candidate_body_hash(draft.body_text),
+                review_id=review.id,
+                version=1,
+                status="canon_committed",
+                canon_status="canon",
             )
+            session.add(candidate)
+            session.flush()
+            commit = CanonCommitRecord(
+                idempotency_key="recent-release-context-31",
+                candidate_id=candidate.id,
+                project_id=project.id,
+                chapter_plan_id=plan.id,
+                chapter_number=31,
+                chapter_title=plan.title,
+            )
+            session.add(commit)
+            session.flush()
+            plan.active_commit_id = commit.id
+            project.book_revision = 1
             session.commit()
 
             context = _build_canon_quality_context(

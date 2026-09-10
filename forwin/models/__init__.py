@@ -101,6 +101,8 @@ from .book_state import (
 )
 
 __all__ = [
+    "ChapterCapacityReservation",
+    "SerialCapacityConfigRevision",
     "Base",
     "get_engine",
     "get_session_factory",

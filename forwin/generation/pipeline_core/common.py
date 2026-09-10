@@ -18,7 +18,6 @@ import logging
 from typing import Any
 
 from forwin.planning.future_plan_audit import FuturePlanAuditRun
-from forwin.protocol.review import ReviewVerdict
 from forwin.writer.execution_errors import (
     TransientLLMChapterFailure as TransientLLMChapterFailure,  # noqa: PLC0414 - public exception alias.
 )
@@ -33,54 +32,10 @@ def _positive_int(value: object) -> int:
         return 0
 
 
-def _priority_for_deferred_issue(issue_type: str) -> str:
-    normalized = str(issue_type or "").strip()
-    if normalized in {"style_repetition_pressure"}:
-        return "P3"
-    if normalized in {"foreshadowing_payoff", "transition_bridge_needed"}:
-        return "P2"
-    return "P1"
 
 
-def _summary_for_deferred_issue(
-    *, verdict: ReviewVerdict, issue_type: str, outcome_reason: str
-) -> str:
-    for issue in verdict.issues:
-        if (
-            str(
-                getattr(issue, "issue_type", "")
-                or getattr(issue, "rule_name", "")
-                or ""
-            )
-            == issue_type
-        ):
-            return str(
-                getattr(issue, "description", "") or outcome_reason or issue_type
-            )
-    return str(outcome_reason or issue_type)
 
 
-def _payoff_test_for_deferred_issue(
-    *,
-    verdict: ReviewVerdict,
-    issue_type: str,
-    deadline_chapter: int,
-    summary: str,
-) -> str:
-    for issue in verdict.issues:
-        if (
-            str(
-                getattr(issue, "issue_type", "")
-                or getattr(issue, "rule_name", "")
-                or ""
-            )
-            != issue_type
-        ):
-            continue
-        suggested = str(getattr(issue, "suggested_fix", "") or "").strip()
-        if suggested:
-            return suggested
-    return f"第{int(deadline_chapter or 0)}章前必须偿还：{summary}"
 
 
 def _future_plan_audit_checkpoint_payload(

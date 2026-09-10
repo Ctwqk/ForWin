@@ -454,8 +454,6 @@ def test_revision_atomic_failure_restores_whole_acceptance_set(prepared_canon, s
 
 
 def test_existing_approve_owner_validates_real_non_active_proposal(prepared_canon):
-    from types import SimpleNamespace
-
     from forwin.generation.pipeline_core.acceptance import AcceptanceStage
     from forwin.state.repo import StateRepository
 
@@ -465,9 +463,7 @@ def test_existing_approve_owner_validates_real_non_active_proposal(prepared_cano
     class Pipeline(AcceptanceStage):
         _SessionFactory = fixture.Session
         writer = ChapterWriter(BodyModel())
-        canon_preparation_context = SimpleNamespace(
-            policy=RuntimePolicy.for_profile("standard")
-        )
+        policy = RuntimePolicy.for_profile("standard")
         canon_admission = CanonAdmissionService(session_factory=fixture.Session)
 
         def _make_state_helpers(self, session):

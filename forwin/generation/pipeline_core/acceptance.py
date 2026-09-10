@@ -4,12 +4,14 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionActorType, DecisionEventType
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.preparation import CanonPreparationRequest
 from forwin.maintenance.deferred import (
     DeferredMaintenanceRecord,
     record_deferred_maintenance,
 )
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.review.issue_groups import issue_group_for_issue
+from forwin.review.results import review_issue_payloads
 
 
 class AcceptanceStage:
@@ -49,7 +51,7 @@ class AcceptanceStage:
                 candidate_id = candidate.id
                 session.rollback()
                 preparation = RevisionValidationService(session_factory=self._SessionFactory,writer=self.writer,
-                    policy=self.canon_preparation_context.policy).prepare(project_id=project_id,candidate_id=candidate_id)
+                    policy=self.policy).prepare(project_id=project_id,candidate_id=candidate_id)
                 if preparation.blocked:
                     return {"status":"accepted","message":"修订未通过完整后缀核验；原接纳版本继续生效。", "frozen_artifact":preparation.blocked_path,"revision_status":"blocked"}
                 outcome = self.canon_admission.commit_plan(preparation.plan,revision_model_identity=revision_model_identity(self.writer))
@@ -92,23 +94,27 @@ class AcceptanceStage:
 
             verdict = self._load_review_verdict(latest_review)
             repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)
-            residual_issues = self._review_issue_payloads(verdict)
+            residual_issues = review_issue_payloads(verdict)
             preparation = self.canon_preparation.prepare(
-                context=self.canon_preparation_context,
-                session=session,
-                repo=repo,
-                updater=updater,
-                candidate_id=candidate.id,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                writer_output=writer_output,
-                verdict=verdict,
-                acceptance_mode="human_approved",
-                repair_attempt_count=repair_attempt_count,
-                residual_review_issues=residual_issues,
-                canon_risk_level=(
-                    "low" if verdict.verdict in {"pass", "warn"} else "high"
+                request=CanonPreparationRequest(
+                    candidate_id=candidate.id,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    writer_output=writer_output,
+                    verdict=verdict,
+                    acceptance_mode="human_approved",
+                    repair_attempt_count=repair_attempt_count,
+                    residual_review_issues=residual_issues,
+                    canon_risk_level=(
+                        "low" if verdict.verdict in {"pass", "warn"} else "high"
+                    ),
                 ),
+                session=session,
+                updater=updater,
+                policy=self.policy,
+                llm_client=self.llm_client,
+                artifact_store=self.artifact_store,
+                recorder=self.trace_recorder,
             )
             if preparation.blocked or preparation.plan is None:
                 updater.mark_chapter_status(

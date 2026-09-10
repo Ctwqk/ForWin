@@ -21,7 +21,7 @@ from forwin.generation.pipeline_core.audit_control import (
 from forwin.generation.pipeline_core.chapter_execution_support import (
     hard_floor_gate_outcome,
 )
-from forwin.generation.pipeline_core.quality_gates import _canon_quality_gate_outcome
+from forwin.canon.quality_preparation import _canon_quality_gate_outcome
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.observability.pipeline_trace import (

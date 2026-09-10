@@ -33,10 +33,6 @@ from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAudit
 from forwin.planning.health import PlanHealthService
 from forwin.planning.query import PlanningQuery
 from forwin.protocol.experience import BandDelightSchedule
-from forwin.review.decision.audit import (
-    build_decision_event_payload,
-    digest_decision_input,
-)
 from forwin.review.decision.types import Decision, DecisionInput
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.plan_checks import (
@@ -201,34 +197,11 @@ class AuditControlStage:
         related_object_id: str = "",
         parent_event_id: str = "",
     ) -> DecisionEvent | None:
-        try:
-            payload = build_decision_event_payload(
-                decision=decision,
-                input_digest=digest_decision_input(decision_input),
-            )
-            return self._record_decision_event(
-                updater=updater,
-                project_id=decision_input.project_id,
-                chapter_number=decision_input.chapter_number,
-                event_family="evaluation_verdict",
-                event_type=DecisionEventType.RULE_DECISION_EVALUATED,
-                scope="chapter",
-                summary=f"engine decided {decision.outcome} via {decision.rule_id}",
-                reason=decision.reason,
-                related_object_type=related_object_type,
-                related_object_id=related_object_id,
-                payload=payload,
-                parent_event_id=parent_event_id,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to record rule decision event project=%s chapter=%s rule=%s: %s",
-                decision_input.project_id,
-                decision_input.chapter_number,
-                decision.rule_id,
-                exc,
-            )
-            return None
+        return self.trace_recorder.record_rule_decision(
+            updater=updater, decision=decision, decision_input=decision_input,
+            related_object_type=related_object_type, related_object_id=related_object_id,
+            parent_event_id=parent_event_id,
+        )
 
     def _audit_current_plan_before_write(
         self,

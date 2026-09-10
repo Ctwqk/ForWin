@@ -18,7 +18,7 @@ from forwin.book_state.extraction.contract import (
     BookStateExtractionResult,
 )
 from forwin.book_state.writer_contract import WriterContractDeltaBuilder
-from forwin.canon.preparation import BookStateCanonPreparer, CanonPreparationContext
+from forwin.canon.preparation import BookStateCanonPreparer
 from forwin.models import Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
@@ -144,20 +144,15 @@ def test_book_state_preparer_records_review_block_reason() -> None:
         )
 
         outcome = BookStateCanonPreparer().prepare(
-            context=CanonPreparationContext(
-                policy=RuntimePolicy.for_profile("standard"),
-                llm_client=object(),  # type: ignore[arg-type]
-                artifact_store=object(),  # type: ignore[arg-type]
-                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
-                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-            ),
-            session=session,
-            candidate_id="candidate-review-6",
-            project_id=project.id,
-            chapter_number=6,
-            writer_output=output,
-            verdict=ReviewVerdict(verdict="pass"),
-        )
+                      policy=RuntimePolicy.for_profile('standard'),
+                      recorder=SimpleNamespace(record_event=record_decision_event, record_rule_decision=lambda **_kwargs: None),
+                      session=session,
+                      candidate_id='candidate-review-6',
+                      project_id=project.id,
+                      chapter_number=6,
+                      writer_output=output,
+                      verdict=ReviewVerdict(verdict='pass'),
+                  )
 
         assert outcome.blocked is True
         assert recorded_events[-1]["event_type"] == DecisionEventType.CANON_COMMIT_BLOCKED
@@ -219,20 +214,15 @@ def test_book_state_preparer_records_extraction_block_reason(monkeypatch) -> Non
         )
 
         outcome = BookStateCanonPreparer().prepare(
-            context=CanonPreparationContext(
-                policy=RuntimePolicy.for_profile("standard"),
-                llm_client=object(),  # type: ignore[arg-type]
-                artifact_store=object(),  # type: ignore[arg-type]
-                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
-                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-            ),
-            session=session,
-            candidate_id="candidate-extraction-1",
-            project_id=project.id,
-            chapter_number=1,
-            writer_output=output,
-            verdict=ReviewVerdict(verdict="pass"),
-        )
+                      policy=RuntimePolicy.for_profile('standard'),
+                      recorder=SimpleNamespace(record_event=record_decision_event, record_rule_decision=lambda **_kwargs: None),
+                      session=session,
+                      candidate_id='candidate-extraction-1',
+                      project_id=project.id,
+                      chapter_number=1,
+                      writer_output=output,
+                      verdict=ReviewVerdict(verdict='pass'),
+                  )
 
         assert outcome.blocked is True
         payload = recorded_events[-1]["payload"]

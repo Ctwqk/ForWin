@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from forwin.review.candidate_autofix import apply_canon_name_drift_autofix
+
 import json
 import unittest
 from tempfile import TemporaryDirectory
@@ -25,7 +27,6 @@ from forwin.models.subworld import (
 )
 from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.planning.stage_analysis import ReplanGovernor, StageAssessment
-from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
@@ -1062,7 +1063,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
+        fixed = apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNotNone(fixed)
         assert fixed is not None
@@ -1104,7 +1105,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
+        fixed = apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
 
@@ -1127,7 +1128,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        fixed = ChapterPipeline._apply_canon_name_drift_autofix(output, review)
+        fixed = apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
 

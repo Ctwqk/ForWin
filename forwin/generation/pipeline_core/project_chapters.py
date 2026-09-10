@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.preparation import CanonPreparationRequest
 from forwin.canon.types import CanonAdmissionOutcome
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
@@ -26,6 +27,7 @@ from forwin.review.repair.service import (
     _canon_repair_scope,
     _canon_repair_scope_can_run,
 )
+from forwin.review.results import review_canon_risk, review_issue_payloads
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.writer.execution import WriterExecutionRequest
@@ -385,8 +387,8 @@ class ChapterExecutionStage:
                     )
                 )
                 repair_attempt_count = int(chapter_plan.repair_attempt_count or 0)
-                residual_review_issues = self._review_issue_payloads(verdict)
-                canon_risk_level = self._review_canon_risk(verdict)
+                residual_review_issues = review_issue_payloads(verdict)
+                canon_risk_level = review_canon_risk(verdict)
                 session.commit()
                 if self._pause_requested():
                     return self._paused_result(
@@ -561,19 +563,23 @@ class ChapterExecutionStage:
                         )
                     else:
                         preparation = self.canon_preparation.prepare(
-                            context=self.canon_preparation_context,
                             session=session,
-                            repo=repo,
                             updater=updater,
-                            candidate_id=candidate.id,
-                            project_id=project_id,
-                            chapter_number=chapter_num,
-                            writer_output=writer_output,
-                            verdict=verdict,
-                            acceptance_mode=acceptance_mode,
-                            repair_attempt_count=repair_attempt_count,
-                            residual_review_issues=accepted_residual_issues,
-                            canon_risk_level=canon_risk_level,
+                            policy=self.policy,
+                            llm_client=self.llm_client,
+                            artifact_store=self.artifact_store,
+                            recorder=self.trace_recorder,
+                            request=CanonPreparationRequest(
+                                candidate_id=candidate.id,
+                                project_id=project_id,
+                                chapter_number=chapter_num,
+                                writer_output=writer_output,
+                                verdict=verdict,
+                                acceptance_mode=acceptance_mode,
+                                repair_attempt_count=repair_attempt_count,
+                                residual_review_issues=accepted_residual_issues,
+                                canon_risk_level=canon_risk_level,
+                            ),
                         )
                         if preparation.blocked or preparation.plan is None:
                             canon_outcome = CanonAdmissionOutcome(
@@ -624,8 +630,8 @@ class ChapterExecutionStage:
                         repair_attempt_count = int(
                             chapter_plan.repair_attempt_count or 0
                         )
-                        residual_review_issues = self._review_issue_payloads(verdict)
-                        canon_risk_level = self._review_canon_risk(verdict)
+                        residual_review_issues = review_issue_payloads(verdict)
+                        canon_risk_level = review_canon_risk(verdict)
                         session.commit()
                         if verdict.verdict != "fail":
                             force_accept_applied = (

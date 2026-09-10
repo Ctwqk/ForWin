@@ -19,6 +19,7 @@ from forwin.audit.events import (
     ensure_decision_event_type,
 )
 from forwin.models import new_id
+from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.observability.context import OperationContext
 from forwin.observability.llm_trace import (
@@ -27,6 +28,11 @@ from forwin.observability.llm_trace import (
 )
 from forwin.observability.redaction import redact_payload
 from forwin.observability.spans import SpanRecord, current_span
+from forwin.review.decision.audit import (
+    build_decision_event_payload,
+    digest_decision_input,
+)
+from forwin.review.decision.types import Decision, DecisionInput
 from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
@@ -287,3 +293,42 @@ class PipelineTraceRecorder:
                 logger.debug(
                     "Ignoring prompt trace performance span failure.", exc_info=True
                 )
+
+    def record_rule_decision(
+        self,
+        *,
+        updater: StateUpdater,
+        decision: Decision,
+        decision_input: DecisionInput,
+        related_object_type: str = "",
+        related_object_id: str = "",
+        parent_event_id: str = "",
+    ) -> DecisionEvent | None:
+        try:
+            payload = build_decision_event_payload(
+                decision=decision,
+                input_digest=digest_decision_input(decision_input),
+            )
+            return self.record_event(
+                updater=updater,
+                project_id=decision_input.project_id,
+                chapter_number=decision_input.chapter_number,
+                event_family="evaluation_verdict",
+                event_type=DecisionEventType.RULE_DECISION_EVALUATED,
+                scope="chapter",
+                summary=f"engine decided {decision.outcome} via {decision.rule_id}",
+                reason=decision.reason,
+                related_object_type=related_object_type,
+                related_object_id=related_object_id,
+                payload=payload,
+                parent_event_id=parent_event_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to record rule decision event project=%s chapter=%s rule=%s: %s",
+                decision_input.project_id,
+                decision_input.chapter_number,
+                decision.rule_id,
+                exc,
+            )
+            return None

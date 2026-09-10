@@ -160,7 +160,10 @@ def test_design_status_links_current_contract_and_retired_history() -> None:
 
     assert "2026-09-09-forwin-three-stage-design.md" in status_doc
     assert "2026-09-09-forwin-three-stage.md" in status_doc
-    assert "https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/" in status_doc
+    assert (
+        "https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/"
+        in status_doc
+    )
     assert "未完成项不能解释成当前能力" in status_doc
     assert "scenario_rehearsal" not in status_doc
 
@@ -353,17 +356,17 @@ def test_outbox_runtime_has_only_fenced_nonterminal_claims() -> None:
 
     assert 'row.status = "failed"' not in sources["forwin/outbox/store.py"]
     assert '"failed"' not in sources["forwin/outbox/worker.py"]
-    assert "event.payload_json" not in sources[
-        "forwin/knowledge_system/projection_jobs.py"
-    ]
+    assert (
+        "event.payload_json"
+        not in sources["forwin/knowledge_system/projection_jobs.py"]
+    )
     assert "event.payload_json" not in sources["forwin/maintenance/events.py"]
-    assert "event.payload_json" not in sources[
-        "forwin/publisher_runtime/canon_jobs.py"
-    ]
+    assert "event.payload_json" not in sources["forwin/publisher_runtime/canon_jobs.py"]
     assert "OutboxClaim" in sources["forwin/outbox/handlers.py"]
-    assert 'revision: str = "0001_v5_recovery"' in sources[
-        "forwin/migrations/versions/0001_v5_baseline.py"
-    ]
+    assert (
+        'revision: str = "0001_v5_recovery"'
+        in sources["forwin/migrations/versions/0001_v5_baseline.py"]
+    )
 
 
 def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
@@ -511,7 +514,9 @@ def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> No
     assert "def require_project(" in _read("forwin/http/request_support.py")
 
 
-def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership() -> None:
+def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership() -> (
+    None
+):
     removed_paths = (
         "forwin/obsidian/importer.py",
         "forwin/obsidian/proposal_classifier.py",
@@ -576,8 +581,14 @@ def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership()
     assert "/obsidian/export" in routes
     assert '"export_obsidian"' in obsidian_api
     assert "world_export_obsidian" in _read("forwin/mcp/client.py")
-    assert "from forwin.proposals.proposal_review import approve_world_edit_proposal" in proposal_api
-    assert "from forwin.proposals.structured_patch import proposal_to_graph_delta" in proposal_review
+    assert (
+        "from forwin.proposals.proposal_review import approve_world_edit_proposal"
+        in proposal_api
+    )
+    assert (
+        "from forwin.proposals.structured_patch import proposal_to_graph_delta"
+        in proposal_review
+    )
     assert 'trigger: str = "proposal_approve"' in proposal_review
     assert '"source": row.source' in structured_patch
     assert "human-indexed" in exporter
@@ -615,7 +626,6 @@ def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> No
     assert {
         "RunControlStage",
         "AuditControlStage",
-        "ReviewWorkflowStage",
         "ChapterExecutionStage",
         "FinalizationStage",
     }.issubset(bases)
@@ -708,7 +718,7 @@ def test_quality_analysis_cache_is_shared_and_versioned() -> None:
     assert "save_quality_analysis_run" in service_source
     assert "analyze_writer_output_quality(" in _read("forwin/review/draft_service.py")
     assert "analyze_writer_output_quality(" in _read(
-        "forwin/generation/pipeline_core/quality_gates.py"
+        "forwin/canon/quality_preparation.py"
     )
     baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
     assert '"quality_analysis_runs"' in baseline
@@ -767,6 +777,11 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     }
     offenders: list[tuple[str, str]] = []
     for token, rel_paths in forbidden_runtime_tokens.items():
+        rel_paths = [
+            *rel_paths,
+            "forwin/canon/quality_preparation.py",
+            "forwin/canon/deferred_acceptance.py",
+        ]
         for rel_path in rel_paths:
             if token in _read(rel_path):
                 offenders.append((rel_path, token))
@@ -863,9 +878,7 @@ def test_entry_adapters_use_explicit_application_services() -> None:
     assert "class PublisherApplicationService" in _read(
         "forwin/application/publisher/service.py"
     )
-    assert "TaskApplicationService" in _read(
-        "forwin/http/adapters/api_task_routes.py"
-    )
+    assert "TaskApplicationService" in _read("forwin/http/adapters/api_task_routes.py")
     assert "ProjectControlApplicationService" in _read(
         "forwin/http/adapters/api_project_control_routes.py"
     )
@@ -1054,3 +1067,33 @@ def test_application_read_models_have_one_current_owner() -> None:
         if removed_import in path.read_text(encoding="utf-8"):
             offenders.append(path.relative_to(ROOT).as_posix())
     assert offenders == []
+
+
+def test_review_repair_and_canon_use_finite_concrete_collaborators() -> None:
+    from forwin.canon import quality_preparation
+    from forwin.canon.preparation import CanonPreparationService
+    from forwin.review.queries import latest_draft_and_review_for_chapter
+    from forwin.review.repair import service as repair_service
+    from forwin.review.repair.service import RepairExecution
+
+    assert {field.name for field in fields(RepairExecution)} == {
+        "policy",
+        "candidate_review",
+        "plan_patch",
+        "writer_execution",
+        "telemetry",
+        "control",
+    }
+    assert all("Callable" not in str(field.type) for field in fields(RepairExecution))
+    prepare = inspect.signature(CanonPreparationService.prepare)
+    assert {"request", "policy", "recorder"}.issubset(prepare.parameters)
+    assert "context" not in prepare.parameters
+    assert "repo" not in prepare.parameters
+    assert (
+        repair_service._latest_draft_and_review_for_chapter
+        is latest_draft_and_review_for_chapter
+    )
+    assert (
+        quality_preparation.latest_draft_and_review_for_chapter
+        is latest_draft_and_review_for_chapter
+    )

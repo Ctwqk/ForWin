@@ -787,8 +787,8 @@ def _review_api(scenario, monkeypatch, tmp_path):
         draft.llm_raw_response = paths["meta_path"]
         candidate.writer_artifact_ref = paths["meta_path"]
     monkeypatch.setattr(
-        pipeline.canon_preparation,
-        "quality_evaluator",
+        pipeline.canon_preparation.quality_preparer,
+        "evaluate",
         lambda **_kwargs: SimpleNamespace(blocked=False,quality_admission_run_id=""),
     )
     monkeypatch.setattr(

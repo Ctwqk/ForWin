@@ -11,12 +11,14 @@ from forwin.candidate_drafts import (
     candidate_plan_revision,
 )
 from forwin.canon import CanonAdmissionOutcome, CanonPreparationOutcome
+from forwin.canon.preparation import CanonPreparationRequest
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan
+from forwin.naming import EntityRegistrar
 from forwin.planning.world_contracts import (
     ChapterWorldDeltaIntent,
     WorldContractRepository,
@@ -24,7 +26,6 @@ from forwin.planning.world_contracts import (
 from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.naming import EntityRegistrar
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -128,7 +129,7 @@ def _persist_candidate(session, project, chapter, output, verdict):
 
 
 def _prepare_candidate(pipeline, session, project, chapter, output, verdict):
-    repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
+    _repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
     planned, candidate = _persist_candidate(
         session,
         project,
@@ -137,19 +138,23 @@ def _prepare_candidate(pipeline, session, project, chapter, output, verdict):
         verdict,
     )
     return pipeline.canon_preparation.prepare(
-        context=pipeline.canon_preparation_context,
+        request=CanonPreparationRequest(
+            candidate_id=candidate.id,
+            project_id=project.id,
+            chapter_number=chapter.chapter_number,
+            writer_output=planned,
+            verdict=verdict,
+            acceptance_mode="normal",
+            repair_attempt_count=0,
+            residual_review_issues=[],
+            canon_risk_level="low",
+        ),
         session=session,
-        repo=repo,
         updater=updater,
-        candidate_id=candidate.id,
-        project_id=project.id,
-        chapter_number=chapter.chapter_number,
-        writer_output=planned,
-        verdict=verdict,
-        acceptance_mode="normal",
-        repair_attempt_count=0,
-        residual_review_issues=[],
-        canon_risk_level="low",
+        policy=pipeline.policy,
+        llm_client=pipeline.llm_client,
+        artifact_store=pipeline.artifact_store,
+        recorder=pipeline.trace_recorder,
     )
 
 

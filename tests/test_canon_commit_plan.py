@@ -6,22 +6,22 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import parse_gate_outcome
-from forwin.canon.plan import (
-    CanonAuditEvent,
-    CanonCommitPlan,
-)
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.outbox_events import (
     CANON_PHASE3_REQUESTED,
     CANON_PROJECTION_REQUESTED,
     CANON_PUBLISHER_REQUESTED,
     canon_event_id,
 )
+from forwin.canon.plan import (
+    CanonAuditEvent,
+    CanonCommitPlan,
+)
 from forwin.canon.preparation import (
     BookStatePreparationOutcome,
-    CanonPreparationContext,
+    CanonPreparationRequest,
     CanonPreparationService,
 )
 from forwin.canon.types import CanonQualityGateOutcome
@@ -32,8 +32,8 @@ from forwin.models.entity import Entity, EntityAlias
 from forwin.models.outbox import OutboxEvent
 from forwin.naming import EntityAdmissionPlan
 from forwin.naming.entity_registrar import writer_output_admission_fingerprint
-from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta
+from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -416,30 +416,15 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
                     approved_changes=approved,
                 )
 
-        outcome = CanonPreparationService(
-            quality_evaluator=quality_evaluator,
-            book_state_preparer=PreparedBookState(),
-        ).prepare(
-            context=CanonPreparationContext(
-                policy=RuntimePolicy.for_profile("standard"),
-                llm_client=object(),  # type: ignore[arg-type]
-                artifact_store=object(),  # type: ignore[arg-type]
-                _record_decision_event=record_decision_event,  # type: ignore[arg-type]
-                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-            ),
-            session=session,
-            repo=None,
-            updater=updater,
-            candidate_id=candidate.id,
-            project_id=project.id,
-            chapter_number=1,
-            writer_output=output,
-            verdict=ReviewVerdict(verdict="pass"),
-            acceptance_mode="normal",
-            repair_attempt_count=0,
-            residual_review_issues=[],
-            canon_risk_level="low",
-        )
+        outcome = CanonPreparationService(quality_preparer=SimpleNamespace(evaluate=quality_evaluator), book_state_preparer=PreparedBookState()).prepare(
+                      policy=RuntimePolicy.for_profile('standard'),
+                      recorder=SimpleNamespace(record_event=record_decision_event, record_rule_decision=lambda **_kwargs: None),
+                      llm_client=object(),
+                      artifact_store=object(),
+                      request=CanonPreparationRequest(candidate_id=candidate.id, project_id=project.id, chapter_number=1, writer_output=output, verdict=ReviewVerdict(verdict='pass'), acceptance_mode='normal', repair_attempt_count=0, residual_review_issues=[], canon_risk_level='low'),
+                      session=session,
+                      updater=updater,
+                  )
 
         assert calls == ["quality", "book_state"]
         assert outcome.plan is not None

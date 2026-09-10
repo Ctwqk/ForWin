@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -11,23 +9,15 @@ from forwin.audit.events import DecisionEventType
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.checker.rules import ContinuityChecker
 from forwin.generation.pipeline_core.common import logger
-from forwin.generation.pipeline_core.quality_gates import (
-    _latest_draft_and_review_for_chapter,
-)
 from forwin.generation.pipeline_core.repair_budget import repair_word_budget_patch
 from forwin.generation.pipeline_core.repair_budget_events import (
     record_repair_body_budget_event,
 )
-from forwin.models.audit import DecisionEvent
 from forwin.models.draft import (
     ChapterDraft,
     ChapterReview,
 )
 from forwin.models.project import ChapterPlan
-from forwin.protocol.experience import (
-    BandDelightSchedule,
-    ChapterExperiencePlan,
-)
 from forwin.protocol.review import (
     ContinuityIssue,
     FinalResidualDecision,
@@ -35,12 +25,29 @@ from forwin.protocol.review import (
     ReviewVerdict,
 )
 from forwin.protocol.writer import WriterOutput
-from forwin.retrieval import RetrievalBroker
+from forwin.review.candidate import (
+    CandidateRepairVerification,
+    CandidateReviewEvaluation,
+    CandidateReviewRequest,
+    CandidateReviewService,
+)
 from forwin.review.decision.engine import AutoDecisionEngine
 from forwin.review.decision.rules.final_residual import build_final_residual_rules
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.queries import (
+    latest_draft_and_review_for_chapter as _latest_draft_and_review_for_chapter,
+)
+from forwin.review.repair.control import RepairControl
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
+from forwin.review.repair.plan_patch import (
+    RepairPlanPatchRequest,
+    RepairPlanPatchService,
+    band_plan_snapshot,
+    chapter_plan_snapshot,
+)
+from forwin.review.results import review_event_payload
+from forwin.review.telemetry import ReviewTelemetry
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
@@ -50,28 +57,11 @@ from forwin.writer.execution import WriterExecution, WriterExecutionRequest
 @dataclass(frozen=True, slots=True)
 class RepairExecution:
     policy: RuntimePolicy
-    retrieval_broker: RetrievalBroker
-    _save_prompt_trace_payload: Callable[..., str]
-    _plan_writer_output_entities: Callable[..., WriterOutput]
-    _review_current_output: Callable[..., ReviewVerdict]
-    _apply_canon_name_drift_autofix: Callable[..., WriterOutput | None]
-    _apply_placeholder_leakage_autofix: Callable[..., WriterOutput | None]
-    _persist_draft_and_review: Callable[
-        ..., tuple[WriterOutput, ChapterDraft, ChapterReview]
-    ]
-    _record_decision_event: Callable[..., DecisionEvent]
-    _review_event_payload: Callable[..., dict[str, object]]
-    _record_map_movement_review_issues: Callable[..., None]
-    _pause_requested: Callable[[], bool]
-    _record_rule_decision_event: Callable[..., DecisionEvent | None]
-    _chapter_plan_snapshot: Callable[..., dict[str, object]]
-    _band_plan_snapshot: Callable[..., dict[str, object]]
-    _emit_progress: Callable[..., None]
+    candidate_review: CandidateReviewService
+    plan_patch: RepairPlanPatchService
     writer_execution: WriterExecution
-    _review_with_repair_verification: Callable[..., ReviewVerdict]
-    _chapter_experience_patch_payload: Callable[..., dict[str, object]]
-    _replace_band_schedule: Callable[..., None]
-    _band_schedule_patch_payload: Callable[..., dict[str, object]]
+    telemetry: ReviewTelemetry
+    control: RepairControl
 
 
 REVIEW_REPAIR_PHASE = "review_repair"
@@ -310,7 +300,7 @@ def _apply_final_residual_decision(
     final_decision = AutoDecisionEngine(build_final_residual_rules()).decide(
         repair_v2_input
     )
-    final_decision_event = self._record_rule_decision_event(
+    final_decision_event = self.telemetry.recorder.record_rule_decision(
         updater=updater,
         decision=final_decision,
         decision_input=repair_v2_input,
@@ -336,7 +326,7 @@ def _apply_final_residual_decision(
             phase_attempts[-1].forced_accept_applied = True
             session.add(phase_attempts[-1])
         final_event_id = str(getattr(final_decision_event, "id", "") or "")
-        self._record_decision_event(
+        self.telemetry.recorder.record_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -369,7 +359,7 @@ def _review_candidate(
     writer_output: WriterOutput,
 ) -> tuple[WriterOutput, ReviewVerdict, bool]:
     current_output = writer_output
-    current_writer_trace_id = self._save_prompt_trace_payload(
+    current_writer_trace_id = self.telemetry.recorder.save_prompt_trace(
         session=session,
         updater=updater,
         project_id=project_id,
@@ -379,63 +369,31 @@ def _review_candidate(
             else {}
         ),
     )
-    current_output = self._plan_writer_output_entities(
-        session=session,
-        project_id=project_id,
-        chapter_number=chapter_plan.chapter_number,
-        writer_output=current_output,
-    )
-    current_review = self._review_current_output(
-        repo=repo,
-        checker=checker,
-        project_id=project_id,
-        context=context,
-        writer_output=current_output,
-    )
-    autofixed_output = self._apply_canon_name_drift_autofix(
-        current_output, current_review
-    )
-    if autofixed_output is not None:
-        current_output = self._plan_writer_output_entities(
+    evaluation = self.candidate_review.evaluate(
+        CandidateReviewRequest(
             session=session,
-            project_id=project_id,
-            chapter_number=chapter_plan.chapter_number,
-            writer_output=autofixed_output,
-        )
-        current_review = self._review_current_output(
             repo=repo,
             checker=checker,
             project_id=project_id,
-            context=context,
-            writer_output=current_output,
-        )
-    autofixed_output = self._apply_placeholder_leakage_autofix(
-        current_output, current_review
-    )
-    if autofixed_output is not None:
-        current_output = self._plan_writer_output_entities(
-            session=session,
-            project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
-            writer_output=autofixed_output,
-        )
-        current_review = self._review_current_output(
-            repo=repo,
-            checker=checker,
-            project_id=project_id,
             context=context,
-            writer_output=current_output,
+            output=current_output,
         )
-    current_output, current_draft, current_review_row = self._persist_draft_and_review(
+    )
+    current_review = evaluation.review
+    persisted = self.candidate_review.persist(
         session=session,
         updater=updater,
-        chapter_plan=chapter_plan,
         project_id=project_id,
-        chapter_number=chapter_plan.chapter_number,
-        writer_output=current_output,
-        review=current_review,
+        chapter_plan=chapter_plan,
+        evaluation=evaluation,
     )
-    current_review_event = self._record_decision_event(
+    current_output, current_draft, current_review_row = (
+        persisted.output,
+        persisted.draft,
+        persisted.review_row,
+    )
+    current_review_event = self.telemetry.recorder.record_event(
         updater=updater,
         project_id=project_id,
         chapter_number=chapter_plan.chapter_number,
@@ -445,16 +403,16 @@ def _review_candidate(
         summary=f"第{chapter_plan.chapter_number}章 review verdict: {current_review.verdict}",
         related_object_type="chapter_review",
         related_object_id=current_review_row.id,
-        payload=self._review_event_payload(current_review),
+        payload=review_event_payload(current_review),
     )
-    self._record_map_movement_review_issues(
+    self.telemetry.record_map_issues(
         updater=updater,
         project_id=project_id,
         chapter_number=chapter_plan.chapter_number,
         review=current_review,
         parent_event_id=str(current_review_event.id or ""),
     )
-    current_review_trace_id = self._save_prompt_trace_payload(
+    current_review_trace_id = self.telemetry.recorder.save_prompt_trace(
         session=session,
         updater=updater,
         project_id=project_id,
@@ -504,22 +462,23 @@ def _repair_canon_block(
     )
     synthetic_review = _review_from_canon_gate_block(gate_result)
     if latest_draft is None:
+        persisted = self.candidate_review.persist(
+            session=session,
+            updater=updater,
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            evaluation=CandidateReviewEvaluation(writer_output, synthetic_review),
+        )
         current_output, current_draft, current_review_row = (
-            self._persist_draft_and_review(
-                session=session,
-                updater=updater,
-                chapter_plan=chapter_plan,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                writer_output=writer_output,
-                review=synthetic_review,
-            )
+            persisted.output,
+            persisted.draft,
+            persisted.review_row,
         )
     else:
         current_output = writer_output
         current_draft = latest_draft
         current_review_row = updater.save_review(latest_draft.id, synthetic_review)
-    current_review_event = self._record_decision_event(
+    current_review_event = self.telemetry.recorder.record_event(
         updater=updater,
         project_id=project_id,
         chapter_number=chapter_plan.chapter_number,
@@ -532,7 +491,7 @@ def _repair_canon_block(
         ),
         related_object_type="chapter_review",
         related_object_id=current_review_row.id,
-        payload=self._review_event_payload(synthetic_review),
+        payload=review_event_payload(synthetic_review),
     )
     return _run_repair_loop_for_phase(
         self,
@@ -579,7 +538,7 @@ def _run_repair_loop_for_phase(
         str(current_draft.id or ""),
     )
     while True:
-        if self._pause_requested():
+        if self.control.paused():
             return current_output, current_review, False
         historical_attempts = repo.list_chapter_rewrite_attempts(
             project_id, chapter_plan.chapter_number
@@ -626,7 +585,7 @@ def _run_repair_loop_for_phase(
             decide_repair_v2(repair_v2_input)
         )
         repair_scope = str(repair_v2_decision.sub_action.get("scope") or "")
-        repair_decision_event = self._record_rule_decision_event(
+        repair_decision_event = self.telemetry.recorder.record_rule_decision(
             updater=updater,
             decision=repair_v2_decision,
             decision_input=repair_v2_input,
@@ -668,17 +627,17 @@ def _run_repair_loop_for_phase(
                 review=current_review,
             )
         )
-        source_chapter_plan = self._chapter_plan_snapshot(
+        source_chapter_plan = chapter_plan_snapshot(
             repo=repo,
             project_id=project_id,
             chapter_plan=chapter_plan,
         )
-        source_band_plan = self._band_plan_snapshot(
+        source_band_plan = band_plan_snapshot(
             repo=repo,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
         )
-        repair_started_event = self._record_decision_event(
+        repair_started_event = self.telemetry.recorder.record_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -696,23 +655,23 @@ def _run_repair_loop_for_phase(
             parent_event_id=str(current_review_event.id or ""),
         )
         session.commit()
-        (
-            design_patch,
-            updated_context,
-            result_chapter_plan,
-            result_band_plan,
-            failure_reason,
-        ) = _apply_repair_patch(
-            self,
-            session=session,
-            repo=repo,
-            project_id=project_id,
-            chapter_plan=chapter_plan,
-            context=current_context,
-            current_output=current_output,
-            repair_scope=repair_scope,
-            repair_instruction=repair_instruction,
+        patch_result = self.plan_patch.apply(
+            RepairPlanPatchRequest(
+                session=session,
+                repo=repo,
+                project_id=project_id,
+                chapter_plan=chapter_plan,
+                context=current_context,
+                repair_scope=repair_scope,
+                instruction=repair_instruction,
+            )
         )
+        design_patch, updated_context = patch_result.design_patch, patch_result.context
+        result_chapter_plan, result_band_plan = (
+            patch_result.chapter_snapshot,
+            patch_result.band_snapshot,
+        )
+        failure_reason = patch_result.failure_reason
         if any(repair_model_preference.values()):
             design_patch = {
                 **design_patch,
@@ -748,7 +707,7 @@ def _run_repair_loop_for_phase(
             )
             chapter_plan.repair_attempt_count = attempt_no
             session.add(chapter_plan)
-            current_review_event = self._record_decision_event(
+            current_review_event = self.telemetry.recorder.record_event(
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_plan.chapter_number,
@@ -804,19 +763,17 @@ def _run_repair_loop_for_phase(
                     local_result.mode,
                 )
 
-        self._emit_progress(
-            "stage_changed",
-            stage="repairing_chapter",
+        self.control.notify(
+            "repairing_chapter",
             project_id=project_id,
-            current_chapter=chapter_plan.chapter_number,
+            chapter_number=chapter_plan.chapter_number,
         )
         if rewritten_output is None:
             try:
-                self._emit_progress(
-                    "stage_changed",
-                    stage="repairing_chapter",
+                self.control.notify(
+                    "repairing_chapter",
                     project_id=project_id,
-                    current_chapter=chapter_plan.chapter_number,
+                    chapter_number=chapter_plan.chapter_number,
                 )
                 rewritten_output = self.writer_execution.execute(
                     WriterExecutionRequest(
@@ -831,7 +788,7 @@ def _run_repair_loop_for_phase(
                         llm_preferred_model=repair_model_preference["preferred_model"],
                     )
                 ).unwrap()
-                if self._pause_requested():
+                if self.control.paused():
                     session.commit()
                     return current_output, current_review, False
             except Exception as exc:  # noqa: BLE001
@@ -864,7 +821,7 @@ def _run_repair_loop_for_phase(
                 )
                 chapter_plan.repair_attempt_count = attempt_no
                 session.add(chapter_plan)
-                current_review_event = self._record_decision_event(
+                current_review_event = self.telemetry.recorder.record_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_plan.chapter_number,
@@ -914,7 +871,7 @@ def _run_repair_loop_for_phase(
             )
             chapter_plan.repair_attempt_count = attempt_no
             session.add(chapter_plan)
-            current_review_event = self._record_decision_event(
+            current_review_event = self.telemetry.recorder.record_event(
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_plan.chapter_number,
@@ -949,7 +906,7 @@ def _run_repair_loop_for_phase(
             rewritten_output = rewritten_output.model_copy(
                 update={"title": current_output.title}
             )
-        rewritten_writer_trace_id = self._save_prompt_trace_payload(
+        rewritten_writer_trace_id = self.telemetry.recorder.save_prompt_trace(
             session=session,
             updater=updater,
             project_id=project_id,
@@ -960,78 +917,39 @@ def _run_repair_loop_for_phase(
             ),
             parent_trace_id=current_review_trace_id,
         )
-        self._emit_progress(
-            "stage_changed",
-            stage="repair_review",
-            project_id=project_id,
-            current_chapter=chapter_plan.chapter_number,
-        )
-        rewritten_output = self._plan_writer_output_entities(
-            session=session,
+        self.control.notify(
+            "repair_review",
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
-            writer_output=rewritten_output,
         )
-        rewritten_review = self._review_current_output(
-            repo=repo,
-            checker=checker,
+        evaluation = self.candidate_review.evaluate(
+            CandidateReviewRequest(
+                session=session,
+                repo=repo,
+                checker=checker,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                context=updated_context,
+                output=rewritten_output,
+            ),
+            verification=CandidateRepairVerification(
+                original_output=current_output,
+                before_review=current_review,
+                instruction=repair_instruction,
+            ),
+        )
+        rewritten_review = evaluation.review
+        persisted = self.candidate_review.persist(
+            session=session,
+            updater=updater,
             project_id=project_id,
-            context=updated_context,
-            writer_output=rewritten_output,
-        )
-        autofixed_rewritten_output = self._apply_canon_name_drift_autofix(
-            rewritten_output,
-            rewritten_review,
-        )
-        if autofixed_rewritten_output is not None:
-            rewritten_output = self._plan_writer_output_entities(
-                session=session,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                writer_output=autofixed_rewritten_output,
-            )
-            rewritten_review = self._review_current_output(
-                repo=repo,
-                checker=checker,
-                project_id=project_id,
-                context=updated_context,
-                writer_output=rewritten_output,
-            )
-        autofixed_rewritten_output = self._apply_placeholder_leakage_autofix(
-            rewritten_output,
-            rewritten_review,
-        )
-        if autofixed_rewritten_output is not None:
-            rewritten_output = self._plan_writer_output_entities(
-                session=session,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                writer_output=autofixed_rewritten_output,
-            )
-            rewritten_review = self._review_current_output(
-                repo=repo,
-                checker=checker,
-                project_id=project_id,
-                context=updated_context,
-                writer_output=rewritten_output,
-            )
-        rewritten_review = self._review_with_repair_verification(
-            original_output=current_output,
-            repaired_output=rewritten_output,
-            before_review=current_review,
-            review=rewritten_review,
-            repair_instruction=repair_instruction,
+            chapter_plan=chapter_plan,
+            evaluation=evaluation,
         )
         rewritten_output, rewritten_draft, rewritten_review_row = (
-            self._persist_draft_and_review(
-                session=session,
-                updater=updater,
-                chapter_plan=chapter_plan,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                writer_output=rewritten_output,
-                review=rewritten_review,
-            )
+            persisted.output,
+            persisted.draft,
+            persisted.review_row,
         )
         attempt_row = updater.save_chapter_rewrite_attempt(
             project_id=project_id,
@@ -1071,7 +989,7 @@ def _run_repair_loop_for_phase(
             verification.fixed_all_must_fix is None
             or verification.preserved_all_must_preserve is None
         )
-        repair_result_event = self._record_decision_event(
+        repair_result_event = self.telemetry.recorder.record_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -1101,7 +1019,7 @@ def _run_repair_loop_for_phase(
             parent_event_id=str(repair_started_event.id or ""),
         )
         record_repair_body_budget_event(
-            self,
+            self.telemetry.recorder,
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -1113,7 +1031,7 @@ def _run_repair_loop_for_phase(
             attempt_row=attempt_row,
             parent_event_id=str(repair_result_event.id or ""),
         )
-        current_review_event = self._record_decision_event(
+        current_review_event = self.telemetry.recorder.record_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -1123,17 +1041,17 @@ def _run_repair_loop_for_phase(
             summary=f"第{chapter_plan.chapter_number}章 rewrite 后 verdict: {rewritten_review.verdict}",
             related_object_type="chapter_review",
             related_object_id=rewritten_review_row.id,
-            payload=self._review_event_payload(rewritten_review),
+            payload=review_event_payload(rewritten_review),
             parent_event_id=str(repair_result_event.id or ""),
         )
-        self._record_map_movement_review_issues(
+        self.telemetry.record_map_issues(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
             review=rewritten_review,
             parent_event_id=str(current_review_event.id or ""),
         )
-        current_review_trace_id = self._save_prompt_trace_payload(
+        current_review_trace_id = self.telemetry.recorder.save_prompt_trace(
             session=session,
             updater=updater,
             project_id=project_id,
@@ -1178,169 +1096,6 @@ def _default_repair_instruction(
         ],
         design_patch=budget_patch,
         evidence_refs=[ref for issue in review.issues for ref in issue.evidence_refs],
-    )
-
-
-def _apply_repair_patch(
-    self: RepairExecution,
-    *,
-    session: Session,
-    repo: StateRepository,
-    project_id: str,
-    chapter_plan: ChapterPlan,
-    context,
-    current_output: WriterOutput,
-    repair_scope: str,
-    repair_instruction: RepairInstruction,
-) -> tuple[dict[str, object], Any, dict[str, object], dict[str, object], str]:
-    if getattr(chapter_plan, "active_commit_id", None) and repair_scope != "draft":
-        raise ValueError(
-            "accepted chapter plan requires an isolated candidate revision"
-        )
-    current_plan = (
-        repo.get_chapter_experience_plan(project_id, chapter_plan.chapter_number)
-        or ChapterExperiencePlan()
-    )
-    band_schedule = repo.get_band_experience_plan_for_chapter(
-        project_id, chapter_plan.chapter_number
-    )
-    arc_structure = repo.get_latest_arc_structure_draft(project_id)
-    patch = dict(repair_instruction.design_patch)
-    patch["repair_scope"] = repair_scope
-
-    if repair_scope == "draft":
-        updated_plan = current_plan.model_copy(
-            update=self._chapter_experience_patch_payload(
-                current_plan, repair_instruction
-            )
-        )
-        updated_context = context.model_copy(
-            update={"chapter_experience_plan": updated_plan}
-        )
-        return (
-            updated_plan.model_dump(mode="json"),
-            updated_context,
-            self._chapter_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_plan=chapter_plan,
-                experience_plan=updated_plan,
-                transient_overlay=True,
-            ),
-            self._band_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                schedule=band_schedule,
-                transient_overlay=True,
-            ),
-            "",
-        )
-
-    if repair_scope == "chapter_plan":
-        updated_plan = current_plan.model_copy(
-            update=self._chapter_experience_patch_payload(
-                current_plan, repair_instruction
-            )
-        )
-        chapter_plan.experience_plan_json = json.dumps(
-            updated_plan.model_dump(mode="json"),
-            ensure_ascii=False,
-        )
-        if str(patch.get("chapter_plan_title") or patch.get("title") or "").strip():
-            chapter_plan.title = str(
-                patch.get("chapter_plan_title") or patch.get("title") or ""
-            ).strip()
-        if str(
-            patch.get("chapter_plan_one_line") or patch.get("one_line") or ""
-        ).strip():
-            chapter_plan.one_line = str(
-                patch.get("chapter_plan_one_line") or patch.get("one_line") or ""
-            ).strip()
-        goal_patch = patch.get("chapter_goals")
-        if not isinstance(goal_patch, list):
-            goal_patch = patch.get("goals")
-        if isinstance(goal_patch, list):
-            chapter_plan.goals_json = json.dumps(goal_patch, ensure_ascii=False)
-        task_contract_patch = patch.get("chapter_task_contract")
-        if not isinstance(task_contract_patch, list):
-            task_contract_patch = patch.get("task_contract")
-        if isinstance(task_contract_patch, list):
-            chapter_plan.task_contract_json = json.dumps(
-                task_contract_patch, ensure_ascii=False
-            )
-        session.add(chapter_plan)
-        session.flush()
-        return (
-            updated_plan.model_dump(mode="json"),
-            self.retrieval_broker.build_chapter_context(repo, project_id, chapter_plan),
-            self._chapter_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_plan=chapter_plan,
-            ),
-            self._band_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-            ),
-            "",
-        )
-
-    if band_schedule is not None:
-        updated_schedule = BandDelightSchedule.model_validate(
-            self._band_schedule_patch_payload(band_schedule, repair_instruction)
-        )
-        self._replace_band_schedule(
-            session=session,
-            repo=repo,
-            project_id=project_id,
-            chapter_number=chapter_plan.chapter_number,
-            schedule=updated_schedule,
-            arc_structure=arc_structure,
-            repair_instruction=repair_instruction,
-        )
-        session.flush()
-        return (
-            updated_schedule.model_dump(mode="json"),
-            self.retrieval_broker.build_chapter_context(repo, project_id, chapter_plan),
-            self._chapter_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_plan=chapter_plan,
-            ),
-            self._band_plan_snapshot(
-                repo=repo,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-            ),
-            "",
-        )
-
-    updated_plan = current_plan.model_copy(
-        update=self._chapter_experience_patch_payload(current_plan, repair_instruction)
-    )
-    updated_context = context.model_copy(
-        update={"chapter_experience_plan": updated_plan}
-    )
-    return (
-        updated_plan.model_dump(mode="json"),
-        updated_context,
-        self._chapter_plan_snapshot(
-            repo=repo,
-            project_id=project_id,
-            chapter_plan=chapter_plan,
-            experience_plan=updated_plan,
-            transient_overlay=True,
-        ),
-        self._band_plan_snapshot(
-            repo=repo,
-            project_id=project_id,
-            chapter_number=chapter_plan.chapter_number,
-            schedule=band_schedule,
-            transient_overlay=True,
-        ),
-        "",
     )
 
 

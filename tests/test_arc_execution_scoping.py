@@ -10,7 +10,7 @@ from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.generation.pipeline_core.result import RunResult
-from forwin.generation.pipeline_core.structural_patches import (
+from forwin.canon.deferred_acceptance import (
     evaluate_structural_patch_completion_debt,
 )
 from forwin.planning.arc_envelope import ArcEnvelopeManager

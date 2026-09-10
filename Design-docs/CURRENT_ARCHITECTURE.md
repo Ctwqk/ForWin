@@ -41,8 +41,8 @@ Genesis / Writer / Review 主链
 
 ## 模块与入口边界
 
-- 章节生产入口是 `forwin.generation.pipeline.ChapterPipeline`。它静态组合 run control、audit control、review、repair planning、chapter execution、writer、finalization 等 stage owner，构造器只接收具体类型协作者；类体不再做跨模块函数赋值。旧 `WritingOrchestrator`、模块回注、伪造 `__module__` 和完整 pipeline 反向注入均已删除。
-- `forwin.generation.pipeline_core` 以 stage owner class 保存 pipeline 行为，以模块私有函数保存纯计算；不通过 `common.py` 转发外域类型。`RepairExecution` 与 `CanonPreparationContext` 是冻结的窄能力集，review/canon 域不依赖 `ChapterPipeline`。
+- 章节生产入口是 `forwin.generation.pipeline.ChapterPipeline`，保留执行顺序、任务控制和具体协作者组装。`WriterExecution`、`CandidateReviewService`、`RepairPlanPatchService`、`CanonPreparationService` 分别拥有 Writer 执行、候选评审、修复计划与接纳准备；真实调用方传有限请求，旧 Writer/Review/Repair Stage 路径已删除。
+- `RepairExecution` 持有六个具体协作者，`RepairControl` 只暴露暂停检查和两个修复阶段通知；`CanonPreparationRequest` 只携带本次候选输入，策略、模型、artifact 和 trace recorder 显式传入，无共享缓存服务绑定可变任务状态。`PipelineTraceRecorder` 与 `PipelineProgressRecorder` 保留审计、span 和原调用方事务，唯一 Canon 接纳事务不变。重构验证见 [A0 记录](../docs/superpowers/reports/2026-09-09-stage2-owner-refactor.md)。
 - Genesis 只有 `forwin.genesis` 一个包，workspace 与 handoff 是其子域；`book_genesis.py`、`book_genesis_core`、`genesis_workspace`、`genesis_handoff` 旧入口均已删除。
 - `forwin.http.create_app()` 是唯一 FastAPI 组装入口。每个 App 持有独立 `HttpRuntime`，其 config、session factory、pipeline、task cache/lock、scheduler stop event、publisher manager 与应用服务只挂在 `app.state.forwin_runtime`；不存在模块级可变 API 状态。
 - 所有 HTTP 路由位于 `forwin.http.adapters`。项目/Genesis/章节/review 调用 `ProjectApplicationService`，项目聚合读模型归 `forwin.application.read_models`，任务 mutation 调用 `TaskApplicationService`，任务读模型由 `forwin.application.task_center.TaskCenterService` 提供，project-control 调用 `ProjectControlApplicationService`，publisher/extension 调用 `PublisherApplicationService`；适配器不拥有业务状态机。

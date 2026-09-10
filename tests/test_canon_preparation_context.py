@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
-from forwin.canon.preparation import CanonPreparationContext
-from forwin.generation.pipeline_core.quality_gates import (
-    _persist_canon_quality_attempt_trace,
+from forwin.canon.quality_preparation import (
+    persist_canon_quality_attempt_trace,
 )
-from forwin.runtime.policy import RuntimePolicy
 
 
 def test_canon_preparation_context_persists_quality_attempt_telemetry() -> None:
@@ -33,17 +32,9 @@ def test_canon_preparation_context_persists_quality_attempt_telemetry() -> None:
         saved.append(kwargs)
         return "canon-quality-trace"
 
-    context = CanonPreparationContext(
-        policy=RuntimePolicy.for_profile("standard"),
-        llm_client=client,  # type: ignore[arg-type]
-        artifact_store=object(),  # type: ignore[arg-type]
-        _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-        _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-        save_prompt_trace=save_prompt_trace,
-    )
-
-    trace_id = _persist_canon_quality_attempt_trace(
-        context,
+    trace_id = persist_canon_quality_attempt_trace(
+        llm_client=client,
+        recorder=SimpleNamespace(save_prompt_trace=save_prompt_trace),
         session=object(),  # type: ignore[arg-type]
         updater=object(),  # type: ignore[arg-type]
         project_id="project-1",

@@ -277,30 +277,26 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
                 minimax_api_key="",
             ),
         )
-        pipeline = ChapterPipeline.__new__(ChapterPipeline)
-        pipeline.observability = obs
-        pipeline._audit_task_id = "task-stage-chapter"
-        pipeline._audit_root_event_id = ""
-        pipeline._audit_project_id = project_id
-        pipeline._audit_updater = object()
-        pipeline._audit_stage_name = ""
-        pipeline._audit_stage_started_at = 0.0
-        pipeline._audit_stage_span = None
+        from forwin.observability.pipeline_progress import PipelineProgressRecorder
+        from forwin.observability.pipeline_trace import PipelineAuditContext, PipelineTraceRecorder
+        trace = PipelineTraceRecorder(audit=PipelineAuditContext(task_id="task-stage-chapter"), artifact_store=None, observability=obs)
+        progress = PipelineProgressRecorder(trace_recorder=trace, observability=obs)
+        progress.bind(project_id=project_id, updater=object())
         recorded_events = []
 
         def record_event(**kwargs):
             recorded_events.append(kwargs)
             return SimpleNamespace(id=f"event-{len(recorded_events)}")
 
-        pipeline._record_decision_event = record_event
-        pipeline._record_stage_transition(
+        trace.record_event = record_event
+        progress._record_stage_transition(
             {
                 "project_id": project_id,
                 "stage": "running_post_acceptance",
                 "current_chapter": 28,
             }
         )
-        pipeline._record_stage_transition(
+        progress._record_stage_transition(
             {
                 "project_id": project_id,
                 "stage": "assembling_context",
@@ -321,6 +317,7 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
             item for item in recorded_events if item["event_type"] == "stage_exited"
         )
         assert exited_event["chapter_number"] == 28
+        progress.clear()
     finally:
         engine.dispose()
 

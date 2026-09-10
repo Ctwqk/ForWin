@@ -7,7 +7,7 @@ from .admission import (
 )
 from .entity_admission import EntityAdmissionCommitter
 from .plan import CanonAuditEvent, CanonCommitPlan
-from .preparation import CanonPreparationContext, CanonPreparationService
+from .preparation import CanonPreparationRequest, CanonPreparationService
 from .types import (
     CanonAdmissionOutcome,
     CanonPreparationOutcome,
@@ -24,7 +24,7 @@ __all__ = [
     "CanonWriteFailure",
     "CanonWorldEditOutcome",
     "CanonPreparationOutcome",
-    "CanonPreparationContext",
+    "CanonPreparationRequest",
     "CanonPreparationService",
     "CanonQualityGateOutcome",
     "EntityAdmissionCommitter",

@@ -70,6 +70,7 @@ def _run_title_repair(
     must_preserve: list[str],
     design_patch: dict[str, object] | None = None,
     keep_body_error: bool = False,
+    include_traces: bool = False,
 ):
     pipeline, session, chapter_plan = repair_runtime
     instruction = RepairInstruction(
@@ -103,6 +104,22 @@ def _run_title_repair(
         must_preserve_facts=["交割已完成"],
         generation_meta={"source": "repair-writer-fixture"},
     )
+
+    def trace(stage, body):
+        if not include_traces:
+            return {}
+        return {
+            "stage_key": stage,
+            "trace_scope": "review" if "review" in stage else "writer",
+            "input_snapshot": {"chapter_number": 10, "body": body},
+            "output_summary": {"chapter_number": 10},
+        }
+
+    if include_traces:
+        original.generation_meta["prompt_trace"] = trace("chapter_write", original.body)
+        rewritten.generation_meta["prompt_trace"] = trace(
+            "chapter_rewrite", rewritten.body
+        )
     seen_outputs: list[WriterOutput] = []
 
     def review_output(*, writer_output, **_kwargs):
@@ -121,13 +138,17 @@ def _run_title_repair(
                     )
                 ],
                 repair_instruction=instruction,
+                prompt_trace=trace("draft_review", writer_output.body),
             )
-        return ReviewVerdict(verdict="pass", issues=[])
+        return ReviewVerdict(
+            verdict="pass",
+            issues=[],
+            prompt_trace=trace("repair_review", writer_output.body),
+        )
 
+    pipeline.candidate_review.draft_review = SimpleNamespace(review=review_output)
     execution = replace(
         pipeline.repair_execution,
-        _plan_writer_output_entities=lambda *, writer_output, **_kwargs: writer_output,
-        _review_current_output=review_output,
         writer_execution=SimpleNamespace(
             execute=lambda _request: WriterExecutionResult(output=rewritten)
         ),
@@ -168,8 +189,16 @@ def test_repair_keeps_exactly_protected_title_before_review_and_persistence(
 
     assert output.title == "第10章"
     assert seen_outputs[1].title == "第10章"
-    assert seen_outputs[1].model_dump(exclude={"title"}) == rewritten.model_dump(
-        exclude={"title"}
+    assert seen_outputs[1].model_dump(
+        exclude={"title", "generation_meta"}
+    ) == rewritten.model_dump(exclude={"title", "generation_meta"})
+    assert {
+        key: value
+        for key, value in seen_outputs[1].generation_meta.items()
+        if key != "entity_admission_plan"
+    } == rewritten.generation_meta
+    assert (
+        seen_outputs[1].generation_meta["entity_admission_plan"]["chapter_number"] == 10
     )
     assert rewritten.title == "第10章 空税入泽"
     assert review.verdict == "pass"
@@ -334,3 +363,60 @@ def test_legacy_stored_review_missing_aggregate_fields_still_defaults_to_failure
     )
     assert api.repair_verification.fixed_all_must_fix is False
     assert api.repair_verification.preserved_all_must_preserve is False
+
+
+def test_real_repair_owners_preserve_trace_chain_and_commit_boundary(repair_runtime):
+    from forwin.audit.events import DecisionEventType
+    from forwin.models.audit import DecisionEvent
+    from forwin.models.draft import ChapterReview
+    from forwin.models.genesis import PromptTrace
+
+    pipeline, session, chapter = repair_runtime
+    output, review, forced_accept, _, _ = _run_title_repair(
+        repair_runtime, must_preserve=["第10章"], include_traces=True
+    )
+    assert review.verdict == "pass"
+    assert forced_accept is False
+    traces = {row.stage_key: row for row in session.scalars(select(PromptTrace))}
+    assert set(traces) == {
+        "chapter_write",
+        "draft_review",
+        "chapter_rewrite",
+        "repair_review",
+    }
+    assert traces["chapter_write"].parent_trace_id == ""
+    assert traces["draft_review"].parent_trace_id == traces["chapter_write"].id
+    assert traces["chapter_rewrite"].parent_trace_id == traces["draft_review"].id
+    assert traces["repair_review"].parent_trace_id == traces["chapter_rewrite"].id
+    events = list(session.scalars(select(DecisionEvent)))
+    review_events = [
+        row
+        for row in events
+        if row.event_type == DecisionEventType.REVIEW_VERDICT_RECORDED
+    ]
+    assert len(review_events) == 2
+    assert traces["draft_review"].decision_event_id == review_events[0].id
+    assert traces["repair_review"].decision_event_id == review_events[1].id
+    started = next(
+        row for row in events if row.event_type == DecisionEventType.REPAIR_STARTED
+    )
+    assert started.parent_event_id == review_events[0].id
+    result_event = session.get(DecisionEvent, review_events[1].parent_event_id)
+    assert result_event.parent_event_id == started.id
+    assert len({row.causal_root_id for row in events}) == 1
+    final_review_row = session.get(ChapterReview, review_events[1].related_object_id)
+    assert session.get(ChapterDraft, final_review_row.draft_id).body_text == output.body
+    final_trace_body = json.loads(traces["repair_review"].input_snapshot_json)["body"]
+    assert final_trace_body == output.body
+    # Existing loop commits the original failure/repair-start before mutable patching.
+    # The rewritten draft, review and traces remain in the caller's transaction.
+    session.rollback()
+    assert {row.stage_key for row in session.scalars(select(PromptTrace))} == {
+        "chapter_write",
+        "draft_review",
+    }
+    assert [row.body_text for row in session.scalars(select(ChapterDraft))] == [
+        "巳初二刻完成交割。"
+    ]
+    assert session.get(ChapterPlan, chapter.id).title == "第10章"
+    assert pipeline.trace_recorder.audit.root_event_id == started.causal_root_id

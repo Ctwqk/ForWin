@@ -946,7 +946,8 @@ def override_band_experience(
 
         if pipeline is not None:
             arc_structure = repo.get_latest_arc_structure_draft(project_id)
-            structure_data = pipeline._structure_data_from_row(arc_structure)
+            from forwin.review.repair.plan_patch import arc_structure_data_from_row
+            structure_data = arc_structure_data_from_row(arc_structure)
             for chapter_number in range(
                 schedule.chapter_start, schedule.chapter_end + 1
             ):

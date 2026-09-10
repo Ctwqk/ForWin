@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from forwin.audit.events import DecisionEventType
-from forwin.generation.pipeline_core.audit_control import AuditControlStage
 from forwin.models.audit import DecisionEvent
+from forwin.observability.pipeline_trace import PipelineTraceRecorder
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.review import (
     ContinuityIssue,
@@ -15,10 +15,12 @@ from forwin.protocol.review import (
     ReviewVerdict,
 )
 from forwin.protocol.writer import WriterOutput
-from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.review import llm_webnovel
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.review.llm_webnovel import LLMWebNovelReviewer
 from forwin.review.repair import service as repair_service
+from forwin.review.repair.control import RepairControl
+from forwin.review.telemetry import ReviewTelemetry
 from forwin.runtime.policy import RuntimePolicy
 
 
@@ -185,12 +187,12 @@ def _manual_review_decision() -> Decision:
     )
 
 
-class _AuditControlHarness(AuditControlStage):
+class _AuditControlHarness(PipelineTraceRecorder):
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.recorded_parent_event_ids: list[str] = []
 
-    def _record_decision_event(self, **kwargs) -> DecisionEvent:
+    def record_event(self, **kwargs) -> DecisionEvent:
         self.recorded_parent_event_ids.append(str(kwargs["parent_event_id"]))
         if self.fail:
             raise RuntimeError("audit sink unavailable")
@@ -206,7 +208,7 @@ class _AuditControlHarness(AuditControlStage):
 def test_rule_decision_audit_contract_returns_recorded_event() -> None:
     stage = _AuditControlHarness()
 
-    event = stage._record_rule_decision_event(
+    event = stage.record_rule_decision(
         updater=object(),  # type: ignore[arg-type]
         decision=_manual_review_decision(),
         decision_input=_rule_decision_input(),
@@ -221,7 +223,7 @@ def test_rule_decision_audit_contract_returns_recorded_event() -> None:
 def test_rule_decision_audit_contract_returns_none_on_recording_error() -> None:
     stage = _AuditControlHarness(fail=True)
 
-    event = stage._record_rule_decision_event(
+    event = stage.record_rule_decision(
         updater=object(),  # type: ignore[arg-type]
         decision=_manual_review_decision(),
         decision_input=_rule_decision_input(),
@@ -257,6 +259,15 @@ class _MemoryRepo:
     def __init__(self, attempts: list[object]) -> None:
         self.attempts = attempts
 
+    def get_chapter_experience_plan(self, *_args):
+        return None
+
+    def get_band_row_for_chapter(self, *_args):
+        return None
+
+    def get_band_experience_plan_for_chapter(self, *_args):
+        return None
+
     def list_chapter_rewrite_attempts(
         self,
         _project_id: str,
@@ -280,6 +291,12 @@ class _RepairHarness:
         self.rule_events: list[DecisionEvent] = []
         self.events: list[DecisionEvent] = []
         self.timeline: list[str] = []
+        self.control = RepairControl(progress=None, should_pause=self._pause_requested)
+        self.telemetry = ReviewTelemetry(SimpleNamespace(
+            record_event=self._record_decision_event,
+            record_rule_decision=self._record_rule_decision_event,
+        ))
+        self.plan_patch = SimpleNamespace(apply=lambda _request: None)
 
     def _pause_requested(self) -> bool:
         return False
@@ -404,7 +421,7 @@ def _run_repair_loop(
         updater=object(),  # type: ignore[arg-type]
         checker=object(),  # type: ignore[arg-type]
         project_id="project-1",
-        chapter_plan=SimpleNamespace(chapter_number=5, repair_attempt_count=0),
+        chapter_plan=SimpleNamespace(chapter_number=5, repair_attempt_count=0, title="Chapter 5", one_line="Fixture"),
         current_context=object(),
         current_output=output,  # type: ignore[arg-type]
         current_draft=SimpleNamespace(id="draft-1"),
@@ -505,7 +522,7 @@ def test_blocking_budget_starts_rewrite_when_ordinary_budget_is_zero(
     def rewrite_started(*_args, **_kwargs):
         raise _RewriteStarted
 
-    monkeypatch.setattr(repair_service, "_apply_repair_patch", rewrite_started)
+    monkeypatch.setattr(harness.plan_patch, "apply", rewrite_started)
 
     with pytest.raises(_RewriteStarted):
         _run_repair_loop(
@@ -576,7 +593,7 @@ def test_attempts_from_another_phase_do_not_exhaust_active_phase(
     def rewrite_started(*_args, **_kwargs):
         raise _RewriteStarted
 
-    monkeypatch.setattr(repair_service, "_apply_repair_patch", rewrite_started)
+    monkeypatch.setattr(harness.plan_patch, "apply", rewrite_started)
 
     with pytest.raises(_RewriteStarted):
         _run_repair_loop(
@@ -621,7 +638,7 @@ def test_attempts_from_previous_retry_cycle_do_not_exhaust_new_draft(
     def rewrite_started(*_args, **_kwargs):
         raise _RewriteStarted
 
-    monkeypatch.setattr(repair_service, "_apply_repair_patch", rewrite_started)
+    monkeypatch.setattr(harness.plan_patch, "apply", rewrite_started)
 
     with pytest.raises(_RewriteStarted):
         _run_repair_loop(

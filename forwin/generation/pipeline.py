@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from forwin.canon import (
     CanonAdmissionService,
-    CanonPreparationContext,
     CanonPreparationService,
 )
 from forwin.director import ArcDirector
@@ -18,19 +17,17 @@ from forwin.generation.pipeline_core.finalization import FinalizationStage
 from forwin.generation.pipeline_core.gate_delegation import GateDelegationStage
 from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
 from forwin.generation.pipeline_core.quality_gates import QualityDiagnosticsStage
-from forwin.generation.pipeline_core.repair_patches import RepairPlanningStage
-from forwin.generation.pipeline_core.review_autofix import ReviewWorkflowStage
 from forwin.generation.pipeline_core.run_control import RunControlStage
 from forwin.generation.pipeline_core.runtime_helpers import RuntimeSupportStage
 from forwin.generation.pipeline_core.world_projection import PostCanonStage
 from forwin.genesis import BookGenesisService
 from forwin.maintenance.post_canon import PostCanonMaintenanceService
 from forwin.model_adapter import ModelAdapter
+from forwin.observability.pipeline_progress import PipelineProgressRecorder
 from forwin.observability.pipeline_trace import (
     PipelineAuditContext,
     PipelineTraceRecorder,
 )
-from forwin.observability.ports import SpanHandle
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.stage_analysis import (
@@ -39,12 +36,15 @@ from forwin.planning.stage_analysis import (
     StageAnalyzer,
 )
 from forwin.retrieval import RetrievalBroker
+from forwin.review.candidate import CandidateReviewService
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairExecution, RepairService, RepairVerifier
+from forwin.review.repair.control import RepairControl
+from forwin.review.repair.plan_patch import RepairPlanPatchService
+from forwin.review.telemetry import ReviewTelemetry
 from forwin.runtime.policy import RuntimePolicy
 from forwin.simulation.world import WorldSimulator
 from forwin.skills import SkillPromptLayerBuilder, SkillRouter
-from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
@@ -57,8 +57,6 @@ class ChapterPipeline(
     AcceptanceStage,
     AuditControlStage,
     RuntimeSupportStage,
-    ReviewWorkflowStage,
-    RepairPlanningStage,
     GateDelegationStage,
     ChapterExecutionStage,
     QualityDiagnosticsStage,
@@ -106,12 +104,6 @@ class ChapterPipeline(
         self.audit_context = PipelineAuditContext(
             str(task_id or "").strip(), str(root_event_id or "").strip()
         )
-        self._audit_project_id = ""
-        self._audit_updater: StateUpdater | None = None
-        self._audit_stage_name = ""
-        self._audit_stage_started_at = 0.0
-        self._audit_stage_chapter_number = 0
-        self._audit_stage_span: SpanHandle | None = None
         self._runtime_container = None
 
         self.engine = engine
@@ -166,40 +158,32 @@ class ChapterPipeline(
                 llm_client=self.llm_client,
             )
         )
-        self.canon_preparation_context = CanonPreparationContext(
-            policy=self.policy,
-            llm_client=self.llm_client,
-            artifact_store=self.artifact_store,
-            _record_decision_event=self._record_decision_event,
-            _record_rule_decision_event=self._record_rule_decision_event,
-            save_prompt_trace=self._save_prompt_trace_payload,
+        self.progress_recorder = PipelineProgressRecorder(
+            trace_recorder=self.trace_recorder,
+            observability=self.observability,
+            progress_callback=progress_callback,
+        )
+        self.candidate_review = CandidateReviewService(
+            draft_review=draft_review,
+            repair_verifier=repair_verifier,
+            model_client=llm_client,
+            skill_router=skill_router,
+            skill_prompt_layer_builder=skill_prompt_layer_builder,
+            artifact_store=artifact_store,
+            trace_recorder=self.trace_recorder,
+        )
+        self.repair_plan_patch = RepairPlanPatchService(
+            retrieval_broker=retrieval_broker, arc_envelope_manager=arc_envelope_manager
         )
         self.repair_execution = RepairExecution(
-            policy=self.policy,
-            retrieval_broker=self.retrieval_broker,
-            _save_prompt_trace_payload=self._save_prompt_trace_payload,
-            _plan_writer_output_entities=self._plan_writer_output_entities,
-            _review_current_output=self._review_current_output,
-            _apply_canon_name_drift_autofix=self._apply_canon_name_drift_autofix,
-            _apply_placeholder_leakage_autofix=(
-                self._apply_placeholder_leakage_autofix
-            ),
-            _persist_draft_and_review=self._persist_draft_and_review,
-            _record_decision_event=self._record_decision_event,
-            _review_event_payload=self._review_event_payload,
-            _record_map_movement_review_issues=(
-                self._record_map_movement_review_issues
-            ),
-            _pause_requested=self._pause_requested,
-            _record_rule_decision_event=self._record_rule_decision_event,
-            _chapter_plan_snapshot=self._chapter_plan_snapshot,
-            _band_plan_snapshot=self._band_plan_snapshot,
-            _emit_progress=self._emit_progress,
+            policy=policy,
+            candidate_review=self.candidate_review,
+            plan_patch=self.repair_plan_patch,
             writer_execution=self.writer_execution,
-            _review_with_repair_verification=self._review_with_repair_verification,
-            _chapter_experience_patch_payload=self._chapter_experience_patch_payload,
-            _replace_band_schedule=self._replace_band_schedule,
-            _band_schedule_patch_payload=self._band_schedule_patch_payload,
+            telemetry=ReviewTelemetry(self.trace_recorder),
+            control=RepairControl(
+                progress=self.progress_recorder, should_pause=should_pause
+            ),
         )
 
     @property

@@ -364,46 +364,34 @@ def test_snapshot_reader_ignores_inactive_acceptance_evidence(request, backend):
 
 
 def test_repair_cannot_edit_active_accepted_plan_title():
-    from types import SimpleNamespace
 
     from forwin.protocol.review import RepairInstruction
-    from forwin.protocol.writer import WriterOutput
-    from forwin.review.repair.service import _apply_repair_patch
+    from forwin.review.repair.plan_patch import (
+        RepairPlanPatchRequest,
+        RepairPlanPatchService,
+    )
     from forwin.state.repo import StateRepository
     from tests.test_post_canon_maintenance import _durable_service
 
     _, sessions, _ = _durable_service()
-    execution = SimpleNamespace(
-        _chapter_experience_patch_payload=lambda *args: {},
-        retrieval_broker=SimpleNamespace(build_chapter_context=lambda *args: {}),
-        _chapter_plan_snapshot=lambda **kwargs: {},
-        _band_plan_snapshot=lambda **kwargs: {},
-    )
+    owner = RepairPlanPatchService(retrieval_broker=None, arc_envelope_manager=None)
     with sessions.begin() as session:
         chapter = session.get(ChapterPlan, "plan-1")
         original_title = chapter.title
         with pytest.raises(ValueError, match="revision"):
-            _apply_repair_patch(
-                execution,
+            owner.apply(RepairPlanPatchRequest(
                 session=session,
                 repo=StateRepository(session),
                 project_id="project-1",
                 chapter_plan=chapter,
                 context=None,
-                current_output=WriterOutput(
-                    project_id="project-1",
-                    chapter_number=1,
-                    title="old",
-                    body="body",
-                    end_of_chapter_summary="summary",
-                ),
                 repair_scope="chapter_plan",
-                repair_instruction=RepairInstruction(
+                instruction=RepairInstruction(
                     repair_scope="chapter_plan",
                     failure_type="continuity",
                     design_patch={"title": "Changed public title"},
                 ),
-            )
+            ))
         assert chapter.title == original_title
 
 

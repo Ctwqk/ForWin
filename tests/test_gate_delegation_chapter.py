@@ -258,11 +258,11 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             def __init__(self) -> None:
                 self.calls = 0
 
-            def prepare(self, **kwargs):
+            def prepare(self, *, request, **kwargs):
                 self.calls += 1
                 return CanonPreparationService().prepare_from_approved(
                     session=kwargs["session"],
-                    candidate_id=kwargs["candidate_id"],
+                    candidate_id=request.candidate_id,
                     approved_book_state_changes=ApprovedGraphDeltaSet(
                         project_id=project_id,
                         chapter_number=1,
@@ -273,13 +273,13 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
                         project_id=project_id,
                         chapter_number=1,
                         candidate_fingerprint=writer_output_admission_fingerprint(
-                            kwargs["writer_output"]
+                            request.writer_output
                         ),
                     ),
-                    acceptance_mode=kwargs["acceptance_mode"],
-                    repair_attempt_count=kwargs["repair_attempt_count"],
-                    residual_review_issues=kwargs["residual_review_issues"],
-                    canon_risk_level=kwargs["canon_risk_level"] or "low",
+                    acceptance_mode=request.acceptance_mode,
+                    repair_attempt_count=request.repair_attempt_count,
+                    residual_review_issues=request.residual_review_issues,
+                    canon_risk_level=request.canon_risk_level or "low",
                 )
 
         preparation = RecordingPreparation()
@@ -299,7 +299,9 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             repair=PersistingRepair(),
             repair_execution=SimpleNamespace(),
             canon_preparation=preparation,
-            canon_preparation_context=SimpleNamespace(),
+            llm_client=None,
+            artifact_store=None,
+            trace_recorder=None,
             canon_admission=CanonAdmissionService(session_factory=Session),
             _project_policy=lambda _session, _project: policy,
             _make_state_helpers=lambda session: (
@@ -315,8 +317,6 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             writer_execution=SimpleNamespace(
                 execute=lambda _request: WriterExecutionResult(output=writer_output)
             ),
-            _review_issue_payloads=lambda _verdict: [],
-            _review_canon_risk=lambda _verdict: "low",
             _resolve_gate_delegation=lambda **kwargs: (
                 delegation_calls.append(kwargs["gate_kind"])
                 or GateResolution(

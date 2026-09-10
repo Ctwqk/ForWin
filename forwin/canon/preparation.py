@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,21 +21,21 @@ from forwin.candidate_drafts import (
 )
 from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.model_adapter import ModelAdapter
-from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
+from forwin.observability.pipeline_trace import PipelineTraceRecorder
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
-from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 
 from .outbox_events import publisher_binding_snapshot
 from .plan import CanonAuditEvent, CanonCommitPlan
+from .quality_preparation import CanonQualityPreparer
 from .types import CanonPreparationOutcome
 
 
@@ -53,31 +52,24 @@ class BookStatePreparationOutcome:
 
 
 @dataclass(frozen=True, slots=True)
-class CanonPreparationContext:
-    policy: RuntimePolicy
-    llm_client: ModelAdapter
-    artifact_store: ArtifactStore
-    _record_decision_event: Callable[..., DecisionEvent]
-    _record_rule_decision_event: Callable[..., DecisionEvent | None]
-    save_prompt_trace: Callable[..., str] | None = None
-
-    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
-        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
-        if not callable(drain):
-            return []
-        events = drain()
-        return (
-            [dict(item) for item in events if isinstance(item, dict)]
-            if isinstance(events, list)
-            else []
-        )
+class CanonPreparationRequest:
+    candidate_id: str
+    project_id: str
+    chapter_number: int
+    writer_output: WriterOutput
+    verdict: ReviewVerdict
+    acceptance_mode: str
+    repair_attempt_count: int
+    residual_review_issues: list[dict[str, Any]]
+    canon_risk_level: str
 
 
 class BookStateCanonPreparer:
     def prepare(
         self,
         *,
-        context: CanonPreparationContext,
+        policy: RuntimePolicy,
+        recorder: PipelineTraceRecorder,
         session: Session,
         candidate_id: str,
         project_id: str,
@@ -91,7 +83,7 @@ class BookStateCanonPreparer:
             chapter_number,
         )
         extraction = BookStateGraphDeltaExtractor(
-            layers=set(context.policy.canon.book_state_layers),
+            layers=set(policy.canon.book_state_layers),
             session=session,
         ).extract(
             BookStateExtractionRequest(
@@ -108,7 +100,7 @@ class BookStateCanonPreparer:
         )
         if not extraction.accepted or extraction.changes is None:
             _record_book_state_block(
-                context=context,
+                recorder=recorder,
                 session=session,
                 candidate_id=candidate_id,
                 project_id=project_id,
@@ -126,7 +118,7 @@ class BookStateCanonPreparer:
         review = BookStateReviewGate(session).review(extraction.changes)
         if not review.accepted or review.approved_changes is None:
             _record_book_state_block(
-                context=context,
+                recorder=recorder,
                 session=session,
                 candidate_id=candidate_id,
                 project_id=project_id,
@@ -151,7 +143,7 @@ class BookStateCanonPreparer:
 
 def _record_book_state_block(
     *,
-    context: CanonPreparationContext,
+    recorder: PipelineTraceRecorder,
     session: Session,
     candidate_id: str,
     project_id: str,
@@ -177,7 +169,7 @@ def _record_book_state_block(
         for item in issue_payloads
         if str(item.get("message") or item.get("code") or "").strip()
     )
-    context._record_decision_event(
+    recorder.record_event(
         updater=StateUpdater(session),
         project_id=project_id,
         chapter_number=chapter_number,
@@ -212,29 +204,28 @@ class CanonPreparationService:
     def __init__(
         self,
         *,
-        quality_evaluator: Callable[..., Any] | None = None,
+        quality_preparer: CanonQualityPreparer | None = None,
         book_state_preparer: BookStateCanonPreparer | None = None,
     ) -> None:
-        self.quality_evaluator = quality_evaluator or _evaluate_canon_quality
+        self.quality_preparer = quality_preparer or CanonQualityPreparer()
         self.book_state_preparer = book_state_preparer or BookStateCanonPreparer()
 
     def prepare(
         self,
         *,
-        context: CanonPreparationContext,
+        request: CanonPreparationRequest,
         session: Session,
-        repo: StateRepository,
         updater: StateUpdater,
-        candidate_id: str,
-        project_id: str,
-        chapter_number: int,
-        writer_output: WriterOutput,
-        verdict: ReviewVerdict,
-        acceptance_mode: str,
-        repair_attempt_count: int,
-        residual_review_issues: list[dict[str, Any]],
-        canon_risk_level: str,
+        policy: RuntimePolicy,
+        llm_client: ModelAdapter,
+        artifact_store: ArtifactStore,
+        recorder: PipelineTraceRecorder,
     ) -> CanonPreparationOutcome:
+        candidate_id = request.candidate_id
+        project_id = request.project_id
+        chapter_number = request.chapter_number
+        writer_output = request.writer_output
+        verdict = request.verdict
         candidate = CandidateDraftRepository(session).get(candidate_id)
         if candidate is None:
             raise LookupError("candidate draft not found")
@@ -244,7 +235,7 @@ class CanonPreparationService:
             raise ValueError("candidate chapter mismatch")
         if candidate.body_hash != candidate_body_hash(writer_output.body):
             raise ValueError("candidate body changed after review")
-        context._record_decision_event(
+        recorder.record_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_number,
@@ -283,10 +274,12 @@ class CanonPreparationService:
             )
 
         try:
-            quality_outcome = self.quality_evaluator(
-                context=context,
+            quality_outcome = self.quality_preparer.evaluate(
+                policy=policy,
+                llm_client=llm_client,
+                artifact_store=artifact_store,
+                recorder=recorder,
                 session=session,
-                repo=repo,
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -296,7 +289,7 @@ class CanonPreparationService:
                 policy_version=int(candidate.policy_version or 0),
             )
         except Exception as exc:  # noqa: BLE001
-            context._record_decision_event(
+            recorder.record_event(
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -363,7 +356,8 @@ class CanonPreparationService:
             )
         try:
             book_state_outcome = self.book_state_preparer.prepare(
-                context=context,
+                policy=policy,
+                recorder=recorder,
                 session=session,
                 candidate_id=candidate_id,
                 project_id=project_id,
@@ -396,10 +390,10 @@ class CanonPreparationService:
             candidate_id=candidate_id,
             approved_book_state_changes=book_state_outcome.approved_changes,
             entity_admission_plan=entity_admission_plan,
-            acceptance_mode=acceptance_mode,
-            repair_attempt_count=repair_attempt_count,
-            residual_review_issues=residual_review_issues,
-            canon_risk_level=canon_risk_level,
+            acceptance_mode=request.acceptance_mode,
+            repair_attempt_count=request.repair_attempt_count,
+            residual_review_issues=request.residual_review_issues,
+            canon_risk_level=request.canon_risk_level,
             quality_admission_run_id=getattr(quality_outcome, "quality_admission_run_id", ""),
         )
 
@@ -530,13 +524,6 @@ class CanonPreparationService:
         if candidate.status != "ready_for_canon":
             repository.transition(candidate.id, "ready_for_canon")
         return CanonPreparationOutcome(plan=plan)
-
-
-def _evaluate_canon_quality(**kwargs: Any):
-    from forwin.generation.pipeline_core import quality_gates
-
-    context = kwargs.pop("context")
-    return quality_gates._apply_canon_quality_gate(context, **kwargs)
 
 
 def _mark_candidate_needs_review(

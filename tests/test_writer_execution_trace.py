@@ -178,3 +178,77 @@ def test_writer_failure_trace_uses_actual_attempts_and_same_transaction():
             assert list(session.scalars(select(DecisionEvent))) == []
     finally:
         engine.dispose()
+
+
+def test_rule_decision_trace_keeps_parent_and_best_effort_failure():
+    from forwin.observability.pipeline_trace import (
+        PipelineAuditContext,
+        PipelineTraceRecorder,
+    )
+    from forwin.protocol.review import ReviewVerdict
+    from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
+    from tests.test_writer_execution_owner import _EventUpdater
+
+    recorder = PipelineTraceRecorder(
+        audit=PipelineAuditContext(root_event_id="root"),
+        artifact_store=None,
+        observability=None,
+    )
+    assert hasattr(recorder, "record_rule_decision"), (
+        "Rule decisions need one concrete transaction-bound recorder"
+    )
+    updater = _EventUpdater()
+    decision = Decision(
+        rule_id="rule",
+        outcome="local_repair",
+        reason="Evidence requires repair",
+        missing_evidence=[],
+        routed_from="test",
+        sub_action={},
+    )
+    row = recorder.record_rule_decision(
+        updater=updater,
+        decision=decision,
+        decision_input=DecisionInput(
+            project_id="book",
+            chapter_number=2,
+            review=ReviewVerdict(verdict="fail"),
+            signals=[],
+            open_obligations=[],
+            attempts_completed=0,
+            prior_scope_history=[],
+            budget=None,
+            target_total_chapters=10,
+            plan_layer_health=PlanLayerHealth(),
+        ),
+        related_object_type="chapter_review",
+        related_object_id="review",
+        parent_event_id="parent",
+    )
+    assert row.info.event_type == DecisionEventType.RULE_DECISION_EVALUATED
+    assert row.info.parent_event_id == "parent"
+    assert row.info.causal_root_id == "root"
+    assert row.info.reason == "Evidence requires repair"
+
+    def fail(_info):
+        raise RuntimeError("audit unavailable")
+
+    assert (
+        recorder.record_rule_decision(
+            updater=SimpleNamespace(save_decision_event=fail),
+            decision=decision,
+            decision_input=DecisionInput(
+                project_id="book",
+                chapter_number=2,
+                review=ReviewVerdict(verdict="fail"),
+                signals=[],
+                open_obligations=[],
+                attempts_completed=0,
+                prior_scope_history=[],
+                budget=None,
+                target_total_chapters=10,
+                plan_layer_health=PlanLayerHealth(),
+            ),
+        )
+        is None
+    )

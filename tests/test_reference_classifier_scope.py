@@ -74,7 +74,7 @@ def test_story_scar_terms_and_dead_normalizer_are_absent_from_production() -> No
     ):
         assert term not in classifier_source
     review_autofix_source = (
-        root / "forwin/generation/pipeline_core/review_autofix.py"
+        root / "forwin/review/candidate.py"
     ).read_text(encoding="utf-8")
     assert "_project_character_names" not in review_autofix_source
     assert "normalize_character_reference" not in classifier_source

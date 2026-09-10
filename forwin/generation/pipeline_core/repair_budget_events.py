@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from forwin.generation.pipeline_core.repair_budget import evaluate_repair_body_budget
+from forwin.observability.pipeline_trace import PipelineTraceRecorder
 
 
 def record_repair_body_budget_event(
-    owner: Any,
+    recorder: PipelineTraceRecorder,
     *,
     updater: Any,
     project_id: str,
@@ -26,7 +27,7 @@ def record_repair_body_budget_event(
     )
     if budget_decision is None:
         return
-    owner._record_decision_event(
+    recorder.record_event(
         updater=updater,
         project_id=project_id,
         chapter_number=chapter_number,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from forwin.review.candidate_autofix import apply_placeholder_leakage_autofix
+
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage
 from forwin.checker.reference_classifier import (
     looks_like_generic_character_reference,
@@ -157,7 +159,7 @@ def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias(
         ],
     )
 
-    fixed = ChapterPipeline._apply_placeholder_leakage_autofix(output, review)
+    fixed = apply_placeholder_leakage_autofix(output, review)
 
     assert fixed is not None
     assert "工作人员" not in fixed.body

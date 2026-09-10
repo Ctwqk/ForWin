@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
@@ -8,7 +9,7 @@ from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_plan_revision,
 )
-from forwin.canon.preparation import CanonPreparationContext, CanonPreparationService
+from forwin.canon.preparation import CanonPreparationRequest, CanonPreparationService
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
@@ -18,7 +19,6 @@ from forwin.models.outbox import OutboxEvent
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
-from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
@@ -92,30 +92,15 @@ def test_fail_verdict_is_rejected_before_canon_preparation_collaborators() -> No
                         "BookState extraction must not run for an ineligible candidate"
                     )
 
-            outcome = CanonPreparationService(
-                quality_evaluator=unexpected_quality,
-                book_state_preparer=UnexpectedBookState(),
-            ).prepare(
-                context=CanonPreparationContext(
-                    policy=RuntimePolicy.for_profile("standard"),
-                    llm_client=object(),  # type: ignore[arg-type]
-                    artifact_store=object(),  # type: ignore[arg-type]
-                    _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-                    _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
-                ),
-                session=session,
-                repo=StateRepository(session),
-                updater=updater,
-                candidate_id=candidate.id,
-                project_id=project.id,
-                chapter_number=1,
-                writer_output=output,
-                verdict=ReviewVerdict(verdict="fail"),
-                acceptance_mode="normal",
-                repair_attempt_count=0,
-                residual_review_issues=[],
-                canon_risk_level="high",
-            )
+            outcome = CanonPreparationService(quality_preparer=SimpleNamespace(evaluate=unexpected_quality), book_state_preparer=UnexpectedBookState()).prepare(
+                          policy=RuntimePolicy.for_profile('standard'),
+                          recorder=SimpleNamespace(record_event=lambda **_kwargs: None, record_rule_decision=lambda **_kwargs: None),
+                          llm_client=object(),
+                          artifact_store=object(),
+                          request=CanonPreparationRequest(candidate_id=candidate.id, project_id=project.id, chapter_number=1, writer_output=output, verdict=ReviewVerdict(verdict='fail'), acceptance_mode='normal', repair_attempt_count=0, residual_review_issues=[], canon_risk_level='high'),
+                          session=session,
+                          updater=updater,
+                      )
 
             assert outcome.blocked is True
             assert outcome.block_kind == "candidate_ineligible"

@@ -71,7 +71,7 @@ ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
     "forwin/application/projects/common.py",
     "forwin/canon_quality/rule_profile.py",
     "forwin/review/repair/service.py",
-    "forwin/generation/pipeline_core/repair_patches.py",
+    "forwin/review/repair/plan_patch.py",
     "forwin/planning/future_plan_audit/helpers.py",
 }
 

@@ -8,7 +8,6 @@ import pytest
 from forwin.api_schema.review import RepairVerificationInfo
 from forwin.application.projects.reviews import _build_decision_layers
 from forwin.canon.eligibility import candidate_ineligibility_reason
-from forwin.generation.pipeline_core.review_autofix import ReviewWorkflowStage
 from forwin.protocol.review import (
     ContinuityIssue,
     RepairInstruction,
@@ -18,6 +17,7 @@ from forwin.protocol.review import (
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.rules.final_residual import FinalResidualPolicy
 from forwin.review.repair.verification import RepairVerifier
+from forwin.review.results import merge_repair_verification
 
 
 class ScriptedVerifier:
@@ -261,17 +261,7 @@ def test_unknown_roundtrips_api_and_does_not_create_repair_or_canon_failure():
     assert RepairVerificationInfo().fixed_all_must_fix is False
     review = ReviewVerdict(verdict="pass", repair_verification=result)
     assert candidate_ineligibility_reason(review) == ""
-    pipeline = SimpleNamespace(
-        repair_verifier=SimpleNamespace(verify=lambda **kwargs: result)
-    )
-    merged = ReviewWorkflowStage._review_with_repair_verification(
-        pipeline,
-        original_output=None,
-        repaired_output=None,
-        before_review=review,
-        review=review,
-        repair_instruction=None,
-    )
+    merged = merge_repair_verification(review, result, None)
     assert merged.verdict == "pass"
     assert merged.issues == []
     layers = _build_decision_layers(

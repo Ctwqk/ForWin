@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 import logging
-
-from forwin.generation.pipeline_core.result import RunResult
 from typing import Any
-from forwin.models.project import ChapterPlan
-from forwin.models.project import (
-    ArcPlanVersion,
-    Project,
-)
-from forwin.generation.continue_workset import build_continue_generation_workset
-from forwin.models.draft import ChapterDraft
-from forwin.audit.events import DecisionEventType
-from forwin.observability.context import OperationContext
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from forwin.audit.events import DecisionEventType
+from forwin.generation.continue_workset import build_continue_generation_workset
+from forwin.generation.pipeline_core.result import RunResult
+from forwin.models.draft import ChapterDraft
+from forwin.models.project import (
+    ArcPlanVersion,
+    ChapterPlan,
+    Project,
+)
 from forwin.state.updater import StateUpdater
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -362,143 +361,14 @@ class RunControlStage:
             session.close()
 
     def _emit_progress(self, event: str, **payload: Any) -> None:
-        if event == "stage_changed":
-            try:
-                self._record_stage_transition(payload)
-            except Exception:  # noqa: BLE001
-                logger.debug("Ignoring stage transition tracking error.", exc_info=True)
-        if self.progress_callback is None:
-            return
-        try:
-            self.progress_callback(event, payload)
-        except Exception:  # noqa: BLE001
-            logger.debug("Ignoring progress callback error.", exc_info=True)
+        self.progress_recorder.emit(event, **payload)
 
-    def _bind_audit_context(
-        self,
-        *,
-        project_id: str,
-        updater: StateUpdater,
-    ) -> None:
-        self._audit_project_id = str(project_id or "").strip()
-        self._audit_updater = updater
-        self._audit_stage_name = ""
-        self._audit_stage_started_at = 0.0
-        self._audit_stage_chapter_number = 0
-        self._audit_stage_span = None
+    def _bind_audit_context(self, *, project_id: str, updater: StateUpdater) -> None:
+        self.progress_recorder.bind(project_id=project_id, updater=updater)
 
     def _clear_audit_context(self) -> None:
-        self._finish_audit_stage_span(next_stage="", chapter_number=0)
-        self._audit_project_id = ""
-        self._audit_updater = None
-        self._audit_stage_name = ""
-        self._audit_stage_started_at = 0.0
-        self._audit_stage_chapter_number = 0
-        self._audit_stage_span = None
+        self.progress_recorder.clear()
 
-    def _start_audit_stage_span(
-        self, *, project_id: str, stage: str, chapter_number: int
-    ) -> None:
-        if self._audit_stage_span is not None:
-            return
-        context = OperationContext(
-            project_id=project_id,
-            task_id=self._audit_task_id,
-            chapter_number=int(chapter_number or 0),
-            stage=stage,
-            operation_id=self._audit_operation_id(),
-        )
-        span = self.observability.span(
-            context,
-            f"stage.{stage}",
-            span_kind="stage",
-            component="pipeline",
-            tags={"stage": stage},
-        )
-        span.__enter__()
-        self._audit_stage_span = span
-
-    def _finish_audit_stage_span(self, *, next_stage: str, chapter_number: int) -> None:
-        span = self._audit_stage_span
-        if span is None:
-            return
-        try:
-            span.tag("next_stage", str(next_stage or ""))
-            stage_chapter_number = int(
-                getattr(self, "_audit_stage_chapter_number", 0) or chapter_number or 0
-            )
-            if stage_chapter_number:
-                span.metric("chapter_number", stage_chapter_number)
-            span.__exit__(None, None, None)
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "Ignoring audit control stage span close failure.", exc_info=True
-            )
-        finally:
-            self._audit_stage_span = None
-
-    def _record_stage_transition(self, payload: dict[str, Any]) -> None:
-        updater = self._audit_updater
-        project_id = str(
-            payload.get("project_id") or self._audit_project_id or ""
-        ).strip()
-        stage = str(payload.get("stage") or "").strip()
-        if updater is None or not project_id or not stage:
-            return
-        now = time.perf_counter()
-        chapter_number = int(payload.get("current_chapter") or 0)
-        if self._audit_stage_name and self._audit_stage_name != stage:
-            stage_chapter_number = int(
-                getattr(self, "_audit_stage_chapter_number", 0) or chapter_number or 0
-            )
-            duration_ms = max(0, int((now - self._audit_stage_started_at) * 1000))
-            stage_payload = {
-                "stage": self._audit_stage_name,
-                "next_stage": stage,
-                "duration_ms": duration_ms,
-            }
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=stage_chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.STAGE_EXITED,
-                scope="task",
-                summary=f"阶段 {self._audit_stage_name} 已结束。",
-                payload=stage_payload,
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=stage_chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.STAGE_DURATION_SUMMARY,
-                scope="task",
-                summary=f"阶段 {self._audit_stage_name} 用时 {duration_ms}ms。",
-                payload=stage_payload,
-            )
-            self._finish_audit_stage_span(
-                next_stage=stage, chapter_number=stage_chapter_number
-            )
-        if self._audit_stage_name != stage:
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.STAGE_ENTERED,
-                scope="task",
-                summary=f"阶段 {stage} 已开始。",
-                payload={"stage": stage},
-            )
-            self._audit_stage_name = stage
-            self._audit_stage_started_at = now
-            self._audit_stage_chapter_number = chapter_number
-            self._start_audit_stage_span(
-                project_id=project_id,
-                stage=stage,
-                chapter_number=chapter_number,
-            )
 
     def _materialize_next_genesis_arc_if_needed(
         self,

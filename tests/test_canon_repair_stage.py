@@ -17,7 +17,7 @@ from forwin.checker.hard_floor import HardFloorResult
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.generation.pipeline_core import project_chapters as project_chapters_module
-from forwin.generation.pipeline_core import quality_gates as quality_gates_module
+from forwin.canon import quality_preparation as quality_gates_module
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -27,6 +27,10 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.candidate import CandidateReviewRequest
+from forwin.review.repair.plan_patch import RepairPlanPatchResult
+from forwin.review.repair.control import RepairControl
+from forwin.review.telemetry import ReviewTelemetry
 from forwin.review.repair import service as repair_service_module
 from forwin.review.repair.service import (
     _attempts_for_repair_phase,
@@ -269,6 +273,17 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
     class _Pipeline:
         policy = RuntimePolicy.for_profile("standard")
 
+        def __init__(self):
+            self.control = RepairControl(
+                progress=None, should_pause=self._pause_requested
+            )
+            self.telemetry = ReviewTelemetry(
+                SimpleNamespace(
+                    record_event=self._record_decision_event,
+                    record_rule_decision=self._record_rule_decision_event,
+                )
+            )
+
         def _pause_requested(self) -> bool:
             return False
 
@@ -445,21 +460,33 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     )
     monkeypatch.setattr(
         quality_gates_module,
-        "_latest_draft_and_review_for_chapter",
+        "latest_draft_and_review_for_chapter",
         lambda **_kwargs: (SimpleNamespace(id="d1"), SimpleNamespace(id="r1")),
     )
     monkeypatch.setattr(
         quality_gates_module,
-        "_prepare_deferred_acceptance_if_needed",
-        lambda _runtime, **_kwargs: (
+        "prepare_deferred_acceptance",
+        lambda **_kwargs: (
             calls.append("deferred_acceptance") or ["deferred patch failed"]
         ),
     )
 
-    outcome = quality_gates_module._apply_canon_quality_gate(
-        _Pipeline(),
+    outcome = quality_gates_module.CanonQualityPreparer().evaluate(
+        policy=_Pipeline().policy,
+        llm_client=_Pipeline().llm_client,
+        artifact_store=getattr(_Pipeline(), "artifact_store", None),
+        recorder=SimpleNamespace(
+            record_event=getattr(
+                _Pipeline(), "_record_decision_event", lambda **_kwargs: None
+            ),
+            record_rule_decision=getattr(
+                _Pipeline(), "_record_rule_decision_event", lambda **_kwargs: None
+            ),
+            save_prompt_trace=getattr(
+                _Pipeline(), "save_prompt_trace", lambda **_kwargs: ""
+            ),
+        ),
         session=_Session(),
-        repo=object(),
         updater=object(),
         project_id="p",
         chapter_number=2,
@@ -560,19 +587,31 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     )
     monkeypatch.setattr(
         quality_gates_module,
-        "_latest_draft_and_review_for_chapter",
+        "latest_draft_and_review_for_chapter",
         lambda **_kwargs: (SimpleNamespace(id="d18"), SimpleNamespace(id="r18")),
     )
     monkeypatch.setattr(
         quality_gates_module,
-        "_prepare_deferred_acceptance_if_needed",
-        lambda _runtime, **_kwargs: [],
+        "prepare_deferred_acceptance",
+        lambda **_kwargs: [],
     )
 
-    outcome = quality_gates_module._apply_canon_quality_gate(
-        _Pipeline(),
+    outcome = quality_gates_module.CanonQualityPreparer().evaluate(
+        policy=_Pipeline().policy,
+        llm_client=_Pipeline().llm_client,
+        artifact_store=getattr(_Pipeline(), "artifact_store", None),
+        recorder=SimpleNamespace(
+            record_event=getattr(
+                _Pipeline(), "_record_decision_event", lambda **_kwargs: None
+            ),
+            record_rule_decision=getattr(
+                _Pipeline(), "_record_rule_decision_event", lambda **_kwargs: None
+            ),
+            save_prompt_trace=getattr(
+                _Pipeline(), "save_prompt_trace", lambda **_kwargs: ""
+            ),
+        ),
         session=_Session(),
-        repo=object(),
         updater=object(),
         project_id="p",
         chapter_number=18,
@@ -604,14 +643,14 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        pipeline.draft_review = PassReviewHub()
+        pipeline.candidate_review.draft_review = PassReviewHub()
 
         def fail_canon_quality_gate(*_args, **_kwargs):
             raise RuntimeError("canon apply failed")
 
         monkeypatch.setattr(
-            quality_gates_module,
-            "_apply_canon_quality_gate",
+            quality_gates_module.CanonQualityPreparer,
+            "evaluate",
             fail_canon_quality_gate,
         )
 
@@ -682,6 +721,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
         return project
 
     monkeypatch.setattr(StateUpdater, "create_project", create_serial_project)
+
     class WarnThenPassReviewHub:
         def __init__(self) -> None:
             self.calls = 0
@@ -729,7 +769,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
             thread_beats=[],
             time_advance=None,
         )
-        pipeline.draft_review = WarnThenPassReviewHub()
+        pipeline.candidate_review.draft_review = WarnThenPassReviewHub()
 
         def evaluate_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
@@ -751,7 +791,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
                 )
             return CanonQualityGateOutcome()
 
-        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
+        pipeline.canon_preparation.quality_preparer.evaluate = evaluate_canon_candidate
 
         result = pipeline.run("p", "g", 1)
 
@@ -815,19 +855,16 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        pipeline.draft_review = WarnThenFailReviewHub()
+        pipeline.candidate_review.draft_review = WarnThenFailReviewHub()
         pipeline.writer.write_chapter = lambda context: _writer_output(
-            int(context.chapter_number), marker=f"repair-{pipeline.draft_review.calls}",
+            int(context.chapter_number),
+            marker=f"repair-{pipeline.candidate_review.draft_review.calls}",
         )
         monkeypatch.setattr(
-            repair_service_module,
-            "_apply_repair_patch",
-            lambda _runtime, **kwargs: (
-                {"repair_scope": kwargs["repair_scope"]},
-                kwargs["context"],
-                {},
-                {},
-                "",
+            pipeline.repair_plan_patch,
+            "apply",
+            lambda request: RepairPlanPatchResult(
+                {"repair_scope": request.repair_scope}, request.context, {}, {}, ""
             ),
         )
 
@@ -848,7 +885,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
                 ),
             )
 
-        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
+        pipeline.canon_preparation.quality_preparer.evaluate = evaluate_canon_candidate
 
         result = pipeline.run("p", "g", 1)
 
@@ -918,11 +955,11 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
-        pipeline.draft_review = WarnReviewHub()
+        pipeline.candidate_review.draft_review = WarnReviewHub()
         pipeline.repair.repair_canon_block = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
-        pipeline.canon_preparation.quality_evaluator = lambda **_kwargs: (
+        pipeline.canon_preparation.quality_preparer.evaluate = lambda **_kwargs: (
             CanonQualityGateOutcome(
                 blocked_path="frozen/canon-quality.json",
                 gate_result=CanonAdmissionGateResult(
@@ -1023,28 +1060,30 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             time_advance=None,
         )
 
+        pipeline.candidate_review.draft_review = SimpleNamespace(
+            review=lambda **_kwargs: ReviewVerdict(verdict="pass", issues=[])
+        )
+
         def force_accepted_review(**kwargs):
-            planned_output = pipeline._plan_writer_output_entities(
-                session=kwargs["session"],
-                project_id=kwargs["project_id"],
-                chapter_number=kwargs["chapter_plan"].chapter_number,
-                writer_output=kwargs["writer_output"],
+            evaluation = pipeline.candidate_review.evaluate(
+                CandidateReviewRequest(
+                    session=kwargs["session"],
+                    repo=kwargs["repo"],
+                    checker=kwargs["checker"],
+                    project_id=kwargs["project_id"],
+                    chapter_number=kwargs["chapter_plan"].chapter_number,
+                    context=kwargs["context"],
+                    output=kwargs["writer_output"],
+                )
             )
-            verdict = ReviewVerdict(verdict="pass", issues=[])
-            persisted_output, _draft, _review = pipeline._persist_draft_and_review(
+            persisted = pipeline.candidate_review.persist(
                 session=kwargs["session"],
                 updater=kwargs["updater"],
                 chapter_plan=kwargs["chapter_plan"],
                 project_id=kwargs["project_id"],
-                chapter_number=kwargs["chapter_plan"].chapter_number,
-                writer_output=planned_output,
-                review=verdict,
+                evaluation=evaluation,
             )
-            return (
-                persisted_output,
-                verdict,
-                initial_force_accept,
-            )
+            return persisted.output, evaluation.review, initial_force_accept
 
         gate = CanonAdmissionGateResult(
             project_id="p",
@@ -1083,7 +1122,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             )
 
         pipeline.repair.review_candidate = force_accepted_review
-        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
+        pipeline.canon_preparation.quality_preparer.evaluate = evaluate_canon_candidate
         pipeline.repair.repair_canon_block = failed_canon_repair
 
         result = pipeline.run("p", "g", 1)

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from forwin.book_state.extraction.contract import BookStateExtractionRequest
 from forwin.book_state.compiler import BookStateCompiler
-from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.canon.preparation import CanonPreparationContext
-from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
-from forwin.canon_quality.signals import CanonQualitySignal
+from forwin.book_state.extraction.contract import BookStateExtractionRequest
 from forwin.book_state.extraction.graph_delta import (
     BookStateGraphDeltaExtractor,
     _filter_graph_delta_layers,
 )
-from forwin.generation.pipeline_core import quality_gates
+from forwin.book_state.extraction.types import BookStateExtractionGateVerdict
+from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.reviewer import BookStateReviewGate
+from forwin.canon import quality_preparation as quality_gates
+from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
+from forwin.canon_quality.signals import CanonQualitySignal
+from forwin.models import Project
+from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.protocol.book_state import (
     CognitionPatch,
     FactPatch,
@@ -28,10 +32,7 @@ from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
-from forwin.book_state.extraction.types import BookStateExtractionGateVerdict
 from tests.postgres import postgres_test_url
-from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models import Project
 
 
 class DummyChecker:
@@ -407,7 +408,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         captured["prompt_trace"] = kwargs["prompt_trace"]
         return "canon-gate-trace"
 
-    context = CanonPreparationContext(
+    context = SimpleNamespace(
         policy=Policy(),  # type: ignore[arg-type]
         llm_client=sentinel_llm_client,  # type: ignore[arg-type]
         artifact_store=object(),  # type: ignore[arg-type]
@@ -428,20 +429,22 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
     )
     monkeypatch.setattr(
         quality_gates,
-        "_latest_draft_and_review_for_chapter",
+        "latest_draft_and_review_for_chapter",
         lambda **_kwargs: (Draft(), Review()),
     )
 
     with pytest.raises(StopAfterAnalysis):
-        quality_gates._apply_canon_quality_gate(
-            context,
+        quality_gates.CanonQualityPreparer().evaluate(
+            policy=context.policy,
+            llm_client=context.llm_client,
+            artifact_store=getattr(context, "artifact_store", None),
+            recorder=SimpleNamespace(record_event=getattr(context, "_record_decision_event", lambda **_kwargs: None), record_rule_decision=getattr(context, "_record_rule_decision_event", lambda **_kwargs: None), save_prompt_trace=getattr(context, "save_prompt_trace", lambda **_kwargs: "")),
             session=None,
-            repo=None,
             updater=None,
-            project_id="project-1",
+            project_id='project-1',
             chapter_number=1,
             writer_output=writer(),
-            verdict=ReviewVerdict(verdict="pass", issues=[]),
+            verdict=ReviewVerdict(verdict='pass', issues=[]),
         )
 
     assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)

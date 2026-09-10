@@ -22,3 +22,5 @@
 私有证据在 `.superpowers/sdd/2026-09-09-forwin-three-stage/runs/forwin-stage1-smoke-5524e362ed75-f807dc/map-edge-contract-diagnosis/`，原 canonical read SHA-256 为 `b6727c699af348f6c1245b8eb39ad0eda0420d60b527467d68d1d1f020bdfc01`。`before.json` 保留冻结旧源码结果，`after-working-tree.json` 保留修复重放，当前源码、测试及独立审查状态以[执行计划](../plans/2026-09-09-forwin-three-stage.md)和运行证据为准。
 
 新候选还需要独立冻结后的全量 QA、两类角色镜像、全新 smoke20 和另建的独立 L100，包括真实结局目标审读。没有重写旧失败样本、手工放行、降低质量或部署到生产。
+
+首次冻结修复提交 `da7890c` 的全量结果为 **1 failed / 3202 passed / 4 skipped**：失败项是旧格式入口未登记到现有兼容清单。已在 `legacy-inventory.yaml` 单独登记唯一解析入口、owner、验证路径和退役条件，类别为真实的外部输入兼容债务；没有放宽清单扫描或将运行逻辑伪列为文档/迁移。新的完整验证仍需重跑，该首次失败记录保留。

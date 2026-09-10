@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from forwin.audience.consumption import consume_post_canon_comment_batch
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.canon.identity import active_commit_predicate, is_active_commit
 from forwin.maintenance.events import (
@@ -951,6 +952,13 @@ class PostCanonMaintenanceService:
         session: Session,
         commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
+        analysis = consume_post_canon_comment_batch(
+            session_factory=self.session_factory,
+            llm_client=self.llm_client,
+            project_id=commit.project_id,
+            canon_commit_id=commit.id,
+            chapter_number=commit.chapter_number,
+        )
         result = run_feedback_aggregation_pass(
             session,
             commit.project_id,
@@ -959,6 +967,7 @@ class PostCanonMaintenanceService:
             comment_to_reader_ratio=80,
         )
         return {
+            "analysis": analysis,
             "aggregate_count": len(result.all_aggregates),
             "actionable_count": len(result.actionable),
         }

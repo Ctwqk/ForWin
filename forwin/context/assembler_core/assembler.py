@@ -102,6 +102,8 @@ class ChapterContextAssembler:
             genesis_world_overview=data.get("genesis_world_overview", ""),
             genesis_map_overview=data.get("genesis_map_overview", ""),
             genesis_story_engine_summary=data.get("genesis_story_engine_summary", ""),
+            genesis_reference_facts=data.get("genesis_reference_facts", []),
+            genesis_reference_omitted_count=data.get("genesis_reference_omitted_count", 0),
             chapter_number=chapter_plan.chapter_number,
             chapter_plan_title=rebase_generic_numeric_chapter_title(
                 chapter_plan.title,

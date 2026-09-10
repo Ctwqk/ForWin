@@ -42,6 +42,8 @@ from forwin.obsidian.frontmatter import parse_sections
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (
+    _budget_genesis_references,
+    _drop_unrelated_genesis_reference,
     _active_personality_contexts,
     _edge_context,
     _extract_source_digest,
@@ -158,6 +160,7 @@ class RetrievalBroker:
         return pack
 
     def _trim_pack(self, pack: ChapterContextPack) -> ChapterContextPack:
+        pack = _budget_genesis_references(pack, self.context_budget_chars // 4)
         summaries = self._pick_summaries(list(pack.previous_chapter_summaries))
         entities = self._pick_entities(list(pack.active_entities))
         threads = self._pick_threads(list(pack.active_threads))
@@ -174,6 +177,11 @@ class RetrievalBroker:
         estimate = self._estimate_pack_with_components(pack)
 
         while estimate > self.context_budget_chars:
+            without_unrelated = _drop_unrelated_genesis_reference(pack)
+            if without_unrelated is not None:
+                pack = without_unrelated
+                estimate = self._estimate_pack_with_components(pack)
+                continue
             if pack.active_relations:
                 removed = pack.active_relations[-1]
                 estimate -= self._estimate_component_chars(removed)
@@ -777,6 +785,10 @@ class RetrievalBroker:
                 or pack.active_knowledge_gaps,
                 "planned_reveal_ladder": world_pack.planned_reveal_ladder
                 or pack.planned_reveal_ladder,
+                "character_cognition_states": world_pack.character_cognition_states
+                or pack.character_cognition_states,
+                "observer_visibility_states": world_pack.observer_visibility_states
+                or pack.observer_visibility_states,
                 "promise_debts": world_pack.promise_debts or pack.promise_debts,
                 "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas
                 or pack.recent_reader_experience_deltas,
@@ -830,6 +842,12 @@ class RetrievalBroker:
     @staticmethod
     def _estimate_chars(pack: ChapterContextPack) -> int:
         payload = pack.model_dump(mode="json")
+        # An absent optional source view adds no Writer prompt content. Keep
+        # existing no-Genesis retention unchanged when this feature is unused.
+        if not payload.get("genesis_reference_facts"):
+            payload.pop("genesis_reference_facts", None)
+        if not payload.get("genesis_reference_omitted_count"):
+            payload.pop("genesis_reference_omitted_count", None)
         return len(json.dumps(payload, ensure_ascii=False))
 
     @classmethod

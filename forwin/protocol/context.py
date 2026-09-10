@@ -213,6 +213,15 @@ class LintSignal(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+class GenesisReferenceFact(BaseModel):
+    """Verbatim writing-time source evidence, not a Canon or knowledge update."""
+
+    source_path: str
+    category: Literal["world_history", "world_rule", "character_secret"]
+    subject: str = ""
+    text: str
+
+
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
 
@@ -226,6 +235,8 @@ class ChapterContextPack(BaseModel):
     genesis_world_overview: str = ""
     genesis_map_overview: str = ""
     genesis_story_engine_summary: str = ""
+    genesis_reference_facts: list[GenesisReferenceFact] = Field(default_factory=list)
+    genesis_reference_omitted_count: int = 0
 
     # Current chapter info
     chapter_number: int
@@ -273,7 +284,7 @@ class ChapterContextPack(BaseModel):
     active_knowledge_gaps: list[str] = Field(default_factory=list)
     planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
     reader_cognition_state: str = ""
-    character_cognition_states: dict[str, str] = Field(default_factory=dict)
+    character_cognition_states: dict[str, Any] = Field(default_factory=dict)
     observer_visibility_states: dict[str, str] = Field(default_factory=dict)
     promise_debts: list[str] = Field(default_factory=list)
     recent_reader_experience_deltas: list[str] = Field(default_factory=list)
@@ -367,6 +378,14 @@ class ReviewContextPack(BaseModel):
     genesis_world_overview: str = ""
     genesis_map_overview: str = ""
     genesis_story_engine_summary: str = ""
+    genesis_reference_facts: list[GenesisReferenceFact] = Field(default_factory=list)
+    genesis_reference_omitted_count: int = 0
+    must_not_reveal: list[str] = Field(default_factory=list)
+    planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
+    character_cognition_states: dict[str, Any] = Field(default_factory=dict)
+    observer_visibility_states: dict[str, str] = Field(default_factory=dict)
+    fair_misdirection_requirements: list[str] = Field(default_factory=list)
+    chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
     active_entities: list[EntitySnapshot] = Field(default_factory=list)
     active_rules: list[EntitySnapshot] = Field(default_factory=list)
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)

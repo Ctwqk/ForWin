@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from forwin.personality import (
     CharacterPersonalityLibrary,
     build_active_personality_contexts,
 )
+from forwin.protocol.context import ChapterContextPack
 
 
 def _node_context(node) -> dict[str, object]:
@@ -132,3 +135,37 @@ __all__ = [
     "_truncate",
     "_extract_source_digest",
 ]
+
+
+def _budget_genesis_references(pack: ChapterContextPack, max_chars: int) -> ChapterContextPack:
+    """Reserve only a bounded share for whole writing-time source statements."""
+    remaining_chars = max(0, max_chars)
+    selected = []
+    for fact in pack.genesis_reference_facts:
+        size = len(json.dumps(fact.model_dump(mode="json"), ensure_ascii=False))
+        if size <= remaining_chars:
+            selected.append(fact)
+            remaining_chars -= size
+    return pack.model_copy(update={
+        "genesis_reference_facts": selected,
+        "genesis_reference_omitted_count": (
+            pack.genesis_reference_omitted_count + len(pack.genesis_reference_facts) - len(selected)
+        ),
+    })
+
+
+def _drop_unrelated_genesis_reference(pack: ChapterContextPack) -> ChapterContextPack | None:
+    """Under pressure, offstage source background precedes current Canon eviction."""
+    chapter_text = "\n".join([pack.chapter_plan_title, pack.chapter_plan_one_line, *pack.chapter_goals])
+    current_names = {entity.name for entity in pack.active_entities}
+    for index in range(len(pack.genesis_reference_facts) - 1, -1, -1):
+        fact = pack.genesis_reference_facts[index]
+        if (fact.category == "character_secret" and fact.subject not in current_names
+                and fact.subject not in chapter_text):
+            selected = list(pack.genesis_reference_facts)
+            selected.pop(index)
+            return pack.model_copy(update={
+                "genesis_reference_facts": selected,
+                "genesis_reference_omitted_count": pack.genesis_reference_omitted_count + 1,
+            })
+    return None

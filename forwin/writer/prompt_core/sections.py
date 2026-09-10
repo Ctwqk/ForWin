@@ -5,6 +5,7 @@ produces fluent Chinese web-novel prose and metadata without code-switching.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
@@ -97,6 +98,21 @@ def _story_basics_section(context: ChapterContextPack) -> str:
         lines.append(f"Genesis 地图总览：{context.genesis_map_overview}")
     if getattr(context, "genesis_story_engine_summary", ""):
         lines.append(f"Genesis 长线引擎：{context.genesis_story_engine_summary}")
+    facts = context.genesis_reference_facts
+    omitted = context.genesis_reference_omitted_count
+    if facts or omitted:
+        lines.extend([
+            "【Genesis 来源事实】",
+            (
+                "以下原文约束对应的写前历史与根规则；不能用新计划或正文静默改写同一历史事件。"
+                "当前状态仍以已接纳 BookState 为准，长线目标不等于已经发生。"
+                "character_secret 是作者掌握的背景，不代表其他人物已知，也不要求本章揭露；"
+                "必须遵守人物知情边界和 must_not_reveal。区分客观事实、角色说法和不同历史事件。"
+            ),
+            json.dumps([fact.model_dump(mode="json") for fact in facts], ensure_ascii=False),
+        ])
+        if omitted:
+            lines.append(f"受上下文预算限制，{omitted} 条来源事实未完整提供；缺失不表示不存在，不得据此编造历史。")
     return "\n".join(lines)
 
 
@@ -260,11 +276,17 @@ def _world_intent_section(context: ChapterContextPack) -> str | None:
             getattr(context, "active_world_lines", None),
             getattr(context, "active_knowledge_gaps", None),
             getattr(context, "must_not_reveal", None),
+            context.character_cognition_states,
+            context.observer_visibility_states,
             intent,
         )
     ):
         return None
     lines = ["【世界状态意图】"]
+    if context.character_cognition_states:
+        lines.append("  · 已有的人物认知（缺项为未知）：" + json.dumps(context.character_cognition_states, ensure_ascii=False))
+    if context.observer_visibility_states:
+        lines.append("  · 观察者可见状态：" + json.dumps(context.observer_visibility_states, ensure_ascii=False))
     if getattr(context, "visible_world_lines", None):
         lines.append("  · 台前 world lines：" + "、".join(context.visible_world_lines))
     if getattr(context, "hidden_world_lines", None):

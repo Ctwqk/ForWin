@@ -387,6 +387,17 @@ class LLMWebNovelReviewer:
 
     def _llm_payload(self, context: ReviewContextPack, writer_output: WriterOutput) -> dict[str, Any]:
         map_context = self._map_review_payload(context, writer_output.body)
+        reveal_context = {
+            "must_not_reveal": list(context.must_not_reveal),
+            "planned_reveal_ladder": [item.model_dump(mode="json") for item in context.planned_reveal_ladder],
+            "character_cognition_states": dict(context.character_cognition_states),
+            "observer_visibility_states": dict(context.observer_visibility_states),
+            "fair_misdirection_requirements": list(context.fair_misdirection_requirements),
+            "chapter_world_delta_intent": (
+                context.chapter_world_delta_intent.model_dump(mode="json")
+                if context.chapter_world_delta_intent is not None else {}
+            ),
+        }
         evidence_index: list[dict[str, Any]] = []
         seen_evidence_ids: set[str] = set()
 
@@ -428,6 +439,18 @@ class LLMWebNovelReviewer:
             add_evidence("world:timeline", "world", context.timeline.model_dump_json())
         if context.genesis_map_overview:
             add_evidence("world:genesis_map", "map", context.genesis_map_overview, limit=1000)
+        if context.genesis_world_overview:
+            add_evidence("world:genesis_overview", "genesis_reference", context.genesis_world_overview)
+        if context.genesis_story_engine_summary:
+            add_evidence("world:genesis_engine", "genesis_plan", context.genesis_story_engine_summary)
+        revision_id = context.genesis_context_refs.get("genesis_revision_id", "")
+        for fact in context.genesis_reference_facts:
+            add_evidence(
+                f"genesis:{revision_id}:{fact.source_path}", "genesis_reference",
+                fact.model_dump_json(), limit=1000,
+            )
+        if any(reveal_context.values()):
+            add_evidence("world:reveal_context", "reveal_context", json.dumps(reveal_context, ensure_ascii=False), limit=1000)
         if map_context:
             add_evidence("world:map", "map", json.dumps(map_context, ensure_ascii=False), limit=1000)
         if context.world_pressure is not None:
@@ -550,6 +573,12 @@ class LLMWebNovelReviewer:
                 ),
             },
             "world": {
+                "genesis_context_refs": dict(context.genesis_context_refs),
+                "genesis_world_overview": context.genesis_world_overview,
+                "genesis_story_engine_summary": context.genesis_story_engine_summary,
+                "genesis_reference_facts": [fact.model_dump(mode="json") for fact in context.genesis_reference_facts],
+                "genesis_reference_omitted_count": context.genesis_reference_omitted_count,
+                "reveal_context": reveal_context,
                 "genesis_map_overview": context.genesis_map_overview,
                 "map_context": map_context,
                 "timeline": context.timeline.model_dump(mode="json") if context.timeline is not None else {},
@@ -605,6 +634,12 @@ class LLMWebNovelReviewer:
                     "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
                     "draft.body 是待评审的完整最终正文；正文问题必须以它为准。"
                     "摘要与结构化状态、事件、时间候选用于交叉核验，不能代替最终正文。"
+                    "genesis_reference_facts 保留写前来源原文和字段路径；用它核对同一历史事件、行为人与时间。"
+                    "同一历史事实的无解释改写属于因果一致性错误，须引用来源与最终正文证据。"
+                    "character_secret 是作者背景，不等于人物已知或本章必须揭露；遵守既有知情与揭示边界。"
+                    "角色说谎、猜测、误记或明确不同的历史事件不能仅因年份不同而判冲突。"
+                    "当前状态以已接纳 BookState/Canon 为准，Genesis 长线目标不等于已发生事实；"
+                    "来源条目遗漏表示证据不完整，不能据缺失判定不存在。"
                     "根据地图路线约束核对正文人物的出发、抵达和经过时间；手续等待与移动耗时须区分。"
                     "场景元数据中的地点或整章时长不能覆盖正文内更具体的时间地点事实。"
                     "当前BookMap是运行地图；Genesis总览只是写前来源。travel_time单位为小时，"

@@ -149,6 +149,14 @@ Files: `forwin/map/{protocol,genesis_adapter,generator,service,validator}.py`, `
 
 Verification commands: `.venv/bin/python -m pytest -q tests/test_genesis_route_contract.py tests/test_map_genesis_adapter.py tests/test_map_generation.py tests/test_map_world_integration.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_reviewer_split.py`; then the existing frozen-source QA/image procedure from Task 7. Run locally under executing-plans; do not create another user task or duplicate the observer.
 
+### Task 12: Preserve Genesis reference facts through final model inputs
+
+- [x] Reproduce the accepted smoke BODY's historical-date drift against the frozen Genesis revision and actual Writer requests; retain the safely paused sample and terminal exports.
+- [x] Extend the existing Genesis context provider with one bounded, verbatim reference projection: world history, root axioms and named character secrets, each with its original field path. Carry the same projection and revision through chapter/review packs, all writing prompts and the main final-BODY review payload/evidence index. Keep whole facts or mark omissions; do not silently clip facts or dump the complete Genesis pack.
+- [x] Preserve the distinction between author-only background, character knowledge, reveal permission, future intentions and accepted current state. Do not add a new checker, gate, model call or story-specific date rule.
+- [x] Test the real provider → assembler → final messages, including different historical events, literal quoted claims, hidden information, absent/malformed input and bounded omissions. Reproduce red before implementation, then run related regression and independent review.
+- [ ] Update the current design and failure report, freeze the reviewed source, run full QA and verify both role images. Start a new smoke, followed only after acceptance by a fresh separate L100; the failed sample cannot qualify the replacement source.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

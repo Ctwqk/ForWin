@@ -2,7 +2,7 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路及地图约束传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
+更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。
 
@@ -87,7 +87,7 @@ RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只
 
 ## 5. Genesis、计划和写作
 
-Genesis 包含 brief、world、map、story_engine、book_blueprint、bootstrap 六阶段。用户可以在写前生成、修订、锁定；handoff 后它变成原始蓝图档案，后续写作以运行计划为准。
+Genesis 包含 brief、world、map、story_engine、book_blueprint、bootstrap 六阶段。用户可以在写前生成、修订、锁定；handoff 后它变成原始蓝图档案。后续情节安排以运行计划为准，已确定的历史与根规则仍保留来源约束，未来目标不被当成已发生事实。
 
 PlanningService 组织 Arc/Band/Chapter 的创建、激活和修订。PlanningQuery 是读侧；PlanHealthService 的实际职责是把 future-plan audit 转成 typed health 结果，供生成控制决定是否阻断。Patch validation 由现有计划修订流程执行，没有经过一个统一健康聚合器。FuturePlanAuditor 可以对未来计划提出并应用合法修正，不能改已接纳章节来抹平历史。
 
@@ -96,6 +96,10 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 本轮已删除主 LLM review 和 repair escalation 的旧 scene 正文输入，改为完整最终 body；结构化状态/事件/时间和 Canon invariants 仍用于核验。场景原始产物没有被销毁，地图检查仍可使用位置等结构化数据。
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
+
+`GenesisContextProvider` 从冻结 revision 提供一份只读来源事实视图：`world_bible.history_slice`、`axioms` 和具名 `core_cast.secret`，保留完整原文、类别、人物和字段路径。相同视图经过 Chapter/Review context 进入各写作模式及主 BODY reviewer，审查证据引用绑定 Genesis revision 与原字段。视图最多 64 条、序列化条目合计 12000 字符，超限整条省略并显式记录遗漏数，不把截断句当完整事实；章计划提及的人物优先于其余 cast。实际 RetrievalBroker 再按调用者总预算的四分之一裁剪整条来源并累计遗漏；总预算仍紧张时，章节与当前人物均未涉及的秘密先于当前 Canon 上下文撤掉。完整 Genesis、文化词库和未来场景模板不随之灌入。
+
+这些信息不直接创建 Canon、人物知情或揭示许可：`character_secret` 是作者背景，仍遵守当前知情状态与 `must_not_reveal`。当前状态以已接纳 BookState 为准；同一历史事件不能被新计划静默改写。主审查同时收到现有的禁止揭示、揭示阶梯、人物认知、观察者可见状态和允许误导线索，并以完整最终正文核对来源，区分客观陈述、角色谎言/猜测与不同事件，不通过年份关键词判错。缺失来源表示证据不完整。[历史事实漏传失败报告](../docs/superpowers/reports/2026-09-10-stage1-genesis-reference-failure.md)区分输入传递验证与真实生成验收。
 
 Genesis 提供明确地点路线时，handoff 在现有 BookMap owner 内保留原始端点、方向、独立平行路线、显隐状态、发现状态和通行规则。行程的明确时长转为小时；登记、排队和许可等条件保留原文，无法解析的耗时保持未知。只有没有明确地点路线的输入才使用程序化地图生成；不因“门禁”字样生成传送门，也不为通过连通性检查补造路线。全部跨区路线落库后在同一 savepoint 内核验结构弱连通性，失败完整回滚；实际寻路仍按单向/双向限制。旧作品地图不被自动重建。
 

@@ -39,9 +39,11 @@ class ProductionPlanner:
         if not policy.enabled:
             return plan.model_copy(update={"blocked_reason": "disabled"})
         if backlog.needs_review and policy.stop_when_review_pending:
-            return plan.model_copy(update={"blocked_reason": "waiting_review"})
-        if backlog.has_active_generation_task:
-            return plan.model_copy(update={"blocked_reason": "active_generation_task"})
+            plan.blocked_reason = "waiting_review"
+        elif backlog.has_active_generation_task:
+            plan.blocked_reason = "active_generation_task"
+        elif backlog.capacity_available == 0:
+            plan.blocked_reason = backlog.capacity_wait_reason or "serial_buffer_full"
 
         if policy.quota.plan > 0:
             plan.plan_chapters.extend(backlog.needs_plan[: policy.quota.plan])
@@ -63,7 +65,9 @@ class ProductionPlanner:
                 }
             )
 
-        write_quota = max(0, int(policy.quota.write or 0))
+        write_quota = 0 if plan.blocked_reason else max(0, int(policy.quota.write or 0))
+        if backlog.capacity_available is not None:
+            write_quota = min(write_quota, backlog.capacity_available)
         has_existing_chapter_plans = (
             backlog.has_existing_chapter_plans or backlog.chapter_plan_count > 0
         )

@@ -239,6 +239,7 @@ def normalize_project_automation(
 
     return ProjectAutomationSettings.model_validate(
         {
+            "primary_publish_platform": str(payload.get("primary_publish_platform") or "").strip(),
             "enabled": bool(payload.get("enabled", False)),
             "daily_start_time": time_text,
             "daily_chapter_quota": quota,

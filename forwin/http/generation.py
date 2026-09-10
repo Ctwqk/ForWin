@@ -140,6 +140,9 @@ def _create_continue_generation_task(
     *,
     project_id: str,
     requested_chapters: int,
+    long_run_mode: str = "daily_serial",
+    isolated: bool = False,
+    session=None,
     max_chapters: int | None = None,
     auto_continue: bool = True,
     run_until_chapter: int | None = None,
@@ -153,6 +156,8 @@ def _create_continue_generation_task(
         .enqueue(
             EnqueueGenerationCommand(
                 project_id=normalized_project_id,
+                long_run_mode=long_run_mode,
+                isolated=isolated,
                 requested_chapters=int(requested_chapters or 0),
                 max_chapters=int(max_chapters or 0),
                 run_until_chapter=int(run_until_chapter or 0),
@@ -161,7 +166,8 @@ def _create_continue_generation_task(
                 subtitle=subtitle or f"项目 {normalized_project_id}",
                 message=message or "准备继续后续章节。",
                 root_event_type=DecisionEventType.CONTINUE_REQUESTED,
-            )
+            ),
+            session=session,
         )
         .task_id
     )

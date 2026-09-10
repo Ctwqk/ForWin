@@ -125,8 +125,13 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 candidate_id=candidate.id,
                 project_id=project.id,
                 chapter_number=chapter.chapter_number,
+                chapter_plan_id=chapter.id,
+                chapter_title=chapter.title,
             )
             session.add(old_commit)
+            session.flush()
+            session.get(ChapterPlan, chapter.id).active_commit_id = old_commit.id
+            session.get(Project, project.id).book_revision = 1
             session.commit()
             return old_commit
 
@@ -673,7 +678,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(payload.task_id, "task-retry-workset")
         self.assertEqual(captured["requested_chapters"], 3)
 
-    def test_retry_chapter_review_can_reset_accepted_when_explicitly_allowed(
+    def test_retry_chapter_review_preserves_accepted_until_revision_validation(
         self,
     ) -> None:
         project = self._create_project(project_id="proj-review-retry-accepted")
@@ -721,9 +726,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertTrue(payload.ok)
         with self.session_factory() as session:
             plan = session.get(ChapterPlan, "plan-review-retry-accepted")
-            self.assertEqual(plan.status, "planned")
-            self.assertEqual(plan.acceptance_mode, "")
-            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(payload.status, "accepted")
+            self.assertEqual(plan.status, "accepted")
+            self.assertEqual(plan.active_commit_id, old_commit.id)
+            self.assertEqual(plan.acceptance_mode, "normal")
+            self.assertEqual(plan.repair_attempt_count, 3)
+            self.assertEqual(session.get(CanonCommitRecord, old_commit.id).status, "committed")
             marker = self._rewrite_marker(session, project.id, 3)
             self.assertIsNotNone(marker)
             self.assertEqual(marker.previous_commit_id, old_commit.id)
@@ -1503,7 +1511,12 @@ class ProjectOperationGuardTests(unittest.TestCase):
             title,
             subtitle,
             message,
+            long_run_mode,
+            isolated,
+            session=None,
         ):
+            self.assertEqual(long_run_mode, "daily_serial")
+            self.assertIs(isolated, False)
             self.assertIs(auto_continue, True)
             self.assertEqual(run_until_chapter, 4)
             task_id = "task-continue-strict-factory"

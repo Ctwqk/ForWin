@@ -16,6 +16,8 @@ class ProductionPublishJob(BaseModel):
 
 class ProductionBacklog(BaseModel):
     project_id: str
+    capacity_available: int | None = None
+    capacity_wait_reason: str = ""
     needs_plan: list[int] = Field(default_factory=list)
     planned_unwritten: list[int] = Field(default_factory=list)
     drafted_unreviewed: list[int] = Field(default_factory=list)

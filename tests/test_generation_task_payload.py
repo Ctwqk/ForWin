@@ -69,3 +69,11 @@ def test_payload_without_v5_policy_snapshot_fails_closed(raw: str | None) -> Non
         match="generation task has no valid v5 policy snapshot",
     ):
         payload_from_json(raw)
+
+
+def test_task_payload_freezes_explicit_offline_production_mode():
+    payload = execution_payload(mode='continue', policy=RuntimePolicy.for_profile('standard'), policy_version=1,
+                                long_run_mode='soak_test', isolated=True)
+    restored = payload_from_json(payload.model_dump_json())
+    assert restored.long_run_mode == 'soak_test'
+    assert restored.isolated is True

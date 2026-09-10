@@ -1112,7 +1112,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         ):
             started = self._load_model(
                 MutationResult,
-                self._call_tool("project_start_writing", {"project_id": project_id}),
+                self._call_tool("project_start_writing", {"project_id": project_id, "long_run_mode": "soak_test", "isolated": True}),
             )
 
         self.assertIsNotNone(started.task)
@@ -1184,12 +1184,16 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 {
                     "project_id": project_id,
                     "run_until_chapter": 12,
+                    "long_run_mode": "soak_test",
+                    "isolated": True,
                     "auto_continue": True,
                 },
             ),
         )
 
         self.assertIsNotNone(result.task)
+        self.assertEqual(result.task.long_run_mode, "soak_test")
+        self.assertTrue(result.task.isolated)
         self.assertEqual(result.task.project_id, project_id)
         self.assertEqual(result.task.status, "queued")
         self.assertEqual(result.task.current_stage, "queued")

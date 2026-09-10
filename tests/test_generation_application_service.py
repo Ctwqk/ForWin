@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from tests.postgres import postgres_test_url
 
 from forwin.application.errors import ActiveGenerationTaskError, ProjectNotFound
 from forwin.application.generation import (
@@ -25,14 +25,7 @@ from forwin.runtime.policy_store import ProjectPolicyStore
 
 @pytest.fixture
 def session_factory() -> Iterator[sessionmaker]:
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Project.__table__.create(engine)
-    GenerationTask.__table__.create(engine)
-    DecisionEvent.__table__.create(engine)
+    engine = create_engine(postgres_test_url("generation_application"))
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         yield factory
@@ -53,6 +46,8 @@ def _create_project(
             premise="测试前提",
             genre="玄幻",
             creation_status="writing",
+            target_total_chapters=100,
+            automation_json='{"primary_publish_platform":"fanqie"}',
         )
         session.add(project)
         session.flush()

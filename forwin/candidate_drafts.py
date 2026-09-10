@@ -180,6 +180,10 @@ class CandidateDraftRepository:
         generation_meta = _json_object(writer_output.generation_meta)
         entity_plan = _json_object(generation_meta.get("entity_admission_plan"))
         metadata = dict(generation_meta)
+        metadata.pop("generation_task_id", None)
+        from forwin.production.capacity import SerialCapacityService
+        metadata.update(SerialCapacityService(self.session).candidate_provenance(
+            project_id, chapter_number, parent_candidate_id=parent_candidate_id))
         metadata.setdefault("title", writer_output.title)
         metadata.setdefault("summary", writer_output.end_of_chapter_summary)
         metadata.setdefault(

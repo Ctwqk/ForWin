@@ -156,6 +156,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             project = Project(
                 id="project-enqueue-only",
                 title="继续入队测试",
+                automation_json='{"primary_publish_platform":"fanqie"}',
                 premise="测试",
                 genre="玄幻",
                 creation_status="writing",

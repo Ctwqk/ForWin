@@ -196,6 +196,7 @@ class ForWinAPIClient:
         genre: str = "玄幻",
         setting_summary: str = "",
         target_total_chapters: int = 3,
+        primary_publish_platform: str = "",
     ) -> MutationResult:
         if not title.strip():
             raise ValueError("title is required")
@@ -212,6 +213,7 @@ class ForWinAPIClient:
                 "genre": genre,
                 "setting_summary": setting_summary,
                 "target_total_chapters": target_total_chapters,
+                "primary_publish_platform": primary_publish_platform,
             },
         )
         project_id = str(payload.get("project_id", "")).strip()
@@ -289,12 +291,16 @@ class ForWinAPIClient:
         auto_continue: bool | None = None,
         run_until_chapter: int | None = None,
         max_chapters: int | None = None,
+        long_run_mode: str = "daily_serial",
+        isolated: bool = False,
     ) -> MutationResult:
         if run_until_chapter is not None and run_until_chapter < 1:
             raise ValueError("run_until_chapter must be positive when provided")
         if max_chapters is not None and max_chapters < 1:
             raise ValueError("max_chapters must be positive when provided")
         request_json: dict[str, Any] = {}
+        if long_run_mode != "daily_serial" or isolated:
+            request_json.update(long_run_mode=long_run_mode, isolated=isolated)
         if auto_continue is not None:
             request_json["auto_continue"] = bool(auto_continue)
         if run_until_chapter is not None:
@@ -321,12 +327,16 @@ class ForWinAPIClient:
         max_chapters: int | None = None,
         auto_continue: bool | None = None,
         run_until_chapter: int | None = None,
+        long_run_mode: str = "daily_serial",
+        isolated: bool = False,
     ) -> MutationResult:
         if max_chapters is not None and max_chapters < 1:
             raise ValueError("max_chapters must be positive when provided")
         if run_until_chapter is not None and run_until_chapter < 1:
             raise ValueError("run_until_chapter must be positive when provided")
         request_json: dict[str, Any] = {}
+        if long_run_mode != "daily_serial" or isolated:
+            request_json.update(long_run_mode=long_run_mode, isolated=isolated)
         if max_chapters is not None:
             request_json["max_chapters"] = int(max_chapters)
         if auto_continue is not None:
@@ -751,6 +761,9 @@ class ForWinAPIClient:
     def _task_view(self, raw: dict[str, Any]) -> TaskView:
         generation_control = self._generation_control_view(raw.get("generation_control") or {})
         return TaskView(
+            long_run_mode=str(raw.get("long_run_mode") or "daily_serial"),
+            isolated=bool(raw.get("isolated", False)),
+            capacity_config_version=int(raw.get("capacity_config_version") or 0),
             task_id=str(raw.get("task_id", "")),
             status=str(raw.get("status", "")),
             title=str(raw.get("title", "")),

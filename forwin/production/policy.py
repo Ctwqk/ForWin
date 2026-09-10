@@ -118,3 +118,9 @@ def policy_from_automation(automation: ProjectAutomationSettings) -> ProductionP
             getattr(automation, "long_run_policy", None)
         ),
     )
+
+
+def serial_buffer_limit(total_chapters: int) -> int:
+    """Integer arithmetic keeps the exact 5% ceiling for every book size."""
+    total = max(0, int(total_chapters))
+    return min(total, max(3, (total + 19) // 20))

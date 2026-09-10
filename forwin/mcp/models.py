@@ -291,6 +291,9 @@ class GenesisView(BaseModel):
 
 
 class TaskView(BaseModel):
+    long_run_mode: str = "daily_serial"
+    isolated: bool = False
+    capacity_config_version: int = 0
     task_id: str
     status: str = ""
     title: str = ""

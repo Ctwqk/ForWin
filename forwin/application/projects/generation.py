@@ -4,7 +4,10 @@ from __future__ import annotations
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from forwin.application.read_models import build_project_detail, normalize_project_automation
+from forwin.application.read_models import (
+    build_project_detail,
+    normalize_project_automation,
+)
 from forwin.api_schema import (
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,
@@ -39,6 +42,7 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
+
 
 def _reset_orphan_needs_review_plans(
     session,
@@ -203,6 +207,9 @@ def continue_project_generation(
                 batch_end_chapter = min(batch_end_chapter, target_total)
             task_run_until_chapter = batch_end_chapter
         task_id = create_continue_generation_task(
+            long_run_mode=req.long_run_mode if req else "daily_serial",
+            isolated=bool(req.isolated) if req else False,
+            session=session,
             project_id=project_id,
             requested_chapters=workset.requested_chapters,
             max_chapters=task_max_chapters,
@@ -212,6 +219,7 @@ def continue_project_generation(
             subtitle=f"继续生成 · {project.genre}",
             message="准备继续生成剩余章节。",
         )
+        session.commit()
     except active_generation_task_error_cls as exc:
         raise HTTPException(409, str(exc)) from exc
     finally:
@@ -369,6 +377,14 @@ def update_project_automation(
                 "auto_publish": bool(req.auto_publish),
             }
         )
+        if req.primary_publish_platform is not None:
+            from forwin.publishers.platforms import normalize_supported_platform
+
+            payload["primary_publish_platform"] = normalize_supported_platform(
+                req.primary_publish_platform, allow_empty=True
+            )
+        if req.target_total_chapters is not None:
+            project.target_total_chapters = req.target_total_chapters
         if req.publish is not None:
             payload["publish"] = req.publish.model_dump(mode="json")
         if req.publish_bindings is not None:
@@ -377,6 +393,9 @@ def update_project_automation(
             ]
         updated = normalize_project_automation(payload)
         stored = persist_project_automation(session, project, updated)
+        from forwin.production.capacity import SerialCapacityService
+
+        SerialCapacityService(session).snapshot(project_id)
         session.commit()
         return ProjectAutomationUpdateResponse(
             ok=True,

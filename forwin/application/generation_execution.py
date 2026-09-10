@@ -140,6 +140,7 @@ def _build_chapter_pipeline_for_task(
     should_abort=None,
     should_pause=None,
     canon_transaction_guard=None,
+    reserve_chapter=None,
 ) -> ChapterPipeline:
     container = RuntimeContainer.from_config(
         context.infrastructure,
@@ -154,6 +155,7 @@ def _build_chapter_pipeline_for_task(
             task_id=context.task_id,
             root_event_id=context.root_event_id,
         )
+        pipeline.capacity_reserver = reserve_chapter
         if canon_transaction_guard is not None:
             from forwin.canon.admission import CanonAdmissionService
 
@@ -332,6 +334,7 @@ def execute_continuation(
     resume_from_chapter: int | None = None,
     completion_handler: Callable[[object], None] | None = None,
     canon_transaction_guard: Callable[[Any], bool] | None = None,
+    reserve_chapter: Callable[[str, int], None] | None = None,
     component: str = "api",
 ) -> None:
     task_id = context.task_id
@@ -347,10 +350,20 @@ def execute_continuation(
         should_abort=should_abort,
         should_pause=should_pause,
         canon_transaction_guard=canon_transaction_guard,
+        reserve_chapter=reserve_chapter,
     )
 
     def _handle_result(result) -> None:
-        if result.status == "cancelled":
+        if result.status == "capacity_wait":
+            update_task(
+                task_id,
+                status="capacity_wait",
+                current_stage="capacity_wait",
+                current_chapter=result.capacity_wait_chapter,
+                message=result.capacity_wait_reason,
+                error=None,
+            )
+        elif result.status == "cancelled":
             update_task(
                 task_id,
                 status="cancelled",

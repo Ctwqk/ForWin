@@ -109,6 +109,7 @@ def test_repository_loads_backlog_statuses_and_active_tasks() -> None:
             session.add(
                 CanonCommitRecord(
                     id=canon_commit_id,
+                    chapter_plan_id=plans[4].id,
                     idempotency_key=canon_key,
                     candidate_id=candidate_id,
                     project_id=project.id,
@@ -117,6 +118,7 @@ def test_repository_loads_backlog_statuses_and_active_tasks() -> None:
                 )
             )
             session.flush()
+            plans[4].active_commit_id = canon_commit_id
             session.add(
                 PublisherUploadJob(
                     id="upload-scheduled-canon",

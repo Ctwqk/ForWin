@@ -58,6 +58,7 @@ def _setup_project(session):
         genre="科幻",
         runtime_policy=RuntimePolicy.for_profile("standard"),
     )
+    project.automation_json = '{"primary_publish_platform":"qidian"}'
     arc = updater.create_arc_plan(
         project.id, "母星通讯危机", chapter_start=1, chapter_end=8
     )

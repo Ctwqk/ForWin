@@ -33,6 +33,7 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "paused",
 }
 
+
 def _build_project_genesis_service(session, project: Project, build_genesis_service):
     policy_record = ProjectPolicyStore(session).load(project)
     return build_genesis_service(
@@ -464,6 +465,9 @@ def start_project_writing(
                 task_max_chapters = target.effective_max_chapters
                 task_run_until_chapter = target.run_until_chapter
             task_id = create_continue_generation_task(
+                long_run_mode=req.long_run_mode if req else "daily_serial",
+                isolated=bool(req.isolated) if req else False,
+                session=session,
                 project_id=project.id,
                 requested_chapters=requested_chapters,
                 max_chapters=task_max_chapters,

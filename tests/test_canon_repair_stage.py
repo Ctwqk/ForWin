@@ -672,7 +672,17 @@ def test_canon_gate_block_review_routes_to_required_draft_scope():
     assert decision.sub_action["scope"] == "draft"
 
 
-def test_warn_review_canon_block_runs_canon_repair_before_accepting():
+def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch):
+    from forwin.state.updater import StateUpdater
+
+    create_project = StateUpdater.create_project
+
+    def create_serial_project(updater, *args, **kwargs):
+        project = create_project(updater, *args, **kwargs)
+        project.automation_json = '{"primary_publish_platform":"qidian"}'
+        return project
+
+    monkeypatch.setattr(StateUpdater, "create_project", create_serial_project)
     class WarnThenPassReviewHub:
         def __init__(self) -> None:
             self.calls = 0

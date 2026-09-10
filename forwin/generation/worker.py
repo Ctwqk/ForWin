@@ -139,6 +139,16 @@ def run_one_generation_task(
         raise
 
     with session_factory.begin() as session:
+        row = session.get(GenerationTask, task_id)
+        if row is not None and row.status == "capacity_wait":
+            return GenerationWorkerResult(
+                claimed=True,
+                task_id=task_id,
+                project_id=project_id,
+                resume_from_chapter=resume_from_chapter,
+                executed=True,
+                message="capacity_wait",
+            )
         heartbeat_ok = heartbeat_generation_task(
             session,
             task_id=task_id,
@@ -196,6 +206,10 @@ def _start_periodic_heartbeat(
                 )
                 continue
             if not heartbeat_ok:
+                with session_factory() as session:
+                    row = session.get(GenerationTask, task_id)
+                    if row is not None and row.status == "capacity_wait":
+                        return
                 record_worker_heartbeat_failed(
                     session_factory=session_factory,
                     config=config,

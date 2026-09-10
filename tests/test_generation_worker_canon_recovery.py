@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -81,6 +82,8 @@ def recovery_fixture() -> RecoveryFixture:
             genre="thriller",
             runtime_policy=policy,
         )
+        project.automation_json = '{"primary_publish_platform":"qidian"}'
+        session.flush()
         arc = updater.create_arc_plan(project.id, "Arc one")
         chapter = updater.create_chapter_plan(
             project_id=project.id,
@@ -342,9 +345,7 @@ def _assert_expired_control_request_is_acknowledged(
 
     application = GenerationApplicationService(
         session_factory=recovery_fixture.Session,
-        infrastructure=InfrastructureConfig(
-            database_url=recovery_fixture.database_url
-        ),
+        infrastructure=InfrastructureConfig(database_url=recovery_fixture.database_url),
         runner=forbidden_runner,
     )
 
@@ -510,9 +511,7 @@ def test_stale_worker_epoch_cannot_enter_canon_transaction(
     assert reclaimed.lease_epoch == first_epoch + 1
     application = GenerationApplicationService(
         session_factory=recovery_fixture.Session,
-        infrastructure=InfrastructureConfig(
-            database_url=recovery_fixture.database_url
-        ),
+        infrastructure=InfrastructureConfig(database_url=recovery_fixture.database_url),
     )
 
     outcome = CanonAdmissionService(
@@ -531,3 +530,205 @@ def test_stale_worker_epoch_cannot_enter_canon_transaction(
         assert session.scalar(select(func.count(CanonCommitRecord.id))) == 0
         candidate = session.get(CandidateDraftRecord, recovery_fixture.candidate_id)
         assert candidate is not None and candidate.status == "ready_for_canon"
+
+
+def test_new_capacity_wait_does_not_recover_old_chapter_as_its_own(recovery_fixture):
+    import json
+    from forwin.application.generation import EnqueueGenerationCommand
+    from forwin.models.project import Project
+
+    fixture = recovery_fixture
+    outcome = CanonAdmissionService(session_factory=fixture.Session).commit_plan(
+        fixture.plan
+    )
+    assert outcome.commit_id
+    with fixture.Session.begin() as session:
+        session.get(GenerationTask, fixture.task_id).status = "completed"
+        session.get(Project, fixture.project_id).automation_json = "{}"
+    service = GenerationApplicationService(
+        session_factory=fixture.Session,
+        infrastructure=InfrastructureConfig(database_url=fixture.database_url),
+        runner=lambda *args: (_ for _ in ()).throw(
+            AssertionError("blocked task must not run pipeline")
+        ),
+    )
+    handle = service.enqueue(
+        EnqueueGenerationCommand(
+            project_id=fixture.project_id,
+            requested_chapters=1,
+            max_chapters=1,
+            run_until_chapter=2,
+            auto_continue=False,
+            title="Continue",
+            subtitle="",
+            root_event_type="continue_requested",
+        )
+    )
+    with fixture.Session() as session:
+        assert session.get(GenerationTask, handle.task_id).status == "capacity_wait"
+    result = run_one_generation_task(
+        application_service=service, worker_id="review-probe"
+    )
+    assert result.task_id == handle.task_id
+    with fixture.Session() as session:
+        task = session.get(GenerationTask, handle.task_id)
+        assert task.status == "capacity_wait", (
+            task.status,
+            task.completed_chapters_json,
+            task.message,
+        )
+        assert json.loads(task.completed_chapters_json) == []
+
+
+def test_offline_canon_publisher_outbox_is_successful_noop(recovery_fixture):
+    import json
+    from datetime import datetime, UTC, timedelta
+    from types import SimpleNamespace
+    from forwin.models.draft import CandidateDraftRecord
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.production.capacity import SerialCapacityService
+    from forwin.canon.outbox_events import CANON_PUBLISHER_REQUESTED
+    from forwin.publisher_runtime.canon_jobs import (
+        CanonPublisherJobService,
+        build_canon_publisher_outbox_handlers,
+    )
+    from forwin.outbox.worker import OutboxClaim
+
+    fixture = recovery_fixture
+    with fixture.Session.begin() as session:
+        task = session.get(GenerationTask, fixture.task_id)
+        task.status = "running"
+        task.lease_owner = "worker"
+        task.lease_epoch = 1
+        task.lease_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        payload = json.loads(task.execution_payload_json)
+        payload.update(long_run_mode="soak_test", isolated=True)
+        task.execution_payload_json = json.dumps(payload)
+        owner = SerialCapacityService(session)
+        owner.reserve(
+            fixture.project_id, 1, task_id=task.id, worker_id="worker", lease_epoch=1
+        )
+        candidate = session.get(CandidateDraftRecord, fixture.candidate_id)
+        metadata = json.loads(candidate.metadata_json)
+        metadata.update(owner.candidate_provenance(fixture.project_id, 1))
+        candidate.metadata_json = json.dumps(metadata)
+    outcome = CanonAdmissionService(session_factory=fixture.Session).commit_plan(
+        fixture.plan
+    )
+    assert outcome.commit_id
+    with fixture.Session() as session:
+        assert (
+            session.get(CanonCommitRecord, outcome.commit_id).production_mode
+            == "soak_test"
+        )
+    event = next(
+        event
+        for event in fixture.plan.outbox_events
+        if event.event_type == CANON_PUBLISHER_REQUESTED
+    )
+    assert event.payload["publisher_bindings"] == []
+    service = CanonPublisherJobService(
+        session_factory=fixture.Session, upload_jobs=SimpleNamespace()
+    )
+    handler = build_canon_publisher_outbox_handlers(service_provider=lambda: service)[
+        CANON_PUBLISHER_REQUESTED
+    ]
+    handler(
+        OutboxClaim(
+            row_id="probe",
+            event_id=event.event_id,
+            event_type=event.event_type,
+            aggregate_type=event.aggregate_type,
+            aggregate_id=event.aggregate_id,
+            payload=event.payload,
+            worker_id="probe",
+            lease_epoch=1,
+            attempts=1,
+        )
+    )
+
+
+def test_capacity_wait_resumes_its_prepared_candidate_without_writer(
+    recovery_fixture, monkeypatch
+):
+    import json
+    from forwin.models.project import Project
+
+    fixture = recovery_fixture
+    with fixture.Session.begin() as session:
+        candidate = session.get(CandidateDraftRecord, fixture.candidate_id)
+        metadata = json.loads(candidate.metadata_json or "{}")
+        metadata["generation_task_id"] = fixture.task_id
+        candidate.metadata_json = json.dumps(metadata)
+        task = session.get(GenerationTask, fixture.task_id)
+        task.status = "capacity_wait"
+        task.resume_from_chapter = 1
+        task.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.get(Project, fixture.project_id).automation_json = "{}"
+    application, pipeline = _recovery_application(fixture, monkeypatch)
+    first = run_one_generation_task(application_service=application, worker_id="wait-1")
+    assert first.message == "capacity_wait"
+    with fixture.Session.begin() as session:
+        assert (
+            session.get(CandidateDraftRecord, fixture.candidate_id).status
+            == "ready_for_canon"
+        )
+        assert session.scalar(select(func.count(CanonCommitRecord.id))) == 0
+        task = session.get(GenerationTask, fixture.task_id)
+        task.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.get(
+            Project, fixture.project_id
+        ).automation_json = '{"primary_publish_platform":"qidian"}'
+    run_one_generation_task(application_service=application, worker_id="wait-2")
+    assert pipeline.calls == []
+    with fixture.Session() as session:
+        task = session.get(GenerationTask, fixture.task_id)
+        assert task.status == "completed"
+        assert json.loads(task.completed_chapters_json) == [1]
+        assert session.scalar(select(func.count(CanonCommitRecord.id))) == 1
+
+
+def test_enqueued_start_does_not_override_recorded_progress_on_crash(recovery_fixture):
+    from forwin.application.generation import EnqueueGenerationCommand
+    from forwin.models.project import Project
+    from forwin.generation.task_lease import (
+        generation_task_resume_from_chapter,
+        claim_generation_task,
+    )
+    from datetime import datetime, UTC, timedelta
+
+    fixture = recovery_fixture
+    CanonAdmissionService(session_factory=fixture.Session).commit_plan(fixture.plan)
+    with fixture.Session.begin() as session:
+        session.get(GenerationTask, fixture.task_id).status = "completed"
+        session.get(Project, fixture.project_id).target_total_chapters = 100
+    service = GenerationApplicationService(
+        session_factory=fixture.Session,
+        infrastructure=InfrastructureConfig(database_url=fixture.database_url),
+    )
+    handle = service.enqueue(
+        EnqueueGenerationCommand(
+            project_id=fixture.project_id,
+            requested_chapters=3,
+            max_chapters=3,
+            run_until_chapter=4,
+            auto_continue=False,
+            title="Continue",
+            subtitle="",
+            root_event_type="continue_requested",
+        )
+    )
+    with fixture.Session.begin() as session:
+        claim = claim_generation_task(session, worker_id="crashed")
+        assert claim.task.id == handle.task_id
+    # Real task progress persists through the guarded application update owner.
+    service._task_updater(worker_id="crashed", lease_epoch=claim.lease_epoch)(
+        handle.task_id, completed_chapters=[2], current_chapter=3
+    )
+    with fixture.Session.begin() as session:
+        task = session.get(GenerationTask, handle.task_id)
+        task.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    with fixture.Session.begin() as session:
+        claim = claim_generation_task(session, worker_id="reclaimed")
+        assert claim.claim_kind == "expired_running"
+        assert generation_task_resume_from_chapter(claim.task) == 3

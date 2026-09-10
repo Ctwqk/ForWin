@@ -57,6 +57,8 @@ class EnqueueGenerationCommand:
     subtitle: str
     root_event_type: str
     message: str = ""
+    long_run_mode: str = "daily_serial"
+    isolated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +124,18 @@ class GenerationApplicationService:
             raise ActiveGenerationTaskError(
                 f"active generation task exists for project: {project_id}"
             )
+        from forwin.production.capacity import SerialCapacityService
+
+        if command.long_run_mode not in {"daily_serial", "factory_batch", "soak_test"}:
+            raise ValueError("unsupported long_run_mode")
+        if command.long_run_mode != "daily_serial" and not command.isolated:
+            raise ValueError("offline production mode requires explicit isolated task")
+        capacity = SerialCapacityService(session).snapshot(project_id)
+        offline = command.long_run_mode != "daily_serial" and command.isolated
+        if not offline:
+            batch_limit = max(1, capacity.available)
+            requested_chapters = min(requested_chapters, batch_limit)
+            max_chapters = min(max_chapters or requested_chapters, batch_limit)
         policy_record = ProjectPolicyStore(session).load(project)
         root_event = StateUpdater(session).save_decision_event(
             DecisionEventInfo(
@@ -145,6 +159,9 @@ class GenerationApplicationService:
         )
         payload = execution_payload(
             mode="continue",
+            long_run_mode=command.long_run_mode,
+            isolated=command.isolated,
+            capacity_config_version=capacity.config_version,
             policy=policy_record.policy,
             policy_version=policy_record.version,
             root_event_id=root_event.id,
@@ -163,6 +180,13 @@ class GenerationApplicationService:
             run_until_chapter=run_until_chapter,
             payload=payload,
         )
+        # Persist this task's first intended chapter before it can enter a wait.
+        task.resume_from_chapter = capacity.accepted + 1
+        if not offline and not capacity.available:
+            task.status = "capacity_wait"
+            task.current_stage = "capacity_wait"
+            task.message = capacity.wait_reason
+            session.flush()
         return GenerationTaskHandle(
             task_id=task.id,
             project_id=project_id,
@@ -210,13 +234,29 @@ class GenerationApplicationService:
                 paused_at=acknowledged_at,
             )
             return
-        if str(claim_kind or "") == "expired_running":
-            resume_from_chapter = self._recover_committed_chapter(
-                task,
-                resume_from_chapter=max(0, int(resume_from_chapter or 0)),
-                worker_id=normalized_worker_id,
-                lease_epoch=normalized_lease_epoch,
-            )
+        from forwin.production.capacity import CapacityWait
+
+        if str(claim_kind or "") in {"expired_running", "capacity_wait"}:
+            try:
+                resume_from_chapter = self._recover_committed_chapter(
+                    task,
+                    resume_from_chapter=max(0, int(resume_from_chapter or 0)),
+                    worker_id=normalized_worker_id,
+                    lease_epoch=normalized_lease_epoch,
+                    require_task_provenance=claim_kind == "capacity_wait",
+                )
+            except CapacityWait as exc:
+                self._task_updater(
+                    worker_id=normalized_worker_id, lease_epoch=normalized_lease_epoch
+                )(
+                    task.id,
+                    status="capacity_wait",
+                    current_stage="capacity_wait",
+                    current_chapter=exc.chapter_number or resume_from_chapter,
+                    message=exc.reason,
+                    error=None,
+                )
+                return
         completed_chapters = _task_chapter_numbers(task.completed_chapters_json)
         payload = payload_from_json(task.execution_payload_json)
         if int(task.requested_chapters or 0) > 0 and len(completed_chapters) >= int(
@@ -249,6 +289,22 @@ class GenerationApplicationService:
                     "Post-recovery completion handler failed for task %s",
                     task.id,
                 )
+            return
+        try:
+            self._capacity_reserver(
+                task.id, normalized_worker_id, normalized_lease_epoch
+            )(task.project_id, max(1, int(resume_from_chapter or 1)))
+        except CapacityWait as exc:
+            self._task_updater(
+                worker_id=normalized_worker_id, lease_epoch=normalized_lease_epoch
+            )(
+                task.id,
+                status="capacity_wait",
+                current_stage="capacity_wait",
+                current_chapter=exc.chapter_number or resume_from_chapter,
+                message=exc.reason,
+                error=None,
+            )
             return
         context = build_execution_context(
             self.infrastructure,
@@ -304,8 +360,24 @@ class GenerationApplicationService:
                 worker_id=worker_id,
                 lease_epoch=lease_epoch,
             ),
+            reserve_chapter=self._capacity_reserver(task.id, worker_id, lease_epoch),
             component="worker",
         )
+
+    def _capacity_reserver(self, task_id: str, worker_id: str, lease_epoch: int):
+        def reserve(project_id: str, chapter_number: int) -> None:
+            from forwin.production.capacity import SerialCapacityService
+
+            with self.session_factory.begin() as session:
+                SerialCapacityService(session).reserve(
+                    project_id,
+                    chapter_number,
+                    task_id=task_id,
+                    worker_id=worker_id,
+                    lease_epoch=lease_epoch,
+                )
+
+        return reserve
 
     def _task_updater(self, *, worker_id: str, lease_epoch: int):
         def update(task_id: str, **changes: object) -> None:
@@ -318,15 +390,22 @@ class GenerationApplicationService:
                 )
                 normalized = dict(changes)
                 if "completed_chapters" in normalized:
-                    existing = _task_chapter_numbers(
-                        task.completed_chapters_json
-                    )
+                    existing = _task_chapter_numbers(task.completed_chapters_json)
                     incoming = [
                         int(chapter)
                         for chapter in normalized.get("completed_chapters", []) or []
                     ]
                     normalized["completed_chapters"] = list(
                         dict.fromkeys([*existing, *incoming])
+                    )
+                if normalized.get("status") == "capacity_wait":
+                    from datetime import timedelta
+
+                    task.lease_expires_at = datetime.now(timezone.utc) + timedelta(
+                        seconds=30
+                    )
+                    task.resume_from_chapter = int(
+                        normalized.get("current_chapter") or task.current_chapter or 1
                     )
                 GenerationTaskRepository(session).update(task_id, normalized)
 
@@ -339,6 +418,7 @@ class GenerationApplicationService:
         resume_from_chapter: int,
         worker_id: str,
         lease_epoch: int,
+        require_task_provenance: bool = False,
     ) -> int:
         chapter_number = max(0, int(resume_from_chapter or 0))
         if chapter_number < 1:
@@ -361,6 +441,20 @@ class GenerationApplicationService:
                 project_id=str(task.project_id or ""),
                 chapter_number=chapter_number,
             )
+            if require_task_provenance:
+                try:
+                    provenance = (
+                        json.loads(candidate.metadata_json or "{}") if candidate else {}
+                    )
+                except (TypeError, ValueError):
+                    provenance = {}
+                # Capacity rechecks recover only work started by this task; a
+                # newly enqueued wait must not adopt prior accepted chapters.
+                if (
+                    not isinstance(provenance, dict)
+                    or provenance.get("generation_task_id") != task.id
+                ):
+                    return chapter_number
             candidate_status = str(candidate.status or "") if candidate else ""
             chapter_status = str(chapter.status or "") if chapter else ""
             if candidate is None or candidate_status not in {
@@ -385,6 +479,10 @@ class GenerationApplicationService:
                     "accepted candidate has no valid Canon commit plan"
                 ) from exc
 
+        if candidate_status != "accepted":
+            self._capacity_reserver(task.id, worker_id, lease_epoch)(
+                task.project_id, chapter_number
+            )
         outcome = CanonAdmissionService(
             session_factory=self.session_factory,
             transaction_guard=self._canon_transaction_guard(
@@ -421,9 +519,7 @@ class GenerationApplicationService:
             paused=paused,
             worker_id=worker_id,
             lease_epoch=lease_epoch,
-            recovery_kind=(
-                "canon_replay" if outcome.idempotent else "canon_commit"
-            ),
+            recovery_kind=("canon_replay" if outcome.idempotent else "canon_commit"),
         )
         task.completed_chapters_json = json.dumps(completed, ensure_ascii=False)
         task.failed_chapters_json = json.dumps(failed, ensure_ascii=False)
@@ -525,9 +621,7 @@ class GenerationApplicationService:
         lease_epoch: int,
     ) -> GenerationTask:
         task = session.execute(
-            select(GenerationTask)
-            .where(GenerationTask.id == task_id)
-            .with_for_update()
+            select(GenerationTask).where(GenerationTask.id == task_id).with_for_update()
         ).scalar_one_or_none()
         if (
             task is None
@@ -535,9 +629,7 @@ class GenerationApplicationService:
             or int(task.lease_epoch or 0) != int(lease_epoch)
             or _lease_expired(task.lease_expires_at)
         ):
-            raise GenerationTaskLeaseLost(
-                f"generation task lease lost: {task_id}"
-            )
+            raise GenerationTaskLeaseLost(f"generation task lease lost: {task_id}")
         return task
 
     @staticmethod
@@ -570,7 +662,11 @@ class GenerationApplicationService:
 
             GenerationAutoContinueController(
                 session_factory=self.session_factory,
-                create_continue_generation_task=self._enqueue_continue,
+                create_continue_generation_task=lambda **values: self._enqueue_continue(
+                    **values,
+                    long_run_mode=payload.long_run_mode,
+                    isolated=payload.isolated,
+                ),
             ).after_task_completion(
                 result,
                 parent_task_id=task_id,
@@ -585,6 +681,8 @@ class GenerationApplicationService:
         handle = self.enqueue(
             EnqueueGenerationCommand(
                 project_id=str(values.get("project_id") or ""),
+                long_run_mode=str(values.get("long_run_mode") or "daily_serial"),
+                isolated=bool(values.get("isolated", False)),
                 requested_chapters=int(values.get("requested_chapters") or 0),
                 max_chapters=int(values.get("max_chapters") or 0),
                 run_until_chapter=int(values.get("run_until_chapter") or 0),

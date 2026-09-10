@@ -188,6 +188,7 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
                 target_total_chapters=2,
                 runtime_policy=policy,
             )
+            project.automation_json = '{"primary_publish_platform":"qidian"}'
             arc = updater.create_arc_plan(project.id, "Arc one")
             chapter_one = updater.create_chapter_plan(
                 project_id=project.id,

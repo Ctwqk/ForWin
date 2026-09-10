@@ -194,7 +194,7 @@ class ProductionScheduler:
             if not self._is_due(automation, now_local):
                 return None
             plan = self._plan(session, project_id, automation, now_local)
-            if plan.blocked_reason:
+            if plan.blocked_reason and not plan.publish_jobs:
                 action = action_for_blocked_reason(plan.blocked_reason)
                 execution = ProductionExecutionResult(
                     action=action,

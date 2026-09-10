@@ -112,6 +112,7 @@ def create_project(
                 publish_bindings = [default_publish]
         automation = normalize_project_automation(
             {
+                "primary_publish_platform": req.primary_publish_platform,
                 "publish": default_publish,
                 "publish_bindings": publish_bindings,
             }

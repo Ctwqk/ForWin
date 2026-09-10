@@ -108,10 +108,7 @@ class ProductionExecutor:
                 ).task_id
                 action = ACTION_STARTED_CONTINUE_GENERATION
         except ActiveGenerationTaskError:
-            return ProductionExecutionResult(
-                action=ACTION_ACTIVE_TASK,
-                message=message_for_action(ACTION_ACTIVE_TASK),
-            )
+            action = ACTION_ACTIVE_TASK
 
         if review_job_count is None:
             review_job_count = self.execute_review_jobs(plan=plan, project=project)
@@ -123,7 +120,7 @@ class ProductionExecutor:
             project=project,
             policy=policy,
         )
-        if action == ACTION_IDLE and publish_job_count > 0:
+        if action in {ACTION_IDLE, ACTION_ACTIVE_TASK} and publish_job_count > 0:
             action = ACTION_STARTED_PUBLISH_JOBS
         message_chapter_count = (
             max(1, int(policy.quota.write or len(plan.write_chapters)))

@@ -82,6 +82,11 @@ class ProductionRepository:
             ids,
             terminal_statuses=upload_terminal_statuses,
         )
+        from .capacity import SerialCapacityService
+        for project_id, backlog in backlogs.items():
+            capacity = SerialCapacityService(self.session).snapshot(project_id, synchronize=False)
+            backlog.capacity_available = capacity.available
+            backlog.capacity_wait_reason = capacity.wait_reason
         return backlogs
 
     def _attach_continue_worksets(

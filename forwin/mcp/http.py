@@ -172,6 +172,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         genre: str = "玄幻",
         setting_summary: str = "",
         target_total_chapters: int = 3,
+        primary_publish_platform: str = "",
     ) -> MutationResult:
         return await client.project_create(
             title=title,
@@ -179,6 +180,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             genre=genre,
             setting_summary=setting_summary,
             target_total_chapters=target_total_chapters,
+            primary_publish_platform=primary_publish_platform,
         )
 
     @register_read_tool(
@@ -230,9 +232,13 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         auto_continue: bool | None = None,
         run_until_chapter: int | None = None,
         max_chapters: int | None = None,
+        long_run_mode: str = "daily_serial",
+        isolated: bool = False,
     ) -> MutationResult:
         return await client.project_start_writing(
             project_id=project_id,
+            long_run_mode=long_run_mode,
+            isolated=isolated,
             auto_continue=auto_continue,
             run_until_chapter=run_until_chapter,
             max_chapters=max_chapters,
@@ -247,9 +253,13 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         max_chapters: int | None = None,
         auto_continue: bool | None = None,
         run_until_chapter: int | None = None,
+        long_run_mode: str = "daily_serial",
+        isolated: bool = False,
     ) -> MutationResult:
         return await client.project_continue_generation(
             project_id=project_id,
+            long_run_mode=long_run_mode,
+            isolated=isolated,
             max_chapters=max_chapters,
             auto_continue=auto_continue,
             run_until_chapter=run_until_chapter,

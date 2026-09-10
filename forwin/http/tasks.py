@@ -276,7 +276,7 @@ def _task_is_pausable(task: dict[str, Any]) -> bool:
         and not task.get("deleted")
         and not task.get("cancel_requested")
         and not task.get("pause_requested")
-        and str(task.get("status", "")) in {"queued", "starting", "running"}
+        and str(task.get("status", "")) in {"queued", "starting", "running", "capacity_wait"}
     )
 
 
@@ -319,7 +319,11 @@ def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
     accepted = list(task.get("completed_chapters", []))
     pending_review = list(task.get("paused_chapters", []))
     generated = list(dict.fromkeys([*accepted, *pending_review]))
+    execution = task.get("execution_payload") or {}
     return TaskSummaryResponse(
+        long_run_mode=str(execution.get("long_run_mode") or "daily_serial"),
+        isolated=bool(execution.get("isolated", False)),
+        capacity_config_version=int(execution.get("capacity_config_version") or 0),
         task_kind=str(task.get("task_kind", "generation")),
         task_id=task_id,
         status=task["status"],

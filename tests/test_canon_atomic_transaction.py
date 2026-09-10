@@ -106,6 +106,7 @@ def prepared_canon() -> PreparedCanon:
             runtime_policy=RuntimePolicy.for_profile("standard"),
             automation_json=json.dumps(
                 {
+                    "primary_publish_platform": "qidian",
                     "publish_bindings": [
                         {
                             "platform": "qidian",
@@ -2339,6 +2340,7 @@ def test_publisher_event_uses_prepared_snapshot_after_settings_change(
         assert project is not None
         project.automation_json = json.dumps(
             {
+                "primary_publish_platform": "qidian",
                 "publish_bindings": [
                     {"platform": "fanqie", "book_name": "Changed Too Late"}
                 ]

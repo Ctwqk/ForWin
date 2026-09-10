@@ -62,6 +62,8 @@ class CanonAdmissionService:
         *,
         failure_injector: Callable[[str], None] | None = None,
     ) -> CanonAdmissionOutcome:
+        from forwin.production.capacity import CapacityWait, SerialCapacityService
+
         if self.session_factory is None:
             raise RuntimeError("CanonAdmissionService requires a session factory")
         inject = failure_injector or _ignore_failure_stage
@@ -94,6 +96,14 @@ class CanonAdmissionService:
                     ):
                         raise CanonStaleVersion("Canon commit has been superseded")
                     return _outcome_from_record(prior, idempotent=True)
+
+                capacity = SerialCapacityService(session)
+                capacity.validate_commit(
+                    plan.project_id, plan.chapter_number, candidate_id=plan.candidate_id
+                )
+                production_mode = capacity.commit_mode(
+                    plan.project_id, plan.chapter_number, candidate_id=plan.candidate_id
+                )
 
                 self._require_previous_post_canon_barrier(
                     session=session,
@@ -239,6 +249,7 @@ class CanonAdmissionService:
                         chapter_title=plan.chapter_title,
                         acceptance_revision=1,
                         base_book_revision=project.book_revision,
+                        production_mode=production_mode,
                         expected_previous_accepted_chapter=(
                             plan.expected_previous_accepted_chapter
                         ),
@@ -261,11 +272,14 @@ class CanonAdmissionService:
                 session.flush()
                 chapter.active_commit_id = commit_id
                 project.book_revision += 1
+                capacity.consume_commit(plan.project_id, plan.chapter_number)
                 session.flush()
                 return CanonAdmissionOutcome(
                     commit_id=commit_id,
                     compile_result=compile_result,
                 )
+        except CapacityWait:
+            raise
         except CanonStaleVersion as exc:
             self._return_candidate_to_ready(plan.candidate_id)
             return CanonAdmissionOutcome(

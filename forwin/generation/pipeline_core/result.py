@@ -16,9 +16,13 @@ class RunResult:
     system_block_chapters: list[int] = field(default_factory=list)
     cancelled: bool = False
     paused: bool = False
+    capacity_wait_reason: str = ""
+    capacity_wait_chapter: int = 0
 
     @property
     def status(self) -> str:
+        if self.capacity_wait_reason:
+            return "capacity_wait"
         if self.paused:
             return "paused"
         if self.cancelled:

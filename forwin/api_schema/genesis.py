@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -101,6 +103,8 @@ class BookGenesisNameGenerateResponse(BaseModel):
 
 
 class StartWritingRequest(BaseModel):
+    long_run_mode: Literal["daily_serial", "factory_batch", "soak_test"] = "daily_serial"
+    isolated: bool = False
     auto_continue: bool | None = None
     run_until_chapter: int | None = Field(default=None, ge=1)
     max_chapters: int | None = Field(default=None, ge=1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .base import Base, get_engine, get_session_factory, init_db, new_id
+from .capacity import ChapterCapacityReservation, SerialCapacityConfigRevision
 from .canon import CanonCommitRecord
 from .draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from .canon_quality import (

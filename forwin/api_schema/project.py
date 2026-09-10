@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -63,6 +65,13 @@ class ProjectAutomationPublishSettings(BaseModel):
 
 
 class ProjectAutomationSettings(BaseModel):
+    primary_publish_platform: str = ""
+
+    @field_validator("primary_publish_platform")
+    @classmethod
+    def _primary_platform(cls, value: str) -> str:
+        return normalize_supported_platform(value, allow_empty=True)
+
     enabled: bool = False
     daily_start_time: str = "09:00"
     daily_chapter_quota: int = 1
@@ -219,6 +228,13 @@ class ProjectDeleteResponse(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
+    primary_publish_platform: str = ""
+
+    @field_validator("primary_publish_platform")
+    @classmethod
+    def _primary_platform(cls, value: str) -> str:
+        return normalize_supported_platform(value, allow_empty=True)
+
     title: str
     premise: str
     genre: str = "玄幻"
@@ -250,6 +266,8 @@ class ProjectCreateResponse(BaseModel):
 
 
 class ProjectContinueGenerationRequest(BaseModel):
+    long_run_mode: Literal["daily_serial", "factory_batch", "soak_test"] = "daily_serial"
+    isolated: bool = False
     model_config = {"extra": "forbid"}
 
     max_chapters: int | None = Field(default=None, ge=1)

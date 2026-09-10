@@ -730,6 +730,8 @@ def approve_chapter_review(
     if config is None or pipeline is None:
         raise HTTPException(500, "服务尚未完成初始化")
 
+    from forwin.production.capacity import CapacityWait
+
     reason = require_reason(req.reason, action="接受 review")
     task_id = ""
     if req.continue_generation:
@@ -783,6 +785,8 @@ def approve_chapter_review(
             chapter_number,
             **accept_kwargs,
         )
+    except CapacityWait as exc:
+        raise HTTPException(409, exc.reason) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except FileNotFoundError as exc:

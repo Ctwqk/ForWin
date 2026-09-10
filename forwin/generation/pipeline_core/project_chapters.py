@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from forwin.production.capacity import CapacityWait
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.types import CanonAdmissionOutcome
 from forwin.checker.hard_floor import run_hard_floor
@@ -76,6 +77,15 @@ class ChapterExecutionStage:
                     frozen_artifacts=frozen_artifacts,
                     current_chapter=max(0, chapter_num - 1),
                 )
+            try:
+                reserve = getattr(self, "capacity_reserver", None)
+                if reserve is not None:
+                    reserve(project_id, chapter_num)
+            except CapacityWait as exc:
+                return RunResult(project_id=project_id, requested_chapters=requested_chapters,
+                    completed_chapters=completed_chapters, failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters, frozen_artifacts=frozen_artifacts,
+                    capacity_wait_reason=exc.reason, capacity_wait_chapter=chapter_num)
             post_canon_run_ids: list[str] = []
             try:
                 self._recover_post_canon_before_chapter(
@@ -921,6 +931,12 @@ class ChapterExecutionStage:
                         current_chapter=chapter_num,
                     )
 
+            except CapacityWait as exc:
+                session.rollback()
+                return RunResult(project_id=project_id, requested_chapters=requested_chapters,
+                    completed_chapters=completed_chapters, failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters, frozen_artifacts=frozen_artifacts,
+                    capacity_wait_reason=exc.reason, capacity_wait_chapter=chapter_num)
             except Exception as exc:
                 logger.exception("Chapter %d failed.", chapter_num)
                 session.rollback()

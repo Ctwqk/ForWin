@@ -45,6 +45,9 @@ class GenerationControlInfo(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    long_run_mode: str = "daily_serial"
+    isolated: bool = False
+    capacity_config_version: int = 0
     task_kind: str = "generation"
     task_id: str
     status: str

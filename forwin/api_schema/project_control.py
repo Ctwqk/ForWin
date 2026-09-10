@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import PlanTaskItem
@@ -68,6 +68,17 @@ class TaskContractResponse(BaseModel):
 
 
 class ProjectAutomationUpdateRequest(BaseModel):
+    primary_publish_platform: str | None = None
+
+    @field_validator("primary_publish_platform")
+    @classmethod
+    def _primary_platform(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from forwin.publishers.platforms import normalize_supported_platform
+        return normalize_supported_platform(value, allow_empty=True)
+
+    target_total_chapters: int | None = Field(default=None, ge=1, le=5000)
     enabled: bool = False
     daily_start_time: str = "09:00"
     daily_chapter_quota: int = 1

@@ -39,6 +39,7 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
             ready_payload = json.dumps(
                 {
                     "enabled": True,
+                    "primary_publish_platform": "fanqie",
                     "daily_start_time": "09:00",
                     "daily_chapter_quota": 2,
                 },
@@ -47,6 +48,7 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
             future_payload = json.dumps(
                 {
                     "enabled": True,
+                    "primary_publish_platform": "fanqie",
                     "daily_start_time": "23:00",
                     "daily_chapter_quota": 2,
                 },
@@ -266,6 +268,7 @@ def test_scheduler_rolls_back_publish_release_when_daily_marker_fails() -> None:
                     automation_json=json.dumps(
                         {
                             "enabled": True,
+                    "primary_publish_platform": "fanqie",
                             "daily_start_time": "09:00",
                             "daily_publish_quota": 1,
                             "auto_publish": True,

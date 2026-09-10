@@ -24,6 +24,11 @@ class GenerationTaskExecutionPayload(BaseModel):
     root_event_id: str = ""
     run_until_chapter: int = 0
     max_chapters: int = 0
+    long_run_mode: Literal["daily_serial", "factory_batch", "soak_test"] = (
+        "daily_serial"
+    )
+    isolated: bool = False
+    capacity_config_version: int = 0
     policy_version: int = Field(ge=1)
     policy_snapshot: RuntimePolicy
 
@@ -40,6 +45,9 @@ class GenerationExecutionContext:
 def execution_payload(
     *,
     mode: ExecutionMode,
+    long_run_mode: str = "daily_serial",
+    isolated: bool = False,
+    capacity_config_version: int = 0,
     policy: RuntimePolicy,
     policy_version: int,
     root_event_id: str = "",
@@ -52,6 +60,9 @@ def execution_payload(
 ) -> GenerationTaskExecutionPayload:
     return GenerationTaskExecutionPayload(
         mode=mode,
+        long_run_mode=long_run_mode,
+        isolated=isolated,
+        capacity_config_version=capacity_config_version,
         premise=str(premise or ""),
         genre=str(genre or ""),
         num_chapters=int(num_chapters or 0),

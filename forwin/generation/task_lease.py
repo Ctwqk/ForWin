@@ -14,7 +14,7 @@ from forwin.models.task import GenerationTask
 @dataclass(frozen=True)
 class GenerationTaskClaimResult:
     task: GenerationTask
-    claim_kind: Literal["queued", "expired_running"]
+    claim_kind: Literal["queued", "expired_running", "capacity_wait"]
     lease_epoch: int = 0
     previous_lease_owner: str = ""
     previous_lease_expires_at: datetime | None = None
@@ -45,7 +45,7 @@ def claim_generation_task(
                         GenerationTask.pause_requested.is_(False),
                     ),
                     and_(
-                        GenerationTask.status == "running",
+                        GenerationTask.status.in_(["running", "capacity_wait"]),
                         or_(
                             GenerationTask.lease_expires_at.is_(None),
                             GenerationTask.lease_expires_at < now,
@@ -65,8 +65,12 @@ def claim_generation_task(
     previous_status = str(row.status or "")
     previous_lease_owner = str(row.lease_owner or "")
     previous_lease_expires_at = row.lease_expires_at
-    claim_kind: Literal["queued", "expired_running"] = (
-        "expired_running" if previous_status == "running" else "queued"
+    claim_kind: Literal["queued", "expired_running", "capacity_wait"] = (
+        "expired_running"
+        if previous_status == "running"
+        else "capacity_wait"
+        if previous_status == "capacity_wait"
+        else "queued"
     )
     row.status = "running"
     row.current_stage = "running"
@@ -81,8 +85,12 @@ def claim_generation_task(
         task=row,
         claim_kind=claim_kind,
         lease_epoch=int(row.lease_epoch or 0),
-        previous_lease_owner=previous_lease_owner if claim_kind == "expired_running" else "",
-        previous_lease_expires_at=previous_lease_expires_at if claim_kind == "expired_running" else None,
+        previous_lease_owner=previous_lease_owner
+        if claim_kind == "expired_running"
+        else "",
+        previous_lease_expires_at=previous_lease_expires_at
+        if claim_kind == "expired_running"
+        else None,
     )
 
 
@@ -99,10 +107,7 @@ def heartbeat_generation_task(
     if (
         row is None
         or row.lease_owner != worker_id
-        or (
-            lease_epoch is not None
-            and int(row.lease_epoch or 0) != int(lease_epoch)
-        )
+        or (lease_epoch is not None and int(row.lease_epoch or 0) != int(lease_epoch))
         or row.status != "running"
     ):
         return False
@@ -114,9 +119,11 @@ def heartbeat_generation_task(
 
 def generation_task_resume_from_chapter(task: GenerationTask) -> int:
     explicit = int(getattr(task, "resume_from_chapter", 0) or 0)
-    if explicit > 0:
-        return explicit
     completed = _json_ints(getattr(task, "completed_chapters_json", "[]"))
+    # An explicit starting/wait point is consumed once that chapter completes.
+    # Keep pending failed/paused work eligible instead of replaying old progress.
+    if explicit > 0 and explicit not in completed:
+        return explicit
     failed = _json_ints(getattr(task, "failed_chapters_json", "[]"))
     paused = _json_ints(getattr(task, "paused_chapters_json", "[]"))
     if failed:

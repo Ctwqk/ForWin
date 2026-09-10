@@ -220,7 +220,7 @@ def _mutate_generation_task(
             if action == "terminate":
                 if not _task_is_terminable(task):
                     raise HTTPException(400, "当前任务状态不支持终止")
-                queued = status == "queued"
+                queued = status in {"queued", "capacity_wait"}
                 changes = {
                     "cancel_requested": True,
                     "status": "cancelled" if queued else "terminating",
@@ -236,7 +236,7 @@ def _mutate_generation_task(
             elif action == "pause":
                 if not _task_is_pausable(task):
                     raise HTTPException(400, "当前任务状态不支持安全暂停")
-                queued = status == "queued"
+                queued = status in {"queued", "capacity_wait"}
                 changes = {
                     "pause_requested": True,
                     "status": "paused" if queued else status,

@@ -34,6 +34,7 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
             project = Project(
                 id="project-worker-cutover",
                 title="Worker Cutover",
+                automation_json='{"primary_publish_platform":"qidian"}',
                 premise="测试",
                 genre="玄幻",
                 creation_status="writing",

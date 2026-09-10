@@ -62,6 +62,7 @@ def _project(sessions, *, status="planned", automation=None):
             automation_json=json.dumps(
                 {
                     "enabled": True,
+                    "primary_publish_platform": "qidian",
                     "daily_start_time": "09:00",
                     "daily_chapter_quota": 1,
                     **(automation or {}),

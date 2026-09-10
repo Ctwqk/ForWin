@@ -157,14 +157,13 @@ def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
         ApiRouteDeps(get_session=lambda: None)
 
 
-def test_design_status_contains_deprecation_matrix() -> None:
+def test_design_status_links_current_contract_and_retired_history() -> None:
     status_doc = _read("Design-docs/DESIGN_STATUS.md")
 
-    assert "兼容 / 弃用矩阵" in status_doc
-    assert "`forwin.world_model` | removed | `forwin.knowledge_system`" in status_doc
-    assert (
-        "`forwin.reviewer_v4` | removed | `forwin.book_state.extraction`" in status_doc
-    )
+    assert "2026-09-09-forwin-three-stage-design.md" in status_doc
+    assert "2026-09-09-forwin-three-stage.md" in status_doc
+    assert "https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/" in status_doc
+    assert "未完成项不能解释成当前能力" in status_doc
     assert "scenario_rehearsal" not in status_doc
 
 
@@ -273,12 +272,12 @@ def test_v5_schema_has_no_dead_world_v4_model_or_tables() -> None:
 
 
 def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
-    versions = sorted(
-        path.name
-        for path in (ROOT / "forwin/migrations/versions").glob("*.py")
-        if path.name != "__init__.py"
-    )
-    assert versions == ["0001_v5_baseline.py"]
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    migrations = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert migrations.get_bases() == ["0001_v5_recovery"]
+    assert len(migrations.get_heads()) == 1
 
     base_source = _read("forwin/models/base.py")
     for removed in (

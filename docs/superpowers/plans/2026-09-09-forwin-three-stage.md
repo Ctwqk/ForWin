@@ -42,12 +42,12 @@
 
 **Interfaces:** ChapterPlan.id is stable; one active commit pointer; per-chapter acceptance revisions; Project.book_revision detects any mainline switch. Persist public/reserved publication identity independently of task deletion. Shared lock order is Project → Chapter → Job → Attempt.
 
-- [ ] Reproduce public/unknown/multiplatform/deleted-job freeze bypass and retry invalidating accepted state.
-- [ ] Add forward migration preserving original chapter and candidate/receipt references; reject ambiguous archived identities.
-- [ ] Implement pointer-based effective commit selection and immutable history; remove negative chapter archival and mutation of original evidence.
-- [ ] Persist external-action protection before mutation; verify active identity on job release/claim/action authorization; reject stale queued payloads.
-- [ ] Run transaction, migration, publisher receipt/lease and retry regressions, including real PostgreSQL racing transactions.
-- [ ] Review and commit this package independently.
+- [x] Reproduce public/unknown/multiplatform/deleted-job freeze bypass and retry invalidating accepted state.
+- [x] Add forward migration preserving original chapter and candidate/receipt references; reject ambiguous archived identities.
+- [x] Implement pointer-based effective commit selection and immutable history; remove negative chapter archival and mutation of original evidence.
+- [x] Persist external-action protection before mutation; verify active identity on job release/claim/action authorization; reject stale queued payloads.
+- [x] Run transaction, migration, publisher receipt/lease and retry regressions, including real PostgreSQL racing transactions.
+- [x] Review and commit this package independently.
 
 ### Task 3: Isolated full-suffix revision validation (P1-2)
 
@@ -67,11 +67,11 @@
 
 **Interfaces:** Explicit primary platform and versioned capacity configuration; task-bound production mode; durable chapter reservations fenced by generation task lease/epoch. Canon admission invokes the same capacity owner under the project lock.
 
-- [ ] Tests use literal N/B pairs 60/3, 100/5, 200/10, 500/25 and 1000/50.
-- [ ] Reproduce publication starvation with an active generation task and accepted queued content.
-- [ ] Bound enqueue batches, reserve before starting new chapters, revalidate on acceptance; retries reuse a chapter slot.
-- [ ] Verify concurrent final-slot claims, crash/restart, receipt holes, platform changes, lowered N, excess old backlog and offline exemptions.
-- [ ] Expose normal capacity wait without failed-generation repair and keep publication planning active; review/commit.
+- [x] Tests use literal N/B pairs 60/3, 100/5, 200/10, 500/25 and 1000/50.
+- [x] Reproduce publication starvation with an active generation task and accepted queued content.
+- [x] Bound enqueue batches, reserve before starting new chapters, revalidate on acceptance; retries reuse a chapter slot.
+- [x] Verify concurrent final-slot claims, crash/restart, receipt holes, platform changes, lowered N, excess old backlog and offline exemptions.
+- [x] Expose normal capacity wait without failed-generation repair and keep publication planning active; review/commit.
 
 ### Task 5: Temporary feedback quarantine
 

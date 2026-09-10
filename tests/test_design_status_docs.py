@@ -5,16 +5,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = ROOT / "Design-docs"
+# The status page is navigation; the current architecture owns policy details.
 ACTIVE_CURRENT_POLICY_DOCS = {
     "Design-docs/CURRENT_ARCHITECTURE.md": (
         "`CURRENT_ARCHITECTURE.md` | active-current"
     ),
-    "Design-docs/DESIGN_STATUS.md": "`DESIGN_STATUS.md` | active-current",
-    "docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md": (
-        "`../docs/superpowers/specs/"
-        "2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current"
-    ),
 }
+
 
 
 def _read(path: Path) -> str:
@@ -40,7 +37,7 @@ def test_current_architecture_and_design_status_are_documented() -> None:
         "`map_scheme_c.md` | active-current",
         "`V2_9_2.md` | baseline-with-overrides",
         "`provisional_mechanism_check.md` | legacy-compatibility",
-        "`docs/superpowers/plans/2026-04-24-forwin-v4-world-model.md` | historical-plan",
+        "https://github.com/Ctwqk/ForWin/blob/521228871a5752ebe8572c057caa9f4944bb0295/Design-docs/DESIGN_STATUS.md",
     ]:
         assert expected in status
 

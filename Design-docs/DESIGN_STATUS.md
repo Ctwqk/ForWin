@@ -29,7 +29,7 @@
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
 | 2026-09-04 收口设计 | historical-plan | 全文见下方 Git 历史入口；重复验收要求由当前三阶段路线图覆盖。 |
 | `../forwin_architecture_consolidation_audit.md` | historical-plan | 2026-07-09 架构收敛审计（历史论证记录）。其 Phase A-D 已由 v5 hard-cut 完成并替代，Phase A-F 不再作为待办；source-of-truth 思维与测试/风险框架由后续计划继承。 |
-| `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；RuntimePolicy v2，旧项目和旧设置不迁移。 |
+| `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | historical-plan | 旧 v5 收敛决策记录；破坏性迁移条款已由三阶段设计的备份、隔离验证与向前迁移要求取代。 |
 | 2026-07-12 v5 最终路线图 | historical-plan | 全文见下方 Git 历史入口；不是当前待办。 |
 | `../docs/superpowers/plans/2026-07-12-forwin-measurement-loop.md` | baseline-with-overrides | S1/S3/S2 已实现并冻结；S4-S8 属发布后改进，不阻塞 v5。 |
 | `V4.5_markstone.md` | active-current | 当前代码与设计差距统一入口，旧 `world_model_v4` 已降级。 |

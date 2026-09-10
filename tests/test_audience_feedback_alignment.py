@@ -414,7 +414,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             "candidate",
         )
 
-    def test_feedback_aggregation_updates_candidate_levels_by_exact_signal_identity(self) -> None:
+    def test_feedback_aggregation_preserves_candidate_evidence_and_exact_signal_identity(self) -> None:
         project = self._create_project()
 
         arc_comment_a = self._add_comment(
@@ -500,7 +500,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self.session.commit()
 
-        run_feedback_aggregation_pass(
+        result = run_feedback_aggregation_pass(
             self.session,
             project.id,
             3,
@@ -518,8 +518,14 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         for row in rows:
             levels_by_target_type.setdefault(row.target_type, set()).add(row.signal_level)
 
-        self.assertEqual(levels_by_target_type["arc"], {"candidate"})
-        self.assertEqual(levels_by_target_type["plot"], {"confirmed"})
+        self.assertEqual(levels_by_target_type["arc"], {"noise"})
+        self.assertEqual(levels_by_target_type["plot"], {"noise"})
+        short_rows = {row.target_type: row for row in result.all_aggregates if row.window_type == "short"}
+        self.assertEqual(short_rows["arc"].hit_comment_count, 2)
+        self.assertEqual(short_rows["plot"].hit_comment_count, 3)
+        self.assertNotEqual(short_rows["arc"].signal_key, short_rows["plot"].signal_key)
+        self.assertTrue(all(not row.source_qualified for row in short_rows.values()))
+        self.assertEqual(result.actionable, [])
 
     def test_state_repository_reader_feedback_prefers_structured_signals(self) -> None:
         project = self._create_project()
@@ -588,7 +594,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(feedback.reader_tier, 1)
         self.assertIn("主导信号", feedback.feedback_summary)
 
-    def test_feedback_aggregation_pass_records_only_confirmed_and_watchlist_actions(self) -> None:
+    def test_feedback_aggregation_pass_keeps_unqualified_source_observable_without_actions(self) -> None:
         project = self._create_project()
         comments = [
             self._add_comment(
@@ -665,66 +671,14 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             cooldown_chapters=3,
             comment_to_reader_ratio=50,
         )
-        self.assertEqual(
-            {
-                (
-                    row.signal_key,
-                    row.signal_level,
-                    row.max_severity,
-                    row.unique_user_count,
-                    row.target_name,
-                    row.signal_type,
-                )
-                for row in result.actionable
-            },
-            {
-                ("pacing:arc:节奏", "confirmed", 2, 3, "节奏", "pacing"),
-                ("risk:plot:整体逻辑", "watchlist", 3, 1, "整体逻辑", "risk"),
-            },
-        )
-        self.assertEqual(
-            result.hint_pack.pacing_hints,
-            ["读者反馈回报偏干(1-3章, 3人), 近1-5章缩短 reward gap 并提高兑现密度"],
-        )
-        self.assertEqual(
-            result.hint_pack.risk_flags,
-            ["[整体逻辑]存在受控不确定性风险(1-3章), 保持 managed ambiguity，别让信息失真失控"],
-        )
-
-        records = self.session.execute(
-            select(FeedbackActionRecord).order_by(FeedbackActionRecord.signal_key.asc())
-        ).scalars().all()
-        self.assertEqual(
-            [
-                (
-                    row.signal_key,
-                    row.signal_type,
-                    row.action_type,
-                    row.triggered_at_chapter,
-                    row.cooldown_until_chapter,
-                    row.notes,
-                )
-                for row in records
-            ],
-            [
-                (
-                    "pacing:arc:节奏",
-                    "pacing",
-                    "boost_reward_density",
-                    3,
-                    6,
-                    "读者反馈回报偏干(1-3章, 3人), 近1-5章缩短 reward gap 并提高兑现密度",
-                ),
-                (
-                    "risk:plot:整体逻辑",
-                    "risk",
-                    "hold_managed_ambiguity",
-                    3,
-                    6,
-                    "[整体逻辑]存在受控不确定性风险(1-3章), 保持 managed ambiguity，别让信息失真失控",
-                ),
-            ],
-        )
+        # These older fixtures lack exact published versions and grounded direction.
+        # Preserve the aggregate observation without silently converting it to action.
+        self.assertTrue(result.all_aggregates)
+        self.assertTrue(all(not row.source_qualified for row in result.all_aggregates))
+        self.assertEqual(result.actionable, [])
+        self.assertEqual(result.hint_pack.items, [])
+        records = self.session.scalars(select(FeedbackActionRecord)).all()
+        self.assertEqual(records, [])
 
         second = run_feedback_aggregation_pass(
             self.session,
@@ -806,7 +760,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(snapshot.estimation_method, "platform_metric:fanqie:read_count")
         self.assertEqual(snapshot.tier, 2)
 
-    def test_action_effectiveness_marks_score_drop_improved(self) -> None:
+    def test_unqualified_legacy_action_has_insufficient_effect_evidence(self) -> None:
         from forwin.audience.feedback import derive_action_effectiveness
 
         project = self._create_project()
@@ -868,7 +822,8 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
         outcomes = derive_action_effectiveness(self.session, project.id)
 
-        self.assertEqual(outcomes[0]["outcome"], "improved")
+        self.assertEqual(outcomes[0]["outcome"], "insufficient_data")
+        self.assertIn("action_unqualified", outcomes[0]["reasons"])
         self.assertEqual(outcomes[0]["action_type"], "boost_reward_density")
 
     def test_action_effectiveness_batches_signal_aggregate_reads(self) -> None:

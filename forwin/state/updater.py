@@ -255,13 +255,17 @@ class StateUpdater:
         project_id: str,
         chapter_number: int,
         experience_plan: ChapterExperiencePlan,
+        *,
+        expected_plan_revision: str,
     ) -> ChapterPlan | None:
-        plan = self._repo.get_chapter_plan(project_id, chapter_number)
+        with self.session.no_autoflush:
+            plan = self._repo.get_chapter_plan(project_id, chapter_number)
         if plan is None:
             return None
-        plan.experience_plan_json = json.dumps(
-            experience_plan.model_dump(mode="json"),
-            ensure_ascii=False,
+        from forwin.experience.persistence import ExperiencePersistence
+        ExperiencePersistence().save_chapter_experience_plan(
+            session=self.session, chapter_plan=plan, experience_plan=experience_plan,
+            expected_plan_revision=expected_plan_revision,
         )
         self.session.add(plan)
         self.session.flush()

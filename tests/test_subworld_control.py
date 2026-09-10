@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from forwin.review.candidate_autofix import apply_canon_name_drift_autofix
-
 import json
 import unittest
 from tempfile import TemporaryDirectory
@@ -11,13 +9,17 @@ from sqlalchemy import select
 
 from forwin.application.read_models import build_project_detail
 from forwin.book_state import BookStateRepository
-from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
+from forwin.canon_names import (
+    CanonNameAnchor,
+    extract_canon_name_anchors,
+    find_canon_name_violations,
+)
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler_core import assemble_context
 from forwin.director.arc_director import ArcDirector
+from forwin.map.models import MapRegionRow
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
-from forwin.map.models import MapRegionRow
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import (
@@ -38,15 +40,16 @@ from forwin.protocol import (
     WriterOutput,
 )
 from forwin.protocol.book_state import WorldNode
-from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
+from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
+from forwin.review.candidate_autofix import apply_canon_name_drift_autofix
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
-from tests.postgres import postgres_test_url
 from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from tests.postgres import postgres_test_url
 
 
 class _BookStateQueryStub:
@@ -454,12 +457,16 @@ class SubWorldControlTests(unittest.TestCase):
                         "canon_source": "book_state",
                     },
                 )
+                from forwin.candidate_drafts import candidate_plan_revision
                 updater.update_chapter_experience_plan(
                     project.id,
                     1,
                     ChapterExperiencePlan(
                         active_subworld_ids=[global_core.id],
                         entity_admission_rule="strict_named_character",
+                    ),
+                    expected_plan_revision=candidate_plan_revision(
+                        StateRepository(session).get_chapter_plan(project.id, 1)
                     ),
                 )
                 revision = BookGenesisRevision(

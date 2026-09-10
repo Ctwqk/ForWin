@@ -966,10 +966,71 @@ class PostCanonMaintenanceService:
             cooldown_chapters=3,
             comment_to_reader_ratio=80,
         )
+        from forwin.audience.actions import action_hint_available
+        from forwin.audience.aggregation import aggregate_view
+        from forwin.audience.body_observation import FeedbackBodyObservationService
+        from forwin.audience.effects import record_signal_change_observations
+        from forwin.candidate_drafts import candidate_plan_revision
+        from forwin.models.project import ChapterPlan
+        from forwin.models.publisher import FeedbackActionRecord
+        from forwin.planning.feedback_plan import FeedbackPlanService
+
+        next_number = commit.chapter_number + 1
+        plan = session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == commit.project_id,
+            ChapterPlan.chapter_number == next_number,
+        ))
+        plan_applications = []
+        for hint in result.hint_pack.items:
+            applied = FeedbackPlanService().apply(
+                session=session, project_id=commit.project_id, action_id=hint.action_id,
+                chapter_number=next_number,
+                expected_plan_revision=candidate_plan_revision(plan) if plan is not None else "",
+            )
+            plan_applications.append({
+                "action_id": hint.action_id, "chapter_number": next_number,
+                "status": applied.status, "reason": applied.reason,
+                "plan_revision": applied.plan_revision,
+            })
+        body_observations = []
+        records = session.scalars(select(FeedbackActionRecord).where(
+            FeedbackActionRecord.project_id == commit.project_id,
+            FeedbackActionRecord.status == "selected",
+            FeedbackActionRecord.source_qualified.is_(True),
+            FeedbackActionRecord.target_chapter_start <= commit.chapter_number,
+            FeedbackActionRecord.target_chapter_end >= commit.chapter_number,
+            FeedbackActionRecord.hint_valid_from_chapter <= commit.chapter_number,
+            FeedbackActionRecord.hint_expires_at_chapter >= commit.chapter_number,
+        ).order_by(FeedbackActionRecord.id)).all()
+        session.flush()
+        for record in records:
+            if not action_hint_available(record, commit.chapter_number):
+                continue
+            try:
+                observation = FeedbackBodyObservationService().record(
+                    session=session, project_id=commit.project_id, action_id=record.id,
+                    canon_commit_id=commit.id,
+                )
+            except ValueError as exc:
+                # Passive evidence collection must not add another content gate.
+                # Retain invalid prior evidence and expose the missing observation.
+                observation = {
+                    "action_id": record.id, "canon_commit_id": commit.id,
+                    "assessment": "unknown", "reasons": ["body_observation_unavailable"],
+                    "detail": str(exc), "causal_claim": False,
+                }
+            body_observations.append(observation)
+        effect_observations = record_signal_change_observations(
+            session, project_id=commit.project_id, chapter_number=commit.chapter_number,
+            aggregate_views=[aggregate_view(row) for row in result.all_aggregates],
+        )
         return {
             "analysis": analysis,
             "aggregate_count": len(result.all_aggregates),
             "actionable_count": len(result.actionable),
+            "plan_applications": plan_applications,
+            "body_observations": body_observations,
+            "effect_observations": effect_observations,
         }
 
     def _drain_llm_attempts(self) -> list[dict[str, Any]]:

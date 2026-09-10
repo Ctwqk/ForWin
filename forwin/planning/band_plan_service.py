@@ -5,15 +5,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.candidate_drafts import candidate_plan_revision
 from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.persistence import ExperiencePersistence
+from forwin.experience.plan_guard import lock_expected_plan, require_clean_plan_inputs
 from forwin.experience.service import ExperiencePlanningService
 from forwin.experience.types import ArcExperienceBundle
 from forwin.models.project import ChapterPlan, Project
+from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_plan.band_role import classify_band_role
 from forwin.planning.band_plan.contract_templates import contract_for_role
-from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindowResolver
 from forwin.planning.progression_rules import active_progression_rules_for_chapter
 from forwin.planning.world_contract_service import WorldContractPlanningService
@@ -83,6 +85,16 @@ class BandPlanService:
             activation_chapter=request.activation_chapter,
             detailed_band_size=request.detailed_band_size,
         )
+        require_clean_plan_inputs(session, window.active_band)
+        expected_revisions = {plan.id: candidate_plan_revision(plan) for plan in window.active_band}
+        # Activation may create registry/roster rows before chapter overlays are
+        # persisted. Keep all those writes inside the same rollback boundary.
+        with session.begin_nested():
+            return self._prepare_and_persist_band(
+                session=session, request=request, window=window, expected_revisions=expected_revisions,
+            )
+
+    def _prepare_and_persist_band(self, *, session, request, window, expected_revisions):
         calibration = self.experience_service.build_audience_calibration_profile(
             session=session,
             project_id=request.project_id,
@@ -156,6 +168,18 @@ class BandPlanService:
                 "band_contract_template": contract.model_dump(mode="json"),
             }
         )
+        # Derive complete chapter payloads before taking Project locks. The
+        # following activation step owns registry/roster writes, not model work.
+        proposals = {
+            plan.id: self.chapter_planner.derive_chapter_experience_plan(
+                chapter_number=plan.chapter_number, structure=request.structure,
+                arc_experience=request.arc_experience, schedule=schedule,
+                chapter_plan=plan, calibration=calibration,
+            ) for plan in window.active_band
+        }
+        for plan in sorted(window.active_band, key=lambda p: (p.chapter_number, p.id)):
+            lock_expected_plan(session, chapter_plan=plan,
+                               expected_plan_revision=expected_revisions[plan.id])
         activation_plan = self.subworld_manager.plan_band_activation(
             session=session,
             project_id=request.project_id,
@@ -184,14 +208,7 @@ class BandPlanService:
             )
         updated_numbers: list[int] = []
         for plan in window.active_band:
-            experience_plan = self.chapter_planner.derive_chapter_experience_plan(
-                chapter_number=plan.chapter_number,
-                structure=request.structure,
-                arc_experience=request.arc_experience,
-                schedule=schedule,
-                chapter_plan=plan,
-                calibration=calibration,
-            )
+            experience_plan = proposals[plan.id]
             chapter_targets = _chapter_entry_targets_for_plan(schedule=schedule, plan=plan)
             experience_plan = experience_plan.model_copy(
                 update={
@@ -201,8 +218,8 @@ class BandPlanService:
                 }
             )
             self.persistence.save_chapter_experience_plan(
-                chapter_plan=plan,
-                experience_plan=experience_plan,
+                session=session, chapter_plan=plan, experience_plan=experience_plan,
+                expected_plan_revision=expected_revisions[plan.id],
             )
             session.add(plan)
             updated_numbers.append(int(plan.chapter_number or 0))

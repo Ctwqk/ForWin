@@ -738,6 +738,9 @@ class CommentSignalCandidate(Base):
     analysis_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("comment_analysis_records.id"), nullable=True
     )
+    direction: Mapped[str] = mapped_column(
+        String, default="unknown", server_default="unknown"
+    )
     signal_type: Mapped[str] = mapped_column(String, nullable=False)
     target_type: Mapped[str] = mapped_column(String, default="")
     target_name: Mapped[str] = mapped_column(String, default="")
@@ -753,6 +756,14 @@ class SignalWindowAggregate(Base):
     __tablename__ = "signal_window_aggregates"
     __table_args__ = (
         Index(
+            "uq_signal_aggregate_evidence",
+            "project_id",
+            "aggregation_version",
+            "evidence_sha256",
+            unique=True,
+            postgresql_where=text("evidence_sha256 <> ''"),
+        ),
+        Index(
             "ix_signal_window_agg_project_key_window",
             "project_id",
             "signal_key",
@@ -761,10 +772,34 @@ class SignalWindowAggregate(Base):
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    aggregation_version: Mapped[str] = mapped_column(
+        String, default="", server_default=""
+    )
+    evidence_sha256: Mapped[str] = mapped_column(
+        String(64), default="", server_default=""
+    )
+    provenance_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}"
+    )
+    analyzed_comment_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    known_author_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    unknown_author_comment_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    source_qualified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     project_id: Mapped[str] = mapped_column(
         String, ForeignKey("projects.id"), nullable=False
     )
     signal_key: Mapped[str] = mapped_column(String, nullable=False)
+    direction: Mapped[str] = mapped_column(
+        String, default="unknown", server_default="unknown"
+    )
     signal_type: Mapped[str] = mapped_column(String, default="")
     target_type: Mapped[str] = mapped_column(String, default="")
     target_name: Mapped[str] = mapped_column(String, default="")
@@ -814,6 +849,22 @@ class FeedbackActionRecord(Base):
     signal_key: Mapped[str] = mapped_column(String, nullable=False)
     signal_type: Mapped[str] = mapped_column(String, default="")
     action_type: Mapped[str] = mapped_column(String, default="")
+    direction: Mapped[str] = mapped_column(String, default="unknown")
+    aggregate_id: Mapped[str] = mapped_column(String, default="")
+    aggregate_evidence_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_qualified: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String, default="proposed")
+    selected_at_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    target_chapter_start: Mapped[int] = mapped_column(Integer, default=0)
+    target_chapter_end: Mapped[int] = mapped_column(Integer, default=0)
+    hint_valid_from_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    hint_expires_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    action_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_inclusions_json: Mapped[str] = mapped_column(Text, default="[]")
+    plan_application_json: Mapped[str] = mapped_column(Text, default="{}")
+    body_observation_json: Mapped[str] = mapped_column(Text, default="{}")
+    effect_observation_json: Mapped[str] = mapped_column(Text, default="{}")
     triggered_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
     cooldown_until_chapter: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")

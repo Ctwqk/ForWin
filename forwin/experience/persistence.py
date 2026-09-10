@@ -71,7 +71,12 @@ class ExperiencePersistence:
         *,
         chapter_plan: ChapterPlan,
         experience_plan: ChapterExperiencePlan,
+        session: Session,
+        expected_plan_revision: str,
     ) -> None:
+        from forwin.experience.plan_guard import lock_expected_plan
+        chapter_plan = lock_expected_plan(session, chapter_plan=chapter_plan,
+                                          expected_plan_revision=expected_plan_revision)
         chapter_plan.experience_plan_json = json.dumps(
             experience_plan.model_dump(mode="json"),
             ensure_ascii=False,

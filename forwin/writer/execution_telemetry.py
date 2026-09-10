@@ -91,6 +91,8 @@ class WriterExecutionTelemetry:
         selected_skills = summarize_skill_layers(skill_layers)
         operation_id = self.operation_id()
         model_profile_id, model_name = self.model_identity()
+        drain_feedback = getattr(self.writer, "drain_feedback_inputs", None)
+        feedback_inputs = drain_feedback() if callable(drain_feedback) else []
         trace_payload = {
             "trace_scope": "writer",
             "stage_key": stage_key,
@@ -105,6 +107,7 @@ class WriterExecutionTelemetry:
                 chapter_number=chapter_number,
                 writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
                 selected_skills=selected_skills,
+                feedback_inputs=feedback_inputs,
             ),
             "model_profile": {
                 "profile_id": model_profile_id,

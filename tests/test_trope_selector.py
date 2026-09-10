@@ -12,8 +12,11 @@ from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_plan_service import BandPlanningRequest, BandPlanService
 from forwin.protocol.experience import ArcPayoffMap, MacroPayoff, ReaderPromise
-from forwin.protocol.trope_library import TropeTemplate, load_trope_template_library, trope_template_index
-
+from forwin.protocol.trope_library import (
+    TropeTemplate,
+    load_trope_template_library,
+    trope_template_index,
+)
 
 PULP_LIBRARY_PATH = "Design-docs/trope_library_pulp_v1.md"
 
@@ -272,7 +275,7 @@ def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
                 band_id="band:1:1",
                 chapter_start=1,
                 chapter_end=1,
-                active_band=_chapters()[:1],
+                active_band=chapter_rows[:1],
             )
 
     class _ExperienceService:
@@ -298,15 +301,17 @@ def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
         def ensure_for_arc_band(self, **_kwargs) -> None:
             return None
 
-    class _Session:
-        def get(self, *_args, **_kwargs):
-            return None
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
 
-        def add(self, *_args, **_kwargs) -> None:
-            return None
+    from forwin.models.base import Base
 
-        def flush(self) -> None:
-            return None
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    chapter_rows = _chapters()
+    session.add_all(chapter_rows)
+    session.commit()
 
     scheduler = _Scheduler()
     service = BandPlanService(
@@ -321,16 +326,18 @@ def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
     )
 
     service.ensure_current_band_plan(
-        session=_Session(),
+        session=session,
         request=BandPlanningRequest(
             project_id="project-1",
             arc_id="arc-1",
             activation_chapter=1,
             detailed_band_size=1,
-            chapter_plans=_chapters()[:1],
+            chapter_plans=chapter_rows[:1],
             structure=_structure(),
             arc_experience=_arc_experience(),
         ),
     )
 
     assert scheduler.cost_ceiling == 1
+    session.close()
+    engine.dispose()

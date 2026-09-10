@@ -119,6 +119,8 @@ class EvidenceModel:
 
 def isolated_writer(writer, frozen):
     result = copy.copy(writer)
+    if isinstance(getattr(result, "_feedback_inputs", None), list):
+        result._feedback_inputs = []
     result.llm_client = EvidenceModel(writer.llm_client, frozen)
     # Writer uses this signature to forward supported transport options.
     import inspect

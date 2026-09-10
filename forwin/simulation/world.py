@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any, Sequence
 
 from sqlalchemy import or_, select
@@ -14,8 +15,12 @@ from forwin.audience.comment_analysis import (
     CommentAnalysisStore,
     current_signal_condition,
 )
+from forwin.audience.directions import (
+    DIRECTIONS,
+    keyword_direction,
+    validated_direction,
+)
 from forwin.audience.feedback import (
-    classify_signal_level,
     keyword_dominant_sentiment,
     keyword_feedback_summary,
 )
@@ -93,6 +98,7 @@ class SignalDraft:
     severity: int
     confidence: float
     evidence_span: str
+    direction: str = "unknown"
 
 
 @dataclass(slots=True)
@@ -100,10 +106,6 @@ class WorldTurnDraft:
     pressure_level: str
     pressure_summary: str
     notable_shifts: list[str]
-
-
-def _signal_key(signal_type: str, target_type: str, target_name: str) -> str:
-    return f"{signal_type}:{target_type}:{target_name or 'general'}"
 
 
 def _signal_target_label(target_name: str) -> str:
@@ -125,6 +127,7 @@ def _keyword_fallback(body: str) -> list[SignalDraft]:
                 severity=severity,
                 confidence=0.4,
                 evidence_span=body[:80],
+                direction=keyword_direction(signal_type, body),
             )
         )
     return signals
@@ -225,7 +228,7 @@ class CommentAnalyzer:
         self,
         *,
         llm_client=None,
-        analyzer_version="comment-v2",
+        analyzer_version="comment-v3-direction",
         max_attempts=3,
         retry_delay_seconds=60,
     ) -> None:
@@ -282,6 +285,7 @@ class CommentAnalyzer:
                     source_comment_id=comment.id,
                     analysis_id=record.id,
                     signal_type=draft.signal_type,
+                    direction=draft.direction,
                     target_type=draft.target_type,
                     target_name=draft.target_name,
                     severity=draft.severity,
@@ -320,9 +324,11 @@ class CommentAnalyzer:
                 "content": (
                     "请分析以下读者评论，提取信号。一条评论可产出多个信号。\n"
                     "signal_type 只能是：confusion / pacing / character_heat / risk / relationship_interest / prediction\n"
+                    f"每类 direction 闭集：{json.dumps({k: sorted(v) for k, v in DIRECTIONS.items()})}\n"
+                    "direction 必须由完整原文证据支持；不确定为 unknown，不能猜测或把预测当建议。\n"
                     "返回格式："
                     '{"signals":[{"comment_index":0,'
-                    '"signal_type":"...","target_type":"...",'
+                    '"signal_type":"...","direction":"...","target_type":"...",'
                     '"target_name":"...","severity":1,"confidence":0.8,'
                     '"evidence_span":"原文摘录"}]}\n\n'
                     f"评论列表：{json.dumps(comment_payload, ensure_ascii=False)}"
@@ -417,18 +423,24 @@ class CommentAnalyzer:
             except (TypeError, ValueError):
                 severity = 1
             try:
-                confidence = max(0.0, min(1.0, float(item.get("confidence") or 0.5)))
+                confidence = float(item.get("confidence", 0.5))
             except (TypeError, ValueError):
                 confidence = 0.5
+            if not isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError("comment confidence must be finite and between zero and one")
 
             comment_id = index_to_comment_id[idx]
+            evidence = str(item.get("evidence_span") or "").strip()
+            direction = validated_direction(signal_type, item.get("direction"), evidence,
+                                            comments[idx].body_text or "")
             draft = SignalDraft(
                 signal_type=signal_type,
                 target_type=target_type,
                 target_name=str(item.get("target_name") or "").strip()[:60],
                 severity=severity,
                 confidence=confidence,
-                evidence_span=str(item.get("evidence_span") or "").strip()[:120],
+                evidence_span=evidence,
+                direction=direction,
             )
             result.setdefault(comment_id, []).append(draft)
 
@@ -462,81 +474,29 @@ def load_recent_signals(
 
     return list(
         session.execute(
-            stmt.order_by(CommentSignalCandidate.created_at.desc()).limit(200)
+            stmt.order_by(CommentSignalCandidate.created_at.desc())
         )
         .scalars()
         .all()
     )
 
 
-def aggregate_and_level_signals(
-    session: Session,
-    signals: Sequence[CommentSignalCandidate],
-) -> dict[str, dict[str, Any]]:
-    if not signals:
+def aggregate_and_level_signals(session, signals, *, project_id="", chapter_end=0):
+    """Adapt the same short-window snapshot used by SignalAggregator."""
+    from forwin.audience.aggregation import aggregate_view, aggregate_window
+
+    projects = {s.project_id for s in signals}
+    if project_id:
+        projects.add(project_id)
+    if len(projects) != 1:
         return {}
-
-    comment_ids = {signal.source_comment_id for signal in signals}
-    comment_map = {
-        row.id: row
-        for row in session.execute(
-            select(PublisherRawComment).where(PublisherRawComment.id.in_(comment_ids))
-        )
-        .scalars()
-        .all()
-    }
-
-    buckets: dict[str, dict[str, Any]] = {}
-    for signal in signals:
-        key = _signal_key(signal.signal_type, signal.target_type, signal.target_name)
-        bucket = buckets.setdefault(
-            key,
-            {
-                "signal_key": key,
-                "signal_type": signal.signal_type,
-                "target_type": signal.target_type,
-                "target_name": signal.target_name,
-                "user_ids": set(),
-                "hit_count": 0,
-                "max_severity": 0,
-                "chapters": set(),
-            },
-        )
-        source_comment = comment_map.get(signal.source_comment_id)
-        author_key = ""
-        if source_comment is not None:
-            author_key = (
-                str(source_comment.author_id or "").strip()
-                or str(source_comment.author_name or "").strip()
-            )
-        bucket["user_ids"].add(author_key or signal.source_comment_id)
-        bucket["hit_count"] += 1
-        bucket["max_severity"] = max(bucket["max_severity"], signal.severity)
-        if signal.chapter_number > 0:
-            bucket["chapters"].add(signal.chapter_number)
-
-    result: dict[str, dict[str, Any]] = {}
-    for key, bucket in buckets.items():
-        unique_users = len(bucket["user_ids"])
-        spans_chapters = len(bucket["chapters"])
-        level = classify_signal_level(
-            unique_users=unique_users,
-            spans_chapters=spans_chapters,
-            severity=bucket["max_severity"],
-            signal_type=bucket["signal_type"],
-        )
-        result[key] = {
-            "signal_key": key,
-            "signal_type": bucket["signal_type"],
-            "target_type": bucket["target_type"],
-            "target_name": bucket["target_name"],
-            "unique_users": unique_users,
-            "hit_count": bucket["hit_count"],
-            "max_severity": bucket["max_severity"],
-            "spans_chapters": spans_chapters,
-            "level": level,
-        }
-    return result
+    end = chapter_end or max((s.chapter_number for s in signals), default=0)
+    if end < 1:
+        return {}
+    return {row.signal_key: aggregate_view(row) for row in aggregate_window(
+        session, project_id=next(iter(projects)), chapter_start=max(1, end - 2),
+        chapter_end=end, window_type="short",
+    )}
 
 
 def build_reader_feedback_snapshot(
@@ -616,12 +576,15 @@ def build_reader_feedback_snapshot(
         signal_rows = load_recent_signals(
             session,
             project_id,
-            chapter_range=5,
+            chapter_range=3,
             current_chapter=chapter_number,
             before_chapter=before_chapter,
         )
         if signal_rows:
-            aggregated_signals = aggregate_and_level_signals(session, signal_rows)
+            aggregated_signals = aggregate_and_level_signals(
+                session, signal_rows, project_id=project_id,
+                chapter_end=(before_chapter - 1) if before_chapter else chapter_number,
+            )
 
     highlight_rows = _load_highlight_comments(
         session, rows, signal_rows, limit=min(limit, 4)

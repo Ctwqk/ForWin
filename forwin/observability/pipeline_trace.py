@@ -133,6 +133,11 @@ class PipelineTraceRecorder:
             project_id=project_id,
             chapter_number=trace_chapter_number,
         )
+        feedback_inputs = input_snapshot.get("feedback_inputs", [])
+        if feedback_inputs:
+            from forwin.canon.projection_lock import lock_projection_project
+
+            lock_projection_project(session, project_id)
         project = session.get(Project, project_id)
         row = updater.save_prompt_trace(
             project_id=project_id,
@@ -166,6 +171,16 @@ class PipelineTraceRecorder:
             permission_profile=str(payload.get("permission_profile", "") or ""),
             fallback_used=bool(payload.get("fallback_used", False)),
         )
+        if feedback_inputs:
+            from forwin.audience.actions import record_prompt_inclusions
+
+            record_prompt_inclusions(
+                session,
+                project_id=project_id,
+                chapter_number=trace_chapter_number,
+                prompt_trace_id=row.id,
+                feedback_inputs=feedback_inputs,
+            )
         for event_payload in build_llm_decision_event_payloads(
             payload, prompt_trace_id=row.id
         ):

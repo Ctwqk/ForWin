@@ -20,7 +20,7 @@ A3 只保留消费者调查，不改变维护频率：
 | world pressure | StateContextProvider、PersonalityContextProvider、Writer 世界压力段 | 当前按 `before_chapter` 取最新，尚不能证明任意旧结果可用 |
 | feedback maintenance row | 聚合读侧与 order controls/barrier | 自动反馈隔离不代表可删除维护行或绕过义务/checkpoint 顺序 |
 
-四步 barrier 保留。A4 条件未满足，未启动；没有新增 Writer 模式、临时生产 flag、第二套 writer 或失败候选源码。
+四步 barrier 保留。初次离线评估时没有启动 A4。随后固定 `c62f6d0` 的[隔离 smoke](2026-09-09-stage1-smoke.md)取得首章实际 3 场景、8 次逻辑 Writer 调用、466,158 ms，以及场景/stitch 时间矛盾未被评审拦住的证据，已具备调查调用成本与一致性的理由。不过这只是单路单章数据，没有同起点、同上下文、同预算的 single/scene 对照；无法推出改用 single 就能修复矛盾或达到 15% 质量不退步的收益。A4 当前结论为证据不足，保留现有 Scene 实现；没有永久增加 Writer 模式、生产 flag 或第二套 writer。
 
 本地审查附件保存在忽略目录 `.superpowers/sdd/2026-09-09-forwin-three-stage/review/stage2-diagnostics/`：`replay.py`、`test_tape.py`、`post-a0-results.json`、`post-a0-input-lock.json`。原 `tape.json` 的 SHA256 为 `d68e62a544630df9a0754106c5558d8bd2678e9f64c56c9d64b33c8ef9696531`；原 `labels.json` 为 `8e1db536d7d755cb563a366d39775b9eb8ad1eddeb0061d763b513f7e3b2414b`，均未变化。A0 前报告与结果保留，未重写；重放禁止刷新响应并校验标签、原结果及所有输入键。
 

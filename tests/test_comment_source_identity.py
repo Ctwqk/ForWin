@@ -4,6 +4,7 @@ pytest_plugins = ["tests.test_comment_consumption_contract"]
 
 from sqlalchemy import select
 
+from forwin.candidate_drafts import candidate_body_hash
 from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord, CanonPublicationProtection
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
@@ -45,6 +46,7 @@ def _published_chapter(runtime, project_id):
                 chapter_plan_id=plan.id,
                 chapter_number=2,
                 candidate_draft_id=draft.id,
+                body_hash=candidate_body_hash(draft.body_text),
                 review_id=review.id,
                 version=version,
             )
@@ -88,7 +90,7 @@ def _published_chapter(runtime, project_id):
             canon_commit_id=commits[0].id,
             upload_job_id=new_id(),
             platform_id="fanqie",
-            content_sha256="hash-of-published-body",
+            content_sha256=candidate_body_hash("正文1"),
             state="published",
             remote_book_id="remote-work",
             remote_chapter_id="remote-chapter",

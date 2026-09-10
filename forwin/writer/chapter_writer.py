@@ -7,6 +7,9 @@ from contextlib import contextmanager
 
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.model_adapter import ModelAdapter
+from forwin.observability.context import OperationContext
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.observability.ports import NullObservability
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
 from forwin.protocol.state_change import (
@@ -24,22 +27,21 @@ from forwin.protocol.writer import (
     WriterOutput,
 )
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
-from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
-from forwin.observability.context import OperationContext
-from forwin.observability.ports import NullObservability
-from forwin.writer.prompt_budget import prompt_revision_hash
+from forwin.utils import parse_llm_json
+from forwin.writer.feedback_input import feedback_input_evidence
 from forwin.writer.profile import WriterProfile
+from forwin.writer.prompt_budget import prompt_revision_hash
+
 from .prompt_core import (
-    build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
-    build_state_event_extraction_prompt,
-    build_single_chapter_draft_prompt,
+    build_preview_chapter_prompt,
     build_scene_breakdown_prompt,
     build_scene_generation_prompt,
     build_scene_stitch_prompt,
+    build_single_chapter_draft_prompt,
+    build_state_event_extraction_prompt,
     build_thread_time_extraction_prompt,
 )
-from forwin.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 _VALID_REWARD_TAGS = {"power", "social", "justice", "mystery", "emotion"}
@@ -101,6 +103,7 @@ class ChapterWriter:
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
         self._chat_signature = inspect.signature(self.llm_client.chat)
         self._business_retry_events: list[dict[str, object]] = []
+        self._feedback_inputs: list[dict[str, object]] = []
         self._llm_route_overrides: list[dict[str, str]] = []
         self.observability = observability or NullObservability()
 
@@ -1401,7 +1404,24 @@ class ChapterWriter:
                 kwargs["preferred_provider_kind"] = preferred_provider_kind
             if preferred_model and "preferred_model" in parameters:
                 kwargs["preferred_model"] = preferred_model
-        return self.llm_client.chat(messages, **kwargs)
+        evidence = feedback_input_evidence(messages, stage_key)
+        if evidence is not None:
+            self._feedback_inputs.append(evidence)
+        try:
+            result = self.llm_client.chat(messages, **kwargs)
+        except BaseException as exc:
+            if evidence is not None:
+                evidence["adapter_outcome"] = "raised"
+                evidence["exception_type"] = type(exc).__name__
+            raise
+        if evidence is not None:
+            evidence["adapter_outcome"] = "returned"
+        return result
+
+    def drain_feedback_inputs(self) -> list[dict[str, object]]:
+        evidence = self._feedback_inputs
+        self._feedback_inputs = []
+        return evidence
 
     def _record_business_retry_event(
         self,
@@ -1486,6 +1506,7 @@ class ChapterWriter:
                 **input_snapshot,
                 "stage_key": stage_key,
                 "selected_skills": selected_skills,
+                "feedback_inputs": self.drain_feedback_inputs(),
             },
             "model_profile": {
                 "profile_id": getattr(self.llm_client, "profile_id", ""),
@@ -1677,6 +1698,8 @@ class ChapterWriter:
     @classmethod
     def _parse_preview_text(cls, raw: str, *, fallback_title: str) -> dict[str, str]:
         fields = cls._parse_tagged_text(raw, fallback_title=fallback_title)
+        if "feedback_action:" in str(fields.get("body", "")) or "[/feedback_action]" in str(fields.get("body", "")):
+            raise ValueError("feedback hint marker leaked into chapter body")
         return {
             "title": str(fields.get("title", fallback_title) or fallback_title),
             "body": str(fields.get("body", "") or "").strip(),

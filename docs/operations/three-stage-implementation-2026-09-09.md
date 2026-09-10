@@ -71,7 +71,9 @@ CLI `forwin --help`、生成/Pubisher服务导入和浏览器 `chromium --versio
 | 运行入口 | `.venv/bin/python scripts/check_codex_operator_ready.py` | API/MCP健康、插件配置、Swarm角色、Python环境通过 |
 | 活跃生成任务 | `forwin.task_active_generation_check` | 0；仅说明调查时状态 |
 
-`c62f6d02329b5d766569f37159fe57f16907c7ad` 的独立源码归档（tree `5da6f38651decfef0cadb4b13b9e4346fc566ccb`）完成全量 pytest：**2658 passed、4 skipped、6 subtests passed**，用时287.98秒。归档导入路径已经核对，未从正在进行后续开发的 checkout 导入。compileall、F/E9 Ruff 和源码守卫通过；默认完整 Ruff 为1179项，同规则原始基线1219项，新引入诊断已修正，不能称为全库零告警。20章smoke和全新离线L100仍待实际完成。
+`c62f6d02329b5d766569f37159fe57f16907c7ad` 的独立源码归档（tree `5da6f38651decfef0cadb4b13b9e4346fc566ccb`）完成全量 pytest：**2658 passed、4 skipped、6 subtests passed**，用时287.98秒。归档导入路径已经核对，未从正在进行后续开发的 checkout 导入。compileall、F/E9 Ruff 和源码守卫通过；默认完整 Ruff 为1179项，同规则原始基线1219项，新引入诊断已修正，不能称为全库零告警。[20章隔离 smoke](../superpowers/reports/2026-09-09-stage1-smoke.md)已启动并发现一个评审未拦住的首章时间矛盾；任务和完整结尾仍待实际完成，全新离线 L100 未启动。
+
+Stage 3 的向前迁移另在原生产备份的全新隔离 PostgreSQL 副本验证至 `0007_feedback_actions`：101 张原表及全部原字段值保留（仅旧发布任务状态与已核实的 binding 章号按已审契约转换），额外 `npc_intent_snapshots` 原样保留；23 个不确定任务对应 23 个 reserved 保护、15 处标题差异保留、18 个已核实章绑定、0 个伪造公开保护或回执。分析器/聚合/行动新增字段没有把旧证据猜成合格。私有报告保存完整迁移源码 hash，本次未修改生产数据库；最终部署仍须停妥后重新备份。
 
 ## 版本、发布和容量基础
 

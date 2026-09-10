@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.constraints import NarrativeConstraintInfo
@@ -115,11 +115,58 @@ class ReaderFeedbackView(BaseModel):
     reader_tier: int = 0
 
 
+class AudienceHintItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    category: Literal["pacing", "clarity", "character_heat", "risk", "prediction"]
+    text: str = Field(min_length=1, max_length=500)
+
+
 class AudienceHintView(BaseModel):
-    pacing_hints: list[str] = Field(default_factory=list)
-    clarity_hints: list[str] = Field(default_factory=list)
-    character_heat_changes: list[str] = Field(default_factory=list)
-    risk_flags: list[str] = Field(default_factory=list)
+    """Canonical action items; category lists are derived read views only."""
+
+    items: list[AudienceHintItem] = Field(default_factory=list)
+
+    def clipped(self, per_category: int = 3) -> AudienceHintView:
+        counts: dict[str, int] = {}
+        kept: list[AudienceHintItem] = []
+        seen: set[str] = set()
+        for item in self.items:
+            if item.action_id in seen or counts.get(item.category, 0) >= per_category:
+                continue
+            seen.add(item.action_id)
+            counts[item.category] = counts.get(item.category, 0) + 1
+            kept.append(item)
+        return AudienceHintView(items=kept)
+
+    def _texts(self, category: str) -> list[str]:
+        return [item.text for item in self.items if item.category == category]
+
+    @computed_field
+    @property
+    def pacing_hints(self) -> list[str]:
+        return self._texts("pacing")
+
+    @computed_field
+    @property
+    def clarity_hints(self) -> list[str]:
+        return self._texts("clarity")
+
+    @computed_field
+    @property
+    def character_heat_changes(self) -> list[str]:
+        return self._texts("character_heat")
+
+    @computed_field
+    @property
+    def risk_flags(self) -> list[str]:
+        return self._texts("risk")
+
+    @computed_field
+    @property
+    def prediction_hints(self) -> list[str]:
+        return self._texts("prediction")
 
 
 class AudienceTrendView(BaseModel):

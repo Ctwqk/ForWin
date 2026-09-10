@@ -87,7 +87,7 @@
 
 - [x] Run per-package related tests, then full pytest, Ruff and compileall from one source candidate. Frozen `c62f6d0`: 2658 passed, 4 skipped, 6 subtests passed; compileall/F/E9 clean. Full Ruff 1179 versus original 1219, not zero warnings.
 - [x] Validate restore/migration in isolation, build full images, record source/image/model/effective policy. The restored production backup passed through `0004_revision_validation`; frozen `c62f6d0` role images passed actual execution checks. Full policy readback changed only three supported automation fields.
-- [ ] Run approximately 20-chapter offline smoke, then fresh 100-chapter offline project with supported automatic pause/delegation policy. Isolated smoke project `693a1a7df3124c1088f2201e9581f023`, task `08104286cb5b`, started with `run_until_chapter=20`; first chapter accepted, ongoing. Preserve actual model retries/fallback and usage gaps. L100 not started.
+- [ ] Run approximately 20-chapter offline smoke, then fresh 100-chapter offline project with supported automatic pause/delegation policy. Isolated smoke project `693a1a7df3124c1088f2201e9581f023`, task `08104286cb5b`, started with `run_until_chapter=20`; first four chapters accepted, ongoing; independent BODY review found time/field continuity defects, so acceptance is not a quality-pass claim. Preserve actual model retries/fallback and usage gaps. L100 not started.
 - [ ] Verify finite repair, recovery idempotency and intended ending; record failures honestly. Use isolated publisher adapters for serial safety.
 - [ ] Close Stage 1 only with actual evidence; do not mechanically continue a failed candidate as the same release identity.
 
@@ -98,7 +98,7 @@
 - [x] Freeze Writer behavior and replace both real callers with the concrete execution owner; delete the old mixin. `de3d854`: 344 related tests, independent 110, root 73 (overlapping).
 - [x] Complete Review/Repair and Canon preparation separation from full Pipeline callbacks; replace callers and remove obsolete entries. `59b2bbb`: 387 related tests, independent 153; original transactions, budget, pause and trace behavior retained.
 - [x] Replay A1/A2 with the same nine frozen response keys and independent labels. A1 keep after two known severe misses; A2 insufficient, retained. A3's consumer/version proof is insufficient; maintenance cadence and barrier stay unchanged.
-- [x] Evaluate A4 condition: not justified by current evidence, not started; no permanent second writer.
+- [x] Evaluate A4 condition: later smoke revealed 8 Writer calls and an unblocked scene/stitch time contradiction. A paired single/scene quality comparison remains absent; insufficient evidence to replace Scene, no permanent second writer. See the smoke report.
 - [x] Record measured and missing quantities explicitly. Offline calls/input characters measured; real tokens, latency and narrative preference unmeasured. No claimed ≥15% production benefit or real-model paired trial. See [ablation report](../reports/2026-09-09-stage2-ablation.md), `45faa90`.
 - [ ] Run final full regression after integration. No production experiment flags or alternative implementations were retained.
 
@@ -109,10 +109,10 @@
 - [x] Separate source chapter/publication revision and observed/ingested/analyzed times from current generation progress. `99dcd6b`, forward migration `0005_comment_analysis`; old provenance stays unknown.
 - [x] Query uncompleted analysis before pagination; version completion including zero signals; bounded failures, content-edit hash and scoped idempotency. Exact old input restoration reactivates completed evidence; project binding can be resolved independently of chapter binding. Caller rollback/crash limit documented; automatic consumer transaction integration follows.
 - [x] Test 100 comments with batch size 8, zero signals, out-of-order/backfill and duplicate book titles. 75 package/probe tests; independent 54 plus final 32 (overlapping), including both independently reproduced defects.
-- [ ] One aggregation/decision owner, correct all-comment denominators, distinct scoped authors, prediction and directional action mapping.
-- [ ] Track proposed/selected/actually-included/applied/observed separately; only record Writer inputs after trimming.
-- [ ] Demonstrate one traceable accepted future adjustment and one justified rejection using low/late/conflicting/repeated-single-reader evidence.
-- [ ] Remove quarantine only after consumers are qualified and regression passes.
+- [x] One aggregation/decision owner, correct all-comment denominators, distinct scoped authors, prediction and directional action mapping. Independent review fixed stale ORM proof, cross-platform severity borrowing and invalid confidence; risk watchlist and overlapping opposite directions remain observation-only.
+- [x] Track proposed/selected/actually-included/applied/observed separately; only record Writer inputs after trimming. Future plans share CAS with existing writers; actual BODY observation defaults unknown and later comparisons remain noncausal.
+- [x] Demonstrate one traceable accepted future adjustment and one justified rejection using low/late/conflicting/repeated-single-reader evidence. Five finite cases use real owners including five sole-Canon admissions; model/quality/publication inputs are explicitly frozen fixtures. See [finite-loop evidence](../reports/2026-09-09-stage3-feedback-finite-loop.md).
+- [x] Reenable only the qualified canonical Writer provider and bounded future-plan consumer after related regression. Legacy global calibration/world/review effects remain neutral; passive observation errors cannot add a new content gate. Independent integration review: 72 passed; [evidence](../reports/2026-09-09-stage3-feedback-integration.md). Final whole-candidate verification remains in Task 7.
 
 ### Task 9: Optional book export
 

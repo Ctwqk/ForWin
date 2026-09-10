@@ -11,12 +11,6 @@ from forwin.audience.feedback import (
     keyword_dominant_sentiment,
     keyword_feedback_summary,
 )
-from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.checkpoints import NextBandSummary
-from forwin.planning.contracts import (
-    PlanTaskItem,
-    load_plan_task_contract,
-)
 from forwin.models import (
     ArcEnvelope,
     ArcPlanVersion,
@@ -37,18 +31,24 @@ from forwin.models import (
     SubWorldRosterItem,
     WorldSimulationTurn,
 )
-from forwin.runtime.policy_store import ProjectPolicyStore
+from forwin.planning.checkpoints import NextBandSummary
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.contracts import (
+    PlanTaskItem,
+    load_plan_task_contract,
+)
 from forwin.protocol import (
     ArcPayoffMap,
     BandDelightSchedule,
     ChapterExperiencePlan,
-    ReaderPromise,
     ReaderCommentView,
     ReaderFeedbackView,
+    ReaderPromise,
     SignalSummaryView,
     SubWorldSummary,
     WorldPressureView,
 )
+from forwin.runtime.policy_store import ProjectPolicyStore
 
 logger = logging.getLogger(__name__)
 
@@ -96,27 +96,6 @@ def _reader_feedback_sort_key(
         int(row.hit_comment_count or 0),
         _reader_feedback_target_label(str(row.target_name or "")),
     )
-
-
-class _AudienceHintData:
-    __slots__ = (
-        "pacing_hints",
-        "clarity_hints",
-        "character_heat_changes",
-        "risk_flags",
-    )
-
-    def __init__(
-        self,
-        pacing_hints: list[str],
-        clarity_hints: list[str],
-        character_heat_changes: list[str],
-        risk_flags: list[str],
-    ) -> None:
-        self.pacing_hints = pacing_hints
-        self.clarity_hints = clarity_hints
-        self.character_heat_changes = character_heat_changes
-        self.risk_flags = risk_flags
 
 
 class StateRepository:
@@ -848,56 +827,25 @@ class StateRepository:
     # Audience hints (Phase C)
     # ------------------------------------------------------------------
 
-    def get_audience_hints(
-        self,
-        project_id: str,
-        before_chapter: int,
-    ) -> Optional["_AudienceHintData"]:
-        """Build audience hints from recent FeedbackActionRecords.
+    def get_audience_hints(self, project_id: str, before_chapter: int):
+        """Read only qualified, selected hints inside their explicit validity window."""
+        from forwin.audience.actions import action_hint, action_hint_available
+        from forwin.protocol.context import AudienceHintView
 
-        Returns a lightweight data object with hint lists, or None if no actions exist.
-        """
-        records = (
-            self.session.execute(
-                select(FeedbackActionRecord)
-                .where(
-                    FeedbackActionRecord.project_id == project_id,
-                    FeedbackActionRecord.triggered_at_chapter < before_chapter,
-                    FeedbackActionRecord.cooldown_until_chapter >= before_chapter,
-                )
-                .order_by(FeedbackActionRecord.created_at.desc())
-                .limit(12)
-            )
-            .scalars()
-            .all()
-        )
-        if not records:
-            return None
-
-        pacing: list[str] = []
-        clarity: list[str] = []
-        heat: list[str] = []
-        risk: list[str] = []
-        for rec in records:
-            note = rec.notes or rec.action_type
-            if rec.signal_type == "pacing":
-                pacing.append(note)
-            elif rec.signal_type == "confusion":
-                clarity.append(note)
-            elif rec.signal_type in {"character_heat", "relationship_interest"}:
-                heat.append(note)
-            elif rec.signal_type == "risk":
-                risk.append(note)
-
-        if not any((pacing, clarity, heat, risk)):
-            return None
-
-        return _AudienceHintData(
-            pacing_hints=pacing[:3],
-            clarity_hints=clarity[:3],
-            character_heat_changes=heat[:3],
-            risk_flags=risk[:3],
-        )
+        records = self.session.scalars(
+            select(FeedbackActionRecord).where(
+                FeedbackActionRecord.project_id == project_id,
+                FeedbackActionRecord.status == "selected",
+                FeedbackActionRecord.source_qualified.is_(True),
+                FeedbackActionRecord.selected_at_chapter < before_chapter,
+                FeedbackActionRecord.hint_valid_from_chapter <= before_chapter,
+                FeedbackActionRecord.hint_expires_at_chapter >= before_chapter,
+                FeedbackActionRecord.target_chapter_start <= before_chapter,
+                FeedbackActionRecord.target_chapter_end >= before_chapter,
+            ).order_by(FeedbackActionRecord.selected_at.desc(), FeedbackActionRecord.id)
+        ).all()
+        items = [action_hint(row) for row in records if action_hint_available(row, before_chapter)]
+        return AudienceHintView(items=items).clipped() if items else None
 
     def _active_subworld_ids_for_chapter(
         self,

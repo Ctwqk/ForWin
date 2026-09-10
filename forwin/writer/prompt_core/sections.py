@@ -537,25 +537,10 @@ def _world_model_section(context: ChapterContextPack) -> str | None:
 
 
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
+    from forwin.writer.feedback_input import render_feedback_hints
+
     hints = getattr(context, "audience_hints", None)
-    if not hints:
-        return None
-    lines: list[str] = []
-    if hints.risk_flags:
-        lines.append("  ⚠ 风险提示：")
-        lines.extend(f"    · {h}" for h in hints.risk_flags)
-    if hints.pacing_hints:
-        lines.append("  节奏建议：")
-        lines.extend(f"    · {h}" for h in hints.pacing_hints)
-    if hints.clarity_hints:
-        lines.append("  清晰度建议：")
-        lines.extend(f"    · {h}" for h in hints.clarity_hints)
-    if hints.character_heat_changes:
-        lines.append("  角色热度：")
-        lines.extend(f"    · {h}" for h in hints.character_heat_changes)
-    if not lines:
-        return None
-    return "【读者信号提示（仅供参考，自然融入情节）】\n" + "\n".join(lines)
+    return render_feedback_hints(hints) if hints else None
 
 
 def _retrieved_memories_section(

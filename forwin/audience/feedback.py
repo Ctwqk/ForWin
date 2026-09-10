@@ -7,12 +7,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.audience.comment_analysis import current_signal_condition
 from forwin.models import (
-    CommentSignalCandidate,
     FeedbackActionRecord,
     PublisherCommentSyncJob,
     PublisherRawComment,
@@ -250,83 +248,27 @@ def derive_action_effectiveness(
     project_id: str,
     *,
     limit: int = 8,
-    window_type: str = "long",
+    window_type: str = "",
 ) -> list[dict[str, object]]:
-    """Compare post-action signal score to the latest pre-action score."""
-    records = session.execute(
+    """Read noncausal observations against each action's frozen input snapshot."""
+    from forwin.audience.aggregation import aggregate_view
+    from forwin.audience.effects import observe_action_signal_change
+
+    records = session.scalars(
         select(FeedbackActionRecord)
         .where(FeedbackActionRecord.project_id == project_id)
         .order_by(FeedbackActionRecord.created_at.desc())
         .limit(max(1, limit))
-    ).scalars().all()
-    signal_keys = {
-        str(record.signal_key or "").strip()
-        for record in records
-        if str(record.signal_key or "").strip()
-    }
-    aggregate_rows = (
-        session.execute(
-            select(SignalWindowAggregate)
-            .where(
-                SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.window_type == window_type,
-                SignalWindowAggregate.signal_key.in_(signal_keys),
-            )
-            .order_by(
-                SignalWindowAggregate.signal_key.asc(),
-                SignalWindowAggregate.window_chapter_end.asc(),
-                SignalWindowAggregate.created_at.asc(),
-            )
-        ).scalars().all()
-        if signal_keys
-        else []
+    ).all()
+    signal_keys = {record.signal_key for record in records if record.signal_key}
+    query = select(SignalWindowAggregate).where(
+        SignalWindowAggregate.project_id == project_id,
+        SignalWindowAggregate.signal_key.in_(signal_keys),
     )
-    rows_by_signal_key: dict[str, list[SignalWindowAggregate]] = defaultdict(list)
-    for row in aggregate_rows:
-        signal_key = str(row.signal_key or "").strip()
-        if signal_key:
-            rows_by_signal_key[signal_key].append(row)
-    results: list[dict[str, object]] = []
-    for record in records:
-        rows = rows_by_signal_key.get(str(record.signal_key or "").strip(), [])
-        before_rows = [
-            row
-            for row in rows
-            if int(row.window_chapter_end or 0) <= int(record.triggered_at_chapter or 0)
-        ]
-        after_rows = [
-            row
-            for row in rows
-            if int(row.window_chapter_end or 0) > int(record.triggered_at_chapter or 0)
-        ]
-        before = before_rows[-1] if before_rows else None
-        after = after_rows[-1] if after_rows else None
-        before_score = score_signal_aggregate_v1(before) if before is not None else 0.0
-        after_score = score_signal_aggregate_v1(after) if after is not None else 0.0
-        if before is None or after is None:
-            outcome = "insufficient_data"
-        else:
-            delta = round(after_score - before_score, 4)
-            if delta <= -0.05:
-                outcome = "improved"
-            elif delta >= 0.05:
-                outcome = "worsened"
-            else:
-                outcome = "unchanged"
-        results.append(
-            {
-                "signal_key": str(record.signal_key or ""),
-                "signal_type": str(record.signal_type or ""),
-                "action_type": str(record.action_type or ""),
-                "triggered_at_chapter": int(record.triggered_at_chapter or 0),
-                "cooldown_until_chapter": int(record.cooldown_until_chapter or 0),
-                "before_score": before_score,
-                "after_score": after_score,
-                "outcome": outcome,
-                "notes": str(record.notes or ""),
-            }
-        )
-    return results
+    if window_type:
+        query = query.where(SignalWindowAggregate.window_type == window_type)
+    views = [aggregate_view(row) for row in session.scalars(query).all()] if signal_keys else []
+    return [observe_action_signal_change(record, views) for record in records]
 
 
 def _comment_scope_filters(
@@ -505,220 +447,37 @@ def estimate_reader_scale(
 # ── Signal Aggregator ────────────────────────────────────────────────
 
 class SignalAggregator:
-    """Window-based aggregation of CommentSignalCandidate rows.
-
-    For each window × signal_key, computes M / U / C / R and applies the
-    shared hard-rule classifier. Persists results as SignalWindowAggregate rows.
-    """
+    """Adapt the shared computation owner to the existing named windows."""
 
     def aggregate(
-        self,
-        session: Session,
-        project_id: str,
-        chapter_number: int,
-        *,
-        comment_to_reader_ratio: int = 80,
-    ) -> list[SignalWindowAggregate]:
-        """Run windowed aggregation and return all aggregate rows created."""
+        self, session, project_id, chapter_number, *, comment_to_reader_ratio=80
+    ):
+        from forwin.audience.aggregation import aggregate_window
+
         scale = estimate_reader_scale(
             session,
             project_id,
             chapter_number=chapter_number,
             comment_to_reader_ratio=comment_to_reader_ratio,
         )
-
-        results: list[SignalWindowAggregate] = []
-        candidate_levels: dict[tuple[str, str, str], str] = {}
-        for window in WINDOWS:
-            window_start = max(1, chapter_number - window.size + 1)
-            window_end = chapter_number
-
-            # Load signals in window
-            signals = session.execute(
-                select(CommentSignalCandidate)
-                .where(
-                    CommentSignalCandidate.project_id == project_id,
-                    current_signal_condition(),
-                    CommentSignalCandidate.chapter_number >= window_start,
-                    CommentSignalCandidate.chapter_number <= window_end,
-                )
-            ).scalars().all()
-
-            comment_map = {
-                row.id: row
-                for row in session.execute(
-                    select(PublisherRawComment).where(
-                        PublisherRawComment.id.in_(
-                            {signal.source_comment_id for signal in signals}
-                        )
-                    )
-                ).scalars().all()
-            }
-
-            # Count total comments in window (C)
-            total_comments = session.execute(
-                select(func.count(func.distinct(CommentSignalCandidate.source_comment_id)))
-                .where(
-                    CommentSignalCandidate.project_id == project_id,
-                    current_signal_condition(),
-                    CommentSignalCandidate.chapter_number >= window_start,
-                    CommentSignalCandidate.chapter_number <= window_end,
-                )
-            ).scalar_one()
-
-            # Group by signal_key
-            buckets: dict[str, _Bucket] = defaultdict(_Bucket)
-            for sig in signals:
-                key = f"{sig.signal_type}:{sig.target_type}:{sig.target_name or 'general'}"
-                bucket = buckets[key]
-                bucket.signal_type = sig.signal_type
-                bucket.target_type = sig.target_type
-                bucket.target_name = sig.target_name
-                source_comment = comment_map.get(sig.source_comment_id)
-                user_key = ""
-                if source_comment is not None:
-                    user_key = (
-                        str(source_comment.author_id or "").strip()
-                        or str(source_comment.author_name or "").strip()
-                    )
-                bucket.user_keys.add(user_key or sig.source_comment_id)
-                bucket.source_comment_ids.add(sig.source_comment_id)
-                bucket.hit_count += 1
-                bucket.max_severity = max(bucket.max_severity, sig.severity)
-                bucket.confidence_sum += sig.confidence
-                if sig.chapter_number > 0:
-                    bucket.chapters.add(sig.chapter_number)
-
-            # Delete old aggregates for this window
-            session.execute(
-                SignalWindowAggregate.__table__.delete().where(
-                    SignalWindowAggregate.project_id == project_id,
-                    SignalWindowAggregate.window_type == window.name,
-                    SignalWindowAggregate.window_chapter_end == window_end,
-                )
-            )
-
-            for key, bucket in buckets.items():
-                unique_users = len(bucket.user_keys)
-                spans_chapters = len(bucket.chapters)
-                avg_conf = bucket.confidence_sum / max(1, bucket.hit_count)
-                level = classify_signal_level(
-                    unique_users=unique_users,
-                    spans_chapters=spans_chapters,
-                    severity=bucket.max_severity,
-                    signal_type=bucket.signal_type,
-                )
-
-                row = SignalWindowAggregate(
-                    id=new_id(),
-                    project_id=project_id,
-                    signal_key=key,
-                    signal_type=bucket.signal_type,
-                    target_type=bucket.target_type,
-                    target_name=bucket.target_name,
-                    window_type=window.name,
-                    window_chapter_start=window_start,
-                    window_chapter_end=window_end,
-                    hit_comment_count=bucket.hit_count,
-                    unique_user_count=unique_users,
-                    total_comment_count=total_comments,
-                    reader_estimate=scale.reader_estimate,
-                    reader_tier=scale.tier,
-                    estimation_method=scale.estimation_method,
-                    scale_confidence=(
-                        0.9
-                        if str(scale.estimation_method or "").startswith("platform_metric:")
-                        else 0.35
-                    ),
-                    max_severity=bucket.max_severity,
-                    avg_confidence=round(avg_conf, 3),
-                    signal_level=level,
-                )
-                session.add(row)
-                results.append(row)
-                candidate_key = (
-                    str(bucket.signal_type or "").strip(),
-                    str(bucket.target_type or "").strip(),
-                    str(bucket.target_name or "").strip(),
-                )
-                previous_level = candidate_levels.get(candidate_key, "noise")
-                if _SIGNAL_LEVEL_ORDER.get(level, 0) >= _SIGNAL_LEVEL_ORDER.get(previous_level, 0):
-                    candidate_levels[candidate_key] = level
-
-        for (signal_type, target_type, target_name), level in candidate_levels.items():
-            _update_candidate_levels(
+        return [
+            row
+            for window in WINDOWS
+            for row in aggregate_window(
                 session,
                 project_id=project_id,
-                signal_type=signal_type,
-                target_type=target_type,
-                target_name=target_name,
-                level=level,
+                chapter_start=max(1, chapter_number - window.size + 1),
+                chapter_end=chapter_number,
+                window_type=window.name,
+                scale=scale,
             )
-
-        if results:
-            session.flush()
-        return results
-
-
-class _Bucket:
-    __slots__ = (
-        "signal_type", "target_type", "target_name",
-        "user_keys", "source_comment_ids", "hit_count", "max_severity",
-        "confidence_sum", "chapters",
-    )
-
-    def __init__(self) -> None:
-        self.signal_type = ""
-        self.target_type = ""
-        self.target_name = ""
-        self.user_keys: set[str] = set()
-        self.source_comment_ids: set[str] = set()
-        self.hit_count = 0
-        self.max_severity = 0
-        self.confidence_sum = 0.0
-        self.chapters: set[int] = set()
-
-
-def _update_candidate_levels(
-    session: Session,
-    *,
-    project_id: str,
-    signal_type: str,
-    target_type: str,
-    target_name: str,
-    level: str,
-) -> None:
-    """Propagate the aggregated level back to individual candidates."""
-    normalized_target_name = str(target_name or "").strip()
-
-    stmt = (
-        select(CommentSignalCandidate)
-        .where(
-            CommentSignalCandidate.project_id == project_id,
-                    current_signal_condition(),
-            CommentSignalCandidate.signal_type == signal_type,
-            CommentSignalCandidate.target_type == target_type,
-        )
-    )
-    if normalized_target_name and normalized_target_name not in {"general", "整体"}:
-        stmt = stmt.where(CommentSignalCandidate.target_name == normalized_target_name)
-    else:
-        stmt = stmt.where(
-            or_(
-                CommentSignalCandidate.target_name == "",
-                CommentSignalCandidate.target_name == "整体",
-                CommentSignalCandidate.target_name == "general",
-            )
-        )
-
-    for candidate in session.execute(stmt).scalars().all():
-        candidate.signal_level = level
+        ]
 
 
 # ── Feedback Cooldown ────────────────────────────────────────────────
 
 class FeedbackCooldown:
-    """Tracks which signals have been acted on and enforces per-signal cooldowns."""
+    """Only explicit selection starts a per-signal repetition cooldown."""
 
     def __init__(self, cooldown_chapters: int = 3) -> None:
         self.cooldown_chapters = max(1, cooldown_chapters)
@@ -736,8 +495,10 @@ class FeedbackCooldown:
             .where(
                 FeedbackActionRecord.project_id == project_id,
                 FeedbackActionRecord.signal_key == signal_key,
+                FeedbackActionRecord.status == "selected",
+                FeedbackActionRecord.source_qualified.is_(True),
             )
-            .order_by(FeedbackActionRecord.created_at.desc())
+            .order_by(FeedbackActionRecord.cooldown_until_chapter.desc())
             .limit(1)
         ).scalar_one_or_none()
         if last_action is None:
@@ -766,7 +527,7 @@ class FeedbackCooldown:
                 .over(
                     partition_by=FeedbackActionRecord.signal_key,
                     order_by=(
-                        FeedbackActionRecord.created_at.desc(),
+                        FeedbackActionRecord.cooldown_until_chapter.desc(),
                         FeedbackActionRecord.id.desc(),
                     ),
                 )
@@ -775,6 +536,8 @@ class FeedbackCooldown:
             .where(
                 FeedbackActionRecord.project_id == project_id,
                 FeedbackActionRecord.signal_key.in_(normalized_signal_keys),
+                FeedbackActionRecord.status == "selected",
+                FeedbackActionRecord.source_qualified.is_(True),
             )
             .subquery()
         )
@@ -788,32 +551,6 @@ class FeedbackCooldown:
             for row in rows
             if str(row.signal_key or "").strip()
         }
-
-    def record_action(
-        self,
-        session: Session,
-        *,
-        project_id: str,
-        signal_key: str,
-        signal_type: str,
-        action_type: str,
-        chapter_number: int,
-        notes: str = "",
-    ) -> FeedbackActionRecord:
-        """Record that an action was taken on a signal, starting cooldown."""
-        record = FeedbackActionRecord(
-            id=new_id(),
-            project_id=project_id,
-            signal_key=signal_key,
-            signal_type=signal_type,
-            action_type=action_type,
-            triggered_at_chapter=chapter_number,
-            cooldown_until_chapter=chapter_number + self.cooldown_chapters,
-            notes=notes,
-        )
-        session.add(record)
-        session.flush()
-        return record
 
     def filter_actionable(
         self,
@@ -868,6 +605,11 @@ def run_feedback_aggregation_pass(
     Called from the pipeline loop after each accepted chapter.
     """
     from forwin.audience.actions import build_audience_hint_pack_from_aggregates
+    from forwin.canon.projection_lock import lock_projection_project
+
+    # Serialize snapshot FK inserts and selection before acquiring child locks.
+    # Comment analysis, which calls the model, has already committed separately.
+    lock_projection_project(session, project_id)
 
     aggregator = SignalAggregator()
     all_aggregates = aggregator.aggregate(
@@ -899,7 +641,9 @@ def run_feedback_aggregation_pass(
         session,
         project_id,
         chapter_number,
-        actionable=actionable,
+        # Preserve opposite-direction evidence even while its action is cooling.
+        # Selection applies cooldown after the unique mapper sees the full window.
+        actionable=all_aggregates,
         cooldown=cooldown,
     )
 

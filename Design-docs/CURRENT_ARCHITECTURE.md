@@ -1,8 +1,8 @@
 # ForWin Current Architecture
 
-> 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页的既有实现描述以源码为准；新版本身份、冻结、修订核验和 5% 限制在逐包实施。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
+> 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述当前源码；部署与真实运行证据见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。新版本身份、冻结、后缀修订核验、5% 限制及反馈链路已在开发分支接入，最终候选验证和部署仍以执行计划为准。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
 
-更新时间：2026-09-04
+更新时间：2026-09-09
 
 完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。
 
@@ -49,6 +49,16 @@ Genesis / Writer / Review 主链
 - `forwin.api` 只公开 `app`、`create_app` 与 `lifespan`。旧 `api_core`、根 `api_route_registry.py`、根 `api_*_routes.py`、`ModuleType` 代理、`globals().update()`、`api_project_ops`、`api_publisher_ops`、`api_project_policy` 和 `project_ops` 已删除。
 - `/api/generate` 与 `GenerateRequest` 已删除。合法写作路径只有 `project_create -> Genesis generate/refine/lock -> project_start_writing`，以及 writing 项目的 `project_continue_generation`。
 - 决策事件契约归 `forwin.audit.events`，持久化归 `forwin.models.audit`；任务契约、约束与 checkpoint 归 `forwin.planning`，草稿规则归 `forwin.review`，project-control 应用用例归 `forwin.application.project_control`，Codex 受控动作归 `forwin.codex_bridge.governed_actions`。生产代码不再使用泛化 `governance` namespace。
+
+## 评论证据与有限反馈
+
+评论接收保存平台/账号或绑定/作品/远端评论身份、所指发布版本及发生/摄入时间。无法确认的章号、作者和历史来源保持 unknown，不使用当前写作章号补齐。`CommentAnalyzer` 先查询未完成输入再分页；零信号同样完成，失败最多尝试既定次数。自动 post-Canon 消费在独立事务提交分析和 trace，再进入聚合，后续计划失败不会让已完成模型调用重复入账。
+
+`audience/aggregation.py` 是唯一窗口计算 owner；分母包含无信号和未分析评论，同评论在同方向目标内只投一票。跨平台身份不相加提升共识，发布 proof 必须对上实际 Canon/Candidate/BODY hash。聚合以证据 hash 保留不可变快照。`ActionMapper` 使用该读视图决定动作；先检查完整窗口里的方向冲突，再应用冷却。风险 watchlist 和相反方向均只观察，不产生改纲指令。
+
+`FeedbackActionRecord` 分别记录提议、选用、计划应用、实际 Writer 输入、正文观察和后续关联。提示有效章窗、响应范围与冷却期独立。Writer 只消费合格且已选的 canonical hints，prediction 也有明确观察提示；最终裁剪之后，在实际 adapter 调用处记录 action ID、提示 hash 和完整 messages hash，再与真实 PromptTrace 同事务保存。进入提示不等于正文落实。
+
+未来计划应用只允许在未写、无预约/发布/Canon 历史的章节，保留既定目标及根设定。反馈和既有体验计划写入共享 Project/Chapter 锁与捕获前版本 CAS；整段规划冲突回滚全部相关写入。正文观察核对 Canon、不可变计划和三处实际输入证据，默认 unknown；明确人工/冻结观察须提供同 BODY 的精确引用。后续比较排除不同发布版本、重叠时间/章节/评论及不足样本，只报告关联变化。旧的全局 audience calibration、世界规则自动改写及 review 反馈阻断继续不参与生产。
 
 ## Review 决策层
 

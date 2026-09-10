@@ -62,12 +62,12 @@ def _strong_feedback() -> ReaderFeedbackView:
 
 
 def _strong_hints() -> AudienceHintView:
-    return AudienceHintView(
-        pacing_hints=["立即压缩主线"],
-        clarity_hints=["重写世界规则"],
-        character_heat_changes=["增加配角戏份"],
-        risk_flags=["阻断当前正文"],
-    )
+    return AudienceHintView(items=[
+        {"action_id": "pacing", "category": "pacing", "text": "立即压缩主线"},
+        {"action_id": "clarity", "category": "clarity", "text": "重写世界规则"},
+        {"action_id": "heat", "category": "character_heat", "text": "增加配角戏份"},
+        {"action_id": "risk", "category": "risk", "text": "阻断当前正文"},
+    ])
 
 
 def _chapter_context(**updates) -> ChapterContextPack:
@@ -308,8 +308,8 @@ def test_existing_feedback_rows_remain_observable_but_do_not_change_automation(
         ]
         repo = StateRepository(session)
         observed_hints = repo.get_audience_hints(feedback_id, before_chapter=5)
-        assert observed_hints is not None
-        assert observed_hints.risk_flags == ["阻断当前正文"]
+        # Historical observations remain queryable but cannot become qualified input.
+        assert observed_hints is None
 
         baseline_draft = ContextDraft()
         FeedbackContextProvider().contribute(

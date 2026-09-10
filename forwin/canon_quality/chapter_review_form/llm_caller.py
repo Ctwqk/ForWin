@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from typing import Any
@@ -13,10 +14,9 @@ from forwin.observability.llm_trace import (
 )
 from forwin.utils.json_repair import parse_llm_json
 
-from .evidence_validator import validate_answers
 from .errors import ChapterReviewFormSchemaInvalid, ChapterReviewFormUnavailable
+from .evidence_validator import validate_answers
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
-
 
 _ALLOWED_INCONSISTENCY_KINDS = {
     "regression",
@@ -114,7 +114,7 @@ def call_form(
             )
         except ChapterReviewFormUnavailable:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ChapterReviewFormUnavailable(str(exc)) from exc
 
         last_raw = raw_result
@@ -185,6 +185,7 @@ def _complete_json(
     output_schema: dict[str, Any],
     max_tokens: int,
     timeout_seconds: float,
+    strict_json: bool = False,
 ) -> dict[str, Any]:
     complete_json = getattr(llm_client, "complete_json", None)
     if callable(complete_json):
@@ -195,11 +196,17 @@ def _complete_json(
             max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
         )
-        return _coerce_json_object(result)
+        return _coerce_json_object(result, strict=strict_json)
     generate_json = getattr(llm_client, "generate_json", None)
     if callable(generate_json):
+        timeout_kwargs = {}
+        if strict_json:
+            if "timeout_seconds" not in inspect.signature(generate_json).parameters:
+                raise ChapterReviewFormUnavailable("Historical generate_json requires explicit timeout_seconds support.")
+            timeout_kwargs["timeout_seconds"] = timeout_seconds
         return _coerce_json_object(
-            generate_json(messages=messages, output_schema=output_schema, temperature=0.0, max_tokens=max_tokens)
+            generate_json(messages=messages, output_schema=output_schema, temperature=0.0, max_tokens=max_tokens, **timeout_kwargs),
+            strict=strict_json,
         )
     chat = getattr(llm_client, "chat", None)
     if callable(chat):
@@ -213,8 +220,9 @@ def _complete_json(
             output_schema=output_schema,
             task_family="chapter_review_form",
             stage_key="chapter_review_form",
+            **({"retry_on_timeout": False} if strict_json else {}),
         )
-        return _coerce_json_object(raw)
+        return _coerce_json_object(raw, strict=strict_json)
     raise ChapterReviewFormUnavailable("No compatible structured JSON LLM client is configured.")
 
 
@@ -503,10 +511,14 @@ def _truncate_for_prompt(value: str, limit: int = 12000) -> str:
     return text[:limit] + "\n...[truncated]"
 
 
-def _coerce_json_object(value: Any) -> dict[str, Any]:
+def _coerce_json_object(value: Any, *, strict: bool = False) -> dict[str, Any]:
     if isinstance(value, dict):
+        if strict:
+            json.dumps(value, allow_nan=False)
         return value
-    parsed = parse_llm_json(str(value or ""), error_prefix="ChapterReviewForm")
+    parsed = json.loads(str(value or "")) if strict else parse_llm_json(str(value or ""), error_prefix="ChapterReviewForm")
     if not isinstance(parsed, dict):
         raise ChapterReviewFormSchemaInvalid("LLM response was not a JSON object.")
+    if strict:
+        json.dumps(parsed, allow_nan=False)
     return parsed

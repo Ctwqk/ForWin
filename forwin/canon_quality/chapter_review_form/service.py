@@ -7,7 +7,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.signals import (
     CanonQualitySignal,
@@ -15,6 +14,7 @@ from forwin.canon_quality.signals import (
     CountdownLedgerEntry,
     make_signal_id,
 )
+from forwin.config import FormBlockingPolicy
 from forwin.models.project import Project
 from forwin.protocol.writer import WriterOutput
 
@@ -158,10 +158,39 @@ def review_chapter_with_form(
         )
         return _with_budget_warnings(result, budget_warning_signals, budget_warning_issues)
 
+    return project_form_answers(
+        project_id=project_id, chapter_number=chapter_number, draft_id=draft_id,
+        form=form, answers=answers, chapter_text=body,
+        min_blocking_confidence=min_blocking_confidence, blocking_policy=blocking_policy,
+        mode=mode, budget_warning_signals=budget_warning_signals,
+        budget_warning_issues=budget_warning_issues,
+    )
+
+
+def project_form_answers(
+    *,
+    project_id: str,
+    chapter_number: int,
+    draft_id: str,
+    form: ChapterReviewForm,
+    answers: ChapterReviewAnswers,
+    chapter_text: str,
+    min_blocking_confidence: float = 0.8,
+    blocking_policy: FormBlockingPolicy | None = None,
+    mode: str = "primary",
+    budget_warning_signals: list[CanonQualitySignal] | None = None,
+    budget_warning_issues: list[dict[str, Any]] | None = None,
+) -> ChapterReviewFormResult:
+    """One evidence validator/projector for ordinary and historical form answers."""
+    dry_run = _is_dry_run_mode(mode)
+    result_mode = DRY_RUN_RESULT_MODE if dry_run else PRIMARY_SOURCE_MODE
+    source_mode = DRY_RUN_SOURCE_MODE if dry_run else PRIMARY_SOURCE_MODE
+    budget_warning_signals = budget_warning_signals or []
+    budget_warning_issues = budget_warning_issues or []
     validation_report = validate_answers(
         form=form,
         answers=answers,
-        chapter_text=body,
+        chapter_text=chapter_text,
         min_blocking_confidence=min_blocking_confidence,
     )
     projection: ProjectionResult = project_validated_answers(

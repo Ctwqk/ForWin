@@ -11,6 +11,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
 from forwin.models.audit import DecisionEvent
+from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ChapterPlan
 
@@ -293,9 +294,10 @@ def _accepted_future_chapter_anchor_constraints(
 
     rows = session.execute(
         select(ChapterPlan, ChapterDraft)
+        .join(CanonCommitRecord, CanonCommitRecord.id == ChapterPlan.active_commit_id)
         .join(
             CandidateDraftRecord,
-            CandidateDraftRecord.chapter_plan_id == ChapterPlan.id,
+            CandidateDraftRecord.id == CanonCommitRecord.candidate_id,
         )
         .join(
             ChapterDraft,
@@ -496,10 +498,11 @@ def _recent_canon_custody_constraints(*, session, project_id: str, before_chapte
     rows = session.execute(
         select(CandidateDraftRecord, ChapterDraft)
         .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
+        .join(CanonCommitRecord, CanonCommitRecord.candidate_id == CandidateDraftRecord.id)
+        .join(ChapterPlan, ChapterPlan.active_commit_id == CanonCommitRecord.id)
         .where(
             CandidateDraftRecord.project_id == project_id,
             CandidateDraftRecord.chapter_number < int(before_chapter or 0),
-            CandidateDraftRecord.status == "canon_committed",
             CandidateDraftRecord.canon_status == "canon",
         )
         .order_by(CandidateDraftRecord.chapter_number.desc(), CandidateDraftRecord.updated_at.desc())

@@ -9,23 +9,40 @@ from sqlalchemy import case, func, or_, select
 
 from forwin.audit.events import DecisionEventType
 from forwin.models.base import new_id
+from forwin.models.canon import CanonPublicationProtection
 from forwin.models.publisher import (
     PublisherExtensionClient,
     PublisherOperatorAction,
     PublisherUploadAttempt,
     PublisherUploadJob,
+    PublisherUploadReceipt,
 )
 
 from .audit import PublisherAuditService
 from .browser_sessions import as_utc, utc_now
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog
-
+from .protection import (
+    PublicationConflictError,
+    PublicationPrefixWait,
+    lock_job_chapter,
+    lock_publisher_projects,
+    release_absent_publication,
+    require_active_job,
+    reserve_publication,
+)
 
 EXECUTE_PHASES = ("claimed", "mutation_started", "receipt_observed")
 RECONCILE_PHASES = ("claimed", "observation_started", "receipt_observed")
 CLAIMABLE_TASK_KINDS = ("chapter_upload", "cover_upload", "audit_sync")
 RISK_PAUSE_REASONS = ("captcha", "mfa", "account_risk")
+
+
+class _RetryClaim:
+    pass
+
+
+_RETRY_CLAIM = _RetryClaim()
 
 
 class PublisherProtocolError(ValueError):
@@ -119,17 +136,42 @@ class PublisherAttemptService:
         claimed_at = now or utc_now()
         lease_duration = self._lease_seconds(lease_seconds)
 
+        # Expiry is its own short transaction; its books cannot invert the
+        # subsequent selected job's Project -> Chapter lock order.
+        with self.session_factory.begin() as expiry_session:
+            self._expire_in_session(expiry_session, now=claimed_at, interrupted=False)
+        # Each discarded pre-action payload commits before selecting another
+        # book, so this scan never holds project locks in conflicting order.
+        # Bound one request; later polls keep draining any larger stale backlog.
+        for _ in range(100):
+            result = self._claim_once(
+                worker_id=worker_id,
+                platforms=platforms,
+                claimed_at=claimed_at,
+                lease_duration=lease_duration,
+            )
+            if result is not _RETRY_CLAIM:
+                return result
+        return None
+
+    def _claim_once(
+        self,
+        *,
+        worker_id: str,
+        platforms: list[str],
+        claimed_at: datetime,
+        lease_duration: int,
+    ) -> dict[str, Any] | None | _RetryClaim:
         with self.session_factory() as session:
             client = self.connection_state.ensure_extension_client(session, worker_id)
             if client is None:
                 raise ValueError("publisher attempt worker_id must be non-empty")
-            # One worker may own only one claim; all later row locks use job -> attempt.
+            # One worker may own only one claim; project/chapter locks precede jobs.
             session.execute(
                 select(PublisherExtensionClient)
                 .where(PublisherExtensionClient.client_id == worker_id)
                 .with_for_update()
             ).scalar_one()
-            self._expire_in_session(session, now=claimed_at, interrupted=False)
             active_ids = session.execute(
                 select(PublisherUploadJob.id, PublisherUploadAttempt.id)
                 .join(
@@ -150,6 +192,7 @@ class PublisherAttemptService:
             ).one_or_none()
             if active_ids is not None:
                 active_job_id, active_attempt_id = active_ids
+                lock_job_chapter(session, active_job_id)
                 job = session.execute(
                     select(PublisherUploadJob)
                     .where(PublisherUploadJob.id == active_job_id)
@@ -187,7 +230,7 @@ class PublisherAttemptService:
                 session.commit()
                 return None
 
-            job = session.execute(
+            eligible = (
                 select(PublisherUploadJob)
                 .where(
                     PublisherUploadJob.deleted_at.is_(None),
@@ -219,13 +262,34 @@ class PublisherAttemptService:
                     PublisherUploadJob.created_at.asc(),
                     PublisherUploadJob.id.asc(),
                 )
-                .with_for_update(skip_locked=True)
                 .limit(1)
-            ).scalar_one_or_none()
+            )
+            selected_id = session.scalar(
+                eligible.with_only_columns(PublisherUploadJob.id)
+            )
+            if selected_id is None:
+                session.commit()
+                return None
+            lock_job_chapter(session, selected_id)
+            job = session.scalar(
+                eligible.where(PublisherUploadJob.id == selected_id).with_for_update()
+            )
             if job is None:
                 session.commit()
                 return None
 
+            if job.status != "reconciling":
+                try:
+                    require_active_job(session, job)
+                except ValueError as exc:
+                    self._retire_stale_pending_job(
+                        session,
+                        job=job,
+                        reason=str(exc),
+                        now=claimed_at,
+                    )
+                    session.commit()
+                    return _RETRY_CLAIM
             attempt_number = (
                 int(
                     session.scalar(
@@ -311,6 +375,64 @@ class PublisherAttemptService:
             session.refresh(attempt)
             return self._serialize_claim(job, attempt)
 
+    def _retire_stale_pending_job(
+        self, session, *, job, reason: str, now: datetime
+    ) -> None:
+        protection = session.scalar(
+            select(CanonPublicationProtection.state).where(
+                CanonPublicationProtection.upload_job_id == job.id,
+            )
+        )
+        uncertain = protection in {"reserved", "published"}
+        if protection is None:
+            uncertain = bool(
+                session.scalar(
+                    select(PublisherUploadAttempt.id)
+                    .where(
+                        PublisherUploadAttempt.upload_job_id == job.id,
+                        or_(
+                            PublisherUploadAttempt.attempt_kind == "reconcile",
+                            PublisherUploadAttempt.phase.in_(
+                                ["mutation_started", "receipt_observed"]
+                            ),
+                        ),
+                    )
+                    .limit(1)
+                )
+                or session.scalar(
+                    select(PublisherUploadReceipt.id)
+                    .where(
+                        PublisherUploadReceipt.upload_job_id == job.id,
+                    )
+                    .limit(1)
+                )
+            )
+        if uncertain:
+            self._move_job_to_reconciling(job, now=now)
+        else:
+            job.status = "cancelled"
+            job.abort_requested = True
+            job.finished_at = now
+            job.available_at = None
+            job.result_message = "旧 Canon 发布载荷已在外部动作前作废。"
+        job.error_message = reason
+        self.audit.record_upload_job_event(
+            session,
+            job=job,
+            event_type=(
+                DecisionEventType.UPLOAD_JOB_PROGRESS
+                if uncertain
+                else DecisionEventType.UPLOAD_JOB_CANCELLED
+            ),
+            summary=(
+                "旧发布身份保留保护，转入只读对账。"
+                if uncertain
+                else "旧 Canon 发布载荷已在外部动作前作废。"
+            ),
+            actor_type="system",
+            extra_payload={"reason": reason},
+        )
+
     def heartbeat(
         self,
         *,
@@ -366,6 +488,86 @@ class PublisherAttemptService:
                 raise PublisherInvalidTransitionError(
                     "publisher mutation cannot start after abort was requested"
                 )
+            if str(phase or "").strip() == "mutation_started":
+                if attempt.attempt_kind != "execute":
+                    raise PublisherInvalidTransitionError(
+                        f"unsupported {attempt.attempt_kind} attempt phase: mutation_started"
+                    )
+                try:
+                    reserve_publication(session, job)
+                except PublicationPrefixWait as exc:
+                    if attempt.phase != "claimed":
+                        raise  # Existing external mutations retain their recovery owner.
+                    attempt.status = "cancelled"
+                    attempt.finished_at = transitioned_at
+                    attempt.lease_expires_at = None
+                    job.status = "pending"
+                    job.current_attempt_id = ""
+                    job.extension_client_id = ""
+                    job.available_at = transitioned_at + timedelta(seconds=30)
+                    job.reconcile_after = None
+                    job.error_message = ""
+                    job.result_message = (
+                        "等待本平台前序章节确认公开；当前发布名额已释放。"
+                    )
+                    evidence = {
+                        "reason": exc.reason,
+                        "attempt_id": attempt.id,
+                        "retry_at": job.available_at.isoformat(),
+                    }
+                    attempt.result_json = json.dumps(evidence, sort_keys=True)
+                    payload = self._payload(job)
+                    payload["publication_wait"] = evidence
+                    job.result_payload_json = json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True
+                    )
+                    self.audit.record_upload_job_event(
+                        session,
+                        job=job,
+                        event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
+                        summary=job.result_message,
+                        actor_type="system",
+                        extra_payload=evidence,
+                    )
+                    session.commit()
+                    raise
+                except PublicationConflictError as exc:
+                    # No external action was authorized. Persist the conflict so
+                    # lease expiry cannot continually return this job to the front.
+                    attempt.status = "paused"
+                    attempt.finished_at = transitioned_at
+                    attempt.lease_expires_at = None
+                    attempt.error_code = exc.reason
+                    attempt.error_message = str(exc)
+                    job.status = "paused"
+                    job.current_attempt_id = ""
+                    job.extension_client_id = ""
+                    job.paused_at = transitioned_at
+                    job.pause_reason = exc.reason
+                    job.available_at = None
+                    job.reconcile_after = None
+                    job.error_message = str(exc)
+                    job.result_message = "同一章节已有受保护发布身份；当前任务已暂停。"
+                    evidence = {
+                        "conflicting_job_id": exc.conflicting_job_id,
+                        "attempt_id": attempt.id,
+                        "reason": exc.reason,
+                    }
+                    payload = self._payload(job)
+                    payload["publication_conflict"] = evidence
+                    job.result_payload_json = json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True
+                    )
+                    self.audit.record_upload_job_event(
+                        session,
+                        job=job,
+                        event_type=DecisionEventType.UPLOAD_JOB_PAUSED,
+                        summary=job.result_message,
+                        actor_type="system",
+                        extra_payload=evidence,
+                    )
+                    session.commit()
+                    raise
             self.advance_phase(attempt, phase)
             if current_url:
                 job.current_url = str(current_url).strip()
@@ -755,6 +957,14 @@ class PublisherAttemptService:
     def recover_interrupted(self, *, now: datetime | None = None) -> list[str]:
         recovered_at = now or utc_now()
         with self.session_factory() as session:
+            recovery_ids = list(
+                session.scalars(
+                    select(PublisherUploadJob.id).where(
+                        PublisherUploadJob.status.in_(["running", "terminating"])
+                    )
+                )
+            )
+            lock_publisher_projects(session, recovery_ids)
             job_ids = self._expire_in_session(
                 session,
                 now=recovered_at,
@@ -795,6 +1005,7 @@ class PublisherAttemptService:
     ) -> tuple[PublisherUploadJob, PublisherUploadAttempt]:
         normalized_job_id = str(job_id or "").strip()
         normalized_attempt_id = str(attempt_id or "").strip()
+        lock_job_chapter(session, normalized_job_id)
         job = session.execute(
             select(PublisherUploadJob)
             .where(
@@ -957,6 +1168,7 @@ class PublisherAttemptService:
             job.paused_at = None
             job.pause_reason = ""
         elif normalized_outcome == "absent":
+            release_absent_publication(session, job)
             attempt.status = "succeeded"
             attempt.phase = "observation_started"
             job.status = "cancelled" if job.abort_requested else "pending"
@@ -1035,6 +1247,15 @@ class PublisherAttemptService:
         lease_epoch: int,
         now: datetime,
     ) -> tuple[PublisherUploadJob, PublisherUploadAttempt]:
+        lock_job_chapter(session, str(job_id or "").strip())
+        job = session.execute(
+            select(PublisherUploadJob)
+            .where(
+                PublisherUploadJob.id == str(job_id or "").strip(),
+                PublisherUploadJob.deleted_at.is_(None),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
         attempt = session.execute(
             select(PublisherUploadAttempt)
             .where(
@@ -1042,14 +1263,6 @@ class PublisherAttemptService:
                 PublisherUploadAttempt.upload_job_id == str(job_id or "").strip(),
                 PublisherUploadAttempt.worker_id == str(worker_id or "").strip(),
                 PublisherUploadAttempt.lease_epoch == int(lease_epoch or 0),
-            )
-            .with_for_update()
-        ).scalar_one_or_none()
-        job = session.execute(
-            select(PublisherUploadJob)
-            .where(
-                PublisherUploadJob.id == str(job_id or "").strip(),
-                PublisherUploadJob.deleted_at.is_(None),
             )
             .with_for_update()
         ).scalar_one_or_none()
@@ -1114,6 +1327,7 @@ class PublisherAttemptService:
             .where(predicate)
             .order_by(PublisherUploadAttempt.created_at.asc())
         ).all()
+        lock_publisher_projects(session, [job_id for _, job_id in candidates])
         job_ids: list[str] = []
         for attempt_id, upload_job_id in candidates:
             job = session.execute(

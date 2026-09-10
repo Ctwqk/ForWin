@@ -18,6 +18,7 @@ from forwin.models.publisher import (
 from forwin.publisher_runtime.covers import PublisherCoverService
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from tests.postgres import postgres_test_url
+from tests.test_publisher_runtime_upload_jobs import seed_accepted_upload_identity
 
 
 PNG_1X1 = base64.b64decode(
@@ -115,6 +116,7 @@ def _run_cover_generation_job(
 
 
 def _complete_upload(runtime: PublisherRuntimeService, created: dict, payload: dict):
+    seed_accepted_upload_identity(runtime, created)
     claimed = runtime.upload_jobs.claim_next_upload_job(
         client_id="client-1",
         connected_platforms=[created["platform"]],

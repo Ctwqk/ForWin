@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -12,12 +20,15 @@ from .base import Base, new_id
 class CanonCommitRecord(Base):
     __tablename__ = "canon_commit_records"
     __table_args__ = (
+        UniqueConstraint(
+            "chapter_plan_id", "id", name="uq_canon_commit_chapter_identity"
+        ),
         Index("ux_canon_commits_idempotency_key", "idempotency_key", unique=True),
-        Index("ux_canon_commits_candidate", "candidate_id", unique=True),
+        Index("ix_canon_commits_candidate", "candidate_id"),
         Index(
-            "ux_canon_commits_project_chapter",
-            "project_id",
-            "chapter_number",
+            "ux_canon_commits_chapter_revision",
+            "chapter_plan_id",
+            "acceptance_revision",
             unique=True,
         ),
     )
@@ -33,6 +44,21 @@ class CanonCommitRecord(Base):
         String,
         ForeignKey("projects.id"),
         nullable=False,
+    )
+    chapter_plan_id: Mapped[str] = mapped_column(
+        String, ForeignKey("chapter_plans.id"), nullable=False
+    )
+    chapter_title: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default=""
+    )
+    acceptance_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    base_book_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    production_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="daily_serial", server_default="daily_serial"
     )
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
     expected_previous_accepted_chapter: Mapped[int] = mapped_column(
@@ -63,3 +89,41 @@ class CanonCommitRecord(Base):
 
 
 __all__ = ["CanonCommitRecord"]
+
+
+class CanonPublicationProtection(Base):
+    """Publication facts outlive upload jobs, attempts and platform bindings."""
+
+    __tablename__ = "canon_publication_protections"
+    __table_args__ = (
+        Index("ux_canon_publication_job", "upload_job_id", unique=True),
+        Index("ix_canon_publication_range", "project_id", "chapter_number", "state"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    chapter_plan_id: Mapped[str] = mapped_column(
+        String, ForeignKey("chapter_plans.id"), nullable=False
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    canon_commit_id: Mapped[str] = mapped_column(
+        String, ForeignKey("canon_commit_records.id"), nullable=False
+    )
+    upload_job_id: Mapped[str] = mapped_column(String, nullable=False)
+    platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False, default="reserved")
+    remote_book_id: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default=""
+    )
+    remote_chapter_id: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default=""
+    )
+    evidence_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}", server_default="{}"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )

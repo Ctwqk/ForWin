@@ -16,6 +16,7 @@ from forwin.models.publisher import (
 )
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from tests.postgres import postgres_test_url
+from tests.test_publisher_runtime_upload_jobs import seed_accepted_upload_identity
 
 
 def _session_factory(name: str):
@@ -57,6 +58,7 @@ def _complete_upload(
     current_url: str,
     result_payload: dict,
 ) -> dict:
+    seed_accepted_upload_identity(runtime, created)
     claimed = runtime.upload_jobs.claim_next_upload_job(
         client_id="client-1",
         connected_platforms=[created["platform"]],
@@ -337,7 +339,7 @@ def test_upload_success_upserts_chapter_binding() -> None:
             chapter = session.execute(select(PublisherChapterBinding)).scalar_one()
             assert chapter.project_id == project_id
             assert chapter.platform_id == "fanqie"
-            assert chapter.chapter_number == 0
+            assert chapter.chapter_number == 1
             assert chapter.chapter_title == "第一章"
             assert chapter.remote_chapter_id == "chapter-456-1"
             assert chapter.publish_state == "published"

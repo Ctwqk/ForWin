@@ -7,17 +7,8 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.chapter_titles import rebase_generic_numeric_chapter_title
-from forwin.planning.checkpoints import BandCheckpointDetail
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.contracts import (
-    derive_band_task_contract,
-    derive_chapter_task_contract,
-    plan_task_contract_to_json,
-)
-from forwin.review.issue_groups import issue_group_for_issue
-from forwin.observability.redaction import redact_payload
+from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.models import (
     ArcPlanVersion,
     BandCheckpoint,
@@ -25,8 +16,8 @@ from forwin.models import (
     BookGenesisRevision,
     ChapterDraft,
     ChapterPlan,
-    ChapterRewriteAttempt,
     ChapterReview,
+    ChapterRewriteAttempt,
     DecisionEvent,
     NarrativeConstraint,
     Project,
@@ -35,12 +26,21 @@ from forwin.models import (
     SubWorldRosterItem,
     new_id,
 )
+from forwin.observability.redaction import redact_payload
+from forwin.planning.checkpoints import BandCheckpointDetail
+from forwin.planning.constraints import NarrativeConstraintInfo
+from forwin.planning.contracts import (
+    derive_band_task_contract,
+    derive_chapter_task_contract,
+    plan_task_contract_to_json,
+)
 from forwin.protocol import (
     BandDelightSchedule,
     ChapterExperiencePlan,
     ReviewVerdict,
     WriterOutput,
 )
+from forwin.review.issue_groups import issue_group_for_issue
 
 if TYPE_CHECKING:
     from forwin.runtime.policy import RuntimePolicy
@@ -646,7 +646,10 @@ class StateUpdater:
         canon_risk_level: str | None = None,
     ) -> None:
         """Update the status field on a ChapterPlan row."""
-        plan = self._repo.get_chapter_plan(project_id, chapter_number)
+        self.session.scalar(select(Project).where(Project.id == project_id).with_for_update())
+        plan = self.session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number
+        ).with_for_update().execution_options(populate_existing=True))
         if plan is None:
             logger.warning(
                 "Cannot mark status: no chapter plan found for project=%s chapter=%d.",
@@ -654,6 +657,10 @@ class StateUpdater:
                 chapter_number,
             )
             return
+        if plan.active_commit_id:
+            if status != "accepted":
+                raise ValueError("accepted chapter requires a candidate revision; cannot reset active acceptance")
+            return  # Canon already wrote its acceptance metadata atomically.
         plan.title = rebase_generic_numeric_chapter_title(plan.title, chapter_number)
         plan.status = status
         if acceptance_mode is not None:

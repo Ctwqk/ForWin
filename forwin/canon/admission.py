@@ -6,8 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.candidate_drafts import (
@@ -16,15 +15,16 @@ from forwin.candidate_drafts import (
     candidate_plan_revision,
     candidate_writer_output_admission_fingerprint,
 )
+from forwin.canon.identity import active_commit_predicate
+from forwin.maintenance.state import post_canon_barrier_ready
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.audit import DecisionEvent
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import ChapterPlan, Project
-from forwin.maintenance.state import post_canon_barrier_ready
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.outbox.store import enqueue_outbox_event
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
@@ -34,7 +34,6 @@ from .entity_admission import EntityAdmissionCommitter
 from .historical_rewrite import HistoricalCanonRewriteService, HistoricalRewriteInvalid
 from .plan import CanonCommitPlan
 from .types import CanonAdmissionOutcome, CanonWorldEditOutcome
-
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +87,11 @@ class CanonAdmissionService:
                     .with_for_update()
                 ).scalar_one_or_none()
                 if prior is not None:
-                    if prior.status == "superseded":
+                    if not session.scalar(
+                        select(ChapterPlan.id).where(
+                            ChapterPlan.active_commit_id == prior.id
+                        )
+                    ):
                         raise CanonStaleVersion("Canon commit has been superseded")
                     return _outcome_from_record(prior, idempotent=True)
 
@@ -118,25 +121,18 @@ class CanonAdmissionService:
                     .where(CandidateDraftRecord.id == plan.candidate_id)
                     .with_for_update()
                 ).scalar_one_or_none()
-                rewrite = None
                 try:
-                    if chapter is not None and chapter.status != "accepted":
-                        rewrite = HistoricalCanonRewriteService(
-                            session
-                        ).prepare_replacement(plan)
+                    if chapter is not None:
+                        HistoricalCanonRewriteService(session).prepare_replacement(plan)
                 except HistoricalRewriteInvalid as exc:
                     raise CanonStaleVersion(str(exc)) from exc
-                if rewrite is not None:
-                    rewrite.retire_old_contribution()
                 self._revalidate_locked_plan(
                     session=session,
                     project=project,
                     chapter=chapter,
                     candidate=candidate,
                     plan=plan,
-                    retained_chapter_delta_ids=frozenset(rewrite.retained_delta_ids)
-                    if rewrite
-                    else frozenset(),
+                    retained_chapter_delta_ids=frozenset(),
                 )
 
                 commit_id = plan.canon_commit_id
@@ -155,10 +151,6 @@ class CanonAdmissionService:
                 if compile_result.metadata.get("idempotent"):
                     raise CanonStaleVersion(
                         "BookState deltas already exist without a Canon commit record"
-                    )
-                if rewrite is not None:
-                    compile_result = rewrite.rebuild_successor_projections(
-                        compile_result, compiler=BookStateCompiler(session)
                     )
                 session.flush()
                 inject("book_state")
@@ -236,13 +228,6 @@ class CanonAdmissionService:
                     "commit_id": commit_id,
                     "compile_result": compile_result.model_dump(mode="json"),
                 }
-                if rewrite is not None:
-                    rewrite.mark_prior_commit_superseded()
-                    result_payload["historical_rewrite"] = {
-                        "superseded_commit_id": rewrite.previous.id,
-                        "retired_delta_ids": rewrite.retired_delta_ids,
-                        "replayed_chapters": rewrite.replayed_chapters,
-                    }
                 session.add(
                     CanonCommitRecord(
                         id=commit_id,
@@ -250,6 +235,10 @@ class CanonAdmissionService:
                         candidate_id=plan.candidate_id,
                         project_id=plan.project_id,
                         chapter_number=plan.chapter_number,
+                        chapter_plan_id=chapter.id,
+                        chapter_title=plan.chapter_title,
+                        acceptance_revision=1,
+                        base_book_revision=project.book_revision,
                         expected_previous_accepted_chapter=(
                             plan.expected_previous_accepted_chapter
                         ),
@@ -269,6 +258,9 @@ class CanonAdmissionService:
                         ),
                     )
                 )
+                session.flush()
+                chapter.active_commit_id = commit_id
+                project.book_revision += 1
                 session.flush()
                 return CanonAdmissionOutcome(
                     commit_id=commit_id,
@@ -309,6 +301,7 @@ class CanonAdmissionService:
                 CanonCommitRecord.project_id == plan.project_id,
                 CanonCommitRecord.chapter_number == previous_chapter,
                 CanonCommitRecord.status == "committed",
+                active_commit_predicate(),
             )
         ).scalar_one_or_none()
         if previous is None:
@@ -342,6 +335,8 @@ class CanonAdmissionService:
         plan: CanonCommitPlan,
         retained_chapter_delta_ids: frozenset[str] = frozenset(),
     ) -> None:
+        if project.book_revision != plan.expected_book_revision:
+            raise CanonStaleVersion("book revision changed after Canon preparation")
         if chapter is None:
             raise CanonStaleVersion("chapter plan no longer exists")
         if str(chapter.status or "") == "accepted":
@@ -462,6 +457,22 @@ class CanonAdmissionService:
         if approved_changes.project_id != project_id:
             raise CanonStaleVersion("world edit project changed")
 
+        from forwin.publisher_runtime.protection import (
+            lock_project_chapters,
+            require_revision_unprotected,
+        )
+
+        lock_project_chapters(session, project_id)
+        require_revision_unprotected(
+            session,
+            project_id=project_id,
+            from_chapter=min(
+                [
+                    approved_changes.chapter_number,
+                    *(delta.chapter_number for delta in approved_changes.graph_deltas),
+                ]
+            ),
+        )
         compile_result = BookStateCompiler(session).compile(
             approved_changes,
             compiler_run_id=f"canon-world-edit-{proposal.id}",
@@ -476,6 +487,7 @@ class CanonAdmissionService:
                 "world edit delta already exists without an accepted proposal"
             )
 
+        project.book_revision += 1
         proposal.status = "accepted"
         proposal.reviewed_at = datetime.now(UTC)
         proposal.review_reason = reason

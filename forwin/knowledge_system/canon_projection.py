@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
 import hashlib
 import json
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
+from forwin.canon.identity import active_commit_predicate
 from forwin.knowledge_system.checkpoints import (
     PROJECTION_COMPONENTS,
     ProjectionCheckpointStore,
@@ -23,7 +24,6 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ChapterPlan
 from forwin.obsidian import ObsidianExporter
-
 
 ComponentRunner = Callable[[ProjectionTarget], Any]
 _MAX_TARGET_CONVERGENCE_PASSES = 8
@@ -254,6 +254,7 @@ class CanonProjectionService:
                     .where(
                         CanonCommitRecord.project_id == target.project_id,
                         CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
                         CanonCommitRecord.chapter_number <= target.chapter_number,
                         CandidateDraftRecord.status == "accepted",
                         ChapterPlan.status == "accepted",

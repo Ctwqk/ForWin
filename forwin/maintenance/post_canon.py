@@ -1,22 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import json
 import math
 import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from forwin.audience.feedback import run_feedback_aggregation_pass
-from forwin.models.base import new_id
-from forwin.models.canon import CanonCommitRecord
-from forwin.models.draft import CandidateDraftRecord
-from forwin.models.maintenance import PostCanonMaintenanceRun
-from forwin.models.project import Project
+from forwin.canon.identity import active_commit_predicate, is_active_commit
 from forwin.maintenance.events import (
     ORDER_CONTROLS_KEY,
     POST_CANON_STEP_NAMES,
@@ -28,11 +24,15 @@ from forwin.maintenance.state import (
     post_canon_phase3_complete,
 )
 from forwin.maintenance.trace_upload import enqueue_trace_upload
+from forwin.models.base import new_id
+from forwin.models.canon import CanonCommitRecord
+from forwin.models.draft import CandidateDraftRecord
+from forwin.models.maintenance import PostCanonMaintenanceRun
+from forwin.models.project import Project
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.simulation.world import save_world_turn
-
 
 MAX_ERROR_LENGTH = 4000
 
@@ -193,6 +193,7 @@ class PostCanonMaintenanceService:
                     CanonCommitRecord.project_id == normalized_project,
                     CanonCommitRecord.chapter_number == normalized_chapter,
                     CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
                 )
             ).scalar_one_or_none()
         if commit is None:
@@ -230,7 +231,7 @@ class PostCanonMaintenanceService:
             commit = session.get(CanonCommitRecord, commit_id)
             if (
                 commit is None
-                or commit.status != "committed"
+                or commit.status != "committed" or not is_active_commit(session, commit)
                 or commit.idempotency_key != normalized_canon_key
                 or commit.project_id != normalized_project
                 or int(commit.chapter_number or 0) != normalized_chapter
@@ -254,6 +255,7 @@ class PostCanonMaintenanceService:
                     CanonCommitRecord.project_id == str(project_id or "").strip(),
                     CanonCommitRecord.chapter_number < int(chapter_number or 0),
                     CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
                 )
                 .order_by(CanonCommitRecord.chapter_number.desc())
                 .limit(1)
@@ -276,7 +278,7 @@ class PostCanonMaintenanceService:
         commit_id = str(canon_commit_id or "").strip()
         with self.session_factory() as session:
             commit = session.get(CanonCommitRecord, commit_id)
-            if commit is None or commit.status != "committed":
+            if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
                 raise ValueError(f"Committed Canon not found: {commit_id}")
             rows = list(
                 session.execute(
@@ -336,7 +338,7 @@ class PostCanonMaintenanceService:
                 commit = session.get(CanonCommitRecord, commit_id)
                 if (
                     commit is None
-                    or commit.status != "committed"
+                    or commit.status != "committed" or not is_active_commit(session, commit)
                     or commit.project_id != str(project_id or "").strip()
                     or int(commit.chapter_number or 0) != int(chapter_number or 0)
                 ):
@@ -403,7 +405,7 @@ class PostCanonMaintenanceService:
                     return dict(result) if isinstance(result, dict) else {}
 
                 commit = session.get(CanonCommitRecord, commit_id)
-                if commit is None or commit.status != "committed":
+                if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
                     raise ValueError(f"Committed Canon not found: {commit_id}")
                 self._drain_llm_attempts()
                 result = dict(runner(session, commit) or {})
@@ -469,7 +471,7 @@ class PostCanonMaintenanceService:
                 .where(CanonCommitRecord.id == canon_commit_id)
                 .with_for_update()
             ).scalar_one_or_none()
-            if commit is None or commit.status != "committed":
+            if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
                 raise ValueError(f"Committed Canon not found: {canon_commit_id}")
             candidate = session.get(CandidateDraftRecord, commit.candidate_id)
             if (
@@ -522,6 +524,7 @@ class PostCanonMaintenanceService:
                     CanonCommitRecord.project_id == commit.project_id,
                     CanonCommitRecord.chapter_number < commit.chapter_number,
                     CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
                 )
                 .order_by(CanonCommitRecord.chapter_number.desc())
                 .limit(1)
@@ -646,7 +649,7 @@ class PostCanonMaintenanceService:
             heartbeat.start()
             with self.session_factory.begin() as session:
                 commit = session.get(CanonCommitRecord, claim.canon_commit_id)
-                if commit is None or commit.status != "committed":
+                if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
                     raise ValueError("maintenance Canon commit is unavailable")
                 self._drain_llm_attempts()
                 result = dict(runner(session, commit) or {})

@@ -1,47 +1,49 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from sqlalchemy.orm import Session
+
+from forwin.audit.events import DecisionEventType
 from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.models.project import ChapterPlan
-import json
+from forwin.checker.rules import ContinuityChecker
 from forwin.generation.pipeline_core.common import logger
-from forwin.protocol.review import ReviewVerdict
-from forwin.protocol.experience import (
-    BandDelightSchedule,
-    ChapterExperiencePlan,
+from forwin.generation.pipeline_core.quality_gates import (
+    _latest_draft_and_review_for_chapter,
 )
+from forwin.generation.pipeline_core.repair_budget import repair_word_budget_patch
+from forwin.generation.pipeline_core.repair_budget_events import (
+    record_repair_body_budget_event,
+)
+from forwin.models.audit import DecisionEvent
 from forwin.models.draft import (
     ChapterDraft,
     ChapterReview,
 )
-from forwin.checker.rules import ContinuityChecker
+from forwin.models.project import ChapterPlan
+from forwin.protocol.experience import (
+    BandDelightSchedule,
+    ChapterExperiencePlan,
+)
 from forwin.protocol.review import (
     ContinuityIssue,
+    FinalResidualDecision,
     RepairInstruction,
+    ReviewVerdict,
 )
-from forwin.audit.events import DecisionEventType
-from forwin.models.audit import DecisionEvent
-from forwin.retrieval import RetrievalBroker
-from forwin.runtime.policy import RuntimePolicy
-from sqlalchemy.orm import Session
-from forwin.state.repo import StateRepository
-from forwin.state.updater import StateUpdater
 from forwin.protocol.writer import WriterOutput
-from forwin.protocol.review import FinalResidualDecision
+from forwin.retrieval import RetrievalBroker
 from forwin.review.decision.engine import AutoDecisionEngine
 from forwin.review.decision.rules.final_residual import build_final_residual_rules
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
-from forwin.generation.pipeline_core.repair_budget import repair_word_budget_patch
-from forwin.generation.pipeline_core.repair_budget_events import (
-    record_repair_body_budget_event,
-)
-from forwin.generation.pipeline_core.quality_gates import (
-    _latest_draft_and_review_for_chapter,
-)
+from forwin.runtime.policy import RuntimePolicy
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
 
 
 @dataclass(frozen=True, slots=True)
@@ -1198,6 +1200,8 @@ def _apply_repair_patch(
     repair_scope: str,
     repair_instruction: RepairInstruction,
 ) -> tuple[dict[str, object], Any, dict[str, object], dict[str, object], str]:
+    if getattr(chapter_plan, "active_commit_id", None) and repair_scope != "draft":
+        raise ValueError("accepted chapter plan requires an isolated candidate revision")
     current_plan = (
         repo.get_chapter_experience_plan(project_id, chapter_plan.chapter_number)
         or ChapterExperiencePlan()

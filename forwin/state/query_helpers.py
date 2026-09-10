@@ -6,7 +6,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.models.draft import ChapterDraft
+from forwin.models.canon import CanonCommitRecord
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -15,7 +16,7 @@ from forwin.models.phase import (
     ProjectStageAnalysis,
 )
 from forwin.models.phase4 import WorldSimulationTurn
-from forwin.models.project import ArcPlanVersion
+from forwin.models.project import ArcPlanVersion, ChapterPlan
 
 
 def _as_list(values: Iterable[str]) -> list[str]:
@@ -100,17 +101,43 @@ def load_latest_drafts_by_plan_id(
     session: Session,
     chapter_plan_ids: Iterable[str],
 ) -> dict[str, ChapterDraft]:
-    return _load_latest_partitioned_rows(
+    """Return active accepted text, or the newest draft for an unaccepted plan."""
+    ids = _as_list(chapter_plan_ids)
+    active_ids = set(
+        session.scalars(
+            select(ChapterPlan.id).where(
+                ChapterPlan.id.in_(ids), ChapterPlan.active_commit_id.is_not(None)
+            )
+        )
+    )
+    drafts = _load_latest_partitioned_rows(
         session,
         ChapterDraft,
         ChapterDraft.chapter_plan_id,
-        chapter_plan_ids,
+        [plan_id for plan_id in ids if plan_id not in active_ids],
         order_by=(
             ChapterDraft.version.desc(),
             ChapterDraft.created_at.desc(),
             ChapterDraft.id.desc(),
         ),
     )
+    active_drafts = session.scalars(
+        select(ChapterDraft)
+        .join(
+            CandidateDraftRecord,
+            CandidateDraftRecord.candidate_draft_id == ChapterDraft.id,
+        )
+        .join(
+            CanonCommitRecord, CanonCommitRecord.candidate_id == CandidateDraftRecord.id
+        )
+        .join(ChapterPlan, ChapterPlan.active_commit_id == CanonCommitRecord.id)
+        .where(
+            ChapterPlan.id.in_(active_ids),
+            ChapterDraft.chapter_plan_id == ChapterPlan.id,
+        )
+    )
+    drafts.update({draft.chapter_plan_id: draft for draft in active_drafts})
+    return drafts
 
 
 def load_latest_rewrite_attempts_by_chapter(

@@ -653,6 +653,27 @@ class BookStateRepository:
             .scalars()
             .all()
         )
+        # Retain the entire ledger, but never replay retired acceptance evidence.
+        # Unowned deltas include Genesis, standalone edits and the current
+        # transaction's provisional compile, which do not yet have a commit.
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.models.project import ChapterPlan
+        manifests = self.session.execute(select(
+            CanonCommitRecord.id, CanonCommitRecord.graph_delta_ids_json
+        ).where(CanonCommitRecord.project_id == project_id,
+                CanonCommitRecord.chapter_number > after_chapter,
+                CanonCommitRecord.chapter_number <= through_chapter)).all()
+        active_ids = set(self.session.scalars(select(ChapterPlan.active_commit_id).where(
+            ChapterPlan.project_id == project_id)))
+        owned, effective = set(), set()
+        for commit_id, raw in manifests:
+            ids = json.loads(raw)
+            if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
+                raise ValueError("Canon delta manifest is invalid")
+            owned.update(ids)
+            if commit_id in active_ids:
+                effective.update(ids)
+        rows = [row for row in rows if row.id not in owned or row.id in effective]
         patch_rows = list(
             self.session.execute(
                 select(GraphDeltaPatchRow)
@@ -1426,11 +1447,14 @@ class BookStateRepository:
     # ------------------------------------------------------------------
 
     def latest_world_snapshot(self, project_id: str, as_of_chapter: int) -> WorldSnapshot | None:
+        from forwin.canon.identity import effective_snapshot_predicate
+        from forwin.models.canon import CanonCommitRecord
         row = self.session.execute(
             select(WorldSnapshotRow)
             .where(
                 WorldSnapshotRow.project_id == project_id,
                 WorldSnapshotRow.as_of_chapter <= as_of_chapter,
+                effective_snapshot_predicate(WorldSnapshotRow.id, CanonCommitRecord.world_snapshot_id),
             )
             .order_by(WorldSnapshotRow.as_of_chapter.desc(), WorldSnapshotRow.built_at.desc(), WorldSnapshotRow.id.desc())
             .limit(1)
@@ -1438,11 +1462,14 @@ class BookStateRepository:
         return _world_snapshot_from_row(row) if row else None
 
     def latest_map_snapshot(self, project_id: str, as_of_chapter: int) -> MapSnapshot | None:
+        from forwin.canon.identity import effective_snapshot_predicate
+        from forwin.models.canon import CanonCommitRecord
         row = self.session.execute(
             select(MapSnapshotRow)
             .where(
                 MapSnapshotRow.project_id == project_id,
                 MapSnapshotRow.as_of_chapter <= as_of_chapter,
+                effective_snapshot_predicate(MapSnapshotRow.id, CanonCommitRecord.map_snapshot_id),
             )
             .order_by(MapSnapshotRow.as_of_chapter.desc(), MapSnapshotRow.built_at.desc(), MapSnapshotRow.id.desc())
             .limit(1)

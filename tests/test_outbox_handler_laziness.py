@@ -218,8 +218,8 @@ def test_publisher_handler_resolves_materializer_lazily_once() -> None:
     calls: list[object] = []
 
     class Service:
-        def materialize(self, **request) -> None:
-            calls.append(("materialize", request))
+        def materialize_event(self, event) -> None:
+            calls.append(("materialize_event", event.model_dump(mode="json")))
 
     service = Service()
 
@@ -238,12 +238,12 @@ def test_publisher_handler_resolves_materializer_lazily_once() -> None:
 
     assert calls[0] == "provider"
     assert calls.count("provider") == 1
-    assert [item[0] for item in calls[1:]] == ["materialize", "materialize"]
+    assert [item[0] for item in calls[1:]] == ["materialize_event", "materialize_event"]
     request = calls[1][1]
     assert request["canon_idempotency_key"] == CANON_KEY
-    assert request["bindings"][0]["platform"] == "qidian"
-    assert request["bindings"][0]["book_name"] == "事件快照书名"
-    assert request["bindings"][0]["book_meta"]["theme_tags"] == ["悬疑", "都市"]
+    assert request["publisher_bindings"][0]["platform"] == "qidian"
+    assert request["publisher_bindings"][0]["book_name"] == "事件快照书名"
+    assert request["publisher_bindings"][0]["book_meta"]["theme_tags"] == ["悬疑", "都市"]
 
 
 @pytest.mark.parametrize(

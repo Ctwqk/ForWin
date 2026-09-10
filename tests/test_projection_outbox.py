@@ -214,11 +214,15 @@ def test_canon_projection_failure_preserves_acceptance_and_retries(
                 idempotency_key=candidate.idempotency_key,
                 candidate_id=candidate.id,
                 project_id=project.id,
+                chapter_plan_id=chapter.id,
+                chapter_title=chapter.title,
                 chapter_number=1,
                 status="committed",
             )
             session.add(commit)
             session.flush()
+            chapter.active_commit_id = commit.id
+            project.book_revision = 1
             candidate.canon_commit_id = commit.id
             session.add(candidate)
             event = enqueue_outbox_event(

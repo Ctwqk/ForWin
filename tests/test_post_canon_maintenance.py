@@ -30,7 +30,7 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.planning_control import BandCheckpoint
-from forwin.models.project import Project
+from forwin.models.project import Project, ChapterPlan
 from forwin.runtime.policy import RuntimePolicy
 from forwin.storage.artifacts import ArtifactStore
 
@@ -115,6 +115,7 @@ def _durable_service():
         session.add(
             CanonCommitRecord(
                 id="canon-1",
+                chapter_plan_id="plan-1",
                 idempotency_key="canon-key-1",
                 candidate_id="candidate-1",
                 project_id="project-1",
@@ -122,6 +123,8 @@ def _durable_service():
                 status="committed",
             )
         )
+        session.add(ChapterPlan(id="plan-1", project_id="project-1", arc_plan_id="arc-1",
+                                chapter_number=1, status="accepted", active_commit_id="canon-1"))
     calls: list[str] = []
     service = PostCanonMaintenanceService(
         session_factory=sessions,
@@ -265,7 +268,7 @@ def test_failure_write_is_fenced_by_unexpired_lease() -> None:
 def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None:
     transaction_errors: list[type[BaseException] | None] = []
     failed_claims = []
-    commit = SimpleNamespace(id="canon-1", status="committed")
+    commit = SimpleNamespace(id="canon-1", status="committed", chapter_plan_id="plan-1", active_commit_id="canon-1", project_id="project-1", chapter_number=1)
 
     class FakeSession:
         def get(self, _model, _identity):
@@ -347,7 +350,7 @@ def test_stale_completion_fence_is_rejected() -> None:
 
 
 def test_stale_completion_cannot_enqueue_trace() -> None:
-    commit = SimpleNamespace(id="canon-1", status="committed")
+    commit = SimpleNamespace(id="canon-1", status="committed", chapter_plan_id="plan-1", active_commit_id="canon-1", project_id="project-1", chapter_number=1)
 
     class FakeSession:
         def get(self, _model, _identity):
@@ -413,6 +416,7 @@ def test_order_controls_reject_noncanonical_step_set() -> None:
 def test_run_materialization_rejects_unknown_step_rows() -> None:
     commit = SimpleNamespace(
         id="canon-1",
+        chapter_plan_id="plan-1", active_commit_id="canon-1",
         idempotency_key="canon-key-1",
         project_id="project-1",
         chapter_number=1,
@@ -443,7 +447,7 @@ def test_run_materialization_rejects_unknown_step_rows() -> None:
             return next(self.results)
 
         def get(self, _model, _identity):
-            return candidate
+            return commit if _model is ChapterPlan else candidate
 
         def add(self, _row) -> None:
             raise AssertionError("unknown steps must fail before materialization")
@@ -459,6 +463,7 @@ def test_run_materialization_rejects_unknown_step_rows() -> None:
 def test_phase3_event_requires_complete_canon_identity() -> None:
     commit = SimpleNamespace(
         id="canon-1",
+        chapter_plan_id="plan-1", active_commit_id="canon-1",
         idempotency_key="canon-key-1",
         project_id="project-1",
         chapter_number=1,
@@ -492,6 +497,7 @@ def test_phase3_event_requires_complete_canon_identity() -> None:
 def test_synchronous_chapter_entrypoint_rejects_mismatched_canon() -> None:
     commit = SimpleNamespace(
         id="canon-1",
+        chapter_plan_id="plan-1", active_commit_id="canon-1",
         project_id="other-project",
         chapter_number=1,
         status="committed",
@@ -599,6 +605,7 @@ def test_blocked_order_controls_are_re_evaluated_until_clear() -> None:
     feedback.result_json = "{}"
     commit = SimpleNamespace(
         id="canon-1",
+        chapter_plan_id="plan-1", active_commit_id="canon-1",
         project_id="project-1",
         chapter_number=1,
         status="committed",

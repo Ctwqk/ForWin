@@ -33,6 +33,81 @@ def _runtime(name: str) -> tuple[object, PublisherRuntimeService]:
     )
 
 
+def seed_accepted_upload_identity(
+    runtime: PublisherRuntimeService, created: dict
+) -> None:
+    """Supply the accepted Canon side of this isolated publisher lifecycle fixture."""
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
+    from forwin.models.project import ArcPlanVersion, ChapterPlan
+
+    with runtime.session_factory.begin() as session:
+        job = session.get(PublisherUploadJob, created["job_id"])
+        if (
+            not job.project_id
+            or job.task_kind != "chapter_upload"
+            or job.canon_commit_id
+        ):
+            return
+        arc = ArcPlanVersion(
+            project_id=job.project_id, arc_synopsis="Publisher test arc"
+        )
+        session.add(arc)
+        session.flush()
+        chapter = ChapterPlan(
+            project_id=job.project_id,
+            arc_plan_id=arc.id,
+            chapter_number=1,
+            title=job.chapter_title,
+            status="accepted",
+        )
+        session.add(chapter)
+        session.flush()
+        draft = ChapterDraft(
+            chapter_plan_id=chapter.id,
+            version=1,
+            body_text=job.body_text,
+            char_count=len(job.body_text),
+        )
+        session.add(draft)
+        session.flush()
+        review = ChapterReview(draft_id=draft.id, verdict="pass")
+        session.add(review)
+        session.flush()
+        candidate = CandidateDraftRecord(
+            project_id=job.project_id,
+            chapter_plan_id=chapter.id,
+            chapter_number=1,
+            candidate_draft_id=draft.id,
+            review_id=review.id,
+            body_hash=job.body_sha256,
+            status="accepted",
+            canon_status="canon",
+        )
+        session.add(candidate)
+        session.flush()
+        commit = CanonCommitRecord(
+            idempotency_key=f"fixture-canon:{job.id}",
+            candidate_id=candidate.id,
+            project_id=job.project_id,
+            chapter_plan_id=chapter.id,
+            chapter_number=1,
+            chapter_title=job.chapter_title,
+        )
+        session.add(commit)
+        session.flush()
+        chapter.active_commit_id = commit.id
+        candidate.canon_commit_id = commit.id
+        candidate.idempotency_key = commit.idempotency_key
+        session.get(Project, job.project_id).book_revision += 1
+        job.canon_commit_id = commit.id
+        job.candidate_id = candidate.id
+        job.chapter_number = 1
+        created.update(
+            canon_commit_id=commit.id, candidate_id=candidate.id, chapter_number=1
+        )
+
+
 def _complete_mutating_job(
     runtime: PublisherRuntimeService,
     created: dict,
@@ -117,6 +192,7 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
                 "intro": "这是一本关于发布运行时的长篇测试作品，简介用于通过平台建书预检，并验证 payload 不泄露正文。",
             },
         )
+        seed_accepted_upload_identity(runtime, created)
         claimed = runtime.upload_jobs.claim_next_upload_job(
             client_id="client-1",
             connected_platforms=["qidian"],

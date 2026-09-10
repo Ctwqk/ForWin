@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,18 +20,19 @@ from forwin.models.publisher import (
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
 from forwin.review.publisher_compliance import PublisherComplianceReviewer
-from .audit import PublisherAuditService, terminal_upload_event_type
+
 from .attempts import (
     PublisherAttemptFenceError,
     PublisherInvalidTransitionError,
     PublisherReceiptRequiredError,
     PublisherResourceNotFoundError,
 )
+from .audit import PublisherAuditService, terminal_upload_event_type
 from .browser_sessions import as_utc, isoformat, utc_now
-from .receipts import PublisherReceiptValidationError
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog, PlatformSpec
-
+from .protection import lock_job_chapter, lock_project_chapters, require_active_job
+from .receipts import PublisherReceiptValidationError
 
 LOGIN_FAILURE_ERROR_CODES = {
     "login-required",
@@ -600,6 +601,7 @@ class UploadJobService:
         publish: bool,
         actor_type: str,
     ) -> list[PublisherUploadJob]:
+        lock_project_chapters(session, project_id)
         jobs = (
             session.execute(
                 select(PublisherUploadJob)
@@ -627,6 +629,7 @@ class UploadJobService:
             if job.deleted_at is not None:
                 raise ValueError(f"publisher job is deleted: {job.id}")
 
+            require_active_job(session, job)
             payload = _load_json_object(job.result_payload_json)
             if bool(job.publish) != publish:
                 if self._canon_publish_mode_is_frozen(job, payload):
@@ -1287,6 +1290,7 @@ class UploadJobService:
     ) -> dict[str, Any]:
         observed_at = now or utc_now()
         with self.session_factory() as session:
+            lock_job_chapter(session, str(job_id or "").strip())
             job = session.execute(
                 select(PublisherUploadJob)
                 .where(

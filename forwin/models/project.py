@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -17,7 +26,9 @@ class Project(Base):
     premise: Mapped[str] = mapped_column(Text, nullable=False)
     genre: Mapped[str] = mapped_column(String, default="玄幻")
     setting_summary: Mapped[str] = mapped_column(Text, default="")
-    target_total_chapters: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
+    target_total_chapters: Mapped[int] = mapped_column(
+        Integer, default=50, server_default="50"
+    )
     creation_status: Mapped[str] = mapped_column(String, default="creating")
     active_genesis_revision_id: Mapped[str] = mapped_column(String, default="")
     automation_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -25,6 +36,9 @@ class Project(Base):
         Text, nullable=False, default="", server_default=""
     )
     runtime_policy_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    book_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
@@ -48,7 +62,9 @@ class ArcPlanVersion(Base):
     chapter_start: Mapped[int] = mapped_column(Integer, default=1)
     chapter_end: Mapped[int] = mapped_column(Integer, default=0)
     arc_synopsis: Mapped[str] = mapped_column(Text, nullable=False)
-    macro_progression_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    macro_progression_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}"
+    )
     planned_target_size: Mapped[int] = mapped_column(Integer, default=0)
     planned_soft_min: Mapped[int] = mapped_column(Integer, default=0)
     planned_soft_max: Mapped[int] = mapped_column(Integer, default=0)
@@ -64,7 +80,20 @@ class ArcPlanVersion(Base):
 class ChapterPlan(Base):
     __tablename__ = "chapter_plans"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "active_commit_id"],
+            ["canon_commit_records.chapter_plan_id", "canon_commit_records.id"],
+            use_alter=True,
+            name="fk_chapter_active_commit",
+        ),
         Index("ix_chapter_plans_project_chapter", "project_id", "chapter_number"),
+        Index(
+            "ux_chapter_plans_stable_number",
+            "project_id",
+            "chapter_number",
+            unique=True,
+            postgresql_where=text("chapter_number > 0"),
+        ),
         Index("ix_chapter_plans_project_status", "project_id", "status"),
     )
 
@@ -76,6 +105,7 @@ class ChapterPlan(Base):
         String, ForeignKey("arc_plan_versions.id"), nullable=False
     )
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_commit_id: Mapped[str | None] = mapped_column(String, nullable=True)
     title: Mapped[str] = mapped_column(String, default="")
     one_line: Mapped[str] = mapped_column(Text, default="")
     goals_json: Mapped[str] = mapped_column(Text, default="[]")

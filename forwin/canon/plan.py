@@ -45,6 +45,7 @@ class CanonCommitPlan(_FrozenCanonModel):
     policy_version: int
     expected_previous_accepted_chapter: int
     expected_book_state_chapter: int
+    expected_book_revision: int = 0
     approved_book_state_changes: ApprovedGraphDeltaSet
     entity_admission_plan: EntityAdmissionPlan
     acceptance_mode: str = "normal"
@@ -89,12 +90,12 @@ class CanonCommitPlan(_FrozenCanonModel):
         policy_version: int,
         expected_previous_accepted_chapter: int,
         expected_book_state_chapter: int,
+        expected_book_revision: int = 0,
         approved_book_state_changes: ApprovedGraphDeltaSet,
         entity_admission_plan: EntityAdmissionPlan,
         acceptance_mode: str = "normal",
         repair_attempt_count: int = 0,
-        residual_review_issues: list[dict[str, Any]]
-        | tuple[dict[str, Any], ...] = (),
+        residual_review_issues: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
         canon_risk_level: str = "",
         chapter_title: str,
         publisher_bindings: Sequence[
@@ -123,6 +124,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             policy_version=policy_version,
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
+            expected_book_revision=expected_book_revision,
         )
         normalized_commit_id = canon_commit_id(idempotency_key)
         normalized_outbox = build_canon_recovery_events(
@@ -143,6 +145,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             raise TypeError("Canon publisher event payload normalization failed")
         return cls(
             schema_version=schema_version,
+            expected_book_revision=max(0, int(expected_book_revision)),
             project_id=normalized_project_id,
             chapter_number=normalized_chapter,
             candidate_id=str(candidate_id or "").strip(),
@@ -161,9 +164,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             entity_admission_plan=entity_admission_plan,
             acceptance_mode=str(acceptance_mode or "normal"),
             repair_attempt_count=max(0, int(repair_attempt_count or 0)),
-            residual_review_issues=tuple(
-                dict(item) for item in residual_review_issues
-            ),
+            residual_review_issues=tuple(dict(item) for item in residual_review_issues),
             canon_risk_level=str(canon_risk_level or ""),
             chapter_title=publisher_payload.chapter_title,
             publisher_bindings=publisher_payload.publisher_bindings,
@@ -184,9 +185,11 @@ def _idempotency_key(
     policy_version: int,
     approved_book_state_changes: ApprovedGraphDeltaSet,
     entity_admission_plan: EntityAdmissionPlan,
+    expected_book_revision: int = 0,
 ) -> str:
     payload = {
         "schema_version": "v1",
+        "expected_book_revision": max(0, int(expected_book_revision)),
         "project_id": str(project_id or ""),
         "chapter_number": int(chapter_number or 0),
         "candidate_id": str(candidate_id or ""),
@@ -194,8 +197,7 @@ def _idempotency_key(
         "plan_revision": str(plan_revision or ""),
         "policy_version": max(1, int(policy_version or 1)),
         "graph_delta_ids": [
-            str(delta.id or "")
-            for delta in approved_book_state_changes.graph_deltas
+            str(delta.id or "") for delta in approved_book_state_changes.graph_deltas
         ],
         "entity_plan_fingerprint": str(
             entity_admission_plan.candidate_fingerprint or ""

@@ -18,6 +18,7 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.outbox.worker import OutboxClaim
 
 from .idempotency import publisher_job_idempotency_key
+from .protection import lock_project_chapters
 
 
 class CanonPublisherJobService:
@@ -59,6 +60,10 @@ class CanonPublisherJobService:
                 candidate_id=normalized_candidate_id,
                 body_sha256=normalized_body_hash,
             )
+            if commit.production_mode in {"factory_batch", "soak_test"}:
+                raise ValueError("offline Canon content cannot enter real publication")
+            if normalized_title != commit.chapter_title:
+                raise ValueError("Canon publisher accepted title mismatch")
             jobs = []
             for binding in normalized_bindings:
                 identity = publisher_job_idempotency_key(
@@ -86,6 +91,30 @@ class CanonPublisherJobService:
             for job in jobs:
                 session.refresh(job)
             return [self.upload_jobs.serialize_upload_job(job) for job in jobs]
+
+    def materialize_event(self, parsed: CanonPublisherEventPayload) -> list[dict[str, Any]]:
+        request = {
+            "canon_commit_id": parsed.canon_commit_id,
+            "canon_idempotency_key": parsed.canon_idempotency_key,
+            "project_id": parsed.project_id,
+            "chapter_number": parsed.chapter_number,
+            "candidate_id": parsed.candidate_id,
+            "body_sha256": parsed.body_sha256,
+        }
+        with self.session_factory() as session:
+            commit = session.get(CanonCommitRecord, parsed.canon_commit_id)
+            if commit is not None and commit.production_mode in {"factory_batch", "soak_test"}:
+                # Offline chapter recovery still has a canonical publisher event.
+                # Consume it successfully after validating identity; emit no jobs.
+                self._load_canon_rows(session, **request)
+                if parsed.chapter_title != commit.chapter_title:
+                    raise ValueError("Canon publisher accepted title mismatch")
+                return []
+        return self.materialize(
+            **request, chapter_title=parsed.chapter_title,
+            bindings=[binding.model_dump(mode="json") for binding in parsed.publisher_bindings],
+            publish=parsed.publish,
+        )
 
     def release(
         self,
@@ -175,6 +204,7 @@ class CanonPublisherJobService:
             raise ValueError("Canon publisher identity is incomplete")
         if not project_id or not candidate_id or chapter_number <= 0:
             raise ValueError("Canon publisher chapter identity is incomplete")
+        lock_project_chapters(session, project_id)
         project = session.get(Project, project_id)
         commit = session.get(CanonCommitRecord, canon_commit_id)
         candidate = session.get(CandidateDraftRecord, candidate_id)
@@ -192,8 +222,6 @@ class CanonPublisherJobService:
         if (
             candidate is None
             or candidate.status != "accepted"
-            or candidate.canon_commit_id != commit.id
-            or candidate.idempotency_key != commit.idempotency_key
             or candidate.project_id != project_id
             or int(candidate.chapter_number or 0) != chapter_number
         ):
@@ -203,6 +231,8 @@ class CanonPublisherJobService:
         if (
             chapter is None
             or chapter.status != "accepted"
+            or chapter.active_commit_id != commit.id
+            or commit.chapter_plan_id != chapter.id
             or chapter.project_id != project_id
             or int(chapter.chapter_number or 0) != chapter_number
         ):
@@ -230,20 +260,7 @@ def build_canon_publisher_outbox_handlers(
         )
         if not isinstance(parsed, CanonPublisherEventPayload):
             raise TypeError("Canon publisher event payload has the wrong type")
-        service_provider().materialize(
-            canon_commit_id=parsed.canon_commit_id,
-            canon_idempotency_key=parsed.canon_idempotency_key,
-            project_id=parsed.project_id,
-            chapter_number=parsed.chapter_number,
-            candidate_id=parsed.candidate_id,
-            chapter_title=parsed.chapter_title,
-            body_sha256=parsed.body_sha256,
-            bindings=[
-                binding.model_dump(mode="json")
-                for binding in parsed.publisher_bindings
-            ],
-            publish=parsed.publish,
-        )
+        service_provider().materialize_event(parsed)
 
     return {CANON_PUBLISHER_REQUESTED: handle}
 

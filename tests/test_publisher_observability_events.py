@@ -11,6 +11,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
 from forwin.publishers.manager import PublisherManager
 from tests.postgres import postgres_test_url
+from tests.test_publisher_runtime_upload_jobs import seed_accepted_upload_identity
 
 
 def _event_payload(row: DecisionEvent) -> dict[str, object]:
@@ -52,6 +53,7 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
                 create_if_missing=False,
                 book_meta={"audience": "male"},
             )
+            seed_accepted_upload_identity(manager.runtime, created)
             claimed = manager.claim_next_upload_job(
                 client_id="client-1",
                 connected_platforms=["qidian"],

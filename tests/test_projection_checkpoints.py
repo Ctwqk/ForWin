@@ -90,15 +90,26 @@ def _add_commit(
     *,
     candidate_id: str | None = None,
 ) -> CanonCommitRecord:
+    candidate = session.get(
+        CandidateDraftRecord, candidate_id or f"candidate-{project_id}-{chapter_number}"
+    )
+    if candidate is None:
+        return _add_accepted_chapter(session, project_id, chapter_number)
+    chapter = session.get(ChapterPlan, candidate.chapter_plan_id)
     commit = CanonCommitRecord(
         id=f"commit-{project_id}-{chapter_number}",
         idempotency_key=f"canon-key-{project_id}-{chapter_number}",
         candidate_id=candidate_id or f"candidate-{project_id}-{chapter_number}",
         project_id=project_id,
+        chapter_plan_id=chapter.id,
+        chapter_title=chapter.title,
         chapter_number=chapter_number,
         status="committed",
     )
     session.add(commit)
+    session.flush()
+    chapter.active_commit_id = commit.id
+    session.get(Project, project_id).book_revision += 1
     session.flush()
     return commit
 
@@ -140,12 +151,16 @@ def _add_accepted_chapter(
     )
     session.add(draft)
     session.flush()
+    review = ChapterReview(draft_id=draft.id, verdict="pass")
+    session.add(review)
+    session.flush()
     candidate = CandidateDraftRecord(
         id=f"candidate-{project_id}-{chapter_number}",
         project_id=project_id,
         chapter_plan_id=chapter.id,
         chapter_number=chapter_number,
         candidate_draft_id=draft.id,
+        review_id=review.id,
         version=1,
         status="accepted",
         canon_status="canon",

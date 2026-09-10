@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from forwin.api_schema import (
     ChapterDetail,
-    ChapterListResponse,
     ChapterInfo,
+    ChapterListResponse,
     ProjectChapterPublishRequest,
     PublisherUploadJobResponse,
 )
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan, Project
+from forwin.state.query_helpers import load_latest_drafts_by_plan_id
+
 from .common import (
     _chapter_infos_for_plans,
     _load_json_object,
     _normalize_chapter_page,
 )
-
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
@@ -117,12 +117,7 @@ def get_chapter(
         if plan is None:
             raise HTTPException(404, f"第{chapter_number}章不存在")
 
-        draft = session.execute(
-            select(ChapterDraft)
-            .where(ChapterDraft.chapter_plan_id == plan.id)
-            .order_by(ChapterDraft.version.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        draft = load_latest_drafts_by_plan_id(session, [plan.id]).get(plan.id)
         if draft is None:
             raise HTTPException(404, f"第{chapter_number}章尚未生成")
         has_review = (
@@ -183,13 +178,16 @@ def create_project_chapter_upload_job(
                 CandidateDraftRecord.project_id == project_id,
                 CandidateDraftRecord.chapter_number == req.chapter_number,
                 CandidateDraftRecord.status == "accepted",
+                CandidateDraftRecord.id == select(CanonCommitRecord.candidate_id).where(
+                    CanonCommitRecord.id == plan.active_commit_id
+                ).scalar_subquery(),
             )
             .order_by(CandidateDraftRecord.updated_at.desc())
             .limit(1)
         ).scalar_one_or_none()
         if candidate is None:
             raise HTTPException(409, f"第{req.chapter_number}章尚未进入 Canon")
-        commit = session.get(CanonCommitRecord, candidate.canon_commit_id)
+        commit = session.get(CanonCommitRecord, plan.active_commit_id)
         draft = session.get(ChapterDraft, candidate.candidate_draft_id)
         if (
             commit is None
@@ -197,7 +195,6 @@ def create_project_chapter_upload_job(
             or commit.candidate_id != candidate.id
             or commit.project_id != project_id
             or int(commit.chapter_number or 0) != req.chapter_number
-            or commit.idempotency_key != candidate.idempotency_key
             or candidate.chapter_plan_id != plan.id
             or draft is None
             or draft.chapter_plan_id != plan.id

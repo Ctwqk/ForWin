@@ -31,7 +31,7 @@ class CanonFixture:
     body: str
 
 
-def _fixture(name: str) -> CanonFixture:
+def _fixture(name: str, *, chapter_number: int = 1) -> CanonFixture:
     engine = get_engine(postgres_test_url(name))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -40,8 +40,7 @@ def _fixture(name: str) -> CanonFixture:
     candidate_id = new_id()
     canon_commit_id = new_id()
     canon_idempotency_key = f"canon:{name}"
-    chapter_number = 7
-    chapter_title = "第七章 旧城回声"
+    chapter_title = f"第{chapter_number}章 旧城回声"
     body = "雨停以后，旧城的钟声沿着空巷传来。"
     with session_factory.begin() as session:
         session.add(
@@ -126,9 +125,13 @@ def _fixture(name: str) -> CanonFixture:
                 candidate_id=candidate_id,
                 project_id=project_id,
                 chapter_number=chapter_number,
+                chapter_plan_id=chapter_plan_id,
+                chapter_title=chapter_title,
                 status="committed",
             )
         )
+        session.flush()
+        session.get(ChapterPlan, chapter_plan_id).active_commit_id = canon_commit_id
     runtime = PublisherRuntimeService(
         session_factory=session_factory,
         extension_api_key="secret",

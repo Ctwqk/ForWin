@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timezone
-import json
 from typing import Any
 
 from sqlalchemy import select
@@ -12,6 +12,7 @@ from forwin.api_schema import (
     PostCanonMaintenanceRunInfo,
     PostCanonMaintenanceStatusResponse,
 )
+from forwin.canon.identity import active_commit_predicate
 from forwin.http.request_support import require_project
 from forwin.maintenance.events import POST_CANON_STEP_NAMES
 from forwin.maintenance.state import (
@@ -37,6 +38,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
             query = select(CanonCommitRecord).where(
                 CanonCommitRecord.project_id == project_id,
                 CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
             )
             if int(chapter_number or 0) > 0:
                 query = query.where(

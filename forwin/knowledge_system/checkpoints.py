@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import re
 from typing import Any, Iterator
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from forwin.canon.identity import active_commit_predicate, is_active_commit
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.project import Project
 from forwin.models.projection import ProjectionCheckpoint
-
 
 PROJECTION_COMPONENTS = ("obsidian", "llm_kb", "chapter_memory")
 _PROJECTION_COMPONENT_SET = frozenset(PROJECTION_COMPONENTS)
@@ -104,6 +104,7 @@ def latest_projection_target(session: Any, project_id: str) -> ProjectionTarget:
         .where(
             CanonCommitRecord.project_id == project_id,
             CanonCommitRecord.status == "committed",
+                    active_commit_predicate(),
         )
         .order_by(
             CanonCommitRecord.chapter_number.desc(),
@@ -128,7 +129,7 @@ def validate_projection_event_identity(
     identity: ProjectionEventIdentity,
 ) -> None:
     commit = session.get(CanonCommitRecord, identity.canon_commit_id)
-    if commit is None or commit.status != "committed":
+    if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
         raise ValueError("canon projection event references no committed Canon record")
     expected = {
         "canon_idempotency_key": str(commit.idempotency_key or ""),

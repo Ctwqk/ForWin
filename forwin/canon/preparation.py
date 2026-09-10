@@ -489,6 +489,7 @@ class CanonPreparationService:
             policy_version=candidate.policy_version,
             expected_previous_accepted_chapter=expected_previous_accepted_chapter,
             expected_book_state_chapter=expected_book_state_chapter,
+            expected_book_revision=project.book_revision,
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
             acceptance_mode=acceptance_mode,

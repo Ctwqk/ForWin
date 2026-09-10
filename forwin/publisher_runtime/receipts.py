@@ -18,6 +18,7 @@ from forwin.models.publisher import (
 
 from .attempts import PublisherProtocolError
 from .browser_sessions import as_utc
+from .protection import record_publication_receipt
 
 
 class PublisherReceiptConflictError(PublisherProtocolError):
@@ -120,6 +121,9 @@ class PublisherReceiptService:
             remote_url=remote_url,
             official_state=official_state,
         )
+        record_publication_receipt(session, job, state=official_state,
+                                   remote_book_id=remote_book_id,
+                                   remote_chapter_id=remote_chapter_id, evidence=evidence)
         receipt_key = self.receipt_key(
             job_identity=str(job.idempotency_key or job.id),
             platform_id=job.platform_id,

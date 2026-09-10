@@ -7,24 +7,25 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.application.read_models import build_project_detail
-from forwin.candidate_drafts import CandidateDraftRepository
-from forwin.canon.historical_rewrite import (
-    HistoricalCanonRewriteRepository,
-    HistoricalRewriteInvalid,
-)
 from forwin.api_schema import (
     CandidateDraftDetail,
     ChapterDecisionLayerInfo,
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
+    ChapterReviewIssueInfo,
     ChapterReviewRetryRequest,
     ChapterRewriteAttemptInfo,
-    ChapterReviewIssueInfo,
     FinalResidualDecisionInfo,
     LintSignalInfo,
     RepairVerificationInfo,
+)
+from forwin.application.read_models import build_project_detail
+from forwin.audit.events import DecisionEventType
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.historical_rewrite import (
+    HistoricalCanonRewriteRepository,
+    HistoricalRewriteInvalid,
 )
 from forwin.generation.continue_workset import (
     build_continue_generation_workset,
@@ -34,18 +35,17 @@ from forwin.generation.review_auto_retry import (
     prior_auto_review_retry_count,
     reset_chapter_for_auto_review_retry,
 )
-from forwin.audit.events import DecisionEventType
+from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.phase import ChapterRewriteAttempt
+from forwin.models.project import ChapterPlan, Project
 from forwin.planning.contracts import (
     derive_chapter_task_contract,
     plan_task_contract_to_json,
 )
-from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.phase import ChapterRewriteAttempt
-from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
-from .common import _load_json_object
 
+from .common import _load_json_object
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
@@ -991,23 +991,24 @@ def retry_chapter_review(
                 marker.related_object_id = str(plan.id)
             except HistoricalRewriteInvalid as exc:
                 raise HTTPException(409, str(exc)) from exc
-        plan.status = "planned"
-        plan.acceptance_mode = ""
-        plan.repair_attempt_count = 0
-        plan.residual_review_issues_json = "[]"
-        plan.canon_risk_level = ""
-        goals_payload = _load_json_object(plan.goals_json, [])
-        if isinstance(goals_payload, list):
-            cleaned_goals = [
-                str(item).strip()
-                for item in goals_payload
-                if len(str(item).strip()) >= 2
-            ]
-            if cleaned_goals != goals_payload:
-                plan.goals_json = json.dumps(cleaned_goals, ensure_ascii=False)
-                plan.task_contract_json = plan_task_contract_to_json(
-                    derive_chapter_task_contract(cleaned_goals)
-                )
+        if previous_status != "accepted":
+            plan.status = "planned"
+            plan.acceptance_mode = ""
+            plan.repair_attempt_count = 0
+            plan.residual_review_issues_json = "[]"
+            plan.canon_risk_level = ""
+            goals_payload = _load_json_object(plan.goals_json, [])
+            if isinstance(goals_payload, list):
+                cleaned_goals = [
+                    str(item).strip()
+                    for item in goals_payload
+                    if len(str(item).strip()) >= 2
+                ]
+                if cleaned_goals != goals_payload:
+                    plan.goals_json = json.dumps(cleaned_goals, ensure_ascii=False)
+                    plan.task_contract_json = plan_task_contract_to_json(
+                        derive_chapter_task_contract(cleaned_goals)
+                    )
         session.add(plan)
         if previous_status != "accepted":
             log_decision_event(
@@ -1034,11 +1035,13 @@ def retry_chapter_review(
                 source="review_retry_continue",
             )
             continue_requested_chapters = int(workset.requested_chapters or 0)
+        retained_status = str(plan.status)
         session.commit()
     finally:
         session.close()
 
-    message = f"第{chapter_number}章已重置为 planned。"
+    message = (f"第{chapter_number}章修订请求已记录；原接纳版本继续生效，等待完整后缀核验。"
+               if previous_status == "accepted" else f"第{chapter_number}章已重置为 planned。")
     if req.continue_generation and continue_requested_chapters > 0:
         try:
             task_id = create_continue_generation_task(
@@ -1056,7 +1059,7 @@ def retry_chapter_review(
         ok=True,
         project_id=project_id,
         chapter_number=chapter_number,
-        status="planned",
+        status=retained_status,
         message=message,
         task_id=task_id,
         frozen_artifact="",

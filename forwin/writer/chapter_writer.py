@@ -417,10 +417,17 @@ class ChapterWriter:
                 max_scene_count=self.max_scene_count,
             )
             scene_plans = self._plan_scenes(context, skill_layers=skill_layers)
-            scene_outputs = [
-                self._generate_scene(context, scene_plan, skill_layers=skill_layers)
-                for scene_plan in scene_plans
-            ]
+            scene_outputs: list[SceneOutput] = []
+            for scene_plan in scene_plans:
+                scene_outputs.append(
+                    self._generate_scene(
+                        context,
+                        scene_plan,
+                        skill_layers=skill_layers,
+                        scene_plans=scene_plans,
+                        previous_scenes=scene_outputs,
+                    )
+                )
             stitched = self._stitch_scenes(
                 context, scene_outputs, skill_layers=skill_layers
             )
@@ -661,6 +668,8 @@ class ChapterWriter:
         scene_plan: ScenePlan,
         *,
         skill_layers: list[object] | None = None,
+        scene_plans: list[ScenePlan] | None = None,
+        previous_scenes: list[SceneOutput] | None = None,
     ) -> SceneOutput:
         max_output_tokens = min(
             self.max_tokens,
@@ -668,7 +677,12 @@ class ChapterWriter:
         )
         raw_scene = self._chat_preview_text(
             build_scene_generation_prompt(
-                context, scene_plan, skill_layers=skill_layers
+                context,
+                scene_plan,
+                skill_layers=skill_layers,
+                scene_plans=scene_plans,
+                previous_scenes=previous_scenes,
+                handoff_budget_chars=self.max_chapter_chars,
             ),
             temperature=self.temperature,
             max_tokens=max_output_tokens,

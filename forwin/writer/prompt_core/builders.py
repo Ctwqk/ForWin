@@ -295,10 +295,70 @@ def build_scene_breakdown_prompt(
     ], skill_layers)
 
 
+def _scene_draft_record(scene: SceneOutput) -> str:
+    return (
+        f"[Scene {scene.scene_no}]\n"
+        f"目标：{scene.scene_objective}\n"
+        f"摘要：{scene.micro_summary}\n"
+        f"continuation：锚点={scene.continuation.continuity_anchor}；"
+        f"未解钩子={scene.continuation.unresolved_micro_hook}；"
+        f"下一衔接={scene.continuation.next_scene_bridge}；"
+        f"时间={scene.continuation.time_continuity}；地点={scene.continuation.location_continuity}；"
+        f"角色焦点={'、'.join(scene.continuation.character_focus)}\n"
+        f"正文：\n{scene.text}"
+    )
+
+
+def _scene_handoff_section(
+    scene_plans: list[ScenePlan],
+    previous_scenes: list[SceneOutput],
+    *,
+    max_chars: int,
+) -> str:
+    if not scene_plans and not previous_scenes:
+        return ""
+
+    def render(drafts: list[str], plans: list[str]) -> str:
+        return _join_sections(
+            "【本章分场衔接输入】\n"
+            "分场计划是写作意图，尚未发生；前稿是待审叙述，不代表所有角色知情。"
+            "Canon、修复合同和禁止揭示约束优先于前稿及计划；"
+            "角色说法不是已核实事实，下一衔接只是建议。"
+            "承接已写动作与细节，勿重复已完成事件；发现冲突时清楚交代修正依据。\n"
+            f"预算 {max_chars} 字；省略前稿 {len(previous_scenes) - len(drafts)} 条，"
+            f"省略计划 {len(scene_plans) - len(plans)} 条。"
+            "省略不表示未发生或不存在，不得据缺失内容编造衔接。",
+            "【分场计划（非事实）】\n" + "\n\n".join(plans) if plans else None,
+            "【已生成前稿（执行顺序）】\n" + "\n\n".join(drafts) if drafts else None,
+            "【本章分场衔接输入结束】",
+        )
+
+    drafts: list[str] = []
+    plans: list[str] = []
+    if len(render(drafts, plans)) > max_chars:
+        raise ValueError("Scene handoff budget cannot fit the omission notice")
+    # Keep a contiguous suffix of complete records; never turn clipped prose
+    # into a fact or skip the latest scene while implying continuous coverage.
+    for scene in reversed(previous_scenes):
+        candidate = [_scene_draft_record(scene), *drafts]
+        if len(render(candidate, plans)) > max_chars:
+            break
+        drafts = candidate
+    for plan in scene_plans:
+        candidate = [*plans, _scene_task_section(plan, include_target_chars=True)]
+        if len(render(drafts, candidate)) <= max_chars:
+            plans = candidate
+    return render(drafts, plans)
+
+
 def build_scene_generation_prompt(
     context: ChapterContextPack,
     scene_plan: ScenePlan,
     skill_layers: list[object] | None = None,
+    *,
+    scene_plans: list[ScenePlan] | None = None,
+    previous_scenes: list[SceneOutput] | None = None,
+    handoff_budget_chars: int = 3200,
 ) -> list[dict]:
     scene_sections = _scene_prompt_sections(
         context,
@@ -308,7 +368,14 @@ def build_scene_generation_prompt(
         thread_limit=6,
         memory_limit=2,
         envelope_compact=True,
-        extra_sections=[_scene_task_section(scene_plan, include_target_chars=True)],
+        extra_sections=[
+            _scene_handoff_section(
+                scene_plans or [],
+                previous_scenes or [],
+                max_chars=handoff_budget_chars,
+            ),
+            _scene_task_section(scene_plan, include_target_chars=True),
+        ],
     )
     user_content = (
         f"{scene_sections}\n\n"
@@ -366,20 +433,7 @@ def build_scene_stitch_prompt(
         min_chars=min_chars,
         max_chars=max_chars,
     )
-    stitched_input = "\n\n".join(
-        (
-            f"[Scene {scene.scene_no}]\n"
-            f"目标：{scene.scene_objective}\n"
-            f"摘要：{scene.micro_summary}\n"
-            f"continuation：锚点={scene.continuation.continuity_anchor}；"
-            f"未解钩子={scene.continuation.unresolved_micro_hook}；"
-            f"下一衔接={scene.continuation.next_scene_bridge}；"
-            f"时间={scene.continuation.time_continuity}；地点={scene.continuation.location_continuity}；"
-            f"角色焦点={'、'.join(scene.continuation.character_focus)}\n"
-            f"正文：\n{scene.text}"
-        )
-        for scene in scene_outputs
-    )
+    stitched_input = "\n\n".join(_scene_draft_record(scene) for scene in scene_outputs)
     user_sections = _scene_prompt_sections(
         context,
         plan_title="本章计划",

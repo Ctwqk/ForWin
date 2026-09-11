@@ -93,6 +93,10 @@ PlanningService 组织 Arc/Band/Chapter 的创建、激活和修订。PlanningQu
 
 Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。这能组织长文本和场景目标，但引入了多个叙述表示。最终 body、scene 原稿、摘要、事件和时间候选不一定天然一致，必须明示优先级，不能让 reviewer 混读新旧稿。
 
+分场按现有顺序生成。每次调用可读取本章分场计划及已经生成的前场正文、continuation：计划是尚未发生的意图，前稿是待审叙述，均不能覆盖 Canon、当前修复合同或禁止揭示约束，也不代表所有角色已经知情。新增衔接段使用现有章节最大字数作为字符上限，优先保留最近连续的完整前稿，再附完整计划条目；省略数量写入提示，不截半句冒充事实。该上限仅约束新增段落，不是整个模型输入的硬上限。当前分场任务、原始 scene 元数据、stitch、抽取和主 BODY review 仍由原 owner 处理。调用数不增加，输入字符会增加；实际连续性和成本仍须新样本验证。
+
+不能直接把主 Writer 切成现有 single 模式：即使补齐三次结构化抽取，它仍没有场景位置记录，会失去确定性地图移动检查的覆盖。该 A4 候选已在离线合同对照中拒绝，未启动真实模型对照或新增永久模式；见[消融记录](../docs/superpowers/reports/2026-09-09-stage2-ablation.md)。
+
 本轮已删除主 LLM review 和 repair escalation 的旧 scene 正文输入，改为完整最终 body；结构化状态/事件/时间和 Canon invariants 仍用于核验。场景原始产物没有被销毁，地图检查仍可使用位置等结构化数据。
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。

@@ -43,6 +43,7 @@ from forwin.protocol.world_model import WorldContextPack
 from forwin.obsidian.frontmatter import frontmatter_hidden, parse_sections
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
+from forwin.writer.world_context import render_world_context
 from .helpers import (
     _budget_genesis_references,
     _drop_unrelated_genesis_reference,
@@ -857,7 +858,15 @@ class RetrievalBroker:
     def _estimate_chars(pack: ChapterContextPack) -> int:
         # This provenance view is not rendered by any Writer prompt. Keep it
         # intact on the pack without letting it evict visible history.
-        payload = pack.model_dump(mode="json", exclude={"knowledge_system_context"})
+        payload = pack.model_dump(
+            mode="json", exclude={"knowledge_system_context", "world_context"}
+        )
+        # Charge the same bounded view the Writer receives, not full markdown
+        # or the unrendered specialized copies. Preserve empty-world overhead.
+        payload["world_context"] = (
+            render_world_context(pack.world_context)
+            or WorldContextPack().model_dump(mode="json")
+        )
         # An absent optional source view adds no Writer prompt content. Keep
         # existing no-Genesis retention unchanged when this feature is unused.
         if not payload.get("genesis_reference_facts"):
@@ -901,16 +910,11 @@ class RetrievalBroker:
             cls._estimate_component_chars(item)
             for item in getattr(pack, "retrieved_memories", []) or []
         )
-        world_context = getattr(pack, "world_context", None)
-        if world_context is not None:
-            if hasattr(world_context, "model_copy"):
-                total += cls._estimate_component_chars(
-                    world_context.model_copy(update={"relevant_world_pages": []})
-                )
-            total += sum(
-                cls._estimate_component_chars(item)
-                for item in getattr(world_context, "relevant_world_pages", []) or []
-            )
+        # Keep the existing empty-world allowance while counting a populated
+        # world's rendered representation once, including after page pruning.
+        total += cls._estimate_component_chars(
+            render_world_context(pack.world_context) or WorldContextPack()
+        )
         return total
 
     @staticmethod

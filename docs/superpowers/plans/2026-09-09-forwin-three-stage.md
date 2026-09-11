@@ -241,6 +241,19 @@ The naive A4 candidate (existing single plus the same three extraction passes) i
 - [x] Run focused and related regressions, replay immutable actual scenes to measure added/omitted input, obtain independent review, and update current contracts and limitations. Independent 97 related tests and 400 budget probes pass (test counts overlap), no blocking finding. Nine real recorded inputs add 1213–2992 characters, retain all prior bodies, and explicitly omit two additional plans in each third-scene call; this is not a model-quality replay.
 - [ ] Freeze the reviewed candidate; complete fresh full QA and both role images, then fresh smoke20 and independent L100 with ending review. Never resume the failed sample as qualification.
 
+### Task 20: Charge the world context's actual Writer representation once
+
+Task 19's independent baseline probe found that 10,000 extra characters under a world page's Manual Notes change no Writer prompt, yet increase the budget estimate and evict a previous summary. Task 18 excluded the separate knowledge provenance dictionary; full world-page markdown and specialized-list copies are still charged. This is independently reproducible, but the unavailable original runtime pack prevents attributing the smoke's identifier failure to it.
+
+**Bounded correction:** move the existing world-context renderer, without changing its text, limits or visibility semantics, into one leaf Writer module used by both prompt sections and RetrievalBroker's estimate. Only the estimate replaces the full world object with its rendered string; stored pages, hashes, provenance and Reviewer context remain intact. Component accounting includes this representation once and recalculates after page pruning. Keep empty-world accounting, all other estimates, the configured budget and eviction order unchanged. Do not expand memory or introduce a second projection or renderer.
+
+**Files:** new `forwin/writer/world_context.py`, `forwin/writer/prompt_core/sections.py`, `forwin/retrieval/broker_core/broker.py`, `tests/test_world_context_budget.py`, current design and the existing continuity report.
+
+- [x] Reproduce same-prompt/different-retention through real typed contexts and both estimators; initial 6 failed / 5 passed. Twelve final tests cover unrendered markdown, source metadata, hidden content, specialized copies, visible positive controls, input immutability and page pruning.
+- [x] Share the unchanged renderer and charge its output once, without changing other context owners or budget thresholds. The additional empty-world regression caught an omitted historical allowance (1870 versus 2130); restore it before independent review and preserve that failed-check evidence.
+- [x] Verify old/new prompt equality, focused and related regressions, and independent review. Root 188 related plus 37 additional tests pass; independent 130 related tests and 20 empty-world comparison probes pass, with overlapping test counts and no blocking finding. Commit separately from the scene handoff. At the original fixed budget 2836, equal world views now both estimate 2193 and retain two summaries and one memory.
+- [ ] Freeze the combined reviewed source; complete whole QA and both role images before a fresh smoke. Existing engineering results do not qualify this source; smoke20/L100/ending remain required.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

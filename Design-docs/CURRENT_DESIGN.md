@@ -101,7 +101,7 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
 
-`knowledge_system_context` 是不进入 Writer prompt 的溯源副本，保留在 context 中，但不参与 Writer 软预算，避免挤掉实际可见的摘要和记忆。其余预算、裁剪优先级及超限语义保持；这仍是字符估算，不是精确 token 限额。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
+`knowledge_system_context` 是不进入 Writer prompt 的溯源副本，保留在 context 中，但不参与 Writer 软预算，避免挤掉实际可见的摘要和记忆。世界上下文也只按 Writer 实际渲染的有界内容计入一次；估算与五种提示共用同一 renderer，不再重复计算完整 Markdown、人工笔记、来源 metadata 和未渲染的分类副本。裁剪页面后重新估算，完整页面、hash、溯源和主 reviewer 证据仍保留。空世界的既有固定开销、其余预算、裁剪优先级及超限语义保持；这仍是字符估算，不是精确 token 限额。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
 
 五种 Writer 提示共用世界页渲染，读取可见页面的 `Canon Summary`；具备实体来源的单个世界/地图页还读取 `Current State`，共享每页 220 字内容限额。书籍、overview 等聚合页的状态可能混有隐藏信息，只保留概要；frontmatter、人工笔记或待批准修订不当作 Canon。页面属性与内嵌 frontmatter 任一标记为隐藏时都不展开，秘密页仍不开放；可见性及真假关系随内容呈现，读者可见不等于所有角色知情。
 

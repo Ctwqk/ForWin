@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -9,6 +10,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.book_state import (
     BookStateCompiler,
+    BookStateProjection,
     BookStateQuery,
     BookStateRepository,
     BookStateReviewGate,
@@ -45,6 +47,77 @@ def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return engine, sessionmaker(bind=engine)()
+
+
+@pytest.mark.parametrize(
+    ("op", "value", "expected"),
+    [
+        ("merge", {"holder_id": "reader"}, {"status": "sealed", "holder_id": "reader"}),
+        ("set", {"status": "released"}, {"status": "released"}),
+        ("set", {}, {}),
+        ("remove", None, {}),
+    ],
+)
+def test_whole_state_change_survives_compilation_and_historical_reads(op, value, expected):
+    engine, session = _session()
+    try:
+        project = Project(title="证物保管", premise="状态版本", genre="pulp")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(WorldNode(
+            id="exhibit", project_id=project.id, node_type="item", name="证物",
+        ))
+        compiler = BookStateCompiler(session)
+        for chapter, field, operation, new_value in [
+            (1, "state.status", "set", "sealed"),
+            (2, "state", op, value),
+        ]:
+            result = compiler.compile(ApprovedGraphDeltaSet(
+                project_id=project.id, chapter_number=chapter,
+                graph_deltas=[GraphDelta(
+                    id=f"delta-{chapter}", project_id=project.id, chapter_number=chapter,
+                    node_patches=[NodePatch(
+                        node_id="exhibit", node_type="item", op=operation,
+                        field_path=field, new_value=new_value,
+                        old_value={"status": "sealed"} if chapter == 2 else None,
+                    )],
+                )],
+            ))
+            assert result.committed
+        session.flush()
+        session.expire_all()
+        projection = BookStateProjection(session)
+        assert projection.load_runtime_as_of(project.id, as_of_chapter=1).world.get_state("exhibit") == {"status": "sealed"}
+        assert projection.load_runtime_as_of(project.id, as_of_chapter=2).world.get_state("exhibit") == expected
+        # State history must agree even without supplying a snapshot overlay.
+        assert repo.load_base_world_graph(project.id, as_of_chapter=2).get_state("exhibit") == expected
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_empty_snapshot_state_overrides_an_older_state_row():
+    engine, session = _session()
+    try:
+        project = Project(title="证物保管", premise="空状态快照", genre="pulp")
+        session.add(project)
+        session.flush()
+        repo = BookStateRepository(session)
+        repo.create_world_node(WorldNode(
+            id="exhibit", project_id=project.id, node_type="item", name="证物",
+        ))
+        repo.append_world_node_state(
+            project_id=project.id, node_id="exhibit", node_type="item",
+            as_of_chapter=1, state={"status": "sealed"},
+        )
+        world = repo.load_base_world_graph(
+            project.id, as_of_chapter=2, state_index={"exhibit": {}},
+        )
+        assert world.get_state("exhibit") == {}
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_review_gate_blocks_writer_rewrite_of_canonical_rule_definition() -> None:
@@ -993,6 +1066,14 @@ def test_noncanonical_writer_fields_do_not_pollute_canonical_state() -> None:
                     reason="保全证据",
                 ),
                 StateChangeCandidate(
+                    entity_name="样本-17",
+                    entity_kind="item",
+                    field="contents",
+                    old_value="",
+                    new_value="两页附件",
+                    reason="保全时核对内容",
+                ),
+                StateChangeCandidate(
                     entity_name="核验流程",
                     entity_kind="rule",
                     field="audit_note",
@@ -1035,6 +1116,22 @@ def test_noncanonical_writer_fields_do_not_pollute_canonical_state() -> None:
         )
         assert review.accepted is True
         assert review.issues == []
+        assert review.approved_changes is not None
+        compiled = BookStateCompiler(session).compile(review.approved_changes)
+        assert compiled.committed
+        session.flush()
+        session.expire_all()
+        runtime = BookStateProjection(session).load_runtime_as_of(
+            project.id, as_of_chapter=1,
+        )
+        item = next(node for node in runtime.world.nodes_by_id.values() if node.name == "样本-17")
+        assert runtime.world.get_state(item.id) == {
+            "status": "active", "state_summary": "被装入证据盒",
+        }
+        assert item.metadata["writer_state"]["contents"] == "两页附件"
+        snapshot = BookStateRepository(session).latest_world_snapshot(project.id, 1)
+        assert snapshot is not None
+        assert snapshot.world_node_state_index[item.id]["state_summary"] == "被装入证据盒"
     finally:
         session.close()
         engine.dispose()

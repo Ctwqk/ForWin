@@ -868,7 +868,8 @@ def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
             project_id=project_id,
             node_id="char_mc",
             node_type="character",
-            as_of_chapter=1,
+            # Initial location must exist in the chapter-0 input of compilation.
+            as_of_chapter=0,
             state={"location_id": "loc_city"},
         )
         BookStateCompiler(session).compile(

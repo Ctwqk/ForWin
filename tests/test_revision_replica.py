@@ -13,6 +13,40 @@ from tests import test_canon_atomic_transaction as atomic_tests
 prepared_canon = atomic_tests.prepared_canon
 
 
+@pytest.mark.parametrize("field_path", ["state", "metadata.note"])
+def test_replica_state_provenance_recognizes_whole_state_patches(prepared_canon, field_path):
+    from dataclasses import replace
+    from forwin.canon.revision_replica import (
+        PrefixProvenanceUnknown, _verify_manifest_evidence, capture_revision,
+    )
+
+    fixture = prepared_canon
+    outcome = CanonAdmissionService(session_factory=fixture.Session).commit_plan(fixture.plan)
+    with fixture.Session() as source:
+        snapshot = capture_revision(
+            source, project_id=fixture.project_id, candidate_id=fixture.plan.candidate_id,
+            model_identity={"provider": "fixture", "model": "frozen"},
+            policy_fingerprint="policy",
+        )
+    # Feed the provenance validator a whole-state source for the existing state
+    # row; an unrelated metadata patch must not establish that provenance.
+    tables = dict(snapshot.tables)
+    state = tables["world_node_states"][0]
+    patches = []
+    for row in tables["graph_delta_patches"]:
+        metadata = json.loads(row["metadata_json"] or "{}")
+        if row["patch_type"] == "node" and metadata.get("node_id") == state["node_id"]:
+            row = {**row, "op": "set", "field_path": field_path}
+        patches.append(row)
+    tables["graph_delta_patches"] = tuple(patches)
+    snapshot = replace(snapshot, tables=tables)
+    if field_path == "state":
+        _verify_manifest_evidence(snapshot, active_ids={outcome.commit_id})
+    else:
+        with pytest.raises(PrefixProvenanceUnknown, match="world state lacks proven delta identity"):
+            _verify_manifest_evidence(snapshot, active_ids={outcome.commit_id})
+
+
 def test_replica_capture_rewinds_only_private_database(prepared_canon):
     from forwin.canon.revision_replica import CandidateReplica, capture_revision
     from forwin.models.entity import Entity

@@ -312,7 +312,11 @@ def _verify_manifest_evidence(
         (row["delta_id"], json.loads(row["metadata_json"] or "{}").get("node_id"))
         for row in snapshot.tables.get("graph_delta_patches", ())
         if row["patch_type"] == "node"
-        and (row["op"] == "create" or row["field_path"].startswith("state."))
+        and (
+            row["op"] == "create"
+            or row["field_path"] == "state"
+            or row["field_path"].startswith("state.")
+        )
     }
     for row in snapshot.tables.get("world_node_states", ()):
         if row["as_of_chapter"] <= 0:

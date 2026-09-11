@@ -1300,7 +1300,6 @@ class BookStateRepository:
                 {
                     node_id: dict(state)
                     for node_id, state in state_index.items()
-                    if state
                 }
             )
         edges = [

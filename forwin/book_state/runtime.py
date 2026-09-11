@@ -136,11 +136,13 @@ class ObjectiveWorldGraph:
             return
 
         payload = node.model_dump(mode="json")
+        # State patches and restored snapshots live in the state index. A
+        # metadata/profile edit must not restore the node's older state copy.
+        payload["state"] = self.get_state(patch.node_id)
         apply_path_patch(payload, patch.field_path, patch.new_value, op=op)
         updated = WorldNode.model_validate(payload)
         self.nodes_by_id[patch.node_id] = updated
-        if "state" in payload:
-            self.states_by_node_id[patch.node_id] = dict(updated.state)
+        self.states_by_node_id[patch.node_id] = dict(updated.state)
 
     def apply_edge_patch(self, patch: EdgePatch) -> None:
         op = str(patch.op)

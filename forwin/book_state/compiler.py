@@ -294,7 +294,11 @@ class BookStateCompiler:
                         node = WorldNode.model_validate(result.world_node)
                         runtime.world.nodes_by_id[patch.node_id] = node
             self.repo.create_world_node(node)
-            if str(patch.op) == "create" or patch.field_path.startswith("state."):
+            if (
+                str(patch.op) == "create"
+                or patch.field_path == "state"
+                or patch.field_path.startswith("state.")
+            ):
                 self.repo.append_world_node_state(
                     project_id=delta.project_id,
                     node_id=patch.node_id,
@@ -454,6 +458,8 @@ def _node_current(runtime: BookStateRuntime, patch: NodePatch) -> Any:
     node = runtime.world.nodes_by_id.get(patch.node_id)
     if node is None:
         return None
+    if patch.field_path == "state":
+        return runtime.world.get_state(patch.node_id)
     if patch.field_path.startswith("state."):
         return _get_path(runtime.world.get_state(patch.node_id), patch.field_path.removeprefix("state."))
     return _get_path(node.model_dump(mode="json"), patch.field_path)

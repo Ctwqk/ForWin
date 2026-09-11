@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.book_state import CognitionView, MapGraph, ObjectiveWorldGraph, distance_between_world_nodes
 from forwin.protocol.book_state import (
     CognitionOverlay,
@@ -238,3 +240,55 @@ def test_objective_world_graph_applies_node_and_map_patches() -> None:
 
     assert world.get_state("char_mc")["location_id"] == "loc_city"
     assert graph.edges_by_id["edge_secret_tunnel"].status == "open"
+
+
+@pytest.mark.parametrize(
+    ("field_path", "op", "value"),
+    [
+        ("metadata.writer_state.contents", "set", "two sheets"),
+        ("profile.appearance", "set", "transparent sleeve"),
+        ("aliases", "append", "sealed exhibit"),
+        ("metadata", "merge", {"checked": True}),
+        ("metadata.obsolete", "remove", None),
+    ],
+)
+def test_non_state_patch_preserves_latest_world_state(field_path, op, value) -> None:
+    world = ObjectiveWorldGraph(nodes=[WorldNode(
+        id="exhibit", project_id="project-1", node_type="item",
+        state={"status": "active"}, metadata={"obsolete": True},
+    )])
+    world.apply_node_patch(NodePatch(
+        node_id="exhibit", node_type="item", op="set",
+        field_path="state.status", new_value="sealed",
+    ))
+    world.apply_node_patch(NodePatch(
+        node_id="exhibit", node_type="item", op=op,
+        field_path=field_path, new_value=value,
+    ))
+
+    assert world.get_state("exhibit") == {"status": "sealed"}
+    assert world.snapshot()["states_by_node_id"]["exhibit"] == {"status": "sealed"}
+
+
+@pytest.mark.parametrize(
+    ("op", "value", "expected"),
+    [
+        ("merge", {"holder_id": "reader"}, {"status": "sealed", "holder_id": "reader"}),
+        ("set", {"status": "released"}, {"status": "released"}),
+        ("remove", None, {}),
+    ],
+)
+def test_whole_state_patch_uses_restored_snapshot_state(op, value, expected) -> None:
+    world = ObjectiveWorldGraph(
+        nodes=[WorldNode(
+            id="exhibit", project_id="project-1", node_type="item",
+            state={"status": "active"},
+        )],
+        states_by_node_id={"exhibit": {"status": "sealed"}},
+    )
+    world.apply_node_patch(NodePatch(
+        node_id="exhibit", node_type="item", op=op,
+        field_path="state", new_value=value,
+    ))
+
+    assert world.get_state("exhibit") == expected

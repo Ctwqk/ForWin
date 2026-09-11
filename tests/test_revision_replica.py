@@ -16,8 +16,11 @@ prepared_canon = atomic_tests.prepared_canon
 @pytest.mark.parametrize("field_path", ["state", "metadata.note"])
 def test_replica_state_provenance_recognizes_whole_state_patches(prepared_canon, field_path):
     from dataclasses import replace
+
     from forwin.canon.revision_replica import (
-        PrefixProvenanceUnknown, _verify_manifest_evidence, capture_revision,
+        PrefixProvenanceUnknown,
+        _verify_manifest_evidence,
+        capture_revision,
     )
 
     fixture = prepared_canon

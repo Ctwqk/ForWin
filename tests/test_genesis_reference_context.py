@@ -143,7 +143,7 @@ def test_actual_broker_budget_does_not_displace_canon_with_oversized_background(
     prompt = "\n".join(m["content"] for m in build_single_chapter_draft_prompt(trimmed))
     assert len(trimmed.active_entities) == 8
     assert trimmed.previous_chapter_summaries == ["第1章接受的事实", "第2章接受的事实", "第3章接受的事实"]
-    assert broker._estimate_pack_with_components(trimmed) <= broker.context_budget_chars
+    assert broker._estimate_chars(trimmed) <= broker.context_budget_chars
     assert "遥远的旧史" not in prompt and "她在第九年改过账。" in prompt
     assert trimmed.genesis_reference_omitted_count == 1
 
@@ -154,10 +154,16 @@ def test_budget_discards_unrelated_source_before_current_canon():
     ]}})
     context.active_entities = [EntitySnapshot(
         entity_id=f"e{i}", kind="character", name=f"人物{i}",
-        description="人" * 240, current_state={},
+        description="人" * 500, current_state={},
     ) for i in range(8)]
     context.previous_chapter_summaries = ["第1章接受的事实", "第2章接受的事实", "第3章接受的事实"]
-    trimmed = RetrievalBroker()._trim_pack(context)
+    without_background = context.model_copy(update={
+        "genesis_reference_facts": [], "genesis_reference_omitted_count": 1,
+    })
+    budget = RetrievalBroker._estimate_chars(without_background)
+    # The source fits its separate quota; total pressure must remove it first.
+    assert _budget_genesis_references(context, budget // 4).genesis_reference_facts
+    trimmed = RetrievalBroker(context_budget_chars=budget)._trim_pack(context)
     assert len(trimmed.active_entities) == 8
     assert len(trimmed.previous_chapter_summaries) == 3
     assert trimmed.genesis_reference_facts == []
@@ -178,7 +184,7 @@ def test_reference_relevance_does_not_change_when_its_entity_is_trimmed():
     ]}})
     context.active_entities = [EntitySnapshot(
         entity_id=f"e{i}", kind="character", name=f"人物{i}",
-        description="人" * 240, current_state={},
+        description="人" * 1000, current_state={},
     ) for i in range(8)]
     context.previous_chapter_summaries = ["第1章接受的事实", "第2章接受的事实", "第3章接受的事实"]
     trimmed = RetrievalBroker()._trim_pack(context)

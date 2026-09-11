@@ -43,7 +43,7 @@ from forwin.protocol.world_model import WorldContextPack
 from forwin.obsidian.frontmatter import frontmatter_hidden, parse_sections
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
-from forwin.writer.world_context import render_world_context
+from forwin.writer.prompt_core.builders import writer_context_chars
 from .helpers import (
     _budget_genesis_references,
     _drop_unrelated_genesis_reference,
@@ -188,45 +188,40 @@ class RetrievalBroker:
             }
         )
         pack = self._filter_writer_safe_world_context(pack)
-        estimate = self._estimate_pack_with_components(pack)
+        estimate = self._estimate_chars(pack)
         current_names = {entity.name for entity in pack.active_entities}
 
         while estimate > self.context_budget_chars:
             without_unrelated = _drop_unrelated_genesis_reference(pack, current_names)
             if without_unrelated is not None:
                 pack = without_unrelated
-                estimate = self._estimate_pack_with_components(pack)
+                estimate = self._estimate_chars(pack)
                 continue
             if pack.active_relations:
-                removed = pack.active_relations[-1]
-                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
                     update={"active_relations": pack.active_relations[:-1]}
                 )
+                estimate = self._estimate_chars(pack)
                 continue
             memories = list(getattr(pack, "retrieved_memories", []) or [])
             if memories:
-                next_memories, removed = self._drop_lowest_priority_memory(memories)
-                estimate -= self._estimate_component_chars(removed)
+                next_memories, _ = self._drop_lowest_priority_memory(memories)
                 pack = pack.model_copy(update={"retrieved_memories": next_memories})
+                estimate = self._estimate_chars(pack)
                 continue
             if len(pack.active_entities) > 3:
-                removed = pack.active_entities[-1]
-                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
                     update={"active_entities": pack.active_entities[:-1]}
                 )
+                estimate = self._estimate_chars(pack)
                 continue
             if len(pack.active_threads) > 1:
-                removed = pack.active_threads[-1]
-                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
                     update={"active_threads": pack.active_threads[:-1]}
                 )
+                estimate = self._estimate_chars(pack)
                 continue
             if len(pack.previous_chapter_summaries) > 1:
-                removed = pack.previous_chapter_summaries[0]
-                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
                     update={
                         "previous_chapter_summaries": pack.previous_chapter_summaries[
@@ -234,6 +229,7 @@ class RetrievalBroker:
                         ]
                     }
                 )
+                estimate = self._estimate_chars(pack)
                 continue
             world_context = getattr(pack, "world_context", None)
             relevant_pages = getattr(world_context, "relevant_world_pages", []) or []
@@ -244,7 +240,7 @@ class RetrievalBroker:
                     }
                 )
                 pack = pack.model_copy(update={"world_context": next_world})
-                estimate = self._estimate_pack_with_components(pack)
+                estimate = self._estimate_chars(pack)
                 continue
             break
         return pack
@@ -256,8 +252,8 @@ class RetrievalBroker:
         pack: ChapterContextPack,
         memories: list[object],
     ) -> None:
-        before_chars = self._estimate_pack_with_components(base_pack)
-        after_chars = self._estimate_pack_with_components(pack)
+        before_chars = self._estimate_chars(base_pack)
+        after_chars = self._estimate_chars(pack)
         memories_before = len(
             getattr(base_pack, "retrieved_memories", []) or memories or []
         )
@@ -856,83 +852,7 @@ class RetrievalBroker:
 
     @staticmethod
     def _estimate_chars(pack: ChapterContextPack) -> int:
-        # This provenance view is not rendered by any Writer prompt. Keep it
-        # intact on the pack without letting it evict visible history.
-        payload = pack.model_dump(
-            mode="json", exclude={"knowledge_system_context", "world_context"}
-        )
-        # Charge the same bounded view the Writer receives, not full markdown
-        # or the unrendered specialized copies. Preserve empty-world overhead.
-        payload["world_context"] = (
-            render_world_context(pack.world_context)
-            or WorldContextPack().model_dump(mode="json")
-        )
-        # An absent optional source view adds no Writer prompt content. Keep
-        # existing no-Genesis retention unchanged when this feature is unused.
-        if not payload.get("genesis_reference_facts"):
-            payload.pop("genesis_reference_facts", None)
-        if not payload.get("genesis_reference_omitted_count"):
-            payload.pop("genesis_reference_omitted_count", None)
-        if payload.get("repair_contract") is None:
-            payload.pop("repair_contract", None)
-        return len(json.dumps(payload, ensure_ascii=False))
-
-    @classmethod
-    def _estimate_pack_with_components(cls, pack: ChapterContextPack) -> int:
-        empty_pack = pack.model_copy(
-            update={
-                "previous_chapter_summaries": [],
-                "active_entities": [],
-                "active_threads": [],
-                "active_relations": [],
-                "retrieved_memories": [],
-                "world_context": WorldContextPack(),
-            }
-        )
-        total = cls._estimate_chars(empty_pack)
-        total += sum(
-            cls._estimate_component_chars(item)
-            for item in getattr(pack, "previous_chapter_summaries", []) or []
-        )
-        total += sum(
-            cls._estimate_component_chars(item)
-            for item in getattr(pack, "active_entities", []) or []
-        )
-        total += sum(
-            cls._estimate_component_chars(item)
-            for item in getattr(pack, "active_threads", []) or []
-        )
-        total += sum(
-            cls._estimate_component_chars(item)
-            for item in getattr(pack, "active_relations", []) or []
-        )
-        total += sum(
-            cls._estimate_component_chars(item)
-            for item in getattr(pack, "retrieved_memories", []) or []
-        )
-        # Keep the existing empty-world allowance while counting a populated
-        # world's rendered representation once, including after page pruning.
-        total += cls._estimate_component_chars(
-            render_world_context(pack.world_context) or WorldContextPack()
-        )
-        return total
-
-    @staticmethod
-    def _estimate_component_chars(item: object) -> int:
-        if hasattr(item, "model_dump"):
-            payload = item.model_dump(mode="json")
-        elif hasattr(item, "__dict__"):
-            payload = {
-                key: value
-                for key, value in vars(item).items()
-                if isinstance(value, (str, int, float, bool, list, dict, type(None)))
-            }
-        else:
-            payload = item
-        try:
-            return len(json.dumps(payload, ensure_ascii=False)) + 1
-        except TypeError:
-            return len(str(payload)) + 1
+        return writer_context_chars(pack)
 
     def _pick_memories(self, base_pack: ChapterContextPack):
         query_parts = [

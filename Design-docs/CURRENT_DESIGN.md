@@ -103,7 +103,9 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
 
-`knowledge_system_context` 是不进入 Writer prompt 的溯源副本，保留在 context 中，但不参与 Writer 软预算，避免挤掉实际可见的摘要和记忆。世界上下文也只按 Writer 实际渲染的有界内容计入一次；估算与五种提示共用同一 renderer，不再重复计算完整 Markdown、人工笔记、来源 metadata 和未渲染的分类副本。裁剪页面后重新估算，完整页面、hash、溯源和主 reviewer 证据仍保留。空世界的既有固定开销、其余预算、裁剪优先级及超限语义保持；这仍是字符估算，不是精确 token 限额。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
+Writer 的上下文组成由现有 prompt builder 统一提供，单章、预演、分解及场景四种布局保留原内容与限额，stitch 使用场景布局。RetrievalBroker 按这四种实际渲染块的最大字符数计一次软预算，每次裁剪后重新计算，不再按 ContextPack JSON 或组件大小相减。未显示的状态副本、地图 metadata、手工笔记和溯源不会挤占摘要；完整记录、页面 hash 和主 reviewer 证据仍保留。估算隔离 prompt 统计字段的写入，不把预算试算当成真正发送。
+
+总预算设置、裁剪顺序、最低保留量及 Genesis 来源的独立四分之一配额保持。旧 JSON 空世界固定开销已被上述可见字符语义取代；新旧 estimated_context_chars 数值不能直接当作 token 或成本变化。强制合同等内容可能仍超过软预算。系统/输出指令、schema、技能层和本章临时草稿不在这个上下文额度内，仍由各自的提示统计或既有上限处理；这不是完整请求或精确 token 限额。原单章提示内两次 Canon 质量约束仍按实际出现次数计入，另行消融前不顺带删改。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
 
 五种 Writer 提示共用世界页渲染，读取可见页面的 `Canon Summary`；具备实体来源的单个世界/地图页还读取 `Current State`，共享每页 220 字内容限额。书籍、overview 等聚合页的状态可能混有隐藏信息，只保留概要；frontmatter、人工笔记或待批准修订不当作 Canon。页面属性与内嵌 frontmatter 任一标记为隐藏时都不展开，秘密页仍不开放；可见性及真假关系随内容呈现，读者可见不等于所有角色知情。
 

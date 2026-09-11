@@ -116,12 +116,11 @@ def test_same_writer_world_input_has_same_budget_and_history(inflation):
     original = inflated.model_dump(mode="json")
     assert prompts(plain) == prompts(inflated)
     broker = RetrievalBroker(
-        context_budget_chars=RetrievalBroker._estimate_pack_with_components(plain)
+        context_budget_chars=RetrievalBroker._estimate_chars(plain)
     )
-    assert broker._estimate_chars(plain) == broker._estimate_chars(inflated)
-    assert broker._estimate_pack_with_components(
+    assert broker._estimate_chars(
         plain
-    ) == broker._estimate_pack_with_components(inflated)
+    ) == broker._estimate_chars(inflated)
     a, b = broker._trim_pack(plain), broker._trim_pack(inflated)
     assert (
         a.previous_chapter_summaries
@@ -166,10 +165,9 @@ def test_visible_world_input_is_still_charged(visible_change):
     else:
         b.world_context.active_secrets = [page(hidden=True)]
     assert prompts(a) != prompts(b)
-    assert RetrievalBroker._estimate_chars(b) > RetrievalBroker._estimate_chars(a)
-    assert RetrievalBroker._estimate_pack_with_components(
+    assert RetrievalBroker._estimate_chars(
         b
-    ) > RetrievalBroker._estimate_pack_with_components(a)
+    ) > RetrievalBroker._estimate_chars(a)
 
 
 def test_page_pruning_releases_only_rendered_page_cost():
@@ -200,25 +198,10 @@ def test_page_pruning_releases_only_rendered_page_cost():
         }
     )
     broker = RetrievalBroker(
-        context_budget_chars=RetrievalBroker._estimate_pack_with_components(smaller)
+        context_budget_chars=RetrievalBroker._estimate_chars(smaller)
     )
     result = broker._trim_pack(pack)
     assert result.world_context.relevant_world_pages == [first]
     assert result.world_context.active_resource_constraints == [second]
-    assert broker._estimate_pack_with_components(result) <= broker.context_budget_chars
+    assert broker._estimate_chars(result) <= broker.context_budget_chars
     assert pack.world_context.relevant_world_pages == [first, second]
-
-
-def test_empty_world_keeps_existing_component_overhead():
-    pack = context(WorldContextPack()).model_copy(
-        update={
-            "previous_chapter_summaries": [],
-            "retrieved_memories": [],
-        }
-    )
-    # The original component estimator has a fixed empty-world allowance in
-    # addition to the base pack. This change must not alter no-world retention.
-    expected = RetrievalBroker._estimate_chars(
-        pack
-    ) + RetrievalBroker._estimate_component_chars(WorldContextPack())
-    assert RetrievalBroker._estimate_pack_with_components(pack) == expected

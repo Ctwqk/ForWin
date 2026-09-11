@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.context import ChapterContextPack, MemorySnippet
 from forwin.retrieval.broker_core.broker import RetrievalBroker
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 
@@ -56,16 +56,22 @@ def test_broker_requests_raw_budget_and_returns_bucketed_memories() -> None:
     assert [item.summary for item in selected] == ["recent 1", "enemy 1"]
 
 
-def _typed_memory(summary: str, memory_type: str) -> SimpleNamespace:
-    return SimpleNamespace(
+class TypedMemory(MemorySnippet):
+    memory_type: str
+
+
+def _typed_memory(summary: str, memory_type: str) -> TypedMemory:
+    return TypedMemory(
         summary=summary,
         memory_type=memory_type,
         chapter_number=1,
+        title="记录",
+        excerpt="原文",
     )
 
 
-def _pack_with_memories(memories: list[SimpleNamespace]) -> ChapterContextPack:
-    return ChapterContextPack.model_construct(
+def _pack_with_memories(memories: list[TypedMemory]) -> ChapterContextPack:
+    return ChapterContextPack(
         project_id="project-1",
         project_title="P",
         premise="p",
@@ -84,7 +90,6 @@ def _pack_with_memories(memories: list[SimpleNamespace]) -> ChapterContextPack:
 
 
 def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
-    broker = RetrievalBroker(context_budget_chars=2850)
     pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),
@@ -93,13 +98,15 @@ def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
         ]
     )
 
+    broker = RetrievalBroker(context_budget_chars=RetrievalBroker._estimate_chars(
+        pack.model_copy(update={"retrieved_memories": pack.retrieved_memories[1:]})
+    ))
     trimmed = broker._trim_pack(pack)
 
     assert [item.memory_type for item in trimmed.retrieved_memories] == ["promise", "enemy"]
 
 
 def test_finalize_context_summary_reports_memory_pruning() -> None:
-    broker = RetrievalBroker(context_budget_chars=2850)
     base_pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),
@@ -107,6 +114,9 @@ def test_finalize_context_summary_reports_memory_pruning() -> None:
             _typed_memory("enemy " + "x" * 260, "enemy"),
         ]
     )
+    broker = RetrievalBroker(context_budget_chars=RetrievalBroker._estimate_chars(
+        base_pack.model_copy(update={"retrieved_memories": base_pack.retrieved_memories[1:]})
+    ))
     trimmed = broker._trim_pack(base_pack)
 
     broker._finalize_context_summary(

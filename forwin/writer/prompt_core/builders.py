@@ -6,6 +6,8 @@ produces fluent Chinese web-novel prose and metadata without code-switching.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from typing import Literal
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
@@ -83,41 +85,61 @@ def _scene_task_section(
     return "\n".join(lines)
 
 
-def _scene_prompt_sections(
+_CONTEXT_LAYOUTS = {
+    # summaries, entities, threads, memories, excerpt chars, compact envelope
+    "single": (3, 6, 8, 3, 80, False),
+    "preview": (2, 5, 6, 2, 60, True),
+    "breakdown": (3, 6, 6, 3, 80, False),
+    "scene": (2, 5, 6, 2, 80, True),
+}
+
+
+def render_writer_context(
     context: ChapterContextPack,
     *,
-    plan_title: str,
-    previous_limit: int,
-    entity_limit: int,
-    thread_limit: int,
-    memory_limit: int,
-    envelope_compact: bool,
-    extra_sections: list[str] | None = None,
+    layout: Literal["single", "preview", "breakdown", "scene"],
 ) -> str:
+    """The existing context block for a Writer call, without task or output text."""
+    previous_limit, entity_limit, thread_limit, memory_limit, excerpt_chars, compact = (
+        _CONTEXT_LAYOUTS[layout]
+    )
     sections: list[str | None] = [
         _story_basics_section(context),
         _repair_contract_section(context),
-        _chapter_plan_section(context, plan_title),
+        # Preserve the single-mode repetition until a separate prompt ablation.
+        _canon_quality_context_section(context) if layout == "single" else None,
+        _chapter_plan_section(context, "预演章节计划" if layout == "preview" else "本章计划"),
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
         _personality_context_section(context),
-        _subworld_control_section(context),
+        _subworld_control_section(context) if layout != "preview" else None,
         _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
         _canon_name_anchor_section(context),
         _experience_overlay_section(context),
         _world_intent_section(context),
-        _arc_envelope_section(context, compact=envelope_compact),
+        _arc_envelope_section(context, compact=compact),
         _world_pressure_section(context),
         _world_model_section(context),
         _audience_hints_section(context),
-        _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
+        _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=excerpt_chars),
         _timeline_section(context),
         _canon_quality_context_section(context),
     ]
-    if extra_sections:
-        sections.extend(extra_sections)
     return _join_sections(*sections)
+
+
+def writer_context_chars(context: ChapterContextPack) -> int:
+    """Largest rendered context block, not a token or complete-request limit.
+
+    Retrieval does not select a Writer mode. Charge the largest existing layout
+    once; never add the costs of sequential calls. Prompt telemetry belongs to
+    the actual call, so estimation isolates its mutable quality dictionary.
+    """
+    view = context.model_copy(update={
+        "canon_quality_context": deepcopy(context.canon_quality_context),
+    })
+    return max(len(render_writer_context(view, layout=layout)) for layout in _CONTEXT_LAYOUTS)
 
 
 def build_single_chapter_draft_prompt(
@@ -133,28 +155,7 @@ def build_single_chapter_draft_prompt(
         min_chars=min_chars,
         max_chars=max_chars,
     )
-    user_sections = _join_sections(
-        _story_basics_section(context),
-        _repair_contract_section(context),
-        _canon_quality_context_section(context),
-        _chapter_plan_section(context, "本章计划"),
-        _previous_summaries_section(context, limit=3),
-        _active_entities_section(context, limit=6),
-        _personality_context_section(context),
-        _subworld_control_section(context),
-        _map_runtime_section(context),
-        _active_threads_section(context, limit=8),
-        _canon_name_anchor_section(context),
-        _experience_overlay_section(context),
-        _world_intent_section(context),
-        _arc_envelope_section(context, compact=False),
-        _world_pressure_section(context),
-        _world_model_section(context),
-        _audience_hints_section(context),
-        _retrieved_memories_section(context, limit=3, excerpt_chars=80),
-        _timeline_section(context),
-        _canon_quality_context_section(context),
-    )
+    user_sections = render_writer_context(context, layout="single")
 
     user_content = (
         user_sections
@@ -196,26 +197,7 @@ def build_preview_chapter_prompt(
         min_chars=min_chars,
         max_chars=max_chars,
     )
-    user_sections = _join_sections(
-        _story_basics_section(context),
-        _repair_contract_section(context),
-        _chapter_plan_section(context, "预演章节计划"),
-        _previous_summaries_section(context, limit=2),
-        _active_entities_section(context, limit=5),
-        _personality_context_section(context),
-        _map_runtime_section(context),
-        _active_threads_section(context, limit=6),
-        _canon_name_anchor_section(context),
-        _experience_overlay_section(context),
-        _world_intent_section(context),
-        _arc_envelope_section(context, compact=True),
-        _world_pressure_section(context),
-        _world_model_section(context),
-        _audience_hints_section(context),
-        _retrieved_memories_section(context, limit=2, excerpt_chars=60),
-        _timeline_section(context),
-        _canon_quality_context_section(context),
-    )
+    user_sections = render_writer_context(context, layout="preview")
 
     user_content = (
         user_sections
@@ -268,15 +250,7 @@ def build_scene_breakdown_prompt(
         ensure_ascii=False,
         indent=2,
     )
-    user_sections = _scene_prompt_sections(
-        context,
-        plan_title="本章计划",
-        previous_limit=3,
-        entity_limit=6,
-        thread_limit=6,
-        memory_limit=3,
-        envelope_compact=False,
-    )
+    user_sections = render_writer_context(context, layout="breakdown")
     user_content = (
         f"你正在为《{context.project_title}》第 {context.chapter_number} 章拆分场景。\n\n"
         f"{user_sections}\n\n"
@@ -360,22 +334,14 @@ def build_scene_generation_prompt(
     previous_scenes: list[SceneOutput] | None = None,
     handoff_budget_chars: int = 3200,
 ) -> list[dict]:
-    scene_sections = _scene_prompt_sections(
-        context,
-        plan_title="本章计划",
-        previous_limit=2,
-        entity_limit=5,
-        thread_limit=6,
-        memory_limit=2,
-        envelope_compact=True,
-        extra_sections=[
-            _scene_handoff_section(
-                scene_plans or [],
-                previous_scenes or [],
-                max_chars=handoff_budget_chars,
-            ),
-            _scene_task_section(scene_plan, include_target_chars=True),
-        ],
+    scene_sections = _join_sections(
+        render_writer_context(context, layout="scene"),
+        _scene_handoff_section(
+            scene_plans or [],
+            previous_scenes or [],
+            max_chars=handoff_budget_chars,
+        ),
+        _scene_task_section(scene_plan, include_target_chars=True),
     )
     user_content = (
         f"{scene_sections}\n\n"
@@ -434,18 +400,10 @@ def build_scene_stitch_prompt(
         max_chars=max_chars,
     )
     stitched_input = "\n\n".join(_scene_draft_record(scene) for scene in scene_outputs)
-    user_sections = _scene_prompt_sections(
-        context,
-        plan_title="本章计划",
-        previous_limit=2,
-        entity_limit=5,
-        thread_limit=6,
-        memory_limit=2,
-        envelope_compact=True,
-        extra_sections=[
-            f"请把以下 scenes 拼接成《{context.project_title}》第 {context.chapter_number} 章的完整章节。",
-            "【待拼接 Scenes】\n" + stitched_input,
-        ],
+    user_sections = _join_sections(
+        render_writer_context(context, layout="scene"),
+        f"请把以下 scenes 拼接成《{context.project_title}》第 {context.chapter_number} 章的完整章节。",
+        "【待拼接 Scenes】\n" + stitched_input,
     )
     user_content = (
         f"{user_sections}\n\n"
@@ -475,7 +433,8 @@ __all__ = [
     '_chapter_hook_requirement',
     '_join_sections',
     '_scene_task_section',
-    '_scene_prompt_sections',
+    'render_writer_context',
+    'writer_context_chars',
     'build_single_chapter_draft_prompt',
     'build_preview_chapter_prompt',
     'build_scene_breakdown_prompt',

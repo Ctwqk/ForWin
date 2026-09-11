@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -133,7 +132,7 @@ def test_repair_contract_is_mandatory_and_counted_in_existing_soft_budget():
     broker = RetrievalBroker(context_budget_chars=100_000)
     baseline = _context()
     assert broker._estimate_chars(context) > broker._estimate_chars(baseline)
-    required_cost = broker._estimate_pack_with_components(context)
+    required_cost = broker._estimate_chars(context)
     broker.context_budget_chars = required_cost + 10
     with_memory = context.model_copy(
         update={
@@ -149,21 +148,6 @@ def test_repair_contract_is_mandatory_and_counted_in_existing_soft_budget():
     for items in contract.values():
         for constraint in items:
             assert constraint in _prompt(trimmed, "single")
-
-
-def test_absent_repair_contract_does_not_change_ordinary_context_budget():
-    context = _context()
-    payload = context.model_dump(mode="json")
-    for key in (
-        "knowledge_system_context",  # Provenance is not part of the Writer input.
-        "genesis_reference_facts",
-        "genesis_reference_omitted_count",
-        "repair_contract",
-    ):
-        payload.pop(key, None)
-    assert RetrievalBroker._estimate_chars(context) == len(
-        json.dumps(payload, ensure_ascii=False)
-    )
 
 
 def test_next_repair_replaces_contract_without_mutating_prior_view():

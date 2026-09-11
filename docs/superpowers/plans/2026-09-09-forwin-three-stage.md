@@ -278,7 +278,20 @@ The retained chapter-3 events report 44,419 estimated characters before trimming
 - [x] Reproduce unrendered-field eviction with actual typed packs and five builders; retain baseline prompt bytes. Cover visible-cost controls, nonadditive removals, mandatory context and estimator input immutability.
 - [x] Unify existing context composition and budget consumption; remove the competing JSON accounting path. Verify five-mode prompt equality and related regression behavior.
 - [x] Obtain independent review and record changed accounting semantics. Root 240 related tests plus the additional empty-quality maximum-layout control pass; independent 82 focused tests, 160 complete old/new prompt comparisons, 96 immutable measurements and both cold-import orders pass (overlapping counts). No blocking finding at the reviewed production hashes. Commit the coherent correction.
-- [ ] Freeze full QA/images and run a fresh smoke20 and independent L100 with ending review.
+- [x] Freeze `45aa530`: full QA 3372 passed / 4 skipped / 6 subtests and both exact role images verified. Fresh project did not reach writing: Task 23 below records a Map refinement failure; do not count it as smoke20 or L100.
+- [ ] Complete a fresh smoke20 and independent L100 with ending review after the diagnosed correction.
+
+### Task 23: Preserve Map revisions when model requests fail
+
+The fresh `45aa530` project first rejected two model-authored Node-to-Region routes correctly. Its reviewed prewriting repair proposal passes the existing contract, but the full Map refinement request sends an open dictionary schema at `edges.items`; Codex strict structured output rejects it before generating. Ordinary fallback routes report exhausted account balance. The Genesis owner then returns a deterministic scaffold and saves an edited revision with no nodes or routes. Canonical readback caught this before lock or writing. Preserve the failed run and its original artifacts; restore model availability separately from the code fix.
+
+**Bounded design:** full Map refinement uses existing JSON mode so legacy route dictionaries retain their fields, followed by the unchanged complete Atlas and reference validation. Strict canonical output schema remains for new Map generation; remove its unused open-dictionary variant. Map generation, full refinement and item refinement must report missing-model and exhausted call/parse failures before a workspace write. Keep existing retry limits, model routing, non-Map fallback, route rules and all historical revisions unchanged. No new model step, schema coercion or runtime hotfix.
+
+- [x] Reproduce the actual schema incompatibility and silent fallback. Corrected RED: 19 failed / 3 controls passed; six cases exercise real PostgreSQL revision writes. The initial malformed JSON fixture was salvageable by the existing parser, so use an unrepairable non-object response while retaining the same assertions.
+- [x] Correct the two existing owners; focused 80 and broader 315 tests pass (overlap), including retained legacy routes and unchanged non-Map fallback.
+- [x] Complete independent implementation review: 47 pure tests, 12 Map failure combinations, 28 non-Map comparisons, 12 workspace checks, legacy equivalence and actual Codex schema conversion pass; no blocking finding. Update evidence and commit the coherent correction.
+- [ ] Freeze new complete QA/images. A source change requires a fresh qualification project; do not resume the failed sample as a pass.
+- [ ] Restore ordinary model availability, then complete smoke20, independent L100 and actual ending review under frozen source/model/policy.
 
 ## Initial evidence
 

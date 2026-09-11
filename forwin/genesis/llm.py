@@ -301,12 +301,17 @@ def _call_json_with_trace_impl(
         if str(item.get("role", "")).strip() == "system"
     )
     attempts_payload: list[dict[str, Any]] = []
+    is_map_operation = stage_key.split(":", 1)[0] == "map"
     max_tokens = min(self.max_tokens, int(max_tokens or self.max_tokens))
     if (
         hasattr(self.llm_client, "api_key")
         and not str(getattr(self.llm_client, "api_key", "") or "").strip()
         and not bool(getattr(self.llm_client, "codex_enabled", False))
     ):
+        if is_map_operation:
+            raise RuntimeError(
+                "Genesis Map requires an available model; prior revision preserved."
+            )
         attempts_payload.append({"status": "fallback", "reason": "missing_api_key"})
         return fallback, self._trace_payload(
             stage_key=stage_key,
@@ -324,6 +329,7 @@ def _call_json_with_trace_impl(
             "max_tokens": max(480, min(max_tokens, 900)),
         },
     ]
+    last_error: Exception | None = None
     for attempt_no, attempt in enumerate(retry_plan, start=1):
         try:
             is_chapter_plan = str(stage_key or "").startswith("launch_arc_")
@@ -337,7 +343,12 @@ def _call_json_with_trace_impl(
                 else "genesis",
                 stage_key=stage_key,
                 codex_allowed=not is_chapter_plan,
-                output_schema=genesis_map_output_schema(canonical_routes=stage_key == "map") if stage_key in {"map", "map:refine"} else {"type": "object"},
+                # Full refinements may preserve legacy route dictionaries. Use
+                # JSON mode there, then validate the complete map below; an open
+                # dictionary schema cannot be sent as Codex strict output.
+                output_schema=genesis_map_output_schema()
+                if stage_key == "map"
+                else {"type": "object"},
             )
             try:
                 payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
@@ -375,6 +386,7 @@ def _call_json_with_trace_impl(
             # scaffold after schema/contract failure. The prior revision survives.
             raise
         except Exception as exc:  # noqa: BLE001
+            last_error = exc
             attempts_payload.append(
                 {
                     "attempt": attempt_no,
@@ -386,6 +398,10 @@ def _call_json_with_trace_impl(
             )
             if isinstance(exc, LLMJSONParseError) and exc.empty_response:
                 break
+    if is_map_operation:
+        raise RuntimeError(
+            "Genesis Map model call failed; prior revision preserved."
+        ) from last_error
     logger.warning("Genesis stage %s fell back to deterministic scaffold.", stage_key)
     attempts_payload.append({"status": "fallback", "reason": "deterministic_scaffold"})
     return fallback, self._trace_payload(

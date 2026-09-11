@@ -73,12 +73,11 @@ class _Atlas(BaseModel):
     edges: list[dict[str, Any]]
 
 
-def genesis_map_output_schema(*, canonical_routes: bool = True) -> dict[str, Any]:
+def genesis_map_output_schema() -> dict[str, Any]:
     schema = _Atlas.model_json_schema()
-    if canonical_routes:
-        schema["properties"]["edges"]["items"] = GenesisRoute.model_json_schema(
-            by_alias=True
-        )
+    schema["properties"]["edges"]["items"] = GenesisRoute.model_json_schema(
+        by_alias=True
+    )
     return schema
 
 

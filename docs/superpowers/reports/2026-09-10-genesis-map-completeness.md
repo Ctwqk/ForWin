@@ -44,3 +44,5 @@
 运行目录 `forwin-stage1-smoke-45aa5309f9a2-c94fd4` 保存原调用、canonical 读回、地图提案和 `map-diagnosis/index.json`；30 个原始文件逐一验证远端/本地 SHA。桥接会话的最终响应与模型标识另有记录，真实使用 `gpt-5.6-sol`。初次失败的 Map artifacts 当时未落盘，在后续 trace 保存时才被保留，不能声称其在失败当时就有完整持久 trace。`37-active-before-stop.json` 确认无生成任务，随后停止五个隔离容器，卷及证据保留。
 
 新增失败合同正确 RED 为 **19 failed / 3 passed**；修复后 **80 项聚焦测试**、**315 项相关测试**通过，计数重叠。六个 PostgreSQL 用例在捕获失败后显式 commit，再确认正式 revision ID、原 JSON 与 revision 数量均不变。独立实施复审的 47 项纯测试、12 个 Map 失败组合、28 个非 Map 旧新对照、12 个 workspace 保存边界、旧路线等价及实际 Codex 转换均通过，无阻断发现。完整 Ruff 对原基线零新增诊断，关键静态与差异检查通过。新源码的冻结完整 QA、镜像仍需另记；此处不宣称新模型修订、smoke20、L100 或结局已通过。
+
+冻结 `89aa84f` 的完整 QA 为 **3393 passed / 1 failed / 4 skipped / 6 subtests passed**。唯一失败是兼容性清单漏登记 `forwin/genesis/llm.py` 的完整修订入口；编译、关键静态、源码策略与差异检查通过，完整 Ruff 相对基线零新增诊断。将该入口、精确匹配文本、JSON 模式及保存前校验理由和失败回归登记到既有 `genesis.persisted_route_input` 项，保留原审计断言与运行代码。此修正需要新提交的完整 QA，不能将本轮失败记为通过。

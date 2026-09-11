@@ -59,12 +59,14 @@ entries:
     paths:
       - forwin/map/genesis_route.py
       - forwin/map/genesis_atlas.py
+      - forwin/genesis/llm.py
     allow_patterns:
       - Legacy dictionaries remain immutable evidence
       - _LEGACY
       - _validate_legacy_scalars
       - legacy_kind
       - including merged legacy edits
+      - Full refinements may preserve legacy route dictionaries
     reason: >
       The approved three-stage roadmap preserves existing Genesis revisions.
       This single input parser reads their finite route aliases, including
@@ -74,11 +76,15 @@ entries:
       are rejected. The shared atlas boundary also retains the existing node
       parent aliases and omitted-ID autofill for editable input; new complete
       model maps declare canonical identities. This is an explicit retained
-      input-compatibility debt.
+      input-compatibility debt. Full Map refinement uses existing JSON-mode
+      transport to retain supported old route fields, then applies the same
+      complete atlas and route validator before saving a revision. Model or
+      parse failure does not create a fallback Map revision.
     removal_phase: after_genesis_route_input_retirement
     verification:
       - tests/test_genesis_route_schema.py
       - tests/test_genesis_route_contract.py
+      - tests/test_genesis_map_failure_handling.py
       - tests/test_architecture_boundaries.py
     delete_when:
       - no supported editable project or import workflow depends on old route aliases

@@ -290,6 +290,7 @@ The fresh `45aa530` project first rejected two model-authored Node-to-Region rou
 - [x] Reproduce the actual schema incompatibility and silent fallback. Corrected RED: 19 failed / 3 controls passed; six cases exercise real PostgreSQL revision writes. The initial malformed JSON fixture was salvageable by the existing parser, so use an unrepairable non-object response while retaining the same assertions.
 - [x] Correct the two existing owners; focused 80 and broader 315 tests pass (overlap), including retained legacy routes and unchanged non-Map fallback.
 - [x] Complete independent implementation review: 47 pure tests, 12 Map failure combinations, 28 non-Map comparisons, 12 workspace checks, legacy equivalence and actual Codex schema conversion pass; no blocking finding. Update evidence and commit the coherent correction.
+- [x] Preserve the first frozen QA result for `89aa84f`: 3393 passed, one legacy-inventory failure, four skipped and six subtests. Register full Map refinement under the existing retained-input compatibility entry, including exact path/pattern, reason and regression coverage; leave production behavior and audit assertions unchanged.
 - [ ] Freeze new complete QA/images. A source change requires a fresh qualification project; do not resume the failed sample as a pass.
 - [ ] Restore ordinary model availability, then complete smoke20, independent L100 and actual ending review under frozen source/model/policy.
 

@@ -67,12 +67,12 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 - [ ] 实现同一审阅证据传递：保留 form/answers/validation report 在 quality result/cache；form ask 携带主体、条件和完整合同指纹，现有语义 prompt 明确区分已兑现/未兑现/无法确认。缓存版本升级，旧缓存不得伪造证据。未知旧类型不默认 pass，关键词/marker 不再拥有清账权。
 - [ ] 在 preparation 冻结证据及依赖，admission 锁内重读义务完整合同并复核候选 body/draft/审阅身份，激活后和正式 active pointer 同事务应用已证实兑现；提供现有 failure injection 的 rollback 证明。空证据保持未解决，不能获得到期豁免；idempotent 已提交读取仍保持兼容。
 - [ ] 抽取历史 `apply_reviewed_resolutions()` 的通用部分，保留其 before-image/全覆盖规则；删除普通接纳后的重新语义判断，只保留已提交结果读取和到期维护。
-- [ ] GREEN + related: verifier/evidence/history/historical form/Canon atomic/preparation/quality cache。审计函数只读列出旧 resolved 的来源及证据状态，不能回写。
+- [ ] GREEN + related: verifier/evidence/history/historical form/Canon atomic/preparation/quality cache。证明旧 resolved 行不会自动回填或重置；新记录保留可审计的来源。实际旧书修复前另作有范围的只读审计，本任务不新增无人调用的审计服务。
 - [ ] 同步当前设计的已实现范围并提交 `fix(canon): resolve obligations from version-bound review evidence`；独立任务审查。
 
 ## Task 2: B — 持久、原子的续跑交接
 
-**Files:** Create `forwin/generation/continuation_events.py`, `tests/test_generation_continuation_outbox.py`; modify `forwin/application/{generation,generation_execution}.py`, `forwin/generation/{auto_continue,task_repository,task_payload}.py`, `forwin/models/task.py`, `forwin/outbox/handlers.py`, `forwin/runtime/container.py`, task pause/cancel owner, new forward migration after current Alembic head.
+**Files:** Create `forwin/generation/continuation_events.py`, `tests/test_generation_continuation_outbox.py`; modify `forwin/application/{generation,generation_execution}.py`, `forwin/generation/{auto_continue,task_repository,task_payload}.py`, `forwin/models/task.py`, `forwin/outbox/handlers.py`, `forwin/runtime/container.py`, `forwin/http/project_support.py` (task pause/cancel owner), new forward migration after current Alembic head.
 
 **Interfaces:** `GenerationApplicationService.finish_claimed_task(task_id, result, *, worker_id, lease_epoch)` owns finalization; deterministic `generation-continuation:{parent_task_id}:v1` event carries typed result. Consumer uses a caller-owned Session; `GenerationTask.continuation_parent_task_id` is nullable and unique; deterministic `AUTO_CONTINUE_DECISION` audit ID persists child-or-stop decision. Parent frozen task payload supplies policy and run scope.
 
@@ -81,7 +81,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 - [ ] 前向迁移增加可空唯一父任务字段，旧行保持 NULL；新增事件 schema/handler，不建第二调度器或 intent table。
 - [ ] 最终任务状态与 event 在一个 fenced transaction 写入；所有完成路径共用入口；进度回调只写进度，移除 best-effort completion callback。已提交完成后的显示错误不回改结果。
 - [ ] 消费按 Project → GenerationTask 锁定，原子重查控制/维护/目标/容量/其他活跃任务，创建子任务与 review reset、audit 决定同事务。未消费 completed 父任务可暂停该意图；竞争失败不声称已经暂停。旧事件遇新运行记录 superseded。
-- [ ] 子任务复用父 policy_snapshot/policy_version/run_until_chapter/long_run_mode/isolated，仅更新身份批次；数据库唯一键和既定 audit 决定处理全部 replay。
+- [ ] 子任务复用父 policy_snapshot/policy_version/run_until_chapter/long_run_mode/isolated，仅更新身份批次；若项目策略版本已被用户修改，旧意图记录 policy_changed 并停止，不伪造新版本或弱化 Canon stale 检查。用例断言旧快照未被改写、无旧策略冒充新版本的子任务；新设置由显式新运行采用。数据库唯一键和既定 audit 决定处理全部 replay。
 - [ ] GREEN：上述 suite、outbox worker/lease/laziness、capacity、migration preservation；提交 `fix(generation): persist idempotent continuation intent with task completion` 并审查。
 
 ## Task 3: A2 — 义务阻塞接入有限修复
@@ -92,7 +92,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 - [ ] RED：构造仅到期未兑现、signals=[] 的候选，实际流水线应使用一次章修复；修复新候选通过后才接纳。预算耗尽、基础设施失败、没有 executor、冻结历史分别停止且不延期/waive。
 - [ ] 用已有 route/contract 接收 typed blocker；Writer 获得具体义务和 must_preserve；scope 不可执行给出确定结果，不在流水线新增字符串匹配链。
-- [ ] 复用同一 repair-cycle 累计预算，新候选重建 review/eligibility/approval/Canon evidence；新 task 不绕过已耗尽预算。
+- [ ] 复用同一 repair-cycle 累计预算，新候选重建 review/eligibility/approval/Canon evidence；新 task 不绕过已耗尽预算。review/Canon phase 保留审计标签，但不各自重获一套额度；更新旧的 `test_canon_repair_budget_ignores_prior_review_repair_attempts` 反向契约，沿用现有 effective rewrite limit。
 - [ ] 跑实际流水线/repair/obligation regression，提交 `fix(review): route obligation blockers through bounded repair` 并审查。
 
 ## Task 4: C1 — 固定读取基线并拒绝失效派生事实

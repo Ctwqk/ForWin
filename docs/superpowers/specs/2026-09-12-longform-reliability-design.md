@@ -22,6 +22,8 @@ CanonPreparation 冻结这些证据及依赖；CanonAdmission 在锁内复核义
 
 父任务完成后、意图未消费前允许停止该意图；与消费竞争须串行化，不能返回已暂停却悄悄启动子任务。已有其他运行占用项目时旧意图终止为 superseded。子任务沿用父任务不可变策略快照、版本、run_until_chapter、long_run_mode、isolated；仅子任务身份和批次信息更新。历史 completed 任务不推测补发意图。
 
+若用户在批次间明确修改项目策略版本，旧续跑意图记录 `policy_changed` 并停止，新策略由显式新运行意图采用。不能把旧快照标成新版本，也不为沿用旧快照放宽现有 Canon 策略过期保护。
+
 ## 3. 有效检索及增量投影
 
 一次 Writer 上下文固定 project、book_revision 和第 N−1 章读取基线。整书 revision 用于发现并发变化及缓存失效，不作为每条旧记忆必须等于最新 revision 的条件。基线变化最多重建一次整包，仍变化则明确输入构造失败，不混合不同版本。

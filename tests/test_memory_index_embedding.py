@@ -525,3 +525,139 @@ def test_cache_key_uses_actual_input_and_preprocessing_and_validates_stored_vect
         assert len(calls) == 3
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("response_model", ["other-same-dimension", None, ""])
+def test_remote_response_model_rejected_before_cache_or_point_write(response_model):
+    from sqlalchemy import select
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.retrieval.memory_index import RemoteTextEmbedder, QdrantChapterMemoryIndex
+    from tests.postgres import postgres_test_url
+
+    def handler(_request):
+        payload = {"data": [{"embedding": [1.0] * 8}]}
+        if response_model is not None:
+            payload["model"] = response_model
+        return httpx.Response(200, json=payload)
+
+    engine = get_engine(postgres_test_url("remote-response-identity"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    client = FakeQdrantClient()
+    embedder = RemoteTextEmbedder(
+        base_url="http://remote.test", model="prepared-model", dims=8,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    index = QdrantChapterMemoryIndex(
+        url=":memory:", collection_name="remote-identity", embedder=embedder,
+        client=client, qdrant_models=FakeQdrantModels, session_factory=sessions,
+    )
+    try:
+        with pytest.raises(ValueError, match="response model identity"):
+            index.upsert_chapter(project_id="p", chapter_number=1, title="Title", summary="Summary", body="Body")
+        assert embedder.model == "prepared-model"
+        with sessions() as session:
+            assert session.scalars(select(EmbeddingCacheEntry)).all() == []
+        assert client.upsert_calls == 0
+        assert client.collections[index.collection_name]["points"] == {}
+    finally:
+        engine.dispose()
+
+
+def test_remote_matching_response_model_persists_and_reuses_cached_vector():
+    from sqlalchemy import select
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.retrieval.memory_index import RemoteTextEmbedder, QdrantChapterMemoryIndex
+    from tests.postgres import postgres_test_url
+
+    requests = []
+    vector = [0.0, 1.0] + [0.0] * 6
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"model": "prepared-model", "data": [{"embedding": vector}]})
+
+    engine = get_engine(postgres_test_url("remote-matching-model"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    client = FakeQdrantClient()
+    try:
+        for commit in ("first", "new-source-same-input"):
+            embedder = RemoteTextEmbedder(
+                base_url="http://remote.test", model="prepared-model", dims=8,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+            )
+            index = QdrantChapterMemoryIndex(
+                url=":memory:", collection_name="remote-matching", embedder=embedder,
+                client=client, qdrant_models=FakeQdrantModels, session_factory=sessions,
+            )
+            index.upsert_chapter(project_id="p", chapter_number=1, title="Title", summary="Summary", body="Body", canon_commit_id=commit)
+        assert requests == [{"model": "prepared-model", "input": ["Title\nSummary\nBody"], "dimensions": 8}]
+        with sessions() as session:
+            cached = session.scalars(select(EmbeddingCacheEntry)).one()
+            assert json.loads(cached.vector_json) == vector
+            assert cached.embedding_identity == memory_embedding_identity(embedder)
+        assert len(client.collections[index.collection_name]["points"]) == 2
+        assert all(point.vector == vector for point in client.collections[index.collection_name]["points"].values())
+    finally:
+        engine.dispose()
+
+
+def test_postgres_simultaneous_cache_insert_conflict_returns_winning_vector():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from sqlalchemy import event, select
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.retrieval.embedding_cache import cached_embeddings
+    from tests.postgres import postgres_test_url
+
+    engine = get_engine(postgres_test_url("cache-insert-conflict"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    both_writers = Barrier(2, timeout=10)
+    connections = []
+    conflicts = []
+    provider_vectors = []
+
+    def synchronize_insert(connection, _cursor, statement, _parameters, _context, _many):
+        if statement.startswith("INSERT INTO embedding_cache_entries"):
+            connections.append(id(connection.connection.driver_connection))
+            both_writers.wait()
+
+    def record_conflict(context):
+        if getattr(context.original_exception, "sqlstate", None) == "23505":
+            conflicts.append(context.statement)
+
+    class DistinctResponseEmbedder(HashTextEmbedder):
+        def __init__(self, value):
+            super().__init__(dims=8)
+            self.vector = [value] + [0.0] * 7
+
+        def embed(self, texts):
+            provider_vectors.append(self.vector)
+            return [self.vector for _ in texts]
+
+    event.listen(engine, "before_cursor_execute", synchronize_insert)
+    event.listen(engine, "handle_error", record_conflict)
+    try:
+        def consume(value):
+            return cached_embeddings(DistinctResponseEmbedder(value), ["same input"], session_factory=sessions)[0]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(consume, [1.0, 2.0]))
+        with sessions() as session:
+            row = session.scalars(select(EmbeddingCacheEntry)).one()
+            stored = json.loads(row.vector_json)
+        assert len(set(connections)) == 2
+        assert len(conflicts) == 1
+        assert "embedding_cache_entries" in conflicts[0]
+        assert len(provider_vectors) == 2
+        assert stored in provider_vectors
+        assert results == [stored, stored]
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_insert)
+        event.remove(engine, "handle_error", record_conflict)
+        engine.dispose()

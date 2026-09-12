@@ -891,3 +891,43 @@ def test_public_projection_status_preserves_revision_lag_and_unknown_baseline():
     assert result["components"][1]["projected_book_revision"] is None
     assert result["components"][1]["revision_lag"] is None
     assert ProjectionRefreshResponse.model_validate({"project_id": "p", "target_book_revision": 5}).model_dump().get("target_book_revision") == 5
+
+
+def test_http_projection_callable_factory_persists_cold_cache_and_replays(projection_sessions):
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    from tests.qdrant import FakeQdrantClient, FakeQdrantModels
+
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        _add_accepted_chapter(session, "project-1", 1)
+    embedded = []
+
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            embedded.extend(texts)
+            return super().embed(texts)
+
+    client = FakeQdrantClient()
+    index = QdrantChapterMemoryIndex(
+        url=":memory:", collection_name="http-cache",
+        embedder=CountingEmbedder(dims=8), client=client,
+        qdrant_models=FakeQdrantModels,
+    )
+    handlers = api_projection_routes.build_handlers(
+        get_session=lambda: projection_sessions(),
+        memory_index_provider=lambda: index,
+    )
+    first = handlers["refresh_projection"]("project-1", projection_kind="chapter_memory")
+    assert first["ok"] is True
+    assert first["components"]["chapter_memory"]["chapters"] == [1]
+    with projection_sessions() as session:
+        cache = session.scalars(select(EmbeddingCacheEntry)).all()
+        assert len(cache) == 1
+    assert len(client.collections[index.collection_name]["points"]) == 1
+    replay = handlers["refresh_projection"]("project-1", projection_kind="chapter_memory")
+    assert replay["components"]["chapter_memory"]["skipped"] is True
+    assert embedded == ["Chapter 1\nSummary 1\nBody 1"]
+    checkpoint = _checkpoint(projection_sessions, "project-1", "chapter_memory")
+    assert checkpoint.status == "healthy"
+    assert checkpoint.projected_book_revision == 1

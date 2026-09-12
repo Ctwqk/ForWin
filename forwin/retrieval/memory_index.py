@@ -101,6 +101,11 @@ class RemoteTextEmbedder(TextEmbedder):
         )
         response.raise_for_status()
         data = response.json()
+        response_model = data.get("model")
+        if not isinstance(response_model, str) or not response_model.strip():
+            raise ValueError("remote embedding response model identity unavailable")
+        if response_model != self.model:
+            raise ValueError("remote embedding response model identity mismatch")
         rows = data.get("data") or []
         embeddings = [list(item.get("embedding") or []) for item in rows]
         if len(embeddings) != len(texts):

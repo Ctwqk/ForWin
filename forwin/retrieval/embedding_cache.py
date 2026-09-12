@@ -64,7 +64,7 @@ def cached_embeddings(embedder, texts, *, preprocessing=MEMORY_PREPROCESSING, se
         if session_factory is not None:
             # Commit before external upsert: failed point writes can restart without
             # embedding again. Concurrent cache writers share immutable keys.
-            with session_factory.begin() as session:
+            with session_factory() as session, session.begin():
                 for key in missing:
                     try:
                         with session.begin_nested():

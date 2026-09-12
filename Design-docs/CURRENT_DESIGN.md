@@ -2,21 +2,9 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-2026-09-12 补充工作：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。以下已有实现说明不代表这些新增工作已完成，进度以执行计划和验证记录为准。
+2026-09-12 更新依据：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。本页按职责记录当前契约；工程审查、完整镜像及真实 smoke20 / 全新离线 L100 的完成情况以执行计划和验证记录为准，彼此不能替代。
 
-2026-09-12 A1 开发实现：普通续写与历史修订现在复用 ChapterReviewForm 的主体及逐项兑现条件审阅，表单/答案保存实际审阅正文 SHA-256，quality cache v2 保留原表单、答案和校验报告。不可变义务证据计划绑定完整合同、候选、draft、正文及审阅身份；Canon preparation 冻结依赖，admission 在项目/义务锁内复核，并把义务激活、兑现、来源审计与 active Canon 指针同事务写入。接纳后仅读取已提交兑现结果和处理到期，不再以关键词清账。pulp 有适用义务时会调用现有 ChapterReviewForm 获取真实语义证据（可能增加模型调用），无适用义务仍走确定性低成本路径。pulp 表单仅按声明策略保护强制项，非强制 P1 到期项可裁剪，不挤占 P0 证据预算；缓存区分义务策略。未到期未知维持 active；到期/终章要求沿用现有 strict/pulp 策略，历史修订保留完整后缀及六维覆盖。旧 resolved 不重置、不补造证据。此处仅记录 A1 工程实现，不代表后续工作包、真实模型质量或长跑验收完成。
-
-2026-09-12 B 开发实现：生成任务最终结果与 `generation-continuation:{parent_task_id}:v1` 意图通过 `finish_claimed_task` 在同一 lease/epoch fenced 事务提交；普通完成、Canon 恢复完成共用入口，进度回调不再发布终态，展示失败不回改已提交结果。既有 outbox 消费者按 Project → Task 锁检查控制、有效前缀维护、目标、容量和新运行；子任务、review reset 与确定身份的 AUTO_CONTINUE_DECISION 同事务落盘。可空唯一 continuation_parent_task_id 保留历史 NULL，子任务完成或软删除后重放也不会重复创建。未消费意图显示可暂停/终止；消费已创建子任务时父任务停止请求失败，不能冒报成功。子任务复制父策略及离线运行范围；策略版本已变则记录 policy_changed，新的显式运行采用新设置。消费者不构建生成模型服务；无历史 completed 意图补发，发布冻结、5% 存稿及已有修复预算保持。本段记录工程实现，不代表真实长跑验收完成。
-
-2026-09-12 A2 开发实现：义务阻塞以包含主体、未满足条件、来源和允许范围的结构化结果进入现有有限修复。admission 保留有效来源的 active、expired、blocked 债务，Writer/form 仍只选择 active；过期或不支持的修复明确停止，strict 与 pulp P0/hard-only 规则保持。review、Canon、新候选及非 accepted 章节的显式 retry 共用已消耗的修复次数，不重新获得额度；修复后的候选重新经过 review、eligibility、approval 和 Canon 证据核验。Writer 执行失败或没有可用正文时停止，不新增内容修复次数；现有章节失败入口先回滚，再持久保存错误分类、来源身份和既有次数。真实产出但仍不合格的正文继续计入预算。已发布历史保护和历史修订入口保持独立。任务审查及修复复核已通过，尚不代表真实长跑资格完成。
-
-2026-09-12 C1 开发实现：一次写作上下文固定 project、book_revision 和 N−1 基线；缓存与 ORM 读取按该基线刷新，构造期间变化最多重建一次整包。章节向量只定位来源，实际片段沿 active commit → candidate → draft 核对归属和正文/input hash 后从正式文本重建；未知旧身份被排除，补检限制为每批 20 条、最多 5 批且 query 只嵌入一次。知识页、Obsidian 和 LLM-KB 检查实际渲染输入的语义依赖及文件身份，校验先于排序和限额；渲染使用同一当前状态及标题。章节和知识库索引点包含不可变的来源、内容及 embedding 身份，迟到任务不能替换其他版本；知识库编译结束再次核验基线。不同版本的索引点保留，GC 不在本轮范围。前向迁移 0009 只增加未知依赖字段，旧 Markdown、hash 和人工笔记不变。读基线在进程内上下文副本中保留；序列化内容不携带可复用的读取证明，后续需要基线读取时须重新组装。已通过任务审查和修复复核；人物认知和必需对象见下述 D1/D2，增量投影/cache 及完整运行验收仍由后续任务处理。
-
-2026-09-12 D1 开发实现：人物和读者的已接纳认知从同一 N−1 基线下的实时 CognitionView 显式状态、override、错误认知及现存证据读取；无记录保持 unknown，可见性默认值不代表知道，知道某个节点不代表知道其全部客观字段。每位观察者从自己的初始快照继续回放，防止其他观察者的新快照跳过其变化。当前证据与历史认知事件分开，更正或清空后的证据不从旧事件补回；事件时点不冒充快照读取时点。Writer 的普通、preview、breakdown、scene、stitch 和 repair 提示及 Reviewer 实际请求区分当前认知、作者计划和本章预期变化；前场景只能通过正文中已经发生的获知事件建立有条件的承接。Reviewer 有数据库会话时按同一基线重读认知，不把序列化上下文当成新鲜度证明。任务独立审查及修复复核通过；必需对象保留、增量投影和真实运行验收仍待后续任务完成。
-
-2026-09-12 D2 开发实现：统一必需引用解析器在同一 accepted 基线下解析 ID、唯一名称/别名、node/field/edge/fact 引用，并保留已有对象的当前状态及关系。先保留必需对象，再排序裁剪可选背景；场景拆分后及修复更换目标后再次补取，普通、preview、breakdown、scene、stitch 与 repair 提示共用完整渲染。隐含必需关系仅连接两个独立必需端点，显式关系/事实引用保留相关端点，不递归扩张周边人物。软预算统计反映渲染后的上下文，不能充当完整 HTTP 请求的 token 数。真实 provider input_limit、缺失/歧义必需输入及 Canon 变化在外层 WriterExecution 保留诊断并终止，不经重复调用或 preview 获得正文。名称候选快照保留裁剪前的歧义信息，但序列化数据不授予新读取权限；进程内补取接口随事务结束失效，正常修复由原入口复核原 Canon 基线并重新绑定当前事务。独立审查及两轮修复复核已通过；最终覆盖包括真实 Canon 修复提交边界，文学质量和完整长跑仍需单独验收。
-
-更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
+既有范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。
 
@@ -71,6 +59,8 @@ BookState runtime 的当前节点状态以 `states_by_node_id` 为准，包括�
 
 ## 4. 应用层与运行配置
 
+生成任务最终结果与 `generation-continuation:{parent_task_id}:v1` 意图通过 `finish_claimed_task` 在同一 lease/epoch fenced 事务提交；普通完成、Canon 恢复完成共用入口，进度回调不再发布终态，展示失败不回改已提交结果。既有 outbox 消费者按 Project → Task 锁检查控制、有效前缀维护、目标、容量和新运行；子任务、review reset 与确定身份的 AUTO_CONTINUE_DECISION 同事务落盘。可空唯一 continuation_parent_task_id 保留历史 NULL，子任务完成或软删除后重放也不会重复创建。未消费意图显示可暂停/终止；消费已创建子任务时父任务停止请求失败，不能冒报成功。子任务复制父策略及离线运行范围；策略版本已变则记录 policy_changed，新的显式运行采用新设置。消费者不构建生成模型服务；无历史 completed 意图补发，发布冻结、5% 存稿及已有修复预算保持。
+
 `forwin.http.create_app()` 创建每个 App 自己的 `HttpRuntime`。应用服务持有用例，HTTP adapter 只做传输适配。当前实际入口包括：
 
 - `ProjectApplicationService`：项目、Genesis、章节和 review 用例。
@@ -117,9 +107,15 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
 
-Writer 的上下文组成由现有 prompt builder 统一提供，单章、预演、分解及场景四种布局保留原内容与限额，stitch 使用场景布局。RetrievalBroker 按这四种实际渲染块的最大字符数计一次软预算，每次裁剪后重新计算，不再按 ContextPack JSON 或组件大小相减。未显示的状态副本、地图 metadata、手工笔记和溯源不会挤占摘要；完整记录、页面 hash 和主 reviewer 证据仍保留。估算隔离 prompt 统计字段的写入，不把预算试算当成真正发送。
+一次写作上下文固定 project、book_revision 和 N−1 基线；缓存与 ORM 读取按该基线刷新，构造期间变化最多重建一次整包。章节向量只定位来源，实际片段沿 active commit → candidate → draft 核对归属和正文/input hash 后从正式文本重建；未知旧身份被排除，补检限制为每批 20 条、最多 5 批且 query 只嵌入一次。知识页、Obsidian 和 LLM-KB 检查实际渲染输入的语义依赖及文件身份，校验先于排序和限额；渲染使用同一当前状态及标题。章节和知识库索引点包含不可变的来源、内容及 embedding 身份，迟到任务不能替换其他版本；知识库编译结束再次核验基线。不同版本的索引点保留，GC 不在本轮范围。前向迁移 0009 只增加未知依赖字段，旧 Markdown、hash 和人工笔记不变。读基线在进程内上下文副本中保留；序列化内容不携带可复用的读取证明，后续需要基线读取时须重新组装。
 
-总预算设置、裁剪顺序、最低保留量及 Genesis 来源的独立四分之一配额保持。旧 JSON 空世界固定开销已被上述可见字符语义取代；新旧 estimated_context_chars 数值不能直接当作 token 或成本变化。强制合同等内容可能仍超过软预算。系统/输出指令、schema、技能层和本章临时草稿不在这个上下文额度内，仍由各自的提示统计或既有上限处理；这不是完整请求或精确 token 限额。原单章提示内两次 Canon 质量约束仍按实际出现次数计入，另行消融前不顺带删改。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
+人物和读者的已接纳认知从同一 N−1 基线下的实时 CognitionView 显式状态、override、错误认知及现存证据读取；无记录保持 unknown，可见性默认值不代表知道，知道某个节点不代表知道其全部客观字段。每位观察者从自己的初始快照继续回放，防止其他观察者的新快照跳过其变化。当前证据与历史认知事件分开，更正或清空后的证据不从旧事件补回；事件时点不冒充快照读取时点。Writer 的普通、preview、breakdown、scene、stitch 和 repair 提示及 Reviewer 实际请求区分当前认知、作者计划和本章预期变化；前场景只能通过正文中已经发生的获知事件建立有条件的承接。Reviewer 有数据库会话时按同一基线重读认知，不把序列化上下文当成新鲜度证明。
+
+统一必需引用解析器在同一 accepted 基线下解析 ID、唯一名称/别名、node/field/edge/fact 引用，并保留已有对象的当前状态及关系。先保留必需对象，再排序裁剪可选背景；场景拆分后及修复更换目标后再次补取，普通、preview、breakdown、scene、stitch 与 repair 提示共用完整渲染。隐含必需关系仅连接两个独立必需端点，显式关系/事实引用保留相关端点，不递归扩张周边人物。软预算统计反映渲染后的上下文，不能充当完整 HTTP 请求的 token 数。真实 provider input_limit、缺失/歧义必需输入及 Canon 变化在外层 WriterExecution 保留诊断并终止，不经重复调用或 preview 获得正文。名称候选快照保留裁剪前的歧义信息，但序列化数据不授予新读取权限；进程内补取接口随事务结束失效，正常修复由原入口复核原 Canon 基线并重新绑定当前事务。
+
+Writer 的上下文组成由现有 prompt builder 统一提供，单章、预演、分解及场景四种布局完整保留必需对象和状态，可选背景沿用限额，stitch 使用场景布局。RetrievalBroker 按这四种实际渲染块的最大字符数计一次软预算，每次裁剪后重新计算，不再按 ContextPack JSON 或组件大小相减。未显示的状态副本、地图 metadata、手工笔记和溯源不会挤占摘要；完整记录、页面 hash 和主 reviewer 证据仍保留。估算隔离 prompt 统计字段的写入，不把预算试算当成真正发送。
+
+总预算设置和 Genesis 来源的独立四分之一配额保持；必需集合先于可选背景，最低保留量不能挤掉必需事实。旧 JSON 空世界固定开销已被上述可见字符语义取代；新旧 estimated_context_chars 数值不能直接当作 token 或成本变化。强制合同等内容可能仍超过软预算。系统/输出指令、schema、技能层和本章临时草稿不在这个上下文额度内，仍由各自的提示统计或既有上限处理；这不是完整请求或精确 token 限额。原单章提示内两次 Canon 质量约束仍按实际出现次数计入，另行消融前不顺带删改。主 BODY reviewer 接收已经保留的完整前章摘要，证据 `history:summary:N` 绑定本次输入序号，不推断绝对章号。摘要未记载的细节保持未知。
 
 五种 Writer 提示共用世界页渲染，读取可见页面的 `Canon Summary`；具备实体来源的单个世界/地图页还读取 `Current State`，共享每页 220 字内容限额。书籍、overview 等聚合页的状态可能混有隐藏信息，只保留概要；frontmatter、人工笔记或待批准修订不当作 Canon。页面属性与内嵌 frontmatter 任一标记为隐藏时都不展开，秘密页仍不开放；可见性及真假关系随内容呈现，读者可见不等于所有角色知情。
 
@@ -155,6 +151,8 @@ DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、
 
 RepairService 选择 scope，必要时修改未来计划，再重写、重新 review、验证 must_fix / must_preserve 和新风险。预算在当前 candidate/repair cycle 内计算。警告不自动变成必须修复；内容错误、合同错误与基础设施失败不能混为同一“重试”。
 
+义务阻塞以包含主体、未满足条件、来源和允许范围的结构化结果进入现有有限修复。admission 保留有效来源的 active、expired、blocked 债务，Writer/form 仍只选择 active；过期或不支持的修复明确停止，strict 与 pulp P0/hard-only 规则保持。review、Canon、新候选及非 accepted 章节的显式 retry 共用已消耗的修复次数，不重新获得额度；修复后的候选重新经过 review、eligibility、approval 和 Canon 证据核验。Writer 执行失败或没有可用正文时停止，不新增内容修复次数；现有章节失败入口先回滚，再持久保存错误分类、来源身份和既有次数。真实产出但仍不合格的正文继续计入预算。已发布历史保护和历史修订入口保持独立。
+
 当前重写通过 `ChapterContextPack.repair_contract` 接收与 verifier 同源的完整 `must_fix / must_preserve / must_not_reveal` 三列表。它在各 scope 完成计划重建后附加，纳入已有软上下文预算，再由单章、预演、场景拆分、场景生成和 stitch 共用一处完整渲染。合同不可按前三项截断；次要上下文依原规则裁剪，必需内容超过软预算时不静默删除合同，也不新增质量门。下一轮替换当前合同，普通初稿不携带；不再将通用纠错文本累积进持久化计划的规则锚点。现有倒计时专用提示和 Canon 优先级保持不变。此修复解决输入覆盖，不能保证模型输出或 reviewer 建议本身正确；真实 smoke 和 L100 仍需独立验收。
 
 标题属于修复合同里的可保留元数据：若合同精确保护当前标题，且本次计划没有显式改名，重写者应保留该标题。显式改名与旧 must_preserve 冲突时仍拒绝；本轮不靠删除 verifier 约束获得通过。
@@ -168,6 +166,8 @@ RepairVerifier 对全部 must_fix、must_preserve、must_not_reveal 条件分别
 FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 candidate 不能交给 Spark 放行。Spark 只有写 trace/event 的窄能力，不能修改 eligibility 或直接调用 Canon 写入口。JSON/schema/model/timeout 等失败按现有契约关闭该委托路径。
 
 ## 7. Canon 原子事务
+
+普通续写与历史修订现在复用 ChapterReviewForm 的主体及逐项兑现条件审阅，表单/答案保存实际审阅正文 SHA-256，quality cache v2 保留原表单、答案和校验报告。不可变义务证据计划绑定完整合同、候选、draft、正文及审阅身份；Canon preparation 冻结依赖，admission 在项目/义务锁内复核，并把义务激活、兑现、来源审计与 active Canon 指针同事务写入。接纳后仅读取已提交兑现结果和处理到期，不再以关键词清账。pulp 有适用义务时会调用现有 ChapterReviewForm 获取真实语义证据（可能增加模型调用），无适用义务仍走确定性低成本路径。pulp 表单仅按声明策略保护强制项，非强制 P1 到期项可裁剪，不挤占 P0 证据预算；缓存区分义务策略。未到期未知维持 active；到期/终章要求沿用现有 strict/pulp 策略，历史修订保留完整后缀及六维覆盖。旧 resolved 不重置、不补造证据。
 
 事务外的 CanonPreparationService 收集 review/eligibility、质量分析、实体计划及 BookState extraction 结果，冻结 CanonCommitPlan。共享 QualityAnalysisRunRow 用于避免 draft review 与 Canon 准备重复执行同一候选的 primary quality 分析。
 

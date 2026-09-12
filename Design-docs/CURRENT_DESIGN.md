@@ -8,6 +8,8 @@
 
 2026-09-12 B 开发实现：生成任务最终结果与 `generation-continuation:{parent_task_id}:v1` 意图通过 `finish_claimed_task` 在同一 lease/epoch fenced 事务提交；普通完成、Canon 恢复完成共用入口，进度回调不再发布终态，展示失败不回改已提交结果。既有 outbox 消费者按 Project → Task 锁检查控制、有效前缀维护、目标、容量和新运行；子任务、review reset 与确定身份的 AUTO_CONTINUE_DECISION 同事务落盘。可空唯一 continuation_parent_task_id 保留历史 NULL，子任务完成或软删除后重放也不会重复创建。未消费意图显示可暂停/终止；消费已创建子任务时父任务停止请求失败，不能冒报成功。子任务复制父策略及离线运行范围；策略版本已变则记录 policy_changed，新的显式运行采用新设置。消费者不构建生成模型服务；无历史 completed 意图补发，发布冻结、5% 存稿及已有修复预算保持。本段记录工程实现，不代表真实长跑验收完成。
 
+2026-09-12 A2 开发实现：义务阻塞以包含主体、未满足条件、来源和允许范围的结构化结果进入现有有限修复。admission 保留有效来源的 active、expired、blocked 债务，Writer/form 仍只选择 active；过期或不支持的修复明确停止，strict 与 pulp P0/hard-only 规则保持。review、Canon、新候选及非 accepted 章节的显式 retry 共用已消耗的修复次数，不重新获得额度；修复后的候选重新经过 review、eligibility、approval 和 Canon 证据核验。Writer 执行失败或没有可用正文时停止，不新增内容修复次数；现有章节失败入口先回滚，再持久保存错误分类、来源身份和既有次数。真实产出但仍不合格的正文继续计入预算。已发布历史保护和历史修订入口保持独立。任务审查及修复复核已通过，尚不代表真实长跑资格完成。
+
 更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。

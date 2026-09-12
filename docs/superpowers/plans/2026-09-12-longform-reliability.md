@@ -90,11 +90,11 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 **Interfaces:** 扩展已有 `CanonAdmissionGateResult` 的结构化阻塞项，保留 blocking_reasons 作为显示；每项含 obligation_id、未满足条件、来源、scope、failure domain。Task 1 的 reviewed resolutions 决定到期是否清账，不能重新启用关键词。
 
-- [ ] RED：构造仅到期未兑现、signals=[] 的候选，实际流水线应使用一次章修复；修复新候选通过后才接纳。预算耗尽、基础设施失败、没有 executor、冻结历史分别停止且不延期/waive。
-- [ ] 用已有 route/contract 接收 typed blocker；Writer 获得具体义务和 must_preserve；scope 不可执行给出确定结果，不在流水线新增字符串匹配链。
-- [ ] admission 专用查询保留 active/expired/blocked 的有效来源义务，Writer/form 仍只选 active；冻结依赖和锁内重查一致。覆盖准备后状态变化，严格保留 strict 与 pulp P0/hard-only 策略，不能让过期债因查询排除而消失。
-- [ ] 复用同一 repair-cycle 累计预算，新候选重建 review/eligibility/approval/Canon evidence；新 task 不绕过已耗尽预算。review/Canon phase 保留审计标签，但不各自重获一套额度；更新旧的 `test_canon_repair_budget_ignores_prior_review_repair_attempts` 反向契约，沿用现有 effective rewrite limit。
-- [ ] 跑实际流水线/repair/obligation regression，提交 `fix(review): route obligation blockers through bounded repair` 并审查。
+- [x] RED：构造仅到期未兑现、signals=[] 的候选，实际流水线应使用一次章修复；修复新候选通过后才接纳。预算耗尽、基础设施失败、没有 executor、冻结历史分别停止且不延期/waive。
+- [x] 用已有 route/contract 接收 typed blocker；Writer 获得具体义务和 must_preserve；scope 不可执行给出确定结果，不在流水线新增字符串匹配链。
+- [x] admission 专用查询保留 active/expired/blocked 的有效来源义务，Writer/form 仍只选 active；冻结依赖和锁内重查一致。覆盖准备后状态变化，严格保留 strict 与 pulp P0/hard-only 策略，不能让过期债因查询排除而消失。
+- [x] 复用同一 repair-cycle 累计预算，新候选重建 review/eligibility/approval/Canon evidence；新 task 不绕过已耗尽预算。review/Canon phase 保留审计标签，但不各自重获一套额度；更新旧的 `test_canon_repair_budget_ignores_prior_review_repair_attempts` 反向契约，沿用现有 effective rewrite limit。
+- [x] 跑实际流水线/repair/obligation regression，提交 `fix(review): route obligation blockers through bounded repair` 并审查。
 
 ## Task 4: C1 — 固定读取基线并拒绝失效派生事实
 

@@ -254,11 +254,11 @@ class LLMKBVectorIndex:
                     match=self._rest.MatchAny(any=sorted(visibility_scopes)),
                 )
             )
-        if as_of_chapter is not None and int(as_of_chapter) > 0:
+        if as_of_chapter is not None:
             must.append(
                 self._rest.FieldCondition(
                     key="as_of_chapter",
-                    match=self._rest.MatchValue(value=int(as_of_chapter)),
+                    range=self._rest.Range(lte=int(as_of_chapter)),
                 )
             )
         return self._rest.Filter(must=must)
@@ -351,6 +351,7 @@ class LLMKBVectorIndex:
         limit: int = 5,
         as_of_chapter: int | None = None,
         visibility_scope: str | None = None,
+        source_sections: dict | None = None,
     ) -> list[LLMKBVectorRecord]:
         query_text = str(query or "").strip()
         if not query_text:
@@ -365,45 +366,55 @@ class LLMKBVectorIndex:
             allowed_visibility = allowed_visibility.intersection({requested_visibility})
             if not allowed_visibility:
                 return []
-        response = self.client.query_points(
-            collection_name=self.collection_name,
-            query=self.embedder.embed([query_text])[0],
-            query_filter=self._project_filter(
-                project_id,
-                roles=_allowed_role_scopes(role),
-                visibility_scopes=allowed_visibility,
-                as_of_chapter=as_of_chapter,
-            ),
-            limit=limit_value,
-        )
-        points = getattr(response, "points", response)
+        vector = self.embedder.embed([query_text])[0]
         records: list[LLMKBVectorRecord] = []
-        for point in points:
-            payload = dict(getattr(point, "payload", {}) or {})
-            records.append(
-                LLMKBVectorRecord(
-                    project_id=str(payload.get("project_id") or project_id),
-                    file_key=str(payload.get("file_key") or ""),
-                    section_key=str(payload.get("section_key") or ""),
-                    role_scope=str(payload.get("role_scope") or "writer"),
-                    text=_trim(str(payload.get("text") or ""), 900),
-                    source_refs=_source_refs(payload.get("source_refs")),
-                    source_digest=str(payload.get("source_digest") or ""),
-                    section_digest=str(payload.get("section_digest") or ""),
-                    index_kind=str(payload.get("index_kind") or "llm_kb"),
-                    as_of_chapter=int(payload.get("as_of_chapter") or 0),
-                    projection_version=str(payload.get("projection_version") or LLM_KB_PROJECTION_VERSION),
-                    visibility_scope=str(payload.get("visibility_scope") or "writer_safe"),
-                    canon_status=str(payload.get("canon_status") or "canon_projection"),
-                    node_refs=_source_refs(payload.get("node_refs")),
-                    edge_refs=_source_refs(payload.get("edge_refs")),
-                    fact_refs=_source_refs(payload.get("fact_refs")),
-                    map_refs=_source_refs(payload.get("map_refs")),
-                    chapter_refs=_source_refs(payload.get("chapter_refs")),
-                    score=float(getattr(point, "score", 0.0) or 0.0),
-                )
+        rejected = 0
+        batches = 5 if source_sections is not None else 1
+        batch_size = 20 if source_sections is not None else limit_value
+        for batch in range(batches):
+            response = self.client.query_points(
+                collection_name=self.collection_name, query=vector,
+                query_filter=self._project_filter(project_id, roles=_allowed_role_scopes(role),
+                    visibility_scopes=allowed_visibility, as_of_chapter=as_of_chapter),
+                limit=batch_size, **({"offset": batch * batch_size} if source_sections is not None else {}),
             )
-        return records
+            points = getattr(response, "points", response)
+            for point in points:
+                payload = dict(getattr(point, "payload", {}) or {})
+                if source_sections is not None:
+                    source = source_sections.get((payload.get("file_key"), payload.get("section_key")))
+                    if source is None or payload.get("project_id") != project_id or any(payload.get(key) != source[key] for key in ("source_digest", "section_digest", "role_scope", "visibility_scope", "as_of_chapter", "projection_version")):
+                        rejected += 1
+                        continue
+                    payload = {**source, "project_id": project_id}
+                records.append(
+                    LLMKBVectorRecord(
+                        project_id=str(payload.get("project_id") or project_id),
+                        file_key=str(payload.get("file_key") or ""),
+                        section_key=str(payload.get("section_key") or ""),
+                        role_scope=str(payload.get("role_scope") or "writer"),
+                        text=_trim(str(payload.get("text") or ""), 900),
+                        source_refs=_source_refs(payload.get("source_refs")),
+                        source_digest=str(payload.get("source_digest") or ""),
+                        section_digest=str(payload.get("section_digest") or ""),
+                        index_kind=str(payload.get("index_kind") or "llm_kb"),
+                        as_of_chapter=int(payload.get("as_of_chapter") or 0),
+                        projection_version=str(payload.get("projection_version") or LLM_KB_PROJECTION_VERSION),
+                        visibility_scope=str(payload.get("visibility_scope") or "writer_safe"),
+                        canon_status=str(payload.get("canon_status") or "canon_projection"),
+                        node_refs=_source_refs(payload.get("node_refs")),
+                        edge_refs=_source_refs(payload.get("edge_refs")),
+                        fact_refs=_source_refs(payload.get("fact_refs")),
+                        map_refs=_source_refs(payload.get("map_refs")),
+                        chapter_refs=_source_refs(payload.get("chapter_refs")),
+                        score=float(getattr(point, "score", 0.0) or 0.0),
+                    )
+                )
+            if len(records) >= limit_value or len(points) < batch_size:
+                break
+        self.last_search_stats = {"rejected": rejected, "batches": batch + 1,
+            "cap_reached": batch + 1 == batches and len(points) == batch_size and len(records) < limit_value}
+        return records[:limit_value]
 
 
 def _source_refs(raw: Any) -> list[str]:

@@ -35,18 +35,50 @@ class LLMKnowledgeBaseRetriever:
         limit: int = 5,
         as_of_chapter: int | None = None,
         visibility_scope: str | None = None,
+        session=None,
+        baseline=None,
     ) -> list[dict[str, Any]]:
-        return [
+        from .source_validation import validated_manifest, validated_file
+        from .vector_index import _collect_project_sections
+
+        manifest = (
+            validated_manifest(self.root, project_id, session, baseline)
+            if baseline is not None
+            else None
+        )
+        if manifest is not None and not manifest:
+            return []
+        authoritative = {}
+        if manifest:
+            authoritative = {
+                (row["file_key"], row["section_key"]): row
+                for row in _collect_project_sections(
+                    self.root / project_id,
+                    source_digest=manifest["source_digest"],
+                    as_of_chapter=manifest["as_of_chapter"],
+                    projection_version=manifest["projection_version"],
+                )
+                if validated_file(self.root, project_id, row["file_key"], manifest)
+                is not None
+            }
+        records = [
             record.as_dict()
             for record in self.index.search(
                 project_id,
                 query,
                 role=role,
                 limit=limit,
-                as_of_chapter=as_of_chapter,
+                as_of_chapter=baseline.as_of_chapter
+                if baseline is not None
+                else (as_of_chapter or None),
                 visibility_scope=visibility_scope,
+                source_sections=authoritative if manifest is not None else None,
             )
         ]
+
+        if baseline is not None:
+            baseline.assert_current(session)
+        return records
 
     def close(self) -> None:
         self.index.close()

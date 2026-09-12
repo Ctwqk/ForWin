@@ -28,18 +28,30 @@ class ChapterContextAssembler:
     def provider_names(self) -> list[str]:
         return [str(getattr(provider, "name", provider.__class__.__name__)) for provider in self.providers]
 
-    def assemble(
+    def assemble(self, repo, project_id, chapter_plan, *, baseline=None):
+        from forwin.retrieval.source_identity import fresh_orm_reads
+        with fresh_orm_reads(getattr(repo, "session", None)):
+            return self._assemble(repo, project_id, chapter_plan, baseline=baseline)
+
+    def _assemble(
         self,
         repo,
         project_id: str,
         chapter_plan,
+        *, baseline=None,
     ) -> ChapterContextPack:
         from forwin.context.request import ContextDraft, ContextRequest
 
+        from forwin.retrieval.source_identity import CanonReadBaseline
+        session = getattr(repo, "session", None)
+        if session is not None:
+            baseline = baseline or CanonReadBaseline.capture(session, project_id, as_of_chapter=max(0, chapter_plan.chapter_number - 1))
+            baseline.assert_current(session, project_id=project_id, as_of_chapter=max(0, chapter_plan.chapter_number - 1))
         request = ContextRequest(
             project_id=project_id,
             chapter_plan=chapter_plan,
             repo=repo,
+            baseline=baseline,
             session=getattr(repo, "session", None),
         )
         draft = ContextDraft(data={}, issues=[])
@@ -75,12 +87,16 @@ class ChapterContextAssembler:
                 issues = gate.validate(request, draft)
                 draft.issues.extend(issues)
                 span.metric("issue_count", len(issues))
-        return self._build_pack(
+        pack = self._build_pack(
             project_id=project_id,
             chapter_plan=chapter_plan,
             draft=draft,
             session=getattr(repo, "session", None),
         )
+        if baseline is not None:
+            baseline.assert_current(session)
+            pack = pack.model_copy(update={"canon_read_baseline": baseline})
+        return pack
 
     def _build_pack(self, *, project_id: str, chapter_plan, draft, session=None) -> ChapterContextPack:
         from forwin.protocol.world_model import WorldContextPack
@@ -240,9 +256,10 @@ def assemble_context(
     repo,  # StateRepository
     project_id: str,
     chapter_plan,  # ChapterPlan ORM object
+    *, baseline=None,
 ) -> ChapterContextPack:
     """Build a ChapterContextPack for the writer through the provider chain."""
-    return ChapterContextAssembler().assemble(repo, project_id, chapter_plan)
+    return ChapterContextAssembler().assemble(repo, project_id, chapter_plan, baseline=baseline)
 
 
 __all__ = [

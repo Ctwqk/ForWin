@@ -17,19 +17,18 @@ def _book_state_context_overlay(
     repo_session,
     project_id: str,
     chapter_number: int,
+    *, baseline=None,
 ) -> dict:
-    from forwin.book_state import BookStateProjection, BookStateRepository
+    from forwin.book_state.query import BookStateQuery
+    from forwin.retrieval.source_identity import CanonBaselineChanged
 
     if repo_session is None:
         return {}
     try:
-        repository = BookStateRepository(repo_session)
-        latest_chapter = repository.latest_available_chapter(project_id)
-        as_of_chapter = max(0, min(int(latest_chapter or 0), int(chapter_number or 0) - 1))
-        runtime = BookStateProjection(repo_session).load_runtime_as_of(
-            project_id,
-            as_of_chapter=as_of_chapter,
-        )
+        as_of_chapter = max(0, int(chapter_number) - 1)
+        runtime = BookStateQuery(repo_session, baseline=baseline).runtime(project_id, as_of_chapter=as_of_chapter)
+    except CanonBaselineChanged:
+        raise
     except Exception:
         logger.warning("Failed to load BookState context overlay.", exc_info=True)
         return {}

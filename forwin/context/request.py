@@ -20,6 +20,7 @@ class ContextRequest:
     chapter_plan: Any
     repo: Any
     session: Any | None = None
+    baseline: Any | None = None
 
 
 @dataclass(slots=True)

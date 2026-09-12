@@ -7,7 +7,8 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.query import BookStateQuery
+from forwin.retrieval.source_identity import CanonReadBaseline
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.visibility import node_page_visibility
 from forwin.models.canon_quality import CanonQualitySignalRow
@@ -38,9 +39,11 @@ class KnowledgeContextQuery:
         chapter_number: int,
         query_terms: Iterable[str] | None = None,
         max_pages: int = 6,
+        baseline=None,
     ) -> WorldContextPack:
         as_of = max(0, int(chapter_number or 0) - 1)
-        runtime = BookStateProjection(self.session).load_runtime_as_of(
+        baseline = baseline or CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
+        runtime = BookStateQuery(self.session, baseline=baseline).runtime(
             project_id,
             as_of_chapter=as_of,
         )
@@ -62,7 +65,9 @@ class KnowledgeContextQuery:
             terms=terms,
             max_pages=max_pages,
             as_of_chapter=as_of,
+            runtime=runtime,
         )
+        baseline.assert_current(self.session)
         # Old projections may predate a visibility change or omit status/tags.
         # Apply current as-of Canon visibility to copies, retaining full content
         # for the reviewer without modifying the stored projection or its hash.
@@ -120,9 +125,10 @@ class KnowledgeContextQuery:
         terms: list[str],
         max_pages: int,
         as_of_chapter: int,
+        runtime,
     ) -> list[WorldModelPage]:
         rows = [
-            row for row in KnowledgePageRepository(self.session).list_canonical_rows(project_id)
+            row for row in KnowledgePageRepository(self.session).list_valid_rows(project_id, runtime=runtime, as_of_chapter=as_of_chapter)
             if int(row.as_of_chapter or 0) <= as_of_chapter
         ]
 

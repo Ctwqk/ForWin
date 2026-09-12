@@ -53,6 +53,7 @@ class KnowledgeProjectionStore:
         projection_kind: str = "world_studio",
         projection_version: str = "",
         source_digest: str = "",
+        dependency_manifest: dict | None = None,
         section_digest: dict[str, str] | None = None,
         observer_type: str = "",
         observer_id: str = "",
@@ -152,6 +153,7 @@ class KnowledgeProjectionStore:
                 projection_kind=projection_kind,
                 projection_version=projection_version,
                 source_digest=source_digest,
+                dependency_manifest_json=stable_json(dependency_manifest or {}),
                 section_digest_json=section_digest_json,
                 observer_type=observer_type,
                 observer_id=observer_id,
@@ -178,6 +180,7 @@ class KnowledgeProjectionStore:
             row.projection_kind = projection_kind
             row.projection_version = projection_version
             row.source_digest = source_digest
+            row.dependency_manifest_json = stable_json(dependency_manifest or {})
             row.section_digest_json = section_digest_json
             row.observer_type = observer_type
             row.observer_id = observer_id

@@ -12,9 +12,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.visibility import node_page_visibility
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
@@ -108,11 +108,17 @@ class ObsidianExporter:
         root.mkdir(parents=True, exist_ok=True)
         manifest_state = load_managed_projection_manifest(root, project_id)
         as_of = self._resolve_as_of(project_id, as_of_chapter)
-        runtime = BookStateProjection(self.session).load_runtime_as_of(
+        from forwin.retrieval.source_identity import CanonReadBaseline
+        self._read_baseline = CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
+        from forwin.book_state.query import BookStateQuery
+        runtime = BookStateQuery(self.session, baseline=self._read_baseline).runtime(
             project_id, as_of_chapter=as_of
         )
+        self._read_baseline.assert_current(self.session)
+        self._dependency_runtime = runtime
+        self._dependency_project_title = self.session.scalar(select(Project.title).where(Project.id == project_id))
         world_nodes = sorted(
-            runtime.world.nodes_by_id.values(),
+            [node.model_copy(update={"state": runtime.world.get_state(node.id)}) for node in runtime.world.nodes_by_id.values()],
             key=lambda item: (str(item.node_type), item.id),
         )
         map_nodes = sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id)
@@ -398,7 +404,7 @@ class ObsidianExporter:
         sections = {
             "Canon Summary": node.summary or node.description or node.name or node.id,
             "Current State": _format_mapping(
-                node.state or node.profile or node.metadata
+                node.state
             ),
             "Relationships": "\n".join(
                 _format_edge(edge, node.id) for edge in related_edges
@@ -488,6 +494,10 @@ class ObsidianExporter:
                     and not sections.get(field_name, "").strip()
                 ):
                     sections[field_name] = current_sections[field_name]
+        from forwin.knowledge_system.dependencies import page_dependencies
+        self._read_baseline.assert_current(self.session)
+        scope = "book" if page_type == "book" else "map_node" if page_type == "map_node" else "node"
+        dependency_manifest = page_dependencies(self._dependency_runtime, scope=scope, node_id="" if scope == "book" else str(frontmatter.get("node_id") or ""), extra={"project_title": self._dependency_project_title} if scope == "book" else None)
         source_digest = _page_source_digest(frontmatter, sections)
         section_digest = _section_digest(sections)
         frontmatter = {
@@ -514,6 +524,7 @@ class ObsidianExporter:
             projection_kind="obsidian",
             projection_version=OBSIDIAN_PROJECTION_VERSION,
             source_digest=source_digest,
+            dependency_manifest=dependency_manifest,
             section_digest=section_digest,
             observer_type="reader",
             observer_id="reader",

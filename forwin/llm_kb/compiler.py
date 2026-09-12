@@ -8,11 +8,11 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
-from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.protocol.book_state import FactNode, GraphDelta, WorldNode
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
+from forwin.retrieval.source_identity import CanonBaselineChanged
 
 from .store import DEFAULT_LLM_KB_ROOT
 from .vector_index import LLM_KB_PROJECTION_VERSION, LLMKBVectorIndex
@@ -71,8 +71,12 @@ class LLMKnowledgeBaseCompiler:
         project_root = self.root / project_id
         project_root.mkdir(parents=True, exist_ok=True)
         (project_root / "packs").mkdir(exist_ok=True)
-        runtime = BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of)
-        nodes = list(runtime.world.nodes_by_id.values())
+        from forwin.retrieval.source_identity import CanonReadBaseline, text_hash
+        from forwin.knowledge_system.dependencies import page_dependencies, llm_kb_inputs
+        baseline = CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
+        from forwin.book_state.query import BookStateQuery
+        runtime = BookStateQuery(self.session, baseline=baseline).runtime(project_id, as_of_chapter=as_of)
+        nodes = [node.model_copy(update={"state": runtime.world.get_state(node.id)}) for node in runtime.world.nodes_by_id.values()]
         facts = list(runtime.world.facts_by_id.values())
         safe_nodes = [node for node in nodes if not _hidden_node(node)]
         safe_facts = [fact for fact in facts if not _hidden_fact(fact)]
@@ -80,14 +84,8 @@ class LLMKnowledgeBaseCompiler:
             delta for delta in self.repo.list_graph_deltas(project_id, after_chapter=-1, through_chapter=as_of)
             if not _hidden_delta(delta)
         ]
-        source_digest = _digest(
-            {
-                "as_of_chapter": as_of,
-                "nodes": [node.model_dump(mode="json") for node in safe_nodes],
-                "facts": [fact.model_dump(mode="json") for fact in safe_facts],
-                "deltas": [delta.model_dump(mode="json") for delta in deltas[-20:]],
-            }
-        )
+        dependency_manifest = page_dependencies(runtime, scope="llm_kb", extra=llm_kb_inputs(self.session, project_id, as_of))
+        source_digest = dependency_manifest["fingerprint"]
         common_refs = [f"book_state:snapshot:{as_of}", f"source_digest:{source_digest}"]
 
         files: list[str] = []
@@ -131,6 +129,7 @@ class LLMKnowledgeBaseCompiler:
             "project_id": project_id,
             "as_of_chapter": as_of,
             "source_digest": source_digest,
+            "dependency_manifest": dependency_manifest,
             "projection_version": LLM_KB_PROJECTION_VERSION,
             "files": sorted(files),
             "root_policy": "writer_safe",
@@ -139,6 +138,10 @@ class LLMKnowledgeBaseCompiler:
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         files.append("retrieval_index.json")
         self._write_role_packs(project_id, as_of, project_root)
+        baseline.assert_current(self.session)
+        file_keys = [*files, *(f"packs/{role}/context.json" for role in ("writer", "reviewer", "planner", "compiler"))]
+        retrieval_index["file_hashes"] = {key: text_hash((project_root / key).read_text(encoding="utf-8")) for key in file_keys if key != "retrieval_index.json"}
+        (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         vector_store = LLMKBVectorIndex(
             self.root,
             qdrant_url=self.qdrant_url,
@@ -308,9 +311,11 @@ class LLMKnowledgeBaseCompiler:
                 role_root.mkdir(parents=True, exist_ok=True)
                 try:
                     pack = broker.build_world_model_pack(
-                        repo, project_id, as_of + 1, pack_kind
+                        repo, project_id, as_of + 1, pack_kind, include_secondary=False
                     )
                     payload = pack.model_dump(mode="json")
+                except CanonBaselineChanged:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - role packs are best effort.
                     payload = {
                         "project_id": project_id,

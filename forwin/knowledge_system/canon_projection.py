@@ -234,9 +234,10 @@ class CanonProjectionService:
                 session.execute(
                     select(
                         ChapterPlan.chapter_number,
-                        ChapterPlan.title,
+                        CanonCommitRecord.chapter_title,
                         ChapterDraft.summary,
                         ChapterDraft.body_text,
+                        CanonCommitRecord.id, CandidateDraftRecord.id, ChapterDraft.id, CandidateDraftRecord.body_hash,
                     )
                     .select_from(CanonCommitRecord)
                     .join(
@@ -269,13 +270,14 @@ class CanonProjectionService:
             memory_index = self.memory_index_provider()
             if memory_index is None:
                 raise RuntimeError("memory index provider returned no index")
-            for chapter_number, title, summary, body in chapters:
+            for chapter_number, title, summary, body, commit_id, candidate_id, draft_id, body_hash in chapters:
                 memory_index.upsert_chapter(
                     project_id=target.project_id,
                     chapter_number=int(chapter_number),
                     title=str(title or ""),
                     summary=str(summary or ""),
                     body=str(body or ""),
+                    canon_commit_id=commit_id, candidate_id=candidate_id, draft_id=draft_id, body_hash=body_hash,
                 )
 
         digest_payload = [
@@ -285,7 +287,7 @@ class CanonProjectionService:
                 "summary": str(summary or ""),
                 "body": str(body or ""),
             }
-            for chapter_number, title, summary, body in chapters
+            for chapter_number, title, summary, body, *_ in chapters
         ]
         return {
             "ok": True,

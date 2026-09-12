@@ -61,6 +61,13 @@ class TimelineSnapshot(BaseModel):
 class MemorySnippet(BaseModel):
     """Retrieved memory snippet selected for the current chapter."""
 
+    project_id: str = ""
+    canon_commit_id: str = ""
+    candidate_id: str = ""
+    draft_id: str = ""
+    body_hash: str = ""
+    embedding_input_hash: str = ""
+    embedding_identity: str = ""
     chapter_number: int
     title: str
     summary: str = ""
@@ -232,6 +239,9 @@ class RepairContract(BaseModel):
 
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
+
+    # Retain the immutable in-process read fence for repair rehydration.
+    canon_read_baseline: Any | None = Field(default=None, exclude=True)
 
     project_id: str = ""
     project_title: str

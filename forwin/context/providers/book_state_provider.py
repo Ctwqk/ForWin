@@ -13,6 +13,7 @@ class BookStateContextProvider:
             request.session,
             request.project_id,
             request.chapter_plan.chapter_number,
+            baseline=request.baseline,
         )
         map_context = _merge_book_state_map_overlay(draft.data.get("map_context", {}), overlay)
         book_state_world_lines = [

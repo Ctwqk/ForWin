@@ -5,6 +5,7 @@ import logging
 
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.knowledge_system.context import KnowledgeContextQuery
+from forwin.retrieval.source_identity import CanonBaselineChanged
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.context import ArcEnvelopeView
 from forwin.protocol.world_model import WorldContextPack
@@ -90,7 +91,10 @@ class ExperienceContextProvider:
                     chapter_number=chapter_plan.chapter_number,
                     query_terms=query_terms,
                     max_pages=6,
+                    baseline=request.baseline,
                 )
+            except CanonBaselineChanged:
+                raise
             except Exception:
                 logger.warning("Failed to assemble world model context.", exc_info=True)
 

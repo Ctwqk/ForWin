@@ -16,7 +16,7 @@ class StateContextProvider:
         if request.session is None:
             raise RuntimeError("StateContextProvider requires a database session")
         as_of_chapter = max(int(chapter_plan.chapter_number) - 1, 0)
-        book_state = BookStateQuery(request.session)
+        book_state = BookStateQuery(request.session, baseline=request.baseline)
         review_query = ReviewQuery(request.session)
         entities = book_state.active_entities(
             project_id,

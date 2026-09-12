@@ -1689,8 +1689,8 @@ def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: 
                 llm_kb_qdrant_models=FakeQdrantModels,
             )
             state_repo = StateRepository(session)
-            writer_pack = broker.build_world_model_pack(state_repo, project_id, 1, "writing")
-            review_pack = broker.build_world_model_pack(state_repo, project_id, 1, "review")
+            writer_pack = broker.build_world_model_pack(state_repo, project_id, 2, "writing")
+            review_pack = broker.build_world_model_pack(state_repo, project_id, 2, "review")
 
         writer_dump = str(writer_pack.model_dump(mode="json"))
         review_dump = str(review_pack.model_dump(mode="json"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -10,8 +11,10 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from pydantic import ValidationError
 
 from forwin.protocol.context import MemorySnippet
+from .source_identity import embedding_input, text_hash, validate_memories
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class TextEmbedder:
 
 class HashTextEmbedder(TextEmbedder):
     kind = "hash"
+    model = "sha1-token-bigram-v1"
 
     def __init__(
         self,
@@ -122,6 +126,7 @@ class GatewayTextEmbedder(TextEmbedder):
         self.base_url = base_url.rstrip("/")
         self._owns_client = client is None
         self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
+        self.model = ""
         self._requested_dims = int(dims or 0)
         self._required = bool(required)
         self._ready = False
@@ -177,6 +182,7 @@ class GatewayTextEmbedder(TextEmbedder):
         response = self.client.get(f"{self.base_url}/metadata")
         response.raise_for_status()
         payload = response.json()
+        self.model = str(payload.get("model") or "")
         return int(payload.get("dimension") or 0)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -271,6 +277,8 @@ class ChapterMemoryIndex:
         title: str,
         summary: str,
         body: str,
+        canon_commit_id: str = "", candidate_id: str = "", draft_id: str = "",
+        body_hash: str = "",
     ) -> None:
         raise NotImplementedError
 
@@ -280,6 +288,7 @@ class ChapterMemoryIndex:
         project_id: str,
         query: str,
         limit: int = 3,
+        session=None, baseline=None,
     ) -> list[MemorySnippet]:
         raise NotImplementedError
 
@@ -482,20 +491,28 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         title: str,
         summary: str,
         body: str,
+        canon_commit_id: str = "", candidate_id: str = "", draft_id: str = "",
+        body_hash: str = "",
     ) -> None:
         self._ensure_ready()
         if self.client is None or self._rest is None:  # pragma: no cover
             raise RuntimeError("Qdrant memory index initialization did not complete")
         excerpt = (body or "")[:500]
-        vector = self.embedder.embed([f"{title}\n{summary}\n{excerpt}"])[0]
+        input_text = embedding_input(title, summary, body)
+        vector = self.embedder.embed([input_text])[0]
+        identity = memory_embedding_identity(self.embedder)
         self.client.upsert(
             collection_name=self.collection_name,
             points=[
                 self._rest.PointStruct(
-                    id=_point_id(project_id, chapter_number),
+                    id=_point_id(f"{project_id}:{canon_commit_id}:{candidate_id}:{draft_id}:{body_hash}:{text_hash(input_text)}:{identity}", chapter_number),
                     vector=vector,
                     payload={
                         "project_id": project_id,
+                        "canon_commit_id": canon_commit_id, "candidate_id": candidate_id,
+                        "draft_id": draft_id, "body_hash": body_hash,
+                        "embedding_input_hash": text_hash(input_text),
+                        "embedding_identity": identity,
                         "chapter_number": chapter_number,
                         "title": title,
                         "summary": summary,
@@ -511,6 +528,7 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         project_id: str,
         query: str,
         limit: int = 3,
+        session=None, baseline=None,
     ) -> list[MemorySnippet]:
         query_text = str(query or "").strip()
         if not query_text:
@@ -519,29 +537,49 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         if self.client is None or self._rest is None:  # pragma: no cover
             raise RuntimeError("Qdrant memory index initialization did not complete")
         vector = self.embedder.embed([query_text])[0]
-        response = self.client.query_points(
-            collection_name=self.collection_name,
-            query=vector,
-            query_filter=self._rest.Filter(
-                must=[
-                    self._rest.FieldCondition(
-                        key="project_id",
-                        match=self._rest.MatchValue(value=project_id),
-                    )
-                ]
-            ),
-            limit=limit,
-        )
-        return [
-            MemorySnippet(
-                chapter_number=int(hit.payload.get("chapter_number") or 0),
-                title=str(hit.payload.get("title") or ""),
-                summary=str(hit.payload.get("summary") or ""),
-                excerpt=str(hit.payload.get("excerpt") or ""),
-                score=float(hit.score or 0.0),
+        conditions = [self._rest.FieldCondition(key="project_id", match=self._rest.MatchValue(value=project_id))]
+        if baseline is not None:
+            baseline.assert_current(session, project_id=project_id)
+            conditions.append(self._rest.FieldCondition(key="chapter_number", range=self._rest.Range(lte=baseline.as_of_chapter)))
+        selected = []
+        rejected = 0
+        batches = 5 if baseline is not None else 1
+        batch_size = min(20, max(1, limit)) if baseline is None else 20
+        for batch in range(batches):
+            response = self.client.query_points(
+                collection_name=self.collection_name, query=vector,
+                query_filter=self._rest.Filter(must=conditions), limit=batch_size,
+                **({"offset": batch * batch_size} if baseline is not None else {}),
             )
-            for hit in response.points
-        ]
+            candidates = []
+            for hit in response.points:
+                try:
+                    candidates.append(MemorySnippet.model_validate({**(hit.payload or {}), "score": float(hit.score or 0.0)}))
+                except (ValidationError, TypeError, ValueError):
+                    rejected += 1
+            valid = validate_memories(session, baseline, candidates) if baseline is not None else candidates
+            rejected += len(candidates) - len(valid)
+            selected.extend(valid)
+            if len(selected) >= limit or len(response.points) < batch_size:
+                break
+        self.last_search_stats = {"rejected": rejected, "batches": batch + 1,
+                                  "cap_reached": batch + 1 == batches and len(response.points) == batch_size and len(selected) < limit}
+        if baseline is not None:
+            baseline.assert_current(session)
+        return selected[:limit]
+
+
+
+def memory_embedding_identity(embedder: TextEmbedder) -> str:
+    model = str(getattr(embedder, "model", "") or "")
+    if not model:
+        return ""
+    return text_hash(json.dumps({
+        "backend": str(getattr(embedder, "kind", "")),
+        "endpoint": str(getattr(embedder, "base_url", "")),
+        "model": model, "dimensions": embedder.dims,
+        "preprocessing": "title-summary-body500-v1",
+    }, sort_keys=True))
 
 
 def create_memory_index(

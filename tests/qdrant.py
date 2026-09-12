@@ -32,7 +32,12 @@ class FakeQdrantModels:
     @dataclass
     class FieldCondition:
         key: str
-        match: Any
+        match: Any = None
+        range: Any = None
+
+    @dataclass
+    class Range:
+        lte: float | None = None
 
     @dataclass
     class Filter:
@@ -102,7 +107,7 @@ class FakeQdrantClient:
         for point_id in point_ids:
             collection["points"].pop(point_id, None)
 
-    def query_points(self, *, collection_name: str, query: list[float], query_filter, limit: int):
+    def query_points(self, *, collection_name: str, query: list[float], query_filter, limit: int, offset: int = 0):
         collection = self.collections.setdefault(collection_name, {"points": {}})
         hits = []
         for point in collection["points"].values():
@@ -115,12 +120,15 @@ class FakeQdrantClient:
                 )
             )
         hits.sort(key=lambda item: item.score, reverse=True)
-        return SimpleNamespace(points=hits[:limit])
+        return SimpleNamespace(points=hits[offset:offset + limit])
 
 
 def _matches_filter(payload: dict[str, Any], query_filter) -> bool:
     for condition in getattr(query_filter, "must", []) or []:
         value = payload.get(condition.key)
+        condition_range = getattr(condition, "range", None)
+        if condition_range is not None and (value is None or value > condition_range.lte):
+            return False
         match = condition.match
         if hasattr(match, "value") and value != match.value:
             return False

@@ -9,6 +9,8 @@ from pathlib import Path
 from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.query import BookStateQuery
+from forwin.retrieval.source_identity import CanonReadBaseline, CanonBaselineChanged, fresh_orm_reads
 from forwin.book_state.visibility import book_state_node_hidden
 from forwin.context import assemble_context
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
@@ -67,8 +69,8 @@ from .visibility import (
 logger = logging.getLogger(__name__)
 
 
-def _assemble_context(repo, project_id: str, chapter_plan) -> ChapterContextPack:
-    return assemble_context(repo, project_id, chapter_plan)
+def _assemble_context(repo, project_id: str, chapter_plan, *, baseline=None) -> ChapterContextPack:
+    return assemble_context(repo, project_id, chapter_plan, baseline=baseline)
 
 
 class RetrievalBroker:
@@ -122,24 +124,42 @@ class RetrievalBroker:
     def build_chapter_context(
         self, repo, project_id: str, chapter_plan
     ) -> ChapterContextPack:
+        session = getattr(repo, "session", None)
+        for attempt in range(2):
+            baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=max(0, chapter_plan.chapter_number - 1)) if session is not None else None
+            try:
+                with fresh_orm_reads(session):
+                    pack = self._build_chapter_context(repo, project_id, chapter_plan, baseline=baseline)
+                if baseline is not None:
+                    baseline.assert_current(session)
+                return pack
+            except CanonBaselineChanged:
+                if attempt:
+                    raise
+        raise CanonBaselineChanged("Canon context rebuild exhausted")
+
+    def _build_chapter_context(self, repo, project_id, chapter_plan, *, baseline):
         self._ensure_memory_index(repo)
-        base_pack = _assemble_context(repo, project_id, chapter_plan)
+        base_pack = _assemble_context(repo, project_id, chapter_plan, **({"baseline": baseline} if baseline is not None else {}))
         try:
             world_pack = self.build_world_model_pack(
                 repo,
                 project_id,
                 int(getattr(chapter_plan, "chapter_number", 0) or 0),
                 "writing",
+                baseline=baseline,
             )
             base_pack = self._merge_writer_world_model_pack(base_pack, world_pack)
+        except CanonBaselineChanged:
+            raise
         except Exception:
-            pass
+            logger.warning("World model context unavailable", exc_info=True)
 
         summaries = self._pick_summaries(base_pack.previous_chapter_summaries)
         entities = self._pick_entities(base_pack.active_entities)
         threads = self._pick_threads(base_pack.active_threads)
         relations = self._pick_relations(base_pack.active_relations, entities)
-        memories = self._pick_memories(base_pack)
+        memories = self._pick_memories(base_pack, session=getattr(repo, "session", None), baseline=baseline)
         world_context = self._pick_world_context(base_pack.world_context)
 
         pack = base_pack.model_copy(
@@ -259,6 +279,7 @@ class RetrievalBroker:
         )
         memories_after = len(getattr(pack, "retrieved_memories", []) or [])
         self.last_observability_summary = {
+            "memory_source_validation": dict(getattr(self.memory_index, "last_search_stats", {}) or {}),
             "chapter_number": int(getattr(pack, "chapter_number", 0) or 0),
             "active_entities_count_before": len(base_pack.active_entities),
             "active_entities_count_after": len(pack.active_entities),
@@ -318,6 +339,7 @@ class RetrievalBroker:
         chapter_number: int,
         pack_kind: str,
         query: str = "",
+        *, baseline=None, include_secondary=True,
     ) -> WorldModelRetrievalPack:
         """Build a role-specific v4 world-model retrieval pack.
 
@@ -341,6 +363,8 @@ class RetrievalBroker:
         if session is None:
             raise TypeError("repo must expose a SQLAlchemy session")
 
+        baseline = baseline or CanonReadBaseline.capture(session, project_id, as_of_chapter=max(0, chapter_number - 1))
+        baseline.assert_current(session, project_id=project_id, as_of_chapter=max(0, chapter_number - 1))
         lines = []
         deltas = []
         gaps = []
@@ -414,7 +438,7 @@ class RetrievalBroker:
         pack_cls = pack_classes[pack_kind]
         base_pack = pack_cls(
             project_id=project_id,
-            as_of_chapter=chapter_number,
+            as_of_chapter=baseline.as_of_chapter,
             active_world_lines=active_lines,
             visible_world_lines=visible_lines,
             hidden_world_lines=hidden_lines,
@@ -445,7 +469,7 @@ class RetrievalBroker:
                 "retrieval_source": "book_state",
             },
         )
-        return self._augment_v46_context(
+        result = self._augment_v46_context(
             session=session,
             pack=base_pack,
             project_id=project_id,
@@ -453,7 +477,10 @@ class RetrievalBroker:
             pack_kind=pack_kind,
             include_hidden_truth=include_hidden_truth,
             query=query,
+            baseline=baseline, include_secondary=include_secondary,
         )
+        baseline.assert_current(session)
+        return result
 
     def _augment_v46_context(
         self,
@@ -465,14 +492,16 @@ class RetrievalBroker:
         pack_kind: str,
         include_hidden_truth: bool,
         query: str = "",
+        baseline=None, include_secondary=True,
     ) -> WorldModelRetrievalPack:
         repo = BookStateRepository(session)
-        snapshot = repo.latest_world_snapshot(project_id, chapter_number)
-        nodes = repo.list_world_nodes(project_id, as_of_chapter=chapter_number)
-        edges = repo.list_world_edges(project_id, as_of_chapter=chapter_number)
-        facts = repo.list_fact_nodes(project_id, as_of_chapter=chapter_number)
-        map_nodes = repo.list_map_nodes(project_id)
-        map_edges = repo.list_map_edges(project_id)
+        runtime = BookStateQuery(session, baseline=baseline).runtime(project_id, as_of_chapter=baseline.as_of_chapter)
+        snapshot = repo.latest_world_snapshot(project_id, baseline.as_of_chapter)
+        nodes = [node.model_copy(update={"state": runtime.world.get_state(node.id)}) for node in runtime.world.nodes_by_id.values()]
+        edges = list(runtime.world.edges_by_id.values())
+        facts = list(runtime.world.facts_by_id.values())
+        map_nodes = list(runtime.map.nodes_by_id.values())
+        map_edges = list(runtime.map.edges_by_id.values())
         if not include_hidden_truth:
             visible_node_ids = {
                 node.id for node in nodes if not book_state_node_hidden(node)
@@ -515,11 +544,11 @@ class RetrievalBroker:
         obsidian_pages = self._load_obsidian_page_context(
             session,
             project_id,
-            include_hidden_truth=include_hidden_truth,
-        )
+            include_hidden_truth=include_hidden_truth, baseline=baseline,
+        ) if include_secondary else []
         llm_kb_context = self._load_llm_kb_context(
-            project_id, pack_kind=pack_kind, query=query
-        )
+            project_id, pack_kind=pack_kind, query=query, session=session, baseline=baseline
+        ) if include_secondary else {}
         conflicts: list[dict[str, object]] = []
         source_refs = [
             *list(pack.source_refs),
@@ -564,8 +593,11 @@ class RetrievalBroker:
         project_id: str,
         *,
         include_hidden_truth: bool,
+        baseline=None,
     ) -> list[dict[str, object]]:
-        rows = KnowledgePageRepository(session).list_canonical_rows(project_id)
+        baseline = baseline or CanonReadBaseline.capture(session, project_id, as_of_chapter=BookStateRepository(session).latest_available_chapter(project_id))
+        runtime = BookStateQuery(session, baseline=baseline).runtime(project_id, as_of_chapter=baseline.as_of_chapter)
+        rows = KnowledgePageRepository(session).list_valid_rows(project_id, runtime=runtime, as_of_chapter=baseline.as_of_chapter)
         rows = sorted(
             rows,
             key=lambda row: (
@@ -603,9 +635,13 @@ class RetrievalBroker:
         return pages
 
     def _load_llm_kb_context(
-        self, project_id: str, *, pack_kind: str, query: str = ""
+        self, project_id: str, *, pack_kind: str, query: str = "", session=None, baseline=None
     ) -> dict[str, object]:
+        from forwin.llm_kb.source_validation import validated_manifest, validated_file
         store = LLMKnowledgeBaseStore(root=self.llm_kb_root)
+        manifest = validated_manifest(store.root, project_id, session, baseline)
+        if not manifest:
+            return {}
         files = store.list_files(project_id)
         if not files:
             return {}
@@ -624,7 +660,9 @@ class RetrievalBroker:
         source_digest = ""
         for key in safe_file_keys:
             try:
-                content = store.read_file(project_id, key)
+                content = validated_file(store.root, project_id, key, manifest)
+                if content is None:
+                    continue
             except (FileNotFoundError, ValueError):
                 continue
             excerpts[key] = _truncate(content, limit=1200)
@@ -643,6 +681,7 @@ class RetrievalBroker:
                 query,
                 role=role,
                 limit=5,
+                session=session, baseline=baseline,
             )
         return {
             "root_policy": "writer_safe",
@@ -854,7 +893,7 @@ class RetrievalBroker:
     def _estimate_chars(pack: ChapterContextPack) -> int:
         return writer_context_chars(pack)
 
-    def _pick_memories(self, base_pack: ChapterContextPack):
+    def _pick_memories(self, base_pack: ChapterContextPack, *, session=None, baseline=None):
         query_parts = [
             base_pack.chapter_plan_title,
             base_pack.chapter_plan_one_line,
@@ -872,6 +911,7 @@ class RetrievalBroker:
             project_id=base_pack.project_id,
             query=query,
             limit=raw_limit,
+            **({"session": session, "baseline": baseline} if baseline is not None else {}),
         )
         eligible = [
             memory

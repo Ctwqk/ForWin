@@ -55,6 +55,19 @@ class KnowledgePageRepository:
             return sorted(rows, key=_page_output_key)
         return sorted(_canonical_rows(rows), key=_page_output_key)
 
+    def list_valid_rows(self, project_id, *, runtime, as_of_chapter):
+        from .dependencies import dependencies_valid
+        # A read must not supersede or otherwise mutate legacy artifacts.
+        from forwin.retrieval.source_identity import fresh_orm_reads
+        with fresh_orm_reads(self.session):
+            rows = self._load_rows(project_id, page_type="", include_superseded=False)
+        from forwin.models import Project
+        project_title = self.session.scalar(select(Project.title).where(Project.id == project_id))
+        rows = [row for row in rows if int(row.as_of_chapter or 0) <= as_of_chapter
+                and dependencies_valid(_load_json(row.dependency_manifest_json), runtime,
+                    extra={"project_title": project_title} if _load_json(row.dependency_manifest_json).get("scope") == "book" else None)]
+        return sorted(_canonical_rows(rows), key=_page_output_key)
+
     def resolve_page_key(
         self, project_id: str, page_key: str
     ) -> KnowledgeProjectionPageRow | None:

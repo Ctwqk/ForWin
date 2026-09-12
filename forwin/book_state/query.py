@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from forwin.retrieval.source_identity import CanonReadBaseline
 
 from forwin.protocol.context import (
     CanonEventEvidence,
@@ -36,20 +39,26 @@ _ENTITY_NODE_TYPES = {
 class BookStateQuery:
     """Read accepted narrative state from BookState projections only."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, baseline: CanonReadBaseline | None = None) -> None:
+        self.baseline = baseline
         self.session = session
         self.repository = BookStateRepository(session)
         self.projection = BookStateProjection(session)
-        self._runtime_cache: dict[tuple[str, int], BookStateRuntime] = {}
+        self._runtime_cache: dict[tuple[str, int, int], BookStateRuntime] = {}
 
     def runtime(self, project_id: str, *, as_of_chapter: int) -> BookStateRuntime:
-        key = (project_id, int(as_of_chapter))
+        from forwin.retrieval.source_identity import CanonReadBaseline, fresh_orm_reads
+        baseline = self.baseline or CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of_chapter)
+        baseline.assert_current(self.session, project_id=project_id, as_of_chapter=as_of_chapter)
+        key = (project_id, baseline.book_revision, int(as_of_chapter))
         runtime = self._runtime_cache.get(key)
         if runtime is None:
-            runtime = self.projection.load_runtime_as_of(
-                project_id,
-                as_of_chapter=int(as_of_chapter),
-            )
+            with fresh_orm_reads(self.session):
+                runtime = self.projection.load_runtime_as_of(
+                    project_id,
+                    as_of_chapter=int(as_of_chapter),
+                )
+            baseline.assert_current(self.session)
             self._runtime_cache[key] = runtime
         return runtime
 

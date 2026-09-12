@@ -2,6 +2,8 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
+2026-09-12 补充工作：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。以下已有实现说明不代表这些新增工作已完成，进度以执行计划和验证记录为准。
+
 更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。

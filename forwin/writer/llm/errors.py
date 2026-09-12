@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from email.utils import parsedate_to_datetime
 
@@ -12,6 +13,16 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 _LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
+
+
+class LLMInputLimitError(ValueError):
+    """Provider-declared input limit; repeating this input cannot succeed."""
+
+    error_category = "input_limit"
+
+    def __init__(self, message: str, *, response: httpx.Response):
+        super().__init__(message)
+        self.response = response
 
 
 class ErrorsMixin:
@@ -94,6 +105,30 @@ class ErrorsMixin:
         return ""
 
     @staticmethod
+    def _provider_input_limit(response: httpx.Response) -> bool:
+        if response.status_code == 413:
+            return True
+        try:
+            data = response.json()
+        except (ValueError, TypeError):
+            return False
+        error = data.get("error") if isinstance(data, dict) else None
+        if not error:
+            return False
+        if isinstance(error, dict):
+            code = str(error.get("code") or error.get("type") or "").lower()
+            if code in {"context_length_exceeded", "input_limit", "input_too_long", "prompt_too_long", "max_tokens_exceeded"}:
+                return True
+            message = str(error.get("message") or "").lower()
+        else:
+            message = str(error).lower()
+        return any(marker in message for marker in (
+            "maximum context length", "context length exceeded", "context window exceeded",
+            "input is too long", "input too long", "prompt is too long", "prompt too long",
+            "too many input tokens", "input token limit", "request exceeds the model's context",
+        ))
+
+    @staticmethod
     def _timeout_kind(exc: BaseException) -> str:
         if isinstance(exc, httpx.ConnectTimeout):
             return "connect_timeout"
@@ -105,38 +140,29 @@ class ErrorsMixin:
 
     @classmethod
     def _is_fallback_retryable(cls, exc: Exception) -> bool:
-        if isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError, httpx.NetworkError)):
-            return True
-        if isinstance(exc, httpx.HTTPStatusError):
-            status_code = exc.response.status_code if exc.response is not None else 0
-            return status_code in _RETRYABLE_HTTP_STATUS_CODES
+        chain: list[BaseException] = []
         current: BaseException | None = exc
-        while current is not None:
-            message = str(current).lower()
-            if any(
-                token in message
-                for token in (
-                    "http 529",
-                    "status code 529",
-                    "429",
-                    "500",
-                    "502",
-                    "503",
-                    "504",
-                    "temporarily unavailable",
-                    "service unavailable",
-                    "rate limit",
-                    "too many requests",
-                    "overloaded",
-                    "connection reset",
-                    "server disconnected",
-                    "network error",
-                    "timed out",
-                    "timeout",
-                )
-            ):
-                return True
+        while current is not None and current not in chain:
+            chain.append(current)
             current = current.__cause__ or current.__context__
+        if any(isinstance(error, LLMInputLimitError) for error in chain):
+            return False
+        for error in chain:
+            if isinstance(error, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError, httpx.NetworkError)):
+                return True
+            if isinstance(error, httpx.HTTPStatusError):
+                if cls._provider_input_limit(error.response):
+                    return False
+                return error.response.status_code in _RETRYABLE_HTTP_STATUS_CODES
+            message = str(error).lower()
+            if re.search(r"\b(?:http|status code)\s*(?:408|409|425|429|500|502|503|504|529)\b", message):
+                return True
+            if any(token in message for token in (
+                "temporarily unavailable", "service unavailable", "rate limit",
+                "too many requests", "overloaded", "connection reset", "server disconnected",
+                "network error", "timed out", "timeout",
+            )):
+                return True
         return False
 
     def _retry_delay(

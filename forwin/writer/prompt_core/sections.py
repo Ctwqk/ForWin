@@ -341,12 +341,24 @@ def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> s
 
 
 def _active_entities_section(context: ChapterContextPack, *, limit: int) -> str | None:
-    if not context.active_entities:
+    if not context.active_entities and not context.required_facts:
         return None
-    return "【当前允许命名角色】\n" + "\n".join(
-        f"  · {item.name}：{item.description}"
-        for item in context.active_entities[:limit]
-    )
+    required = [e for e in context.active_entities if e.entity_id in context.required_entity_ids]
+    optional = [e for e in context.active_entities if e.entity_id not in context.required_entity_ids][:limit]
+    lines = ["【当前对象与已接纳客观状态（不代表角色已知）】"]
+    for item in required:
+        lines.append(f"  · {item.name} [node:{item.entity_id}; {item.kind}; status={item.status}; is_active={str(item.is_active).lower()}] "
+                     f"别名={json.dumps(item.aliases, ensure_ascii=False)}：{item.description}；当前状态："
+                     + json.dumps(item.current_state, ensure_ascii=False, sort_keys=True))
+    lines.extend(f"  · {item.name}：{item.description}" for item in optional)
+    for relation in context.active_relations:
+        if relation.relation_id in context.required_relation_ids:
+            lines.append(f"  · edge:{relation.relation_id} {relation.source_name}[{relation.source_id}] → "
+                         f"{relation.target_name}[{relation.target_id}] {relation.relation_type}；{relation.description}；"
+                         f"status={relation.status}；当前状态：" + json.dumps(relation.current_state, ensure_ascii=False, sort_keys=True))
+    if context.required_facts:
+        lines.append("必需事实：" + json.dumps(context.required_facts, ensure_ascii=False, sort_keys=True))
+    return "\n".join(lines)
 
 
 def _personality_context_section(context: ChapterContextPack, *, limit: int = 6) -> str | None:
@@ -408,13 +420,13 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
     if context.allowed_entities:
         lines.append(
             "  · 当前允许直接使用的命名人物："
-            + "、".join(context.allowed_entities[:10])
+            + "、".join(context.allowed_entities)
         )
     if context.chapter_entry_targets:
         lines.append("  · 本章允许首次引入的新人物：")
         lines.extend(
             f"    · 第{item.chapter_hint}章：{item.entity_name}（{item.role_hint or '新角色'}）"
-            for item in context.chapter_entry_targets[:4]
+            for item in context.chapter_entry_targets
         )
     if context.entity_admission_rule:
         lines.append(f"  · 准入模式：{context.entity_admission_rule}")

@@ -10,7 +10,7 @@ import httpx
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.model_adapter import ModelCapabilities
 from .embeddings import EmbeddingsMixin
-from .errors import ErrorsMixin
+from .errors import ErrorsMixin, LLMInputLimitError
 from .profile_options import ProfileOptionsMixin
 from .routing import RoutingMixin
 from .telemetry import TelemetryMixin
@@ -345,6 +345,9 @@ class OpenAICompatibleAdapter(
                     timeout=effective_request_timeout,
                 )
 
+                if self._provider_input_limit(response):
+                    raise LLMInputLimitError(self._http_error_message_from_response(response, profile), response=response)
+
                 if response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
                     retry_delay = self._retry_delay(attempt, response)
                     self._record_llm_attempt(
@@ -556,7 +559,7 @@ class OpenAICompatibleAdapter(
                     raise
                 response = getattr(exc, "response", None)
                 status_code = int(getattr(response, "status_code", 0) or 0)
-                if status_code in _RETRYABLE_HTTP_STATUS_CODES:
+                if status_code in _RETRYABLE_HTTP_STATUS_CODES and not isinstance(exc, LLMInputLimitError):
                     raise
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
@@ -579,9 +582,9 @@ class OpenAICompatibleAdapter(
                     error_class=exc.__class__.__name__,
                     error_message=self._http_error_message(exc, profile),
                     error_category=(
-                        self._error_category_for_status(status_code)
-                        if status_code
-                        else "network"
+                        "input_limit" if isinstance(exc, LLMInputLimitError) else (
+                            self._error_category_for_status(status_code) if status_code else "network"
+                        )
                     ),
                     retryable=self._is_fallback_retryable(exc),
                     fallback_eligible=(

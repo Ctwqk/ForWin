@@ -354,6 +354,8 @@ class RepairPlanPatchService:
         self.arc_envelope_manager = arc_envelope_manager
 
     def apply(self, request: RepairPlanPatchRequest) -> RepairPlanPatchResult:
+        if request.context.canon_read_baseline is not None:
+            request.context.canon_read_baseline.assert_current(request.session)
         result = self._apply_plan_patch(request)
         return replace(result, context=self.retrieval_broker.prepare_repair_context(
             result.context, request.instruction
@@ -448,7 +450,8 @@ class RepairPlanPatchService:
             return RepairPlanPatchResult(
                 updated_plan.model_dump(mode="json"),
                 self.retrieval_broker.build_chapter_context(
-                    repo, project_id, chapter_plan
+                    repo, project_id, chapter_plan,
+                    **({"baseline": context.canon_read_baseline} if context.canon_read_baseline is not None else {}),
                 ),
                 chapter_plan_snapshot(
                     repo=repo,
@@ -480,7 +483,8 @@ class RepairPlanPatchService:
             return RepairPlanPatchResult(
                 updated_schedule.model_dump(mode="json"),
                 self.retrieval_broker.build_chapter_context(
-                    repo, project_id, chapter_plan
+                    repo, project_id, chapter_plan,
+                    **({"baseline": context.canon_read_baseline} if context.canon_read_baseline is not None else {}),
                 ),
                 chapter_plan_snapshot(
                     repo=repo,

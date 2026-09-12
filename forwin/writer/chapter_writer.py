@@ -284,6 +284,7 @@ class ChapterWriter:
                 body,
             ),
             generation_meta={
+                "context_budget": dict(getattr(context, "context_budget_summary", {}) or {}),
                 "mode": "writer_preview",
                 "call_count": 1,
                 "structured_extraction": "skipped",
@@ -405,6 +406,10 @@ class ChapterWriter:
         skill_layers: list[object] | None = None,
         trace_stage_key: str = "chapter_draft",
     ) -> WriterOutput:
+        # Local import avoids config -> writer -> retrieval -> Canon -> config.
+        from forwin.retrieval.requirements import RequiredContextError, hydrate_requirements
+        from forwin.retrieval.source_identity import CanonBaselineChanged
+
         logger.info(
             "write_chapter(scene): chapter=%d title_plan=%r",
             context.chapter_number,
@@ -417,6 +422,10 @@ class ChapterWriter:
                 max_scene_count=self.max_scene_count,
             )
             scene_plans = self._plan_scenes(context, skill_layers=skill_layers)
+            if context.required_context_hydrator is not None:
+                context = context.required_context_hydrator(context, scene_plans)
+            else:
+                context = hydrate_requirements(context, scene_plans=scene_plans)
             scene_outputs: list[SceneOutput] = []
             for scene_plan in scene_plans:
                 scene_outputs.append(
@@ -475,7 +484,11 @@ class ChapterWriter:
             )
             self._attach_prompt_revision(output, base_messages)
             return output
+        except (RequiredContextError, CanonBaselineChanged):
+            raise
         except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "error_category", "") == "input_limit":
+                raise
             logger.warning(
                 "scene chapter generation failed, falling back to single draft mode: %s",
                 exc,
@@ -593,7 +606,7 @@ class ChapterWriter:
             timeline_hints=timeline_hints,
             writer_notes=writer_notes,
             entity_mentions=entity_mentions,
-            generation_meta=dict(data.get("_generation_meta") or {}),
+            generation_meta={**dict(data.get("_generation_meta") or {}), "context_budget": dict(getattr(context, "context_budget_summary", {}) or {})},
         )
         self._attach_llm_fallback_events(output)
         logger.info(
@@ -636,6 +649,8 @@ class ChapterWriter:
             if scenes:
                 return scenes[: self.max_scene_count]
         except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "error_category", "") == "input_limit":
+                raise
             logger.warning(
                 "scene breakdown failed, falling back to heuristic scenes: %s",
                 exc,
@@ -908,6 +923,8 @@ class ChapterWriter:
                 required_list_models=required_list_models,
             )
         except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "error_category", "") == "input_limit":
+                raise
             logger.warning(
                 "%s primary pass failed, retrying with reduced body: %s", label, exc
             )
@@ -930,6 +947,8 @@ class ChapterWriter:
                     else:
                         return window_result
                 except Exception as repair_exc:  # noqa: BLE001
+                    if getattr(repair_exc, "error_category", "") == "input_limit":
+                        raise
                     last_error = repair_exc
             if valid_windows and required_list_models:
                 return self._merge_required_model_lists(
@@ -1280,6 +1299,8 @@ class ChapterWriter:
                     )
                     raise
             except Exception as exc:  # noqa: BLE001
+                if getattr(exc, "error_category", "") == "input_limit":
+                    raise
                 last_error = exc
                 self._record_business_retry_event(
                     stage="json_generation",
@@ -1343,6 +1364,8 @@ class ChapterWriter:
                     return raw
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
+                if getattr(exc, "error_category", "") == "input_limit":
+                    raise
                 if raw:
                     mark_latest_attempt_parse_failure(
                         self.llm_client,

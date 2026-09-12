@@ -206,6 +206,8 @@ class BookStateQuery:
                     name=node.name or node.id,
                     importance=node.importance,
                     aliases=list(node.aliases),
+                    status=node.status,
+                    is_active=node.is_active,
                     description=node.description or node.summary,
                     current_state=runtime.world.get_state(node.id),
                 )
@@ -233,13 +235,15 @@ class BookStateQuery:
         mapping: dict[str, EntitySnapshot] = {}
         if not requested:
             return mapping
-        for entity in self.active_entities(
-            project_id,
-            as_of_chapter=as_of_chapter,
-        ):
-            for name in (entity.entity_id, entity.name, *entity.aliases):
+        entities = self.active_entities(project_id, as_of_chapter=as_of_chapter)
+        by_id = {entity.entity_id: entity for entity in entities}
+        mapping.update({key: by_id[key] for key in requested if key in by_id})
+        for entity in entities:
+            for name in (entity.name, *entity.aliases):
                 normalized = str(name or "").strip()
-                if normalized in requested:
+                if normalized in requested and normalized not in by_id:
+                    if normalized in mapping and mapping[normalized].entity_id != entity.entity_id:
+                        raise ValueError(f"required_context: ambiguous entity {normalized!r}")
                     mapping[normalized] = entity
         return mapping
 
@@ -273,6 +277,11 @@ class BookStateQuery:
             )
             relations.append(
                 RelationSnapshot(
+                    relation_id=edge.id,
+                    source_id=edge.source_id,
+                    target_id=edge.target_id,
+                    current_state=dict(edge.state),
+                    status=edge.status,
                     source_name=source_name,
                     target_name=target_name,
                     relation_type=edge.edge_type,

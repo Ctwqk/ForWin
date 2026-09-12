@@ -112,7 +112,7 @@ def render_writer_context(
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
         _personality_context_section(context),
-        _subworld_control_section(context) if layout != "preview" else None,
+        _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
         _canon_name_anchor_section(context),

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.query import BookStateQuery
+from forwin.retrieval.requirements import hydrate_requirements, RequiredContextError
 from forwin.retrieval.source_identity import CanonReadBaseline, CanonBaselineChanged, fresh_orm_reads
 from forwin.book_state.visibility import book_state_node_hidden
 from forwin.context import assemble_context
@@ -42,6 +43,7 @@ from forwin.protocol.context import (
     WritingPack,
 )
 from forwin.protocol.world_model import WorldContextPack
+from forwin.protocol.scene import ScenePlan
 from forwin.obsidian.frontmatter import frontmatter_hidden, parse_sections
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
@@ -122,19 +124,22 @@ class RetrievalBroker:
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(
-        self, repo, project_id: str, chapter_plan
+        self, repo, project_id: str, chapter_plan, *, baseline: CanonReadBaseline | None = None
     ) -> ChapterContextPack:
         session = getattr(repo, "session", None)
-        for attempt in range(2):
-            baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=max(0, chapter_plan.chapter_number - 1)) if session is not None else None
+        fixed_baseline = baseline
+        for attempt in range(1 if fixed_baseline is not None else 2):
+            baseline = fixed_baseline or (CanonReadBaseline.capture(session, project_id, as_of_chapter=max(0, chapter_plan.chapter_number - 1)) if session is not None else None)
             try:
+                if baseline is not None:
+                    baseline.assert_current(session)
                 with fresh_orm_reads(session):
                     pack = self._build_chapter_context(repo, project_id, chapter_plan, baseline=baseline)
                 if baseline is not None:
                     baseline.assert_current(session)
                 return pack
             except CanonBaselineChanged:
-                if attempt:
+                if fixed_baseline is not None or attempt:
                     raise
         raise CanonBaselineChanged("Canon context rebuild exhausted")
 
@@ -155,8 +160,9 @@ class RetrievalBroker:
         except Exception:
             logger.warning("World model context unavailable", exc_info=True)
 
+        base_pack = self.hydrate_required_context(repo, base_pack, trim=False)
         summaries = self._pick_summaries(base_pack.previous_chapter_summaries)
-        entities = self._pick_entities(base_pack.active_entities)
+        entities = self._pick_entities(base_pack.active_entities, base_pack.required_entity_ids)
         threads = self._pick_threads(base_pack.active_threads)
         relations = self._pick_relations(base_pack.active_relations, entities)
         memories = self._pick_memories(base_pack, session=getattr(repo, "session", None), baseline=baseline)
@@ -179,6 +185,26 @@ class RetrievalBroker:
 
         return pack
 
+    def hydrate_required_context(
+        self, repo, pack: ChapterContextPack, *,
+        scene_plans: Iterable[ScenePlan] = (), trim: bool = True,
+    ) -> ChapterContextPack:
+        session = getattr(repo, "session", None)
+        baseline = pack.canon_read_baseline
+        hydrated = hydrate_requirements(pack, session=session, scene_plans=scene_plans)
+        if baseline is not None and session is not None:
+            def hydrate_later(current: ChapterContextPack, scenes: list[ScenePlan]) -> ChapterContextPack:
+                if current.canon_read_baseline != baseline:
+                    raise RequiredContextError("required_context: hydration baseline mismatch")
+                baseline.assert_current(session)
+                return self.hydrate_required_context(repo, current, scene_plans=scenes)
+            hydrated = hydrated.model_copy(update={"required_context_hydrator": hydrate_later})
+        if not trim:
+            return hydrated
+        trimmed = self._trim_pack(hydrated)
+        self._finalize_context_summary(base_pack=hydrated, pack=trimmed, memories=hydrated.retrieved_memories)
+        return trimmed
+
     def prepare_repair_context(
         self, pack: ChapterContextPack, contract: RepairContract
     ) -> ChapterContextPack:
@@ -187,6 +213,10 @@ class RetrievalBroker:
                 contract.model_dump(include=set(RepairContract.model_fields))
             ),
         })
+        if base.required_context_hydrator is not None:
+            base = base.required_context_hydrator(base, [])
+        else:
+            base = hydrate_requirements(base)
         trimmed = self._trim_pack(base)
         self._finalize_context_summary(
             base_pack=base, pack=trimmed, memories=base.retrieved_memories
@@ -196,7 +226,7 @@ class RetrievalBroker:
     def _trim_pack(self, pack: ChapterContextPack) -> ChapterContextPack:
         pack = _budget_genesis_references(pack, self.context_budget_chars // 4)
         summaries = self._pick_summaries(list(pack.previous_chapter_summaries))
-        entities = self._pick_entities(list(pack.active_entities))
+        entities = self._pick_entities(list(pack.active_entities), pack.required_entity_ids)
         threads = self._pick_threads(list(pack.active_threads))
         relations = self._pick_relations(list(pack.active_relations), entities)
         pack = pack.model_copy(
@@ -217,9 +247,11 @@ class RetrievalBroker:
                 pack = without_unrelated
                 estimate = self._estimate_chars(pack)
                 continue
-            if pack.active_relations:
+            optional_relations = [r for r in pack.active_relations if r.relation_id not in pack.required_relation_ids]
+            if optional_relations:
+                drop = optional_relations[-1]
                 pack = pack.model_copy(
-                    update={"active_relations": pack.active_relations[:-1]}
+                    update={"active_relations": [r for r in pack.active_relations if r is not drop]}
                 )
                 estimate = self._estimate_chars(pack)
                 continue
@@ -229,9 +261,11 @@ class RetrievalBroker:
                 pack = pack.model_copy(update={"retrieved_memories": next_memories})
                 estimate = self._estimate_chars(pack)
                 continue
-            if len(pack.active_entities) > 3:
+            optional_entities = [e for e in pack.active_entities if e.entity_id not in pack.required_entity_ids]
+            if optional_entities and (pack.required_entity_ids or len(optional_entities) > 3):
+                drop = optional_entities[-1]
                 pack = pack.model_copy(
-                    update={"active_entities": pack.active_entities[:-1]}
+                    update={"active_entities": [e for e in pack.active_entities if e is not drop]}
                 )
                 estimate = self._estimate_chars(pack)
                 continue
@@ -263,7 +297,12 @@ class RetrievalBroker:
                 estimate = self._estimate_chars(pack)
                 continue
             break
-        return pack
+        return pack.model_copy(update={"context_budget_summary": {
+            "rendered_context_chars": estimate,
+            "soft_budget_chars": self.context_budget_chars,
+            "soft_budget_exceeded": estimate > self.context_budget_chars,
+            "soft_budget_overflow_chars": max(0, estimate - self.context_budget_chars),
+        }})
 
     def _finalize_context_summary(
         self,
@@ -279,6 +318,9 @@ class RetrievalBroker:
         )
         memories_after = len(getattr(pack, "retrieved_memories", []) or [])
         self.last_observability_summary = {
+            **pack.context_budget_summary,
+            "required_entity_count": len(pack.required_entity_ids),
+            "required_relation_count": len(pack.required_relation_ids),
             "memory_source_validation": dict(getattr(self.memory_index, "last_search_stats", {}) or {}),
             "chapter_number": int(getattr(pack, "chapter_number", 0) or 0),
             "active_entities_count_before": len(base_pack.active_entities),
@@ -851,9 +893,10 @@ class RetrievalBroker:
     def _pick_summaries(self, summaries: list[str]) -> list[str]:
         return summaries[-self.max_summaries :]
 
-    def _pick_entities(self, entities: list[EntitySnapshot]) -> list[EntitySnapshot]:
-        ranked = sorted(entities, key=lambda item: (-item.importance, item.name))
-        return ranked[: self.max_entities]
+    def _pick_entities(self, entities: list[EntitySnapshot], required_ids=()) -> list[EntitySnapshot]:
+        required = sorted((e for e in entities if e.entity_id in required_ids), key=lambda e: e.entity_id)
+        ranked = sorted((e for e in entities if e.entity_id not in required_ids), key=lambda item: (-item.importance, item.name))
+        return [*required, *ranked[: self.max_entities]]
 
     def _pick_threads(
         self, threads: list[PlotThreadSnapshot]

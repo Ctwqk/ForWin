@@ -64,7 +64,9 @@ def test_band_schedule_repair_commits_without_preview_callback(database) -> None
     assert len(rows) == 1
     assert rows[0].id != "old"
     assert rows[0].stall_guard_max_gap == 1
-    assert result.context.model_dump(exclude={"repair_contract"}) == (
-        rebuilt_context.model_dump(exclude={"repair_contract"})
+    assert result.context.model_dump(exclude={"repair_contract", "context_budget_summary"}) == (
+        rebuilt_context.model_dump(exclude={"repair_contract", "context_budget_summary"})
     )
+    assert result.context.context_budget_summary["rendered_context_chars"] == broker._estimate_chars(result.context)
+    assert result.context.context_budget_summary["soft_budget_exceeded"] is False
     assert result.failure_reason == ""

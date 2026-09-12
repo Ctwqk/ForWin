@@ -177,6 +177,7 @@ def _build_canon_quality_context(
                 "summary": obligation.summary,
                 "deadline_chapter": obligation.deadline_chapter,
                 "payoff_test": obligation.payoff_test,
+                "subject_refs": list(obligation.subject_refs),
                 "must_resolve_now": obligation.must_resolve_now,
                 "linked_plan_patch_ids": list(obligation.linked_plan_patch_ids),
                 "evidence_refs": list(obligation.evidence_refs),

@@ -642,6 +642,10 @@ class SplitWriterPipelineTests(unittest.TestCase):
             chapter_plan_title="第四章",
             chapter_plan_one_line="主角进入旧站",
             chapter_goals=["进入旧站", "确认广播异常"],
+            active_entities=[{
+                "entity_id": "lin-ye", "kind": "character", "name": "林夜",
+                "description": "调查者", "current_state": {"location": "旧站台"},
+            }],
         )
 
         output = writer.write_chapter(context)

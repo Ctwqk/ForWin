@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic.json_schema import SkipJsonSchema
 
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.constraints import NarrativeConstraintInfo
@@ -15,6 +17,7 @@ from .experience import (
     ChapterExperiencePlan,
     ReaderPromise,
 )
+from .scene import ScenePlan
 from .subworld import ChapterEntryTarget, SubWorldSummary
 from .world_model import WorldContextPack
 
@@ -66,12 +69,19 @@ class EntitySnapshot(BaseModel):
     importance: int = 0
     aliases: list[str] = Field(default_factory=list)
     description: str
+    status: str = ""
+    is_active: bool = True
     current_state: dict  # Deserialized state_json
 
 
 class RelationSnapshot(BaseModel):
     """Snapshot of a relationship for context."""
 
+    relation_id: str = ""
+    source_id: str = ""
+    target_id: str = ""
+    current_state: dict[str, Any] = Field(default_factory=dict)
+    status: str = ""
     source_name: str
     target_name: str
     relation_type: str
@@ -280,6 +290,12 @@ class ChapterContextPack(BaseModel):
 
     # Retain the immutable in-process read fence for repair rehydration.
     canon_read_baseline: Any | None = Field(default=None, exclude=True)
+    required_context_hydrator: SkipJsonSchema[Callable[["ChapterContextPack", list[ScenePlan]], "ChapterContextPack"] | None] = Field(default=None, exclude=True)
+    required_entity_ids: list[str] = Field(default_factory=list)
+    required_relation_ids: list[str] = Field(default_factory=list)
+    required_selection_sources: dict[str, list[str]] = Field(default_factory=dict)
+    required_facts: dict[str, Any] = Field(default_factory=dict)
+    context_budget_summary: dict[str, Any] = Field(default_factory=dict)
 
     project_id: str = ""
     project_title: str

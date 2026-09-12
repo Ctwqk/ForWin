@@ -65,6 +65,9 @@ def quality_case(tmp_path):
 
 
 def _evaluate(module, case, *, policy=None, llm_client=None):
+    if not getattr(case, "candidate_id", ""):
+        _, request = _request_case(case)
+        case.candidate_id = request.candidate_id
     return module.CanonQualityPreparer().evaluate(
         session=case.session,
         updater=case.updater,
@@ -76,7 +79,7 @@ def _evaluate(module, case, *, policy=None, llm_client=None):
         chapter_number=1,
         writer_output=case.output,
         verdict=ReviewVerdict(verdict="pass"),
-        candidate_id="candidate",
+        candidate_id=case.candidate_id,
         policy_version=7,
     )
 
@@ -93,7 +96,7 @@ def test_quality_owner_uses_real_gate_and_transaction_bound_audit(quality_case):
     assert gate_event.task_id == "task"
     assert gate_event.causal_root_id == "root"
     gate = json.loads(gate_event.payload_json)["gate_outcome"]
-    assert gate["candidate_id"] == "candidate"
+    assert gate["candidate_id"] == quality_case.candidate_id
     assert gate["policy_version"] == 7
     quality_case.session.rollback()
     assert list(quality_case.session.scalars(select(DecisionEvent))) == []

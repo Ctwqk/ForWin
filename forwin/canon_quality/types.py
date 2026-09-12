@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from .chapter_review_form.evidence_validator import ValidationReport
+from .chapter_review_form.form_schema import ChapterReviewAnswers, ChapterReviewForm
 from .signals import CanonQualitySignal, CharacterStateTransition, CountdownLedgerEntry
 
 
@@ -11,6 +13,9 @@ class CanonQualityAnalysisResult(BaseModel):
     project_id: str
     chapter_number: int
     draft_id: str = ""
+    form: ChapterReviewForm | None = None
+    answers: ChapterReviewAnswers | None = None
+    validation_report: ValidationReport = Field(default_factory=ValidationReport)
     signals: list[CanonQualitySignal] = Field(default_factory=list)
     deterministic_quality_report: dict[str, Any] = Field(default_factory=dict)
     mode: str = "chapter_review_form"

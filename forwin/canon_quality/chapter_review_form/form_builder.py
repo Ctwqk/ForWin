@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from . import FORM_SCHEMA_VERSION
 from .form_schema import (
-    CharacterReviewAsk,
     ChapterReviewForm,
+    CharacterReviewAsk,
     CountdownReviewAsk,
     FinalChapterAsk,
     ObligationReviewAsk,
@@ -54,6 +55,7 @@ def build_form(
         project_id=project_id,
         chapter_number=int(chapter_number or 0),
         form_schema_version=FORM_SCHEMA_VERSION,
+        reviewed_body_sha256=hashlib.sha256(chapter_text.encode("utf-8")).hexdigest(),
         characters=characters,
         countdowns=countdowns,
         obligations=obligation_asks,
@@ -151,10 +153,17 @@ def _signal_ask(row: Any, *, current_chapter: int) -> OpenSignalReviewAsk:
 
 
 def _obligation_ask(obligation: Any, *, current_chapter: int) -> ObligationReviewAsk:
+    from forwin.narrative_obligations.resolution_evidence import contract_snapshot
+
+    snapshot = contract_snapshot(obligation)
     obligation_id = str(row_value(obligation, "id") or row_value(obligation, "obligation_id") or "").strip()
     deadline = int(row_value(obligation, "deadline_chapter", current_chapter) or current_chapter)
     return ObligationReviewAsk(
         id=obligation_id,
+        subject_refs=list(row_value(obligation, "subject_refs", []) or []),
+        resolution_conditions=list(row_value(obligation, "resolution_conditions", []) or []),
+        contract_fingerprint=snapshot.contract_fingerprint,
+        contract_json=snapshot.contract_json,
         summary=str(row_value(obligation, "summary") or row_value(obligation, "description") or "").strip(),
         deadline_chapter=deadline,
         must_resolve_now=bool(row_value(obligation, "must_resolve_now", False)) or deadline <= int(current_chapter or 0),

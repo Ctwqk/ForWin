@@ -22,7 +22,6 @@ __all__ = [
     "IdentityRoleFact",
     "RevealRegistryEntry",
     "StyleTelemetry",
-    "ObligationResolutionVerifier",
     "evaluate_canon_admission",
 ]
 
@@ -32,8 +31,5 @@ def __getattr__(name: str):
         from .gate import evaluate_canon_admission
 
         return evaluate_canon_admission
-    if name == "ObligationResolutionVerifier":
-        from .obligation_verifier import ObligationResolutionVerifier
 
-        return ObligationResolutionVerifier
     raise AttributeError(name)

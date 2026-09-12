@@ -9,13 +9,14 @@ from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.canon.types import CanonQualityGateOutcome
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.gate import evaluate_canon_admission
-from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_quality.signals import CanonAdmissionGateResult, dedupe_signals
 from forwin.model_adapter import ModelAdapter
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.project import Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.resolution_evidence import build_resolution_plan
 from forwin.observability.llm_trace import safe_prompt_trace_attempts
 from forwin.observability.pipeline_trace import PipelineTraceRecorder
 from forwin.protocol.review import ReviewVerdict
@@ -110,7 +111,7 @@ def persist_canon_quality_attempt_trace(
                 "trace_scope": "canon_quality",
                 "stage_key": "chapter_review_form",
                 "template_id": "canon_quality:chapter_review_form",
-                "template_version": "v1",
+                "template_version": "v2",
                 "effective_system_prompt": "",
                 "prompt_layers": [],
                 "input_snapshot": {
@@ -159,11 +160,28 @@ class CanonQualityPreparer:
         candidate_id: str = "",
         policy_version: int = 0,
     ) -> CanonQualityGateOutcome:
-        latest_draft, latest_review = latest_draft_and_review_for_chapter(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
+        if candidate_id:
+            candidate = session.get(CandidateDraftRecord, candidate_id)
+            if candidate is None or (
+                candidate.project_id,
+                candidate.chapter_number,
+            ) != (project_id, chapter_number):
+                raise ValueError("quality review candidate identity mismatch")
+            latest_draft = session.get(ChapterDraft, candidate.candidate_draft_id)
+            latest_review = session.get(ChapterReview, candidate.review_id)
+            if (
+                latest_draft is None
+                or latest_review is None
+                or latest_review.draft_id != latest_draft.id
+                or latest_draft.body_text != writer_output.body
+            ):
+                raise ValueError(
+                    "quality review candidate draft/body identity mismatch"
+                )
+        else:
+            latest_draft, latest_review = latest_draft_and_review_for_chapter(
+                session=session, project_id=project_id, chapter_number=chapter_number
+            )
         draft_id = str(getattr(latest_draft, "id", "") or "")
         review_id = str(getattr(latest_review, "id", "") or "")
         gate_mode = (
@@ -258,17 +276,24 @@ class CanonQualityPreparer:
             *obligation_repo.list_active_for_context(
                 project_id, chapter_number=chapter_number
             ),
-            *obligation_repo.list_planned_for_chapter(
-                project_id, origin_chapter_number=chapter_number
-            ),
+            *[
+                item
+                for item in obligation_repo.list_planned_for_chapter(
+                    project_id, origin_chapter_number=chapter_number
+                )
+                if draft_id and item.origin_draft_id == draft_id
+            ],
         ]
-        draft_resolved_obligation_ids = verify_due_obligations_for_draft(
+        resolution_plan = build_resolution_plan(
             obligations=gate_obligations,
+            form=getattr(analysis, "form", None),
+            answers=getattr(analysis, "answers", None),
+            validation_report=getattr(analysis, "validation_report", None),
+            project_id=project_id,
             chapter_number=chapter_number,
-            draft_text=str(getattr(writer_output, "body", "") or ""),
-            evidence_ref=f"draft:{draft_id}"
-            if draft_id
-            else f"chapter:{chapter_number}:draft",
+            candidate_id=candidate_id,
+            draft_id=draft_id,
+            chapter_body=str(getattr(writer_output, "body", "") or ""),
         )
         patch_ids = sorted(
             {
@@ -297,7 +322,7 @@ class CanonQualityPreparer:
             analyzer_results=gate_analyzer_results,
             min_blocking_confidence=0.8,
             require_evidence_for_block=True,
-            resolved_obligation_ids=draft_resolved_obligation_ids,
+            resolved_obligation_ids=resolution_plan.resolved_obligation_ids,
         )
         admission_run = CanonQualityRepository(session).save_admission_run(
             gate_result, signals=gate_signals
@@ -328,7 +353,8 @@ class CanonQualityPreparer:
         )
         if gate_result.commit_allowed:
             return CanonQualityGateOutcome(
-                gate_result=gate_result, quality_admission_run_id=admission_run.id
+                gate_result=gate_result, quality_admission_run_id=admission_run.id,
+                obligation_resolution_plan=resolution_plan
             )
         frozen_path = ""
         if policy.canon.hard_floor:

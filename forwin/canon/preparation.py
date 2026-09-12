@@ -22,8 +22,15 @@ from forwin.candidate_drafts import (
 from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow
+from forwin.models.draft import ChapterDraft
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
+from forwin.narrative_obligations.resolution_evidence import (
+    ObligationResolutionPlan,
+    build_resolution_plan,
+    context_obligations,
+    validate_resolution_plan,
+)
 from forwin.observability.pipeline_trace import PipelineTraceRecorder
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
@@ -394,7 +401,12 @@ class CanonPreparationService:
             repair_attempt_count=request.repair_attempt_count,
             residual_review_issues=request.residual_review_issues,
             canon_risk_level=request.canon_risk_level,
-            quality_admission_run_id=getattr(quality_outcome, "quality_admission_run_id", ""),
+            quality_admission_run_id=getattr(
+                quality_outcome, "quality_admission_run_id", ""
+            ),
+            obligation_resolution_plan=getattr(
+                quality_outcome, "obligation_resolution_plan", None
+            ),
         )
 
     def prepare_from_approved(
@@ -409,6 +421,7 @@ class CanonPreparationService:
         residual_review_issues: list[dict[str, Any]],
         canon_risk_level: str,
         quality_admission_run_id: str = "",
+        obligation_resolution_plan: ObligationResolutionPlan | None = None,
     ) -> CanonPreparationOutcome:
         repository = CandidateDraftRepository(session)
         candidate = repository.get(candidate_id, for_update=True)
@@ -476,6 +489,26 @@ class CanonPreparationService:
             project.automation_json,
             default_book_name=project.title,
         )
+        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
+        if draft is None:
+            raise ValueError("obligation candidate draft missing")
+        obligation_context = context_obligations(
+            session, project_id, chapter_number, draft_id=draft.id
+        )
+        identity = {
+            "project_id": project_id,
+            "chapter_number": chapter_number,
+            "candidate_id": candidate.id,
+            "draft_id": draft.id,
+            "chapter_body": draft.body_text,
+        }
+        if obligation_resolution_plan is None:
+            obligation_resolution_plan = build_resolution_plan(
+                obligations=obligation_context, form=None, answers=None, **identity
+            )
+        validate_resolution_plan(
+            obligation_resolution_plan, obligations=obligation_context, **identity
+        )
         plan = CanonCommitPlan.build(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -487,6 +520,7 @@ class CanonPreparationService:
             expected_book_state_chapter=expected_book_state_chapter,
             expected_book_revision=project.book_revision,
             quality_admission_run_id=quality_admission_run_id,
+            obligation_resolution_plan=obligation_resolution_plan,
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
             acceptance_mode=acceptance_mode,

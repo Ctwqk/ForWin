@@ -5,19 +5,26 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.canon_quality.placeholder import (
+    analyze_placeholder_leakage,
+    extract_expected_protagonist_names,
+)
+from forwin.canon_quality.readability import analyze_writer_output_readability
 from forwin.config import FormBlockingPolicy, InfrastructureConfig
 from forwin.models import Entity, Project
-from forwin.canon_quality.placeholder import analyze_placeholder_leakage, extract_expected_protagonist_names
-from forwin.canon_quality.readability import analyze_writer_output_readability
 from forwin.protocol.writer import WriterOutput
 
-from .chapter_review_form.service import DRY_RUN_RESULT_MODE, persist_form_artifact, review_chapter_with_form
 from .cache import (
     build_quality_analysis_cache_key,
     cache_json_value,
     persist_quality_projection,
     rebind_cache_payload,
     result_for_caller,
+)
+from .chapter_review_form.service import (
+    DRY_RUN_RESULT_MODE,
+    persist_form_artifact,
+    review_chapter_with_form,
 )
 from .repository import CanonQualityRepository
 from .signals import CanonQualitySignal, dedupe_signals
@@ -56,7 +63,10 @@ def analyze_writer_output_quality(
         before_chapter=chapter_number,
         limit=20,
     )
+    from forwin.narrative_obligations.resolution_evidence import context_obligations
+    obligations = context_obligations(session, project_id, chapter_number, draft_id=draft_id)
     quality_context = {
+        "obligations": cache_json_value(obligations),
         "project_premise": str(getattr(project, "premise", "") or ""),
         "project_setting_summary": str(
             getattr(project, "setting_summary", "") or ""
@@ -172,6 +182,7 @@ def analyze_writer_output_quality(
         max_schema_retries=max_schema_retries,
         blocking_policy=FormBlockingPolicy(),
         mode=resolved_mode,
+        obligations=obligations,
         character_rows=character_rows,
         countdown_rows=countdown_rows,
         open_signal_rows=open_signal_rows,
@@ -212,6 +223,9 @@ def analyze_writer_output_quality(
         deterministic_quality_report=report,
         mode=resolved_mode if resolved_mode == DRY_RUN_RESULT_MODE else "chapter_review_form",
         summary=form_result.summary,
+        form=form_result.form,
+        answers=form_result.answers,
+        validation_report=form_result.validation_report,
         review_issues=form_result.review_issues,
         raw_analyzer_results=form_result.raw_analyzer_results,
         blocking=(

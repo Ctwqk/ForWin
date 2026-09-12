@@ -12,12 +12,12 @@ from forwin.canon import (
     CanonAdmissionOutcome,
     CanonQualityGateOutcome,
 )
+from forwin.canon import quality_preparation as quality_gates_module
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.generation.pipeline_core import project_chapters as project_chapters_module
-from forwin.canon import quality_preparation as quality_gates_module
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -25,17 +25,17 @@ from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.review.candidate import CandidateReviewRequest
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
-from forwin.review.candidate import CandidateReviewRequest
-from forwin.review.repair.plan_patch import RepairPlanPatchResult
-from forwin.review.repair.control import RepairControl
-from forwin.review.telemetry import ReviewTelemetry
 from forwin.review.repair import service as repair_service_module
+from forwin.review.repair.control import RepairControl
+from forwin.review.repair.plan_patch import RepairPlanPatchResult
 from forwin.review.repair.service import (
     _attempts_for_repair_phase,
     _review_from_canon_gate_block,
 )
+from forwin.review.telemetry import ReviewTelemetry
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
@@ -517,32 +517,30 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     )
     captured: dict[str, object] = {}
     calls: list[str] = []
-    obligation = SimpleNamespace(id="obl-due", linked_plan_patch_ids=["patch-1"])
-
-    monkeypatch.setattr(
-        quality_gates_module,
-        "analyze_writer_output_quality",
-        lambda **_kwargs: SimpleNamespace(signals=[], raw_analyzer_results=[]),
+    from forwin.canon_quality.chapter_review_form.form_builder import build_form
+    from forwin.canon_quality.chapter_review_form.form_schema import (
+        ChapterReviewAnswers,
     )
-
-    def _verify_due_obligations_for_draft(**kwargs):
-        calls.append("draft_verify")
-        assert kwargs["obligations"] == [obligation]
-        assert kwargs["chapter_number"] == 18
-        assert kwargs["draft_text"] == "Ari confirms the retired engineer is Nox."
-        assert kwargs["evidence_ref"] == "draft:d18"
-        return ["obl-due"]
+    from forwin.narrative_obligations.types import NarrativeObligation
+    body = "Ari confirms the retired engineer is Nox."
+    obligation = NarrativeObligation(id="obl-due", project_id="p", origin_chapter_number=1,
+        obligation_type="identity_ambiguity", status="active", summary="Identify the retired engineer",
+        payoff_test="Confirm the engineer is Nox", deadline_chapter=18, linked_plan_patch_ids=["patch-1"])
+    form = build_form(project_id="p", chapter_number=18, chapter_text=body, obligations=[obligation])
+    assessment = {"value": "fulfilled", "evidence_quote": body, "subject_of_quote": "Nox", "confidence": .95,
+                  "explanation": "Ari confirms that Nox is the retired engineer."}
+    answers = ChapterReviewAnswers.model_validate({"project_id": "p", "chapter_number": 18,
+        "form_schema_version": form.form_schema_version, "reviewed_body_sha256": form.reviewed_body_sha256, "obligations": [{"id": "obl-due",
+        "addressed": assessment, "payoff_evidence": assessment,
+        "subject_matches": {**assessment, "value": "true"},
+        "condition_results": [{"condition": obligation.payoff_test, "assessment": assessment}]}]})
+    monkeypatch.setattr(quality_gates_module, "analyze_writer_output_quality",
+        lambda **_kwargs: SimpleNamespace(signals=[], raw_analyzer_results=[], form=form, answers=answers))
 
     def _evaluate_canon_admission(**kwargs):
         captured.update(kwargs)
         return gate
 
-    monkeypatch.setattr(
-        quality_gates_module,
-        "verify_due_obligations_for_draft",
-        _verify_due_obligations_for_draft,
-        raising=False,
-    )
     monkeypatch.setattr(
         quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission
     )
@@ -622,7 +620,8 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     assert isinstance(outcome, CanonQualityGateOutcome)
     assert outcome.gate_result is gate
     assert captured["resolved_obligation_ids"] == ["obl-due"]
-    assert calls == ["draft_verify", "save_admission", "event"]
+    assert calls == ["save_admission", "event"]
+    assert outcome.obligation_resolution_plan.resolved_obligation_ids == ["obl-due"]
 
 
 def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypatch):

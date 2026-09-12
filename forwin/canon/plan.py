@@ -8,6 +8,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from forwin.naming import EntityAdmissionPlan
+from forwin.narrative_obligations.resolution_evidence import ObligationResolutionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 
 from .outbox_events import (
@@ -48,6 +49,7 @@ class CanonCommitPlan(_FrozenCanonModel):
     expected_book_revision: int = 0
     revision_validation_id: str = ""
     quality_admission_run_id: str = ""
+    obligation_resolution_plan: ObligationResolutionPlan | None = None
     approved_book_state_changes: ApprovedGraphDeltaSet
     entity_admission_plan: EntityAdmissionPlan
     acceptance_mode: str = "normal"
@@ -95,6 +97,7 @@ class CanonCommitPlan(_FrozenCanonModel):
         expected_book_revision: int = 0,
         revision_validation_id: str = "",
         quality_admission_run_id: str = "",
+        obligation_resolution_plan: ObligationResolutionPlan | None = None,
         approved_book_state_changes: ApprovedGraphDeltaSet,
         entity_admission_plan: EntityAdmissionPlan,
         acceptance_mode: str = "normal",
@@ -131,6 +134,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             expected_book_revision=expected_book_revision,
             revision_validation_id=revision_validation_id,
             quality_admission_run_id=quality_admission_run_id,
+            obligation_resolution_plan=obligation_resolution_plan,
         )
         normalized_commit_id = canon_commit_id(idempotency_key)
         normalized_outbox = build_canon_recovery_events(
@@ -154,6 +158,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             expected_book_revision=max(0, int(expected_book_revision)),
             revision_validation_id=revision_validation_id,
             quality_admission_run_id=quality_admission_run_id,
+            obligation_resolution_plan=obligation_resolution_plan,
             project_id=normalized_project_id,
             chapter_number=normalized_chapter,
             candidate_id=str(candidate_id or "").strip(),
@@ -196,6 +201,7 @@ def _idempotency_key(
     expected_book_revision: int = 0,
     revision_validation_id: str = "",
     quality_admission_run_id: str = "",
+    obligation_resolution_plan: ObligationResolutionPlan | None = None,
 ) -> str:
     payload = {
         "schema_version": "v1",
@@ -217,6 +223,8 @@ def _idempotency_key(
         payload["revision_validation_id"] = revision_validation_id
     if quality_admission_run_id:
         payload["quality_admission_run_id"] = quality_admission_run_id
+    if obligation_resolution_plan is not None:
+        payload["obligation_resolution_plan"] = obligation_resolution_plan.model_dump(mode="json")
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

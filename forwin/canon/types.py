@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from forwin.canon_quality.signals import CanonAdmissionGateResult
+from forwin.narrative_obligations.resolution_evidence import ObligationResolutionPlan
 
 if TYPE_CHECKING:
     from forwin.canon.plan import CanonCommitPlan
@@ -15,6 +16,7 @@ class CanonQualityGateOutcome:
     blocked_path: str = ""
     gate_result: CanonAdmissionGateResult | None = None
     quality_admission_run_id: str = ""
+    obligation_resolution_plan: ObligationResolutionPlan | None = None
 
     @property
     def blocked(self) -> bool:

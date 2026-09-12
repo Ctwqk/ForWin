@@ -24,8 +24,14 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.maintenance import PostCanonMaintenanceRun
+from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.resolution_evidence import (
+    apply_resolution_plan,
+    context_obligations,
+    validate_resolution_plan,
+)
 from forwin.outbox.store import enqueue_outbox_event
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
 from forwin.runtime.policy_store import ProjectPolicyStore
@@ -148,6 +154,65 @@ class CanonAdmissionService:
                     plan=plan,
                     retained_chapter_delta_ids=frozenset(),
                 )
+
+                # Repository mutations also take Project -> obligation locks.
+                list(
+                    session.scalars(
+                        select(NarrativeObligationRow)
+                        .where(NarrativeObligationRow.project_id == project.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                obligations = context_obligations(
+                    session,
+                    project.id,
+                    plan.chapter_number,
+                    draft_id=candidate.candidate_draft_id,
+                )
+                resolution = plan.obligation_resolution_plan
+                if resolution is not None:
+                    try:
+                        validate_resolution_plan(
+                            resolution,
+                            obligations=obligations,
+                            project_id=project.id,
+                            chapter_number=plan.chapter_number,
+                            candidate_id=candidate.id,
+                            draft_id=candidate.candidate_draft_id,
+                            chapter_body=session.get(
+                                ChapterDraft, candidate.candidate_draft_id
+                            ).body_text,
+                        )
+                    except ValueError as exc:
+                        raise CanonStaleVersion(str(exc)) from exc
+                resolved_ids = set(
+                    resolution.resolved_obligation_ids if resolution else []
+                )
+                from forwin.canon_quality.gate import (
+                    normalize_gate_mode,
+                    obligation_resolution_required,
+                )
+
+                gate_mode = normalize_gate_mode(
+                    ProjectPolicyStore(session).load(project).policy.canon.quality_gate
+                )
+                for obligation in obligations:
+                    if (
+                        obligation_resolution_required(
+                            obligation,
+                            current_chapter=plan.chapter_number,
+                            is_final_chapter=bool(
+                                project.target_total_chapters
+                                and plan.chapter_number >= project.target_total_chapters
+                            ),
+                            p0_only=gate_mode in {"pulp_fatal", "serial_fatal"},
+                        )
+                        and obligation.id not in resolved_ids
+                    ):
+                        raise CanonStaleVersion(
+                            f"obligation_due_unresolved:{obligation.id}"
+                        )
 
                 commit_id = plan.canon_commit_id
                 candidate_repository = CandidateDraftRepository(session)
@@ -273,6 +338,10 @@ class CanonAdmissionService:
                     origin_chapter_number=plan.chapter_number,
                     acceptance_id=commit_id, draft_id=candidate.candidate_draft_id,
                 )
+                chapter.active_commit_id = commit_id
+                session.flush()
+                if resolution is not None:
+                    apply_resolution_plan(session, resolution)
                 session.flush()
                 inject("obligation")
 
@@ -280,7 +349,6 @@ class CanonAdmissionService:
                 CanonQualityRepository(session).bind_acceptance(project_id=project.id,chapter_number=chapter.chapter_number,
                     draft_id=candidate.candidate_draft_id,acceptance_id=commit_id,
                     quality_admission_run_id=getattr(plan,"quality_admission_run_id",""))
-                chapter.active_commit_id = commit_id
                 project.book_revision += 1
                 from forwin.novel_export.events import enqueue_book_export
 

@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm, FormAnswer
 
-
 PRONOUN_SUBJECTS = {
     "他",
     "她",
@@ -175,6 +174,19 @@ def validate_answers(
             blocking_values=OBLIGATION_BLOCKING_VALUES,
             min_blocking_confidence=min_blocking_confidence,
         )
+        if answer.addressed.value == "fulfilled":
+            from forwin.narrative_obligations.resolution_evidence import (
+                fulfillment_refs,
+            )
+            ask = next((item for item in form.obligations if item.id == answer.id), None)
+            if ask is None or not fulfillment_refs(ask, answer, chapter_text):
+                path = f"obligations[{index}].addressed"
+                if path in report.validated:
+                    report.validated.remove(path)
+                report.rejected.append(RejectedAnswer(
+                    path=path, reason="unverified_fulfillment",
+                    message="Fulfillment requires exact evidence for the actual subject, payoff and every condition.",
+                ))
         if answer.payoff_evidence is not None:
             _validate_form_answer(
                 report=report,

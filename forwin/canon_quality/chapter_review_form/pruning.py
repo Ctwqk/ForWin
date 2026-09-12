@@ -102,7 +102,7 @@ def select_obligations_to_ask(*, obligations: list[Any], chapter_number: int) ->
             continue
         deadline = int(row_value(obligation, "deadline_chapter", 0) or 0)
         must_resolve = bool(row_value(obligation, "must_resolve_now", False))
-        if must_resolve or (deadline and deadline <= int(chapter_number or 0)):
+        if status == "active" or must_resolve or (deadline and deadline <= int(chapter_number or 0)):
             selected.append(obligation)
     return selected
 

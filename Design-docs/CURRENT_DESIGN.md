@@ -4,6 +4,8 @@
 
 2026-09-12 补充工作：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。以下已有实现说明不代表这些新增工作已完成，进度以执行计划和验证记录为准。
 
+2026-09-12 A1 开发实现：普通续写与历史修订现在复用 ChapterReviewForm 的主体及逐项兑现条件审阅，表单/答案保存实际审阅正文 SHA-256，quality cache v2 保留原表单、答案和校验报告。不可变义务证据计划绑定完整合同、候选、draft、正文及审阅身份；Canon preparation 冻结依赖，admission 在项目/义务锁内复核，并把义务激活、兑现、来源审计与 active Canon 指针同事务写入。接纳后仅读取已提交兑现结果和处理到期，不再以关键词清账。未到期未知维持 active；到期/终章要求沿用现有 strict/pulp 策略，历史修订保留完整后缀及六维覆盖。旧 resolved 不重置、不补造证据。此处仅记录 A1 工程实现，不代表后续工作包、真实模型质量或长跑验收完成。
+
 更新：2026-09-10。范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
 源码起点是 `master@521228871a5752ebe8572c057caa9f4944bb0295`。前轮[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)和[自主性修复记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)只解释历史依据；本轮工作包、独立评审和未完成项见[执行计划](../docs/superpowers/plans/2026-09-09-forwin-three-stage.md)。

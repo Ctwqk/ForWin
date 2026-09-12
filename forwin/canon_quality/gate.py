@@ -6,7 +6,6 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 
 from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
-
 GateMode = Literal["off", "shadow", "fatal_only", "pulp_fatal", "serial_fatal", "strict"]
 
 _FATAL_ONLY_SIGNAL_TYPES = {
@@ -357,6 +356,21 @@ def _result_can_block(result: dict, *, min_confidence: float, require_evidence: 
     return False
 
 
+def obligation_resolution_required(
+    obligation: NarrativeObligation, *, current_chapter: int,
+    is_final_chapter: bool = False, p0_only: bool = False,
+) -> bool:
+    """Shared payoff requirement for the quality gate and locked admission."""
+    if obligation.status in {"resolved", "waived"}:
+        return False
+    if p0_only and obligation.priority != "P0" and obligation.hardness != "hard_blocker":
+        return False
+    return bool(
+        (obligation.status == "active" and obligation.deadline_chapter <= current_chapter)
+        or (is_final_chapter and obligation.priority in {"P0", "P1"})
+    )
+
+
 def _obligation_blocking_reasons(
     *,
     obligations: list[NarrativeObligation],
@@ -381,7 +395,7 @@ def _obligation_blocking_reasons(
         if obligation.status == "expired":
             reasons.append(f"expired_obligation:{obligation_id}")
         elif obligation.status == "active":
-            if int(obligation.deadline_chapter or 0) <= int(current_chapter or 0) and obligation_id not in draft_resolved:
+            if obligation_resolution_required(obligation, current_chapter=current_chapter, p0_only=p0_only) and obligation_id not in draft_resolved:
                 reasons.append(f"obligation_due_unresolved:{obligation_id}")
         elif obligation.status != "planned":
             reasons.append(f"obligation_not_planned:{obligation_id}")
@@ -391,7 +405,7 @@ def _obligation_blocking_reasons(
             reasons.append(f"missing_deadline:{obligation_id}")
         if not str(obligation.payoff_test or "").strip():
             reasons.append(f"missing_payoff_test:{obligation_id}")
-        if is_final_chapter and obligation.priority in {"P0", "P1"} and obligation_id not in draft_resolved:
+        if is_final_chapter and obligation.priority in {"P0", "P1"} and obligation_resolution_required(obligation, current_chapter=current_chapter, is_final_chapter=True, p0_only=p0_only) and obligation_id not in draft_resolved:
             reasons.append(f"final_obligation_not_cleared:{obligation_id}")
         if not obligation.linked_plan_patch_ids:
             reasons.append(f"missing_plan_patch:{obligation_id}")

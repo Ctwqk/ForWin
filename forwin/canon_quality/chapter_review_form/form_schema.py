@@ -73,12 +73,23 @@ class ObligationReviewAsk(BaseModel):
     deadline_chapter: int
     must_resolve_now: bool
     payoff_test: str
+    subject_refs: list[str] = Field(default_factory=list)
+    resolution_conditions: list[str] = Field(default_factory=list)
+    contract_fingerprint: str = ""
+    contract_json: str = ""
+
+
+class ObligationConditionAnswer(BaseModel):
+    condition: str
+    assessment: FormAnswer
 
 
 class ObligationReviewAnswer(BaseModel):
     id: str
     addressed: FormAnswer
     payoff_evidence: FormAnswer | None = None
+    subject_matches: FormAnswer | None = None
+    condition_results: list[ObligationConditionAnswer] = Field(default_factory=list)
 
 
 class OpenSignalReviewAsk(BaseModel):
@@ -133,6 +144,7 @@ class ChapterReviewForm(BaseModel):
     project_id: str
     chapter_number: int
     form_schema_version: str
+    reviewed_body_sha256: str = ""
     characters: list[CharacterReviewAsk] = Field(default_factory=list)
     countdowns: list[CountdownReviewAsk] = Field(default_factory=list)
     obligations: list[ObligationReviewAsk] = Field(default_factory=list)
@@ -144,6 +156,7 @@ class ChapterReviewAnswers(BaseModel):
     project_id: str
     chapter_number: int
     form_schema_version: str
+    reviewed_body_sha256: str = ""
     characters: list[CharacterReviewAnswer] = Field(default_factory=list)
     countdowns: list[CountdownReviewAnswer] = Field(default_factory=list)
     obligations: list[ObligationReviewAnswer] = Field(default_factory=list)

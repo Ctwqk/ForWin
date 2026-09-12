@@ -170,33 +170,19 @@ def apply_reviewed_resolutions(
         raise history.ObligationProvenanceUnknown(
             "reviewed obligation tracked identity coverage changed"
         )
-    resolutions = []
-    for answer in answers:
-        addressed = answer["addressed"]
-        if addressed.get("value") != "fulfilled":
-            continue
-        quote = addressed.get("evidence_quote", "")
-        start = chapter_body.find(quote) if quote else -1
-        if start < 0 or addressed.get("confidence", 0) < 0.8:
-            raise history.ObligationProvenanceUnknown(
-                "reviewed fulfillment needs an exact grounded body quote"
-            )
-        resolutions.append(
-            (answer["id"], answer, f"body:{body_hash}#{start}:{start + len(quote)}")
-        )
-    # Validate every answer before mutating any state or journal head.
-    for obligation_id, answer, ref in resolutions:
-        repo.mark_obligation_resolved(
-            obligation_id,
-            verifier_result={
-                "source": "historical_chapter_review_form",
-                "status": "pass",
-                "answer": answer,
-            },
-            evidence_refs=[ref],
-            resolution_chapter=chapter_number,
-        )
-    return [item[0] for item in resolutions]
+    from .resolution_evidence import apply_resolution_plan, build_resolution_plan
+
+    plan = build_resolution_plan(
+        obligations=list(active.values()), form=review.get("form"), answers=review.get("answers"),
+        project_id=project_id, chapter_number=chapter_number,
+        candidate_id=overlay["acceptance_id"], draft_id=overlay["draft_id"],
+        chapter_body=chapter_body, review_source="historical_chapter_review_form",
+        validation_report=review.get("validation_report"),
+    )
+    claimed = {answer["id"] for answer in answers if answer["addressed"].get("value") == "fulfilled"}
+    if claimed != set(plan.resolved_obligation_ids):
+        raise history.ObligationProvenanceUnknown("reviewed fulfillment needs complete grounded subject/condition evidence quotes")
+    return apply_resolution_plan(session, plan)
 
 
 def _assign(row, snapshot):

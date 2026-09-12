@@ -6,7 +6,10 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import CharacterStateTransitionRow, QualityAnalysisRunRow
+from forwin.models.canon_quality import (
+    CharacterStateTransitionRow,
+    QualityAnalysisRunRow,
+)
 from forwin.protocol.writer import WriterOutput
 from tests.postgres import postgres_test_url
 
@@ -126,6 +129,10 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
             assert client.calls == 3
             assert draft_review.summary == canon_gate.summary
             assert canon_gate.draft_id == "draft-1"
+            assert canon_gate.form == draft_review.form
+            assert canon_gate.answers == draft_review.answers
+            assert canon_gate.form.characters[0].name == "林青"
+            assert "characters[0].life_state" in canon_gate.validation_report.validated
             assert (
                 canon_gate.raw_analyzer_results[0]["character_transitions"][0]["payload"][
                     "draft_id"
@@ -165,3 +172,66 @@ def _payload(project_id: str, quote: str) -> dict[str, object]:
         "new_observations": {},
         "chapter_summary": "表单测试。",
     }
+
+
+def test_cached_obligation_review_keeps_actual_contract_answers_and_invalidates_contract_drift():
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.narrative_obligations.repository import NarrativeObligationRepository
+    from forwin.narrative_obligations.resolution_evidence import (
+        build_resolution_plan,
+        context_obligations,
+    )
+    from forwin.narrative_obligations.types import NarrativeObligation
+    engine = get_engine(postgres_test_url('obligation-quality-cache'))
+    init_db(engine)
+    factory = get_session_factory(engine)
+    try:
+        with factory.begin() as session:
+            project = Project(title='义务缓存', premise='林青进入档案室。', genre='悬疑', target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            obligation = NarrativeObligationRepository(session).create_obligation(NarrativeObligation(
+                project_id=project.id, origin_chapter_number=0, obligation_type='custom_reader_promise',
+                status='active', summary='解释钥匙来源', payoff_test='解释林青钥匙来源',
+                subject_refs=['林青'], deadline_chapter=12, resolution_conditions=['出示遗书作为客观证据']))
+            body = '林青展示父亲遗书，铜钥匙正是父亲在临终前托付给她的。'
+            class Client:
+                calls = 0
+                def complete_json(self, **kwargs):
+                    self.calls += 1
+                    content = kwargs['messages'][1]['content']
+                    payload = json.loads(content[content.index('{'):])
+                    form = payload['form']
+                    ask = form['obligations'][0]
+                    assessment = {'value': 'fulfilled', 'evidence_quote': body, 'subject_of_quote': '林青',
+                        'confidence': .95, 'explanation': '父亲遗书证实铜钥匙临终托付给林青。'}
+                    return {**{key: form[key] for key in ('project_id', 'chapter_number', 'form_schema_version')},
+                        'obligations': [{'id': ask['id'], 'addressed': assessment, 'payoff_evidence': assessment,
+                            'subject_matches': {**assessment, 'value': 'true'},
+                            'condition_results': [{'condition': c, 'assessment': assessment}
+                                                  for c in [ask['payoff_test'], *ask['resolution_conditions']]]}]}
+            client = Client()
+            output = WriterOutput(project_id=project.id, chapter_number=11, title='遗书', body=body, end_of_chapter_summary='遗书证实了钥匙来源。')
+            def analyze(draft_id):
+                return analyze_writer_output_quality(session=session, project_id=project.id, chapter_number=11,
+                    writer_output=output, draft_id=draft_id, mode='primary', llm_client=client)
+            first = analyze('old-draft')
+            cached = analyze('new-draft')
+            assert client.calls == 1
+            assert cached.form == first.form and cached.answers == first.answers
+            assert cached.validation_report.rejected == []
+            plan = build_resolution_plan(obligations=context_obligations(session, project.id, 11),
+                form=cached.form, answers=cached.answers, project_id=project.id, chapter_number=11,
+                candidate_id='new-candidate', draft_id=cached.draft_id, chapter_body=body)
+            assert plan.resolved_obligation_ids == [obligation.id]
+            assert plan.evidence[0].draft_id == 'new-draft'
+            row = session.get(NarrativeObligationRow, obligation.id)
+            row.resolution_conditions_json = '["出示遗书作为客观证据", "证实遗书未被伪造"]'
+            session.flush()
+            changed = analyze('newer-draft')
+            assert client.calls == 2
+            assert changed.form.obligations[0].resolution_conditions[-1] == '证实遗书未被伪造'
+            assert changed.form.obligations[0].contract_fingerprint != first.form.obligations[0].contract_fingerprint
+            assert row.status == 'active'
+    finally:
+        engine.dispose()

@@ -111,6 +111,7 @@ def review_historical_chapter_with_form(
         prefix_data = prefix.model_dump(mode="json")
         form = _unpruned_form(project_id, chapter_number, prefix, target_total_chapters)
         body_hash = _sha256(body)
+        form.reviewed_body_sha256 = body_hash
         prefix_hash = _sha256(
             json.dumps(
                 prefix_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -281,6 +282,7 @@ def _validate_envelope(raw, form, body_hash, prefix_hash):
             "Historical response body or prefix identity does not match its input."
         )
     answers = ChapterReviewAnswers.model_validate(raw.get("answers"))
+    answers.reviewed_body_sha256 = body_hash  # The historical envelope was verified above.
     if (answers.project_id, answers.chapter_number, answers.form_schema_version) != (
         form.project_id,
         form.chapter_number,

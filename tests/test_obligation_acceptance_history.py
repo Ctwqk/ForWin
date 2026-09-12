@@ -262,6 +262,14 @@ def test_acceptance_activation_cannot_omit_or_misattribute_draft(quality_session
 def _historical_form(*, body="Body 2", value="fulfilled", quote="Body 2"):
     import hashlib
 
+    from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
+    from forwin.canon_quality.chapter_review_form.form_builder import _obligation_ask
+    obligation = NarrativeObligation(id="promise", project_id="book", origin_chapter_number=1,
+        origin_draft_id="draft-1", status="active", obligation_type="motivation_gap",
+        summary="Explain why Lin helped", deadline_chapter=3, payoff_test="Give a concrete reason")
+    form_identity = {"project_id": "book", "chapter_number": 2, "form_schema_version": FORM_SCHEMA_VERSION, "reviewed_body_sha256": hashlib.sha256(body.encode()).hexdigest()}
+    assessment = {"value": "fulfilled", "confidence": .95, "evidence_quote": quote,
+                  "subject_of_quote": "Lin", "explanation": "The quoted passage establishes Lin's concrete reason."}
     body_hash = hashlib.sha256(body.encode()).hexdigest()
     return {
         "review": {
@@ -269,16 +277,16 @@ def _historical_form(*, body="Body 2", value="fulfilled", quote="Body 2"):
             "chapter_number": 2,
             "draft_id": "draft-2",
             "blocking": False,
-            "form": {"obligations": [{"id": "promise"}]},
+            "form": {**form_identity, "obligations": [_obligation_ask(obligation, current_chapter=2).model_dump(mode="json")]},
             "answers": {
+                **form_identity,
                 "obligations": [
                     {
                         "id": "promise",
-                        "addressed": {
-                            "value": value,
-                            "confidence": 0.95,
-                            "evidence_quote": quote,
-                        },
+                        "addressed": {**assessment, "value": value},
+                        "payoff_evidence": assessment,
+                        "subject_matches": {**assessment, "value": "true"},
+                        "condition_results": [{"condition": obligation.payoff_test, "assessment": assessment}],
                     }
                 ]
             },

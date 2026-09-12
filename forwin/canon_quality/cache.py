@@ -15,7 +15,7 @@ from .chapter_review_form import FORM_SCHEMA_VERSION
 from .repository import CanonQualityRepository
 from .types import CanonQualityAnalysisResult, QualityAnalysisCachePayload
 
-QUALITY_ANALYSIS_VERSION = "v1"
+QUALITY_ANALYSIS_VERSION = "v2"
 
 
 def build_quality_analysis_cache_key(

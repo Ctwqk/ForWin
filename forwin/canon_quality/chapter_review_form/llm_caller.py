@@ -60,7 +60,17 @@ SYSTEM_PROMPT = (
     "optional new observation when no exact quote supports it. "
     "Each tracked answer array must contain exactly one answer for every matching item in the form "
     "and no unasked items. Put newly observed entities only in new_observations. "
-    "If uncertain, set confidence below 0.5 and explain."
+    "For every obligation, judge its ACTUAL payoff_test and every resolution_condition against subject_refs. "
+    "A shared keyword or any causal explanation is never payoff evidence. Distinguish objective facts from "
+    "negation, hypotheses, future promises and unsupported character claims. Another person's payoff does not count. "
+    "Use addressed=fulfilled only when the complete contract has happened; otherwise use partial, unaddressed or unknown. "
+    "For fulfilled, provide payoff_evidence=fulfilled, subject_matches=true with an explanation of the actual "
+    "subject mapping, and exactly one condition_results item per payoff_test and each resolution_condition "
+    "(deduplicate identical conditions), echoing the exact condition text, assessment.value=fulfilled. "
+    "Every assessment needs confidence >=0.8, an exact contiguous body quote identifying a unique occurrence, explicit subject and an explanation "
+    "of how that quote establishes that condition now. Evidence of intent to fulfill later is unaddressed. "
+    "Do not set subject_matches=true merely because the subject name occurs in the body. "
+    "If uncertain, use unknown, confidence below 0.5 and explain."
 )
 
 
@@ -155,7 +165,12 @@ def call_form(
                     schema_name="chapter_review_evidence",
                 )
                 continue
-            return answers
+            # Capture the actual request body identity here, before any cache
+            # reuse or candidate rebinding. Never infer it from a later caller.
+            import hashlib
+            return answers.model_copy(update={
+                "reviewed_body_sha256": hashlib.sha256(chapter_text.encode("utf-8")).hexdigest()
+            })
 
     raise ChapterReviewFormSchemaInvalid(last_error or "LLM response did not match ChapterReviewAnswers schema.")
 

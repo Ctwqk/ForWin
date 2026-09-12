@@ -72,17 +72,17 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 2: B — 持久、原子的续跑交接
 
-**Files:** Create `forwin/generation/continuation_events.py`, `tests/test_generation_continuation_outbox.py`; modify `forwin/application/{generation,generation_execution}.py`, `forwin/generation/{auto_continue,task_repository,task_payload}.py`, `forwin/models/task.py`, `forwin/outbox/handlers.py`, `forwin/runtime/container.py`, `forwin/http/project_support.py` (task pause/cancel owner), new forward migration after current Alembic head.
+**Files:** Create `forwin/generation/continuation_events.py`, `tests/test_generation_continuation_outbox.py`; modify `forwin/application/{generation,generation_execution}.py`, `forwin/generation/{auto_continue,task_repository}.py`, `forwin/models/task.py`, `forwin/outbox/handlers.py`, `forwin/http/project_support.py` (task pause/cancel owner), new forward migration after current Alembic head. Verify existing `forwin/generation/task_payload.py` frozen fields and `forwin/runtime/container.py` handler integration; no edit required if the existing contract is sufficient.
 
 **Interfaces:** `GenerationApplicationService.finish_claimed_task(task_id, result, *, worker_id, lease_epoch)` owns finalization; deterministic `generation-continuation:{parent_task_id}:v1` event carries typed result. Consumer uses a caller-owned Session; `GenerationTask.continuation_parent_task_id` is nullable and unique; deterministic `AUTO_CONTINUE_DECISION` audit ID persists child-or-stop decision. Parent frozen task payload supplies policy and run scope.
 
-- [ ] RED：真实 application/worker tests 覆盖完成事务失败、完成后消费前进程退出、子任务提交后 ack 丢失、子任务完成/软删除后重复投递、双 consumer、暂停/取消并发、review reset 后入队失败、变更项目策略、恢复路径及 stale lease。
-- [ ] Run new suite and existing `tests/test_generation_application_service.py tests/test_generation_worker_canon_recovery.py tests/test_generation_auto_continue.py`，确认交接丢失/重复创建或策略漂移的失败。
-- [ ] 前向迁移增加可空唯一父任务字段，旧行保持 NULL；新增事件 schema/handler，不建第二调度器或 intent table。
-- [ ] 最终任务状态与 event 在一个 fenced transaction 写入；所有完成路径共用入口；进度回调只写进度，移除 best-effort completion callback。已提交完成后的显示错误不回改结果。
-- [ ] 消费按 Project → GenerationTask 锁定，原子重查控制/维护/目标/容量/其他活跃任务，创建子任务与 review reset、audit 决定同事务。未消费 completed 父任务可暂停该意图；竞争失败不声称已经暂停。旧事件遇新运行记录 superseded。
-- [ ] 子任务复用父 policy_snapshot/policy_version/run_until_chapter/long_run_mode/isolated，仅更新身份批次；若项目策略版本已被用户修改，旧意图记录 policy_changed 并停止，不伪造新版本或弱化 Canon stale 检查。用例断言旧快照未被改写、无旧策略冒充新版本的子任务；新设置由显式新运行采用。数据库唯一键和既定 audit 决定处理全部 replay。
-- [ ] GREEN：上述 suite、outbox worker/lease/laziness、capacity、migration preservation；提交 `fix(generation): persist idempotent continuation intent with task completion` 并审查。
+- [x] RED：真实 application/worker tests 覆盖完成事务失败、完成后消费前进程退出、子任务提交后 ack 丢失、子任务完成/软删除后重复投递、双 consumer、暂停/取消并发、review reset 后入队失败、变更项目策略、恢复路径及 stale lease。
+- [x] Run new suite and existing `tests/test_generation_application_service.py tests/test_generation_worker_canon_recovery.py tests/test_generation_auto_continue.py`，确认交接丢失/重复创建或策略漂移的失败。
+- [x] 前向迁移增加可空唯一父任务字段，旧行保持 NULL；新增事件 schema/handler，不建第二调度器或 intent table。
+- [x] 最终任务状态与 event 在一个 fenced transaction 写入；所有完成路径共用入口；进度回调只写进度，移除 best-effort completion callback。已提交完成后的显示错误不回改结果。
+- [x] 消费按 Project → GenerationTask 锁定，原子重查控制/维护/目标/容量/其他活跃任务，创建子任务与 review reset、audit 决定同事务。未消费 completed 父任务可暂停该意图；竞争失败不声称已经暂停。旧事件遇新运行记录 superseded。
+- [x] 子任务复用父 policy_snapshot/policy_version/run_until_chapter/long_run_mode/isolated，仅更新身份批次；若项目策略版本已被用户修改，旧意图记录 policy_changed 并停止，不伪造新版本或弱化 Canon stale 检查。用例断言旧快照未被改写、无旧策略冒充新版本的子任务；新设置由显式新运行采用。数据库唯一键和既定 audit 决定处理全部 replay。
+- [x] GREEN：上述 suite、outbox worker/lease/laziness、capacity、migration preservation；提交 `fix(generation): persist idempotent continuation intent with task completion` 并审查。
 
 ## Task 3: A2 — 义务阻塞接入有限修复
 
@@ -97,7 +97,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 4: C1 — 固定读取基线并拒绝失效派生事实
 
-**Files:** Create `forwin/retrieval/source_identity.py`; modify `forwin/retrieval/{memory_index,broker_core/broker}.py`, `forwin/protocol/context.py`, `forwin/book_state/query.py`, `forwin/knowledge_system/{context,page_repository,store}.py`, `forwin/obsidian/exporter.py`, `forwin/models/knowledge.py`, `forwin/llm_kb/{compiler,vector_index,retriever}.py`, new forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_knowledge_system_v46.py`, broker and prompt regressions.
+**Files:** Create `forwin/retrieval/source_identity.py`; modify `forwin/retrieval/{memory_index,broker_core/broker}.py`, `forwin/protocol/context.py`, `forwin/book_state/query.py`, `forwin/context/request.py`, `forwin/context/assembler_core/assembler.py`, relevant `forwin/context/providers/`, `forwin/knowledge_system/{context,page_repository,store,canon_projection}.py`, `forwin/obsidian/exporter.py`, `forwin/models/knowledge.py`, `forwin/llm_kb/{compiler,vector_index,retriever}.py`, new forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_knowledge_system_v46.py`, broker and prompt regressions.
 
 **Interfaces:** 不可变 `CanonReadBaseline(project_id, book_revision, as_of_chapter)`；batch active-source selector；纯函数语义 page dependency fingerprints。MemorySnippet 增加来源 ID/hash/embedding 身份，旧字段默认空且不具有效性。broker context 在基线变化时最多重建一次。
 

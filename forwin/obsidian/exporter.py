@@ -150,9 +150,8 @@ class ObsidianExporter:
         map_edges: list[tuple[str, str, str]] = []
 
         self._write_rules(root)
-        project = self.session.get(Project, project_id)
         index_path = self._write_index(
-            root, project_id, project.title if project else project_id, as_of
+            root, project_id, self._dependency_project_title, as_of
         )
         page_paths.append(index_path)
 

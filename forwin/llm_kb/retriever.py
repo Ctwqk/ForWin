@@ -38,13 +38,13 @@ class LLMKnowledgeBaseRetriever:
         session=None,
         baseline=None,
     ) -> list[dict[str, Any]]:
-        from .source_validation import validated_manifest, validated_file
+        from .source_validation import compiled_manifest, validated_manifest, validated_file
         from .vector_index import _collect_project_sections
 
         manifest = (
             validated_manifest(self.root, project_id, session, baseline)
             if baseline is not None
-            else None
+            else (compiled_manifest(self.root, project_id) or None)
         )
         if manifest is not None and not manifest:
             return []
@@ -58,7 +58,7 @@ class LLMKnowledgeBaseRetriever:
                     as_of_chapter=manifest["as_of_chapter"],
                     projection_version=manifest["projection_version"],
                 )
-                if validated_file(self.root, project_id, row["file_key"], manifest)
+                if validated_file(self.root, project_id, row.get("source_file_key", row["file_key"]), manifest)
                 is not None
             }
         records = [

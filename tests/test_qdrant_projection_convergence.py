@@ -10,6 +10,8 @@ from forwin.retrieval.memory_index import HashTextEmbedder
 from forwin.llm_kb.vector_index import (
     LLMKBVectorIndex,
     _existing_points_by_normalized_id,
+    _collect_project_sections,
+    LLM_KB_PROJECTION_VERSION,
 )
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
@@ -32,6 +34,13 @@ def _vector_index(root: Path, client: FakeQdrantClient) -> LLMKBVectorIndex:
         qdrant_client=client,
         qdrant_models=FakeQdrantModels,
     )
+
+
+def _search_current(index, root, source_digest, as_of_chapter):
+    sections = _collect_project_sections(root / "project-1", source_digest=source_digest,
+        as_of_chapter=as_of_chapter, projection_version=LLM_KB_PROJECTION_VERSION)
+    return index.search("project-1", "state", as_of_chapter=as_of_chapter,
+        source_sections={(section["file_key"], section["section_key"]): section for section in sections})
 
 
 def _owned_points(client: FakeQdrantClient, project_id: str) -> dict[str, object]:
@@ -63,7 +72,7 @@ def _insert_foreign_point(
     return point_id
 
 
-def test_rebuild_updates_and_deletes_only_owned_stale_points(tmp_path: Path) -> None:
+def test_rebuild_retains_other_generations_and_replays_current_points(tmp_path: Path) -> None:
     client = FakeQdrantClient()
     _write_current_state(
         tmp_path,
@@ -101,10 +110,15 @@ def test_rebuild_updates_and_deletes_only_owned_stale_points(tmp_path: Path) -> 
 
         assert second["section_count"] == 1
         assert second["upserted_section_count"] == 1
-        assert second["deleted_section_count"] == 1
+        assert second["deleted_section_count"] == 0
+        assert second["retained_other_generation_count"] == 2
         owned = _owned_points(client, "project-1")
-        assert len(owned) == 1
-        payload = next(iter(owned.values())).payload
+        assert len(owned) == 3
+        current = [point for point in owned.values() if point.payload["source_digest"] == "digest-2"]
+        assert len(current) == 1
+        payload = current[0].payload
+        records = _search_current(index, tmp_path, "digest-2", 2)
+        assert [record.text for record in records] == ["# Current\nnew state"]
         assert payload["text"] == "# Current\nnew state"
         assert payload["as_of_chapter"] == 2
         assert payload["source_digest"] == "digest-2"
@@ -159,7 +173,7 @@ def test_non_ascii_and_repeated_headings_have_distinct_stable_points(
     assert replay["upserted_section_count"] == 0
 
 
-def test_target_metadata_change_updates_existing_payload(tmp_path: Path) -> None:
+def test_target_metadata_change_creates_new_identity_and_repairs_its_payload(tmp_path: Path) -> None:
     client = FakeQdrantClient()
     _write_current_state(tmp_path, "project-1", "# Current\nstable state\n")
     index = _vector_index(tmp_path, client)
@@ -174,7 +188,7 @@ def test_target_metadata_change_updates_existing_payload(tmp_path: Path) -> None
             source_digest="digest-2",
             as_of_chapter=2,
         )
-        point = next(iter(_owned_points(client, "project-1").values()))
+        point = next(point for point in _owned_points(client, "project-1").values() if point.payload["source_digest"] == "digest-2")
         point.payload["obsolete_field"] = "remove-me"
         obsolete_result = index.rebuild_project(
             "project-1",
@@ -186,14 +200,15 @@ def test_target_metadata_change_updates_existing_payload(tmp_path: Path) -> None
 
     assert result["upserted_section_count"] == 1
     assert result["skipped_section_count"] == 0
-    payload = next(iter(_owned_points(client, "project-1").values())).payload
+    payload = next(point for point in _owned_points(client, "project-1").values() if point.payload["source_digest"] == "digest-2").payload
+    assert len(_owned_points(client, "project-1")) == 2
     assert payload["as_of_chapter"] == 2
     assert payload["source_digest"] == "digest-2"
     assert obsolete_result["upserted_section_count"] == 1
     assert "obsolete_field" not in payload
 
 
-def test_delete_failure_fails_rebuild_and_preserves_stale_point(
+def test_rebuild_does_not_require_delete_and_preserves_other_content_versions(
     tmp_path: Path,
 ) -> None:
     class DeleteFails(FakeQdrantClient):
@@ -218,10 +233,13 @@ def test_delete_failure_fails_rebuild_and_preserves_stale_point(
         _write_current_state(tmp_path, "project-1", "# Current\nstate\n")
         client.fail_delete = True
 
-        with pytest.raises(RuntimeError, match="delete unavailable"):
-            index.rebuild_project("project-1", as_of_chapter=1)
-
+        result = index.rebuild_project("project-1", as_of_chapter=1)
+        assert result["deleted_section_count"] == 0
+        assert result["retained_other_generation_count"] == 1
+        assert client.delete_calls == 0
         assert len(_owned_points(client, "project-1")) == 2
+        records = _search_current(index, tmp_path, "", 1)
+        assert [record.text for record in records] == ["# Current\nstate"]
     finally:
         index.close()
 
@@ -259,7 +277,7 @@ def test_existing_owned_point_enumeration_scrolls_every_page() -> None:
     }
 
 
-def test_stale_native_integer_id_is_not_stringified_for_delete(
+def test_unknown_legacy_native_integer_id_is_preserved(
     tmp_path: Path,
 ) -> None:
     client = FakeQdrantClient()
@@ -281,6 +299,57 @@ def test_stale_native_integer_id_is_not_stringified_for_delete(
     finally:
         index.close()
 
-    assert result["deleted_section_count"] == 1
-    assert client.deleted_point_ids == [42]
-    assert "42" not in client.collections[COLLECTION]["points"]
+    assert result["deleted_section_count"] == 0
+    assert result["retained_other_generation_count"] == 1
+    assert client.deleted_point_ids == []
+    assert client.collections[COLLECTION]["points"]["42"].id == 42
+
+
+def test_old_worker_starting_after_new_points_does_not_delete_current_generation(tmp_path):
+    client = FakeQdrantClient()
+    current_root, old_root = tmp_path / 'current', tmp_path / 'old-worker'
+    _write_current_state(current_root, 'project-1', '# Current\nNEW_VERSION\n')
+    _write_current_state(old_root, 'project-1', '# Current\nOLD_VERSION\n')
+    current = _vector_index(current_root, client)
+    old = _vector_index(old_root, client)
+    try:
+        current.rebuild_project('project-1', source_digest='new-source', as_of_chapter=2)
+        current_ids = set(_owned_points(client, 'project-1'))
+        late = old.rebuild_project('project-1', source_digest='old-source', as_of_chapter=1)
+        assert late['deleted_section_count'] == 0
+        assert current_ids < set(_owned_points(client, 'project-1'))
+        assert [record.text for record in _search_current(current, current_root, 'new-source', 2)] == ['# Current\nNEW_VERSION']
+    finally:
+        current.close()
+        old.close()
+
+
+@pytest.mark.parametrize('change', ['source', 'content', 'embedding'])
+def test_point_identity_separates_each_source_content_and_embedding_generation(tmp_path, change):
+    client = FakeQdrantClient()
+    _write_current_state(tmp_path, 'project-1', '# Current\noriginal\n')
+    index = _vector_index(tmp_path, client)
+    try:
+        index.rebuild_project('project-1', source_digest='source-1', as_of_chapter=1)
+        original_ids = set(_owned_points(client, 'project-1'))
+        original_point = next(iter(_owned_points(client, 'project-1').values()))
+        original_identity = original_point.payload['embedding_identity']
+        digest = 'source-2' if change == 'source' else 'source-1'
+        if change == 'content':
+            _write_current_state(tmp_path, 'project-1', '# Current\nchanged\n')
+        if change == 'embedding':
+            index.embedder.model = 'different-model-same-96-dimensions'
+        result = index.rebuild_project('project-1', source_digest=digest, as_of_chapter=1)
+        points = _owned_points(client, 'project-1')
+        assert original_ids < set(points)
+        assert len(points) == 2
+        assert result['upserted_section_count'] == 1
+        assert result['deleted_section_count'] == 0
+        assert original_point.payload['embedding_identity'] == original_identity
+        if change == 'embedding':
+            assert len({point.payload['embedding_identity'] for point in points.values()}) == 2
+        replay = index.rebuild_project('project-1', source_digest=digest, as_of_chapter=1)
+        assert replay['upserted_section_count'] == 0
+        assert replay['skipped_section_count'] == 1
+    finally:
+        index.close()

@@ -771,3 +771,101 @@ def test_memory_projection_producer_supplies_active_immutable_source_ids():
     finally:
         index.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize('pending_title', [False, True])
+def test_obsidian_index_renders_the_same_fresh_project_title_it_certifies(tmp_path, pending_title):
+    from forwin.obsidian import ObsidianExporter
+    from forwin.knowledge_system.page_repository import KnowledgePageRepository
+    from forwin.retrieval.broker_core import RetrievalBroker
+    from forwin.retrieval.source_identity import CanonReadBaseline
+
+    Factory, engine = _session_factory()
+    try:
+        with Factory.begin() as session:
+            project_id = _create_project(session)
+            session.get(Project, project_id).title = 'OLD_TITLE_SENTINEL'
+        with Factory() as session:
+            retained = session.get(Project, project_id)
+            assert retained.title == 'OLD_TITLE_SENTINEL'
+            with Factory.begin() as writer:
+                writer.get(Project, project_id).title = 'NEW_TITLE_SENTINEL'
+                writer.get(Project, project_id).book_revision += 1
+            expected_title = 'NEW_TITLE_SENTINEL'
+            if pending_title:
+                retained.title = 'PENDING_TITLE_SENTINEL'
+                expected_title = retained.title
+            ObsidianExporter(session).export_project(project_id, vault_root=tmp_path)
+            baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=0)
+            runtime = BookStateQuery(session, baseline=baseline).runtime(project_id, as_of_chapter=0)
+            rows = KnowledgePageRepository(session).list_valid_rows(project_id, runtime=runtime, as_of_chapter=0)
+            index = next(row for row in rows if row.vault_path == '00_Index.md')
+            assert expected_title in index.markdown
+            assert 'OLD_TITLE_SENTINEL' not in index.markdown
+            pages = RetrievalBroker(max_world_pages=20)._load_obsidian_page_context(session, project_id, include_hidden_truth=False, baseline=baseline)
+            secondary_index = next(page for page in pages if page['vault_path'] == '00_Index.md')
+            assert expected_title in secondary_index['canon_summary']
+            assert 'OLD_TITLE_SENTINEL' not in secondary_index['canon_summary']
+            session.commit()
+        with Factory() as session:
+            assert session.get(Project, project_id).title == expected_title
+    finally:
+        engine.dispose()
+
+
+def test_llm_kb_late_compiler_preserves_current_points_and_manifest(tmp_path, monkeypatch):
+    import forwin.llm_kb.compiler as compiler_module
+    from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever
+    from forwin.llm_kb.vector_index import LLMKBVectorIndex
+    from forwin.models.book_state import WorldNodeRow
+    from forwin.retrieval.memory_index import HashTextEmbedder
+    from forwin.retrieval.source_identity import CanonReadBaseline, CanonBaselineChanged
+    from tests.qdrant import FakeQdrantClient, FakeQdrantModels
+
+    Factory, engine = _session_factory()
+    client = FakeQdrantClient()
+    index_options = dict(qdrant_client=client, qdrant_models=FakeQdrantModels, qdrant_collection='late-kb')
+    created = []
+    current_result = []
+    try:
+        with Factory.begin() as session:
+            project_id = _create_project(session)
+            BookStateRepository(session).create_world_node(WorldNode(id='location', project_id=project_id, node_type='location', name='矿门', summary='OLD_VERSION_SENTINEL'))
+        def run_new_compiler():
+            with Factory.begin() as writer:
+                writer.get(WorldNodeRow, 'location').summary = 'NEW_VERSION_SENTINEL'
+                writer.get(Project, project_id).book_revision += 1
+            with Factory() as current:
+                current_result.append(LLMKnowledgeBaseCompiler(current, root=tmp_path, **index_options).rebuild(project_id))
+        class PausingEmbedder(HashTextEmbedder):
+            def embed(self, texts):
+                run_new_compiler()
+                return super().embed(texts)
+        def index_factory(*args, **kwargs):
+            embedder = PausingEmbedder(dims=96) if not created else HashTextEmbedder(dims=96)
+            index = LLMKBVectorIndex(*args, embedder=embedder, **kwargs)
+            created.append(index)
+            return index
+        monkeypatch.setattr(compiler_module, 'LLMKBVectorIndex', index_factory)
+        stale_error = None
+        with Factory() as session:
+            try:
+                LLMKnowledgeBaseCompiler(session, root=tmp_path, **index_options).rebuild(project_id)
+            except CanonBaselineChanged as exc:
+                stale_error = exc
+        points = list(client.collections['late-kb']['points'].values())
+        assert any('NEW_VERSION_SENTINEL' in point.payload['text'] for point in points)
+        assert any('OLD_VERSION_SENTINEL' in point.payload['text'] for point in points)
+        assert isinstance(stale_error, CanonBaselineChanged)
+        with Factory() as session:
+            baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=0)
+            retriever = LLMKnowledgeBaseRetriever(root=tmp_path, **index_options)
+            current = retriever.search(project_id, '矿门', session=session, baseline=baseline, limit=10)
+            assert any('NEW_VERSION_SENTINEL' in record['text'] for record in current)
+            assert all('OLD_VERSION_SENTINEL' not in record['text'] for record in current)
+            assert all(record['source_digest'] == current_result[0].source_digest for record in current)
+            human = retriever.search(project_id, 'OLD_VERSION_SENTINEL 矿门', as_of_chapter=0, limit=10)
+            assert any('NEW_VERSION_SENTINEL' in record['text'] for record in human)
+            assert all('OLD_VERSION_SENTINEL' not in record['text'] for record in human)
+    finally:
+        engine.dispose()

@@ -20,13 +20,13 @@ from forwin.retrieval.memory_index import (
     _create_qdrant_client,
     _qdrant_models,
     _vector_size_from_config,
+    memory_embedding_identity,
 )
 
 
 LLM_KB_PROJECTION_VERSION = "llm_kb_v2"
 _COLLECTION_RACE_INSPECTION_ATTEMPTS = 5
 _COLLECTION_RACE_INSPECTION_DELAY_SECONDS = 0.1
-_DELETE_BATCH_SIZE = 256
 
 
 @dataclass
@@ -39,6 +39,7 @@ class LLMKBVectorRecord:
     source_refs: list[str]
     source_digest: str
     section_digest: str = ""
+    embedding_identity: str = ""
     index_kind: str = "llm_kb"
     as_of_chapter: int = 0
     projection_version: str = LLM_KB_PROJECTION_VERSION
@@ -71,6 +72,7 @@ class LLMKBVectorRecord:
             "source_refs": list(self.source_refs),
             "source_digest": self.source_digest,
             "section_digest": self.section_digest,
+            "embedding_identity": self.embedding_identity,
             "score": self.score,
         }
 
@@ -89,10 +91,14 @@ def _default_collection_name() -> str:
     return os.environ.get("FORWIN_LLM_KB_QDRANT_COLLECTION", "llm_kb_vectors")
 
 
-def _point_id(project_id: str, file_key: str, section_key: str, role_scope: str) -> str:
-    digest = sha1(
-        f"{project_id}:{file_key}:{section_key}:{role_scope}".encode("utf-8")
-    ).hexdigest()[:32]
+def _point_id(
+    project_id: str, file_key: str, section_key: str, role_scope: str, *,
+    source_digest: str, section_digest: str, embedding_identity: str,
+    projection_version: str, as_of_chapter: int,
+) -> str:
+    identity = [project_id, file_key, section_key, role_scope, source_digest,
+                section_digest, embedding_identity, projection_version, as_of_chapter]
+    digest = sha1(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()[:32]
     return str(UUID(digest))
 
 
@@ -291,12 +297,19 @@ class LLMKBVectorIndex:
         desired_point_ids: set[str] = set()
         sections_to_upsert = []
         skipped = 0
+        embedding_identity = memory_embedding_identity(self.embedder, preprocessing="llm-kb-section-text-v1")
         for section in sections:
+            section = {**section, "embedding_identity": embedding_identity}
             point_id = _point_id(
                 project_id,
                 section["file_key"],
                 section["section_key"],
                 section["role_scope"],
+                source_digest=section["source_digest"],
+                section_digest=section["section_digest"],
+                embedding_identity=embedding_identity,
+                projection_version=section["projection_version"],
+                as_of_chapter=section["as_of_chapter"],
             )
             desired_point_ids.add(point_id)
             desired_payload = _desired_section_payload(project_id, section)
@@ -321,24 +334,17 @@ class LLMKBVectorIndex:
             )
         if points:
             self.client.upsert(collection_name=self.collection_name, points=points)
-        stale_point_keys = sorted(set(existing_points) - desired_point_ids)
-        stale_point_ids = [
-            existing_points[point_key].point_id for point_key in stale_point_keys
-        ]
-        for start in range(0, len(stale_point_ids), _DELETE_BATCH_SIZE):
-            point_id_batch = stale_point_ids[start : start + _DELETE_BATCH_SIZE]
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=self._rest.PointIdsList(points=point_id_batch),
-                wait=True,
-            )
+        # Source/content/model generations are unordered. A late worker cannot
+        # prove ownership of another generation, so it must never delete it.
+        retained_count = len(set(existing_points) - desired_point_ids)
         return {
             "backend": "qdrant",
             "collection": self.collection_name,
             "section_count": len(sections),
             "upserted_section_count": len(points),
             "skipped_section_count": skipped,
-            "deleted_section_count": len(stale_point_ids),
+            "deleted_section_count": 0,
+            "retained_other_generation_count": retained_count,
             "dims": self.embedder.dims,
         }
 
@@ -386,7 +392,7 @@ class LLMKBVectorIndex:
                     if source is None or payload.get("project_id") != project_id or any(payload.get(key) != source[key] for key in ("source_digest", "section_digest", "role_scope", "visibility_scope", "as_of_chapter", "projection_version")):
                         rejected += 1
                         continue
-                    payload = {**source, "project_id": project_id}
+                    payload = {**source, "project_id": project_id, "embedding_identity": payload.get("embedding_identity", "")}
                 records.append(
                     LLMKBVectorRecord(
                         project_id=str(payload.get("project_id") or project_id),
@@ -397,6 +403,7 @@ class LLMKBVectorIndex:
                         source_refs=_source_refs(payload.get("source_refs")),
                         source_digest=str(payload.get("source_digest") or ""),
                         section_digest=str(payload.get("section_digest") or ""),
+                        embedding_identity=str(payload.get("embedding_identity") or ""),
                         index_kind=str(payload.get("index_kind") or "llm_kb"),
                         as_of_chapter=int(payload.get("as_of_chapter") or 0),
                         projection_version=str(payload.get("projection_version") or LLM_KB_PROJECTION_VERSION),
@@ -573,6 +580,7 @@ def _desired_section_payload(
         "source_refs": section["source_refs"],
         "source_digest": section["source_digest"],
         "section_digest": section["section_digest"],
+        "embedding_identity": section["embedding_identity"],
     }
 
 
@@ -704,6 +712,9 @@ def _active_personality_sections(
                 projection_version=projection_version,
             )
         )
+        # This virtual section is parsed from the actual role pack; validate
+        # that file's recorded hash before allowing its reconstructed content.
+        sections[-1]["source_file_key"] = f"packs/{role}/context.json"
     return sections
 
 

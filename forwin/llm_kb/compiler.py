@@ -158,6 +158,7 @@ class LLMKnowledgeBaseCompiler:
             )
         finally:
             vector_store.close()
+        baseline.assert_current(self.session)
         retrieval_index["vector_index"] = vector_index
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         return LLMKBCompileResult(

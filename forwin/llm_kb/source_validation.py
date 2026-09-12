@@ -7,28 +7,31 @@ from forwin.knowledge_system.dependencies import dependencies_valid, llm_kb_inpu
 from forwin.retrieval.source_identity import text_hash
 
 
-def validated_manifest(root, project_id, session, baseline):
-    if session is None or baseline is None:
-        return {}
-    baseline.assert_current(session, project_id=project_id)
+def compiled_manifest(root, project_id):
+    """Read the current local generation identity, without asserting Canon validity."""
     try:
         manifest = json.loads(
             (root / project_id / "retrieval_index.json").read_text(encoding="utf-8")
         )
     except (OSError, ValueError, TypeError):
         return {}
-    if not isinstance(manifest, dict) or not isinstance(
-        manifest.get("file_hashes"), dict
-    ):
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("file_hashes"), dict):
         return {}
     try:
         as_of = int(manifest.get("as_of_chapter", -1))
     except (ValueError, TypeError):
         return {}
-    if (
-        manifest.get("project_id") != project_id
-        or not 0 <= as_of <= baseline.as_of_chapter
-    ):
+    if manifest.get("project_id") != project_id or as_of < 0:
+        return {}
+    return manifest
+
+
+def validated_manifest(root, project_id, session, baseline):
+    if session is None or baseline is None:
+        return {}
+    baseline.assert_current(session, project_id=project_id)
+    manifest = compiled_manifest(root, project_id)
+    if not manifest or int(manifest["as_of_chapter"]) > baseline.as_of_chapter:
         return {}
     runtime = BookStateQuery(session, baseline=baseline).runtime(
         project_id, as_of_chapter=baseline.as_of_chapter

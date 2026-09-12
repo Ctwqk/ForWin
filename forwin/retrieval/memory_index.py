@@ -570,7 +570,9 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
 
 
 
-def memory_embedding_identity(embedder: TextEmbedder) -> str:
+def memory_embedding_identity(
+    embedder: TextEmbedder, *, preprocessing: str = "title-summary-body500-v1"
+) -> str:
     model = str(getattr(embedder, "model", "") or "")
     if not model:
         return ""
@@ -578,7 +580,7 @@ def memory_embedding_identity(embedder: TextEmbedder) -> str:
         "backend": str(getattr(embedder, "kind", "")),
         "endpoint": str(getattr(embedder, "base_url", "")),
         "model": model, "dimensions": embedder.dims,
-        "preprocessing": "title-summary-body500-v1",
+        "preprocessing": preprocessing,
     }, sort_keys=True))
 
 

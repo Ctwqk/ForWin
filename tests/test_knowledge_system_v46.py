@@ -1300,7 +1300,21 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
             qdrant_client=qdrant_client,
             qdrant_models=FakeQdrantModels,
         )
-        writer_results = retriever.search(project_id, "context", role="writer", limit=200)
+        # Retention must not let old/unknown payloads displace valid role output.
+        source_point = next(point for point in qdrant_client.collections["llm_kb_vectors"]["points"].values() if point.payload["role_scope"] == "writer")
+        for label in ("obsolete", "legacy"):
+            payload = {**source_point.payload, "text": f"{label.upper()}_SENTINEL"}
+            if label == "obsolete":
+                payload["source_digest"] = "older-source"
+            else:
+                payload.pop("source_digest")
+                payload.pop("section_digest")
+            qdrant_client.upsert(collection_name="llm_kb_vectors", points=[FakeQdrantModels.PointStruct(id=label, vector=source_point.vector, payload=payload)])
+        with Session() as session:
+            LLMKnowledgeBaseCompiler(session, root=tmp_path / "kb", qdrant_client=qdrant_client, qdrant_models=FakeQdrantModels).rebuild(project_id, as_of_chapter=1)
+        assert {"obsolete", "legacy"} <= qdrant_client.collections["llm_kb_vectors"]["points"].keys()
+        writer_results = retriever.search(project_id, "context", role="writer", limit=200, as_of_chapter=0)
+        assert all("SENTINEL" not in item["text"] for item in writer_results)
         assert writer_results
         assert all(item["index_kind"] == "llm_kb" for item in writer_results)
         assert all(item["visibility_scope"] == "writer_safe" for item in writer_results)
@@ -1623,6 +1637,23 @@ def test_active_personality_context_enters_world_model_and_llm_kb_role_packs(tmp
             qdrant_models=FakeQdrantModels,
         ).search(project_id, "trait-suspicious-survivor", role="reviewer", limit=100)
         assert any("trait-suspicious-survivor" in item["text"] for item in reviewer_results)
+        virtual_key = "packs/reviewer/active_personality_context.json"
+        assert any(item["file_key"] == virtual_key for item in reviewer_results)
+        from forwin.retrieval.source_identity import CanonReadBaseline
+        with Session() as session:
+            baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=1)
+            retriever = LLMKnowledgeBaseRetriever(
+                root=tmp_path / "kb", qdrant_client=qdrant_client,
+                qdrant_models=FakeQdrantModels,
+            )
+            valid = retriever.search(project_id, "trait-suspicious-survivor", role="reviewer", limit=100, session=session, baseline=baseline)
+            assert any(item["file_key"] == virtual_key for item in valid)
+            # The virtual section is owned by the exact bytes of the real role pack.
+            pack_path = root / "packs/reviewer/context.json"
+            pack_path.write_text(pack_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            for options in ({}, {"session": session, "baseline": baseline}):
+                tampered = retriever.search(project_id, "trait-suspicious-survivor", role="reviewer", limit=100, **options)
+                assert all(item["file_key"] not in (virtual_key, "packs/reviewer/context.json") for item in tampered)
     finally:
         engine.dispose()
 

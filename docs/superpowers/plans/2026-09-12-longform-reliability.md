@@ -102,12 +102,14 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 **Interfaces:** 不可变 `CanonReadBaseline(project_id, book_revision, as_of_chapter)`；batch active-source selector；纯函数语义 page dependency fingerprints。MemorySnippet 增加来源 ID/hash/embedding 身份，旧字段默认空且不具有效性。broker context 在基线变化时最多重建一次。
 
-- [ ] RED：修订已接纳但投影暂停，最终 Writer messages 不得含旧状态/摘要；旧 worker 晚到、伪造 hash、unknown legacy、未来 top hits、有效低排名补检和新增章节仍保留未变历史。
-- [ ] 基线覆盖 assembler/BookState cache/cognition/pages/vector/备用知识加载；缓存增加 book revision，整包前后 fresh 校验，不吞基线错误。
-- [ ] 向量来源经 active commit→candidate→draft 批量核对并用正式文本构造片段；immutable point identity 防旧写覆盖，分页每批最多20、最多5批、query 只 embedding 一次，记录拒绝数及上限到达。
-- [ ] 页面依赖覆盖实际字段、状态、关联集合及聚合输入；验证在排序/限额前。Obsidian/LLM-KB 的文件和检索结果同样验证，无法证明的旧内容暂不进入 Writer；当前必须事实仍从 BookState 获取。
-- [ ] migration 不改旧 Markdown/hash/notes，unknown dependencies 不填造。测试新增/删除关联、same-height revision、chapter-zero world edit、late events 和所有 secondary loaders。
-- [ ] 跑相关 suite 和实际 prompt regression，提交 `fix(retrieval): validate derived context against active Canon sources` 并审查。
+- [x] RED：修订已接纳但投影暂停，最终 Writer messages 不得含旧状态/摘要；旧 worker 晚到、伪造 hash、unknown legacy、未来 top hits、有效低排名补检和新增章节仍保留未变历史。
+- [x] 基线覆盖 assembler/BookState cache/cognition/pages/vector/备用知识加载；缓存增加 book revision，整包前后 fresh 校验，不吞基线错误。
+- [x] 向量来源经 active commit→candidate→draft 批量核对并用正式文本构造片段；immutable point identity 防旧写覆盖，分页每批最多20、最多5批、query 只 embedding 一次，记录拒绝数及上限到达。
+- [x] 页面依赖覆盖实际字段、状态、关联集合及聚合输入；验证在排序/限额前。Obsidian/LLM-KB 的文件和检索结果同样验证，无法证明的旧内容暂不进入 Writer；当前必须事实仍从 BookState 获取。
+- [x] migration 不改旧 Markdown/hash/notes，unknown dependencies 不填造。测试新增/删除关联、same-height revision、chapter-zero world edit、late events 和所有 secondary loaders。
+- [x] 跑相关 suite 和实际 prompt regression，提交 `fix(retrieval): validate derived context against active Canon sources` 并审查。
+
+审查遗留（P3，终审处理）：同一有效知识库段落的多个 embedding 版本可能重复占用结果 limit；需按已验证段落去重并保留有界补检，或显式选择当前 embedding 版本。未发现该情形引入旧事实。
 
 ## Task 5: D1 — 接通已接纳人物与读者认知
 

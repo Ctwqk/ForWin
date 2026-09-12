@@ -331,7 +331,8 @@ def _assert_single_committed_state(fixture: RecoveryFixture) -> None:
             assert event.aggregate_id == expected.aggregate_id
             assert json.loads(event.payload_json) == expected.payload
         exports = [
-            event for event in outbox_events
+            event
+            for event in outbox_events
             if event.event_type == NOVEL_EXPORT_REQUESTED
         ]
         assert len(outbox_events) == 4
@@ -493,7 +494,7 @@ def test_reclaim_after_canon_commit_replays_once_then_finishes_task(
     _assert_single_committed_state(recovery_fixture)
 
 
-def test_recovered_terminal_task_still_runs_completion_handler(
+def test_recovered_terminal_task_persists_continuation_intent(
     recovery_fixture: RecoveryFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -504,13 +505,6 @@ def test_recovered_terminal_task_still_runs_completion_handler(
     assert outcome.blocked is False
     _expire_lease(recovery_fixture)
     application, pipeline = _recovery_application(recovery_fixture, monkeypatch)
-    completed: list[RunResult] = []
-    monkeypatch.setattr(
-        application,
-        "_completion_handler",
-        lambda _task_id, _payload: completed.append,
-    )
-
     run_one_generation_task(
         application_service=application,
         worker_id="recovery-worker",
@@ -518,10 +512,24 @@ def test_recovered_terminal_task_still_runs_completion_handler(
     )
 
     assert pipeline.calls == []
-    assert len(completed) == 1
-    assert completed[0].project_id == recovery_fixture.project_id
-    assert completed[0].completed_chapters == [1]
-    assert completed[0].status == "completed"
+    from forwin.generation.continuation_events import (
+        GenerationContinuationEvent,
+        continuation_event_id,
+    )
+
+    with recovery_fixture.Session() as session:
+        intent = session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_id == continuation_event_id(recovery_fixture.task_id)
+            )
+        )
+        assert intent is not None
+        result = GenerationContinuationEvent.model_validate_json(
+            intent.payload_json
+        ).result
+        assert result.project_id == recovery_fixture.project_id
+        assert result.completed_chapters == [1]
+        assert result.status == "completed"
 
 
 def test_stale_worker_epoch_cannot_enter_canon_transaction(

@@ -1,23 +1,28 @@
+"""Durable, replay-safe generation handoff on the existing outbox."""
+
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import asdict, dataclass
+import json
 
 from sqlalchemy import select
 
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.generation.continue_workset import build_continue_generation_workset
+from forwin.generation.review_auto_retry import chapter_numbers as _chapter_numbers
 from forwin.generation.review_auto_retry import (
-    chapter_numbers as _chapter_numbers,
-    eligible_for_auto_review_retry as _eligible_for_auto_review_retry,
-    prior_auto_review_retry_count as _prior_auto_review_retry_count,
+    eligible_for_auto_review_retry,
+    prior_auto_review_retry_count,
     reset_chapter_for_auto_review_retry,
 )
 from forwin.generation.run_target import resolve_generation_run_target
-from forwin.audit.events import (
-    DecisionEventInfo,
-    DecisionEventType,
+from forwin.generation.task_payload import payload_from_json
+from forwin.generation.task_repository import (
+    GenerationTaskRepository,
+    TERMINAL_GENERATION_STATUSES,
 )
+from forwin.models.audit import DecisionEvent
+from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.state.updater import StateUpdater
@@ -36,211 +41,274 @@ class AutoContinueDecision:
 
 
 class GenerationAutoContinueController:
-    def __init__(
-        self,
-        *,
-        session_factory: Callable[[], Any],
-        create_continue_generation_task: Callable[..., str],
-    ) -> None:
-        self.session_factory = session_factory
-        self.create_continue_generation_task = create_continue_generation_task
+    """One decision owner, operating entirely in the caller's transaction."""
 
-    def after_task_completion(
-        self,
-        result: Any,
-        *,
-        parent_task_id: str,
-        run_until_chapter: int | None,
-        max_chapters: int | None,
-        auto_continue: bool,
-    ) -> AutoContinueDecision:
-        project_id = str(getattr(result, "project_id", "") or "").strip()
-        if not project_id:
-            return AutoContinueDecision(decision="stop", reason="missing_project_id")
-        parent_stop_reason = self._parent_task_stop_reason(parent_task_id)
-        if parent_stop_reason:
-            return self._record_decision(
-                project_id=project_id,
-                parent_task_id=parent_task_id,
-                decision=AutoContinueDecision(
+    def __init__(self, session):
+        self.session = session
+
+    def consume(self, event, application):
+        """Caller owns commit; child, review reset and durable decision are indivisible."""
+        session = self.session
+        from forwin.generation.continuation_events import (
+            GenerationContinuationEvent,
+            continuation_event_id,
+            continuation_decision_id,
+        )
+
+        project = session.scalar(
+            select(Project)
+            .where(Project.id == event.result.project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if project is None:
+            raise ValueError("continuation project missing")
+        parent = session.scalar(
+            select(GenerationTask)
+            .where(GenerationTask.id == event.parent_task_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if parent is None or parent.project_id != project.id:
+            raise ValueError("continuation parent mismatch")
+        existing = session.get(DecisionEvent, continuation_decision_id(parent.id))
+        if existing:
+            return AutoContinueDecision(**json.loads(existing.payload_json))
+        # Validate against the committed event, not arbitrary caller-supplied result data.
+        intent = session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_id == continuation_event_id(parent.id)
+            )
+        )
+        if (
+            intent is None
+            or GenerationContinuationEvent.model_validate_json(intent.payload_json)
+            != event
+        ):
+            raise ValueError("continuation result does not match durable intent")
+        if parent.status not in TERMINAL_GENERATION_STATUSES:
+            raise ValueError("continuation parent is not terminal")
+        payload = payload_from_json(parent.execution_payload_json)
+
+        def record(decision):
+            StateUpdater(session).save_decision_event(
+                DecisionEventInfo(
+                    id=continuation_decision_id(parent.id),
+                    project_id=project.id,
+                    task_id=parent.id,
+                    scope="task",
+                    event_family="audit_action",
+                    event_type=DecisionEventType.AUTO_CONTINUE_DECISION,
+                    actor_type="system",
+                    summary=f"Auto-continue decision: {decision.decision} ({decision.reason})",
+                    payload=asdict(decision),
+                    related_object_type="generation_task",
+                    related_object_id=parent.id,
+                )
+            )
+            session.flush()
+            return decision
+
+        def stop(reason):
+            return record(
+                AutoContinueDecision(
                     decision="stop",
-                    reason=parent_stop_reason,
-                ),
-            )
-        if not auto_continue:
-            return self._record_decision(
-                project_id=project_id,
-                parent_task_id=parent_task_id,
-                decision=AutoContinueDecision(
-                    decision="stop", reason="auto_continue_disabled"
-                ),
-            )
-        terminal_block_reason = self._terminal_block_reason(result)
-        if terminal_block_reason:
-            auto_retry_decision = self._maybe_auto_retry_review_blocker(
-                result,
-                parent_task_id=parent_task_id,
-                terminal_block_reason=terminal_block_reason,
-                run_until_chapter=run_until_chapter,
-                max_chapters=max_chapters,
-            )
-            if auto_retry_decision is not None:
-                return auto_retry_decision
-            return self._record_decision(
-                project_id=project_id,
-                parent_task_id=parent_task_id,
-                decision=AutoContinueDecision(
-                    decision="stop", reason=terminal_block_reason
-                ),
+                    reason=reason,
+                    run_until_chapter=payload.run_until_chapter
+                    or project.target_total_chapters,
+                    target_total_chapters=project.target_total_chapters,
+                )
             )
 
-        with self.session_factory() as session:
-            project = session.get(Project, project_id)
-            if project is None:
-                return AutoContinueDecision(decision="stop", reason="project_not_found")
+        child = session.scalar(
+            select(GenerationTask).where(
+                GenerationTask.continuation_parent_task_id == parent.id
+            )
+        )
+        if child:
+            return record(
+                AutoContinueDecision(
+                    decision="continue", reason="existing_child", next_task_id=child.id
+                )
+            )
+        if parent.deleted_at:
+            return stop("parent_deleted")
+        if parent.cancel_requested:
+            return stop("cancel_requested")
+        if parent.pause_requested:
+            return stop("user_pause_requested")
+        if not payload.auto_continue:
+            return stop("auto_continue_disabled")
+        if GenerationTaskRepository(session).has_active(project.id):
+            return stop("superseded")
+        # An explicit newer run permanently supersedes this intent, even if it already finished.
+        if session.scalar(
+            select(GenerationTask.id)
+            .where(
+                GenerationTask.project_id == project.id,
+                GenerationTask.id != parent.id,
+                GenerationTask.created_at > parent.created_at,
+            )
+            .limit(1)
+        ):
+            return stop("superseded")
+        if project.runtime_policy_version != payload.policy_version:
+            return stop("policy_changed")
+        if project.creation_status == "completed":
+            return stop("project_completed")
 
-            target_total_chapters = int(
-                getattr(project, "target_total_chapters", 0) or 0
+        plans = list(
+            session.scalars(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id == project.id)
+                .order_by(ChapterPlan.chapter_number)
+                .with_for_update()
             )
-            normalized_until = (
-                target_total_chapters
-                if run_until_chapter is None
-                else int(run_until_chapter)
+        )
+        accepted_max = max(
+            (p.chapter_number for p in plans if p.status == "accepted"), default=0
+        )
+        until = payload.run_until_chapter or project.target_total_chapters
+        if accepted_max >= until:
+            return stop(
+                "target_total_reached"
+                if accepted_max >= project.target_total_chapters
+                else "run_until_reached"
             )
-            project_title = str(getattr(project, "title", "") or "")
-            project_genre = str(getattr(project, "genre", "") or "")
-            plans = list(
-                session.execute(
-                    select(ChapterPlan)
-                    .where(ChapterPlan.project_id == project_id)
-                    .order_by(ChapterPlan.chapter_number.asc())
-                ).scalars()
+
+        # Maintenance is queried without constructing the LLM/pipeline runtime.
+        from forwin.models.maintenance import PostCanonMaintenanceRun
+        from forwin.maintenance.state import post_canon_barrier_ready
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.canon.identity import active_commit_predicate
+
+        commit_id = session.scalar(
+            select(CanonCommitRecord.id)
+            .where(
+                CanonCommitRecord.project_id == project.id,
+                CanonCommitRecord.chapter_number < accepted_max + 1,
+                CanonCommitRecord.status == "committed",
+                active_commit_predicate(),
             )
-            accepted_max = max(
-                (
-                    int(plan.chapter_number or 0)
-                    for plan in plans
-                    if str(plan.status or "") == "accepted"
-                ),
-                default=0,
+            .order_by(CanonCommitRecord.chapter_number.desc())
+            .limit(1)
+        )
+        if commit_id:
+            rows = list(
+                session.scalars(
+                    select(PostCanonMaintenanceRun).where(
+                        PostCanonMaintenanceRun.canon_commit_id == commit_id
+                    )
+                )
             )
-            if any(str(plan.status or "") == "needs_review" for plan in plans):
-                return self._record_decision(
-                    project_id=project_id,
-                    parent_task_id=parent_task_id,
-                    decision=AutoContinueDecision(
-                        decision="stop",
-                        reason="pending_review_blocker",
-                        run_until_chapter=normalized_until,
-                        target_total_chapters=target_total_chapters,
+            if not post_canon_barrier_ready(
+                rows,
+                session=session,
+                band_checkpoint_action=payload.policy_snapshot.pause.band_checkpoint_action,
+            ):
+                return stop("maintenance_blocker")
+
+        terminal = self._terminal_block_reason(event.result)
+        retry_plan = None
+        if terminal:
+            if (
+                terminal in {"pending_review_blocker", "needs_review_blocker"}
+                and event.result.paused_chapters
+            ):
+                number = event.result.paused_chapters[0]
+                retry_plan = next(
+                    (
+                        p
+                        for p in plans
+                        if p.chapter_number == number and p.status == "needs_review"
                     ),
+                    None,
                 )
-            if any(str(plan.status or "") == "drafted" for plan in plans):
-                return self._record_decision(
-                    project_id=project_id,
-                    parent_task_id=parent_task_id,
-                    decision=AutoContinueDecision(
-                        decision="stop",
-                        reason="pending_acceptance_blocker",
-                        run_until_chapter=normalized_until,
-                        target_total_chapters=target_total_chapters,
-                    ),
-                )
-
-            if accepted_max >= normalized_until:
-                reason = (
-                    "target_total_reached"
-                    if target_total_chapters > 0
-                    and accepted_max >= target_total_chapters
-                    else "run_until_reached"
-                )
-                return self._record_decision(
-                    project_id=project_id,
-                    parent_task_id=parent_task_id,
-                    decision=AutoContinueDecision(
-                        decision="stop",
-                        reason=reason,
-                        next_chapter=accepted_max + 1,
-                        run_until_chapter=normalized_until,
-                        target_total_chapters=target_total_chapters,
-                    ),
-                )
-
-            next_chapter = accepted_max + 1
-            target = resolve_generation_run_target(
-                project,
-                next_chapter=next_chapter,
-                run_until_chapter=normalized_until,
-                max_chapters=max_chapters,
-            )
-            workset = build_continue_generation_workset(
+                if retry_plan is not None and (
+                    not eligible_for_auto_review_retry(
+                        retry_plan, set(event.result.system_block_chapters)
+                    )
+                    or prior_auto_review_retry_count(session, project.id, number)
+                ):
+                    retry_plan = None
+            if retry_plan is None:
+                return stop(terminal)
+        if any(p.status == "needs_review" and p is not retry_plan for p in plans):
+            return stop("pending_review_blocker")
+        if any(p.status == "drafted" for p in plans):
+            return stop("pending_acceptance_blocker")
+        next_chapter = retry_plan.chapter_number if retry_plan else accepted_max + 1
+        target = resolve_generation_run_target(
+            project,
+            next_chapter=next_chapter,
+            run_until_chapter=until,
+            max_chapters=payload.max_chapters or None,
+        )
+        if retry_plan:
+            reset_chapter_for_auto_review_retry(
                 session,
-                project_id,
-                max_chapters=target.effective_max_chapters,
-                source="auto_continue",
-                preloaded_plans=plans,
+                project_id=project.id,
+                task_id=parent.id,
+                chapter_number=retry_plan.chapter_number,
+                plan=retry_plan,
+                source="auto_continue_review_retry",
+                reason="auto_continue_review_retry",
+                summary=f"第{next_chapter}章 needs_review 自动重置为 planned。",
+                terminal_block_reason=terminal,
+                system_block=next_chapter in event.result.system_block_chapters,
             )
-            if workset.requested_chapters <= 0:
-                return self._record_decision(
-                    project_id=project_id,
-                    parent_task_id=parent_task_id,
-                    decision=AutoContinueDecision(
-                        decision="stop",
-                        reason=workset.reason or "no_remaining_chapters",
-                        next_chapter=next_chapter,
-                        run_until_chapter=target.run_until_chapter,
-                        target_total_chapters=target.target_total_chapters,
-                        workset_reason=workset.reason,
-                    ),
-                )
-
-        next_task_id = self.create_continue_generation_task(
-            project_id=project_id,
-            requested_chapters=workset.requested_chapters,
+        workset = build_continue_generation_workset(
+            session,
+            project.id,
             max_chapters=target.effective_max_chapters,
-            auto_continue=True,
-            run_until_chapter=target.run_until_chapter,
-            title=project_title,
-            subtitle=f"自动续跑 · {project_genre}",
-            message="前一批完成，无阻断，自动继续生成。",
+            source="auto_continue",
+            preloaded_plans=plans,
         )
-        reason = (
-            "future_arc_materialized"
-            if workset.reason == "future_arc_materialization_required"
-            else "chapter_completed_no_blocker"
+        if not workset.requested_chapters:
+            # No reset is valid unless it actually hands off to a child.
+            if retry_plan:
+                raise ValueError("review retry has no continuation workset")
+            return stop(workset.reason or "no_remaining_chapters")
+        from forwin.application.generation import EnqueueGenerationCommand
+
+        handle = application._enqueue_in_session(
+            EnqueueGenerationCommand(
+                project_id=project.id,
+                requested_chapters=workset.requested_chapters,
+                max_chapters=target.effective_max_chapters,
+                run_until_chapter=until,
+                auto_continue=True,
+                title=project.title,
+                subtitle=f"自动续跑 · {project.genre}",
+                message="前一批结束，持久续跑交接。",
+                root_event_type=DecisionEventType.CONTINUE_REQUESTED,
+                long_run_mode=payload.long_run_mode,
+                isolated=payload.isolated,
+            ),
+            session,
+            continuation_parent=parent,
         )
-        return self._record_decision(
-            project_id=project_id,
-            parent_task_id=parent_task_id,
-            decision=AutoContinueDecision(
+        return record(
+            AutoContinueDecision(
                 decision="continue",
-                reason=reason,
-                next_task_id=next_task_id,
-                next_chapter=workset.chapter_numbers[0]
-                if workset.chapter_numbers
-                else next_chapter,
-                run_until_chapter=target.run_until_chapter,
-                target_total_chapters=target.target_total_chapters,
+                reason="auto_retry_review_blocker"
+                if retry_plan
+                else (
+                    "future_arc_materialized"
+                    if workset.reason == "future_arc_materialization_required"
+                    else "chapter_completed_no_blocker"
+                ),
+                next_task_id=handle.task_id,
+                next_chapter=next_chapter,
+                run_until_chapter=until,
+                target_total_chapters=project.target_total_chapters,
                 requested_chapters=workset.requested_chapters,
                 workset_reason=workset.reason,
-            ),
+            )
         )
 
-    def _parent_task_stop_reason(self, parent_task_id: str) -> str:
-        normalized_id = str(parent_task_id or "").strip()
-        if not normalized_id:
-            return ""
-        with self.session_factory() as session:
-            task = session.get(GenerationTask, normalized_id)
-            if task is None:
-                return ""
-            if bool(task.cancel_requested):
-                return "cancel_requested"
-            if bool(task.pause_requested):
-                return "user_pause_requested"
-        return ""
-
-    def _terminal_block_reason(self, result: Any) -> str:
+    @staticmethod
+    def _terminal_block_reason(result) -> str:
         if bool(getattr(result, "cancelled", False)):
             return "cancelled"
         if list(getattr(result, "failed_chapters", []) or []):
@@ -267,167 +335,3 @@ class GenerationAutoContinueController:
                 return "user_pause_reached"
             return f"{status}_blocker"
         return ""
-
-    def _record_decision(
-        self,
-        *,
-        project_id: str,
-        parent_task_id: str,
-        decision: AutoContinueDecision,
-    ) -> AutoContinueDecision:
-        with self.session_factory() as session:
-            updater = StateUpdater(session)
-            updater.save_decision_event(
-                DecisionEventInfo(
-                    project_id=project_id,
-                    task_id=parent_task_id,
-                    scope="task",
-                    event_family="audit_action",
-                    event_type=DecisionEventType.AUTO_CONTINUE_DECISION,
-                    actor_type="system",
-                    summary=f"Auto-continue decision: {decision.decision} ({decision.reason})",
-                    payload={
-                        "decision": decision.decision,
-                        "reason": decision.reason,
-                        "next_task_id": decision.next_task_id,
-                        "next_chapter": decision.next_chapter,
-                        "run_until_chapter": decision.run_until_chapter,
-                        "target_total_chapters": decision.target_total_chapters,
-                        "requested_chapters": decision.requested_chapters,
-                        "workset_reason": decision.workset_reason,
-                    },
-                    related_object_type="generation_task",
-                    related_object_id=parent_task_id,
-                )
-            )
-            session.commit()
-        return decision
-
-    def _maybe_auto_retry_review_blocker(
-        self,
-        result: Any,
-        *,
-        parent_task_id: str,
-        terminal_block_reason: str,
-        run_until_chapter: int | None,
-        max_chapters: int | None,
-    ) -> AutoContinueDecision | None:
-        if terminal_block_reason not in {
-            "pending_review_blocker",
-            "needs_review_blocker",
-        }:
-            return None
-        project_id = str(getattr(result, "project_id", "") or "").strip()
-        if not project_id:
-            return None
-        paused_chapters = _chapter_numbers(getattr(result, "paused_chapters", []) or [])
-        if not paused_chapters:
-            return None
-        chapter_number = paused_chapters[0]
-        system_block_chapters = set(
-            _chapter_numbers(getattr(result, "system_block_chapters", []) or [])
-        )
-
-        with self.session_factory() as session:
-            project = session.get(Project, project_id)
-            if project is None:
-                return None
-            project_title = str(getattr(project, "title", "") or "")
-            project_genre = str(getattr(project, "genre", "") or "")
-            plans = list(
-                session.execute(
-                    select(ChapterPlan)
-                    .where(ChapterPlan.project_id == project_id)
-                    .order_by(ChapterPlan.chapter_number.asc())
-                ).scalars()
-            )
-            plan = next(
-                (
-                    item
-                    for item in plans
-                    if int(getattr(item, "chapter_number", 0) or 0) == chapter_number
-                ),
-                None,
-            )
-            if plan is None or str(plan.status or "") != "needs_review":
-                return None
-            if not _eligible_for_auto_review_retry(plan, system_block_chapters):
-                return None
-            if _prior_auto_review_retry_count(session, project_id, chapter_number) > 0:
-                return None
-
-            target_total_chapters = int(
-                getattr(project, "target_total_chapters", 0) or 0
-            )
-            normalized_until = (
-                target_total_chapters
-                if run_until_chapter is None
-                else int(run_until_chapter)
-            )
-            target = resolve_generation_run_target(
-                project,
-                next_chapter=chapter_number,
-                run_until_chapter=normalized_until,
-                max_chapters=max_chapters,
-            )
-
-            reset_chapter_for_auto_review_retry(
-                session,
-                project_id=project_id,
-                task_id=parent_task_id,
-                chapter_number=chapter_number,
-                plan=plan,
-                source="auto_continue_review_retry",
-                reason="auto_continue_review_retry",
-                summary=f"第{chapter_number}章 needs_review 自动重置为 planned。",
-                terminal_block_reason=terminal_block_reason,
-                system_block=chapter_number in system_block_chapters,
-            )
-            workset = build_continue_generation_workset(
-                session,
-                project_id,
-                max_chapters=target.effective_max_chapters,
-                source="auto_continue_review_retry",
-                preloaded_plans=plans,
-            )
-            if workset.requested_chapters <= 0:
-                session.commit()
-                return self._record_decision(
-                    project_id=project_id,
-                    parent_task_id=parent_task_id,
-                    decision=AutoContinueDecision(
-                        decision="stop",
-                        reason=workset.reason
-                        or "no_remaining_chapters_after_auto_retry",
-                        next_chapter=chapter_number,
-                        run_until_chapter=target.run_until_chapter,
-                        target_total_chapters=target.target_total_chapters,
-                        workset_reason=workset.reason,
-                    ),
-                )
-            session.commit()
-
-        next_task_id = self.create_continue_generation_task(
-            project_id=project_id,
-            requested_chapters=workset.requested_chapters,
-            max_chapters=target.effective_max_chapters,
-            auto_continue=True,
-            run_until_chapter=target.run_until_chapter,
-            title=project_title,
-            subtitle=f"自动重试 · {project_genre}",
-            message=f"第{chapter_number}章 needs_review 已自动重置并重试。",
-        )
-        return self._record_decision(
-            project_id=project_id,
-            parent_task_id=parent_task_id,
-            decision=AutoContinueDecision(
-                decision="continue",
-                reason="auto_retry_review_blocker",
-                next_task_id=next_task_id,
-                next_chapter=workset.chapter_numbers[0],
-                run_until_chapter=target.run_until_chapter,
-                target_total_chapters=target.target_total_chapters,
-                requested_chapters=workset.requested_chapters,
-                workset_reason=workset.reason,
-            ),
-        )

@@ -72,6 +72,7 @@ def test_execute_pipeline_task_records_operation_and_cleanup_spans() -> None:
             "task-phase-f-runtime",
             pipeline,
             lambda: result,
+            finish_task=lambda _result: None,
             update_task=lambda *_args, **_kwargs: None,
             logger=SimpleNamespace(
                 exception=lambda *_args, **_kwargs: None,
@@ -140,6 +141,7 @@ def test_execute_pipeline_task_records_worker_component_when_requested() -> None
             "task-phase-f-runtime-worker-component",
             pipeline,
             lambda: result,
+            finish_task=lambda _result: None,
             update_task=lambda *_args, **_kwargs: None,
             logger=SimpleNamespace(exception=lambda *_args, **_kwargs: None),
             error_message="runtime failed",

@@ -41,10 +41,18 @@ def build_default_outbox_handlers(
         if config is not None
         else None
     )
+    from forwin.generation.continuation_events import (
+        build_generation_continuation_handlers,
+    )
+
     handler_maps = [
+        build_generation_continuation_handlers(
+            session_factory=session_factory, infrastructure=config
+        ),
         build_novel_export_handlers(
             session_factory=session_factory,
-            root=Path(getattr(config, "artifact_root", "data/artifacts")) / "novel_exports",
+            root=Path(getattr(config, "artifact_root", "data/artifacts"))
+            / "novel_exports",
         ),
         build_projection_outbox_handlers(
             session_factory=session_factory,
@@ -55,7 +63,7 @@ def build_default_outbox_handlers(
             qdrant_client=qdrant_client,
             qdrant_models=qdrant_models,
             memory_index_provider=shared_memory_provider,
-        )
+        ),
     ]
     if artifact_store_provider is not None:
         handler_maps.append(

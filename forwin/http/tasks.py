@@ -266,7 +266,10 @@ def _task_is_terminable(task: dict[str, Any]) -> bool:
     return (
         not task.get("deleted")
         and not task.get("cancel_requested")
-        and not _task_is_terminal(str(task.get("status", "")))
+        and (
+            task.get("continuation_pending")
+            or not _task_is_terminal(str(task.get("status", "")))
+        )
     )
 
 
@@ -276,7 +279,11 @@ def _task_is_pausable(task: dict[str, Any]) -> bool:
         and not task.get("deleted")
         and not task.get("cancel_requested")
         and not task.get("pause_requested")
-        and str(task.get("status", "")) in {"queued", "starting", "running", "capacity_wait"}
+        and (
+            task.get("continuation_pending")
+            or str(task.get("status", ""))
+            in {"queued", "starting", "running", "capacity_wait"}
+        )
     )
 
 

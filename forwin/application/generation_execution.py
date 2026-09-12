@@ -15,14 +15,6 @@ from forwin.state.updater import StateUpdater
 
 TaskUpdater = Callable[..., None]
 
-_PROGRESS_STAGE_STATUS = {
-    "cancelled": "cancelled",
-    "paused": "paused",
-    "paused_for_review": "needs_review",
-    "failed": "failed",
-    "completed": "completed",
-    "terminating": "terminating",
-}
 _PROGRESS_PAYLOAD_KEYS = (
     "project_id",
     "requested_chapters",
@@ -42,11 +34,6 @@ def _build_task_progress_changes(
     stage = str(payload.get("stage", "")).strip()
     if stage:
         changes["current_stage"] = stage
-        status = _PROGRESS_STAGE_STATUS.get(stage)
-        if status:
-            changes["status"] = status
-        elif stage != "queued":
-            changes["status"] = "running"
 
     for key in _PROGRESS_PAYLOAD_KEYS:
         if key in payload:
@@ -179,12 +166,14 @@ def execute_pipeline_task(
     error_message: str,
     default_project_id: str | None = None,
     progress_handler=None,
-    completion_handler=None,
+    finish_task=None,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     component: str = "api",
 ) -> None:
     started_at = time.perf_counter()
+    finalized = False
+    finishing = False
     observed_project_id = default_project_id
     observability = _task_observability(pipeline)
     span_component = str(component or "api").strip() or "api"
@@ -229,17 +218,11 @@ def execute_pipeline_task(
             span.metric(
                 "paused_chapters", len(getattr(result, "paused_chapters", []) or [])
             )
-            update_task(
-                task_id,
-                status=result.status,
-                project_id=result.project_id,
-                completed_chapters=list(
-                    getattr(result, "completed_chapters", []) or []
-                ),
-                failed_chapters=result.failed_chapters,
-                paused_chapters=result.paused_chapters,
-                frozen_artifacts=result.frozen_artifacts,
-            )
+            if finish_task is None:
+                raise RuntimeError("generation task requires atomic finalization")
+            finishing = True
+            finish_task(result)
+            finalized = True
             _record_task_observability_event(
                 pipeline,
                 task_id=task_id,
@@ -261,12 +244,13 @@ def execute_pipeline_task(
             )
         if progress_handler is not None:
             progress_handler(result)
-        if completion_handler is not None:
-            try:
-                completion_handler(result)
-            except Exception:  # noqa: BLE001
-                logger.exception("Post-completion handler failed for task %s", task_id)
     except Exception as exc:
+        if finishing and not finalized:
+            # Leave the lease recoverable when the completion transaction failed.
+            raise
+        if finalized:
+            logger.exception("Post-finalization display failed for task %s", task_id)
+            return
         logger.exception("%s for task %s", error_message, task_id)
         observed_project_id = str(
             getattr(exc, "project_id", observed_project_id) or observed_project_id or ""
@@ -283,12 +267,15 @@ def execute_pipeline_task(
             },
             exc=exc,
         )
-        update_task(
-            task_id,
-            status="failed",
-            project_id=getattr(exc, "project_id", default_project_id),
-            error=str(exc),
-            message=error_message,
+        if finish_task is None:
+            raise
+        from forwin.generation.continuation_events import GenerationCompletionResult
+
+        finish_task(
+            GenerationCompletionResult(
+                project_id=str(observed_project_id or ""),
+                failure_reason=str(exc) or type(exc).__name__,
+            )
         )
     finally:
         cleanup_ctx = OperationContext(
@@ -332,7 +319,7 @@ def execute_continuation(
     should_pause: Callable[[], bool] | None = None,
     max_chapters: int | None = None,
     resume_from_chapter: int | None = None,
-    completion_handler: Callable[[object], None] | None = None,
+    finish_task: Callable[[object], None] | None = None,
     canon_transaction_guard: Callable[[Any], bool] | None = None,
     reserve_chapter: Callable[[str, int], None] | None = None,
     component: str = "api",
@@ -357,7 +344,6 @@ def execute_continuation(
         if result.status == "capacity_wait":
             update_task(
                 task_id,
-                status="capacity_wait",
                 current_stage="capacity_wait",
                 current_chapter=result.capacity_wait_chapter,
                 message=result.capacity_wait_reason,
@@ -366,7 +352,6 @@ def execute_continuation(
         elif result.status == "cancelled":
             update_task(
                 task_id,
-                status="cancelled",
                 message=(
                     f"继续生成已取消。已完成 {len(result.completed_chapters)} / "
                     f"{result.requested_chapters} 章"
@@ -375,7 +360,6 @@ def execute_continuation(
         elif result.status == "paused":
             update_task(
                 task_id,
-                status="paused",
                 message=(
                     f"继续生成已安全暂停。已完成 {len(result.completed_chapters)} 章"
                 ),
@@ -415,7 +399,7 @@ def execute_continuation(
         error_message="继续生成失败",
         default_project_id=project_id,
         progress_handler=_handle_result,
-        completion_handler=completion_handler,
+        finish_task=finish_task,
         should_abort=should_abort,
         should_pause=should_pause,
         component=component,

@@ -107,7 +107,11 @@ class GenerationApplicationService:
             raise
 
     def _enqueue_in_session(
-        self, command: EnqueueGenerationCommand, session: Session
+        self,
+        command: EnqueueGenerationCommand,
+        session: Session,
+        *,
+        continuation_parent: GenerationTask | None = None,
     ) -> GenerationTaskHandle:
         project_id = str(command.project_id or "").strip()
         if not project_id:
@@ -116,7 +120,12 @@ class GenerationApplicationService:
         max_chapters = max(0, int(command.max_chapters or 0))
         run_until_chapter = max(0, int(command.run_until_chapter or 0))
         task_id = new_task_id()
-        project = session.get(Project, project_id)
+        project = session.scalar(
+            select(Project)
+            .where(Project.id == project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if project is None:
             raise ProjectNotFound(project_id)
         repository = GenerationTaskRepository(session)
@@ -137,6 +146,13 @@ class GenerationApplicationService:
             requested_chapters = min(requested_chapters, batch_limit)
             max_chapters = min(max_chapters or requested_chapters, batch_limit)
         policy_record = ProjectPolicyStore(session).load(project)
+        parent_payload = (
+            payload_from_json(continuation_parent.execution_payload_json)
+            if continuation_parent is not None
+            else None
+        )
+        if parent_payload and parent_payload.policy_version != policy_record.version:
+            raise ValueError("continuation policy changed")
         root_event = StateUpdater(session).save_decision_event(
             DecisionEventInfo(
                 project_id=project_id,
@@ -162,13 +178,27 @@ class GenerationApplicationService:
             long_run_mode=command.long_run_mode,
             isolated=command.isolated,
             capacity_config_version=capacity.config_version,
-            policy=policy_record.policy,
-            policy_version=policy_record.version,
+            policy=parent_payload.policy_snapshot
+            if parent_payload
+            else policy_record.policy,
+            policy_version=parent_payload.policy_version
+            if parent_payload
+            else policy_record.version,
             root_event_id=root_event.id,
             auto_continue=command.auto_continue,
             run_until_chapter=run_until_chapter,
             max_chapters=max_chapters,
         )
+        if parent_payload:
+            # Copy the entire frozen run scope; only batch and causal identity change.
+            payload = parent_payload.model_copy(
+                update={
+                    "root_event_id": root_event.id,
+                    "max_chapters": max_chapters,
+                    "capacity_config_version": capacity.config_version,
+                }
+            )
+            run_until_chapter = parent_payload.run_until_chapter
         task = repository.create(
             task_id=task_id,
             project_id=project_id,
@@ -179,6 +209,9 @@ class GenerationApplicationService:
             max_chapters=max_chapters,
             run_until_chapter=run_until_chapter,
             payload=payload,
+            continuation_parent_task_id=continuation_parent.id
+            if continuation_parent
+            else None,
         )
         # Persist this task's first intended chapter before it can enter a wait.
         task.resume_from_chapter = capacity.accepted + 1
@@ -205,33 +238,19 @@ class GenerationApplicationService:
         normalized_lease_epoch = int(
             task.lease_epoch if lease_epoch is None else lease_epoch
         )
-        if task.cancel_requested:
-            acknowledged_at = datetime.now(UTC)
-            self._task_updater(
+        if task.cancel_requested or task.pause_requested:
+            from forwin.generation.pipeline_core.result import RunResult
+
+            self.finish_claimed_task(
+                task.id,
+                RunResult(
+                    project_id=task.project_id,
+                    requested_chapters=task.requested_chapters,
+                    cancelled=bool(task.cancel_requested),
+                    paused=bool(task.pause_requested and not task.cancel_requested),
+                ),
                 worker_id=normalized_worker_id,
                 lease_epoch=normalized_lease_epoch,
-            )(
-                task.id,
-                status="cancelled",
-                current_stage="cancelled",
-                message="生成 worker 已确认终止请求，任务已取消。",
-                error=None,
-                finished_at=acknowledged_at,
-            )
-            return
-        if task.pause_requested:
-            acknowledged_at = datetime.now(UTC)
-            self._task_updater(
-                worker_id=normalized_worker_id,
-                lease_epoch=normalized_lease_epoch,
-            )(
-                task.id,
-                status="paused",
-                current_stage="paused",
-                message="生成 worker 已确认暂停请求，任务已安全暂停。",
-                error=None,
-                finished_at=acknowledged_at,
-                paused_at=acknowledged_at,
             )
             return
         from forwin.production.capacity import CapacityWait
@@ -262,17 +281,6 @@ class GenerationApplicationService:
         if int(task.requested_chapters or 0) > 0 and len(completed_chapters) >= int(
             task.requested_chapters or 0
         ):
-            self._task_updater(
-                worker_id=normalized_worker_id,
-                lease_epoch=normalized_lease_epoch,
-            )(
-                task.id,
-                status="completed",
-                current_stage="completed",
-                current_chapter=max(completed_chapters, default=0),
-                completed_chapters=completed_chapters,
-                message="已从 Canon 提交恢复任务进度。",
-            )
             from forwin.generation.pipeline_core.result import RunResult
 
             result = RunResult(
@@ -282,13 +290,12 @@ class GenerationApplicationService:
                 failed_chapters=_task_chapter_numbers(task.failed_chapters_json),
                 paused_chapters=_task_chapter_numbers(task.paused_chapters_json),
             )
-            try:
-                self._completion_handler(task.id, payload)(result)
-            except Exception:  # noqa: BLE001
-                logging.getLogger(__name__).exception(
-                    "Post-recovery completion handler failed for task %s",
-                    task.id,
-                )
+            self.finish_claimed_task(
+                task.id,
+                result,
+                worker_id=normalized_worker_id,
+                lease_epoch=normalized_lease_epoch,
+            )
             return
         try:
             self._capacity_reserver(
@@ -354,7 +361,9 @@ class GenerationApplicationService:
             ),
             max_chapters=self._remaining_max_chapters(task, payload),
             resume_from_chapter=resume_from_chapter,
-            completion_handler=self._completion_handler(task.id, payload),
+            finish_task=lambda result: self.finish_claimed_task(
+                task.id, result, worker_id=worker_id, lease_epoch=lease_epoch
+            ),
             canon_transaction_guard=self._canon_transaction_guard(
                 task_id=task.id,
                 worker_id=worker_id,
@@ -381,6 +390,10 @@ class GenerationApplicationService:
 
     def _task_updater(self, *, worker_id: str, lease_epoch: int):
         def update(task_id: str, **changes: object) -> None:
+            from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
+
+            if changes.get("status") in TERMINAL_GENERATION_STATUSES:
+                raise ValueError("terminal task status requires atomic finalization")
             with self.session_factory.begin() as session:
                 task = self._require_task_lease(
                     session,
@@ -389,6 +402,14 @@ class GenerationApplicationService:
                     lease_epoch=lease_epoch,
                 )
                 normalized = dict(changes)
+                if task.status in TERMINAL_GENERATION_STATUSES:
+                    # Post-completion display callbacks cannot alter durable results.
+                    normalized = {
+                        key: value
+                        for key, value in normalized.items()
+                        if key == "message"
+                    }
+
                 if "completed_chapters" in normalized:
                     existing = _task_chapter_numbers(task.completed_chapters_json)
                     incoming = [
@@ -401,9 +422,7 @@ class GenerationApplicationService:
                 if normalized.get("status") == "capacity_wait":
                     from datetime import timedelta
 
-                    task.lease_expires_at = datetime.now(UTC) + timedelta(
-                        seconds=30
-                    )
+                    task.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
                     task.resume_from_chapter = int(
                         normalized.get("current_chapter") or task.current_chapter or 1
                     )
@@ -654,46 +673,77 @@ class GenerationApplicationService:
 
         return guard
 
-    def _completion_handler(self, task_id: str, payload):
-        def handle(result: object) -> None:
-            if not payload.auto_continue:
-                return
-            from forwin.generation.auto_continue import GenerationAutoContinueController
-
-            GenerationAutoContinueController(
-                session_factory=self.session_factory,
-                create_continue_generation_task=lambda **values: self._enqueue_continue(
-                    **values,
-                    long_run_mode=payload.long_run_mode,
-                    isolated=payload.isolated,
-                ),
-            ).after_task_completion(
-                result,
-                parent_task_id=task_id,
-                run_until_chapter=int(payload.run_until_chapter or 0) or None,
-                max_chapters=int(payload.max_chapters or 0) or None,
-                auto_continue=True,
-            )
-
-        return handle
-
-    def _enqueue_continue(self, **values: object) -> str:
-        handle = self.enqueue(
-            EnqueueGenerationCommand(
-                project_id=str(values.get("project_id") or ""),
-                long_run_mode=str(values.get("long_run_mode") or "daily_serial"),
-                isolated=bool(values.get("isolated", False)),
-                requested_chapters=int(values.get("requested_chapters") or 0),
-                max_chapters=int(values.get("max_chapters") or 0),
-                run_until_chapter=int(values.get("run_until_chapter") or 0),
-                auto_continue=bool(values.get("auto_continue", True)),
-                title=str(values.get("title") or ""),
-                subtitle=str(values.get("subtitle") or ""),
-                message=str(values.get("message") or ""),
-                root_event_type=DecisionEventType.CONTINUE_REQUESTED,
-            )
+    def finish_claimed_task(
+        self, task_id: str, result, *, worker_id: str, lease_epoch: int
+    ) -> None:
+        """Fenced final result and continuation intent share one commit."""
+        from forwin.generation.continuation_events import (
+            GenerationCompletionResult,
+            continuation_event_id,
+            enqueue_continuation,
         )
-        return handle.task_id
+        from forwin.models.outbox import OutboxEvent
+        from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
+
+        frozen = GenerationCompletionResult.from_result(result)
+        with self.session_factory.begin() as session:
+            project_id = session.scalar(
+                select(GenerationTask.project_id).where(GenerationTask.id == task_id)
+            )
+            session.scalar(
+                select(Project).where(Project.id == project_id).with_for_update()
+            )
+            task = self._require_task_lease(
+                session, task_id=task_id, worker_id=worker_id, lease_epoch=lease_epoch
+            )
+            if frozen.project_id != task.project_id:
+                raise ValueError("completion project mismatch")
+            if session.scalar(
+                select(OutboxEvent.id).where(
+                    OutboxEvent.event_id == continuation_event_id(task_id)
+                )
+            ):
+                return
+            if task.status in TERMINAL_GENERATION_STATUSES:
+                raise GenerationTaskLeaseLost(
+                    f"generation task already terminal: {task_id}"
+                )
+            completed = list(
+                dict.fromkeys(
+                    [
+                        *_task_chapter_numbers(task.completed_chapters_json),
+                        *frozen.completed_chapters,
+                    ]
+                )
+            )
+            frozen = frozen.model_copy(update={"completed_chapters": completed})
+            changes = dict(
+                status=frozen.status,
+                current_stage=frozen.status,
+                completed_chapters=completed,
+                failed_chapters=frozen.failed_chapters,
+                paused_chapters=frozen.paused_chapters,
+                frozen_artifacts=frozen.frozen_artifacts,
+                error=frozen.failure_reason,
+            )
+            if frozen.status == "capacity_wait":
+                from datetime import timedelta
+
+                task.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
+                task.resume_from_chapter = (
+                    frozen.capacity_wait_chapter or task.current_chapter or 1
+                )
+                changes.update(
+                    current_chapter=task.resume_from_chapter,
+                    message=frozen.capacity_wait_reason,
+                )
+            else:
+                changes.update(finished_at=datetime.now(UTC))
+                if frozen.paused:
+                    changes.update(paused_at=datetime.now(UTC))
+            GenerationTaskRepository(session).update(task_id, changes)
+            if frozen.status in TERMINAL_GENERATION_STATUSES:
+                enqueue_continuation(session, task, frozen)
 
 
 __all__ = [

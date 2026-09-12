@@ -7,7 +7,10 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.application.read_models import build_generation_control, _recent_rows_by_project
+from forwin.application.read_models import (
+    build_generation_control,
+    _recent_rows_by_project,
+)
 from forwin.api_schema import TaskCenterItemResponse
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent
@@ -84,6 +87,10 @@ class TaskCenterService:
         with self.get_session() as session:
             row = session.get(GenerationTask, task_id)
             task = self.generation_task_from_row(row) if row is not None else None
+            if task is not None:
+                from forwin.generation.continuation_events import continuation_pending
+
+                task["continuation_pending"] = continuation_pending(session, row)
             return self.apply_task_visibility_rules(
                 task, include_deleted=include_deleted
             )
@@ -104,6 +111,9 @@ class TaskCenterService:
             tasks: list[tuple[str, dict[str, Any]]] = []
             for row in rows:
                 task = self.generation_task_from_row(row)
+                from forwin.generation.continuation_events import continuation_pending
+
+                task["continuation_pending"] = continuation_pending(session, row)
                 visible = self.apply_task_visibility_rules(
                     task,
                     include_deleted=False,

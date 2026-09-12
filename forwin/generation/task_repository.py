@@ -53,6 +53,7 @@ class GenerationTaskRepository:
             select(GenerationTask)
             .where(GenerationTask.id == task_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
 
     def create(
@@ -67,9 +68,11 @@ class GenerationTaskRepository:
         max_chapters: int,
         run_until_chapter: int,
         payload: GenerationTaskExecutionPayload,
+        continuation_parent_task_id: str | None = None,
     ) -> GenerationTask:
         task = GenerationTask(
             id=task_id,
+            continuation_parent_task_id=continuation_parent_task_id,
             task_kind="generation",
             status="queued",
             title=title,

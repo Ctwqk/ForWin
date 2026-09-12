@@ -408,6 +408,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     "task-runtime-success",
                     pipeline,
                     lambda: result,
+                    finish_task=lambda _result: None,
                     update_task=lambda task_id, **changes: updates.append(
                         {"task_id": task_id, **changes}
                     ),
@@ -480,6 +481,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
                     "task-runtime-failure",
                     pipeline,
                     lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+                    finish_task=lambda _result: None,
                     update_task=lambda *_args, **_kwargs: None,
                     logger=logger,
                     error_message="runtime failed",

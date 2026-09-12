@@ -29,6 +29,10 @@ class GenerationTask(Base):
         ),
     )
 
+    continuation_parent_task_id: Mapped[str | None] = mapped_column(
+        String, nullable=True, unique=True
+    )
+
     id: Mapped[str] = mapped_column(String, primary_key=True)
     task_kind: Mapped[str] = mapped_column(String, default="generation")
     status: Mapped[str] = mapped_column(String, default="queued")

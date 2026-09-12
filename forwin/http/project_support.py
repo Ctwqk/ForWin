@@ -137,24 +137,18 @@ def _apply_locked_task_update(
             normalized["current_stage"] = terminal_stage
     if "current_chapter" in normalized:
         try:
-            normalized["current_chapter"] = int(
-                normalized["current_chapter"] or 0
-            )
+            normalized["current_chapter"] = int(normalized["current_chapter"] or 0)
         except (TypeError, ValueError):
             normalized["current_chapter"] = 0
     timestamp = now or _utcnow()
-    next_status = str(
-        normalized.get("status", task.get("status", "")) or ""
-    ).strip()
+    next_status = str(normalized.get("status", task.get("status", "")) or "").strip()
     if next_status == "running" and str(task.get("lease_owner", "") or "").strip():
         normalized["heartbeat_at"] = timestamp
         normalized["lease_expires_at"] = timestamp + timedelta(
             seconds=_running_task_lease_seconds(task)
         )
     if normalized.get("status") == "paused":
-        if bool(task.get("pause_requested")) or bool(
-            normalized.get("pause_requested")
-        ):
+        if bool(task.get("pause_requested")) or bool(normalized.get("pause_requested")):
             normalized["pause_requested"] = True
         normalized["paused_at"] = timestamp
     next_stage = str(normalized.get("current_stage", "")).strip()
@@ -165,14 +159,10 @@ def _apply_locked_task_update(
                 next_stage,
                 now=timestamp,
                 current_chapter=int(
-                    normalized.get(
-                        "current_chapter", task.get("current_chapter", 0)
-                    )
+                    normalized.get("current_chapter", task.get("current_chapter", 0))
                     or 0
                 ),
-                message=str(
-                    normalized.get("message", task.get("message", ""))
-                ).strip(),
+                message=str(normalized.get("message", task.get("message", ""))).strip(),
             )
         )
         normalized["stage_history"] = history
@@ -186,6 +176,13 @@ def _apply_locked_task_update(
 def _update_task(runtime: HttpRuntime, task_id: str, **changes: Any) -> None:
     def _operation() -> None:
         with _get_session(runtime) as session:
+            project_id = session.scalar(
+                select(GenerationTask.project_id).where(GenerationTask.id == task_id)
+            )
+            if project_id:
+                session.scalar(
+                    select(Project).where(Project.id == project_id).with_for_update()
+                )
             row = GenerationTaskRepository(session).get_for_update(task_id)
             if row is None or row.deleted_at is not None:
                 return
@@ -208,10 +205,24 @@ def _mutate_generation_task(
 
     def _operation() -> None:
         with _get_session(runtime) as session:
+            project_id = session.scalar(
+                select(GenerationTask.project_id).where(GenerationTask.id == task_id)
+            )
+            if project_id:
+                session.scalar(
+                    select(Project)
+                    .where(Project.id == project_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
             row = GenerationTaskRepository(session).get_for_update(task_id)
             if row is None or row.deleted_at is not None:
                 raise HTTPException(404, "任务不存在")
             task = _generation_task_from_row(row)
+            from forwin.generation.continuation_events import continuation_pending
+
+            pending = continuation_pending(session, row)
+            task["continuation_pending"] = pending
             status = str(task.get("status", "") or "").strip()
             project_id = str(task.get("project_id", "") or "").strip()
             event_type: str | None = None
@@ -241,9 +252,7 @@ def _mutate_generation_task(
                     "pause_requested": True,
                     "status": "paused" if queued else status,
                     "current_stage": (
-                        "paused"
-                        if queued
-                        else str(task.get("current_stage", "") or "")
+                        "paused" if queued else str(task.get("current_stage", "") or "")
                     ),
                     "message": (
                         "任务尚未开始，已安全暂停。"
@@ -260,6 +269,11 @@ def _mutate_generation_task(
             else:
                 raise ValueError(f"unknown generation task mutation: {action}")
 
+            if pending and action in {"pause", "terminate"}:
+                # Stop only the unconsumed intent; preserve the parent's committed result.
+                changes["status"] = status
+                changes["current_stage"] = row.current_stage
+                changes["message"] = "已停止尚未交接的自动续跑意图。"
             updated = _apply_locked_task_update(row, changes)
             if project_id and event_type is not None:
                 parent = project_control_support.latest_related_decision_event(

@@ -188,8 +188,7 @@ def test_default_runner_executes_project_task_and_persists_updates(
                 "pause": kwargs["should_pause"](),
             }
         )
-        update_task(task.id, status="completed", current_stage="completed")
-        kwargs["completion_handler"](
+        kwargs["finish_task"](
             SimpleNamespace(
                 project_id=project_id,
                 status="completed",

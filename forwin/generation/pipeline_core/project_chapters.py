@@ -24,6 +24,7 @@ from forwin.models.planning_control import BandCheckpoint
 from forwin.planning.future_plan_audit.models import FuturePlanAuditRun
 from forwin.production.capacity import CapacityWait
 from forwin.review.repair.service import (
+    RepairWriterExecutionFailure,
     _canon_repair_scope,
     _canon_repair_scope_can_run,
     canon_repair_executor_unavailable,
@@ -1053,6 +1054,25 @@ class ChapterExecutionStage:
                         paused_chapters=paused_chapters,
                         frozen_artifacts=frozen_artifacts,
                         current_chapter=chapter_num,
+                    )
+                if isinstance(exc, RepairWriterExecutionFailure):
+                    frozen_artifacts.extend(exc.frozen_artifacts)
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.REPAIR_FAILED,
+                        scope="chapter",
+                        summary=f"第{chapter_num}章 repair 执行失败，未产出修订正文。",
+                        reason=str(exc),
+                        related_object_type="chapter_draft",
+                        related_object_id=str(exc.payload["source_draft_id"]),
+                        payload={
+                            **exc.payload,
+                            "frozen_artifacts": list(exc.frozen_artifacts),
+                        },
+                        parent_event_id=exc.parent_event_id,
                     )
                 updater.mark_chapter_status(project_id, chapter_num, "failed")
                 session.commit()

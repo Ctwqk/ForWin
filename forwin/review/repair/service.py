@@ -52,6 +52,27 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.writer.execution import WriterExecution, WriterExecutionRequest
+from forwin.writer.execution_errors import (
+    diagnostic_kind_for_failure,
+    error_category_from_attempts,
+)
+
+
+class RepairWriterExecutionFailure(RuntimeError):
+    """Carry execution diagnostics to the transaction owner's failure handler."""
+
+    def __init__(
+        self,
+        cause: Exception,
+        *,
+        parent_event_id: str,
+        payload: dict[str, object],
+        frozen_artifacts: tuple[str, ...],
+    ) -> None:
+        super().__init__(str(cause))
+        self.parent_event_id = parent_event_id
+        self.payload = payload
+        self.frozen_artifacts = frozen_artifacts
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,13 +835,14 @@ def _run_repair_loop_for_phase(
             chapter_number=chapter_plan.chapter_number,
         )
         if rewritten_output is None:
+            writer_result = None
             try:
                 self.control.notify(
                     "repairing_chapter",
                     project_id=project_id,
                     chapter_number=chapter_plan.chapter_number,
                 )
-                rewritten_output = self.writer_execution.execute(
+                writer_result = self.writer_execution.execute(
                     WriterExecutionRequest(
                         context=updated_context,
                         project_id=project_id,
@@ -832,109 +854,40 @@ def _run_repair_loop_for_phase(
                         ],
                         llm_preferred_model=repair_model_preference["preferred_model"],
                     )
-                ).unwrap()
+                )
+                rewritten_output = writer_result.unwrap()
                 if self.control.paused():
                     session.commit()
                     return current_output, current_review, False
+                if rewritten_output is None:
+                    raise RuntimeError("writer-returned-none")
             except Exception as exc:  # noqa: BLE001
-                attempt_row = updater.save_chapter_rewrite_attempt(
-                    project_id=project_id,
-                    chapter_number=chapter_plan.chapter_number,
-                    attempt_no=attempt_no,
-                    repair_phase=repair_phase,
-                    phase_attempt_no=phase_attempt_no,
-                    trigger_review_id=current_review_row.id,
-                    repair_scope=repair_scope,
-                    design_patch={**design_patch, "rewrite_error": str(exc)},
-                    source_draft_id=current_draft.id,
-                    result_draft_id=current_draft.id,
-                    result_verdict="fail",
-                    result_review_id=current_review_row.id,
-                    failure_reason=str(exc),
-                    verification={},
-                    source_chapter_plan=source_chapter_plan,
-                    result_chapter_plan=result_chapter_plan,
-                    source_band_plan=source_band_plan,
-                    result_band_plan=result_band_plan,
-                    forced_accept_applied=False,
-                )
-                _sync_candidate_repair_history(
-                    session,
-                    project_id=project_id,
-                    chapter_number=chapter_plan.chapter_number,
-                    attempts=[*cycle_attempts, attempt_row],
-                )
-                chapter_plan.repair_attempt_count = attempt_no
-                session.add(chapter_plan)
-                current_review_event = self.telemetry.recorder.record_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_plan.chapter_number,
-                    event_family="evaluation_verdict",
-                    event_type=DecisionEventType.REPAIR_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 失败。",
-                    reason=str(exc),
-                    related_object_type="chapter_rewrite_attempt",
-                    related_object_id=attempt_row.id,
+                # No revised body exists: the Writer owns transport retries, and
+                # only the outer failure owner may persist after its rollback.
+                error_category = error_category_from_attempts([], exc)
+                raise RepairWriterExecutionFailure(
+                    exc,
+                    parent_event_id=str(repair_started_event.id or ""),
                     payload={
-                        "attempt_no": attempt_no,
+                        "failure_domain": "infrastructure",
+                        "error_category": error_category,
+                        "error_class": exc.__class__.__name__,
+                        "diagnostic_kind": diagnostic_kind_for_failure(
+                            exc, error_category
+                        ),
+                        "content_rewrite_spent": False,
+                        "repair_attempt_count": attempts_completed,
+                        "repair_phase": repair_phase,
+                        "phase_attempt_no": phase_attempt_no,
                         "repair_scope": repair_scope,
+                        "source_draft_id": current_draft.id,
+                        "trigger_review_id": current_review_row.id,
                         **repair_model_preference,
                     },
-                    parent_event_id=str(repair_started_event.id or ""),
-                )
-                continue
-
-        if rewritten_output is None:
-            attempt_row = updater.save_chapter_rewrite_attempt(
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                attempt_no=attempt_no,
-                repair_phase=repair_phase,
-                phase_attempt_no=phase_attempt_no,
-                trigger_review_id=current_review_row.id,
-                repair_scope=repair_scope,
-                design_patch={**design_patch, "rewrite_error": "writer-returned-none"},
-                source_draft_id=current_draft.id,
-                result_draft_id=current_draft.id,
-                result_verdict="fail",
-                result_review_id=current_review_row.id,
-                failure_reason="writer-returned-none",
-                verification={},
-                source_chapter_plan=source_chapter_plan,
-                result_chapter_plan=result_chapter_plan,
-                source_band_plan=source_band_plan,
-                result_band_plan=result_band_plan,
-                forced_accept_applied=False,
-            )
-            _sync_candidate_repair_history(
-                session,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                attempts=[*cycle_attempts, attempt_row],
-            )
-            chapter_plan.repair_attempt_count = attempt_no
-            session.add(chapter_plan)
-            current_review_event = self.telemetry.recorder.record_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                event_family="evaluation_verdict",
-                event_type=DecisionEventType.REPAIR_FAILED,
-                scope="chapter",
-                summary=f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 未产出正文。",
-                reason="writer-returned-none",
-                related_object_type="chapter_rewrite_attempt",
-                related_object_id=attempt_row.id,
-                payload={
-                    "attempt_no": attempt_no,
-                    "repair_scope": repair_scope,
-                    **repair_model_preference,
-                },
-                parent_event_id=str(repair_started_event.id or ""),
-            )
-            continue
+                    frozen_artifacts=(
+                        writer_result.frozen_artifacts if writer_result else ()
+                    ),
+                ) from exc
         protected_title = str(current_output.title or "").strip()
         plan_title_changed = repair_scope == "chapter_plan" and (
             str(source_chapter_plan.get("title") or "").strip()

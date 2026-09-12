@@ -98,7 +98,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 4: C1 — 固定读取基线并拒绝失效派生事实
 
-**Files:** Create `forwin/retrieval/source_identity.py`; modify `forwin/retrieval/{memory_index,broker_core/broker}.py`, `forwin/protocol/context.py`, `forwin/book_state/query.py`, `forwin/context/request.py`, `forwin/context/assembler_core/assembler.py`, relevant `forwin/context/providers/`, `forwin/knowledge_system/{context,page_repository,store,canon_projection}.py`, `forwin/obsidian/exporter.py`, `forwin/models/knowledge.py`, `forwin/llm_kb/{compiler,vector_index,retriever}.py`, new forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_knowledge_system_v46.py`, broker and prompt regressions.
+**Files:** Create `forwin/retrieval/source_identity.py`, `forwin/knowledge_system/dependencies.py`, `forwin/llm_kb/source_validation.py`; modify `forwin/retrieval/{memory_index,broker_core/broker}.py`, `forwin/protocol/context.py`, `forwin/book_state/query.py`, `forwin/context/request.py`, `forwin/context/assembler_core/assembler.py`, relevant `forwin/context/providers/`, `forwin/knowledge_system/{context,page_repository,store,canon_projection}.py`, `forwin/obsidian/exporter.py`, `forwin/models/knowledge.py`, `forwin/llm_kb/{compiler,vector_index,retriever}.py`, new forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_knowledge_system_v46.py`, broker and prompt regressions.
 
 **Interfaces:** 不可变 `CanonReadBaseline(project_id, book_revision, as_of_chapter)`；batch active-source selector；纯函数语义 page dependency fingerprints。MemorySnippet 增加来源 ID/hash/embedding 身份，旧字段默认空且不具有效性。broker context 在基线变化时最多重建一次。
 

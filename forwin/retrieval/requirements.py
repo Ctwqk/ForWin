@@ -102,6 +102,13 @@ def hydrate_requirements(
         for name in (e.name, *e.aliases):
             if name:
                 aliases[name].add(e.entity_id)
+    identity_snapshot = (
+        {name: sorted(ids) for name, ids in aliases.items()}
+        if session is not None
+        else pack.entity_name_candidates
+    )
+    for name, ids in identity_snapshot.items():
+        aliases[name].update(ids)
     required_nodes: set[str] = set()
     required_edges: set[str] = set()
     required_facts: dict[str, Any] = {}
@@ -167,6 +174,10 @@ def hydrate_requirements(
                 return
             fail(ref, source)
         key = next(iter(candidates))
+        if session is None and token not in entities and token not in identity_snapshot:
+            fail(ref, source, "reassemble to establish name uniqueness for")
+        if key not in entities:
+            fail(ref, source, "reassemble to load accepted entity for")
         if field:
             node = runtime.world.nodes_by_id.get(key) if runtime else None
             state = entities[key].current_state
@@ -311,6 +322,7 @@ def hydrate_requirements(
         baseline.assert_current(session)
     return pack.model_copy(
         update={
+            "entity_name_candidates": identity_snapshot,
             "active_entities": list(selected.values()),
             "active_relations": list(selected_relations.values()),
             "required_entity_ids": sorted(required_nodes),

@@ -1,9 +1,30 @@
-"""Shared existing LLM execution failure classification; no retry policy change."""
+"""Shared Writer failure classification, including terminal accepted-input errors."""
 
 from __future__ import annotations
 
 
+def terminal_input_category(exc: BaseException) -> str:
+    # Local imports avoid the config -> Writer -> retrieval -> Canon import cycle.
+    from forwin.retrieval.source_identity import CanonBaselineChanged
+    from forwin.retrieval.requirements import RequiredContextError
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "error_category", None) == "input_limit":
+            return "input_limit"
+        if isinstance(current, RequiredContextError):
+            return "required_context"
+        if isinstance(current, CanonBaselineChanged):
+            return "canon_baseline_changed"
+        current = current.__cause__ or current.__context__
+    return ""
+
+
 def is_timeout_like(exc: Exception) -> bool:
+    if terminal_input_category(exc):
+        return False
     message = str(exc).lower()
     return any(
         token in message
@@ -12,6 +33,8 @@ def is_timeout_like(exc: Exception) -> bool:
 
 
 def is_transient_llm_like(exc: Exception) -> bool:
+    if terminal_input_category(exc):
+        return False
     current: BaseException | None = exc
     while current is not None:
         message = str(current).lower()
@@ -54,6 +77,8 @@ def transient_retry_delay(attempt: int) -> float:
 def error_category_from_attempts(
     attempts: list[dict[str, object]], exc: BaseException
 ) -> str:
+    if category := terminal_input_category(exc):
+        return category
     for attempt in reversed(attempts):
         category = str(attempt.get("error_category") or "").strip()
         if category and category != "unknown":

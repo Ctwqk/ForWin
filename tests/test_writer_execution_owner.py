@@ -520,3 +520,64 @@ def test_zero_retry_budget_still_runs_one_writer_attempt_with_a_narrow_signature
     started = _events(harness, DecisionEventType.LLM_REQUEST_STARTED)
     assert len(started) == 1
     assert started[0].info.payload["max_attempts"] == 1
+
+
+def _terminal_input_error(kind):
+    import httpx
+    from forwin.writer.llm.errors import LLMInputLimitError
+    from forwin.retrieval.requirements import RequiredContextError
+    from forwin.retrieval.source_identity import CanonBaselineChanged
+
+    if kind == "input_limit":
+        return LLMInputLimitError(
+            "input has 150029 tokens; limit 50000", response=httpx.Response(400)
+        )
+    if kind == "required_context":
+        return RequiredContextError("required_context: ambiguous scene participant")
+    return CanonBaselineChanged("Canon baseline changed")
+
+
+@pytest.mark.parametrize(
+    "kind", ["input_limit", "required_context", "canon_baseline_changed"]
+)
+@pytest.mark.parametrize("prior_transient", [False, True])
+def test_terminal_input_failure_cannot_retry_preview_or_lose_identity(
+    monkeypatch, kind, prior_transient
+):
+    error = _terminal_input_error(kind)
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    main = ([RuntimeError("HTTP 503 unavailable")] if prior_transient else []) + [
+        error
+    ] * 3
+    harness = _harness(main, [_output(mode="writer_preview")], retries=3)
+    result = harness.owner.execute(harness.request)
+    assert result.output is None
+    assert result.error is error
+    with pytest.raises(type(error)) as raised:
+        result.unwrap()
+    assert raised.value is error
+    assert [call[0] for call in harness.writer.calls] == ["main"] * (
+        2 if prior_transient else 1
+    )
+    assert sleeps == ([3.0] if prior_transient else [])
+    assert not _events(harness, DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED)
+    failure = _events(harness, DecisionEventType.LLM_REQUEST_FAILED)[-1]
+    assert failure.info.payload["error_category"] == kind
+    assert failure.info.payload["is_transient"] is False
+    assert result.frozen_artifacts == ("artifact://writer-failed.json",)
+    assert harness.store.frozen[0]["payload"]["error"] == str(error)
+
+
+@pytest.mark.parametrize(
+    "kind", ["input_limit", "required_context", "canon_baseline_changed"]
+)
+def test_terminal_preview_failure_retains_identity_after_transient_main(kind):
+    error = _terminal_input_error(kind)
+    harness = _harness([RuntimeError("HTTP 503 unavailable")], [error], retries=1)
+    result = harness.owner.execute(harness.request)
+    assert result.output is None
+    assert result.error is error
+    assert [call[0] for call in harness.writer.calls] == ["main", "preview"]
+    failure = _events(harness, DecisionEventType.WRITER_PREVIEW_FALLBACK_FAILED)[-1]
+    assert failure.info.payload["error_category"] == kind

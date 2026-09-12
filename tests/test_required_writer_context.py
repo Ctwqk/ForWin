@@ -955,3 +955,100 @@ def test_hydration_preserves_accepted_cognition_author_intent_and_repair(
         )[0]
         assert "稍后才知道获释" not in accepted
         assert "hidden" in accepted
+
+
+def test_trimmed_transport_does_not_infer_global_alias_uniqueness(
+    monkeypatch, required_session
+):
+    from forwin.retrieval.requirements import RequiredContextError, hydrate_requirements
+
+    base = base_context(
+        required_session,
+        active_narrative_obligations=[{"subject_refs": ["node:person-20"]}],
+    )
+    broker, pack = build_pack(monkeypatch, required_session, base, budget=1)
+    assert {e.entity_id for e in pack.active_entities} == {"person-20"}
+    restored = ChapterContextPack.model_validate(pack.model_dump())
+    scene = ScenePlan(scene_no=1, objective="核对", involved_entities=["同名"])
+    assert restored.entity_name_candidates["同名"] == ["person-20", "person-21"]
+    with pytest.raises(RequiredContextError, match="ambiguous"):
+        hydrate_requirements(restored, scene_plans=[scene])
+    with pytest.raises(RequiredContextError, match="ambiguous"):
+        pack.required_context_hydrator(pack, [scene])
+
+
+def test_unknown_transport_name_uniqueness_requires_reassembly(required_session):
+    from forwin.retrieval.requirements import RequiredContextError, hydrate_requirements
+
+    base = base_context(required_session)
+    base.active_entities = [
+        e for e in base.active_entities if e.entity_id == "person-23"
+    ]
+    transported = ChapterContextPack.model_validate(base.model_dump())
+    with pytest.raises(RequiredContextError, match="reassembl"):
+        hydrate_requirements(
+            transported,
+            scene_plans=[
+                ScenePlan(scene_no=1, objective="核对", involved_entities=["别名23"])
+            ],
+        )
+    resolved = hydrate_requirements(
+        transported,
+        scene_plans=[
+            ScenePlan(
+                scene_no=1, objective="核对", involved_entities=["node:person-23"]
+            )
+        ],
+    )
+    assert resolved.required_entity_ids == ["person-23"]
+
+
+@pytest.mark.parametrize("finish", ["close", "commit", "rollback"])
+def test_hydration_authority_ends_with_original_session_transaction(finish):
+    from forwin.retrieval.requirements import RequiredContextError
+
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    session = get_session_factory(engine)()
+    try:
+        session.add(Project(id="required", title="人证", genre="悬疑", premise="核实"))
+        session.commit()
+        pack = base_context(session)
+        broker = RetrievalBroker(memory_index=SimpleNamespace(search=lambda **_: []))
+        pack = broker.hydrate_required_context(SimpleNamespace(session=session), pack)
+        copied = pack.model_copy(deep=True)
+        getattr(session, finish)()
+        # Session is reusable, but a retained callback cannot acquire new authority.
+        session.get(Project, "required")
+        with pytest.raises(RequiredContextError, match="reassembl"):
+            copied.required_context_hydrator(copied, [])
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_transport_keeps_supplied_facts_and_explicit_new_entry(
+    monkeypatch, required_session
+):
+    from forwin.protocol.subworld import ChapterEntryTarget
+    from forwin.retrieval.requirements import hydrate_requirements
+
+    base = base_context(
+        required_session,
+        active_narrative_obligations=[{"subject_refs": ["fact:proof"]}],
+        chapter_entry_targets=[ChapterEntryTarget(entity_name="新信使")],
+    )
+    _, pack = build_pack(monkeypatch, required_session, base, budget=1)
+    transported = ChapterContextPack.model_validate(pack.model_dump())
+    hydrated = hydrate_requirements(
+        transported,
+        scene_plans=[
+            ScenePlan(
+                scene_no=1, objective="核对", involved_entities=["fact:proof", "新信使"]
+            )
+        ],
+    )
+    assert hydrated.required_facts == pack.required_facts
+    assert hydrated.required_entity_ids == pack.required_entity_ids
+    assert hydrated.canon_read_baseline is None
+    assert hydrated.required_context_hydrator is None

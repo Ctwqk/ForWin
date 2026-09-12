@@ -291,6 +291,9 @@ class ChapterContextPack(BaseModel):
     # Retain the immutable in-process read fence for repair rehydration.
     canon_read_baseline: Any | None = Field(default=None, exclude=True)
     required_context_hydrator: SkipJsonSchema[Callable[["ChapterContextPack", list[ScenePlan]], "ChapterContextPack"] | None] = Field(default=None, exclude=True)
+    # Complete accepted name candidates, preserved through trimming/transport.
+    # Snapshot identity only: this never grants authority to read new state.
+    entity_name_candidates: dict[str, list[str]] = Field(default_factory=dict)
     required_entity_ids: list[str] = Field(default_factory=list)
     required_relation_ids: list[str] = Field(default_factory=list)
     required_selection_sources: dict[str, list[str]] = Field(default_factory=dict)

@@ -193,9 +193,19 @@ class RetrievalBroker:
         baseline = pack.canon_read_baseline
         hydrated = hydrate_requirements(pack, session=session, scene_plans=scene_plans)
         if baseline is not None and session is not None:
+            read_transaction = session.get_transaction()
+
             def hydrate_later(current: ChapterContextPack, scenes: list[ScenePlan]) -> ChapterContextPack:
                 if current.canon_read_baseline != baseline:
                     raise RequiredContextError("required_context: hydration baseline mismatch")
+                if (
+                    read_transaction is None
+                    or not read_transaction.is_active
+                    or session.get_transaction() is not read_transaction
+                ):
+                    raise RequiredContextError(
+                        "required_context: reassemble after hydration transaction ended"
+                    )
                 baseline.assert_current(session)
                 return self.hydrate_required_context(repo, current, scene_plans=scenes)
             hydrated = hydrated.model_copy(update={"required_context_hydrator": hydrate_later})

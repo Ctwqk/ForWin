@@ -30,6 +30,7 @@ from .execution_errors import (
     is_timeout_like,
     is_transient_llm_like,
     transient_retry_delay,
+    terminal_input_category,
 )
 from .execution_telemetry import WriterExecutionTelemetry, prompt_trace_success_summary
 
@@ -354,6 +355,8 @@ class WriterExecution:
                     attempts=llm_attempts,
                     skill_layers=writer_skill_layers,
                 )
+                if terminal_input_category(exc):
+                    break
                 if is_timeout_like(exc):
                     logger.warning(
                         "Writer timeout detected for chapter %d; skipping extra retries.",
@@ -393,7 +396,7 @@ class WriterExecution:
                         ),
                     )
                     time.sleep(delay)
-        if last_error is not None:
+        if last_error is not None and not terminal_input_category(last_error):
             preview_started_at = time.perf_counter()
             preview_max_attempts = 3 if saw_transient_error else 2
             preview_timeout_seconds = self.writer.single_call_timeout_seconds
@@ -541,7 +544,11 @@ class WriterExecution:
             )
             if frozen_path:
                 frozen_artifacts.append(frozen_path)
-        if last_error is not None and saw_transient_error:
+        if (
+            last_error is not None
+            and saw_transient_error
+            and not terminal_input_category(last_error)
+        ):
             raise TransientLLMChapterFailure(
                 str(last_error), cause=last_error
             ) from last_error

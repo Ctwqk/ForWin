@@ -2,9 +2,9 @@
 
 > 2026-09-09 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述当前源码；部署与真实运行证据见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。新版本身份、冻结、后缀修订核验、5% 限制及反馈链路已在开发分支接入，最终候选验证和部署仍以执行计划为准。旧 v5 hard-cut / 不迁移旧项目只描述历史切换，本轮必须向前迁移并保留历史引用。旧 L200 与历史矩阵不再叠加为本轮前置门；本轮使用 Stage 1 的 smoke + 全新离线 L100。
 
-更新时间：2026-09-10
+更新时间：2026-09-12
 
-完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。
+完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。 [长篇可靠性补充设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md) 沿现有 owner 补齐评审证据、持久续跑、版本化检索和有效上下文，集成检查及真实生成资格见[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)。
 
 状态：active-current。本文档是当前架构入口；旧 V2/V3/V4 side-by-side 计划只作为历史背景或兼容说明读取。
 

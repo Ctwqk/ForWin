@@ -131,17 +131,15 @@ class BookStateQuery:
                     elif patch.field_path in {"field_overrides", "evidence_by_ref"}:
                         patch_refs = list(value)
                 if isinstance(value, dict) and patch_refs:
-                    # Older replay records dict patches under str(dict). Normalize
-                    # that representation to explicit field/false-object refs.
-                    legacy = evidence.setdefault(key, {}).pop(str(value), [])
-                    refs.discard(str(value))
-                    for ref in patch_refs:
-                        entries = evidence[key].setdefault(ref, [])
-                        entries.extend(
-                            item
-                            for item in [*legacy, *patch.evidence_refs]
-                            if item not in entries
-                        )
+                    # Normalize only evidence still present in the live view.
+                    # A newer snapshot may have corrected or cleared this support;
+                    # historical patch evidence belongs only to sources_by_ref.
+                    legacy = evidence.get(key, {}).pop(str(value), None)
+                    if legacy is not None:
+                        refs.discard(str(value))
+                        for ref in patch_refs:
+                            entries = evidence[key].setdefault(ref, [])
+                            entries.extend(item for item in legacy if item not in entries)
                 for ref in patch_refs:
                     sources.setdefault(key, {}).setdefault(ref, []).append(
                         CognitionSource(

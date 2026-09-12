@@ -449,3 +449,41 @@ def test_reviewer_rejects_changed_retained_canon_baseline(cognition_session):
     cognition_session.flush()
     with pytest.raises(CanonBaselineChanged):
         build_review_context_pack(repo=_FakeRepo(cognition_session), context=pack)
+
+
+@pytest.mark.parametrize(
+    "current_evidence",
+    [
+        {"field:A:occupation": ["event:correction"]},
+        {},
+        {"field:A:occupation": []},
+    ],
+    ids=["corrected-support", "cleared-support", "explicit-empty-support"],
+)
+def test_corrected_snapshot_does_not_reacquire_historical_dict_evidence(
+    cognition_session,
+    current_evidence,
+):
+    BookStateRepository(cognition_session).upsert_cognition_overlay(
+        CognitionOverlay(
+            id="corrected-B",
+            project_id="project-1",
+            observer_type="character",
+            observer_id="B",
+            as_of_chapter=1,
+            field_overrides={"field:A:occupation": "已纠正为教师"},
+            evidence_by_ref=current_evidence,
+        )
+    )
+    snapshot = next(
+        item for item in accepted(cognition_session) if item.observer_id == "B"
+    )
+    assert snapshot.field_overrides == {"field:A:occupation": "已纠正为教师"}
+    assert snapshot.evidence_by_ref == current_evidence
+    # Superseded support still belongs to its historical source event, never to
+    # the current corrected belief or a snapshot that explicitly cleared it.
+    history = snapshot.sources_by_ref["field:A:occupation"]
+    assert len(history) == 1
+    assert history[0].delta_id == "learn-at-1"
+    assert history[0].chapter_number == 1
+    assert history[0].evidence_refs == ["event:lie"]

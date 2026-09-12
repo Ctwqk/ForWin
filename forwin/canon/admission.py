@@ -169,7 +169,23 @@ class CanonAdmissionService:
                     project.id,
                     plan.chapter_number,
                     draft_id=candidate.candidate_draft_id,
+                    for_admission=True,
                 )
+                from forwin.canon_quality.gate import (
+                    normalize_gate_mode,
+                    obligation_resolution_required,
+                    obligation_status_blocking_reason,
+                )
+
+                gate_mode = normalize_gate_mode(
+                    ProjectPolicyStore(session).load(project).policy.canon.quality_gate
+                )
+                for obligation in obligations:
+                    status_reason = obligation_status_blocking_reason(
+                        obligation, p0_only=gate_mode in {"pulp_fatal", "serial_fatal"}
+                    )
+                    if status_reason and gate_mode not in {"off", "shadow"}:
+                        raise CanonStaleVersion(status_reason)
                 resolution = plan.obligation_resolution_plan
                 if resolution is not None:
                     try:
@@ -188,14 +204,6 @@ class CanonAdmissionService:
                         raise CanonStaleVersion(str(exc)) from exc
                 resolved_ids = set(
                     resolution.resolved_obligation_ids if resolution else []
-                )
-                from forwin.canon_quality.gate import (
-                    normalize_gate_mode,
-                    obligation_resolution_required,
-                )
-
-                gate_mode = normalize_gate_mode(
-                    ProjectPolicyStore(session).load(project).policy.canon.quality_gate
                 )
                 for obligation in obligations:
                     if (

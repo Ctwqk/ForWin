@@ -227,23 +227,24 @@ def test_attempts_for_repair_phase_filters_history_without_deleting_total_histor
     assert [item.repair_scope for item in phase_attempts] == ["draft"]
 
 
-def test_canon_repair_budget_ignores_prior_review_repair_attempts():
-    attempts = [
-        _Attempt("draft", "review_repair"),
-        _Attempt("draft", "review_repair"),
-        _Attempt("chapter_plan", "review_repair"),
-        _Attempt("band_plan", "review_repair"),
-    ]
-
-    phase_attempts = _attempts_for_repair_phase(attempts, "canon_repair")
-
-    assert phase_attempts == []
-    assert (
-        len(
-            [attempt for attempt in attempts if attempt.repair_phase == "review_repair"]
-        )
-        == 4
+def test_canon_repair_budget_includes_prior_review_repair_attempts():
+    from tests.test_rc_repair_control import (
+        _RepairHarness,
+        _repair_attempt,
+        _run_repair_loop,
+        _hard_failure_review,
     )
+
+    harness = _RepairHarness(max_rewrites=1)
+    _output, review, forced = _run_repair_loop(
+        harness,
+        attempts=[_repair_attempt(phase="review_repair")],
+        review=_hard_failure_review(),
+        repair_phase="canon_repair",
+    )
+    assert review.repair_exhausted
+    assert not forced
+    assert not any(event.event_type == "repair_started" for event in harness.events)
 
 
 def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
@@ -549,7 +550,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         def __init__(self, _session) -> None:
             return None
 
-        def list_active_for_context(self, *_args, **_kwargs):
+        def list_for_admission(self, *_args, **_kwargs):
             return [obligation]
 
         def list_planned_for_chapter(self, *_args, **_kwargs):

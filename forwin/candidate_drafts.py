@@ -258,7 +258,16 @@ class CandidateDraftRepository:
             }
             for attempt in attempts
         ]
-        row.repair_attempt_count = len(history)
+        # A new candidate or an audit phase cannot refund spent cycle budget.
+        previous_history = json.loads(row.repair_history_json or "[]")
+        history = list(
+            {item["id"]: item for item in [*previous_history, *history]}.values()
+        )
+        row.repair_attempt_count = max(
+            int(row.repair_attempt_count or 0),
+            len(history),
+            max((int(item.get("attempt_no", 0) or 0) for item in history), default=0),
+        )
         row.repair_history_json = _dump_json(history, fallback=[])
         self.session.add(row)
         self.session.flush()

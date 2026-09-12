@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -199,10 +200,22 @@ class CandidateReviewService:
                 and previous_candidate.candidate_draft_id != draft.id
                 else ""
             ),
-            repair_attempt_count=0,
-            repair_history=[],
+            repair_attempt_count=max(
+                int(chapter_plan.repair_attempt_count or 0),
+                int(previous_candidate.repair_attempt_count or 0)
+                if previous_candidate
+                else 0,
+            ),
+            repair_history=json.loads(previous_candidate.repair_history_json or "[]")
+            if previous_candidate
+            else [],
         )
-        updater.mark_chapter_status(project_id, chapter_number, "drafted")
+        updater.mark_chapter_status(
+            project_id,
+            chapter_number,
+            "drafted",
+            repair_attempt_count=candidate.repair_attempt_count,
+        )
         session.flush()
         return PersistedCandidateReview(
             persisted_output, draft, review_row, str(candidate.id)

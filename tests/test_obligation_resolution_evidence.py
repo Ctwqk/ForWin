@@ -181,7 +181,7 @@ def _prepare_reviewed_canon(
         candidate = session.get(CandidateDraftRecord, prepared.candidate_id)
         draft = session.get(ChapterDraft, candidate.candidate_draft_id)
         obligations = context_obligations(
-            session, prepared.project_id, 1, draft_id=draft.id
+            session, prepared.project_id, 1, draft_id=draft.id, for_admission=True
         )
         form = build_form(
             project_id=prepared.project_id,
@@ -920,3 +920,64 @@ def test_real_pulp_preparer_without_obligations_keeps_model_unused(
         assert not result.blocked
         assert result.obligation_resolution_plan.form_json == ""
         assert result.obligation_resolution_plan.evidence == ()
+
+
+@pytest.mark.parametrize("status", ["expired", "blocked"])
+def test_locked_admission_rejects_newly_expired_or_blocked_debt(prepared_canon, status):
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.models.project import ChapterPlan
+
+    plan = _prepare_reviewed_canon(prepared_canon)
+    with prepared_canon.Session.begin() as session:
+        session.get(
+            NarrativeObligationRow, prepared_canon.obligation_id
+        ).status = status
+    result = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        plan
+    )
+    assert result.blocked
+    assert status in result.failure_reason
+    with prepared_canon.Session() as session:
+        assert (
+            session.get(NarrativeObligationRow, prepared_canon.obligation_id).status
+            == status
+        )
+        assert (
+            session.get(ChapterPlan, prepared_canon.chapter_plan_id).active_commit_id
+            is None
+        )
+
+
+@pytest.mark.parametrize("status", ["expired", "blocked"])
+def test_old_fulfillment_answers_do_not_resolve_stopped_debt(status):
+    obligation, form, answers = reviewed_fixture()
+    plan = make_plan(obligation.model_copy(update={"status": status}), form, answers)
+    assert plan.resolved_obligation_ids == []
+
+
+@pytest.mark.parametrize("status", ["expired", "blocked"])
+def test_pulp_optional_stopped_debt_remains_stopped_without_blocking_fresh_admission(
+    prepared_canon, status
+):
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.models.project import Project
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.runtime.policy import RuntimePolicy
+
+    with prepared_canon.Session.begin() as session:
+        session.get(
+            Project, prepared_canon.project_id
+        ).runtime_policy_json = RuntimePolicy.for_profile("pulp").model_dump_json()
+    plan = _prepare_reviewed_canon(
+        prepared_canon, status=status, priority="P1", empty=True
+    )
+    result = CanonAdmissionService(session_factory=prepared_canon.Session).commit_plan(
+        plan
+    )
+    assert not result.blocked, result.failure_reason
+    with prepared_canon.Session() as session:
+        assert (
+            session.get(NarrativeObligationRow, prepared_canon.obligation_id).status
+            == status
+        )

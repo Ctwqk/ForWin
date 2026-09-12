@@ -26,6 +26,7 @@ from forwin.production.capacity import CapacityWait
 from forwin.review.repair.service import (
     _canon_repair_scope,
     _canon_repair_scope_can_run,
+    canon_repair_executor_unavailable,
 )
 from forwin.review.results import review_canon_risk, review_issue_payloads
 from forwin.state.repo import StateRepository
@@ -609,7 +610,15 @@ class ChapterExecutionStage:
                         and gate_result is not None
                         else ""
                     )
-                    can_run_canon_repair = _canon_repair_scope_can_run(repair_scope)
+                    executor_unavailable = (
+                        canon_repair_executor_unavailable(self.repair_execution)
+                        if repair_scope
+                        else ""
+                    )
+                    can_run_canon_repair = (
+                        _canon_repair_scope_can_run(repair_scope)
+                        and not executor_unavailable
+                    )
                     if can_run_canon_repair:
                         (
                             writer_output,
@@ -627,9 +636,7 @@ class ChapterExecutionStage:
                             writer_output=writer_output,
                             gate_result=gate_result,
                         )
-                        force_accept_applied = (
-                            force_accept_applied or canon_force_accept_applied
-                        )
+                        force_accept_applied = canon_force_accept_applied
                         repair_attempt_count = int(
                             chapter_plan.repair_attempt_count or 0
                         )
@@ -637,8 +644,40 @@ class ChapterExecutionStage:
                         canon_risk_level = review_canon_risk(verdict)
                         session.commit()
                         if verdict.verdict != "fail":
-                            force_accept_applied = (
-                                force_accept_applied or canon_force_accept_applied
+                            # Approval and eligibility belong to this new body.
+                            review_gate = handle_chapter_review_gate(
+                                self,
+                                session=session,
+                                updater=updater,
+                                project_id=project_id,
+                                chapter_plan=chapter_plan,
+                                writer_output=writer_output,
+                                verdict=verdict,
+                                residual_review_issues=residual_review_issues,
+                                canon_risk_level=canon_risk_level,
+                                repair_attempt_count=repair_attempt_count,
+                                force_accept_applied=force_accept_applied,
+                                chapter_number=chapter_num,
+                                last_requested_chapter=last_requested_chapter,
+                                requested_chapters=requested_chapters,
+                                completed_chapters=completed_chapters,
+                                failed_chapters=failed_chapters,
+                                paused_chapters=paused_chapters,
+                            )
+                            if review_gate.pause_required:
+                                break
+                            gate_approved = review_gate.gate_approved
+                            acceptance_mode = (
+                                "gate_approved"
+                                if gate_approved
+                                else "force_accept_after_repair"
+                                if force_accept_applied
+                                else "normal"
+                            )
+                            accepted_residual_issues = (
+                                residual_review_issues
+                                if force_accept_applied or gate_approved
+                                else []
                             )
                             continue
                     if (
@@ -650,6 +689,8 @@ class ChapterExecutionStage:
                             getattr(gate_result, "gate_summary", "")
                             or "canon quality gate blocked commit"
                         )
+                        if executor_unavailable:
+                            gate_summary = executor_unavailable
                         self._record_decision_event(
                             updater=updater,
                             project_id=project_id,

@@ -520,3 +520,34 @@ def test_accepted_chapter_read_uses_active_draft_instead_of_new_candidate(
     detail = get_chapter(fixture.project_id, 1, get_session=fixture.Session)
     assert detail.status == "accepted"
     assert detail.body == original_body
+
+
+def test_retry_api_preserves_exhausted_unaccepted_chapter_budget(prepared_canon):
+    from forwin.api_schema import ChapterReviewRetryRequest
+    from forwin.application.projects.reviews import retry_chapter_review
+    from forwin.generation.review_auto_retry import eligible_for_auto_review_retry
+
+    fixture = prepared_canon
+    with fixture.Session.begin() as session:
+        chapter = session.get(ChapterPlan, fixture.chapter_plan_id)
+        chapter.status = "needs_review"
+        chapter.repair_attempt_count = 3
+        chapter.canon_risk_level = "high"
+    response = retry_chapter_review(
+        fixture.project_id,
+        1,
+        ChapterReviewRetryRequest(reason="retry unresolved chapter"),
+        config=object(),
+        get_session=fixture.Session,
+        active_generation_task_error_cls=RuntimeError,
+        require_reason=lambda reason, **kwargs: reason,
+        project_has_active_generation_task=lambda *args, **kwargs: False,
+        generation_task_conflict_message=lambda _: "conflict",
+        log_decision_event=lambda *args, **kwargs: None,
+        create_continue_generation_task=lambda **kwargs: "unused",
+    )
+    assert response.status == "planned"
+    with fixture.Session() as session:
+        chapter = session.get(ChapterPlan, fixture.chapter_plan_id)
+        assert chapter.repair_attempt_count == 3
+        assert not eligible_for_auto_review_retry(chapter, {1})

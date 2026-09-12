@@ -297,7 +297,7 @@ class CanonQualityPreparer:
             return CanonQualityGateOutcome(blocked_path="deferred-acceptance-blocked")
         obligation_repo = NarrativeObligationRepository(session)
         gate_obligations = [
-            *obligation_repo.list_active_for_context(
+            *obligation_repo.list_for_admission(
                 project_id, chapter_number=chapter_number
             ),
             *[

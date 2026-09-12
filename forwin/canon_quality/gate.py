@@ -4,7 +4,7 @@ from typing import Literal
 
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 
-from .signals import CanonAdmissionGateResult, CanonQualitySignal
+from .signals import CanonAdmissionBlocker, CanonAdmissionGateResult, CanonQualitySignal
 
 GateMode = Literal["off", "shadow", "fatal_only", "pulp_fatal", "serial_fatal", "strict"]
 
@@ -81,24 +81,6 @@ def _fatal_only_residual_refs(
     ]
 
 
-def _required_repair_scope_for_signals(
-    signals: list[CanonQualitySignal],
-) -> Literal["draft", "chapter_plan", "band", "arc", "book"] | None:
-    from forwin.review.repair_scope_router import RepairScopeKind, route_signal_kind
-
-    routed_scopes: list[Literal["draft", "chapter_plan"]] = []
-    for signal in signals:
-        routed = route_signal_kind(str(signal.signal_type or ""))
-        if routed == RepairScopeKind.CHAPTER_PLAN:
-            routed_scopes.append("chapter_plan")
-        elif routed == RepairScopeKind.DRAFT:
-            routed_scopes.append("draft")
-    if not routed_scopes:
-        return None
-    if "chapter_plan" in routed_scopes:
-        return "chapter_plan"
-    return "draft"
-
 
 def evaluate_canon_admission(
     *,
@@ -119,9 +101,19 @@ def evaluate_canon_admission(
     require_evidence_for_block: bool = True,
     resolved_obligation_ids: list[str] | None = None,
 ) -> CanonAdmissionGateResult:
+    from forwin.review.repair_scope_router import (
+        blockers_for_signals,
+        required_scope_for_blockers,
+    )
+
     resolved_mode = normalize_gate_mode(mode)
     fatal_signal_types = _fatal_signal_types_for_mode(resolved_mode)
     quality_signals = list(signals or [])
+    infrastructure_items = [
+        item
+        for item in blockers_for_signals(quality_signals)
+        if item.failure_domain == "infrastructure"
+    ]
     active_obligations = list(obligations or [])
     available_patches = list(plan_patches or [])
     blocking = [
@@ -157,7 +149,7 @@ def evaluate_canon_admission(
     llm_issue_refs = form_blocking_refs
     residual_issue_refs: list[str] = []
     required_repair_scope: Literal["draft", "chapter_plan", "band", "arc", "book"] | None = None
-    obligation_reasons = _obligation_blocking_reasons(
+    obligation_items = _obligation_blocking_items(
         obligations=active_obligations,
         plan_patches=available_patches,
         current_chapter=int(chapter_number or 0),
@@ -166,6 +158,7 @@ def evaluate_canon_admission(
         p0_only=resolved_mode in {"pulp_fatal", "serial_fatal"},
         resolved_obligation_ids=resolved_obligation_ids or [],
     )
+    obligation_reasons = [item.reason for item in obligation_items]
     review_failed = _review_verdict_to_gate_verdict(review_verdict) == "fail"
     blocking_reasons = sorted(
         {
@@ -214,6 +207,7 @@ def evaluate_canon_admission(
             and not review_failed
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
+            and not infrastructure_items
         )
         admission_mode = (
             "blocked"
@@ -227,7 +221,6 @@ def evaluate_canon_admission(
         )
         blocking = fatal_blocking
         deterministic_refs = [signal.signal_id for signal in fatal_blocking]
-        required_repair_scope = _required_repair_scope_for_signals(fatal_blocking)
         summary = (
             f"canon quality gate {resolved_mode}: commit_allowed={commit_allowed}, "
             f"fatal_blocking={len(fatal_blocking)}, form_blocking={len(fatal_form_blocking_refs)}, "
@@ -242,6 +235,7 @@ def evaluate_canon_admission(
             and not review_failed
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
+            and not infrastructure_items
         )
         admission_mode = (
             "blocked"
@@ -257,8 +251,13 @@ def evaluate_canon_admission(
             f"open_obligations={open_terminal_obligation_count}, "
             f"narrative_obligations={len(active_obligations)}"
         )
-    if resolved_mode != "fatal_only":
-        required_repair_scope = _required_repair_scope_for_signals(blocking)
+    blocking_items = [*obligation_items, *blockers_for_signals(blocking)]
+    # An absent payoff alone is content debt; actual form failures stop repair.
+    known = {item.reason for item in blocking_items}
+    blocking_items.extend(
+        item for item in infrastructure_items if item.reason not in known
+    )
+    required_repair_scope = required_scope_for_blockers(blocking_items)
 
     return CanonAdmissionGateResult(
         project_id=project_id,
@@ -271,6 +270,7 @@ def evaluate_canon_admission(
         obligation_ids=obligation_ids,
         required_plan_patch_ids=required_plan_patch_ids,
         blocking_reasons=blocking_reasons,
+        blocking_items=blocking_items,
         expired_obligation_ids=expired_obligation_ids,
         over_budget=bool(over_budget),
         blocking_issue_count=len(blocking),
@@ -356,6 +356,20 @@ def _result_can_block(result: dict, *, min_confidence: float, require_evidence: 
     return False
 
 
+def obligation_status_blocking_reason(
+    obligation: NarrativeObligation, *, p0_only: bool = False
+) -> str:
+    if (
+        p0_only
+        and obligation.priority != "P0"
+        and obligation.hardness != "hard_blocker"
+    ):
+        return ""
+    if obligation.status in {"expired", "blocked"}:
+        return f"{obligation.status}_obligation:{obligation.id}"
+    return ""
+
+
 def obligation_resolution_required(
     obligation: NarrativeObligation, *, current_chapter: int,
     is_final_chapter: bool = False, p0_only: bool = False,
@@ -371,7 +385,7 @@ def obligation_resolution_required(
     )
 
 
-def _obligation_blocking_reasons(
+def _obligation_blocking_items(
     *,
     obligations: list[NarrativeObligation],
     plan_patches: list[NarrativePlanPatch],
@@ -380,11 +394,60 @@ def _obligation_blocking_reasons(
     is_final_chapter: bool,
     p0_only: bool = False,
     resolved_obligation_ids: list[str] | None = None,
-) -> list[str]:
-    reasons: list[str] = []
-    if over_budget:
-        reasons.append("obligation_budget_exceeded")
+) -> list[CanonAdmissionBlocker]:
+    items: list[CanonAdmissionBlocker] = []
     patches_by_id = {patch.id: patch for patch in plan_patches if patch.id}
+
+    def add(
+        reason: str,
+        obligation: NarrativeObligation | None = None,
+        *,
+        content: bool = False,
+    ) -> None:
+        related = (
+            [
+                patches_by_id[key]
+                for key in obligation.linked_plan_patch_ids
+                if key in patches_by_id
+            ]
+            if obligation
+            else []
+        )
+        items.append(
+            CanonAdmissionBlocker(
+                reason=reason,
+                obligation_id=obligation.id if obligation else "",
+                unmet_conditions=[
+                    obligation.payoff_test,
+                    *obligation.resolution_conditions,
+                ]
+                if obligation
+                else [],
+                source="narrative_obligation",
+                scope="draft" if content else "operator",
+                failure_domain="content" if content else "unsupported",
+                subject_refs=list(obligation.subject_refs) if obligation else [],
+                evidence_refs=list(obligation.evidence_refs) if obligation else [],
+                must_preserve=list(
+                    dict.fromkeys(
+                        [
+                            "Preserve accepted Canon, obligation subjects, payoff conditions and deadlines; do not waive debt.",
+                            *[
+                                value
+                                for patch in related
+                                for value in [
+                                    *patch.must_preserve,
+                                    *patch.must_not_change,
+                                ]
+                            ],
+                        ]
+                    )
+                ),
+            )
+        )
+
+    if over_budget:
+        add("obligation_budget_exceeded")
     draft_resolved = {str(item).strip() for item in resolved_obligation_ids or [] if str(item).strip()}
     for obligation in obligations:
         obligation_id = obligation.id or "unknown"
@@ -392,32 +455,44 @@ def _obligation_blocking_reasons(
             continue
         if p0_only and obligation.priority != "P0" and obligation.hardness != "hard_blocker":
             continue
-        if obligation.status == "expired":
-            reasons.append(f"expired_obligation:{obligation_id}")
+        status_reason = obligation_status_blocking_reason(obligation, p0_only=p0_only)
+        if status_reason:
+            add(status_reason, obligation)
         elif obligation.status == "active":
             if obligation_resolution_required(obligation, current_chapter=current_chapter, p0_only=p0_only) and obligation_id not in draft_resolved:
-                reasons.append(f"obligation_due_unresolved:{obligation_id}")
+                add(
+                    f"obligation_due_unresolved:{obligation_id}",
+                    obligation,
+                    content=True,
+                )
         elif obligation.status != "planned":
-            reasons.append(f"obligation_not_planned:{obligation_id}")
+            add(f"obligation_not_planned:{obligation_id}", obligation)
         if obligation.hardness == "hard_blocker":
-            reasons.append(f"hard_blocker_obligation:{obligation_id}")
+            add(f"hard_blocker_obligation:{obligation_id}", obligation)
         if not int(obligation.deadline_chapter or 0):
-            reasons.append(f"missing_deadline:{obligation_id}")
+            add(f"missing_deadline:{obligation_id}", obligation)
         if not str(obligation.payoff_test or "").strip():
-            reasons.append(f"missing_payoff_test:{obligation_id}")
+            add(f"missing_payoff_test:{obligation_id}", obligation)
         if is_final_chapter and obligation.priority in {"P0", "P1"} and obligation_resolution_required(obligation, current_chapter=current_chapter, is_final_chapter=True, p0_only=p0_only) and obligation_id not in draft_resolved:
-            reasons.append(f"final_obligation_not_cleared:{obligation_id}")
+            add(
+                f"final_obligation_not_cleared:{obligation_id}",
+                obligation,
+                content=obligation.status == "active",
+            )
         if not obligation.linked_plan_patch_ids:
-            reasons.append(f"missing_plan_patch:{obligation_id}")
+            add(f"missing_plan_patch:{obligation_id}", obligation)
             continue
         for patch_id in obligation.linked_plan_patch_ids:
             patch = patches_by_id.get(patch_id)
             if patch is None or patch.validation_status != "passed" or not patch.applied:
-                reasons.append(f"missing_applied_plan_patch:{patch_id}")
+                add(f"missing_applied_plan_patch:{patch_id}", obligation)
                 continue
             if obligation_id not in patch.source_obligation_ids:
-                reasons.append(f"plan_patch_missing_obligation:{patch_id}:{obligation_id}")
-    return sorted(set(reasons))
+                add(
+                    f"plan_patch_missing_obligation:{patch_id}:{obligation_id}",
+                    obligation,
+                )
+    return list({(item.reason, item.obligation_id): item for item in items}.values())
 
 
 def _review_verdict_to_gate_verdict(value: str) -> Literal["pass", "warn", "fail"]:

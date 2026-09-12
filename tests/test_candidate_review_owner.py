@@ -251,3 +251,49 @@ def test_placeholder_review_does_not_invent_an_alias_or_rewrite_evidence(
     assert reviewer.bodies == [before["body"]]
     assert original.model_dump(mode="python") == before
     assert list(session.scalars(select(CandidateDraftRecord))) == []
+
+
+def test_new_candidate_and_auto_retry_preserve_spent_repair_budget(database, tmp_path):
+    from forwin.generation.review_auto_retry import reset_chapter_for_auto_review_retry
+
+    session, chapter = database
+    module, owner = _owner(session, tmp_path)
+    chapter.repair_attempt_count = 3
+    persisted = owner.persist(
+        session=session,
+        updater=StateUpdater(session),
+        project_id="book",
+        chapter_plan=chapter,
+        evaluation=module.CandidateReviewEvaluation(
+            _output("铜钥匙仍未兑现。"), ReviewVerdict(verdict="pass")
+        ),
+    )
+    candidate = session.get(CandidateDraftRecord, persisted.candidate_id)
+    assert candidate.repair_attempt_count == 3
+    reset_chapter_for_auto_review_retry(
+        session,
+        project_id="book",
+        chapter_number=1,
+        plan=chapter,
+        source="auto_continue_review_retry",
+        reason="retry",
+        summary="retry",
+    )
+    session.flush()
+    assert chapter.repair_attempt_count == 3
+    chapter.repair_attempt_count = (
+        0  # A stale task path cannot erase the candidate ledger.
+    )
+    again = owner.persist(
+        session=session,
+        updater=StateUpdater(session),
+        project_id="book",
+        chapter_plan=chapter,
+        evaluation=module.CandidateReviewEvaluation(
+            _output("新的待审正文。"), ReviewVerdict(verdict="pass")
+        ),
+    )
+    assert (
+        session.get(CandidateDraftRecord, again.candidate_id).repair_attempt_count == 3
+    )
+    assert chapter.repair_attempt_count == 3

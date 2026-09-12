@@ -104,7 +104,7 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
         assert committed.canon_commit_id == "canon-commit-1"
 
 
-def test_candidate_repair_history_can_be_scoped_to_current_draft_cycle() -> None:
+def test_candidate_repair_history_cannot_reset_spent_cycle_budget() -> None:
     engine = get_engine(postgres_test_url("candidate-repair-cycle-history"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -144,10 +144,12 @@ def test_candidate_repair_history_can_be_scoped_to_current_draft_cycle() -> None
 
         updated = repository.attach_repair_history(record.id, current_attempts)
 
-        assert updated.repair_attempt_count == 2
-        assert [
-            item["id"] for item in json.loads(updated.repair_history_json)
-        ] == ["new-attempt-1", "new-attempt-2"]
+        assert updated.repair_attempt_count == 3
+        assert [item["id"] for item in json.loads(updated.repair_history_json)] == [
+            "old-attempt",
+            "new-attempt-1",
+            "new-attempt-2",
+        ]
 
 
 def test_candidate_draft_api_requires_v5_candidate_record() -> None:

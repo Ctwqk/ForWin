@@ -138,7 +138,6 @@ def reset_chapter_for_auto_review_retry(
 ) -> None:
     plan.status = "planned"
     plan.acceptance_mode = ""
-    plan.repair_attempt_count = 0
     plan.residual_review_issues_json = "[]"
     plan.canon_risk_level = ""
     session.add(plan)

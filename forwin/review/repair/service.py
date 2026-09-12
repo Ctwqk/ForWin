@@ -170,6 +170,14 @@ _CANON_SCOPE_TO_REPAIR_SCOPE = {
 _CANON_AUTO_REPAIR_SCOPES = frozenset({"draft", "chapter_plan", "band_plan"})
 
 
+def canon_repair_executor_unavailable(execution: RepairExecution) -> str:
+    if not callable(getattr(execution.writer_execution, "execute", None)):
+        return "canon_repair_writer_executor_unavailable"
+    if not callable(getattr(execution.plan_patch, "apply", None)):
+        return "canon_repair_plan_executor_unavailable"
+    return ""
+
+
 def _canon_repair_scope(raw_scope: object) -> str:
     return _CANON_SCOPE_TO_REPAIR_SCOPE.get(str(raw_scope or "").strip().lower(), "")
 
@@ -214,32 +222,65 @@ def _review_from_canon_gate_block(gate_result) -> ReviewVerdict:
         if hasattr(gate_result, "model_dump")
         else {},
     )
+    blockers = list(getattr(gate_result, "blocking_items", []) or [])
+    issues = [issue]
+    if blockers:
+        issues = [
+            ContinuityIssue(
+                rule_name=item.reason,
+                severity="error",
+                reviewer="canon_quality_gate",
+                description=(
+                    f"Obligation {item.obligation_id} ({', '.join(item.subject_refs)}): "
+                    if item.obligation_id
+                    else ""
+                )
+                + "; ".join(item.unmet_conditions),
+                issue_type=issue_type or "canon_admission_unrouted_block",
+                target_scope=item.scope,
+                evidence_refs=list(item.evidence_refs),
+                source_layer=item.source,
+                blocking_origin="canon_quality_gate",
+                blocking=True,
+                original_result=item.model_dump(mode="json"),
+            )
+            for item in blockers
+        ]
     repair_instruction = None
     if repair_scope in {"draft", "chapter_plan", "band_plan"}:
         repair_instruction = RepairInstruction(
-            repair_scope=repair_scope,  # type: ignore[arg-type]
+            repair_scope=repair_scope,
             failure_type="mixed",
-            must_fix=[issue.description],
-            must_preserve=[],
+            must_fix=[item.description for item in issues],
+            must_preserve=list(
+                dict.fromkeys(
+                    value for item in blockers for value in item.must_preserve
+                )
+            ),
             scope_reason="canon admission required repair",
             design_patch={
                 "canon_required_repair_scope": repair_scope,
                 "canon_gate_summary": str(
                     getattr(gate_result, "gate_summary", "") or ""
                 ),
+                "canon_blocking_items": [
+                    item.model_dump(mode="json") for item in blockers
+                ],
             },
-            evidence_refs=list(issue.evidence_refs),
+            evidence_refs=list(
+                dict.fromkeys(ref for item in issues for ref in item.evidence_refs)
+            ),
         )
     return ReviewVerdict(
         verdict="fail",
-        issues=[issue],
+        issues=issues,
         recommended_action="rewrite" if repair_scope else "pause_for_review",
         review_summary=str(
             getattr(gate_result, "gate_summary", "") or "canon admission blocked commit"
         ),
         reviewer_mode="canon_repair",
         repair_instruction=repair_instruction,
-        residual_review_issues=[issue],
+        residual_review_issues=issues,
     )
 
 
@@ -548,7 +589,11 @@ def _run_repair_loop_for_phase(
             repair_cycle_root_draft_id,
         )
         phase_attempts = _attempts_for_repair_phase(cycle_attempts, repair_phase)
-        phase_rewrite_limit = self.policy.review.effective_rewrite_limit(
+        attempts_completed = max(
+            len(cycle_attempts),
+            int(getattr(chapter_plan, "repair_attempt_count", 0) or 0),
+        )
+        cycle_rewrite_limit = self.policy.review.effective_rewrite_limit(
             has_blocking_issue=any(issue.blocking for issue in current_review.issues)
         )
         repair_v2_input = DecisionInput(
@@ -557,16 +602,16 @@ def _run_repair_loop_for_phase(
             review=current_review,
             signals=[],
             open_obligations=[],
-            attempts_completed=len(phase_attempts),
+            attempts_completed=attempts_completed,
             prior_scope_history=[
                 str(getattr(attempt, "repair_scope", "") or "")
-                for attempt in phase_attempts
+                for attempt in cycle_attempts
             ],
             budget=None,
             target_total_chapters=0,
             plan_layer_health=PlanLayerHealth(),
         )
-        if len(phase_attempts) >= phase_rewrite_limit:
+        if attempts_completed >= cycle_rewrite_limit:
             return _apply_final_residual_decision(
                 self,
                 session=session,
@@ -613,7 +658,7 @@ def _run_repair_loop_for_phase(
                 parent_event_id=repair_event_id or str(current_review_event.id or ""),
             )
 
-        attempt_no = len(cycle_attempts) + 1
+        attempt_no = attempts_completed + 1
         phase_attempt_no = len(phase_attempts) + 1
         repair_model_preference = {
             "preferred_provider_kind": "",

@@ -68,6 +68,22 @@ class CanonQualitySignal(BaseModel):
     status: Literal["open", "resolved", "waived"] = "open"
 
 
+class CanonAdmissionBlocker(BaseModel):
+    """A gate failure with its evidence and legally executable repair scope."""
+
+    reason: str
+    obligation_id: str = ""
+    unmet_conditions: list[str] = Field(default_factory=list)
+    source: str
+    scope: Literal[
+        "draft", "chapter_plan", "band", "arc", "book", "operator", "active_rules"
+    ]
+    failure_domain: Literal["content", "plan", "infrastructure", "unsupported"]
+    subject_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    must_preserve: list[str] = Field(default_factory=list)
+
+
 class CanonAdmissionGateResult(BaseModel):
     project_id: str
     chapter_number: int
@@ -79,6 +95,7 @@ class CanonAdmissionGateResult(BaseModel):
     obligation_ids: list[str] = Field(default_factory=list)
     required_plan_patch_ids: list[str] = Field(default_factory=list)
     blocking_reasons: list[str] = Field(default_factory=list)
+    blocking_items: list[CanonAdmissionBlocker] = Field(default_factory=list)
     expired_obligation_ids: list[str] = Field(default_factory=list)
     over_budget: bool = False
     blocking_issue_count: int = 0

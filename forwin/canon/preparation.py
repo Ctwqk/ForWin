@@ -493,7 +493,7 @@ class CanonPreparationService:
         if draft is None:
             raise ValueError("obligation candidate draft missing")
         obligation_context = context_obligations(
-            session, project_id, chapter_number, draft_id=draft.id
+            session, project_id, chapter_number, draft_id=draft.id, for_admission=True
         )
         identity = {
             "project_id": project_id,

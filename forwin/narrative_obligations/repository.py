@@ -239,13 +239,41 @@ class NarrativeObligationRepository:
         return self._obligation_from_row(row)
 
     def list_active_for_context(self, project_id: str, *, chapter_number: int) -> list[NarrativeObligation]:
-        rows = self.session.execute(
-            select(NarrativeObligationRow).execution_options(populate_existing=True).where(
-                NarrativeObligationRow.project_id == project_id,
-                NarrativeObligationRow.status == "active",
-                NarrativeObligationRow.origin_chapter_number < int(chapter_number or 0),
-            ).order_by(NarrativeObligationRow.deadline_chapter.asc(), NarrativeObligationRow.priority.asc())
-        ).scalars().all()
+        return self._list_context_statuses(
+            project_id, chapter_number=chapter_number, statuses=("active",)
+        )
+
+    def list_for_admission(
+        self, project_id: str, *, chapter_number: int
+    ) -> list[NarrativeObligation]:
+        """Include stopped debt in admission without presenting it as writable payoff."""
+        return self._list_context_statuses(
+            project_id,
+            chapter_number=chapter_number,
+            statuses=("active", "expired", "blocked"),
+        )
+
+    def _list_context_statuses(
+        self, project_id: str, *, chapter_number: int, statuses: tuple[str, ...]
+    ) -> list[NarrativeObligation]:
+        rows = (
+            self.session.execute(
+                select(NarrativeObligationRow)
+                .execution_options(populate_existing=True)
+                .where(
+                    NarrativeObligationRow.project_id == project_id,
+                    NarrativeObligationRow.status.in_(statuses),
+                    NarrativeObligationRow.origin_chapter_number
+                    < int(chapter_number or 0),
+                )
+                .order_by(
+                    NarrativeObligationRow.deadline_chapter.asc(),
+                    NarrativeObligationRow.priority.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
         result: list[NarrativeObligation] = []
         for row in rows:
             if not history.active_origin(self.session, row):

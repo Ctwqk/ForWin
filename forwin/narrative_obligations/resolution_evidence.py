@@ -265,7 +265,12 @@ def build_resolution_plan(
         )
     )
     evidence = []
+    resolvable = {
+        item.id for item in obligations if item.status in {"active", "planned"}
+    }
     for key, ask in asks.items():
+        if key not in resolvable:
+            continue
         answer_index = next(
             i for i, item in enumerate(answers.obligations) if item.id == key
         )
@@ -361,12 +366,22 @@ def apply_resolution_plan(session, plan: ObligationResolutionPlan) -> list[str]:
     return plan.resolved_obligation_ids
 
 
-def context_obligations(session, project_id, chapter_number, *, draft_id: str = ""):
+def context_obligations(
+    session,
+    project_id,
+    chapter_number,
+    *,
+    draft_id: str = "",
+    for_admission: bool = False,
+):
     from .repository import NarrativeObligationRepository
 
     repo = NarrativeObligationRepository(session)
+    select_prior = (
+        repo.list_for_admission if for_admission else repo.list_active_for_context
+    )
     return [
-        *repo.list_active_for_context(project_id, chapter_number=chapter_number),
+        *select_prior(project_id, chapter_number=chapter_number),
         *[
             item
             for item in repo.list_planned_for_chapter(

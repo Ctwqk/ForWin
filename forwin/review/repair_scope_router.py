@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from forwin.canon_quality.signals import SignalKind
+from forwin.canon_quality.signals import (
+    CanonAdmissionBlocker,
+    CanonQualitySignal,
+    SignalKind,
+)
 
 
 class RepairScopeKind(StrEnum):
@@ -78,4 +82,57 @@ __all__ = [
     "RoutedSignal",
     "SIGNAL_KIND_TO_SCOPE",
     "route_signal_kind",
+    "blockers_for_signals",
+    "required_scope_for_blockers",
 ]
+
+
+def blockers_for_signals(
+    signals: list[CanonQualitySignal],
+) -> list[CanonAdmissionBlocker]:
+    items = []
+    infrastructure = {
+        "form_schema_invalid",
+        "form_llm_unavailable",
+        "form_budget_exceeded",
+        "form_answer_rejected",
+        "writer_prompt_assembly_error",
+    }
+    for signal in signals:
+        if signal.status != "open" or signal.severity != "error":
+            continue
+        scope = route_signal_kind(signal.signal_type)
+        domain = (
+            "infrastructure"
+            if signal.signal_type in infrastructure
+            else "content"
+            if scope == RepairScopeKind.DRAFT
+            else "plan"
+            if scope == RepairScopeKind.CHAPTER_PLAN
+            else "unsupported"
+        )
+        items.append(
+            CanonAdmissionBlocker(
+                reason=signal.signal_id,
+                source="canon_quality_signal",
+                scope=scope.value,
+                failure_domain=domain,
+                unmet_conditions=[signal.description or signal.signal_type],
+                evidence_refs=signal.evidence_refs,
+            )
+        )
+    return items
+
+
+def required_scope_for_blockers(items: list[CanonAdmissionBlocker]) -> Literal["draft", "chapter_plan"] | None:
+    if not items or any(
+        item.failure_domain in {"infrastructure", "unsupported"}
+        or item.scope not in {"draft", "chapter_plan"}
+        for item in items
+    ):
+        return None
+    return (
+        "chapter_plan"
+        if any(item.scope == "chapter_plan" for item in items)
+        else "draft"
+    )

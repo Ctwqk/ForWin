@@ -569,42 +569,22 @@ def test_blocking_budget_allows_only_one_phase_rewrite(monkeypatch) -> None:
     )
 
 
-def test_attempts_from_another_phase_do_not_exhaust_active_phase(
-    monkeypatch,
-) -> None:
-    class _RewriteStarted(Exception):
-        pass
-
+def test_attempts_from_another_phase_exhaust_shared_cycle() -> None:
     harness = _RepairHarness(max_rewrites=1)
-    attempts = [_repair_attempt(phase="canon_repair")]
-    monkeypatch.setattr(
-        repair_service,
-        "decide_repair_v2",
-        lambda _decision_input: Decision(
-            outcome="chapter_patch",
-            reason="chapter repair is executable",
-            rule_id="test_chapter_patch",
-            missing_evidence=[],
-            routed_from="test",
-            sub_action={"scope": "chapter_plan"},
-        ),
+
+    def unexpected_repair(_):
+        pytest.fail("shared cycle exhausted but a new repair started")
+
+    harness.plan_patch.apply = unexpected_repair
+    _output, review, forced = _run_repair_loop(
+        harness,
+        attempts=[_repair_attempt(phase="canon_repair")],
+        review=_hard_failure_review(),
     )
-
-    def rewrite_started(*_args, **_kwargs):
-        raise _RewriteStarted
-
-    monkeypatch.setattr(harness.plan_patch, "apply", rewrite_started)
-
-    with pytest.raises(_RewriteStarted):
-        _run_repair_loop(
-            harness,
-            attempts=attempts,
-            review=_hard_failure_review(),
-        )
-
-    assert any(
-        event.event_type == DecisionEventType.REPAIR_STARTED
-        for event in harness.events
+    assert not forced
+    assert review.repair_exhausted
+    assert not any(
+        event.event_type == DecisionEventType.REPAIR_STARTED for event in harness.events
     )
 
 

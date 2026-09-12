@@ -117,33 +117,35 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 **Interfaces:** 同一 Task 4 baseline 的 typed accepted cognition snapshot，含 observer ID/type、显式 ref 状态、错误认知/overrides、证据和 as-of。已存在计划 intent 字段保留计划意义，不能填 current reader/observer fields。
 
-- [ ] RED：N−1 A知/B未知/读者只见线索，N后半才告知B；读取 N−1 的 field patch、false belief 和 override；五种布局+repair实际发送请求里 B 不提前知情。
-- [ ] 从 CognitionView 明确字段读取，get_belief absent 保持 unknown，不用 can_see 默认值及旧 overlay 副本；assembler 和 broker merge 移除计划 truthy fallback。
-- [ ] 不同观察者从各自已加载快照的初始章号继续回放；不能用全体最新快照跳过其他观察者尚未应用的认知变化，也不能重复应用已包含的变化。
-- [ ] Writer/Reviewer 分开渲染已接纳认知、作者计划、预期本章变化及带条件场景承接；秘密可以存在于作者区域，但不成为角色知识。
-- [ ] 跑 BookState/provider/prompt/review regressions，提交 `fix(context): separate accepted cognition from planned reveals` 并审查。
+- [x] RED：N−1 A知/B未知/读者只见线索，N后半才告知B；读取 N−1 的 field patch、false belief 和 override；五种布局+repair实际发送请求里 B 不提前知情。
+- [x] 从 CognitionView 明确字段读取，get_belief absent 保持 unknown，不用 can_see 默认值及旧 overlay 副本；assembler 和 broker merge 移除计划 truthy fallback。
+- [x] 不同观察者从各自已加载快照的初始章号继续回放；不能用全体最新快照跳过其他观察者尚未应用的认知变化，也不能重复应用已包含的变化。
+- [x] Writer/Reviewer 分开渲染已接纳认知、作者计划、预期本章变化及带条件场景承接；秘密可以存在于作者区域，但不成为角色知识。
+- [x] 跑 BookState/provider/prompt/review regressions，提交 `fix(context): separate accepted cognition from planned reveals` 并审查。
 
 ## Task 6: D2 — 必需对象与当前状态贯穿实际请求
 
-**Files:** Modify `forwin/retrieval/broker_core/broker.py`, `forwin/book_state/query.py`, `forwin/protocol/context.py`, `forwin/context/assembler_core/canon_quality_context.py`, `forwin/writer/prompt_core/{builders,sections}.py`, `forwin/review/repair/plan_patch.py`, `forwin/writer/llm/errors.py`, relevant actual request error handlers.
+**Files:** Modify `forwin/retrieval/broker_core/broker.py`, `forwin/book_state/query.py`, `forwin/protocol/context.py`, `forwin/context/assembler_core/canon_quality_context.py`, `forwin/writer/chapter_writer.py`, `forwin/writer/prompt_core/{builders,sections}.py`, `forwin/review/repair/plan_patch.py`, `forwin/writer/llm/errors.py`, relevant actual request error handlers.
 
 **Interfaces:** ChapterContextPack 保存 required_entity_ids/required_relation_ids 和选择来源；RelationSnapshot 含 edge/endpoints/state；统一 requirement resolver 区分 ID、唯一别名、node/field/edge/fact refs及非实体任务类别。软预算元数据与真实 provider input_limit 明确区分。
 
 - [ ] RED：超过10个必需低排名人物、义务唯一引用、别名歧义、必须关系、修复引入原包未选人物；检查全部实际 Writer messages 的身份/状态/名单与关系，场景换序或高排名人物增加不挤掉核心角色。
 - [ ] 保留 obligation subject_refs，先解析必需再补可选。有限 soft trim 只能删除可选并压缩背景，required关键状态不丢；下游 caps只作用可选，允许名单不显示截断样本冒充完整。
+- [ ] breakdown 产生场景后，按同一 accepted 基线补齐场景必需的既有人物/地点及状态，再生成 scene 与 stitch；覆盖原包中未被选入的人物。
 - [ ] RepairPlanPatchService 在新目标后按同一 accepted baseline rehydrate，不能只重裁旧包。歧义/真正缺失的必需事实明确输入失败。
 - [ ] 输出真实渲染 soft_budget_exceeded 统计；provider input_limit 明确不重试相同输入，不新造字符→token硬门。
 - [ ] 跑 context budget/prompt contract/snapshots/repair/LLM retry，提交 `fix(writer): preserve required entities and state across prompt layouts` 并审查。
 
 ## Task 7: C2 — 增量投影及可恢复 embedding 缓存
 
-**Files:** Modify `forwin/knowledge_system/{canon_projection,checkpoints}.py`, `forwin/models/{projection,canon}.py`, `forwin/retrieval/memory_index.py` (includes GatewayTextEmbedder), `scripts/reembed_memory_index.py`; create embedding cache model and forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_reembed_memory_index.py`, `tests/test_projection_checkpoints.py` and migration regressions.
+**Files:** Modify `forwin/knowledge_system/{canon_projection,checkpoints}.py`, `forwin/models/{projection,canon}.py`, `forwin/retrieval/memory_index.py` (includes GatewayTextEmbedder), `forwin/llm_kb/vector_index.py`, `scripts/reembed_memory_index.py`; create embedding cache model and forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_reembed_memory_index.py`, `tests/test_projection_checkpoints.py`, relevant LLM-KB index tests and migration regressions.
 
 **Interfaces:** checkpoint target/projected book_revision 按既有 fencing推进；以 CanonCommitRecord.base_book_revision 区间和 active pointers 确定变化集合。durable embedding cache key = actual input hash + model/backend identity + dimensions + preprocessing version；向量空间按模型身份隔离。
 
 - [ ] RED：接纳100章只读取/嵌入第100章；相同事件重放0新增embedding；修订后缀身份变但输入未变复用缓存；同维度换模型不复用；reembed有较新未接纳稿仍只读取active稿。
 - [ ] checkpoint支持同章新revision/chapter0；old valid superseded event安全收敛或no-op，不无限retry；合并事件覆盖整个缺失revision区间，旧ticket不回退新checkpoint。
 - [ ] 普通路径只取变化正文；unknown迁移checkpoint明确一次重建。缓存校验维度/有限数值，模型身份无法确认不得以维度猜测。全量工具复用同一active selector与cache。
+- [ ] 章节记忆与 LLM-KB 向量检索均按实际 embedding 身份选择向量空间；保留其他版本并维持 C1 来源验证，复查 Task 4 遗留的跨 embedding 版本重复段落问题。
 - [ ] 跑 embedding/reembed/projection/outbox/migration suites，提交 `perf(projection): index changed Canon sources and reuse versioned embeddings` 并审查。
 
 ## Task 8: 集成核验与交付

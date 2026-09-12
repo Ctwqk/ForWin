@@ -129,6 +129,10 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 **Interfaces:** ChapterContextPack 保存 required_entity_ids/required_relation_ids 和选择来源；RelationSnapshot 含 edge/endpoints/state；统一 requirement resolver 区分 ID、唯一别名、node/field/edge/fact refs及非实体任务类别。软预算元数据与真实 provider input_limit 明确区分。
 
+**Owner:** 新建 `forwin/retrieval/requirements.py` 统一必需引用解析和已接纳事实补取。包中可保留不参与序列化的进程内补取接口，始终绑定原 Canon baseline；实际副本保留接口，序列化内容不携带补取权限。
+
+**关系范围：** 显式 edge/fact 引用保留相关端点；隐含必需关系仅补在两个已独立判定为必需的端点之间。单个必需人物的其他邻接人物仍按可选背景处理，重复补取不递归扩大必需集合。
+
 - [ ] RED：超过10个必需低排名人物、义务唯一引用、别名歧义、必须关系、修复引入原包未选人物；检查全部实际 Writer messages 的身份/状态/名单与关系，场景换序或高排名人物增加不挤掉核心角色。
 - [ ] 保留 obligation subject_refs，先解析必需再补可选。有限 soft trim 只能删除可选并压缩背景，required关键状态不丢；下游 caps只作用可选，允许名单不显示截断样本冒充完整。
 - [ ] breakdown 产生场景后，按同一 accepted 基线补齐场景必需的既有人物/地点及状态，再生成 scene 与 stitch；覆盖原包中未被选入的人物。

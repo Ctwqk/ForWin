@@ -202,6 +202,10 @@ Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻
 
 Knowledge Projection、Obsidian export、LLM KB、chapter memory 和 World Studio 读视图从 Canon 派生，失败通过 outbox/checkpoint/replay 恢复。Qdrant 是检索索引，MinIO 是产物存储，都不是独立 Canon。Obsidian 的人工 section 进入单独 human index；写前事实编辑走 generic proposal，已有正式章节的事实变更须通过章节修订及完整后缀核验。
 
+投影检查点保存可空的 target/projected book revision 和 lag，按现有运行 fencing 推进；旧进度未知时明确重建一次，不冒称追平。章节记忆先按 Canon revision 区间和 active 指针选择变化身份，再加载并核验正文；同章修订、chapter 0、合并和迟到事件均按版本处理。reembed 使用同一 active 来源链，未接纳的最新 draft 不参与。前向迁移 0010 增加检查点字段、索引和空缓存表，保留旧行；不执行丢弃来源证明的降级。
+
+embedding 持久缓存绑定实际输入 hash、后端/endpoint/模型、维度和预处理版本，先提交缓存再写索引点；普通会话回调和 sessionmaker 共用这一入口。并发首次未命中可以调用模型两次，但唯一键竞争后使用同一已保存向量。Gateway 和 Remote 响应必须提供与已准备身份一致的模型，缺失或不匹配时不写缓存或索引；Remote 配置别名与返回名称不同时需显式配置一致名称。章节记忆和 LLM-KB 分别选择同一模型身份对应的空间，验证后去重再限额。更换模型后由现有 reembed / 知识库编译显式填充历史；填充前新空间可能为空，不自动新增全书重建调度。旧空间保留；服务商在相同名称下静默更换权重且不提供不可变版本时，现有身份无法检测该变化。
+
 小说 Markdown + manifest 是独立的 outbox 导出：先从保留 Canon 历史冻结目标 book revision 和内容身份，再原子写本地版本文件并推进 current。重试复用冻结快照，旧事件不回退当前版本；只读 rebuild 可重建已导出的版本。接纳事务不执行文件 IO，导出失败不回滚 Canon。发布回执引用明确是捕获时观察值，不伪称过去时点的完整发布状态。当前没有每书 Git 仓库、远端同步或绕过 proposal 的正文导入；边界见[导出报告](../docs/superpowers/reports/2026-09-09-novel-export.md)。
 
 反馈步骤先独立提交带来源/版本的评论分析，零信号也完成；后续聚合或计划事务失败不撤销已经完成的分析。唯一 aggregation owner 以全部评论为分母，区分方向与平台作者，冻结来源发布版本和证据。行动分别记录提议、选择、未来计划应用、裁剪后实际 Writer 输入、正文观察与后续变化；单一读者、低置信度、风险 watchlist 或相反方向不足以自动改纲。未来计划使用现有版本 CAS，拒绝已写/预约/接纳/发布历史，保留既定目标。合格提示的 canonical provider 已恢复，旧全局校准、世界规则自动改写及 review 反馈阻断仍禁用。正文观察默认 unknown，后续信号比较只称关联；[有限样本](../docs/superpowers/reports/2026-09-09-stage3-feedback-finite-loop.md)明确区分真实 owner 与冻结模型/发布输入。

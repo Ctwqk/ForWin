@@ -109,7 +109,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 - [x] migration 不改旧 Markdown/hash/notes，unknown dependencies 不填造。测试新增/删除关联、same-height revision、chapter-zero world edit、late events 和所有 secondary loaders。
 - [x] 跑相关 suite 和实际 prompt regression，提交 `fix(retrieval): validate derived context against active Canon sources` 并审查。
 
-审查遗留（P3，终审处理）：同一有效知识库段落的多个 embedding 版本可能重复占用结果 limit；需按已验证段落去重并保留有界补检，或显式选择当前 embedding 版本。未发现该情形引入旧事实。
+审查遗留 P3 已在 Task 7 修复并独立复核：知识库按当前 embedding 身份选择向量空间，对验证后的段落去重再限额，并保留有界补检。两种同维度模型、两个有效段落及旧空间保留的实际索引回归通过；终审复核该处置。
 
 ## Task 5: D1 — 接通已接纳人物与读者认知
 
@@ -147,11 +147,11 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 **Interfaces:** checkpoint target/projected book_revision 按既有 fencing推进；以 CanonCommitRecord.base_book_revision 区间和 active pointers 确定变化集合。durable embedding cache key = actual input hash + model/backend identity + dimensions + preprocessing version；向量空间按模型身份隔离。 `embedding_cache.py` 统一身份、向量校验及持久批量缓存；正常生产者接入同一 session factory，先选择变化身份再读取正文。
 
-- [ ] RED：接纳100章只读取/嵌入第100章；相同事件重放0新增embedding；修订后缀身份变但输入未变复用缓存；同维度换模型不复用；reembed有较新未接纳稿仍只读取active稿。
-- [ ] checkpoint支持同章新revision/chapter0；old valid superseded event安全收敛或no-op，不无限retry；合并事件覆盖整个缺失revision区间，旧ticket不回退新checkpoint。
-- [ ] 普通路径只取变化正文；unknown迁移checkpoint明确一次重建。缓存校验维度/有限数值，模型身份无法确认不得以维度猜测。全量工具复用同一active selector与cache。
-- [ ] 章节记忆与 LLM-KB 向量检索均按实际 embedding 身份选择向量空间；保留其他版本并维持 C1 来源验证，复查 Task 4 遗留的跨 embedding 版本重复段落问题。 检查点仍记录 Canon revision；同 revision 换模型后由现有 reembed/知识库编译显式填充新空间，覆盖全历史重建和旧空间保留，不新增自动后台策略。
-- [ ] 跑 embedding/reembed/projection/outbox/migration suites，提交 `perf(projection): index changed Canon sources and reuse versioned embeddings` 并审查。
+- [x] RED：接纳100章只读取/嵌入第100章；相同事件重放0新增embedding；修订后缀身份变但输入未变复用缓存；同维度换模型不复用；reembed有较新未接纳稿仍只读取active稿。
+- [x] checkpoint支持同章新revision/chapter0；old valid superseded event安全收敛或no-op，不无限retry；合并事件覆盖整个缺失revision区间，旧ticket不回退新checkpoint。
+- [x] 普通路径只取变化正文；unknown迁移checkpoint明确一次重建。缓存校验维度/有限数值，模型身份无法确认不得以维度猜测。全量工具复用同一active selector与cache。
+- [x] 章节记忆与 LLM-KB 向量检索均按实际 embedding 身份选择向量空间；保留其他版本并维持 C1 来源验证，复查 Task 4 遗留的跨 embedding 版本重复段落问题。 检查点仍记录 Canon revision；同 revision 换模型后由现有 reembed/知识库编译显式填充新空间，覆盖全历史重建和旧空间保留，不新增自动后台策略。
+- [x] 跑 embedding/reembed/projection/outbox/migration suites，提交 `perf(projection): index changed Canon sources and reuse versioned embeddings` 并审查。
 
 ## Task 8: 集成核验与交付
 

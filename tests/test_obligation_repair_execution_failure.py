@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
+from forwin.book_state import BookStateRepository
 from forwin.canon import quality_preparation
 from forwin.canon_quality.types import CanonQualityAnalysisResult
 from forwin.models.audit import DecisionEvent
@@ -17,6 +18,7 @@ from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.protocol.book_state import WorldNode
 from forwin.protocol.review import ReviewVerdict
 from forwin.writer.execution import WriterExecutionResult
 from tests.postgres import postgres_test_url
@@ -89,6 +91,16 @@ def test_repair_execution_failure_retains_budget_and_diagnostic_across_new_run(
 
     def analyze(**kwargs):
         if not analyzed_drafts:
+            # The persisted obligation references an existing object, including
+            # when the next run assembles its required accepted context.
+            BookStateRepository(kwargs["session"]).create_world_node(
+                WorldNode(
+                    id="copper-key",
+                    project_id=kwargs["project_id"],
+                    node_type="item",
+                    name="铜钥匙",
+                )
+            )
             repo = NarrativeObligationRepository(kwargs["session"])
             repo.create_obligation(_obligation(kwargs["project_id"]))
             repo.create_plan_patch(_patch(kwargs["project_id"]))

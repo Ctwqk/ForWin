@@ -1052,3 +1052,119 @@ def test_transport_keeps_supplied_facts_and_explicit_new_entry(
     assert hydrated.required_entity_ids == pack.required_entity_ids
     assert hydrated.canon_read_baseline is None
     assert hydrated.required_context_hydrator is None
+
+
+@pytest.fixture
+def committed_required_session(required_session):
+    engine = required_session.get_bind()
+    required_session.commit()
+    with get_session_factory(engine)() as session:
+        yield session
+
+
+@pytest.mark.parametrize("scope", ["draft", "band_plan"])
+@pytest.mark.parametrize("canon_changed", [False, True])
+def test_transient_repair_overlay_rebinds_after_commit(
+    monkeypatch, committed_required_session, scope, canon_changed
+):
+    from forwin.models.project import ChapterPlan
+    from forwin.protocol.book_state import CognitionOverlay
+    from forwin.protocol.review import RepairInstruction
+    from forwin.protocol.subworld import ChapterEntryTarget
+    from forwin.planning.world_contracts import ChapterWorldDeltaIntent
+    from forwin.retrieval.requirements import RequiredContextError
+    from forwin.retrieval.source_identity import CanonBaselineChanged
+    from forwin.review.repair.plan_patch import (
+        RepairPlanPatchRequest,
+        RepairPlanPatchService,
+    )
+    from forwin.state.repo import StateRepository
+
+    session = committed_required_session
+    chapter = ChapterPlan(
+        id="chapter",
+        project_id="required",
+        arc_plan_id="arc",
+        chapter_number=2,
+        title="核对",
+    )
+    session.add(chapter)
+    session.flush()
+    BookStateRepository(session).upsert_cognition_overlay(
+        CognitionOverlay(
+            id="cognition",
+            project_id="required",
+            observer_type="character",
+            observer_id="person-23",
+            as_of_chapter=0,
+            visible_refs=["node:person-20"],
+        )
+    )
+    cognition = BookStateQuery(session).accepted_cognition("required", as_of_chapter=1)
+    intent = ChapterWorldDeltaIntent(
+        intent_id="planned",
+        project_id="required",
+        chapter_number=2,
+        expected_observer_state_changes={"person-23": "稍后才知道获释"},
+    )
+    base = base_context(
+        session,
+        accepted_cognition=cognition,
+        chapter_world_delta_intent=intent,
+        chapter_entry_targets=[ChapterEntryTarget(entity_name="新信使")],
+    )
+    broker, pack = build_pack(monkeypatch, session, base)
+    session.commit()
+    old_callback = pack.required_context_hydrator
+    with pytest.raises(RequiredContextError, match="transaction ended"):
+        old_callback(pack, [])
+    if canon_changed:
+        session.get(Project, "required").book_revision += 1
+        session.commit()
+    request = RepairPlanPatchRequest(
+        session=session,
+        repo=StateRepository(session),
+        project_id="required",
+        chapter_plan=chapter,
+        context=pack,
+        repair_scope=scope,
+        instruction=RepairInstruction(
+            repair_scope=scope,
+            failure_type="continuity",
+            must_fix=["证人23必须保留获释状态"],
+            must_not_reveal=["保密标记"],
+            design_patch={"immersion_anchors": ["证人23在码头核对"]},
+        ),
+    )
+    owner = RepairPlanPatchService(
+        retrieval_broker=broker, arc_envelope_manager=SimpleNamespace()
+    )
+    if canon_changed:
+        with pytest.raises(CanonBaselineChanged):
+            owner.apply(request)
+        return
+    result = owner.apply(request)
+    assert result.chapter_snapshot["transient_overlay"] is True
+    assert result.band_snapshot == {}
+    assert result.context.canon_read_baseline == pack.canon_read_baseline
+    assert result.context.required_context_hydrator is not old_callback
+    assert result.context.accepted_cognition == cognition
+    assert result.context.chapter_world_delta_intent == intent
+    assert result.context.chapter_entry_targets == pack.chapter_entry_targets
+    assert result.context.repair_contract.must_not_reveal == ["保密标记"]
+    assert result.context.chapter_experience_plan.immersion_anchors == [
+        "证人23在码头核对"
+    ]
+    assert_visible(result.context, (23,))
+    scene_pack = result.context.required_context_hydrator(
+        result.context.model_copy(deep=True),
+        [
+            ScenePlan(
+                scene_no=1, objective="核对", involved_entities=["别名22", "新信使"]
+            )
+        ],
+    )
+    assert_visible(scene_pack, (22, 23))
+    assert scene_pack.accepted_cognition == cognition
+    with pytest.raises(RequiredContextError, match="transaction ended"):
+        old_callback(pack, [])

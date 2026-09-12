@@ -710,7 +710,10 @@ def test_canon_gate_block_review_routes_to_required_draft_scope():
     assert decision.sub_action["scope"] == "draft"
 
 
-def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch):
+@pytest.mark.parametrize("canon_changed", [False, True])
+def test_warn_review_canon_block_runs_canon_repair_before_accepting(
+    monkeypatch, canon_changed
+):
     from forwin.state.updater import StateUpdater
 
     create_project = StateUpdater.create_project
@@ -739,6 +742,37 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
     db_path = postgres_test_url("canon-repair-admission")
     pipeline = _build_pipeline(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
+    from forwin.retrieval.requirements import RequiredContextError
+    from forwin.retrieval.source_identity import CanonBaselineChanged
+    from forwin.review.repair.plan_patch import RepairPlanPatchService
+
+    patch_apply = RepairPlanPatchService.apply
+    patch_errors, writer_calls = [], []
+
+    def apply_after_repair_commit(owner, request):
+        original = request.context
+        # The real RepairService already committed REPAIR_STARTED. The old
+        # capability must remain dead; the repair owner must explicitly rebind.
+        with pytest.raises(RequiredContextError, match="transaction ended"):
+            original.required_context_hydrator(original, [])
+        if canon_changed:
+            project = request.session.get(Project, request.project_id)
+            project.book_revision += 1
+            request.session.flush()
+        try:
+            result = patch_apply(owner, request)
+        except Exception as exc:
+            patch_errors.append(exc)
+            raise
+        assert result.context.canon_read_baseline == original.canon_read_baseline
+        assert (
+            result.context.required_context_hydrator
+            is not original.required_context_hydrator
+        )
+        result.context.required_context_hydrator(result.context, [])
+        return result
+
+    monkeypatch.setattr(RepairPlanPatchService, "apply", apply_after_repair_commit)
     try:
         pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
             "arc_synopsis": "canon repair admission",
@@ -758,16 +792,19 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
             "plot_threads": [],
             "initial_time": {"label": "开始", "description": "开始"},
         }
-        pipeline.writer.write_chapter = lambda context: WriterOutput(
-            chapter_number=context.chapter_number,
-            title=f"第{context.chapter_number}章",
-            body="正文" * 900,
-            char_count=1800,
-            end_of_chapter_summary="ok",
-            state_changes=[],
-            new_events=[],
-            thread_beats=[],
-            time_advance=None,
+        pipeline.writer.write_chapter = lambda context: (
+            writer_calls.append(context)
+            or WriterOutput(
+                chapter_number=context.chapter_number,
+                title=f"第{context.chapter_number}章",
+                body="正文" * 900,
+                char_count=1800,
+                end_of_chapter_summary="ok",
+                state_changes=[],
+                new_events=[],
+                thread_beats=[],
+                time_advance=None,
+            )
         )
         pipeline.candidate_review.draft_review = WarnThenPassReviewHub()
 
@@ -815,6 +852,16 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting(monkeypatch)
         pipeline.llm_client.close()
         pipeline.engine.dispose()
 
+    if canon_changed:
+        assert result.status == "failed"
+        assert len(writer_calls) == 1
+        assert len(patch_errors) == 1
+        assert isinstance(patch_errors[0], CanonBaselineChanged)
+        assert attempts == []
+        assert plan.status == "failed"
+        return
+    assert len(writer_calls) == 2
+    assert not patch_errors
     assert result.status == "completed"
     assert result.frozen_artifacts == []
     assert apply_calls["count"] == 2

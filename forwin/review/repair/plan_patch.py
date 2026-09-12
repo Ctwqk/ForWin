@@ -390,8 +390,8 @@ class RepairPlanPatchService:
                     current_plan, repair_instruction
                 )
             )
-            updated_context = context.model_copy(
-                update={"chapter_experience_plan": updated_plan}
+            updated_context = self._with_transient_experience_plan(
+                repo, context, updated_plan
             )
             return RepairPlanPatchResult(
                 updated_plan.model_dump(mode="json"),
@@ -502,8 +502,8 @@ class RepairPlanPatchService:
         updated_plan = current_plan.model_copy(
             update=chapter_experience_patch_payload(current_plan, repair_instruction)
         )
-        updated_context = context.model_copy(
-            update={"chapter_experience_plan": updated_plan}
+        updated_context = self._with_transient_experience_plan(
+            repo, context, updated_plan
         )
         return RepairPlanPatchResult(
             updated_plan.model_dump(mode="json"),
@@ -524,6 +524,23 @@ class RepairPlanPatchService:
             ),
             "",
         )
+
+    def _with_transient_experience_plan(
+        self,
+        repo: StateRepository,
+        context: ChapterContextPack,
+        updated_plan: ChapterExperiencePlan,
+    ) -> ChapterContextPack:
+        updated_context = context.model_copy(
+            update={"chapter_experience_plan": updated_plan}
+        )
+        if context.canon_read_baseline is not None:
+            # RepairService commits before apply(). Rebind accepted reads in its
+            # current transaction, preserving the original fence and authored overlay.
+            updated_context = self.retrieval_broker.hydrate_required_context(
+                repo, updated_context, trim=False
+            )
+        return updated_context
 
     def _replace_band_schedule(
         self,

@@ -125,20 +125,21 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 6: D2 — 必需对象与当前状态贯穿实际请求
 
-**Files:** Modify `forwin/retrieval/broker_core/broker.py`, `forwin/book_state/query.py`, `forwin/protocol/context.py`, `forwin/context/assembler_core/canon_quality_context.py`, `forwin/writer/chapter_writer.py`, `forwin/writer/prompt_core/{builders,sections}.py`, `forwin/review/repair/plan_patch.py`, `forwin/writer/llm/errors.py`, relevant actual request error handlers.
+**Files:** Modify `forwin/retrieval/broker_core/broker.py`, `forwin/book_state/query.py`, `forwin/protocol/context.py`, `forwin/context/assembler_core/canon_quality_context.py`, `forwin/writer/{chapter_writer,execution}.py`, `forwin/writer/prompt_core/{builders,sections}.py`, `forwin/review/repair/plan_patch.py`, `forwin/writer/llm/errors.py`, relevant actual request error handlers.
 
 **Interfaces:** ChapterContextPack 保存 required_entity_ids/required_relation_ids 和选择来源；RelationSnapshot 含 edge/endpoints/state；统一 requirement resolver 区分 ID、唯一别名、node/field/edge/fact refs及非实体任务类别。软预算元数据与真实 provider input_limit 明确区分。
 
-**Owner:** 新建 `forwin/retrieval/requirements.py` 统一必需引用解析和已接纳事实补取。包中可保留不参与序列化的进程内补取接口，始终绑定原 Canon baseline；实际副本保留接口，序列化内容不携带补取权限。
+**Owner:** 新建 `forwin/retrieval/requirements.py` 统一必需引用解析和已接纳事实补取。包中可保留不参与序列化的进程内补取接口，始终绑定原 Canon baseline；实际副本保留接口，序列化内容不携带补取权限。 原补取接口随其事务结束失效；现有修复入口在正常事务切换后复核原 Canon baseline 并重新组装或绑定当前事务，不能把新事务等同于新 Canon 基线。
 
 **关系范围：** 显式 edge/fact 引用保留相关端点；隐含必需关系仅补在两个已独立判定为必需的端点之间。单个必需人物的其他邻接人物仍按可选背景处理，重复补取不递归扩大必需集合。
 
-- [ ] RED：超过10个必需低排名人物、义务唯一引用、别名歧义、必须关系、修复引入原包未选人物；检查全部实际 Writer messages 的身份/状态/名单与关系，场景换序或高排名人物增加不挤掉核心角色。
-- [ ] 保留 obligation subject_refs，先解析必需再补可选。有限 soft trim 只能删除可选并压缩背景，required关键状态不丢；下游 caps只作用可选，允许名单不显示截断样本冒充完整。
-- [ ] breakdown 产生场景后，按同一 accepted 基线补齐场景必需的既有人物/地点及状态，再生成 scene 与 stitch；覆盖原包中未被选入的人物。
-- [ ] RepairPlanPatchService 在新目标后按同一 accepted baseline rehydrate，不能只重裁旧包。歧义/真正缺失的必需事实明确输入失败。
-- [ ] 输出真实渲染 soft_budget_exceeded 统计；provider input_limit 明确不重试相同输入，不新造字符→token硬门。
-- [ ] 跑 context budget/prompt contract/snapshots/repair/LLM retry，提交 `fix(writer): preserve required entities and state across prompt layouts` 并审查。
+- [x] RED：超过10个必需低排名人物、义务唯一引用、别名歧义、必须关系、修复引入原包未选人物；检查全部实际 Writer messages 的身份/状态/名单与关系，场景换序或高排名人物增加不挤掉核心角色。
+- [x] 保留 obligation subject_refs，先解析必需再补可选。有限 soft trim 只能删除可选并压缩背景，required关键状态不丢；下游 caps只作用可选，允许名单不显示截断样本冒充完整。
+- [x] breakdown 产生场景后，按同一 accepted 基线补齐场景必需的既有人物/地点及状态，再生成 scene 与 stitch；覆盖原包中未被选入的人物。
+- [x] RepairPlanPatchService 在新目标后按同一 accepted baseline rehydrate，不能只重裁旧包。歧义/真正缺失的必需事实明确输入失败。
+- [x] 输出真实渲染 soft_budget_exceeded 统计；provider input_limit 明确不重试相同输入，不新造字符→token硬门。
+- [x] 外层 WriterExecution 对 input_limit、缺失/歧义必需输入和 Canon 基线变化明确失败，保留错误记录且不再 retry/preview；裁剪后序列化的局部快照不重新证明别名唯一性。
+- [x] 跑 context budget/prompt contract/snapshots/repair/LLM retry，提交 `fix(writer): preserve required entities and state across prompt layouts` 并审查。
 
 ## Task 7: C2 — 增量投影及可恢复 embedding 缓存
 

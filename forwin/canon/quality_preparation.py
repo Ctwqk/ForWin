@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.canon.types import CanonQualityGateOutcome
+from forwin.canon_quality.chapter_review_form.pruning import select_obligations_to_ask
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.repository import CanonQualityRepository
@@ -184,12 +185,34 @@ class CanonQualityPreparer:
             )
         draft_id = str(getattr(latest_draft, "id", "") or "")
         review_id = str(getattr(latest_review, "id", "") or "")
-        gate_mode = (
-            "fatal_only" if policy.canon.quality_gate == "pulp_fatal" else "strict"
-        )
-        deterministic_gate_mode = gate_mode in {"off", "fatal_only"}
-        gate_llm_client = None if deterministic_gate_mode else llm_client
-        analysis_mode = "off" if deterministic_gate_mode else "primary"
+        gate_mode = policy.canon.quality_gate
+        deterministic_gate_mode = gate_mode == "pulp_fatal"
+        needs_obligation_form = False
+        if deterministic_gate_mode:
+            obligation_repo = NarrativeObligationRepository(session)
+            # Pulp has no other semantic reviewer. Use the existing form only
+            # when its selection rules include an applicable obligation; keep
+            # the no-obligation path deterministic and preserve its cache.
+            review_obligations = [
+                *obligation_repo.list_active_for_context(
+                    project_id, chapter_number=chapter_number
+                ),
+                *[
+                    item
+                    for item in obligation_repo.list_planned_for_chapter(
+                        project_id, origin_chapter_number=chapter_number
+                    )
+                    if draft_id and item.origin_draft_id == draft_id
+                ],
+            ]
+            needs_obligation_form = bool(
+                select_obligations_to_ask(
+                    obligations=review_obligations, chapter_number=chapter_number
+                )
+            )
+        use_form = not deterministic_gate_mode or needs_obligation_form
+        gate_llm_client = llm_client if use_form else None
+        analysis_mode = "primary" if use_form else "off"
         gate_trace_id = ""
         analysis_error: BaseException | None = None
         try:
@@ -203,6 +226,7 @@ class CanonQualityPreparer:
                 mode=analysis_mode,
                 llm_client=gate_llm_client,
                 return_raw_analyzer_results=True,
+                obligation_gate_mode=gate_mode,
             )
         except BaseException as exc:
             analysis_error = exc

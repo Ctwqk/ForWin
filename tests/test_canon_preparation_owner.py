@@ -436,3 +436,41 @@ def test_quality_event_failure_still_becomes_audited_preparation_failure(
     )
     assert blocked is not None
     assert json.loads(blocked.payload_json)["gate_outcome"]["decision"] == "error"
+
+
+@pytest.mark.parametrize(
+    "signal_type,severity,blocked",
+    [
+        ("level_rollback", "error", True),
+        ("form_answer_rejected", "warning", False),
+    ],
+)
+def test_pulp_preparer_uses_declared_fatal_policy_without_standard_warning_gates(
+    quality_case,
+    monkeypatch,
+    signal_type,
+    severity,
+    blocked,
+):
+    from forwin.canon_quality.signals import CanonQualitySignal
+    from forwin.canon_quality.types import CanonQualityAnalysisResult
+
+    module = _quality_owner()
+    signal = CanonQualitySignal(
+        signal_id="policy-signal",
+        project_id="book",
+        chapter_number=1,
+        signal_type=signal_type,
+        severity=severity,
+        description="Existing policy signal",
+        evidence_refs=["body:register"],
+    )
+    monkeypatch.setattr(
+        module,
+        "analyze_writer_output_quality",
+        lambda **_: CanonQualityAnalysisResult(
+            project_id="book", chapter_number=1, signals=[signal]
+        ),
+    )
+    result = _evaluate(module, quality_case)
+    assert result.blocked is blocked

@@ -674,3 +674,249 @@ def test_ambiguous_repeated_quote_needs_more_context_before_it_can_resolve():
         make_plan(obligation, form, answers, repeated_body).resolved_obligation_ids
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "deadline,priority,judgment,blocked,extra_debts",
+    [
+        (1, "P0", "fulfilled", False, 0),
+        (4, "P0", "fulfilled", False, 0),
+        (1, "P0", "unknown", True, 0),
+        (4, "P0", "unknown", False, 0),
+        (1, "P1", "unknown", False, 0),
+        (1, "P0", "fulfilled", False, 25),
+    ],
+)
+def test_real_pulp_preparer_reviews_applicable_payoff_with_existing_form(
+    prepared_canon,
+    tmp_path,
+    deadline,
+    priority,
+    judgment,
+    blocked,
+    extra_debts,
+):
+    import json
+
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.canon.preparation import CanonPreparationService
+    from forwin.canon.quality_preparation import CanonQualityPreparer
+    from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.models.project import Project
+    from forwin.narrative_obligations.repository import NarrativeObligationRepository
+    from forwin.narrative_obligations.types import NarrativePlanPatch
+    from forwin.observability.pipeline_trace import (
+        PipelineAuditContext,
+        PipelineTraceRecorder,
+    )
+    from forwin.protocol.review import ReviewVerdict
+    from forwin.protocol.writer import WriterOutput
+    from forwin.runtime.policy import RuntimePolicy
+    from forwin.state.updater import StateUpdater
+    from forwin.storage import ArtifactStore
+
+    class FormClient:
+        calls = 0
+
+        def complete_json(self, *, messages, **_kwargs):
+            self.calls += 1
+            content = messages[1]["content"]
+            payload = json.loads(content[content.index("{") :])
+            form = payload["form"]
+            body = payload["chapter_body"]
+            if extra_debts:
+                assert len(form["obligations"]) == 1, (
+                    "Optional P1 debt displaced required P0 evidence budget"
+                )
+                assert form["obligations"][0]["id"] == prepared_canon.obligation_id
+                assert form["obligations"][0]["must_resolve_now"]
+            assessment = {
+                "value": judgment,
+                "confidence": 0.95 if judgment == "fulfilled" else 0.3,
+                "evidence_quote": body if judgment == "fulfilled" else "",
+                "subject_of_quote": "Shen Linchuan",
+                "explanation": "The narrative establishes his actual entry."
+                if judgment == "fulfilled"
+                else "Cannot establish the payoff.",
+            }
+            return {
+                **{
+                    key: form[key]
+                    for key in ("project_id", "chapter_number", "form_schema_version")
+                },
+                "obligations": [
+                    {
+                        "id": ask["id"],
+                        "addressed": assessment,
+                        "payoff_evidence": assessment,
+                        "subject_matches": {
+                            **assessment,
+                            "value": "true" if judgment == "fulfilled" else "unknown",
+                        },
+                        "condition_results": [
+                            {"condition": condition, "assessment": assessment}
+                            for condition in [
+                                ask["payoff_test"],
+                                *ask["resolution_conditions"],
+                            ]
+                        ],
+                    }
+                    for ask in form["obligations"]
+                ],
+            }
+
+    client = FormClient()
+    store = ArtifactStore(str(tmp_path))
+    recorder = PipelineTraceRecorder(
+        audit=PipelineAuditContext(), artifact_store=store, observability=None
+    )
+    policy = RuntimePolicy.for_profile("pulp")
+    with prepared_canon.Session.begin() as session:
+        session.get(
+            Project, prepared_canon.project_id
+        ).runtime_policy_json = policy.model_dump_json()
+        candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
+        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
+        obligation = session.get(NarrativeObligationRow, prepared_canon.obligation_id)
+        obligation.status = "active"
+        obligation.origin_chapter_number = 0
+        obligation.priority = priority
+        obligation.deadline_chapter = deadline
+        obligation.subject_refs_json = '["Shen Linchuan"]'
+        obligation.payoff_test = "Shen Linchuan enters the archive"
+        obligation.resolution_conditions_json = (
+            '["Entry actually occurs in this chapter"]'
+        )
+        patch = NarrativeObligationRepository(session).create_plan_patch(
+            NarrativePlanPatch(
+                project_id=prepared_canon.project_id,
+                source_obligation_ids=[obligation.id],
+                validation_status="passed",
+                applied=True,
+            )
+        )
+        obligation.linked_plan_patch_ids_json = json.dumps([patch.id])
+        for i in range(extra_debts):
+            session.add(
+                NarrativeObligationRow(
+                    project_id=prepared_canon.project_id,
+                    origin_chapter_number=0,
+                    priority="P1",
+                    status="active",
+                    deadline_chapter=1,
+                    obligation_type="custom_reader_promise",
+                    summary=f"Optional debt {i}: " + "long promise " * 1000,
+                    payoff_test="Pay off the optional promise",
+                )
+            )
+        session.flush()
+        result = CanonQualityPreparer().evaluate(
+            session=session,
+            updater=StateUpdater(session),
+            policy=policy,
+            llm_client=client,
+            artifact_store=store,
+            recorder=recorder,
+            project_id=prepared_canon.project_id,
+            chapter_number=1,
+            candidate_id=candidate.id,
+            writer_output=WriterOutput(
+                project_id=prepared_canon.project_id,
+                chapter_number=1,
+                title="Chapter one",
+                body=draft.body_text,
+                end_of_chapter_summary=draft.summary,
+            ),
+            verdict=ReviewVerdict(verdict="pass"),
+            policy_version=1,
+        )
+        assert result.blocked is blocked, result.gate_result.blocking_reasons
+        if blocked:
+            assert (
+                f"obligation_due_unresolved:{obligation.id}"
+                in result.gate_result.blocking_reasons
+            )
+        else:
+            receipt = result.obligation_resolution_plan
+            assert receipt.form_json and receipt.answers_json
+            assert receipt.resolved_obligation_ids == (
+                [obligation.id] if judgment == "fulfilled" else []
+            )
+            original = prepared_canon.plan
+            canon = CanonPreparationService().prepare_from_approved(
+                session=session,
+                candidate_id=candidate.id,
+                approved_book_state_changes=original.approved_book_state_changes,
+                entity_admission_plan=original.entity_admission_plan,
+                acceptance_mode="normal",
+                repair_attempt_count=0,
+                residual_review_issues=[],
+                canon_risk_level="low",
+                quality_admission_run_id=result.quality_admission_run_id,
+                obligation_resolution_plan=receipt,
+            )
+        assert client.calls == 1
+    if not blocked:
+        committed = CanonAdmissionService(
+            session_factory=prepared_canon.Session
+        ).commit_plan(canon.plan)
+        assert not committed.blocked, committed.failure_reason
+        with prepared_canon.Session() as session:
+            row = session.get(NarrativeObligationRow, prepared_canon.obligation_id)
+            assert row.status == ("resolved" if judgment == "fulfilled" else "active")
+
+
+def test_real_pulp_preparer_without_obligations_keeps_model_unused(
+    prepared_canon, tmp_path
+):
+    from forwin.canon.quality_preparation import CanonQualityPreparer
+    from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.observability.pipeline_trace import (
+        PipelineAuditContext,
+        PipelineTraceRecorder,
+    )
+    from forwin.protocol.review import ReviewVerdict
+    from forwin.protocol.writer import WriterOutput
+    from forwin.runtime.policy import RuntimePolicy
+    from forwin.state.updater import StateUpdater
+    from forwin.storage import ArtifactStore
+
+    class ForbiddenClient:
+        def __getattr__(self, name):
+            pytest.fail(f"No-obligation pulp path accessed the model: {name}")
+
+    store = ArtifactStore(str(tmp_path))
+    recorder = PipelineTraceRecorder(
+        audit=PipelineAuditContext(), artifact_store=store, observability=None
+    )
+    with prepared_canon.Session.begin() as session:
+        session.delete(
+            session.get(NarrativeObligationRow, prepared_canon.obligation_id)
+        )
+        session.flush()
+        candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
+        draft = session.get(ChapterDraft, candidate.candidate_draft_id)
+        result = CanonQualityPreparer().evaluate(
+            session=session,
+            updater=StateUpdater(session),
+            policy=RuntimePolicy.for_profile("pulp"),
+            llm_client=ForbiddenClient(),
+            artifact_store=store,
+            recorder=recorder,
+            project_id=prepared_canon.project_id,
+            chapter_number=1,
+            candidate_id=candidate.id,
+            writer_output=WriterOutput(
+                project_id=prepared_canon.project_id,
+                chapter_number=1,
+                title="Chapter one",
+                body=draft.body_text,
+                end_of_chapter_summary=draft.summary,
+            ),
+            verdict=ReviewVerdict(verdict="pass"),
+        )
+        assert not result.blocked
+        assert result.obligation_resolution_plan.form_json == ""
+        assert result.obligation_resolution_plan.evidence == ()

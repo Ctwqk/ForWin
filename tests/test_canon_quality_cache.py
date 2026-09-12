@@ -212,9 +212,10 @@ def test_cached_obligation_review_keeps_actual_contract_answers_and_invalidates_
                                                   for c in [ask['payoff_test'], *ask['resolution_conditions']]]}]}
             client = Client()
             output = WriterOutput(project_id=project.id, chapter_number=11, title='遗书', body=body, end_of_chapter_summary='遗书证实了钥匙来源。')
-            def analyze(draft_id):
+            def analyze(draft_id, obligation_gate_mode="strict"):
                 return analyze_writer_output_quality(session=session, project_id=project.id, chapter_number=11,
-                    writer_output=output, draft_id=draft_id, mode='primary', llm_client=client)
+                    writer_output=output, draft_id=draft_id, mode='primary', llm_client=client,
+                    obligation_gate_mode=obligation_gate_mode)
             first = analyze('old-draft')
             cached = analyze('new-draft')
             assert client.calls == 1
@@ -233,5 +234,14 @@ def test_cached_obligation_review_keeps_actual_contract_answers_and_invalidates_
             assert changed.form.obligations[0].resolution_conditions[-1] == '证实遗书未被伪造'
             assert changed.form.obligations[0].contract_fingerprint != first.form.obligations[0].contract_fingerprint
             assert row.status == 'active'
+            row.deadline_chapter = 11
+            session.flush()
+            standard_due = analyze('standard-due')
+            pulp_due = analyze('pulp-due', 'pulp_fatal')
+            assert standard_due.form.obligations[0].must_resolve_now
+            assert not pulp_due.form.obligations[0].must_resolve_now
+            assert client.calls == 4
+            assert not analyze('cached-pulp', 'pulp_fatal').form.obligations[0].must_resolve_now
+            assert client.calls == 4
     finally:
         engine.dispose()

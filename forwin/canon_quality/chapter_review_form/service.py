@@ -67,6 +67,7 @@ def review_chapter_with_form(
     target_total_chapters: int = 0,
     min_blocking_confidence: float = 0.8,
     token_budget_chars: int = 8000,
+    mandatory_obligation_ids: set[str] | None = None,
     max_schema_retries: int = 1,
     blocking_policy: FormBlockingPolicy | None = None,
     mode: str = "primary",
@@ -91,6 +92,7 @@ def review_chapter_with_form(
             obligations=obligations or [],
             target_total_chapters=resolved_target_total,
             token_budget_chars=token_budget_chars,
+            mandatory_obligation_ids=mandatory_obligation_ids,
         )
     except FormBudgetExceeded as exc:
         if exc.form is None:

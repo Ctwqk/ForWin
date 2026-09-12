@@ -33,6 +33,7 @@ def build_form(
     obligations: list[Any] | None = None,
     target_total_chapters: int = 0,
     token_budget_chars: int = 8000,
+    mandatory_obligation_ids: set[str] | None = None,
 ) -> ChapterReviewForm:
     characters = [
         _character_ask(row)
@@ -50,6 +51,11 @@ def build_form(
         _obligation_ask(item, current_chapter=chapter_number)
         for item in select_obligations_to_ask(obligations=list(obligations or []), chapter_number=chapter_number)
     ]
+    if mandatory_obligation_ids is not None:
+        obligation_asks = [
+            ask.model_copy(update={"must_resolve_now": ask.id in mandatory_obligation_ids})
+            for ask in obligation_asks
+        ]
     final_chapter = FinalChapterAsk() if target_total_chapters and int(chapter_number or 0) >= int(target_total_chapters) else None
     form = ChapterReviewForm(
         project_id=project_id,

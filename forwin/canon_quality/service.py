@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -43,6 +43,7 @@ def analyze_writer_output_quality(
     llm_client: object | None = None,
     return_raw_analyzer_results: bool = False,
     use_cache: bool = True,
+    obligation_gate_mode: Literal["strict", "pulp_fatal"] = "strict",
 ) -> CanonQualityAnalysisResult:
     config = InfrastructureConfig.from_env()
     resolved_mode = _normalize_form_mode(mode or "primary")
@@ -67,6 +68,7 @@ def analyze_writer_output_quality(
     obligations = context_obligations(session, project_id, chapter_number, draft_id=draft_id)
     quality_context = {
         "obligations": cache_json_value(obligations),
+        "obligation_gate_mode": obligation_gate_mode,
         "project_premise": str(getattr(project, "premise", "") or ""),
         "project_setting_summary": str(
             getattr(project, "setting_summary", "") or ""
@@ -170,6 +172,21 @@ def analyze_writer_output_quality(
     min_blocking_confidence = 0.8
     token_budget_chars = int(config.chapter_review_form_token_budget_chars or 8000)
     max_schema_retries = int(config.chapter_review_form_max_llm_retries or 1)
+    mandatory_obligation_ids = None
+    if obligation_gate_mode == "pulp_fatal":
+        from .gate import obligation_resolution_required
+
+        target_total = int(getattr(project, "target_total_chapters", 0) or 0)
+        mandatory_obligation_ids = {
+            item.id
+            for item in obligations
+            if obligation_resolution_required(
+                item,
+                current_chapter=chapter_number,
+                is_final_chapter=bool(target_total and chapter_number >= target_total),
+                p0_only=True,
+            )
+        }
     form_result = review_chapter_with_form(
         session=session,
         project_id=project_id,
@@ -179,6 +196,7 @@ def analyze_writer_output_quality(
         llm_client=llm_client,
         min_blocking_confidence=min_blocking_confidence,
         token_budget_chars=token_budget_chars,
+        mandatory_obligation_ids=mandatory_obligation_ids,
         max_schema_retries=max_schema_retries,
         blocking_policy=FormBlockingPolicy(),
         mode=resolved_mode,
@@ -186,9 +204,7 @@ def analyze_writer_output_quality(
         character_rows=character_rows,
         countdown_rows=countdown_rows,
         open_signal_rows=open_signal_rows,
-        target_total_chapters=int(
-            getattr(project, "target_total_chapters", 0) or 0
-        ),
+        target_total_chapters=int(getattr(project, "target_total_chapters", 0) or 0),
     )
     artifact_path = (
         persist_form_artifact(config.artifact_root, form_result)

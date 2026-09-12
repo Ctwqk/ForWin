@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 
 from forwin.book_state.query import BookStateQuery
-from forwin.book_state.repository import BookStateRepository
 from forwin.map.repository import MapRepository
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.review.query import ReviewQuery
+from forwin.retrieval.source_identity import CanonReadBaseline
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,18 @@ def build_review_context_pack(
     band = context.band_delight_schedule
     active_entities = list(context.active_entities)
     session = getattr(repo, "session", None) if repo is not None else None
-    book_state = BookStateQuery(session) if session is not None else None
-    review_query = ReviewQuery(session) if session is not None else None
     as_of_chapter = max(int(context.chapter_number) - 1, 0)
+    baseline = getattr(context, "canon_read_baseline", None)
+    if session is not None and baseline is None:
+        baseline = CanonReadBaseline.capture(session, context.project_id, as_of_chapter=as_of_chapter)
+    book_state = BookStateQuery(session, baseline=baseline) if session is not None else None
+    review_query = ReviewQuery(session) if session is not None else None
+    # A transported pack is not a reusable read certificate. With a repository,
+    # reload cognition under the same fence as the other accepted review reads.
+    accepted_cognition = (
+        book_state.accepted_cognition(context.project_id, as_of_chapter=as_of_chapter)
+        if book_state is not None else list(context.accepted_cognition)
+    )
     active_rules = (
         book_state.active_entities(
             context.project_id,
@@ -103,6 +112,8 @@ def build_review_context_pack(
         genesis_reference_omitted_count=context.genesis_reference_omitted_count,
         must_not_reveal=list(context.must_not_reveal),
         planned_reveal_ladder=list(context.planned_reveal_ladder),
+        accepted_cognition=accepted_cognition,
+        planned_reader_cognition_state=context.planned_reader_cognition_state,
         character_cognition_states=dict(context.character_cognition_states),
         observer_visibility_states=dict(context.observer_visibility_states),
         fair_misdirection_requirements=list(context.fair_misdirection_requirements),
@@ -155,16 +166,4 @@ def _build_reviewer_only_map_context(*, repo, context: ChapterContextPack) -> di
             }
     except Exception:
         logger.warning("Failed to build reviewer objective map context.", exc_info=True)
-    try:
-        views = BookStateRepository(session).load_cognition_views(
-            context.project_id,
-            as_of_chapter=max(0, int(context.chapter_number or 0)),
-        )
-        if views:
-            payload["observer_cognition"] = {
-                f"{observer_type}:{observer_id}": view.overlay.model_dump(mode="json")
-                for (observer_type, observer_id), view in views.items()
-            }
-    except Exception:
-        logger.warning("Failed to build reviewer cognition context.", exc_info=True)
     return payload

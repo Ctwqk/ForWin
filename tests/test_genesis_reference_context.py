@@ -10,7 +10,7 @@ from forwin.context.assembler_core.assembler import ChapterContextAssembler
 from forwin.context.providers.genesis_provider import GenesisContextProvider
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
-from forwin.protocol.context import EntitySnapshot, WritingPack
+from forwin.protocol.context import AcceptedCognitionSnapshot, EntitySnapshot, WritingPack
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.retrieval.broker_core.broker import RetrievalBroker
@@ -195,16 +195,17 @@ def test_reference_relevance_does_not_change_when_its_entity_is_trimmed():
 
 def test_retrieval_merge_preserves_available_nested_cognition_for_both_models():
     broker = RetrievalBroker()
-    source = WritingPack(project_id="p", character_cognition_states={
-        "宋安": {"belief-a": "false:believed"},
-    }, must_not_reveal=["此章不得公开烧账者身份"])
+    source = WritingPack(project_id="p", accepted_cognition=[AcceptedCognitionSnapshot(
+        observer_type="character", observer_id="宋安", as_of_chapter=0,
+        false_facts={"belief-a": {"summary": "false:believed"}},
+    )], must_not_reveal=["此章不得公开烧账者身份"])
     context = broker._trim_pack(broker._merge_writer_world_model_pack(_context(), source))
     prompt = "\n".join(m["content"] for m in build_single_chapter_draft_prompt(context))
     payload = LLMWebNovelReviewer()._llm_payload(build_review_context_pack(context=context), WriterOutput(
         chapter_number=1, title="调档", body="核对原件", end_of_chapter_summary="核对",
     ))
     assert "false:believed" in prompt
-    assert payload["world"]["reveal_context"]["character_cognition_states"] == {"宋安": {"belief-a": "false:believed"}}
+    assert payload["world"]["reveal_context"]["accepted_cognition"][0]["false_facts"] == {"belief-a": {"summary": "false:believed"}}
     assert "此章不得公开烧账者身份" in json.dumps(payload, ensure_ascii=False)
 
 
@@ -212,9 +213,14 @@ def test_retrieval_merge_preserves_available_nested_cognition_for_both_models():
 def test_review_receives_concrete_reveal_and_knowledge_constraints(normalize):
     context = RetrievalBroker()._trim_pack(_context())
     context.must_not_reveal = ["此章不得公开烧账者身份"]
-    context.character_cognition_states = {"宋安": "仍以为原账只是遗失"}
+    context.accepted_cognition = [AcceptedCognitionSnapshot(
+        observer_type="character", observer_id="宋安", as_of_chapter=0,
+        false_facts={"lost-ledger": {"summary": "仍以为原账只是遗失"}},
+    ), AcceptedCognitionSnapshot(
+        observer_type="reader", observer_id="reader", as_of_chapter=0,
+        ref_states={"fact:只能看到焦痕": "known"},
+    )]
     context.fair_misdirection_requirements = ["只允许给出焦痕线索"]
-    context.observer_visibility_states = {"reader": "只能看到焦痕"}
     context.chapter_world_delta_intent = ChapterWorldDeltaIntent(
         intent_id="intent-1", project_id="p", chapter_number=1,
         hint_delta_intents=["可展示账本封皮上的微量灰烬"],

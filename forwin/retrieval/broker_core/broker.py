@@ -369,7 +369,6 @@ class RetrievalBroker:
         deltas = []
         gaps = []
         reader_experience = []
-        beliefs = []
 
         visible_lines = [
             line.world_line_id for line in lines if bool(line.is_visible_onstage)
@@ -410,20 +409,9 @@ class RetrievalBroker:
             else []
         )
 
-        reader_state: dict[str, str] = {}
-        character_states: dict[str, dict[str, str]] = {}
-        for belief in beliefs:
-            entry = {
-                "proposition": belief.proposition,
-                "truth_relation": belief.truth_relation,
-                "belief_status": belief.belief_status,
-            }
-            if belief.holder_type == "reader":
-                reader_state[belief.belief_id] = belief.belief_status
-            elif belief.holder_type == "character":
-                character_states.setdefault(belief.holder_id, {})[belief.belief_id] = (
-                    f"{entry['truth_relation']}:{entry['belief_status']}"
-                )
+        accepted_cognition = BookStateQuery(session, baseline=baseline).accepted_cognition(
+            project_id, as_of_chapter=baseline.as_of_chapter,
+        )
 
         promise_debts = [
             item.next_desire or item.cognition_transition
@@ -449,8 +437,7 @@ class RetrievalBroker:
             active_knowledge_gaps=active_gap_ids,
             hidden_objective_truths=hidden_objective_truths,
             planned_reveal_ladder=reveal_ladder,
-            reader_cognition_state=reader_state,
-            character_cognition_states=character_states,
+            accepted_cognition=accepted_cognition,
             observer_visibility_states={},
             promise_debts=promise_debts,
             recent_reader_experience_deltas=recent_reader_exp,
@@ -835,10 +822,10 @@ class RetrievalBroker:
                 or pack.active_knowledge_gaps,
                 "planned_reveal_ladder": world_pack.planned_reveal_ladder
                 or pack.planned_reveal_ladder,
-                "character_cognition_states": world_pack.character_cognition_states
-                or pack.character_cognition_states,
-                "observer_visibility_states": world_pack.observer_visibility_states
-                or pack.observer_visibility_states,
+                "accepted_cognition": list(world_pack.accepted_cognition),
+                "reader_cognition_state": "",
+                "character_cognition_states": dict(world_pack.character_cognition_states),
+                "observer_visibility_states": dict(world_pack.observer_visibility_states),
                 "promise_debts": world_pack.promise_debts or pack.promise_debts,
                 "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas
                 or pack.recent_reader_experience_deltas,

@@ -19,6 +19,44 @@ from .subworld import ChapterEntryTarget, SubWorldSummary
 from .world_model import WorldContextPack
 
 
+class CognitionSource(BaseModel):
+    """An accepted change event, not an inferred knowledge-acquisition date."""
+
+    delta_id: str
+    chapter_number: int
+    field_path: str
+    op: str
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class AcceptedCognitionSnapshot(BaseModel):
+    """Sparse observer beliefs at the shared accepted read baseline.
+
+    Knowing a node never grants knowledge of all its objective fields.
+    Missing refs and absent evidence timing remain unknown.
+    """
+
+    observer_type: str
+    observer_id: str
+    as_of_chapter: int
+    ref_states: dict[str, Literal["confirmed", "suspected", "known", "hidden", "unknown"]] = Field(default_factory=dict)
+    field_overrides: dict[str, Any] = Field(default_factory=dict)
+    false_nodes: dict[str, Any] = Field(default_factory=dict)
+    false_edges: dict[str, Any] = Field(default_factory=dict)
+    false_facts: dict[str, Any] = Field(default_factory=dict)
+    evidence_by_ref: dict[str, list[str]] = Field(default_factory=dict)
+    sources_by_ref: dict[str, list[CognitionSource]] = Field(default_factory=dict)
+
+
+COGNITION_CONTINUATION_RULE = (
+    "缺记录为 unknown；可见性默认值、知道对象存在均不代表知道其所有字段。"
+    "作者秘密、阶段目标和预期变化不是已接纳认知。"
+    "仅在本章已写正文明确发生获知事件之后，相关角色才可条件性承接新知识；"
+    "前场草稿仍待审，不能把计划、角色说法或其他角色获知当作人人知情。"
+    "as_of_chapter 是读取基线；sources_by_ref 是来源变化事件，缺来源时点不得推定获知时间。"
+)
+
+
 class EntitySnapshot(BaseModel):
     """Snapshot of an entity's current state for context."""
 
@@ -303,6 +341,8 @@ class ChapterContextPack(BaseModel):
     active_knowledge_gaps: list[str] = Field(default_factory=list)
     planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
     reader_cognition_state: str = ""
+    accepted_cognition: list[AcceptedCognitionSnapshot] = Field(default_factory=list)
+    planned_reader_cognition_state: str = ""
     character_cognition_states: dict[str, Any] = Field(default_factory=dict)
     observer_visibility_states: dict[str, str] = Field(default_factory=dict)
     promise_debts: list[str] = Field(default_factory=list)
@@ -335,6 +375,8 @@ class WorldModelRetrievalPack(BaseModel):
     hidden_objective_truths: list[str] = Field(default_factory=list)
     planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
     reader_cognition_state: dict[str, Any] = Field(default_factory=dict)
+    accepted_cognition: list[AcceptedCognitionSnapshot] = Field(default_factory=list)
+    planned_reader_cognition_state: str = ""
     character_cognition_states: dict[str, Any] = Field(default_factory=dict)
     observer_visibility_states: dict[str, str] = Field(default_factory=dict)
     promise_debts: list[str] = Field(default_factory=list)
@@ -401,6 +443,8 @@ class ReviewContextPack(BaseModel):
     genesis_reference_omitted_count: int = 0
     must_not_reveal: list[str] = Field(default_factory=list)
     planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
+    accepted_cognition: list[AcceptedCognitionSnapshot] = Field(default_factory=list)
+    planned_reader_cognition_state: str = ""
     character_cognition_states: dict[str, Any] = Field(default_factory=dict)
     observer_visibility_states: dict[str, str] = Field(default_factory=dict)
     fair_misdirection_requirements: list[str] = Field(default_factory=list)

@@ -190,15 +190,11 @@ class ChapterContextAssembler:
                 if arc_world_contract is not None
                 else []
             ),
-            reader_cognition_state=(
+            accepted_cognition=data.get("accepted_cognition", []),
+            planned_reader_cognition_state=(
                 band_world_contract.band_exit_reader_state
                 if band_world_contract is not None
                 else ""
-            ),
-            observer_visibility_states=(
-                dict(chapter_world_delta_intent.expected_observer_state_changes)
-                if chapter_world_delta_intent is not None
-                else {}
             ),
             must_not_reveal=(
                 list(chapter_world_delta_intent.must_not_reveal)

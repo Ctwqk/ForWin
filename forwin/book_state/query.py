@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from forwin.retrieval.source_identity import CanonReadBaseline
 
 from forwin.protocol.context import (
+    AcceptedCognitionSnapshot,
+    CognitionSource,
     CanonEventEvidence,
     EntitySnapshot,
     PlotThreadSnapshot,
@@ -61,6 +63,126 @@ class BookStateQuery:
             baseline.assert_current(self.session)
             self._runtime_cache[key] = runtime
         return runtime
+
+    def accepted_cognition(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int,
+    ) -> list[AcceptedCognitionSnapshot]:
+        from forwin.retrieval.source_identity import CanonReadBaseline, fresh_orm_reads
+
+        baseline = self.baseline or CanonReadBaseline.capture(
+            self.session, project_id, as_of_chapter=as_of_chapter
+        )
+        runtime = self.runtime(project_id, as_of_chapter=as_of_chapter)
+        views = runtime.cognition_by_observer
+        refs: set[str] = set()
+        for view in views.values():
+            refs.update(
+                view.visible_refs
+                | view.hidden_refs
+                | view.suspected_refs
+                | view.confirmed_refs
+            )
+            refs.update(view.field_overrides)
+            refs.update(view.evidence_by_ref)
+            for prefix, objects in (
+                ("node", view.false_nodes),
+                ("edge", view.false_edges),
+                ("fact", view.false_facts),
+            ):
+                refs.update(f"{prefix}:{key}" for key in objects)
+        keys = set(views)
+        keys.update(
+            ("character", node.id)
+            for node in runtime.world.nodes_by_id.values()
+            if str(node.node_type) == "character"
+        )
+        sources: dict[tuple[str, str], dict[str, list[CognitionSource]]] = {}
+        evidence = {
+            key: {ref: list(items) for ref, items in view.evidence_by_ref.items()}
+            for key, view in views.items()
+        }
+        with fresh_orm_reads(self.session):
+            deltas = self.repository.list_graph_deltas(
+                project_id, through_chapter=as_of_chapter
+            )
+        for delta in deltas:
+            for patch in delta.cognition_patches:
+                key = (str(patch.observer_type), patch.observer_id)
+                value = patch.new_value
+                patch_refs = []
+                if patch.field_path in {
+                    "visible_refs",
+                    "hidden_refs",
+                    "suspected_refs",
+                    "confirmed_refs",
+                } and isinstance(value, str):
+                    patch_refs = [value]
+                elif isinstance(value, dict):
+                    prefix = {
+                        "false_nodes": "node",
+                        "false_edges": "edge",
+                        "false_facts": "fact",
+                    }.get(patch.field_path)
+                    if prefix:
+                        patch_refs = [f"{prefix}:{ref}" for ref in value]
+                    elif patch.field_path in {"field_overrides", "evidence_by_ref"}:
+                        patch_refs = list(value)
+                if isinstance(value, dict) and patch_refs:
+                    # Older replay records dict patches under str(dict). Normalize
+                    # that representation to explicit field/false-object refs.
+                    legacy = evidence.setdefault(key, {}).pop(str(value), [])
+                    refs.discard(str(value))
+                    for ref in patch_refs:
+                        entries = evidence[key].setdefault(ref, [])
+                        entries.extend(
+                            item
+                            for item in [*legacy, *patch.evidence_refs]
+                            if item not in entries
+                        )
+                for ref in patch_refs:
+                    sources.setdefault(key, {}).setdefault(ref, []).append(
+                        CognitionSource(
+                            delta_id=delta.id,
+                            chapter_number=delta.chapter_number,
+                            field_path=patch.field_path,
+                            op=str(patch.op),
+                            evidence_refs=list(patch.evidence_refs),
+                        )
+                    )
+        snapshots = []
+        for key in sorted(keys):
+            view = views.get(key)
+
+            def objects(field):
+                return {
+                    ref: value.model_dump(mode="json")
+                    if hasattr(value, "model_dump")
+                    else value
+                    for ref, value in getattr(view, field, {}).items()
+                }
+
+            snapshots.append(
+                AcceptedCognitionSnapshot(
+                    observer_type=key[0],
+                    observer_id=key[1],
+                    as_of_chapter=as_of_chapter,
+                    ref_states={
+                        ref: view.get_belief(ref) if view else "unknown"
+                        for ref in sorted(refs)
+                    },
+                    field_overrides=dict(view.field_overrides) if view else {},
+                    false_nodes=objects("false_nodes"),
+                    false_edges=objects("false_edges"),
+                    false_facts=objects("false_facts"),
+                    evidence_by_ref=evidence.get(key, {}),
+                    sources_by_ref=sources.get(key, {}),
+                )
+            )
+        baseline.assert_current(self.session)
+        return snapshots
 
     def active_entities(
         self,

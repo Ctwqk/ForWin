@@ -81,7 +81,10 @@ class BookStateProjection:
 
         world_after = world_snapshot.as_of_chapter if world_snapshot else -1
         map_after = map_snapshot.as_of_chapter if map_snapshot else -1
-        cognition_after = max((int(view.as_of_chapter or 0) for view in cognition_views.values()), default=-1)
+        # Each observer owns its own snapshot height. Freeze these cutoffs before
+        # replay: a newly constructed view is not a persisted snapshot.
+        cognition_cutoffs = {key: int(view.as_of_chapter or 0) for key, view in cognition_views.items()}
+        cognition_after = min(cognition_cutoffs.values(), default=-1)
         # Narrative rows are persisted as side effects without full snapshots; replay
         # narrative deltas from the beginning and rely on graph upserts to be idempotent.
         narrative_after = -1
@@ -96,7 +99,7 @@ class BookStateProjection:
                 delta,
                 apply_world=delta.chapter_number > world_after,
                 apply_map=delta.chapter_number > map_after,
-                apply_cognition=delta.chapter_number > cognition_after,
+                cognition_cutoffs=cognition_cutoffs,
                 apply_narrative=delta.chapter_number > narrative_after,
             )
         return runtime
@@ -110,6 +113,7 @@ class BookStateProjection:
         apply_map: bool = True,
         apply_cognition: bool = True,
         apply_narrative: bool = True,
+        cognition_cutoffs: dict[tuple[str, str], int] | None = None,
     ) -> None:
         if apply_world:
             runtime.world.apply_delta(delta)
@@ -119,6 +123,8 @@ class BookStateProjection:
         if apply_cognition:
             for patch in delta.cognition_patches:
                 key = (str(patch.observer_type), patch.observer_id)
+                if cognition_cutoffs is not None and delta.chapter_number <= cognition_cutoffs.get(key, -1):
+                    continue
                 view = runtime.cognition_by_observer.get(key)
                 if view is None:
                     view = CognitionView(

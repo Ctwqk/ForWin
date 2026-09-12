@@ -9,7 +9,7 @@ import json
 import re
 
 from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
-from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.context import COGNITION_CONTINUATION_RULE, ChapterContextPack
 from forwin.writer.world_context import render_world_context
 
 
@@ -272,22 +272,17 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
 
 def _world_intent_section(context: ChapterContextPack) -> str | None:
     intent = getattr(context, "chapter_world_delta_intent", None)
-    if not any(
-        (
-            getattr(context, "active_world_lines", None),
-            getattr(context, "active_knowledge_gaps", None),
-            getattr(context, "must_not_reveal", None),
-            context.character_cognition_states,
-            context.observer_visibility_states,
-            intent,
-        )
-    ):
-        return None
-    lines = ["【世界状态意图】"]
-    if context.character_cognition_states:
-        lines.append("  · 已有的人物认知（缺项为未知）：" + json.dumps(context.character_cognition_states, ensure_ascii=False))
-    if context.observer_visibility_states:
-        lines.append("  · 观察者可见状态：" + json.dumps(context.observer_visibility_states, ensure_ascii=False))
+    lines = [
+        "【已接纳认知（N−1）】",
+        COGNITION_CONTINUATION_RULE,
+        json.dumps([item.model_dump(mode="json") for item in context.accepted_cognition], ensure_ascii=False),
+        "【作者计划（尚未发生）】",
+        "【世界状态意图】",
+    ]
+    if context.planned_reader_cognition_state:
+        lines.append("  · 阶段末读者认知目标：" + context.planned_reader_cognition_state)
+    if context.planned_reveal_ladder:
+        lines.append("  · 计划揭示阶梯：" + json.dumps([item.model_dump(mode="json") for item in context.planned_reveal_ladder], ensure_ascii=False))
     if getattr(context, "visible_world_lines", None):
         lines.append("  · 台前 world lines：" + "、".join(context.visible_world_lines))
     if getattr(context, "hidden_world_lines", None):
@@ -295,6 +290,7 @@ def _world_intent_section(context: ChapterContextPack) -> str | None:
     if getattr(context, "active_knowledge_gaps", None):
         lines.append("  · active gaps：" + "、".join(context.active_knowledge_gaps))
     if intent is not None:
+        lines.append("【预期本章变化（需正文实现）】")
         if intent.visible_delta_intents:
             lines.append("  · 本章台前推进：" + "、".join(intent.visible_delta_intents))
         if intent.hint_delta_intents:

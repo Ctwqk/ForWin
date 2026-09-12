@@ -6,7 +6,7 @@ from typing import Any
 
 from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
-from forwin.protocol.context import ReviewContextPack
+from forwin.protocol.context import COGNITION_CONTINUATION_RULE, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import inject_skill_layers
@@ -388,15 +388,18 @@ class LLMWebNovelReviewer:
     def _llm_payload(self, context: ReviewContextPack, writer_output: WriterOutput) -> dict[str, Any]:
         map_context = self._map_review_payload(context, writer_output.body)
         reveal_context = {
-            "must_not_reveal": list(context.must_not_reveal),
-            "planned_reveal_ladder": [item.model_dump(mode="json") for item in context.planned_reveal_ladder],
-            "character_cognition_states": dict(context.character_cognition_states),
-            "observer_visibility_states": dict(context.observer_visibility_states),
-            "fair_misdirection_requirements": list(context.fair_misdirection_requirements),
-            "chapter_world_delta_intent": (
+            "accepted_cognition": [item.model_dump(mode="json") for item in context.accepted_cognition],
+            "cognition_continuation_rule": COGNITION_CONTINUATION_RULE,
+            "author_plan_not_yet_occurred": {
+                "planned_reveal_ladder": [item.model_dump(mode="json") for item in context.planned_reveal_ladder],
+                "planned_reader_cognition_state": context.planned_reader_cognition_state,
+            },
+            "expected_chapter_changes_require_on_page_evidence": (
                 context.chapter_world_delta_intent.model_dump(mode="json")
                 if context.chapter_world_delta_intent is not None else {}
             ),
+            "must_not_reveal": list(context.must_not_reveal),
+            "fair_misdirection_requirements": list(context.fair_misdirection_requirements),
         }
         evidence_index: list[dict[str, Any]] = []
         seen_evidence_ids: set[str] = set()

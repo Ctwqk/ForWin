@@ -35,6 +35,7 @@ class StateContextProvider:
             {
                 "project": project,
                 "entities": entities,
+                "accepted_cognition": book_state.accepted_cognition(project_id, as_of_chapter=as_of_chapter),
                 "allowed_entities": allowed_entities,
                 "relations": relations,
                 "threads": book_state.active_threads(

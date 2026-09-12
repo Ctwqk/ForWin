@@ -132,6 +132,8 @@ class WebNovelExperienceReviewer:
             genesis_reference_omitted_count=context.genesis_reference_omitted_count,
             must_not_reveal=list(context.must_not_reveal),
             planned_reveal_ladder=list(context.planned_reveal_ladder),
+            accepted_cognition=list(context.accepted_cognition),
+            planned_reader_cognition_state=context.planned_reader_cognition_state,
             character_cognition_states=dict(context.character_cognition_states),
             observer_visibility_states=dict(context.observer_visibility_states),
             fair_misdirection_requirements=list(context.fair_misdirection_requirements),

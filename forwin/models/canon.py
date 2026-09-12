@@ -25,6 +25,7 @@ class CanonCommitRecord(Base):
         ),
         Index("ux_canon_commits_idempotency_key", "idempotency_key", unique=True),
         Index("ix_canon_commits_candidate", "candidate_id"),
+        Index("ix_canon_commits_project_base_revision", "project_id", "base_book_revision"),
         Index(
             "ux_canon_commits_chapter_revision",
             "chapter_plan_id",

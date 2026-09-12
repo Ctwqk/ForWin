@@ -16,8 +16,11 @@ class ProjectionComponentStatus(BaseModel):
     healthy: bool = False
     target_canon_commit_id: str | None = None
     target_chapter_number: int = 0
+    target_book_revision: int | None = None
     projected_canon_commit_id: str | None = None
     projected_chapter_number: int = 0
+    projected_book_revision: int | None = None
+    revision_lag: int | None = None
     lag: int = 0
     last_event_id: str = ""
     source_digest: str = ""
@@ -33,6 +36,7 @@ class ProjectionStatusResponse(BaseModel):
     healthy: bool = False
     target_canon_commit_id: str | None = None
     target_chapter_number: int = 0
+    target_book_revision: int | None = None
     components: list[ProjectionComponentStatus] = Field(default_factory=list)
 
 
@@ -43,6 +47,7 @@ class ProjectionRefreshResponse(BaseModel):
     projection_kind: str = "all"
     target_canon_commit_id: str | None = None
     target_chapter_number: int = 0
+    target_book_revision: int | None = None
     as_of_chapter: int = 0
     trigger: str = ""
     event_type: str = ""

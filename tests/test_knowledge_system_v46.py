@@ -19,6 +19,8 @@ from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStat
 from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever
 from forwin.llm_kb.store import LLMKnowledgeBaseStore
+from forwin.retrieval.embedding_cache import memory_embedding_identity, LLM_KB_PREPROCESSING
+from forwin.retrieval.memory_index import HashTextEmbedder
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
@@ -43,6 +45,8 @@ from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
+
+LLM_KB_COLLECTION = f"llm_kb_vectors_{memory_embedding_identity(HashTextEmbedder(dims=96), preprocessing=LLM_KB_PREPROCESSING)}"
 
 def _session_factory():
     engine = get_engine(postgres_test_url())
@@ -1272,7 +1276,7 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
 
         payloads = [
             point.payload
-            for point in qdrant_client.collections["llm_kb_vectors"]["points"].values()
+            for point in qdrant_client.collections[LLM_KB_COLLECTION]["points"].values()
         ]
         assert payloads
         assert all(payload["index_kind"] == "llm_kb" for payload in payloads)
@@ -1301,7 +1305,7 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
             qdrant_models=FakeQdrantModels,
         )
         # Retention must not let old/unknown payloads displace valid role output.
-        source_point = next(point for point in qdrant_client.collections["llm_kb_vectors"]["points"].values() if point.payload["role_scope"] == "writer")
+        source_point = next(point for point in qdrant_client.collections[LLM_KB_COLLECTION]["points"].values() if point.payload["role_scope"] == "writer")
         for label in ("obsolete", "legacy"):
             payload = {**source_point.payload, "text": f"{label.upper()}_SENTINEL"}
             if label == "obsolete":
@@ -1309,10 +1313,10 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
             else:
                 payload.pop("source_digest")
                 payload.pop("section_digest")
-            qdrant_client.upsert(collection_name="llm_kb_vectors", points=[FakeQdrantModels.PointStruct(id=label, vector=source_point.vector, payload=payload)])
+            qdrant_client.upsert(collection_name=LLM_KB_COLLECTION, points=[FakeQdrantModels.PointStruct(id=label, vector=source_point.vector, payload=payload)])
         with Session() as session:
             LLMKnowledgeBaseCompiler(session, root=tmp_path / "kb", qdrant_client=qdrant_client, qdrant_models=FakeQdrantModels).rebuild(project_id, as_of_chapter=1)
-        assert {"obsolete", "legacy"} <= qdrant_client.collections["llm_kb_vectors"]["points"].keys()
+        assert {"obsolete", "legacy"} <= qdrant_client.collections[LLM_KB_COLLECTION]["points"].keys()
         writer_results = retriever.search(project_id, "context", role="writer", limit=200, as_of_chapter=0)
         assert all("SENTINEL" not in item["text"] for item in writer_results)
         assert writer_results
@@ -1353,7 +1357,7 @@ def test_llm_kb_vector_rebuild_skips_unchanged_section_digests(tmp_path: Path) -
                 qdrant_models=FakeQdrantModels,
             )
             first = compiler.rebuild(project_id, as_of_chapter=1)
-            first_point_count = len(qdrant_client.collections["llm_kb_vectors"]["points"])
+            first_point_count = len(qdrant_client.collections[LLM_KB_COLLECTION]["points"])
             second = compiler.rebuild(project_id, as_of_chapter=1)
 
         assert first.vector_index["section_count"] == first_point_count
@@ -1362,7 +1366,7 @@ def test_llm_kb_vector_rebuild_skips_unchanged_section_digests(tmp_path: Path) -
         assert second.vector_index["upserted_section_count"] == 0
         payloads = [
             point.payload
-            for point in qdrant_client.collections["llm_kb_vectors"]["points"].values()
+            for point in qdrant_client.collections[LLM_KB_COLLECTION]["points"].values()
         ]
         assert all(payload.get("section_digest") for payload in payloads)
     finally:

@@ -9,6 +9,7 @@ import pytest
 from alembic import command
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from tests.test_v5_live_migration import EXPECTED_REVISION
 from sqlalchemy import create_engine, inspect, text
 
 from forwin.models.base import alembic_config, run_migrations
@@ -76,7 +77,7 @@ def test_legacy_upgrade_preserves_history_and_makes_current_schema_usable():
         )
         assert (
             conn.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0007_feedback_actions"
+            == EXPECTED_REVISION
         )
     run_migrations(engine.url.render_as_string(hide_password=False))
     engine.dispose()
@@ -362,7 +363,7 @@ def test_fresh_entrypoint_uses_main_chain_and_unknown_or_unstamped_stores_are_no
     with fresh.begin() as conn:
         assert (
             conn.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0007_feedback_actions"
+            == EXPECTED_REVISION
         )
         conn.execute(text("UPDATE alembic_version SET version_num='unknown_revision'"))
     from alembic.util.exc import CommandError

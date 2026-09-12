@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from forwin.book_state.repository import BookStateRepository
 from forwin.protocol.book_state import FactNode, GraphDelta, WorldNode
@@ -148,6 +148,7 @@ class LLMKnowledgeBaseCompiler:
             collection_name=self.qdrant_collection,
             qdrant_client=self.qdrant_client,
             qdrant_models=self.qdrant_models,
+            session_factory=sessionmaker(bind=self.session.get_bind(), expire_on_commit=False),
         )
         try:
             vector_index = vector_store.rebuild_project(

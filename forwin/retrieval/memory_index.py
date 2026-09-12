@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
@@ -15,6 +14,7 @@ from pydantic import ValidationError
 
 from forwin.protocol.context import MemorySnippet
 from .source_identity import embedding_input, text_hash, validate_memories
+from .embedding_cache import cached_embeddings, memory_embedding_identity, validate_vector
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ class GatewayTextEmbedder(TextEmbedder):
                 return
             try:
                 detected_dims = self._detect_dims()
-                if detected_dims <= 0:
+                if detected_dims <= 0 or not self.model:
                     raise ValueError("embedding gateway metadata unavailable")
             except Exception as exc:
                 logger.warning("Embedding gateway metadata unavailable.", exc_info=True)
@@ -165,16 +165,12 @@ class GatewayTextEmbedder(TextEmbedder):
                 self._ready = True
                 return
 
-            self.dims = (
-                self._requested_dims
-                if self._requested_dims > 0
-                else detected_dims
-            )
-            if detected_dims != self.dims:
+            self.dims = detected_dims
+            if self._requested_dims > 0 and detected_dims != self._requested_dims:
                 logger.warning(
                     "Embedding gateway dimension %s differs from configured dimension %s.",
                     detected_dims,
-                    self.dims,
+                    self._requested_dims,
                 )
             self._ready = True
 
@@ -196,6 +192,8 @@ class GatewayTextEmbedder(TextEmbedder):
         )
         response.raise_for_status()
         payload = response.json()
+        if payload.get("model") != self.model or payload.get("dimension") != self.dims:
+            raise ValueError("embedding gateway response identity mismatch")
         vectors = [list(vector or []) for vector in payload.get("vectors") or []]
         if len(vectors) != len(texts):
             raise ValueError("embedding gateway response size mismatch")
@@ -204,7 +202,7 @@ class GatewayTextEmbedder(TextEmbedder):
             raise ValueError(
                 f"embedding gateway dimension mismatch: expected {self.dims}, got {mismatched[0]}"
             )
-        return vectors
+        return [validate_vector(vector, self.dims) for vector in vectors]
 
     def close(self) -> None:
         if self._owns_client:
@@ -303,7 +301,9 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         owns_embedder: bool = False,
         client: Any | None = None,
         qdrant_models: Any | None = None,
+        session_factory: Any | None = None,
     ) -> None:
+        self.session_factory = session_factory
         self._url = url
         self._configured_collection_name = collection_name
         self._rest = qdrant_models
@@ -319,12 +319,12 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
     def _ensure_ready(self) -> None:
         if self._closed:
             raise RuntimeError("Qdrant memory index is closed")
-        if self._ready:
+        if self._ready and memory_embedding_identity(self.embedder) == self._embedding_identity:
             return
         with self._ready_lock:
             if self._closed:
                 raise RuntimeError("Qdrant memory index is closed")
-            if self._ready:
+            if self._ready and memory_embedding_identity(self.embedder) == self._embedding_identity:
                 return
             self.embedder.prepare()
             created_client = self.client is None
@@ -348,6 +348,7 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             self.client = client
             self._rest = rest
             self.collection_name = collection_name
+            self._embedding_identity = memory_embedding_identity(self.embedder)
             self._ready = True
 
     def _ensure_collection(
@@ -415,39 +416,16 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         client: Any,
         collection_name: str,
     ) -> tuple[str, set[str]]:
+        identity = memory_embedding_identity(self.embedder)
+        candidate = f"{collection_name}_{identity}"
         collections = {item.name for item in client.get_collections().collections}
-        if collection_name not in collections:
-            return collection_name, collections
-        existing_size = self._collection_vector_size(client, collection_name)
-        if existing_size is None:
-            raise ValueError(
-                "Could not determine vector size for Qdrant collection "
-                f"{collection_name!r}."
-            )
-        if existing_size == self.embedder.dims:
-            return collection_name, collections
-        candidate = f"{collection_name}_{self.embedder.dims}d"
-        logger.warning(
-            "Qdrant collection %s has vector size %s, expected %s; using %s instead.",
-            collection_name,
-            existing_size,
-            self.embedder.dims,
-            candidate,
-        )
-        if candidate not in collections:
-            return candidate, collections
-        candidate_size = self._collection_vector_size(client, candidate)
-        if candidate_size is None:
-            raise ValueError(
-                "Could not determine vector size for Qdrant collection "
-                f"{candidate!r}."
-            )
-        if candidate_size == self.embedder.dims:
-            return candidate, collections
-        raise ValueError(
-            f"Qdrant collection {candidate!r} has vector size {candidate_size}, "
-            f"expected {self.embedder.dims}."
-        )
+        if candidate in collections:
+            size = self._collection_vector_size(client, candidate)
+            if size is None:
+                raise ValueError(f"Could not determine vector size for Qdrant collection {candidate!r}.")
+            if size != self.embedder.dims:
+                raise ValueError(f"Qdrant collection {candidate!r} has vector size {size}, expected {self.embedder.dims}.")
+        return candidate, collections
 
     def _collection_vector_size(
         self,
@@ -499,7 +477,7 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             raise RuntimeError("Qdrant memory index initialization did not complete")
         excerpt = (body or "")[:500]
         input_text = embedding_input(title, summary, body)
-        vector = self.embedder.embed([input_text])[0]
+        vector = cached_embeddings(self.embedder, [input_text], session_factory=self.session_factory)[0]
         identity = memory_embedding_identity(self.embedder)
         self.client.upsert(
             collection_name=self.collection_name,
@@ -536,7 +514,7 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         self._ensure_ready()
         if self.client is None or self._rest is None:  # pragma: no cover
             raise RuntimeError("Qdrant memory index initialization did not complete")
-        vector = self.embedder.embed([query_text])[0]
+        vector = cached_embeddings(self.embedder, [query_text])[0]
         conditions = [self._rest.FieldCondition(key="project_id", match=self._rest.MatchValue(value=project_id))]
         if baseline is not None:
             baseline.assert_current(session, project_id=project_id)
@@ -568,20 +546,6 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             baseline.assert_current(session)
         return selected[:limit]
 
-
-
-def memory_embedding_identity(
-    embedder: TextEmbedder, *, preprocessing: str = "title-summary-body500-v1"
-) -> str:
-    model = str(getattr(embedder, "model", "") or "")
-    if not model:
-        return ""
-    return text_hash(json.dumps({
-        "backend": str(getattr(embedder, "kind", "")),
-        "endpoint": str(getattr(embedder, "base_url", "")),
-        "model": model, "dimensions": embedder.dims,
-        "preprocessing": preprocessing,
-    }, sort_keys=True))
 
 
 def create_memory_index(

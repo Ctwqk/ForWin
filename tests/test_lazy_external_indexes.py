@@ -16,6 +16,7 @@ from forwin.retrieval.memory_index import (
 )
 from forwin.llm_kb import vector_index as llm_kb_vector_module
 from forwin.llm_kb.vector_index import LLMKBVectorIndex
+from forwin.retrieval.embedding_cache import memory_embedding_identity, LLM_KB_PREPROCESSING
 from forwin.api_schema import WorldModelExportRequest
 from forwin.http.adapters import api_obsidian_routes
 from forwin.retrieval import obsidian_human_index as obsidian_index_module
@@ -200,7 +201,7 @@ def test_llm_kb_existing_collection_dimension_mismatch_fails_closed(
 ) -> None:
     client = FakeQdrantClient()
     client.create_collection(
-        collection_name="llm_kb_wrong_dims",
+        collection_name=f"llm_kb_wrong_dims_{memory_embedding_identity(HashTextEmbedder(dims=96), preprocessing=LLM_KB_PREPROCESSING)}",
         vectors_config=FakeQdrantModels.VectorParams(
             size=95,
             distance=FakeQdrantModels.Distance.COSINE,
@@ -273,22 +274,30 @@ def test_broker_resolves_each_injected_provider_once(tmp_path: Path) -> None:
     assert retriever_provider_calls == 0
     broker._ensure_memory_index()
     broker._ensure_memory_index()
-    first = broker._load_llm_kb_context(
-        "project-1",
-        pack_kind="writing",
-        query="first",
-    )
-    second = broker._load_llm_kb_context(
-        "project-1",
-        pack_kind="writing",
-        query="second",
-    )
-
-    assert broker.memory_index is memory_index
-    assert first["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
-    assert second["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
-    assert memory_provider_calls == 1
-    assert retriever_provider_calls == 1
+    from forwin.llm_kb import LLMKnowledgeBaseCompiler
+    from forwin.models import Project
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.retrieval.source_identity import CanonReadBaseline
+    from tests.postgres import postgres_test_url
+    engine = get_engine(postgres_test_url("lazy-kb-provider"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    try:
+        with sessions.begin() as session:
+            session.add(Project(id="project-1", title="Valid lazy provider", premise="Source validation"))
+            session.flush()
+            LLMKnowledgeBaseCompiler(session, root=tmp_path, qdrant_client=FakeQdrantClient(), qdrant_models=FakeQdrantModels).rebuild("project-1")
+        with sessions() as session:
+            baseline = CanonReadBaseline.capture(session, "project-1", as_of_chapter=0)
+            first = broker._load_llm_kb_context("project-1", pack_kind="writing", query="first", session=session, baseline=baseline)
+            second = broker._load_llm_kb_context("project-1", pack_kind="writing", query="second", session=session, baseline=baseline)
+        assert broker.memory_index is memory_index
+        assert first["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
+        assert second["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
+        assert memory_provider_calls == 1
+        assert retriever_provider_calls == 1
+    finally:
+        engine.dispose()
 
 
 def test_broker_provider_failure_is_not_cached() -> None:

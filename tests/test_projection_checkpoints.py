@@ -5,10 +5,8 @@ from types import MappingProxyType, SimpleNamespace
 
 from fastapi import HTTPException
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import select, event
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from forwin.http.adapters import api_projection_routes
 from forwin.canon.outbox_events import (
@@ -34,10 +32,10 @@ from forwin.knowledge_system.projection_jobs import (
     normalize_projection_kind,
     projection_components_for_kind,
 )
-from forwin.models.base import Base
+from forwin.models.base import get_engine, get_session_factory, init_db
+from tests.postgres import postgres_test_url
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
-from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.projection import ProjectionCheckpoint
 from forwin.outbox.worker import OutboxClaim
@@ -45,26 +43,9 @@ from forwin.outbox.worker import OutboxClaim
 
 @pytest.fixture
 def projection_sessions():
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            Project.__table__,
-            ArcPlanVersion.__table__,
-            ChapterPlan.__table__,
-            ChapterDraft.__table__,
-            ChapterReview.__table__,
-            CandidateDraftRecord.__table__,
-            CanonCommitRecord.__table__,
-            ProjectionCheckpoint.__table__,
-            OutboxEvent.__table__,
-        ],
-    )
-    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    engine = get_engine(postgres_test_url("projection-checkpoints"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
     try:
         yield sessions
     finally:
@@ -105,6 +86,7 @@ def _add_commit(
         chapter_title=chapter.title,
         chapter_number=chapter_number,
         status="committed",
+        base_book_revision=session.get(Project, project_id).book_revision,
     )
     session.add(commit)
     session.flush()
@@ -162,6 +144,7 @@ def _add_accepted_chapter(
         candidate_draft_id=draft.id,
         review_id=review.id,
         version=1,
+        body_hash=__import__("hashlib").sha256(draft.body_text.encode()).hexdigest(),
         status="accepted",
         canon_status="canon",
         idempotency_key=f"canon-key-{project_id}-{chapter_number}",
@@ -734,3 +717,177 @@ def test_checkpoint_lock_statement_compiles_for_postgresql() -> None:
 
     assert "FROM PROJECTION_CHECKPOINTS" in sql
     assert "FOR UPDATE" in sql
+
+
+def test_incremental_memory_only_reads_chapter_100_and_replay_is_empty(projection_sessions):
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        for n in range(1, 100):
+            _add_accepted_chapter(session, "project-1", n)
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    from tests.qdrant import FakeQdrantClient, FakeQdrantModels
+    embedded = []
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            embedded.extend(texts)
+            return super().embed(texts)
+    memory_index = QdrantChapterMemoryIndex(url=":memory:", collection_name="incremental", embedder=CountingEmbedder(dims=8), client=FakeQdrantClient(), qdrant_models=FakeQdrantModels)
+    service = CanonProjectionService(projection_sessions, memory_index_provider=lambda: memory_index)
+    service.refresh("project-1", components=["chapter_memory"])
+    assert len(embedded) == 99
+    embedded.clear()
+    with projection_sessions.begin() as session:
+        _add_accepted_chapter(session, "project-1", 100)
+    body_reads = []
+    def record_body_read(_connection, _cursor, statement, parameters, _context, _many):
+        if "chapter_drafts.body_text" in statement:
+            body_reads.append((statement, parameters))
+    engine = projection_sessions.kw["bind"]
+    event.listen(engine, "before_cursor_execute", record_body_read)
+    try:
+        result = service.refresh("project-1", components=["chapter_memory"])
+    finally:
+        event.remove(engine, "before_cursor_execute", record_body_read)
+    assert len(body_reads) == 1
+    assert "canon_commit_records.id IN" in body_reads[0][0]
+    assert [value for value in body_reads[0][1].values() if str(value).startswith("commit-")] == ["commit-project-1-100"]
+    assert result["components"]["chapter_memory"]["chapters"] == [100]
+    assert embedded == ["Chapter 100\nSummary 100\nBody 100"]
+    service.refresh("project-1", components=["chapter_memory"])
+    assert len(embedded) == 1
+
+
+def test_chapter_zero_revision_runs_again_and_old_ticket_is_fenced(projection_sessions):
+    with projection_sessions.begin() as session:
+        _add_project(session)
+    calls = []
+    service = CanonProjectionService(projection_sessions, component_runners={"obsidian": lambda target: calls.append(target) or {"ok": True}})
+    service.refresh("project-1", components=["obsidian"])
+    old_target = service.checkpoints.resolve_target("project-1")
+    old_ticket = service.checkpoints.begin_component(old_target, "obsidian", force=True)
+    with projection_sessions.begin() as session:
+        session.get(Project, "project-1").book_revision += 1
+    service.refresh("project-1", components=["obsidian"])
+    assert len(calls) == 2
+    service.checkpoints.complete_component(old_ticket, source_digest="old")
+    checkpoint = _checkpoint(projection_sessions, "project-1", "obsidian")
+    assert checkpoint.projected_book_revision == 1
+    assert checkpoint.source_digest != "old"
+
+
+def _replace_suffix(session, numbers):
+    project = session.get(Project, "project-1")
+    commits = []
+    for n in numbers:
+        chapter = session.get(ChapterPlan, f"chapter-project-1-{n}")
+        old = session.get(CanonCommitRecord, chapter.active_commit_id)
+        commit = CanonCommitRecord(id=f"{old.id}-rev", idempotency_key=f"{old.idempotency_key}-rev", candidate_id=old.candidate_id,
+            project_id=old.project_id, chapter_plan_id=chapter.id, chapter_number=n, chapter_title=old.chapter_title,
+            acceptance_revision=old.acceptance_revision + 1, base_book_revision=project.book_revision, status="committed")
+        session.add(commit)
+        session.flush()
+        chapter.active_commit_id = commit.id
+        commits.append(commit)
+    project.book_revision += 1
+    return commits
+
+
+def test_same_height_suffix_coalesces_all_revisions_and_superseded_event(projection_sessions):
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        for n in (1, 2, 3):
+            _add_accepted_chapter(session, "project-1", n)
+        old = session.get(CanonCommitRecord, "commit-project-1-3")
+        identity = ProjectionEventIdentity(old.id, old.idempotency_key, old.project_id, old.chapter_number, old.candidate_id)
+    upserts = []
+    service = CanonProjectionService(projection_sessions, memory_index_provider=lambda: SimpleNamespace(upsert_chapter=lambda **kw: upserts.append(kw)))
+    service.refresh("project-1", components=["chapter_memory"])
+    upserts.clear()
+    with projection_sessions.begin() as session:
+        _replace_suffix(session, [2, 3])
+    with projection_sessions.begin() as session:
+        _replace_suffix(session, [3])
+    result = service.refresh("project-1", components=["chapter_memory"], event_identity=identity)
+    assert result["components"]["chapter_memory"]["chapters"] == [2, 3]
+    assert len(upserts) == 2
+    assert _checkpoint(projection_sessions, "project-1", "chapter_memory").projected_book_revision == 5
+    assert service.refresh("project-1", components=["chapter_memory"], event_identity=identity)["components"]["chapter_memory"]["skipped"]
+
+
+def test_healthy_chapter_zero_replays_only_after_revision_advance(projection_sessions):
+    with projection_sessions.begin() as session:
+        _add_project(session)
+    calls = []
+    service = CanonProjectionService(projection_sessions, component_runners={"obsidian": lambda target: calls.append(target) or {"ok": True}})
+    service.refresh("project-1", components=["obsidian"])
+    service.refresh("project-1", components=["obsidian"])
+    assert len(calls) == 1
+    with projection_sessions.begin() as session:
+        session.get(Project, "project-1").book_revision += 1
+    service.refresh("project-1", components=["obsidian"])
+    assert len(calls) == 2
+
+
+def test_unknown_migrated_checkpoint_rebuilds_once_then_empty_world_revision(projection_sessions):
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        _add_accepted_chapter(session, "project-1", 1)
+        session.add(ProjectionCheckpoint(project_id="project-1", projection_kind="chapter_memory", status="healthy", target_chapter_number=1, projected_chapter_number=1))
+    upserts = []
+    service = CanonProjectionService(projection_sessions, memory_index_provider=lambda: SimpleNamespace(upsert_chapter=lambda **kw: upserts.append(kw)))
+    result = service.refresh("project-1", components=["chapter_memory"])
+    assert result["components"]["chapter_memory"]["rebuild"] is True
+    assert len(upserts) == 1
+    service.refresh("project-1", components=["chapter_memory"])
+    with projection_sessions.begin() as session:
+        session.get(Project, "project-1").book_revision += 1
+    result = service.refresh("project-1", components=["chapter_memory"])
+    assert result["components"]["chapter_memory"]["chapters"] == []
+    assert result["components"]["chapter_memory"]["rebuild"] is False
+    assert len(upserts) == 1
+    assert _checkpoint(projection_sessions, "project-1", "chapter_memory").projected_book_revision == 2
+
+
+def test_failed_memory_projection_restart_reuses_cache_then_checkpoints(projection_sessions):
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    from tests.qdrant import FakeQdrantClient, FakeQdrantModels
+    with projection_sessions.begin() as session:
+        _add_project(session)
+        _add_accepted_chapter(session, "project-1", 1)
+    calls = []
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            calls.extend(texts)
+            return super().embed(texts)
+    class FailedClient(FakeQdrantClient):
+        def upsert(self, **kwargs):
+            raise RuntimeError("point write unavailable")
+    def service(client):
+        index = QdrantChapterMemoryIndex(url=":memory:", collection_name="restart", embedder=CountingEmbedder(dims=8), client=client, qdrant_models=FakeQdrantModels)
+        return CanonProjectionService(projection_sessions, memory_index_provider=lambda: index)
+    with pytest.raises(ProjectionRefreshError):
+        service(FailedClient()).refresh("project-1", components=["chapter_memory"], event_id="same-event")
+    assert _checkpoint(projection_sessions, "project-1", "chapter_memory").status == "degraded"
+    assert len(calls) == 1
+    restarted = service(FakeQdrantClient())
+    restarted.refresh("project-1", components=["chapter_memory"], event_id="same-event")
+    replay = restarted.refresh("project-1", components=["chapter_memory"], event_id="same-event")
+    assert replay["components"]["chapter_memory"]["skipped"]
+    assert len(calls) == 1
+    assert _checkpoint(projection_sessions, "project-1", "chapter_memory").projected_book_revision == 1
+
+
+def test_public_projection_status_preserves_revision_lag_and_unknown_baseline():
+    from forwin.api_schema.projection import ProjectionStatusResponse, ProjectionRefreshResponse
+    payload = {"project_id": "p", "status": "degraded", "target_book_revision": 5, "components": [
+        {"projection_kind": "chapter_memory", "status": "degraded", "target_book_revision": 5, "projected_book_revision": 4, "revision_lag": 1},
+        {"projection_kind": "llm_kb", "status": "never", "target_book_revision": 5, "projected_book_revision": None, "revision_lag": None},
+    ]}
+    result = ProjectionStatusResponse.model_validate(payload).model_dump()
+    assert result.get("target_book_revision") == 5
+    assert result["components"][0].get("projected_book_revision") == 4
+    assert result["components"][0].get("revision_lag") == 1
+    assert "projected_book_revision" in result["components"][1]
+    assert result["components"][1]["projected_book_revision"] is None
+    assert result["components"][1]["revision_lag"] is None
+    assert ProjectionRefreshResponse.model_validate({"project_id": "p", "target_book_revision": 5}).model_dump().get("target_book_revision") == 5

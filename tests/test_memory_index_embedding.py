@@ -6,7 +6,7 @@ import time
 import httpx
 import pytest
 
-from forwin.retrieval.memory_index import GatewayTextEmbedder, create_memory_index
+from forwin.retrieval.memory_index import GatewayTextEmbedder, create_memory_index, HashTextEmbedder, memory_embedding_identity
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
@@ -87,7 +87,7 @@ def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None
         if request.url.path == "/embed":
             payload = json.loads(request.content.decode("utf-8"))
             vectors = [[1.0, 0.0, 0.0] for _ in payload["texts"]]
-            return httpx.Response(200, json={"dimension": 3, "vectors": vectors})
+            return httpx.Response(200, json={"dimension": 3, "model": "test", "vectors": vectors})
         return httpx.Response(404)
 
     qdrant_client = FakeQdrantClient()
@@ -114,7 +114,7 @@ def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None
     )
     assert index.embedder.dims == 3
     assert (
-        qdrant_client.collections["chapter_memories_gateway"]["vectors_config"].size
+        qdrant_client.collections[index.collection_name]["vectors_config"].size
         == 3
     )
 
@@ -141,8 +141,8 @@ def test_create_memory_index_accepts_collection_created_by_a_competing_role() ->
     )
 
     index.search(project_id="p1", query="query")
-    assert index.collection_name == "chapter_memories_race"
-    assert qdrant_client.collections["chapter_memories_race"]["vectors_config"].size == 64
+    assert index.collection_name.startswith("chapter_memories_race_")
+    assert qdrant_client.collections[index.collection_name]["vectors_config"].size == 64
 
 
 def test_create_memory_index_retries_transient_inspection_after_competing_role(
@@ -178,7 +178,7 @@ def test_create_memory_index_retries_transient_inspection_after_competing_role(
     )
 
     index.search(project_id="p1", query="query")
-    assert index.collection_name == "chapter_memories_eventual_race"
+    assert index.collection_name.startswith("chapter_memories_eventual_race_")
     assert qdrant_client.inspection_attempts == 2
 
 
@@ -194,7 +194,7 @@ def test_existing_collection_inspection_failure_propagates_and_retries() -> None
 
     qdrant_client = FlakyInspectionClient()
     qdrant_client.create_collection(
-        collection_name="chapter_memories_existing",
+        collection_name=f"chapter_memories_existing_{memory_embedding_identity(HashTextEmbedder(dims=64))}",
         vectors_config=FakeQdrantModels.VectorParams(
             size=64,
             distance=FakeQdrantModels.Distance.COSINE,
@@ -218,7 +218,7 @@ def test_existing_collection_inspection_failure_propagates_and_retries() -> None
 
 def test_existing_collection_with_unknown_vector_shape_fails_closed() -> None:
     qdrant_client = FakeQdrantClient()
-    qdrant_client.collections["chapter_memories_named"] = {
+    qdrant_client.collections[f"chapter_memories_named_{memory_embedding_identity(HashTextEmbedder(dims=64))}"] = {
         "vectors_config": {
             "title": FakeQdrantModels.VectorParams(
                 size=64,
@@ -333,7 +333,7 @@ def test_existing_collection_dimension_mismatch_uses_side_by_side_collection() -
             payload = json.loads(request.content.decode("utf-8"))
             return httpx.Response(
                 200,
-                json={"dimension": 3, "vectors": [[1.0, 0.0, 0.0] for _ in payload["texts"]]},
+                json={"dimension": 3, "model": "test", "vectors": [[1.0, 0.0, 0.0] for _ in payload["texts"]]},
             )
         return httpx.Response(404)
 
@@ -360,10 +360,11 @@ def test_existing_collection_dimension_mismatch_uses_side_by_side_collection() -
 
     assert "chapter_memories_3d" not in qdrant_client.collections
     index.search(project_id="p1", query="query")
-    assert index.collection_name == "chapter_memories_3d"
+    assert index.collection_name.startswith("chapter_memories_")
+    assert index.collection_name != "chapter_memories_3d"
     assert "chapter_memories" in qdrant_client.collections
     assert qdrant_client.collections["chapter_memories"]["vectors_config"].size == 64
-    assert qdrant_client.collections["chapter_memories_3d"]["vectors_config"].size == 3
+    assert qdrant_client.collections[index.collection_name]["vectors_config"].size == 3
 
 
 def test_gateway_memory_index_search_orders_by_semantic_vector_similarity() -> None:
@@ -379,6 +380,7 @@ def test_gateway_memory_index_search_orders_by_semantic_vector_similarity() -> N
                 200,
                 json={
                     "dimension": 2,
+                    "model": "test",
                     "vectors": [vector_for(text) for text in payload["texts"]],
                 },
             )
@@ -413,3 +415,113 @@ def test_gateway_memory_index_search_orders_by_semantic_vector_similarity() -> N
     hits = index.search(project_id="p1", query="仓库线索", limit=2)
 
     assert [hit.chapter_number for hit in hits] == [2, 1]
+
+
+@pytest.mark.parametrize("bad_model", ["other-model", ""])
+def test_gateway_response_identity_must_match_prepared_model(bad_model):
+    def handler(request):
+        if request.url.path == "/metadata":
+            return httpx.Response(200, json={"model": "prepared", "dimension": 8})
+        return httpx.Response(200, json={"model": bad_model, "dimension": 8, "vectors": [[1.0] * 8]})
+    embedder = GatewayTextEmbedder(base_url="http://gateway.test", dims=0, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(ValueError, match="identity"):
+        embedder.embed(["text"])
+
+
+def test_same_dimension_models_use_separate_memory_spaces():
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    client = FakeQdrantClient()
+    first = HashTextEmbedder(dims=8)
+    second = HashTextEmbedder(dims=8)
+    second.model = "other-model"
+    indexes = [QdrantChapterMemoryIndex(url=":memory:", collection_name="identity", embedder=e, client=client, qdrant_models=FakeQdrantModels) for e in [first, second]]
+    indexes[0].upsert_chapter(project_id="p", chapter_number=1, title="one", summary="", body="body")
+    assert indexes[1].search(project_id="p", query="body") == []
+    assert indexes[0].collection_name != indexes[1].collection_name
+    assert len(indexes[0].search(project_id="p", query="body")) == 1
+
+
+def test_memory_cache_survives_failed_upsert_restart_and_suffix_identity():
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    from tests.postgres import postgres_test_url
+    engine = get_engine(postgres_test_url("embedding-cache"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    calls = []
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            calls.extend(texts)
+            return super().embed(texts)
+    class FailingUpsert(FakeQdrantClient):
+        def upsert(self, **kwargs):
+            raise RuntimeError("interrupted before Qdrant write")
+    try:
+        def index(client, model="sha1-token-bigram-v1"):
+            embedder = CountingEmbedder(dims=8)
+            embedder.model = model
+            result = QdrantChapterMemoryIndex(url=":memory:", collection_name="cache", embedder=embedder, client=client, qdrant_models=FakeQdrantModels)
+            result.session_factory = sessions
+            return result
+        kw = dict(project_id="p", chapter_number=1, title="one", summary="summary", body="unchanged input", canon_commit_id="old")
+        with pytest.raises(RuntimeError, match="interrupted"):
+            index(FailingUpsert()).upsert_chapter(**kw)
+        index(FakeQdrantClient()).upsert_chapter(**{**kw, "canon_commit_id": "suffix-new"})
+        assert len(calls) == 1
+        index(FakeQdrantClient(), "other-same-dimension").upsert_chapter(**kw)
+        assert len(calls) == 2
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("vector", [[1.0] * 7, [float("nan")] * 8, [float("inf")] * 8, [True] * 8])
+def test_durable_cache_rejects_invalid_vector_before_writing(vector):
+    from forwin.retrieval.embedding_cache import cached_embeddings
+    class InvalidEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            return [vector for _ in texts]
+    with pytest.raises(ValueError, match="dimension|finite"):
+        cached_embeddings(InvalidEmbedder(dims=8), ["input"])
+
+
+def test_unknown_embedding_identity_cannot_select_space_or_cache():
+    from forwin.retrieval.memory_index import QdrantChapterMemoryIndex
+    embedder = HashTextEmbedder(dims=8)
+    embedder.model = ""
+    client = FakeQdrantClient()
+    index = QdrantChapterMemoryIndex(url=":memory:", collection_name="unknown", embedder=embedder, client=client, qdrant_models=FakeQdrantModels)
+    with pytest.raises(ValueError, match="identity unavailable"):
+        index.search(project_id="p", query="text")
+    assert client.collections == {}
+
+
+def test_cache_key_uses_actual_input_and_preprocessing_and_validates_stored_vectors():
+    from sqlalchemy import select
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.retrieval.embedding_cache import cached_embeddings, LLM_KB_PREPROCESSING
+    from tests.postgres import postgres_test_url
+    engine = get_engine(postgres_test_url("cache-validation"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    calls = []
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            calls.extend(texts)
+            return super().embed(texts)
+    embedder = CountingEmbedder(dims=8)
+    try:
+        cached_embeddings(embedder, ["input", "input"], session_factory=sessions)
+        cached_embeddings(embedder, ["input"], session_factory=sessions)
+        assert calls == ["input"]
+        cached_embeddings(embedder, ["input"], preprocessing=LLM_KB_PREPROCESSING, session_factory=sessions)
+        cached_embeddings(embedder, ["changed"], session_factory=sessions)
+        assert calls == ["input", "input", "changed"]
+        with sessions.begin() as session:
+            row = session.scalars(select(EmbeddingCacheEntry).where(EmbeddingCacheEntry.embedding_identity == memory_embedding_identity(embedder))).first()
+            row.vector_json = "[NaN,0,0,0,0,0,0,0]"
+        with pytest.raises(ValueError, match="finite"):
+            cached_embeddings(embedder, ["input", "changed"], session_factory=sessions)
+        assert len(calls) == 3
+    finally:
+        engine.dispose()

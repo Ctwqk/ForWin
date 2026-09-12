@@ -73,6 +73,10 @@ class ProjectionCheckpoint(Base):
         default=0,
         server_default="0",
     )
+    # NULL denotes a migrated, unknown baseline; the first run rebuilds explicitly.
+    target_book_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    projected_book_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     last_event_id: Mapped[str] = mapped_column(
         String,
         nullable=False,

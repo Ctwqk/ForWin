@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from forwin.canon.identity import active_commit_predicate, is_active_commit
+from forwin.canon.identity import active_commit_predicate
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.project import Project
 from forwin.models.projection import ProjectionCheckpoint
@@ -31,6 +31,8 @@ class ProjectionTarget:
     canon_commit_id: str | None = None
     candidate_id: str = ""
     canon_idempotency_key: str = ""
+    book_revision: int = 0
+    from_book_revision: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +52,8 @@ class ProjectionRunTicket:
     target_chapter_number: int
     event_id: str
     started_at: datetime
+    target_book_revision: int
+    projected_book_revision: int | None
 
 
 def validate_projection_component(projection_kind: str) -> str:
@@ -97,7 +101,8 @@ def checkpoint_for_update_statement(project_id: str, projection_kind: str):
 
 
 def latest_projection_target(session: Any, project_id: str) -> ProjectionTarget:
-    if session.get(Project, project_id) is None:
+    project = session.get(Project, project_id)
+    if project is None:
         raise ValueError("project not found")
     commit = session.execute(
         select(CanonCommitRecord)
@@ -114,13 +119,14 @@ def latest_projection_target(session: Any, project_id: str) -> ProjectionTarget:
         .limit(1)
     ).scalar_one_or_none()
     if commit is None:
-        return ProjectionTarget(project_id=project_id, chapter_number=0)
+        return ProjectionTarget(project_id=project_id, chapter_number=0, book_revision=project.book_revision)
     return ProjectionTarget(
         project_id=project_id,
         chapter_number=int(commit.chapter_number or 0),
         canon_commit_id=commit.id,
         candidate_id=commit.candidate_id,
         canon_idempotency_key=commit.idempotency_key,
+        book_revision=project.book_revision,
     )
 
 
@@ -129,7 +135,7 @@ def validate_projection_event_identity(
     identity: ProjectionEventIdentity,
 ) -> None:
     commit = session.get(CanonCommitRecord, identity.canon_commit_id)
-    if commit is None or commit.status != "committed" or not is_active_commit(session, commit):
+    if commit is None or commit.status != "committed":
         raise ValueError("canon projection event references no committed Canon record")
     expected = {
         "canon_idempotency_key": str(commit.idempotency_key or ""),
@@ -188,25 +194,17 @@ class ProjectionCheckpointStore:
                         session.add(row)
                         session.flush()
 
-                    current_target = int(row.target_chapter_number or 0)
-                    if current_target > target.chapter_number:
+                    current_revision = row.target_book_revision
+                    if current_revision is not None and current_revision > target.book_revision:
                         return None
-                    if current_target < target.chapter_number:
-                        row.target_chapter_number = target.chapter_number
-                        row.target_canon_commit_id = target.canon_commit_id
-                    elif target.canon_commit_id is not None:
-                        existing_commit_id = row.target_canon_commit_id
-                        if existing_commit_id not in {None, target.canon_commit_id}:
-                            raise RuntimeError(
-                                "projection checkpoint target identity is inconsistent"
-                            )
-                        row.target_canon_commit_id = target.canon_commit_id
-
-                    projected = int(row.projected_chapter_number or 0)
+                    row.target_book_revision = target.book_revision
+                    row.target_chapter_number = target.chapter_number
+                    row.target_canon_commit_id = target.canon_commit_id
                     if (
                         not force
                         and row.status == "healthy"
-                        and projected >= target.chapter_number
+                        and row.projected_book_revision is not None
+                        and row.projected_book_revision >= target.book_revision
                     ):
                         return None
 
@@ -221,6 +219,8 @@ class ProjectionCheckpointStore:
                         target_chapter_number=target.chapter_number,
                         event_id=str(event_id or ""),
                         started_at=started_at,
+                        target_book_revision=target.book_revision,
+                        projected_book_revision=row.projected_book_revision,
                     )
             except IntegrityError:
                 if attempt:
@@ -240,20 +240,12 @@ class ProjectionCheckpointStore:
                     ticket.projection_kind,
                 )
             ).scalar_one()
-            projected = int(row.projected_chapter_number or 0)
-            if ticket.target_chapter_number > projected:
-                row.projected_chapter_number = ticket.target_chapter_number
-                row.projected_canon_commit_id = ticket.target_canon_commit_id
-
             if not _ticket_is_current(row, ticket):
                 return
             row.status = "healthy"
-            row.projected_chapter_number = max(
-                int(row.projected_chapter_number or 0),
-                ticket.target_chapter_number,
-            )
-            if row.projected_chapter_number == ticket.target_chapter_number:
-                row.projected_canon_commit_id = ticket.target_canon_commit_id
+            row.projected_book_revision = ticket.target_book_revision
+            row.projected_chapter_number = ticket.target_chapter_number
+            row.projected_canon_commit_id = ticket.target_canon_commit_id
             row.last_event_id = ticket.event_id
             row.source_digest = str(source_digest or "")
             row.last_error = ""
@@ -303,9 +295,11 @@ class ProjectionCheckpointStore:
                 projected_chapter = int(
                     getattr(row, "projected_chapter_number", 0) or 0
                 )
+                projected_revision = getattr(row, "projected_book_revision", None)
+                revision_lag = None if projected_revision is None else max(target.book_revision - projected_revision, 0)
                 lag = max(target.chapter_number - projected_chapter, 0)
                 status = str(getattr(row, "status", "never") or "never")
-                if row is not None and lag > 0 and status == "healthy":
+                if row is not None and (lag > 0 or revision_lag != 0) and status == "healthy":
                     status = "degraded"
                 component_target_chapter = max(
                     target.chapter_number,
@@ -328,6 +322,9 @@ class ProjectionCheckpointStore:
                         ),
                         "projected_chapter_number": projected_chapter,
                         "lag": lag,
+                        "target_book_revision": target.book_revision,
+                        "projected_book_revision": projected_revision,
+                        "revision_lag": revision_lag,
                         "last_event_id": str(
                             getattr(row, "last_event_id", "") or ""
                         ),
@@ -358,6 +355,7 @@ class ProjectionCheckpointStore:
             "healthy": overall == "healthy",
             "target_canon_commit_id": target.canon_commit_id,
             "target_chapter_number": target.chapter_number,
+            "target_book_revision": target.book_revision,
             "components": components,
         }
 
@@ -367,7 +365,8 @@ def _ticket_is_current(
     ticket: ProjectionRunTicket,
 ) -> bool:
     return (
-        int(row.target_chapter_number or 0) == ticket.target_chapter_number
+        row.target_book_revision == ticket.target_book_revision
+        and int(row.target_chapter_number or 0) == ticket.target_chapter_number
         and row.target_canon_commit_id == ticket.target_canon_commit_id
         and row.started_at == ticket.started_at
     )

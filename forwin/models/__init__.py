@@ -15,6 +15,7 @@ from .canon_quality import (
     RevealRegistryEntryRow,
     StoryObligationRow,
 )
+from .embedding import EmbeddingCacheEntry
 from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
 from .planning_control import BandCheckpoint, NarrativeConstraint
@@ -177,6 +178,7 @@ __all__ = [
     "PublisherRawComment",
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
+    "EmbeddingCacheEntry",
     # planning state
     "ArcWorldContractRow",
     "BandWorldContractRow",

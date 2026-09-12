@@ -202,7 +202,7 @@ def test_canon_projection_failure_preserves_acceptance_and_retries(
                 version=1,
                 status="accepted",
                 canon_status="canon",
-                body_hash="body-hash",
+                body_hash=__import__("hashlib").sha256(draft.body_text.encode()).hexdigest(),
                 plan_revision="plan-revision",
                 policy_version=1,
                 idempotency_key="canon-projection-key",

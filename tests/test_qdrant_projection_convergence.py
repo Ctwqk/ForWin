@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from forwin.retrieval.memory_index import HashTextEmbedder
+from forwin.retrieval.embedding_cache import memory_embedding_identity, LLM_KB_PREPROCESSING
 from forwin.llm_kb.vector_index import (
     LLMKBVectorIndex,
     _existing_points_by_normalized_id,
@@ -16,7 +17,8 @@ from forwin.llm_kb.vector_index import (
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
-COLLECTION = "llm-kb-convergence"
+BASE_COLLECTION = "llm-kb-convergence"
+COLLECTION = f"{BASE_COLLECTION}_{memory_embedding_identity(HashTextEmbedder(dims=96), preprocessing=LLM_KB_PREPROCESSING)}"
 
 
 def _write_current_state(root: Path, project_id: str, text: str) -> None:
@@ -28,7 +30,7 @@ def _write_current_state(root: Path, project_id: str, text: str) -> None:
 def _vector_index(root: Path, client: FakeQdrantClient) -> LLMKBVectorIndex:
     return LLMKBVectorIndex(
         root,
-        collection_name=COLLECTION,
+        collection_name=BASE_COLLECTION,
         embedder=HashTextEmbedder(dims=96),
         owns_embedder=True,
         qdrant_client=client,
@@ -340,7 +342,7 @@ def test_point_identity_separates_each_source_content_and_embedding_generation(t
         if change == 'embedding':
             index.embedder.model = 'different-model-same-96-dimensions'
         result = index.rebuild_project('project-1', source_digest=digest, as_of_chapter=1)
-        points = _owned_points(client, 'project-1')
+        points = {key: point for collection in client.collections.values() for key, point in collection['points'].items()}
         assert original_ids < set(points)
         assert len(points) == 2
         assert result['upserted_section_count'] == 1
@@ -353,3 +355,42 @@ def test_point_identity_separates_each_source_content_and_embedding_generation(t
         assert replay['skipped_section_count'] == 1
     finally:
         index.close()
+
+
+def test_same_dimension_model_namespace_disposes_duplicate_section_limit(tmp_path):
+    client = FakeQdrantClient()
+    _write_current_state(tmp_path, "project-1", "# First\nstate\n## Second\nstate\n")
+    first = _vector_index(tmp_path, client)
+    first.rebuild_project("project-1", source_digest="current", as_of_chapter=1)
+    second = _vector_index(tmp_path, client)
+    second.embedder.model = "other-model"
+    assert second.search("project-1", "state") == []
+    second.rebuild_project("project-1", source_digest="current", as_of_chapter=1)
+    assert first.collection_name != second.collection_name
+    sections = _collect_project_sections(tmp_path / "project-1", source_digest="current", as_of_chapter=1, projection_version=LLM_KB_PROJECTION_VERSION)
+    sources = {(item["file_key"], item["section_key"]): item for item in sections}
+    hits = second.search("project-1", "state", limit=2, source_sections=sources)
+    assert {hit.section_key for hit in hits} == {"First", "Second"}
+    assert len(client.collections[first.collection_name]["points"]) == 2
+
+
+def test_llm_kb_cache_reuses_unchanged_sections_across_restart_and_sources(tmp_path):
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from tests.postgres import postgres_test_url
+    engine = get_engine(postgres_test_url("llm-kb-cache"))
+    init_db(engine)
+    sessions = get_session_factory(engine)
+    calls = []
+    class CountingEmbedder(HashTextEmbedder):
+        def embed(self, texts):
+            calls.extend(texts)
+            return super().embed(texts)
+    try:
+        _write_current_state(tmp_path, "project-1", "# First\nstate\n## Second\nstate\n")
+        for revision in (1, 2):
+            index = LLMKBVectorIndex(tmp_path, collection_name="cache", embedder=CountingEmbedder(dims=96), qdrant_client=FakeQdrantClient(), qdrant_models=FakeQdrantModels)
+            index.session_factory = sessions
+            index.rebuild_project("project-1", source_digest=str(revision), as_of_chapter=revision)
+        assert len(calls) == 2
+    finally:
+        engine.dispose()

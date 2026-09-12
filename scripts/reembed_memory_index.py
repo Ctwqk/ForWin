@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from forwin.config import InfrastructureConfig
-from forwin.models import ChapterDraft, ChapterPlan
+from forwin.models import ChapterPlan
+from forwin.retrieval.source_identity import CanonReadBaseline, active_sources
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
 
@@ -53,26 +54,27 @@ def reembed_project_memories(
         if int(limit or 0) > 0:
             statement = statement.limit(int(limit))
         plans = session.execute(statement).scalars().all()
-        for plan in plans:
-            scanned += 1
-            draft = session.execute(
-                select(ChapterDraft)
-                .where(ChapterDraft.chapter_plan_id == plan.id)
-                .order_by(ChapterDraft.version.desc(), ChapterDraft.created_at.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if draft is None:
-                skipped_without_draft += 1
-                continue
-            if not dry_run:
-                memory_index.upsert_chapter(
-                    project_id=str(plan.project_id),
-                    chapter_number=int(plan.chapter_number or 0),
-                    title=str(plan.title or f"第{plan.chapter_number}章"),
-                    summary=str(draft.summary or ""),
-                    body=str(draft.body_text or ""),
-                )
-            upserted += 1
+        if hasattr(memory_index, "session_factory"):
+            memory_index.session_factory = session_factory
+        for current_project in dict.fromkeys(plan.project_id for plan in plans):
+            project_plans = [plan for plan in plans if plan.project_id == current_project]
+            baseline = CanonReadBaseline.capture(session, current_project, as_of_chapter=max(plan.chapter_number for plan in project_plans))
+            sources = active_sources(session, baseline, commit_ids={plan.active_commit_id for plan in project_plans if plan.active_commit_id})
+            for plan in project_plans:
+                scanned += 1
+                source = sources.get(plan.active_commit_id)
+                if source is None:
+                    skipped_without_draft += 1
+                    continue
+                if not dry_run:
+                    memory_index.upsert_chapter(
+                        project_id=current_project, chapter_number=source.chapter_number,
+                        title=source.title, summary=source.summary, body=source.excerpt,
+                        canon_commit_id=source.canon_commit_id, candidate_id=source.candidate_id,
+                        draft_id=source.draft_id, body_hash=source.body_hash,
+                    )
+                upserted += 1
+            baseline.assert_current(session)
     return ReembedResult(
         scanned=scanned,
         upserted=upserted,

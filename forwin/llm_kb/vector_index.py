@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from forwin.retrieval.embedding_cache import cached_embeddings, memory_embedding_identity, LLM_KB_PREPROCESSING
 from forwin.config import DEFAULT_QDRANT_URL
 from forwin.llm_kb.store import ROOT_FILE_KEYS
 from forwin.retrieval.memory_index import (
@@ -20,7 +21,6 @@ from forwin.retrieval.memory_index import (
     _create_qdrant_client,
     _qdrant_models,
     _vector_size_from_config,
-    memory_embedding_identity,
 )
 
 
@@ -113,9 +113,12 @@ class LLMKBVectorIndex:
         owns_embedder: bool = False,
         qdrant_client: Any | None = None,
         qdrant_models: Any | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         self.root = root
+        self.session_factory = session_factory
         self.collection_name = collection_name or _default_collection_name()
+        self._configured_collection_name = self.collection_name
         self.embedder = embedder or HashTextEmbedder(dims=96)
         self._owns_embedder = embedder is None or owns_embedder
         self._qdrant_url = qdrant_url or _default_qdrant_url()
@@ -129,14 +132,16 @@ class LLMKBVectorIndex:
     def _ensure_ready(self) -> None:
         if self._closed:
             raise RuntimeError("LLM KB vector index is closed")
-        if self._ready:
+        if self._ready and memory_embedding_identity(self.embedder, preprocessing=LLM_KB_PREPROCESSING) == self._embedding_identity:
             return
         with self._ready_lock:
             if self._closed:
                 raise RuntimeError("LLM KB vector index is closed")
-            if self._ready:
+            if self._ready and memory_embedding_identity(self.embedder, preprocessing=LLM_KB_PREPROCESSING) == self._embedding_identity:
                 return
             self.embedder.prepare()
+            identity = memory_embedding_identity(self.embedder, preprocessing=LLM_KB_PREPROCESSING)
+            self.collection_name = f"{self._configured_collection_name}_{identity}"
             created_client = self.client is None
             client = self.client or _create_qdrant_client(self._qdrant_url)
             try:
@@ -148,6 +153,7 @@ class LLMKBVectorIndex:
                 raise
             self.client = client
             self._rest = rest
+            self._embedding_identity = identity
             self._ready = True
 
     def _ensure_collection(self, client: Any, rest: Any) -> None:
@@ -297,7 +303,7 @@ class LLMKBVectorIndex:
         desired_point_ids: set[str] = set()
         sections_to_upsert = []
         skipped = 0
-        embedding_identity = memory_embedding_identity(self.embedder, preprocessing="llm-kb-section-text-v1")
+        embedding_identity = memory_embedding_identity(self.embedder, preprocessing=LLM_KB_PREPROCESSING)
         for section in sections:
             section = {**section, "embedding_identity": embedding_identity}
             point_id = _point_id(
@@ -319,7 +325,7 @@ class LLMKBVectorIndex:
                 continue
             sections_to_upsert.append((point_id, section, desired_payload))
         texts = [section["text"] for _, section, _ in sections_to_upsert]
-        embeddings = self.embedder.embed(texts) if texts else []
+        embeddings = cached_embeddings(self.embedder, texts, preprocessing=LLM_KB_PREPROCESSING, session_factory=self.session_factory)
         points = []
         for (point_id, _section, payload), embedding in zip(
             sections_to_upsert,
@@ -372,9 +378,10 @@ class LLMKBVectorIndex:
             allowed_visibility = allowed_visibility.intersection({requested_visibility})
             if not allowed_visibility:
                 return []
-        vector = self.embedder.embed([query_text])[0]
+        vector = cached_embeddings(self.embedder, [query_text], preprocessing=LLM_KB_PREPROCESSING)[0]
         records: list[LLMKBVectorRecord] = []
         rejected = 0
+        seen_sections = set()
         batches = 5 if source_sections is not None else 1
         batch_size = 20 if source_sections is not None else limit_value
         for batch in range(batches):
@@ -387,12 +394,20 @@ class LLMKBVectorIndex:
             points = getattr(response, "points", response)
             for point in points:
                 payload = dict(getattr(point, "payload", {}) or {})
+                if payload.get("embedding_identity") != self._embedding_identity:
+                    rejected += 1
+                    continue
                 if source_sections is not None:
                     source = source_sections.get((payload.get("file_key"), payload.get("section_key")))
                     if source is None or payload.get("project_id") != project_id or any(payload.get(key) != source[key] for key in ("source_digest", "section_digest", "role_scope", "visibility_scope", "as_of_chapter", "projection_version")):
                         rejected += 1
                         continue
                     payload = {**source, "project_id": project_id, "embedding_identity": payload.get("embedding_identity", "")}
+                section_key = (payload.get("file_key"), payload.get("section_key"), payload.get("role_scope"))
+                if section_key in seen_sections:
+                    rejected += 1
+                    continue
+                seen_sections.add(section_key)
                 records.append(
                     LLMKBVectorRecord(
                         project_id=str(payload.get("project_id") or project_id),

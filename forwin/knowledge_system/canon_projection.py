@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +21,7 @@ from forwin.knowledge_system.checkpoints import (
 )
 from forwin.llm_kb import LLMKnowledgeBaseCompiler
 from forwin.models.canon import CanonCommitRecord
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.project import ChapterPlan
+from forwin.retrieval.source_identity import CanonReadBaseline, active_sources
 from forwin.obsidian import ObsidianExporter
 
 ComponentRunner = Callable[[ProjectionTarget], Any]
@@ -46,6 +45,7 @@ class ProjectionRefreshError(RuntimeError):
             "project_id": self.project_id,
             "target_canon_commit_id": self.target.canon_commit_id,
             "target_chapter_number": self.target.chapter_number,
+            "target_book_revision": self.target.book_revision,
             "failures": dict(self.failures),
             "partial_success": any(
                 bool(result.get("ok")) for result in self.results.values()
@@ -128,10 +128,11 @@ class CanonProjectionService:
                             "ok": True,
                             "skipped": True,
                             "target_chapter_number": target.chapter_number,
+                            "target_book_revision": target.book_revision,
                         }
                         continue
                     result = _normalize_component_result(
-                        self.component_runners[kind](target)
+                        self.component_runners[kind](replace(target, from_book_revision=ticket.projected_book_revision))
                     )
                     if result.get("ok") is False:
                         raise RuntimeError(_component_failure_message(result))
@@ -178,6 +179,7 @@ class CanonProjectionService:
             "project_id": project_id,
             "target_canon_commit_id": target.canon_commit_id,
             "target_chapter_number": target.chapter_number,
+            "target_book_revision": target.book_revision,
             "components": results,
         }
 
@@ -229,72 +231,49 @@ class CanonProjectionService:
             }
 
     def _run_chapter_memory(self, target: ProjectionTarget) -> dict[str, Any]:
+        baseline = CanonReadBaseline(target.project_id, target.book_revision, target.chapter_number)
         with session_transaction(self.session_factory) as session:
-            chapters = list(
-                session.execute(
-                    select(
-                        ChapterPlan.chapter_number,
-                        CanonCommitRecord.chapter_title,
-                        ChapterDraft.summary,
-                        ChapterDraft.body_text,
-                        CanonCommitRecord.id, CandidateDraftRecord.id, ChapterDraft.id, CandidateDraftRecord.body_hash,
-                    )
-                    .select_from(CanonCommitRecord)
-                    .join(
-                        CandidateDraftRecord,
-                        CandidateDraftRecord.id == CanonCommitRecord.candidate_id,
-                    )
-                    .join(
-                        ChapterPlan,
-                        ChapterPlan.id == CandidateDraftRecord.chapter_plan_id,
-                    )
-                    .join(
-                        ChapterDraft,
-                        ChapterDraft.id == CandidateDraftRecord.candidate_draft_id,
-                    )
-                    .where(
-                        CanonCommitRecord.project_id == target.project_id,
-                        CanonCommitRecord.status == "committed",
-                    active_commit_predicate(),
-                        CanonCommitRecord.chapter_number <= target.chapter_number,
-                        CandidateDraftRecord.status == "accepted",
-                        ChapterPlan.status == "accepted",
-                    )
-                    .order_by(ChapterPlan.chapter_number.asc())
-                )
+            statement = select(CanonCommitRecord.id).where(
+                CanonCommitRecord.project_id == target.project_id,
+                CanonCommitRecord.status == "committed",
+                active_commit_predicate(),
+                CanonCommitRecord.chapter_number <= target.chapter_number,
+                CanonCommitRecord.base_book_revision < target.book_revision,
             )
+            if target.from_book_revision is not None:
+                statement = statement.where(CanonCommitRecord.base_book_revision >= target.from_book_revision)
+            commit_ids = set(session.scalars(statement))
+            sources = active_sources(session, baseline, commit_ids=commit_ids)
+            if set(sources) != commit_ids:
+                raise ValueError("active Canon memory source validation failed")
 
-        if chapters:
+        if sources:
             if self.memory_index_provider is None:
                 raise RuntimeError("chapter memory projection requires a memory index")
             memory_index = self.memory_index_provider()
             if memory_index is None:
                 raise RuntimeError("memory index provider returned no index")
-            for chapter_number, title, summary, body, commit_id, candidate_id, draft_id, body_hash in chapters:
+            # The same cache survives retries and the standalone reembed tool.
+            if hasattr(memory_index, "session_factory"):
+                memory_index.session_factory = self.session_factory
+            for source in sorted(sources.values(), key=lambda item: item.chapter_number):
                 memory_index.upsert_chapter(
                     project_id=target.project_id,
-                    chapter_number=int(chapter_number),
-                    title=str(title or ""),
-                    summary=str(summary or ""),
-                    body=str(body or ""),
-                    canon_commit_id=commit_id, candidate_id=candidate_id, draft_id=draft_id, body_hash=body_hash,
+                    chapter_number=source.chapter_number,
+                    title=source.title, summary=source.summary, body=source.excerpt,
+                    canon_commit_id=source.canon_commit_id, candidate_id=source.candidate_id,
+                    draft_id=source.draft_id, body_hash=source.body_hash,
                 )
-
-        digest_payload = [
-            {
-                "chapter_number": int(chapter_number),
-                "title": str(title or ""),
-                "summary": str(summary or ""),
-                "body": str(body or ""),
-            }
-            for chapter_number, title, summary, body, *_ in chapters
-        ]
+        with session_transaction(self.session_factory) as session:
+            baseline.assert_current(session)
         return {
             "ok": True,
-            "chapter_count": len(chapters),
-            "chapters": [item["chapter_number"] for item in digest_payload],
-            "source_digest": _digest_payload(digest_payload),
+            "chapter_count": len(sources),
+            "chapters": sorted(item.chapter_number for item in sources.values()),
+            "source_digest": _digest_payload([item.model_dump() for item in sources.values()]),
             "as_of_chapter": target.chapter_number,
+            "book_revision": target.book_revision,
+            "rebuild": target.from_book_revision is None,
         }
 
 

@@ -5,7 +5,8 @@ from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.models import Project
 from forwin.protocol.book_state import WorldNode
-from forwin.retrieval.memory_index import create_memory_index
+from forwin.retrieval.memory_index import create_memory_index, HashTextEmbedder
+from forwin.retrieval.embedding_cache import memory_embedding_identity, LLM_KB_PREPROCESSING
 from tests.test_knowledge_system_v46 import _session_factory, _create_project
 
 
@@ -618,7 +619,7 @@ def test_llm_kb_validated_search_reconstructs_payload_and_checks_file_bytes(tmp_
             ).rebuild(project_id)
         with Factory() as session:
             baseline = CanonReadBaseline.capture(session, project_id, as_of_chapter=0)
-            for point in client.collections["kb"]["points"].values():
+            for point in client.collections[f"kb_{memory_embedding_identity(HashTextEmbedder(dims=96), preprocessing=LLM_KB_PREPROCESSING)}"]["points"].values():
                 point.payload["text"] = "伪造文本标记"
             retriever = LLMKnowledgeBaseRetriever(
                 root=tmp_path,
@@ -752,6 +753,7 @@ def test_memory_projection_producer_supplies_active_immutable_source_ids():
                 project_id=project_id,
                 chapter_number=1,
                 canon_commit_id=active["canon_commit_id"],
+                book_revision=2,
             )
         )
         assert result["chapter_count"] == 1
@@ -853,7 +855,7 @@ def test_llm_kb_late_compiler_preserves_current_points_and_manifest(tmp_path, mo
                 LLMKnowledgeBaseCompiler(session, root=tmp_path, **index_options).rebuild(project_id)
             except CanonBaselineChanged as exc:
                 stale_error = exc
-        points = list(client.collections['late-kb']['points'].values())
+        points = list(client.collections[created[0].collection_name]['points'].values())
         assert any('NEW_VERSION_SENTINEL' in point.payload['text'] for point in points)
         assert any('OLD_VERSION_SENTINEL' in point.payload['text'] for point in points)
         assert isinstance(stale_error, CanonBaselineChanged)

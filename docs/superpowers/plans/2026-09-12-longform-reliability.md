@@ -143,14 +143,14 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 7: C2 — 增量投影及可恢复 embedding 缓存
 
-**Files:** Modify `forwin/knowledge_system/{canon_projection,checkpoints}.py`, `forwin/models/{projection,canon}.py`, `forwin/retrieval/memory_index.py` (includes GatewayTextEmbedder), `forwin/llm_kb/vector_index.py`, `scripts/reembed_memory_index.py`; create embedding cache model and forward migration. Tests: `tests/test_memory_index_embedding.py`, `tests/test_reembed_memory_index.py`, `tests/test_projection_checkpoints.py`, relevant LLM-KB index tests and migration regressions.
+**Files:** Create `forwin/retrieval/embedding_cache.py`, `forwin/models/embedding.py` and a forward migration; modify `forwin/knowledge_system/{canon_projection,checkpoints}.py`, `forwin/api_schema/projection.py`, `forwin/models/{projection,canon}.py` and model registration, `forwin/retrieval/memory_index.py` (includes GatewayTextEmbedder), `forwin/llm_kb/{compiler,vector_index}.py`, `scripts/reembed_memory_index.py` and their existing session-factory wiring. Tests: `tests/test_memory_index_embedding.py`, `tests/test_reembed_memory_index.py`, `tests/test_projection_checkpoints.py`, relevant LLM-KB index tests and migration regressions.
 
-**Interfaces:** checkpoint target/projected book_revision 按既有 fencing推进；以 CanonCommitRecord.base_book_revision 区间和 active pointers 确定变化集合。durable embedding cache key = actual input hash + model/backend identity + dimensions + preprocessing version；向量空间按模型身份隔离。
+**Interfaces:** checkpoint target/projected book_revision 按既有 fencing推进；以 CanonCommitRecord.base_book_revision 区间和 active pointers 确定变化集合。durable embedding cache key = actual input hash + model/backend identity + dimensions + preprocessing version；向量空间按模型身份隔离。 `embedding_cache.py` 统一身份、向量校验及持久批量缓存；正常生产者接入同一 session factory，先选择变化身份再读取正文。
 
 - [ ] RED：接纳100章只读取/嵌入第100章；相同事件重放0新增embedding；修订后缀身份变但输入未变复用缓存；同维度换模型不复用；reembed有较新未接纳稿仍只读取active稿。
 - [ ] checkpoint支持同章新revision/chapter0；old valid superseded event安全收敛或no-op，不无限retry；合并事件覆盖整个缺失revision区间，旧ticket不回退新checkpoint。
 - [ ] 普通路径只取变化正文；unknown迁移checkpoint明确一次重建。缓存校验维度/有限数值，模型身份无法确认不得以维度猜测。全量工具复用同一active selector与cache。
-- [ ] 章节记忆与 LLM-KB 向量检索均按实际 embedding 身份选择向量空间；保留其他版本并维持 C1 来源验证，复查 Task 4 遗留的跨 embedding 版本重复段落问题。
+- [ ] 章节记忆与 LLM-KB 向量检索均按实际 embedding 身份选择向量空间；保留其他版本并维持 C1 来源验证，复查 Task 4 遗留的跨 embedding 版本重复段落问题。 检查点仍记录 Canon revision；同 revision 换模型后由现有 reembed/知识库编译显式填充新空间，覆盖全历史重建和旧空间保留，不新增自动后台策略。
 - [ ] 跑 embedding/reembed/projection/outbox/migration suites，提交 `perf(projection): index changed Canon sources and reuse versioned embeddings` 并审查。
 
 ## Task 8: 集成核验与交付

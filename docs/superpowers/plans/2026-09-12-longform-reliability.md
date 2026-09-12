@@ -113,12 +113,13 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 5: D1 — 接通已接纳人物与读者认知
 
-**Files:** Modify `forwin/book_state/query.py`, `forwin/protocol/context.py`, `forwin/context/providers/`, `forwin/context/assembler_core/assembler.py`, `forwin/retrieval/broker_core/broker.py`, `forwin/writer/prompt_core/sections.py`, `forwin/review/{context_builder,webnovel,llm_webnovel}.py`.
+**Files:** Modify `forwin/book_state/{query,projection}.py`, `forwin/protocol/context.py`, `forwin/context/providers/`, `forwin/context/assembler_core/assembler.py`, `forwin/retrieval/broker_core/broker.py`, `forwin/writer/prompt_core/sections.py`, `forwin/review/{context_builder,webnovel,llm_webnovel}.py`.
 
 **Interfaces:** 同一 Task 4 baseline 的 typed accepted cognition snapshot，含 observer ID/type、显式 ref 状态、错误认知/overrides、证据和 as-of。已存在计划 intent 字段保留计划意义，不能填 current reader/observer fields。
 
 - [ ] RED：N−1 A知/B未知/读者只见线索，N后半才告知B；读取 N−1 的 field patch、false belief 和 override；五种布局+repair实际发送请求里 B 不提前知情。
 - [ ] 从 CognitionView 明确字段读取，get_belief absent 保持 unknown，不用 can_see 默认值及旧 overlay 副本；assembler 和 broker merge 移除计划 truthy fallback。
+- [ ] 不同观察者从各自已加载快照的初始章号继续回放；不能用全体最新快照跳过其他观察者尚未应用的认知变化，也不能重复应用已包含的变化。
 - [ ] Writer/Reviewer 分开渲染已接纳认知、作者计划、预期本章变化及带条件场景承接；秘密可以存在于作者区域，但不成为角色知识。
 - [ ] 跑 BookState/provider/prompt/review regressions，提交 `fix(context): separate accepted cognition from planned reveals` 并审查。
 

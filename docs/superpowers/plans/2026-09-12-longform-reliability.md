@@ -86,7 +86,7 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 ## Task 3: A2 — 义务阻塞接入有限修复
 
-**Files:** Modify `forwin/canon_quality/{gate,signals}.py`, `forwin/canon/quality_preparation.py`, `forwin/generation/pipeline_core/project_chapters.py`, existing `forwin/review/repair/` scope/contract/plan-patch owners. Test `tests/test_canon_admission_gate.py`, obligation repair and pipeline tests.
+**Files:** Modify `forwin/canon_quality/{gate,signals}.py`, `forwin/canon/quality_preparation.py`, `forwin/generation/pipeline_core/project_chapters.py`, `forwin/review/{repair_scope_router,candidate}.py`, `forwin/generation/review_auto_retry.py`, existing `forwin/review/repair/` scope/contract/plan-patch owners. Test `tests/test_canon_admission_gate.py`, obligation repair and pipeline tests.
 
 **Interfaces:** 扩展已有 `CanonAdmissionGateResult` 的结构化阻塞项，保留 blocking_reasons 作为显示；每项含 obligation_id、未满足条件、来源、scope、failure domain。Task 1 的 reviewed resolutions 决定到期是否清账，不能重新启用关键词。
 

@@ -159,5 +159,6 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 - [ ] 冻结集成源码，跑 `.venv/bin/python -m pytest -q`、compileall、修改文件 F/E9、source closure guard、diff检查和前向迁移回归；全量 Ruff记录新增问题，不能隐瞒既有基线。
 - [ ] 用 fresh reviewer检查完整diff的规格覆盖、原子性、并发、失效读路径、实际prompt终点；修复并定向复核。
+- [ ] 终审补强：原始 Canon 评审基线写入现有 ChapterReview.review_meta_json，沿 candidate/review 身份冻结到提交计划；实际评审结束、fresh approval、preparation/admission 均不得改用新版本证明旧评审。缺失旧证明须重新评审，已接纳历史读取与完整后缀修订边界保留。通过真实独立会话审批及评审期间 Canon 变化回归，并收敛全量测试、静态检查和既有模块边界。
 - [ ] 更新已完成/待实跑边界，按已有授权提交并push `origin/for-review`，fetch验证0/0。生产同步前仍须完整镜像/旧库前向迁移验证，不能跨越既有未通过资格。
 - [ ] 继续现有阶段候选的smoke20→独立L100→结局审读；如凭据/配额尚无变化，保留明确阻塞和源码身份，不创建定时任务、不假装通过。

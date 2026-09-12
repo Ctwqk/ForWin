@@ -28,6 +28,8 @@ CanonPreparation 冻结这些证据及依赖；CanonAdmission 在锁内复核义
 
 一次 Writer 上下文固定 project、book_revision 和第 N−1 章读取基线。整书 revision 用于发现并发变化及缓存失效，不作为每条旧记忆必须等于最新 revision 的条件。基线变化最多重建一次整包，仍变化则明确输入构造失败，不混合不同版本。
 
+原始评审基线随现有 `ChapterReview.review_meta_json` 保存，并通过 candidate 的确切 review 身份进入不可变 Canon 提交证据。语义评审开始前固定基线，结束后复核；保存、重新打开审批和准备提交不能重新捕获当前版本来替代原证明。准备与锁内接纳检查 project、book revision、N−1 范围和 candidate/review 归属。旧 review 缺少有效基线时仍可读取，但新的接纳必须重新评审，不能补造当前证明；已经接纳的历史幂等读取和修订的完整后缀证明保持各自边界。
+
 向量命中只定位候选来源。章节、commit、candidate/draft 和来源文本指纹批量回 active Canon 验证，再取得正式标题、摘要、片段。未知旧身份及过期命中剔除；检索带 as-of 条件并作有限分页补检，记录拒绝/耗尽信息。索引点以内容和来源版本区分，旧 worker 不能覆盖新点。
 
 知识页及其他进入 Writer 的派生页面须带完整语义依赖指纹；实体字段、当前状态、关联集合、地图、可见性及聚合页实际输入都纳入。缺失或失效来源在排序/限额前剔除。Obsidian 和 LLM-KB 备用读取不能绕过验证；旧页面/文件保留，未验证内容不冒充当前事实。必需事实从当前正式 BookState 补取，可选旧片段缺失不暂停整书。

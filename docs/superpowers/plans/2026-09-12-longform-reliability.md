@@ -29,7 +29,7 @@
 
 **Interfaces:** 新增不可变 `ObligationResolutionEvidence` 与 `ObligationResolutionPlan`；证据包含 obligation_id、contract_fingerprint、draft_id、body_sha256、审阅来源、判断、答案及精确 body 引用。`CanonQualityGateOutcome` 携带该计划，`CanonPreparationService.prepare_from_approved()` 的可选参数写入 `CanonCommitPlan` 并参与幂等身份。共同 validator 接收实际义务/form/answers/body；历史 wrapper 保留六维覆盖，普通路径不调用整个历史核验。
 
-- [ ] RED：在现有真实 PostgreSQL obligation fixture 中以三种正文调用现有接纳后维护，断言不能 resolved；未来到期义务同样覆盖。
+- [x] RED：在现有真实 PostgreSQL obligation fixture 中以三种正文调用现有接纳后维护，断言不能 resolved；未来到期义务同样覆盖。
 
 ```python
 @pytest.mark.parametrize(('kind', 'body'), [
@@ -63,12 +63,12 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 代码放入已有 `test_obligation_resolution_verifier.py`，复用其 import 和 `_obligation`，添加 pytest import。后续删除被替代入口时，将此反例迁移到维护的正式入口。另覆盖无关人物、未来承诺、旧候选引用、条件核验后变化；真实完整兑现、合法提前兑现及事务中途 rollback 为正反对照。
 
-- [ ] Run: `pytest -q tests/test_obligation_resolution_verifier.py tests/test_obligation_resolution_evidence.py`（使用 Global Constraints 前缀）；保存业务断言失败证据，不把建库/导入错误当 RED。
-- [ ] 实现同一审阅证据传递：保留 form/answers/validation report 在 quality result/cache；form ask 携带主体、条件和完整合同指纹，现有语义 prompt 明确区分已兑现/未兑现/无法确认。缓存版本升级，旧缓存不得伪造证据。未知旧类型不默认 pass，关键词/marker 不再拥有清账权。
-- [ ] 在 preparation 冻结证据及依赖，admission 锁内重读义务完整合同并复核候选 body/draft/审阅身份，激活后和正式 active pointer 同事务应用已证实兑现；提供现有 failure injection 的 rollback 证明。空证据保持未解决，不能获得到期豁免；idempotent 已提交读取仍保持兼容。
-- [ ] 抽取历史 `apply_reviewed_resolutions()` 的通用部分，保留其 before-image/全覆盖规则；删除普通接纳后的重新语义判断，只保留已提交结果读取和到期维护。
-- [ ] GREEN + related: verifier/evidence/history/historical form/Canon atomic/preparation/quality cache。证明旧 resolved 行不会自动回填或重置；新记录保留可审计的来源。实际旧书修复前另作有范围的只读审计，本任务不新增无人调用的审计服务。
-- [ ] 同步当前设计的已实现范围并提交 `fix(canon): resolve obligations from version-bound review evidence`；独立任务审查。
+- [x] Run: `pytest -q tests/test_obligation_resolution_verifier.py tests/test_obligation_resolution_evidence.py`（使用 Global Constraints 前缀）；保存业务断言失败证据，不把建库/导入错误当 RED。
+- [x] 实现同一审阅证据传递：保留 form/answers/validation report 在 quality result/cache；form ask 携带主体、条件和完整合同指纹，现有语义 prompt 明确区分已兑现/未兑现/无法确认。缓存版本升级，旧缓存不得伪造证据。未知旧类型不默认 pass，关键词/marker 不再拥有清账权。
+- [x] 在 preparation 冻结证据及依赖，admission 锁内重读义务完整合同并复核候选 body/draft/审阅身份，激活后和正式 active pointer 同事务应用已证实兑现；提供现有 failure injection 的 rollback 证明。空证据保持未解决，不能获得到期豁免；idempotent 已提交读取仍保持兼容。
+- [x] 抽取历史 `apply_reviewed_resolutions()` 的通用部分，保留其 before-image/全覆盖规则；删除普通接纳后的重新语义判断，只保留已提交结果读取和到期维护。
+- [x] GREEN + related: verifier/evidence/history/historical form/Canon atomic/preparation/quality cache。证明旧 resolved 行不会自动回填或重置；新记录保留可审计的来源。实际旧书修复前另作有范围的只读审计，本任务不新增无人调用的审计服务。
+- [x] 同步当前设计的已实现范围并提交 `fix(canon): resolve obligations from version-bound review evidence`；独立任务审查。
 
 ## Task 2: B — 持久、原子的续跑交接
 

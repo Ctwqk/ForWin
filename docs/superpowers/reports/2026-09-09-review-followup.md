@@ -1,6 +1,16 @@
 # 外部 review 跟进
 
-来源：[审查项目设计实现](chatgpt-conversation://6aa1d1af-be2c-83ea-be2b-5e944c030b9e)，审查固定在 `for-review@1f9a9ad`。本记录区分已复现修复与尚未完成的候选验收。
+来源：[审查项目设计实现](chatgpt-conversation://6aa1d1af-be2c-83ea-be2b-5e944c030b9e)，审查分别固定在 `for-review@1f9a9ad` 与 `705fcf5`。本记录区分已复现修复与尚未完成的候选验收。
+
+## `705fcf5` 后续两项修复
+
+Map 定向修订原先对合法 JSON 的缺失 `value` 回填旧值。新增六个真实 PostgreSQL 反例覆盖 overview、topology_rules、edges，分别返回空对象或无关字段；旧源码六项均因未拒绝而失败。现由原解包入口检查必需字段，失败后即使调用方提交事务，旧指针、pack 字节及 revision 数量仍不变。三个明确同值响应作为合法对照，非 Map 回退和合并后的地图校验保留。
+
+历史修订的三个抽取 prompt 原本不要求正文摘要，提交路径也没有写入新 draft。既有读侧测试手工填摘要掩盖了缺口；已删除该注入，由实际抽取、prepare、Canon commit、ReviewQuery、StateContextProvider 和 Arc 读取验证切换。模型替身仅在提示要求时返回摘要，缺失、空白和错误类型必须 unknown。纠正一处测试 import 顺序及模型替身的参数辨识后，原实现六项业务反例失败、三项控制通过；环境/收集错误不算业务 RED。
+
+修复复用第三次完整正文抽取，仍是每章三次抽取加一次历史表单。摘要由原 prepared_changes 绑定正文 hash、draft 和 validation digest，只有最终事务写入修改章 draft；旧稿及未改后继的摘要不重写。隔离 evaluator 按实际章号向后继传递已通过的摘要，未修改正文沿用原稿摘要，不伪造 scratch accepted 指针。正式摘要纳入已有 baseline 身份，核验后被改动的新增反例先失败再修复；持久摘要证据篡改、原事务故障注入及幂等接纳同时覆盖。
+
+测试使用已有 PostgreSQL 镜像的临时内存数据目录实例（仅测试端口 55433）。默认测试实例所在虚拟磁盘已满，最初六例因此未执行到业务断言；没有清理生产库或失败样本来取得通过。首轮相关 Map 68 项、历史修订 51 项通过，修订/Map/架构组合 228 项通过（范围重叠）。独立审查未发现阻断问题，额外建议的幂等断言已补齐；完整 QA 使用本次冻结候选另记，不能沿用旧 SHA 计数。
 
 ## 正式历史读取
 

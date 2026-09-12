@@ -125,6 +125,8 @@ Genesis 路线使用同一 typed contract：新完整 Map 必须明确提供 `ov
 
 Writer 获取当前可见 BookMap 路线和写前来源约束，即使人物位置未解析或地图被裁剪也保留已有路线，并标明不完整。主 BODY reviewer 获取当前地图及来源证据，以当前 BookMap 优先；客观隐藏路线不等于角色已知。确定性移动检查识别运行地点 ID、唯一 Genesis 来源 ID/名称，以及明确的中文/数字复合时长；复合自由文本位置不猜测映射。它仍不能证明最终正文的每一段移动都正确，真实长跑须独立审读最终 BODY。[已暂停 L100 的失败与修复边界](../docs/superpowers/reports/2026-09-10-stage1-map-failure.md)记录了这一限制。
 
+Map 定向修订的字符串和列表响应必须提供 `value` 字段；合法 JSON 缺字段仍是无效响应，不能回填旧值后保存 edited revision。显式返回与原值相同的 `value` 是合法结果；字段类型、路线和合并后的引用继续由现有地图校验负责。
+
 ## 6. Review、修复和接纳资格
 
 DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、地图移动、人物行为、lint、Canon quality、publisher 约束。多个检查器共存的合理性来自职责不同；“都能发现某种连续性问题”仍可能产生重复成本，是下一轮消融要检验的部分。
@@ -167,6 +169,8 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 历史修订先保存候选，原 accepted 主线继续有效；在隔离 BookState 中重新抽取修改章并核验直到 accepted 尾章的完整后缀。旧 GraphDelta 只作为证据，不能以重放成功替代正文核验。结果绑定 base revision、完整范围、候选 hash 和引用；fail 或关键 unknown 拒绝自动替换。短事务内再次核对主线、冻结事实及发布 attempt，然后原子切换整个修订集合。正文未变但接纳上下文变化的后继也产生新接纳身份，保留旧证据。支持边界及并发/失败回归见[修订报告](../docs/superpowers/reports/2026-09-09-p1-2-revision-evidence.md)。
 
 正式摘要、评审、Arc 激活材料、节奏分析和 Band 核验沿 `ChapterPlan.active_commit_id → CanonCommitRecord → CandidateDraftRecord → ChapterDraft` 读取；评审使用 candidate 绑定的 `review_id`。窗口先按稳定章节限额，再读取对应稿件。保存或拒绝修订不改变正式输入，成功接纳后才切换。accepted 身份损坏时不回退到最新候选：章节正文 API 返回 409，Band 核验保留阻断；摘要缺失保持未知，不以计划概要补造事实。
+
+历史修订在既有第三次完整正文抽取中生成非空 `end_of_chapter_summary`，缺字段、空白或错误类型沿原核验边界返回 unknown。新摘要随正文 hash 和 draft 身份进入持久核验结果，最终 Canon 事务仅写入修改章的新 draft，与正式指针同时生效；原稿及复用正文的后继摘要不覆盖。隔离后缀核验按真实章号选取最近三章：已通过的修改章使用新摘要，未修改后继沿用其原 draft 摘要，空摘要不补入更早章节。已读取的正式摘要也绑定在原基线身份中，核验后发生变化则提交拒绝。没有增加抽取调用、另一套正式读入口或旧稿摘要回退。
 
 世界编辑的局部 BookState gate 不能替代完整后缀核验；即使标记未来章节，编辑也可能修改历史读取共用的实体元数据。因此当前 `commit_world_edit` 在项目锁内拒绝任何已有 accepted/active 章节的项目，人工强制批准不能绕过。未来计划调整仍走 Planning；世界编辑接入同一完整后缀核验前不开放这一入口。写前世界编辑仍可使用，章号解析由一个 owner 同时供 envelope、delta 和新建事实使用。
 

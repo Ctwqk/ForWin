@@ -66,7 +66,7 @@ def model_identity(writer):
         "model": str(getattr(client, "model", "") or "unavailable"),
         "max_tokens": int(getattr(writer, "max_tokens", 0) or 0),
         "temperature": 0.2,
-        "extractor_revision": "full-body-v1",
+        "extractor_revision": "full-body-summary-v2",
         "prompt_revision": "historical-form-v1",
         "allowed_routes": json.dumps(routes, sort_keys=True, separators=(",", ":")),
         "route_fingerprint": revision_digest(routes),

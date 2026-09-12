@@ -18,6 +18,7 @@ from forwin.publisher_runtime.protection import (
 )
 
 from .entity_admission import EntityAdmissionCommitter
+from .revision_body import require_revision_summary
 from .revision_replica import CandidateReplica, capture_revision
 from .revision_service import revision_commit_plan, revision_policy_fingerprint
 from .revision_validation import (
@@ -47,6 +48,12 @@ def _load_result(session, record):
         raise ValueError("historical validation identity or complete coverage changed")
     if not all(c.prepared_changes for c in result.chapters):
         raise ValueError("historical validation lacks freshly extracted changes")
+    if record.accepted_book_revision is None:
+        require_revision_summary(
+            result.chapters[0]
+            .prepared_changes.get("writer_output", {})
+            .get("end_of_chapter_summary")
+        )
     return result
 
 
@@ -225,6 +232,14 @@ def commit_revision(owner, plan, *, model_identity, failure_injector):
                 ):
                     stable = session.get(ChapterPlan, chapter.chapter_plan_id)
                     previous = session.get(CanonCommitRecord, chapter.base_commit_id)
+                    if chapter.chapter_number == result.manifest.from_chapter:
+                        session.get(
+                            ChapterDraft, chapter.draft_id
+                        ).summary = require_revision_summary(
+                            result.chapters[0]
+                            .prepared_changes["writer_output"]
+                            .get("end_of_chapter_summary")
+                        )
                     commit = CanonCommitRecord(
                         id=prepared.canon_commit_id,
                         idempotency_key=prepared.idempotency_key,

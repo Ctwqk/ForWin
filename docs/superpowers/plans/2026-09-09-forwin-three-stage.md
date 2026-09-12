@@ -294,6 +294,14 @@ The fresh `45aa530` project first rejected two model-authored Node-to-Region rou
 - [ ] Freeze new complete QA/images. A source change requires a fresh qualification project; do not resume the failed sample as a pass.
 - [ ] Restore ordinary model availability, then complete smoke20, independent L100 and actual ending review under frozen source/model/policy.
 
+### Task 24: Close Map item response and revision summary gaps
+
+External review at `705fcf5` identifies two bounded input/output gaps. Keep the existing Genesis and Canon owners: reject Map scalar/list refinements that omit `value`, while allowing an explicit same value; require the revised body's summary in the existing full-body extraction call and bind it to durable validation. Install only the changed draft's summary in the final Canon transaction. Scratch successors must receive the reviewed prefix summaries using the same chapter window, and accepted summaries belong to the captured baseline. Preserve old drafts, unknown/failure semantics, frozen model routes and call counts.
+
+- [x] Verify both findings and demonstrate failing regressions against production code. Remove the accepted-read test's manual summary injection; verify live read preservation, true acceptance, malformed model results and stale summary evidence.
+- [x] Implement in existing owners and run focused PostgreSQL regressions. Independent code review finds no blocking issue; add an explicit idempotent acceptance assertion.
+- [ ] Freeze this candidate for full regression; record source-bound results and push the review branch. Candidate images, fresh smoke20, independent L100 and actual ending remain separate and unfinished.
+
 ## Initial evidence
 
 `2026-09-09`: `.venv/bin/python -m pytest -q tests/test_v5_live_migration.py tests/test_production_planner.py` → **8 passed**. This is a targeted baseline only, not Stage 1 acceptance.

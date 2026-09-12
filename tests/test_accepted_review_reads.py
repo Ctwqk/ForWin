@@ -324,6 +324,15 @@ def test_formal_reads_switch_together_only_after_real_revision_acceptance(
             assert [
                 row["summary"] for row in pack.accepted_chapter_summaries
             ] == summaries
+            request = ContextRequest(
+                project_id=ids[0],
+                chapter_plan=SimpleNamespace(chapter_number=3),
+                repo=StateRepository(session),
+                session=session,
+            )
+            draft = ContextDraft()
+            StateContextProvider().contribute(request, draft)
+            assert draft.data["summaries"] == summaries
 
     assert_history(["Archive", "Shelves"])
     with fixture.Session.begin() as session:
@@ -334,15 +343,14 @@ def test_formal_reads_switch_together_only_after_real_revision_acceptance(
             body=body.replace("安静地", "静静地"),
             expected_book_revision=2,
         )
-        session.get(
-            ChapterDraft, candidate.candidate_draft_id
-        ).summary = "Replacement archive"
         candidate_id = candidate.id
     assert_history(["Archive", "Shelves"])
 
     class Model(revision.BodyModel):
         def chat(self, messages, **kwargs):
             result = json.loads(super().chat(messages, **kwargs))
+            if "coverage" not in result:
+                result["end_of_chapter_summary"] = "Replacement archive"
             if verdict == "fail" and "coverage" in result:
                 result["coverage"][0]["status"] = "fail"
                 result["coverage"][0]["explanation"] = (

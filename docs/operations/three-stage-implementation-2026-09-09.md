@@ -4,6 +4,10 @@
 
 ## 当前状态
 
+外部 `705fcf5` review 的 Map 定向缺字段与新修订摘要漏接已按 Task 24 修复，详见[review 跟进](../superpowers/reports/2026-09-09-review-followup.md)。原 owner 内补输入检查、完整正文摘要与最终事务写入，补齐隔离后继摘要输入及已读摘要的基线身份。没有增加模型调用或改写旧书稿；当前候选的完整 QA、角色镜像和真实长篇验收分别记录。
+
+补登记后的 `705fcf5` 实际已完成同 SHA 全量：3394 passed、4 skipped、6 subtests，compile、关键 Ruff 和源码守卫通过；完整 Ruff 1117 对原始 1219 无新增诊断。私有证据位于 `evidence/final-98c43f62cf08/verification-summary.json`，源码已 push 至 `origin/for-review`。这些是 Task 24 修改前的结果，不标作本次新源码通过。
+
 Task 23 冻结 `89aa84f` 的完整 QA 为 3393 项通过、1 项兼容性清单失败、4 项跳过和 6 subtests；不是完整通过。已在既有 `genesis.persisted_route_input` 登记完整 Map 修订入口的路径、精确文本、保留理由和验证项，61 项架构及 Map 失败回归通过。运行代码与原审计断言不变，新提交需重新冻结 QA，镜像及实际生成仍待验收。
 
 最近候选 `45aa530` 通过 3372 项全量回归、4 项跳过、6 subtests 和两类完整角色镜像验证。全新隔离项目在 Genesis 阶段发现完整 Map 修订的 schema 被模型接口拒绝，而模型调用失败又回退为空地图并产生新的 edited revision。未锁定该地图，没有启动章节任务；确认 active generation count 为 0 后停止隔离容器，数据和证据保留。Task 23 已补齐失败回归并修正请求与失败路径，315 项相关测试通过；独立 47 项纯测试及 schema、版本保持、旧路线与非 Map 回退对照通过，无阻断发现。新源码的冻结完整 QA 与镜像另记。普通模型备用接口同时报告余额不足，恢复现有账户后才能继续验证相应模型调用。smoke20、独立 L100、真实结局与生产切换仍未通过；见[完整地图失败记录](../superpowers/reports/2026-09-10-genesis-map-completeness.md)。

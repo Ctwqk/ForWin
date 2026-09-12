@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy import select
 
 from forwin.canon.admission import CanonAdmissionService
@@ -90,20 +91,20 @@ class BodyModel:
                 },
                 ensure_ascii=False,
             )
-        return json.dumps(
-            {
-                "state_changes": [],
-                "new_events": [],
-                "delivered_payoffs": [],
-                "thread_beats": [],
-                "time_advance": None,
-                "lore_candidates": [],
-                "timeline_hints": [],
-                "writer_notes": [],
-                "entity_mentions": [],
-                "end_of_chapter_summary": "档案静候查阅。",
-            }
-        )
+        result = {
+            "state_changes": [],
+            "new_events": [],
+            "delivered_payoffs": [],
+            "thread_beats": [],
+            "time_advance": None,
+            "lore_candidates": [],
+            "timeline_hints": [],
+            "writer_notes": [],
+            "entity_mentions": [],
+        }
+        if any("end_of_chapter_summary" in message["content"] for message in messages):
+            result["end_of_chapter_summary"] = "档案静候查阅。"
+        return json.dumps(result)
 
 
 def _book(fixture, *, origin_obligation=False):
@@ -237,10 +238,27 @@ def test_wording_revision_reextracts_every_body_and_atomically_reaccepts_unchang
         prepared.plan, revision_model_identity=revision_model_identity(writer)
     )
     assert not outcome.blocked, outcome
+    repeated = CanonAdmissionService(session_factory=fixture.Session).commit_plan(
+        prepared.plan, revision_model_identity=revision_model_identity(writer)
+    )
+    assert repeated.idempotent
+    assert repeated.commit_id == outcome.commit_id
     assert len(client.calls) == 8, (
         "3 complete extraction calls + 1 extended form per chapter"
     )
     with fixture.Session() as session:
+        from forwin.review.query import ReviewQuery
+
+        assert ReviewQuery(session).chapter_summaries(ids[0], before_chapter=3) == [
+            "档案静候查阅。",
+            "Shelves",
+        ]
+        first_original = session.get(CanonCommitRecord, old_ids[0])
+        first_candidate = session.get(CandidateDraftRecord, first_original.candidate_id)
+        assert (
+            session.get(ChapterDraft, first_candidate.candidate_draft_id).summary
+            == "Archive"
+        )
         assert session.get(Project, ids[0]).book_revision == 3
         new_ids = [session.get(ChapterPlan, id).active_commit_id for id in ids[1:]]
         assert all(new != old for new, old in zip(new_ids, old_ids))
@@ -257,7 +275,91 @@ def test_wording_revision_reextracts_every_body_and_atomically_reaccepts_unchang
         )
 
 
-import pytest
+def test_suffix_evaluation_sees_revised_summary_before_live_acceptance(
+    prepared_canon, monkeypatch
+):
+    from forwin.canon import revision_body
+    from forwin.review.query import ReviewQuery
+
+    fixture = prepared_canon
+    ids, body, _, _ = _book(fixture)
+    with fixture.Session.begin() as session:
+        candidate = save_revision_proposal(
+            session,
+            project_id=ids[0],
+            chapter_number=1,
+            body=body.replace("安静地", "静静地"),
+        )
+        candidate_id = candidate.id
+    original_parts = revision_body._extraction_parts
+    contexts = []
+
+    def capture_parts():
+        parts = list(original_parts())
+        name, builder, models = parts[0]
+
+        def capture(context, title, chapter_body):
+            contexts.append(
+                (context.chapter_number, list(context.previous_chapter_summaries))
+            )
+            return builder(context, title, chapter_body)
+
+        return [(name, capture, models), *parts[1:]]
+
+    monkeypatch.setattr(revision_body, "_extraction_parts", capture_parts)
+    prepared = RevisionValidationService(
+        session_factory=fixture.Session,
+        writer=ChapterWriter(BodyModel()),
+        policy=RuntimePolicy.for_profile("standard"),
+    ).prepare(project_id=ids[0], candidate_id=candidate_id)
+    assert not prepared.blocked, prepared
+    assert contexts == [(1, []), (2, ["档案静候查阅。"])]
+    with fixture.Session() as session:
+        assert ReviewQuery(session).chapter_summaries(ids[0], before_chapter=3) == [
+            "Archive",
+            "Shelves",
+        ]
+
+
+@pytest.mark.parametrize("summary", [None, "", "  ", [], 7])
+def test_missing_or_invalid_revision_summary_cannot_earn_acceptance(
+    prepared_canon, summary
+):
+    from forwin.review.query import ReviewQuery
+
+    fixture = prepared_canon
+    ids, body, old_ids, _ = _book(fixture)
+    with fixture.Session.begin() as session:
+        candidate = save_revision_proposal(
+            session,
+            project_id=ids[0],
+            chapter_number=1,
+            body=body.replace("安静地", "静静地"),
+        )
+        candidate_id = candidate.id
+
+    class MissingSummaryModel(BodyModel):
+        def chat(self, messages, **kwargs):
+            result = json.loads(super().chat(messages, **kwargs))
+            result.pop("end_of_chapter_summary", None)
+            if "coverage" not in result and summary is not None:
+                result["end_of_chapter_summary"] = summary
+            return json.dumps(result)
+
+    prepared = RevisionValidationService(
+        session_factory=fixture.Session,
+        writer=ChapterWriter(MissingSummaryModel()),
+        policy=RuntimePolicy.for_profile("standard"),
+    ).prepare(project_id=ids[0], candidate_id=candidate_id)
+    assert prepared.block_kind == "revision_unknown"
+    with fixture.Session() as session:
+        assert [
+            session.get(ChapterPlan, id).active_commit_id for id in ids[1:]
+        ] == old_ids
+        assert ReviewQuery(session).chapter_summaries(ids[0], before_chapter=3) == [
+            "Archive",
+            "Shelves",
+        ]
 
 
 @pytest.mark.parametrize(
@@ -318,7 +420,15 @@ def test_suffix_contradiction_or_incomplete_model_coverage_preserves_mainline(
 
 
 @pytest.mark.parametrize(
-    "race", ["book_revision", "published", "body_changed", "policy_changed"]
+    "race",
+    [
+        "book_revision",
+        "published",
+        "body_changed",
+        "policy_changed",
+        "summary_changed",
+        "summary_evidence_changed",
+    ],
 )
 def test_final_acceptance_rechecks_full_frozen_baseline(prepared_canon, race):
     from forwin.models.canon import CanonPublicationProtection
@@ -351,6 +461,20 @@ def test_final_acceptance_rechecks_full_frozen_baseline(prepared_canon, race):
             session.get(
                 ChapterDraft, candidate.candidate_draft_id
             ).body_text += " Changed."
+        if race == "summary_changed":
+            candidate = session.get(CandidateDraftRecord, successor)
+            session.get(
+                ChapterDraft, candidate.candidate_draft_id
+            ).summary = "Changed after validation."
+        if race == "summary_evidence_changed":
+            record = session.get(
+                CanonRevisionValidationRecord, prepared.plan.revision_validation_id
+            )
+            payload = json.loads(record.result_json)
+            payload["chapters"][0]["prepared_changes"]["writer_output"][
+                "end_of_chapter_summary"
+            ] = "Unvalidated summary."
+            record.result_json = json.dumps(payload)
         if race == "published":
             session.add(
                 CanonPublicationProtection(

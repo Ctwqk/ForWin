@@ -116,6 +116,7 @@ def capture_revision(
                 "candidate_id": accepted_candidate.id,
                 "draft_id": accepted_draft.id,
                 "body_sha256": accepted_candidate.body_hash,
+                "summary": accepted_draft.summary,
                 "title": commit.chapter_title,
                 "plan_revision": candidate_plan_revision(chapter),
             }

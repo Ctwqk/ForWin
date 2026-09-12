@@ -195,7 +195,9 @@ def test_revision_atomic_owner_refuses_unreviewed_origin_obligation_disposition(
                         "entity_plan": fixture.plan.entity_admission_plan.model_dump(
                             mode="json"
                         ),
-                        "writer_output": {},
+                        "writer_output": {
+                            "end_of_chapter_summary": "Shen Linchuan enters the archive."
+                        },
                         "review": {},
                         "historical_form": {
                             "review": {

@@ -100,6 +100,71 @@ def test_map_generation_with_codex_only_configuration_still_accepts_valid_output
     assert payload == source
 
 
+@pytest.mark.parametrize("target_path", ["overview", "topology_rules", "edges"])
+@pytest.mark.parametrize("response", [{}, {"unrelated": "not a replacement"}])
+def test_map_item_missing_value_cannot_create_a_persisted_revision(
+    target_path, response
+):
+    from sqlalchemy import select
+
+    from forwin.models import Project
+    from forwin.models.base import get_engine, get_session_factory
+    from forwin.models.genesis import BookGenesisRevision
+    from forwin.state.updater import StateUpdater
+    from tests.postgres import postgres_test_url
+
+    service = model_service(response)
+    engine = get_engine(postgres_test_url("map-item-missing-value"))
+    try:
+        with get_session_factory(engine)() as session:
+            project = Project(id="map-item", title="河谷", premise="调查", genre="悬疑")
+            session.add(project)
+            session.flush()
+            updater = StateUpdater(session)
+            revision = service.create_initial_revision(
+                session=session, updater=updater, project=project
+            )
+            pack = service.load_pack(revision)
+            pack["world"]["map_atlas"] = complete_atlas()
+            revision.pack_json = json.dumps(pack, ensure_ascii=False)
+            session.commit()
+            original_id, original_json = revision.id, revision.pack_json
+            with pytest.raises(ValueError, match="value"):
+                service.refine_stage(
+                    session=session,
+                    updater=updater,
+                    project=project,
+                    revision=revision,
+                    stage_key="map",
+                    instruction="更新目标内容",
+                    target_path=target_path,
+                )
+            session.commit()
+            assert project.active_genesis_revision_id == original_id
+            assert (
+                session.get(BookGenesisRevision, original_id).pack_json == original_json
+            )
+            assert len(session.scalars(select(BookGenesisRevision)).all()) == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("target_path", ["overview", "topology_rules", "edges"])
+def test_map_item_explicit_same_value_is_a_valid_response(target_path):
+    from forwin.models import Project
+
+    atlas = complete_atlas()
+    payload, trace = model_service({"value": atlas[target_path]})._refine_stage_payload(
+        project=Project(id="map-item", title="河谷", premise="调查", genre="悬疑"),
+        pack={"world": {"map_atlas": atlas}},
+        stage_key="map",
+        instruction="核实目标内容",
+        target_path=target_path,
+    )
+    assert payload[target_path] == atlas[target_path]
+    assert trace["output_summary"]["mode"] == "success"
+
+
 @pytest.mark.parametrize(
     "operation,failure",
     [

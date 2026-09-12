@@ -16,11 +16,13 @@ from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.checker import ContinuityChecker
 from forwin.context.assembler_core.assembler import ChapterContextAssembler
+from forwin.models.draft import ChapterDraft
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.review.draft_service import DraftReviewService
+from forwin.review.query import ReviewQuery
 from forwin.state.repo import StateRepository
 
 from .revision_body import extract_revision_body
@@ -127,12 +129,29 @@ class HistoricalBodyEvaluator:
         self.writer = writer
         self.policy = policy
         self.llm_client = writer.llm_client
+        self._validated_summaries: dict[int, str] = {}
 
     def evaluate(self, session, manifest, chapter):
         model_start = len(getattr(self.llm_client, "evidence", []))
         repo = StateRepository(session)
         plan = session.get(ChapterPlan, chapter.chapter_plan_id)
         context = ChapterContextAssembler().assemble(repo, manifest.project_id, plan)
+        # The scratch suffix has no active Canon pointers. Its reviewed prefix
+        # supplies only this evaluation's context, never a live accepted version.
+        summaries = {
+            stable.chapter_number: draft.summary
+            for stable, draft in ReviewQuery(session).accepted_chapter_drafts(
+                manifest.project_id, before_chapter=chapter.chapter_number, limit=3
+            )
+        }
+        summaries.update(self._validated_summaries)
+        context.previous_chapter_summaries = [
+            summaries[number]
+            for number in range(
+                max(1, chapter.chapter_number - 3), chapter.chapter_number
+            )
+            if str(summaries.get(number) or "").strip()
+        ]
         output = extract_revision_body(
             writer=self.writer, context=context, title=chapter.title, body=chapter.body
         )
@@ -348,6 +367,11 @@ class HistoricalBodyEvaluator:
                 draft_id=chapter.draft_id,
             )
             session.flush()
+            self._validated_summaries[chapter.chapter_number] = (
+                output.end_of_chapter_summary
+                if chapter.chapter_number == manifest.from_chapter
+                else session.get(ChapterDraft, chapter.draft_id).summary
+            )
             prepared = {
                 "approved_changes": approved.model_dump(mode="json"),
                 "entity_plan": entity.plan.model_dump(mode="json"),

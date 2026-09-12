@@ -26,6 +26,7 @@ def _writer(*, timeout=False):
                 "timeline_hints": [],
                 "writer_notes": [],
                 "entity_mentions": [],
+                "end_of_chapter_summary": "The archive remains still.",
             }
 
         def _writer_output_from_dict(self, context, payload):
@@ -34,7 +35,7 @@ def _writer(*, timeout=False):
                 chapter_number=context.chapter_number,
                 title=payload["title"],
                 body=payload["body"],
-                end_of_chapter_summary="",
+                end_of_chapter_summary=payload.get("end_of_chapter_summary", ""),
             )
 
     return Writer(), calls

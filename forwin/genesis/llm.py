@@ -182,6 +182,12 @@ def _refine_stage_payload(
                 stage_key=f"{stage_key}:refine_item",
                 max_tokens=1400,
             )
+            if stage_key == "map" and (
+                not isinstance(payload, dict) or "value" not in payload
+            ):
+                raise ValueError(
+                    f"Map refinement at {normalized_target_path} requires a value field"
+                )
             payload = (
                 payload.get("value", wrapped_fallback["value"])
                 if isinstance(payload, dict)

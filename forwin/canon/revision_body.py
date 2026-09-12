@@ -61,6 +61,12 @@ def extract_revision_body(*, writer, context, title: str, body: str):
                 "Return all requested arrays explicitly; an empty array means no matching observations.",
             }
         )
+        if name == "lore_timeline_notes_extraction":
+            messages[-1]["content"] += (
+                ' Also return "end_of_chapter_summary" as a nonempty string summarizing '
+                "the ENTIRE supplied body for subsequent chapters. Include its key events, "
+                "outcomes and continuity facts; do not reuse the old draft summary or the plan."
+            )
         value = writer._chat_json(
             messages,
             temperature=0.2,
@@ -81,6 +87,8 @@ def extract_revision_body(*, writer, context, title: str, body: str):
                 raise ValueError("incomplete historical extraction: time_advance")
             if value["time_advance"] is not None:
                 TimeAdvance.model_validate(value["time_advance"])
+        if name == "lore_timeline_notes_extraction":
+            require_revision_summary(value.get("end_of_chapter_summary"))
         extracted.update(value)
     output = writer._writer_output_from_dict(
         context, {**extracted, "title": title, "body": body}
@@ -92,3 +100,9 @@ def extract_revision_body(*, writer, context, title: str, body: str):
         "structured_extraction": "completed",
     }
     return output
+
+
+def require_revision_summary(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("incomplete historical extraction: end_of_chapter_summary")
+    return value

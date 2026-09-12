@@ -187,3 +187,30 @@ __all__ = [
     "hard_floor_gate_outcome",
     "record_pulp_beat_evaluation",
 ]
+
+
+def record_repair_writer_failure(
+    pipeline, *, exc, updater, project_id, chapter_number, frozen_artifacts,
+):
+    """Retain the original failed rewrite artifact and its causal audit event."""
+    from forwin.review.repair.service import RepairWriterExecutionFailure
+
+    if isinstance(exc, RepairWriterExecutionFailure):
+        frozen_artifacts.extend(exc.frozen_artifacts)
+        pipeline._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.REPAIR_FAILED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 repair 执行失败，未产出修订正文。",
+            reason=str(exc),
+            related_object_type="chapter_draft",
+            related_object_id=str(exc.payload["source_draft_id"]),
+            payload={
+                **exc.payload,
+                "frozen_artifacts": list(exc.frozen_artifacts),
+            },
+            parent_event_id=exc.parent_event_id,
+        )

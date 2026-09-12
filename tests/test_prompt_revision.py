@@ -20,16 +20,16 @@ FIXTURE_PATH = ROOT / "tests" / "fixtures" / "prompt_regression" / "cases.json"
 SNAPSHOT_DIR = ROOT / "tests" / "fixtures" / "prompt_regression" / "snapshots"
 
 EXPECTED_PROMPT_REVISIONS = {
-    "single_minimal_opening": "4f12649c0e997ef3",
-    "single_countdown_generic_profile": "08d9dec11209fd3b",
-    "single_closed_countdown": "6a185e4a153caab7",
-    "single_character_state": "8fe02fc5bd35fac9",
-    "single_pre_audit_suppression": "4b570620344971ee",
-    "single_future_plan_audit": "d10cdb3644b068f0",
-    "preview_arc_rehearsal": "fd784e0218d3dded",
-    "scene_breakdown_basic": "52fe1f8a2dcaee84",
-    "single_final_chapter": "37bfbeb8e3ad47a6",
-    "single_obligation_visible": "d1b689ae7c6f541e",
+    "single_minimal_opening": "a09cab6a709ffc52",
+    "single_countdown_generic_profile": "11028bc394d77e0a",
+    "single_closed_countdown": "ff266adf55bbbb5f",
+    "single_character_state": "36e59d214dc8e05c",
+    "single_pre_audit_suppression": "f78662027fe36566",
+    "single_future_plan_audit": "ceb884a35802697b",
+    "preview_arc_rehearsal": "2ec41e1037990d56",
+    "scene_breakdown_basic": "2f6b52fc95870a81",
+    "single_final_chapter": "d7655be46fbf466e",
+    "single_obligation_visible": "6df4a2b7bde6e7c7",
 }
 
 

@@ -354,6 +354,8 @@ class RepairPlanPatchService:
         self.arc_envelope_manager = arc_envelope_manager
 
     def apply(self, request: RepairPlanPatchRequest) -> RepairPlanPatchResult:
+        if getattr(request.chapter_plan, "active_commit_id", None) and request.repair_scope != "draft":
+            raise ValueError("accepted chapter plan requires an isolated candidate revision")
         if request.context.canon_read_baseline is not None:
             request.context.canon_read_baseline.assert_current(request.session)
         result = self._apply_plan_patch(request)
@@ -369,10 +371,6 @@ class RepairPlanPatchService:
         context = request.context
         repair_scope = request.repair_scope
         repair_instruction = request.instruction
-        if getattr(chapter_plan, "active_commit_id", None) and repair_scope != "draft":
-            raise ValueError(
-                "accepted chapter plan requires an isolated candidate revision"
-            )
         current_plan = (
             repo.get_chapter_experience_plan(project_id, chapter_plan.chapter_number)
             or ChapterExperiencePlan()

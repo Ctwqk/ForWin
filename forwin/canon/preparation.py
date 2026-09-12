@@ -6,6 +6,9 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.review.baseline import candidate_review_evidence
+from forwin.retrieval.source_identity import CanonBaselineChanged
+
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.book_state.extraction.contract import (
@@ -240,6 +243,11 @@ class CanonPreparationService:
             raise ValueError("candidate project mismatch")
         if int(candidate.chapter_number or 0) != int(chapter_number or 0):
             raise ValueError("candidate chapter mismatch")
+        try:
+            candidate_review_evidence(session, candidate)
+        except CanonBaselineChanged as exc:
+            _mark_candidate_needs_review(CandidateDraftRepository(session), candidate.id, reason=str(exc))
+            return CanonPreparationOutcome(block_kind="stale_review_baseline", blocked_path=str(exc))
         if candidate.body_hash != candidate_body_hash(writer_output.body):
             raise ValueError("candidate body changed after review")
         recorder.record_event(
@@ -427,6 +435,11 @@ class CanonPreparationService:
         candidate = repository.get(candidate_id, for_update=True)
         if candidate is None:
             raise LookupError("candidate draft not found")
+        try:
+            review_evidence = candidate_review_evidence(session, candidate)
+        except CanonBaselineChanged as exc:
+            _mark_candidate_needs_review(repository, candidate.id, reason=str(exc))
+            return CanonPreparationOutcome(block_kind="stale_review_baseline", blocked_path=str(exc))
         project_id = str(candidate.project_id or "")
         chapter_number = int(candidate.chapter_number or 0)
         if approved_book_state_changes.project_id != project_id:
@@ -518,7 +531,8 @@ class CanonPreparationService:
             policy_version=candidate.policy_version,
             expected_previous_accepted_chapter=expected_previous_accepted_chapter,
             expected_book_state_chapter=expected_book_state_chapter,
-            expected_book_revision=project.book_revision,
+            expected_book_revision=review_evidence.baseline.book_revision,
+            review_evidence=review_evidence,
             quality_admission_run_id=quality_admission_run_id,
             obligation_resolution_plan=obligation_resolution_plan,
             approved_book_state_changes=approved_book_state_changes,

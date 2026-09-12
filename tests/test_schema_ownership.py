@@ -54,6 +54,10 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
         # Export captures its frozen snapshot payload under the existing claim;
         # status, retry and lease mutation remain owned by the outbox service.
         "forwin/novel_export/events.py",
+        # Completion checks its atomic intent; continuation controls lock that intent.
+        "forwin/application/generation.py",
+        "forwin/generation/auto_continue.py",
+        "forwin/generation/continuation_events.py",
     }
     allowed_prefixes = ("forwin/outbox/",)
 

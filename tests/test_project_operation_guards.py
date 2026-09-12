@@ -582,7 +582,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(payload.task_id, "task-approve-workset")
         self.assertEqual(captured["requested_chapters"], 2)
 
-    def test_retry_chapter_review_resets_needs_review_to_planned(self) -> None:
+    def test_retry_chapter_review_preserves_budget_and_returns_needs_review_to_planned(self) -> None:
         project = self._create_project(project_id="proj-review-retry")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
@@ -618,7 +618,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         with self.session_factory() as session:
             plan = session.get(ChapterPlan, "plan-review-retry")
             self.assertEqual(plan.status, "planned")
-            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(plan.repair_attempt_count, 3)
             self.assertEqual(plan.residual_review_issues_json, "[]")
             self.assertEqual(plan.canon_risk_level, "")
 
@@ -736,7 +736,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             self.assertIsNotNone(marker)
             self.assertEqual(marker.previous_commit_id, old_commit.id)
 
-    def test_retry_chapter_review_resets_drafted_candidate_to_planned(self) -> None:
+    def test_retry_chapter_review_preserves_budget_and_returns_drafted_candidate_to_planned(self) -> None:
         project = self._create_project(project_id="proj-review-retry-drafted")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
@@ -774,7 +774,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         with self.session_factory() as session:
             plan = session.get(ChapterPlan, "plan-review-retry-drafted")
             self.assertEqual(plan.status, "planned")
-            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(plan.repair_attempt_count, 1)
             self.assertEqual(plan.residual_review_issues_json, "[]")
             self.assertEqual(plan.canon_risk_level, "")
 

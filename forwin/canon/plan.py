@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from forwin.naming import EntityAdmissionPlan
 from forwin.narrative_obligations.resolution_evidence import ObligationResolutionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
+from forwin.review.baseline import CanonReviewEvidence
 
 from .outbox_events import (
     CanonOutboxEvent,
@@ -47,6 +48,7 @@ class CanonCommitPlan(_FrozenCanonModel):
     expected_previous_accepted_chapter: int
     expected_book_state_chapter: int
     expected_book_revision: int = 0
+    review_evidence: CanonReviewEvidence | None = None
     revision_validation_id: str = ""
     quality_admission_run_id: str = ""
     obligation_resolution_plan: ObligationResolutionPlan | None = None
@@ -95,6 +97,7 @@ class CanonCommitPlan(_FrozenCanonModel):
         expected_previous_accepted_chapter: int,
         expected_book_state_chapter: int,
         expected_book_revision: int = 0,
+        review_evidence: CanonReviewEvidence | None = None,
         revision_validation_id: str = "",
         quality_admission_run_id: str = "",
         obligation_resolution_plan: ObligationResolutionPlan | None = None,
@@ -132,6 +135,7 @@ class CanonCommitPlan(_FrozenCanonModel):
             approved_book_state_changes=approved_book_state_changes,
             entity_admission_plan=entity_admission_plan,
             expected_book_revision=expected_book_revision,
+            review_evidence=review_evidence,
             revision_validation_id=revision_validation_id,
             quality_admission_run_id=quality_admission_run_id,
             obligation_resolution_plan=obligation_resolution_plan,
@@ -156,6 +160,7 @@ class CanonCommitPlan(_FrozenCanonModel):
         return cls(
             schema_version=schema_version,
             expected_book_revision=max(0, int(expected_book_revision)),
+            review_evidence=review_evidence,
             revision_validation_id=revision_validation_id,
             quality_admission_run_id=quality_admission_run_id,
             obligation_resolution_plan=obligation_resolution_plan,
@@ -199,6 +204,7 @@ def _idempotency_key(
     approved_book_state_changes: ApprovedGraphDeltaSet,
     entity_admission_plan: EntityAdmissionPlan,
     expected_book_revision: int = 0,
+    review_evidence: CanonReviewEvidence | None = None,
     revision_validation_id: str = "",
     quality_admission_run_id: str = "",
     obligation_resolution_plan: ObligationResolutionPlan | None = None,
@@ -219,6 +225,8 @@ def _idempotency_key(
             entity_admission_plan.candidate_fingerprint or ""
         ),
     }
+    if review_evidence is not None:
+        payload["review_evidence"] = review_evidence.model_dump(mode="json")
     if revision_validation_id:
         payload["revision_validation_id"] = revision_validation_id
     if quality_admission_run_id:

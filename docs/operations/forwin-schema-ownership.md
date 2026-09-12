@@ -60,3 +60,9 @@ truth.
   phase.
 - Do not treat this document as permission to bypass ForWin API, MCP, task, or
   chapter workflow tools.
+
+Generation completion and continuation adapters (`application/generation.py`,
+`generation/continuation_events.py`, `generation/auto_continue.py`) may read and
+lock the deterministic continuation intent in the parent completion/control
+transaction. They enqueue through the outbox store; delivery status, retries,
+and leases remain with the outbox owner.

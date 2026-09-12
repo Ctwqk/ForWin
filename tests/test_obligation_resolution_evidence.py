@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.review_evidence import bind_frozen_review
 
 from forwin.canon_quality.chapter_review_form.form_builder import build_form
 from forwin.canon_quality.chapter_review_form.form_schema import ChapterReviewAnswers
@@ -476,6 +477,7 @@ def test_prepare_chain_rejects_cached_answers_from_old_body_with_shared_quote(
         session.add(draft)
         session.flush()
         review = ChapterReview(draft_id=draft.id, verdict="pass")
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,10 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
-from forwin.review.repair.verification import RepairVerifier
+from forwin.retrieval.source_identity import CanonReadBaseline
+
+if TYPE_CHECKING:
+    from forwin.review.repair.verification import RepairVerifier
 from forwin.skills import SkillPromptLayerBuilder, SkillRouter
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
@@ -53,6 +57,7 @@ class CandidateRepairVerification:
 class CandidateReviewEvaluation:
     output: WriterOutput
     review: ReviewVerdict
+    baseline: CanonReadBaseline | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +98,14 @@ class CandidateReviewService:
         *,
         verification: CandidateRepairVerification | None = None,
     ) -> CandidateReviewEvaluation:
+        baseline = getattr(request.context, "canon_read_baseline", None)
+        if baseline is None:
+            baseline = CanonReadBaseline.capture(
+                request.session, request.project_id,
+                as_of_chapter=max(0, request.chapter_number - 1),
+            )
+        baseline.assert_current(request.session, project_id=request.project_id,
+                                as_of_chapter=max(0, request.chapter_number - 1))
         output = self._plan_entities(
             session=request.session,
             project_id=request.project_id,
@@ -130,7 +143,9 @@ class CandidateReviewService:
                 repair_instruction=verification.instruction,
             )
             review = merge_repair_verification(review, result, verification.instruction)
-        return CandidateReviewEvaluation(output, review)
+        baseline.assert_current(request.session, project_id=request.project_id,
+                                as_of_chapter=max(0, request.chapter_number - 1))
+        return CandidateReviewEvaluation(output, review, baseline)
 
     def persist(
         self,
@@ -144,6 +159,9 @@ class CandidateReviewService:
         chapter_number = chapter_plan.chapter_number
         writer_output = evaluation.output
         review = evaluation.review
+        if evaluation.baseline is not None:
+            evaluation.baseline.assert_current(session, project_id=project_id,
+                                               as_of_chapter=max(0, chapter_number - 1))
         artifact_paths = self.artifact_store.save_writer_output(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -178,6 +196,10 @@ class CandidateReviewService:
             model_name=str(getattr(self.model_client, "model", "") or ""),
         )
         review_row = updater.save_review(draft.id, review)
+        if evaluation.baseline is not None:
+            metadata = json.loads(review_row.review_meta_json or "{}")
+            metadata["canon_read_baseline"] = asdict(evaluation.baseline)
+            review_row.review_meta_json = json.dumps(metadata, ensure_ascii=False)
         candidate_repository = CandidateDraftRepository(session)
         previous_candidate = candidate_repository.latest_for_chapter(
             project_id=project_id,

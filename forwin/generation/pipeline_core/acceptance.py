@@ -87,6 +87,9 @@ class AcceptanceStage:
             if candidate is None or candidate.candidate_draft_id != latest_draft.id:
                 raise ValueError(f"第{chapter_number}章缺少 v5 candidate record")
 
+            if candidate.review_id != latest_review.id:
+                raise ValueError("candidate review association changed")
+
             artifact_path = latest_draft.llm_raw_response
             writer_output = self._load_writer_output_from_meta(artifact_path)
             if candidate.status == "failed":

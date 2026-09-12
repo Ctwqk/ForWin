@@ -16,6 +16,14 @@ class ChapterReviewGateOutcome:
     gate_approved: bool = False
     pause_required: bool = False
 
+    def acceptance_details(self, *, force_accept_applied, residual_review_issues):
+        mode = (
+            "gate_approved" if self.gate_approved
+            else "force_accept_after_repair" if force_accept_applied else "normal"
+        )
+        residual = residual_review_issues if force_accept_applied or self.gate_approved else []
+        return mode, residual
+
 
 def evaluate_candidate_gate(
     *,

@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from tests.review_evidence import bind_frozen_review
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -278,6 +279,7 @@ def _request_case(case, *, verdict="pass"):
     case.session.add(draft)
     case.session.flush()
     review = ChapterReview(draft_id=draft.id, verdict=verdict)
+    bind_frozen_review(case.session, review)
     case.session.add(review)
     case.session.flush()
     candidate = CandidateDraftRepository(case.session).create_reviewed_version(

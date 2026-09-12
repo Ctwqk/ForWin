@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from tests.review_evidence import bind_frozen_review
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -171,6 +172,7 @@ def prepared_canon() -> PreparedCanon:
             issues_json="[]",
             review_meta_json='{"verdict":"pass"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(
@@ -300,6 +302,8 @@ def _rebuild_plan(
         candidate_body_hash=plan.candidate_body_hash,
         plan_revision=plan.plan_revision,
         policy_version=plan.policy_version,
+        expected_book_revision=plan.expected_book_revision,
+        review_evidence=plan.review_evidence,
         expected_previous_accepted_chapter=plan.expected_previous_accepted_chapter,
         expected_book_state_chapter=plan.expected_book_state_chapter,
         approved_book_state_changes=approved_book_state_changes,
@@ -351,6 +355,7 @@ def _prepare_chapter_candidate(
         issues_json="[]",
         review_meta_json='{"verdict":"pass"}',
     )
+    bind_frozen_review(session, review)
     session.add(review)
     session.flush()
     candidate = CandidateDraftRepository(session).create_reviewed_version(
@@ -1233,6 +1238,7 @@ def test_empty_graph_delta_cannot_commit_second_candidate_for_accepted_chapter(
             issues_json="[]",
             review_meta_json='{"verdict":"pass"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         second_candidate = CandidateDraftRepository(session).create_reviewed_version(

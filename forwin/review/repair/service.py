@@ -1152,3 +1152,8 @@ class RepairService:
 
 
 __all__ = ["RepairExecution", "RepairService"]
+
+
+def canon_repair_availability(execution, repair_scope):
+    unavailable = canon_repair_executor_unavailable(execution) if repair_scope else ""
+    return _canon_repair_scope_can_run(repair_scope) and not unavailable, unavailable

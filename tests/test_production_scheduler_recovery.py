@@ -495,23 +495,26 @@ def test_active_task_constraint_does_not_abort_callers_other_work(
         GenerationTaskRepository, "has_active", pause_after_active_check
     )
 
-    def caller():
+    def first_caller():
         with sessions.begin() as session:
             caller_sessions.append(session)
+            return _application(sessions).enqueue(command, session=session)
+
+    def competing_caller():
+        with sessions.begin() as session:
             with pytest.raises(ActiveGenerationTaskError):
                 _application(sessions).enqueue(command, session=session)
-            session.get(
-                Project, project_id
-            ).setting_summary = "caller transaction survived"
+            session.get(Project, project_id).setting_summary = "caller transaction survived"
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(caller)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_caller)
         try:
             assert checked.wait(5)
-            _application(sessions).enqueue(command)
+            second = pool.submit(competing_caller)
         finally:
             resume.set()
-        pending.result(timeout=5)
+        first.result(timeout=5)
+        second.result(timeout=5)
     with sessions() as session:
         assert session.scalar(select(func.count(GenerationTask.id))) == 1
         assert session.scalar(select(func.count(DecisionEvent.id))) == 1

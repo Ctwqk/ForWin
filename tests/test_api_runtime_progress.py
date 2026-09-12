@@ -24,16 +24,19 @@ class ApiRuntimeProgressTests(unittest.TestCase):
             {"stage": "chapter_failed", "current_chapter": 1},
         )
 
-        self.assertEqual(writing["status"], "running")
-        self.assertEqual(chapter_failed["status"], "running")
+        self.assertNotIn("status", writing)
+        self.assertEqual(writing["current_stage"], "writing_chapter")
+        self.assertEqual(writing["current_chapter"], 2)
+        self.assertNotIn("status", chapter_failed)
+        self.assertEqual(chapter_failed["current_stage"], "chapter_failed")
 
-    def test_terminal_failed_stage_marks_task_failed(self) -> None:
+    def test_terminal_failed_progress_leaves_finalization_to_completion_owner(self) -> None:
         changes = _build_task_progress_changes(
             "stage_changed",
             {"stage": "failed", "current_chapter": 2},
         )
 
-        self.assertEqual(changes["status"], "failed")
+        self.assertNotIn("status", changes)
         self.assertEqual(changes["current_stage"], "failed")
 
 

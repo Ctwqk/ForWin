@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from tests.review_evidence import bind_frozen_review
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
@@ -268,6 +269,7 @@ def test_prepare_from_approved_persists_only_precanon_candidate_state() -> None:
             issues_json="[]",
             review_meta_json='{"verdict":"pass"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(
@@ -387,6 +389,7 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
             issues_json="[]",
             review_meta_json='{"verdict":"pass"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(

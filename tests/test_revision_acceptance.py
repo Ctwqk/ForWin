@@ -482,7 +482,7 @@ def test_wording_revision_with_old_origin_promise_keeps_full_ledger_unknown(
     with fixture.Session() as session:
         result = session.get(CanonRevisionValidationRecord, outcome.blocked_path)
         assert result.status == "unknown", result.result_json
-        assert "origin obligation" in result.result_json
+        assert "obligation origin provenance missing" in result.result_json
         assert ledger(session) == before
         assert [
             (row.id, row.payload_json)

@@ -7,8 +7,15 @@ from types import SimpleNamespace
 import pytest
 
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
+from forwin.knowledge_system.dependencies import page_dependencies
+from forwin.models.base import get_engine, get_session_factory
+from forwin.models.project import Project
+from forwin.models.knowledge import KnowledgeProjectionPageRow
+from tests.postgres import postgres_test_url
+from sqlalchemy import select
 from forwin.knowledge_system.context import KnowledgeContextQuery
-from forwin.knowledge_system.page_repository import KnowledgePageRepository
+from forwin.knowledge_system.store import KnowledgeProjectionStore
 from forwin.obsidian.exporter import ObsidianExporter
 from forwin.obsidian.frontmatter import render_page
 from forwin.protocol.book_state import MapNode, WorldNode
@@ -272,7 +279,7 @@ def test_exported_node_preserves_canonical_hidden_status_and_tags(source_hidden:
     {"metadata": {"truth_relation": "secret"}},
 ])
 def test_existing_page_visibility_uses_as_of_canon_without_rewriting_projection(
-    source_hidden: dict, monkeypatch: pytest.MonkeyPatch,
+    source_hidden: dict, history_session,
 ) -> None:
     node = WorldNode(
         id="captain", project_id="history-contract", node_type="character", **source_hidden,
@@ -280,57 +287,68 @@ def test_existing_page_visibility_uses_as_of_canon_without_rewriting_projection(
     page = _world_page().model_copy(update={
         "canonical_source_type": "book_state_node", "canonical_source_id": node.id,
     })
-    original = page.model_dump(mode="json")
-    query = KnowledgeContextQuery(None)
-    calls = []
-
-    def load_as_of(self, project_id, *, as_of_chapter):
-        calls.append((project_id, as_of_chapter))
-        return SimpleNamespace(world=SimpleNamespace(nodes_by_id={node.id: node}))
-
-    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", load_as_of)
-    monkeypatch.setattr(query.book_state, "latest_world_snapshot", lambda *args: SimpleNamespace(
-        id="snapshot-seven", objective_graph_digest="digest",
-    ))
-    monkeypatch.setattr(query, "_pick_pages", lambda **kwargs: [page])
-    monkeypatch.setattr(query, "_active_quality_conflicts", lambda *args: [])
-
+    query = _query_pages(history_session, [page], world_nodes={node.id: node})
+    stored = history_session.scalar(select(KnowledgeProjectionPageRow))
+    original = (stored.markdown, stored.frontmatter_json, stored.content_hash)
     world = query.build(project_id="history-contract", chapter_number=8)
 
     context = _context().model_copy(update={"world_context": world})
     for messages in _prompts(context).values():
         assert "钥匙已放入封存袋。" not in "\n".join(item["content"] for item in messages)
-    assert calls == [("history-contract", 7)]
-    assert page.model_dump(mode="json") == original
+    assert world.as_of_chapter == 7
+    history_session.refresh(stored)
+    assert (stored.markdown, stored.frontmatter_json, stored.content_hash) == original
     # Reviewer still receives original full content, with corrected visibility.
     assert world.relevant_world_pages[0].markdown == page.markdown
 
 
-def _query_pages(monkeypatch, pages, *, world_nodes=None, map_nodes=None):
-    query = KnowledgeContextQuery(None)
-    runtime = SimpleNamespace(
-        world=SimpleNamespace(nodes_by_id=world_nodes or {}),
-        map=SimpleNamespace(nodes_by_id=map_nodes or {}),
-    )
-    rows = [SimpleNamespace(
-        **page.model_dump(mode="python"), frontmatter_json=json.dumps(page.frontmatter),
-    ) for page in pages]
-    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", lambda *args, **kwargs: runtime)
-    monkeypatch.setattr(query.book_state, "latest_world_snapshot", lambda *args: SimpleNamespace(
-        id="snapshot-seven", objective_graph_digest="digest",
-    ))
-    monkeypatch.setattr(KnowledgePageRepository, "list_canonical_rows", lambda *args: rows)
-    monkeypatch.setattr(query, "_active_quality_conflicts", lambda *args: [])
-    return query
+@pytest.fixture
+def history_session():
+    engine = get_engine(postgres_test_url("history-input-contract"))
+    with get_session_factory(engine)() as session:
+        session.add(Project(id="history-contract", title="归航", premise="港口"))
+        session.commit()
+        yield session
+    engine.dispose()
 
 
-def test_page_selection_excludes_future_state_before_limit(monkeypatch) -> None:
+def _query_pages(session, pages, *, world_nodes=None, map_nodes=None):
+    repository = BookStateRepository(session)
+    if world_nodes is None:
+        world_nodes = {"captain": WorldNode(id="captain", project_id="history-contract", node_type="character", name="船长")}
+    for node in world_nodes.values():
+        repository.create_world_node(node)
+    for node in (map_nodes or {}).values():
+        repository.create_map_node(node)
+    projection = BookStateProjection(session)
+    runtime = projection.load_runtime_as_of("history-contract", as_of_chapter=7)
+    projection.persist_snapshots(runtime, as_of_chapter=7)
+    for page in pages:
+        node_id = page.canonical_source_id or str(page.frontmatter.get("node_id") or "")
+        scope = "book" if page.page_type == "book" else "map_node" if page.page_type == "map_node" else "node"
+        manifest = page_dependencies(runtime, scope=scope, node_id=node_id,
+            extra={"project_title": "归航"} if scope == "book" else None)
+        KnowledgeProjectionStore(session).upsert_page(
+            project_id="history-contract", page_key=page.page_key, page_type=page.page_type,
+            title=page.title, vault_path=page.vault_path, markdown=page.markdown,
+            frontmatter=page.frontmatter, as_of_chapter=page.as_of_chapter,
+            dependency_manifest=manifest,
+        )
+    session.commit()
+    return KnowledgeContextQuery(session)
+
+
+def test_page_selection_excludes_future_state_before_limit(history_session) -> None:
     prior = _world_page().model_copy(update={"as_of_chapter": 7})
     future = _world_page().model_copy(update={
         "page_key": "character:future", "title": "未来命中词", "as_of_chapter": 8,
+        "frontmatter": {**prior.frontmatter, "node_id": "future"},
         "markdown": "## Current State\nFUTURE_STATE",
     })
-    query = _query_pages(monkeypatch, [future, prior])
+    query = _query_pages(history_session, [future, prior], world_nodes={
+        name: WorldNode(id=name, project_id="history-contract", node_type="character", name=name)
+        for name in ["captain", "future"]
+    })
 
     world = query.build(
         project_id="history-contract", chapter_number=8, query_terms=["未来命中词"], max_pages=1,
@@ -340,18 +358,18 @@ def test_page_selection_excludes_future_state_before_limit(monkeypatch) -> None:
     assert "FUTURE_STATE" not in world.model_dump_json()
 
 
-def test_missing_canonical_node_cannot_make_projection_visible(monkeypatch) -> None:
+def test_missing_canonical_node_cannot_make_projection_visible(history_session) -> None:
     page = _world_page().model_copy(update={
         "canonical_source_type": "book_state_node", "canonical_source_id": "missing",
     })
-    query = _query_pages(monkeypatch, [page])
+    query = _query_pages(history_session, [page])
     world = query.build(project_id="history-contract", chapter_number=8)
     for messages in _prompts(_context().model_copy(update={"world_context": world})).values():
         assert "钥匙已放入封存袋。" not in "\n".join(item["content"] for item in messages)
 
 
 @pytest.mark.parametrize("hidden", [True, False])
-def test_map_projection_uses_map_source_visibility(monkeypatch, hidden: bool) -> None:
+def test_map_projection_uses_map_source_visibility(history_session, hidden: bool) -> None:
     node = MapNode(
         id="dock", project_id="history-contract", node_type="site", name="泊位",
         status="hidden" if hidden else "normal", description="MAP_SOURCE_DESCRIPTION",
@@ -366,20 +384,20 @@ def test_map_projection_uses_map_source_visibility(monkeypatch, hidden: bool) ->
     # An old page claiming visibility must still resolve against the map owner.
     page.frontmatter["visibility"] = "reader_known"
     page.markdown = render_page(page.frontmatter, page.title, {"Current State": "MAP_SOURCE_STATE"})
-    query = _query_pages(monkeypatch, [page], map_nodes={node.id: node})
+    query = _query_pages(history_session, [page], map_nodes={node.id: node})
     world = query.build(project_id="history-contract", chapter_number=8)
     for messages in _prompts(_context().model_copy(update={"world_context": world})).values():
         assert ("MAP_SOURCE_STATE" in "\n".join(item["content"] for item in messages)) is not hidden
 
 
-def test_book_aggregate_does_not_expose_mixed_visibility_state(monkeypatch) -> None:
+def test_book_aggregate_does_not_expose_mixed_visibility_state(history_session) -> None:
     page = _world_page(node_type="book", node_id="book:reader-promise-ledger").model_copy(
         update={"page_type": "book"}
     )
     page.markdown = render_page(page.frontmatter, page.title, {
         "Canon Summary": "BOOK_SUMMARY", "Current State": "HIDDEN_AGGREGATED_PROMISE",
     })
-    query = _query_pages(monkeypatch, [page])
+    query = _query_pages(history_session, [page])
     world = query.build(project_id="history-contract", chapter_number=8)
     for messages in _prompts(_context().model_copy(update={"world_context": world})).values():
         prompt = "\n".join(item["content"] for item in messages)

@@ -433,13 +433,17 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         lambda **_kwargs: (Draft(), Review()),
     )
 
-    with pytest.raises(StopAfterAnalysis):
+    from forwin.models.base import get_engine, get_session_factory
+    from tests.postgres import postgres_test_url
+
+    engine = get_engine(postgres_test_url("pulp-quality-mode"))
+    with get_session_factory(engine)() as session, pytest.raises(StopAfterAnalysis):
         quality_gates.CanonQualityPreparer().evaluate(
             policy=context.policy,
             llm_client=context.llm_client,
             artifact_store=getattr(context, "artifact_store", None),
             recorder=SimpleNamespace(record_event=getattr(context, "_record_decision_event", lambda **_kwargs: None), record_rule_decision=getattr(context, "_record_rule_decision_event", lambda **_kwargs: None), save_prompt_trace=getattr(context, "save_prompt_trace", lambda **_kwargs: "")),
-            session=None,
+            session=session,
             updater=None,
             project_id='project-1',
             chapter_number=1,
@@ -447,6 +451,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
             verdict=ReviewVerdict(verdict='pass', issues=[]),
         )
 
+    engine.dispose()
     assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)
     assert captured["mode"] == expected_analysis_mode
     if passes_none:

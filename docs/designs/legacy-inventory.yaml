@@ -842,3 +842,23 @@ entries:
     delete_when:
       - already deleted
     status: deleted
+
+  - id: context.unknown_historical_evidence
+    category: test_doc_followup
+    owner_area: context
+    paths:
+      - forwin/book_state/query.py
+      - forwin/knowledge_system/page_repository.py
+    allow_patterns:
+      - legacy
+    reason: >
+      Historical cognition serialization is normalized only for support still
+      present in the accepted view. Derived pages without current dependencies
+      remain readable artifacts but are excluded from authoritative context.
+    removal_phase: keep
+    verification:
+      - tests/test_canon_read_baseline.py
+      - tests/test_history_input_contract.py
+    delete_when:
+      - retain while unknown historical evidence remains readable
+    status: retained

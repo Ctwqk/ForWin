@@ -152,23 +152,6 @@ def _book(fixture, *, origin_obligation=False):
             delta_summary="Archive",
             node_id="archive-event-one",
         )
-        if origin_obligation:
-            from forwin.models.narrative_obligation import NarrativeObligationRow
-
-            origin = session.get(CandidateDraftRecord, first_plan.candidate_id)
-            session.add(
-                NarrativeObligationRow(
-                    project_id=project.id,
-                    origin_chapter_number=1,
-                    origin_draft_id=origin.candidate_draft_id,
-                    origin_review_id=origin.review_id,
-                    status="planned",
-                    obligation_type="future_payoff",
-                    summary="下一章结束前查明封馆原因。",
-                    deadline_chapter=2,
-                    payoff_test="正文明确解释封馆原因",
-                )
-            )
         ids = (project.id, first.id, second.id)
     owner = CanonAdmissionService(session_factory=fixture.Session)
     first_commit = owner.commit_plan(first_plan)
@@ -195,6 +178,21 @@ def _book(fixture, *, origin_obligation=False):
         )
     second_commit = owner.commit_plan(second_plan)
     assert not second_commit.blocked, second_commit
+    if origin_obligation:
+        # Historical accepted debt predates evidence-bound admission. Seed its
+        # unknown ledger after accepted history exists; new admission must never
+        # create this due/unresolved state or manufacture its missing proof.
+        from forwin.models.narrative_obligation import NarrativeObligationRow
+
+        with fixture.Session.begin() as session:
+            origin = session.get(CandidateDraftRecord, first_plan.candidate_id)
+            session.add(NarrativeObligationRow(
+                project_id=ids[0], origin_chapter_number=1,
+                origin_draft_id=origin.candidate_draft_id, origin_review_id=origin.review_id,
+                status="active", obligation_type="future_payoff",
+                summary="下一章结束前查明封馆原因。", deadline_chapter=2,
+                payoff_test="正文明确解释封馆原因",
+            ))
     return (
         ids,
         body,

@@ -24,10 +24,8 @@ from forwin.models.planning_control import BandCheckpoint
 from forwin.planning.future_plan_audit.models import FuturePlanAuditRun
 from forwin.production.capacity import CapacityWait
 from forwin.review.repair.service import (
-    RepairWriterExecutionFailure,
     _canon_repair_scope,
-    _canon_repair_scope_can_run,
-    canon_repair_executor_unavailable,
+    canon_repair_availability,
 )
 from forwin.review.results import review_canon_risk, review_issue_payloads
 from forwin.state.repo import StateRepository
@@ -530,20 +528,9 @@ class ChapterExecutionStage:
                 )
                 if review_gate.pause_required:
                     break
-                gate_approved = review_gate.gate_approved
-                acceptance_mode = (
-                    "gate_approved"
-                    if gate_approved
-                    else (
-                        "force_accept_after_repair"
-                        if force_accept_applied
-                        else "normal"
-                    )
-                )
-                accepted_residual_issues = (
-                    residual_review_issues
-                    if force_accept_applied or gate_approved
-                    else []
+                acceptance_mode, accepted_residual_issues = review_gate.acceptance_details(
+                    force_accept_applied=force_accept_applied,
+                    residual_review_issues=residual_review_issues,
                 )
 
                 while True:
@@ -611,14 +598,8 @@ class ChapterExecutionStage:
                         and gate_result is not None
                         else ""
                     )
-                    executor_unavailable = (
-                        canon_repair_executor_unavailable(self.repair_execution)
-                        if repair_scope
-                        else ""
-                    )
-                    can_run_canon_repair = (
-                        _canon_repair_scope_can_run(repair_scope)
-                        and not executor_unavailable
+                    can_run_canon_repair, executor_unavailable = canon_repair_availability(
+                        self.repair_execution, repair_scope
                     )
                     if can_run_canon_repair:
                         (
@@ -667,18 +648,9 @@ class ChapterExecutionStage:
                             )
                             if review_gate.pause_required:
                                 break
-                            gate_approved = review_gate.gate_approved
-                            acceptance_mode = (
-                                "gate_approved"
-                                if gate_approved
-                                else "force_accept_after_repair"
-                                if force_accept_applied
-                                else "normal"
-                            )
-                            accepted_residual_issues = (
-                                residual_review_issues
-                                if force_accept_applied or gate_approved
-                                else []
+                            acceptance_mode, accepted_residual_issues = review_gate.acceptance_details(
+                                force_accept_applied=force_accept_applied,
+                                residual_review_issues=residual_review_issues,
                             )
                             continue
                     if (
@@ -1055,25 +1027,10 @@ class ChapterExecutionStage:
                         frozen_artifacts=frozen_artifacts,
                         current_chapter=chapter_num,
                     )
-                if isinstance(exc, RepairWriterExecutionFailure):
-                    frozen_artifacts.extend(exc.frozen_artifacts)
-                    self._record_decision_event(
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=chapter_num,
-                        event_family="runtime_observation",
-                        event_type=DecisionEventType.REPAIR_FAILED,
-                        scope="chapter",
-                        summary=f"第{chapter_num}章 repair 执行失败，未产出修订正文。",
-                        reason=str(exc),
-                        related_object_type="chapter_draft",
-                        related_object_id=str(exc.payload["source_draft_id"]),
-                        payload={
-                            **exc.payload,
-                            "frozen_artifacts": list(exc.frozen_artifacts),
-                        },
-                        parent_event_id=exc.parent_event_id,
-                    )
+                chapter_execution_support.record_repair_writer_failure(
+                    self, exc=exc, updater=updater, project_id=project_id,
+                    chapter_number=chapter_num, frozen_artifacts=frozen_artifacts,
+                )
                 updater.mark_chapter_status(project_id, chapter_num, "failed")
                 session.commit()
                 failed_chapters.append(chapter_num)

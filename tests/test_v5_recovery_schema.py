@@ -183,6 +183,8 @@ def test_projection_checkpoint_contract() -> None:
         "target_chapter_number",
         "projected_canon_commit_id",
         "projected_chapter_number",
+        "target_book_revision",
+        "projected_book_revision",
         "last_event_id",
         "source_digest",
         "last_error",
@@ -197,6 +199,10 @@ def test_projection_checkpoint_contract() -> None:
         "target_canon_commit_id": {"canon_commit_records.id"},
         "projected_canon_commit_id": {"canon_commit_records.id"},
     }
+    assert table.c.target_book_revision.nullable is True
+    assert table.c.projected_book_revision.nullable is True
+    assert _server_default(table.c.target_book_revision) is None
+    assert _server_default(table.c.projected_book_revision) is None
     assert table.c.target_canon_commit_id.nullable is True
     assert table.c.projected_canon_commit_id.nullable is True
     assert table.c.started_at.nullable is True
@@ -459,8 +465,9 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
     for table_name in RECOVERY_TABLES:
         metadata_table = _table(table_name)
         migration_table = capture.tables[table_name]
-        assert list(migration_table.c.keys()) == list(metadata_table.c.keys())
-        for column_name in metadata_table.c.keys():
+        additive_columns = {"target_book_revision", "projected_book_revision"} if table_name == "projection_checkpoints" else set()
+        assert list(migration_table.c.keys()) == [name for name in metadata_table.c.keys() if name not in additive_columns]
+        for column_name in migration_table.c.keys():
             metadata_column = metadata_table.c[column_name]
             migration_column = migration_table.c[column_name]
             assert type(migration_column.type) is type(metadata_column.type)

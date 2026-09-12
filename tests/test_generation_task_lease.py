@@ -300,7 +300,13 @@ def test_stale_epoch_cannot_update_task_after_same_worker_id_reclaims() -> None:
         assert second.lease_epoch == first.lease_epoch + 1
 
         with pytest.raises(GenerationTaskLeaseLost):
-            stale_update("task-epoch-fence", status="completed")
+            stale_update("task-epoch-fence", current_stage="writing_chapter")
+        with pytest.raises(GenerationTaskLeaseLost):
+            application.finish_claimed_task(
+                "task-epoch-fence",
+                SimpleNamespace(project_id="project-1", status="completed"),
+                worker_id="reused-worker-id", lease_epoch=first.lease_epoch,
+            )
 
         with Session() as session:
             row = session.get(GenerationTask, "task-epoch-fence")

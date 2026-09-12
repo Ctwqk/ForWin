@@ -717,6 +717,10 @@ class GenerationApplicationService:
                 )
             )
             frozen = frozen.model_copy(update={"completed_chapters": completed})
+            error = frozen.failure_reason
+            if not error and frozen.failed_chapters:
+                failed_str = ", ".join(str(chapter) for chapter in frozen.failed_chapters)
+                error = f"以下章节生成失败: {failed_str}"
             changes = dict(
                 status=frozen.status,
                 current_stage=frozen.status,
@@ -724,7 +728,7 @@ class GenerationApplicationService:
                 failed_chapters=frozen.failed_chapters,
                 paused_chapters=frozen.paused_chapters,
                 frozen_artifacts=frozen.frozen_artifacts,
-                error=frozen.failure_reason,
+                error=error,
             )
             if frozen.status == "capacity_wait":
                 from datetime import timedelta

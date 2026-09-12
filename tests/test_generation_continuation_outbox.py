@@ -729,6 +729,53 @@ def test_parent_stop_holds_project_lock_until_commit_before_consumer(
         assert len(list(session.scalars(select(GenerationTask)))) == 1
 
 
+@pytest.mark.parametrize(
+    ("completed", "failure_reason", "expected_status", "expected_error"),
+    [
+        ([], "", "failed", "以下章节生成失败: 2, 3"),
+        ([1], "", "partial_failed", "以下章节生成失败: 2, 3"),
+        ([1], "provider unavailable", "failed", "provider unavailable"),
+    ],
+)
+def test_failed_chapter_diagnostic_is_durable_before_late_display_updates(
+    session_factory, completed, failure_reason, expected_status, expected_error
+):
+    from forwin.generation.continuation_events import GenerationCompletionResult
+
+    service, task_id, epoch, _ = setup_parent(session_factory)
+    result = RunResult(
+        project_id="project-1",
+        requested_chapters=3,
+        completed_chapters=completed,
+        failed_chapters=[2, 3],
+    )
+    if failure_reason:
+        result = GenerationCompletionResult.from_result(result).model_copy(
+            update={"failure_reason": failure_reason}
+        )
+
+    finish(service, task_id, epoch, result)
+    with session_factory() as session:
+        parent = session.get(GenerationTask, task_id)
+        assert parent.status == expected_status
+        assert parent.error_message == expected_error
+        assert json.loads(parent.failed_chapters_json) == [2, 3]
+        assert session.scalar(select(OutboxEvent)) is not None
+
+    service._task_updater(worker_id="worker", lease_epoch=epoch)(
+        task_id,
+        message="display callback finished",
+        error="late callback must not replace the durable failure",
+        failed_chapters=[],
+    )
+    with session_factory() as session:
+        parent = session.get(GenerationTask, task_id)
+        assert parent.status == expected_status
+        assert parent.message == "display callback finished"
+        assert parent.error_message == expected_error
+        assert json.loads(parent.failed_chapters_json) == [2, 3]
+
+
 def test_operation_exception_finalizes_without_inventing_a_failed_chapter(
     session_factory,
 ):

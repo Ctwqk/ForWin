@@ -368,7 +368,6 @@ def execute_continuation(
             failed_str = ", ".join(str(chapter) for chapter in result.failed_chapters)
             update_task(
                 task_id,
-                error=f"以下章节生成失败: {failed_str}",
                 message=(
                     f"继续执行后完成 {len(result.completed_chapters)} 章，"
                     f"失败章节: {failed_str}"

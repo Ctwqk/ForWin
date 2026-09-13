@@ -192,7 +192,10 @@ def test_authored_book_import_preserves_restricted_room_route_without_granting_p
 
     from forwin.book_state.cognition import CognitionView
     from forwin.context.assembler_core.map_context import _build_map_context
-    from forwin.map.service import ensure_book_map_from_genesis_atlas, get_book_map_runtime
+    from forwin.map.service import (
+        ensure_book_map_from_genesis_atlas,
+        get_book_map_runtime,
+    )
     from forwin.models import Project
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.protocol.book_state import CognitionOverlay

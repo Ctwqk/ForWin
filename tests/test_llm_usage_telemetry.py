@@ -13,6 +13,7 @@ from forwin.llm.codex_client import CodexBridgeClient
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.writer.llm import LLMClient
+from forwin.writer.llm.errors import LLMResponseParseError
 
 
 class _OrdinaryAdapter:
@@ -199,9 +200,14 @@ def test_openai_compatible_parse_failure_still_records_provider_usage() -> None:
 
     try:
         with patch.object(client.client, "post", side_effect=fake_post):
-            with pytest.raises(IndexError):
+            with pytest.raises(LLMResponseParseError) as caught:
                 client.chat([{"role": "user", "content": "hello"}])
-        attempt = client.drain_llm_attempt_events()[0]
+        assert isinstance(caught.value.__cause__, IndexError)
+        attempts = client.drain_llm_attempt_events()
+        assert len(attempts) == 1
+        attempt = attempts[0]
+        assert attempt["error_class"] == "IndexError"
+        assert attempt["error_category"] == "parse_error"
     finally:
         client.close()
 

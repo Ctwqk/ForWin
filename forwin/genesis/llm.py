@@ -27,7 +27,11 @@ from forwin.utils import (
     parse_llm_json,
 )
 from forwin.genesis.constants import GENESIS_STAGE_ORDER, GenesisModelError, logger
-from forwin.writer.llm.errors import LLMInputLimitError
+from forwin.writer.llm.errors import (
+    LLMInputLimitError,
+    LLMResponseParseError,
+    LLMUnavailableError,
+)
 from forwin.observability.context import OperationContext
 from forwin.models.project import Project
 from forwin.observability.redaction import redact_payload
@@ -379,7 +383,14 @@ def _call_json_with_trace_impl(
             raise
         except Exception as exc:  # noqa: BLE001
             if is_formal_operation and not isinstance(
-                exc, (RuntimeError, httpx.HTTPError, LLMJSONParseError, LLMInputLimitError)
+                exc,
+                (
+                    httpx.HTTPError,
+                    LLMJSONParseError,
+                    LLMInputLimitError,
+                    LLMResponseParseError,
+                    LLMUnavailableError,
+                ),
             ):
                 # Programming errors are not model failures and must not retry.
                 raise
@@ -417,7 +428,7 @@ def _call_json_with_trace_impl(
     if is_formal_operation:
         failure = (
             "model response parsing failed"
-            if isinstance(last_error, LLMJSONParseError)
+            if isinstance(last_error, (LLMJSONParseError, LLMResponseParseError))
             else "model call failed"
         )
         raise GenesisModelError(

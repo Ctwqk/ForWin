@@ -2,6 +2,7 @@
 
 import json
 
+import httpx
 import pytest
 
 from forwin.codex_bridge.runner import CodexExecRunner
@@ -57,7 +58,7 @@ def unavailable_service(failure):
             return "not a JSON object"
         if failure == "empty_response":
             return ""
-        raise RuntimeError("model unavailable")
+        raise httpx.ConnectError("model unavailable")
 
     service.llm_client.chat = chat
     return service

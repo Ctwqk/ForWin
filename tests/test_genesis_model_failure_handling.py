@@ -233,13 +233,14 @@ def test_trace_programming_error_is_not_retried_as_model_failure(error_type):
     assert chat.call_count == 1
 
 
-def test_client_programming_error_is_not_reclassified_or_retried():
+@pytest.mark.parametrize("error_type", [TypeError, RuntimeError])
+def test_client_programming_error_is_not_reclassified_or_retried(error_type):
     service = model_service({})
     with (
         patch.object(
-            service.llm_client, "chat", side_effect=TypeError("client programming bug")
+            service.llm_client, "chat", side_effect=error_type("client programming bug")
         ) as chat,
-        pytest.raises(TypeError, match="client programming bug"),
+        pytest.raises(error_type, match="client programming bug"),
     ):
         service._call_json_with_trace(messages=[], fallback={}, stage_key="brief")
     assert chat.call_count == 1
@@ -272,3 +273,189 @@ def test_provider_failures_remain_identifiable_and_keep_their_cause(failure):
         )
     assert caught.value.__cause__ is error
     assert chat.call_count == 2
+
+
+@pytest.mark.parametrize("stage", GENESIS_STAGE_ORDER)
+@pytest.mark.parametrize("operation", ["generate", "rerun", "refine", "refine_item"])
+@pytest.mark.parametrize(
+    "failure", ["invalid_http_json", "missing_content", "empty_choices"]
+)
+def test_adapter_protocol_failure_is_application_model_parse_failure(
+    locked_workspace, stage, operation, failure
+):
+    import httpx
+
+    from forwin.genesis import BookGenesisService
+    from forwin.writer.llm import LLMClient
+
+    client = LLMClient(
+        api_key="test",
+        base_url="https://api.deepseek.com/v1",
+        model="deepseek-chat",
+        retry_attempts=2,
+        retry_initial_delay_seconds=0,
+        retry_max_delay_seconds=0,
+    )
+    service = BookGenesisService(llm_client=client)
+    cause_type = {
+        "invalid_http_json": json.JSONDecodeError,
+        "missing_content": KeyError,
+        "empty_choices": IndexError,
+    }[failure]
+
+    def respond(url, **kwargs):
+        request = httpx.Request("POST", url)
+        if failure == "invalid_http_json":
+            return httpx.Response(200, text="invalid HTTP JSON", request=request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {}}]}
+            if failure == "missing_content"
+            else {"choices": []},
+            request=request,
+        )
+
+    with locked_workspace() as session:
+        before = snapshot(session)
+    kwargs = {
+        "get_session": locked_workspace,
+        "build_genesis_service": lambda **kwargs: service,
+        "close_genesis_service": lambda service: None,
+        "require_genesis_project": lambda project: None,
+        "active_genesis_revision": service.active_revision,
+    }
+    try:
+        with (
+            patch.object(client.client, "post", side_effect=respond) as post,
+            pytest.raises(HTTPException) as caught,
+        ):
+            if operation in {"generate", "rerun"}:
+                getattr(application, f"{operation}_project_genesis_stage")(
+                    "authored", stage, **kwargs
+                )
+            else:
+                application.refine_project_genesis_stage(
+                    "authored",
+                    stage,
+                    BookGenesisRefineRequest(
+                        instruction="更新",
+                        target_path=TARGETS[stage]
+                        if operation == "refine_item"
+                        else "",
+                    ),
+                    **kwargs,
+                )
+        assert caught.value.status_code == 503
+        assert "parsing failed" in caught.value.detail
+        provider_error = caught.value.__cause__.__cause__
+        assert provider_error.error_category == "parse_error"
+        assert isinstance(provider_error.__cause__, cause_type)
+        assert getattr(provider_error, "_forwin_llm_attempt_recorded", False)
+        assert getattr(provider_error.__cause__, "_forwin_llm_attempt_recorded", False)
+        # Two bounded Genesis attempts, no adapter retries or duplicate records.
+        assert post.call_count == 2
+        attempts = client.drain_llm_attempt_events()
+        assert len(attempts) == 2
+        assert all(row["error_class"] == cause_type.__name__ for row in attempts)
+        assert all(row["error_category"] == "parse_error" for row in attempts)
+        assert all(row["final_failure"] and not row["retryable"] for row in attempts)
+        assert client.drain_model_fallback_events() == []
+        with locked_workspace() as session:
+            assert snapshot(session) == before
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("operation", ["generate", "rerun", "refine", "refine_item"])
+def test_adapter_programming_runtime_error_propagates_once_through_application(
+    locked_workspace, operation
+):
+    from forwin.genesis import BookGenesisService
+    from forwin.writer.llm import LLMClient
+
+    client = LLMClient(
+        api_key="test",
+        base_url="https://api.deepseek.com/v1",
+        model="deepseek-chat",
+        retry_attempts=2,
+        retry_initial_delay_seconds=0,
+    )
+    service = BookGenesisService(llm_client=client)
+    error = RuntimeError("client programming bug")
+    with locked_workspace() as session:
+        before = snapshot(session)
+    kwargs = {
+        "get_session": locked_workspace,
+        "build_genesis_service": lambda **kwargs: service,
+        "close_genesis_service": lambda service: None,
+        "require_genesis_project": lambda project: None,
+        "active_genesis_revision": service.active_revision,
+    }
+    try:
+        with (
+            patch.object(client.client, "post", side_effect=error) as post,
+            pytest.raises(RuntimeError, match="client programming bug") as caught,
+        ):
+            if operation in {"generate", "rerun"}:
+                getattr(application, f"{operation}_project_genesis_stage")(
+                    "authored", "story_engine", **kwargs
+                )
+            else:
+                application.refine_project_genesis_stage(
+                    "authored",
+                    "story_engine",
+                    BookGenesisRefineRequest(
+                        instruction="更新",
+                        target_path="core_cast[0]"
+                        if operation == "refine_item"
+                        else "",
+                    ),
+                    **kwargs,
+                )
+        assert caught.value is error
+        assert post.call_count == 1
+        assert len(client.drain_llm_attempt_events()) == 1
+        with locked_workspace() as session:
+            assert snapshot(session) == before
+    finally:
+        client.close()
+
+
+def test_adapter_unavailable_profile_remains_application_failure(locked_workspace):
+    from forwin.genesis import BookGenesisService
+    from forwin.writer.llm import LLMClient
+    from forwin.writer.llm.errors import LLMUnavailableError
+
+    # A configured key with no model reaches the real no-usable-profile owner.
+    client = LLMClient(api_key="test", base_url="https://model.invalid/v1", model="")
+    service = BookGenesisService(llm_client=client)
+    with locked_workspace() as session:
+        before = snapshot(session)
+    try:
+        with (
+            patch.object(
+                client.client,
+                "post",
+                side_effect=AssertionError("no usable profile must not send HTTP"),
+            ),
+            pytest.raises(HTTPException) as caught,
+        ):
+            application.generate_project_genesis_stage(
+                "authored",
+                "story_engine",
+                get_session=locked_workspace,
+                build_genesis_service=lambda **kwargs: service,
+                close_genesis_service=lambda service: None,
+                require_genesis_project=lambda project: None,
+                active_genesis_revision=service.active_revision,
+            )
+        assert caught.value.status_code == 503
+        assert isinstance(caught.value.__cause__.__cause__, LLMUnavailableError)
+        attempts = client.drain_llm_attempt_events()
+        assert len(attempts) == 2
+        assert all(row["error_class"] == "NoUsableLLMProfile" for row in attempts)
+        assert all(row["error_category"] == "no_usable_profile" for row in attempts)
+        with locked_workspace() as session:
+            assert snapshot(session) == before
+    finally:
+        client.close()

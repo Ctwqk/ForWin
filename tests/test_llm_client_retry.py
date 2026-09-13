@@ -1171,7 +1171,7 @@ class LLMClientRetryTests(unittest.TestCase):
             retry_attempts=1,
         )
         try:
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(RuntimeError) as caught:
                 client.chat(
                     [{"role": "user", "content": "抽 canon"}],
                     response_format={"type": "json_object"},
@@ -1182,6 +1182,9 @@ class LLMClientRetryTests(unittest.TestCase):
         finally:
             client.close()
 
+        self.assertEqual(caught.exception.error_category, "no_usable_profile")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["error_class"], "NoUsableLLMProfile")
         self.assertEqual(attempts[0]["error_category"], "no_usable_profile")
         self.assertEqual(attempts[0]["skipped_profiles"][0]["reason"], "route_not_allowed")
 

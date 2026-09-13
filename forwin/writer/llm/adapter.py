@@ -10,7 +10,12 @@ import httpx
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.model_adapter import ModelCapabilities
 from .embeddings import EmbeddingsMixin
-from .errors import ErrorsMixin, LLMInputLimitError
+from .errors import (
+    ErrorsMixin,
+    LLMInputLimitError,
+    LLMResponseParseError,
+    LLMUnavailableError,
+)
 from .profile_options import ProfileOptionsMixin
 from .routing import RoutingMixin
 from .telemetry import TelemetryMixin
@@ -200,7 +205,9 @@ class OpenAICompatibleAdapter(
                 preferred_provider_kind=preferred_provider_kind,
                 preferred_model=preferred_model,
             )
-            raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
+            raise LLMUnavailableError(
+                "OpenAICompatibleAdapter.chat: no usable LLM profile"
+            )
         last_exc: Exception | None = None
         for profile_index, profile in enumerate(profiles):
             try:
@@ -262,7 +269,9 @@ class OpenAICompatibleAdapter(
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
+        raise LLMUnavailableError(
+            "OpenAICompatibleAdapter.chat: no usable LLM profile"
+        )
 
     def _chat_with_profile(
         self,
@@ -426,7 +435,7 @@ class OpenAICompatibleAdapter(
                         usage_source,
                     ) = _provider_token_usage(data)
                     content: str = data["choices"][0]["message"]["content"]
-                except Exception as exc:  # noqa: BLE001
+                except (ValueError, KeyError, IndexError, TypeError) as exc:
                     self._record_llm_attempt(
                         attempt_group_id=attempt_group_id,
                         profile=profile,
@@ -465,7 +474,9 @@ class OpenAICompatibleAdapter(
                         preferred_model=preferred_model,
                     )
                     setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
-                    raise
+                    error = LLMResponseParseError(str(exc))
+                    setattr(error, _ATTEMPT_RECORDED_ATTR, True)
+                    raise error from exc
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,

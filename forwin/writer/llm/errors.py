@@ -15,6 +15,18 @@ _LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
+class LLMUnavailableError(RuntimeError):
+    """No usable provider profile is available for the requested model call."""
+
+    error_category = "no_usable_profile"
+
+
+class LLMResponseParseError(RuntimeError):
+    """The provider HTTP response cannot be decoded as a chat envelope."""
+
+    error_category = "parse_error"
+
+
 class LLMInputLimitError(ValueError):
     """Provider-declared input limit; repeating this input cannot succeed."""
 

@@ -53,6 +53,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+from tests.review_evidence import bind_frozen_review
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ def recovery_fixture() -> RecoveryFixture:
             issues_json="[]",
             review_meta_json='{"verdict":"pass"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(

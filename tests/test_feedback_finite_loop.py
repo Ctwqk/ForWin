@@ -39,6 +39,7 @@ from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
 from tests import test_canon_atomic_transaction as atomic
+from tests.review_evidence import bind_frozen_review
 from tests.test_feedback_consumer_transaction import _service
 from tests.test_publisher_runtime_comment_sync import _runtime
 
@@ -125,6 +126,7 @@ def _accept(runtime, project_id, chapter_id, output):
             issues_json="[]",
             review_meta_json='{"verdict":"pass","source":"frozen approved test evidence"}',
         )
+        bind_frozen_review(session, review)
         session.add(review)
         session.flush()
         candidate = CandidateDraftRepository(session).create_reviewed_version(

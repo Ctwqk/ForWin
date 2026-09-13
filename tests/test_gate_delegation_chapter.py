@@ -35,6 +35,7 @@ from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.writer.execution import WriterExecutionResult
 from tests.postgres import postgres_test_url
+from tests.review_evidence import bind_frozen_review
 
 
 class SpyDelegate:
@@ -240,6 +241,7 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
                     issues_json="[]",
                     review_meta_json='{"verdict":"pass"}',
                 )
+                bind_frozen_review(session, review)
                 session.add(review)
                 session.flush()
                 CandidateDraftRepository(session).create_reviewed_version(

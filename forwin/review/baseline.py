@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
 from forwin.models.draft import ChapterReview
-from forwin.retrieval.source_identity import CanonBaselineChanged, CanonReadBaseline
+
+if TYPE_CHECKING:
+    from forwin.retrieval.source_identity import CanonReadBaseline
 
 
 class ReviewedCanonBaseline(BaseModel):
@@ -18,6 +21,8 @@ class ReviewedCanonBaseline(BaseModel):
     as_of_chapter: int = Field(ge=0)
 
     def read_baseline(self) -> CanonReadBaseline:
+        from forwin.retrieval.source_identity import CanonReadBaseline
+
         return CanonReadBaseline(self.project_id, self.book_revision, self.as_of_chapter)
 
 
@@ -30,6 +35,8 @@ class CanonReviewEvidence(BaseModel):
 
 
 def candidate_review_evidence(session, candidate, *, for_update=False) -> CanonReviewEvidence:
+    from forwin.retrieval.source_identity import CanonBaselineChanged
+
     statement = select(ChapterReview).where(ChapterReview.id == candidate.review_id)
     if for_update:
         statement = statement.with_for_update()

@@ -10,17 +10,17 @@ from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import ChapterReview
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.project import ChapterPlan, Project
+from forwin.proposals.structured_patch import proposal_to_graph_delta
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.proposals.structured_patch import proposal_to_graph_delta
-from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.retrieval.source_identity import CanonBaselineChanged, CanonReadBaseline
+from forwin.review.candidate import CandidateReviewRequest
 from forwin.review.context_builder import build_review_context_pack
 from forwin.runtime.container import RuntimeContainer
-from forwin.review.candidate import CandidateReviewRequest
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
@@ -220,3 +220,15 @@ def test_fresh_recovery_rejects_plan_without_original_review_evidence(review_cas
     assert case.pipeline.accept_review(case.project_id, 1)["status"] == "needs_review"
     assert captured[0].stale
     assert "review Canon evidence changed" in captured[0].blocked_path
+
+
+@pytest.mark.parametrize("first_import", ["forwin.context", "forwin.canon", "forwin.review.candidate"])
+def test_review_evidence_imports_without_bootstrapping_retrieval_cycle(first_import):
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {first_import}; from forwin.canon.plan import CanonCommitPlan"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr

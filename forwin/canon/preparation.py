@@ -36,7 +36,6 @@ from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.retrieval.source_identity import CanonBaselineChanged
 from forwin.review.baseline import candidate_review_evidence
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -230,6 +229,8 @@ class CanonPreparationService:
         artifact_store: ArtifactStore,
         recorder: PipelineTraceRecorder,
     ) -> CanonPreparationOutcome:
+        from forwin.retrieval.source_identity import CanonBaselineChanged
+
         candidate_id = request.candidate_id
         project_id = request.project_id
         chapter_number = request.chapter_number
@@ -430,6 +431,8 @@ class CanonPreparationService:
         quality_admission_run_id: str = "",
         obligation_resolution_plan: ObligationResolutionPlan | None = None,
     ) -> CanonPreparationOutcome:
+        from forwin.retrieval.source_identity import CanonBaselineChanged
+
         repository = CandidateDraftRepository(session)
         candidate = repository.get(candidate_id, for_update=True)
         if candidate is None:

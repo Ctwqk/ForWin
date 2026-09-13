@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+
+import httpx
 from forwin.map.genesis_route import (
     GenesisRouteContractError,
 )
@@ -24,7 +26,8 @@ from forwin.utils import (
     LLMJSONParseError,
     parse_llm_json,
 )
-from forwin.genesis.constants import logger
+from forwin.genesis.constants import GENESIS_STAGE_ORDER, GenesisModelError, logger
+from forwin.writer.llm.errors import LLMInputLimitError
 from forwin.observability.context import OperationContext
 from forwin.models.project import Project
 from forwin.observability.redaction import redact_payload
@@ -307,16 +310,16 @@ def _call_json_with_trace_impl(
         if str(item.get("role", "")).strip() == "system"
     )
     attempts_payload: list[dict[str, Any]] = []
-    is_map_operation = stage_key.split(":", 1)[0] == "map"
+    is_formal_operation = stage_key.split(":", 1)[0] in GENESIS_STAGE_ORDER
     max_tokens = min(self.max_tokens, int(max_tokens or self.max_tokens))
     if (
         hasattr(self.llm_client, "api_key")
         and not str(getattr(self.llm_client, "api_key", "") or "").strip()
         and not bool(getattr(self.llm_client, "codex_enabled", False))
     ):
-        if is_map_operation:
-            raise RuntimeError(
-                "Genesis Map requires an available model; prior revision preserved."
+        if is_formal_operation:
+            raise GenesisModelError(
+                f"Genesis {stage_key} requires an available model; prior revision preserved."
             )
         attempts_payload.append({"status": "fallback", "reason": "missing_api_key"})
         return fallback, self._trace_payload(
@@ -360,7 +363,7 @@ def _call_json_with_trace_impl(
                 payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
                 if stage_key in {"map", "map:refine"}:
                     validate_complete_genesis_map(payload, canonical_routes=stage_key == "map")
-            except Exception as exc:  # noqa: BLE001
+            except (LLMJSONParseError, GenesisRouteContractError) as exc:
                 mark_latest_attempt_parse_failure(
                     self.llm_client,
                     parser_name=f"Genesis {stage_key}",
@@ -370,28 +373,16 @@ def _call_json_with_trace_impl(
                     error=exc,
                 )
                 raise
-            attempts_payload.append(
-                {
-                    "attempt": attempt_no,
-                    "status": "success",
-                    "temperature": attempt["temperature"],
-                    "max_tokens": attempt["max_tokens"],
-                }
-            )
-            return payload, self._trace_payload(
-                stage_key=stage_key,
-                effective_system_prompt=effective_prompt,
-                messages=messages,
-                prompt_layers=prompt_layers,
-                selected_skills=selected_skills,
-                attempts=attempts_payload,
-                output_summary={"mode": "success", "payload": payload},
-            )
         except GenesisRouteContractError:
             # A model-authored route cannot be discarded in favor of a different
             # scaffold after schema/contract failure. The prior revision survives.
             raise
         except Exception as exc:  # noqa: BLE001
+            if is_formal_operation and not isinstance(
+                exc, (RuntimeError, httpx.HTTPError, LLMJSONParseError, LLMInputLimitError)
+            ):
+                # Programming errors are not model failures and must not retry.
+                raise
             last_error = exc
             attempts_payload.append(
                 {
@@ -404,9 +395,33 @@ def _call_json_with_trace_impl(
             )
             if isinstance(exc, LLMJSONParseError) and exc.empty_response:
                 break
-    if is_map_operation:
-        raise RuntimeError(
-            "Genesis Map model call failed; prior revision preserved."
+            continue
+        # Trace construction is outside the model retry boundary.
+        attempts_payload.append(
+            {
+                "attempt": attempt_no,
+                "status": "success",
+                "temperature": attempt["temperature"],
+                "max_tokens": attempt["max_tokens"],
+            }
+        )
+        return payload, self._trace_payload(
+            stage_key=stage_key,
+            effective_system_prompt=effective_prompt,
+            messages=messages,
+            prompt_layers=prompt_layers,
+            selected_skills=selected_skills,
+            attempts=attempts_payload,
+            output_summary={"mode": "success", "payload": payload},
+        )
+    if is_formal_operation:
+        failure = (
+            "model response parsing failed"
+            if isinstance(last_error, LLMJSONParseError)
+            else "model call failed"
+        )
+        raise GenesisModelError(
+            f"Genesis {stage_key} {failure}; prior revision preserved."
         ) from last_error
     logger.warning("Genesis stage %s fell back to deterministic scaffold.", stage_key)
     attempts_payload.append({"status": "fallback", "reason": "deterministic_scaffold"})

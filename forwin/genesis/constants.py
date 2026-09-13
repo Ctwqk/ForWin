@@ -152,9 +152,13 @@ _GENESIS_REFINE_SYSTEM_PROMPT = (
 )
 
 
+class GenesisModelError(RuntimeError):
+    """A formal Genesis model call is unavailable or returned unparseable output."""
+
+
 class StaleGenesisRevisionError(RuntimeError):
     pass
 
 
 
-__all__ = ["GENESIS_STAGE_ORDER", "StaleGenesisRevisionError"]
+__all__ = ["GENESIS_STAGE_ORDER", "GenesisModelError", "StaleGenesisRevisionError"]

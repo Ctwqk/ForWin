@@ -76,16 +76,6 @@ def test_map_model_failure_cannot_return_a_successful_scaffold(stage, failure):
         )
 
 
-@pytest.mark.parametrize("failure", ["transport", "missing_credentials"])
-def test_non_map_model_failure_keeps_existing_fallback_behavior(failure):
-    payload, trace = unavailable_service(failure)._call_json_with_trace(
-        messages=[{"role": "user", "content": "建立简报"}],
-        fallback={"one_line": "保留的简报"},
-        stage_key="brief",
-    )
-    assert payload == {"one_line": "保留的简报"}
-    assert trace["output_summary"]["mode"] == "fallback"
-
 
 def test_map_generation_with_codex_only_configuration_still_accepts_valid_output():
     source = complete_atlas()

@@ -14,6 +14,7 @@ from forwin.api_schema import (
     StartWritingResponse,
 )
 from forwin.genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.genesis.constants import GenesisModelError
 from forwin.genesis.handoff import StartWritingCommand
 from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
@@ -159,6 +160,8 @@ def generate_project_genesis_stage(
                 revision=revision,
                 stage_key=normalized_stage,
             )
+        except GenesisModelError as exc:
+            raise HTTPException(503, str(exc)) from exc
         except StaleGenesisRevisionError as exc:
             raise HTTPException(409, str(exc)) from exc
         session.commit()
@@ -260,6 +263,8 @@ def rerun_project_genesis_stage(
                 stage_key=normalized_stage,
                 event_type=DecisionEventType.GENESIS_STAGE_RERUN,
             )
+        except GenesisModelError as exc:
+            raise HTTPException(503, str(exc)) from exc
         except StaleGenesisRevisionError as exc:
             raise HTTPException(409, str(exc)) from exc
         session.commit()
@@ -315,6 +320,8 @@ def refine_project_genesis_stage(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except GenesisModelError as exc:
+            raise HTTPException(503, str(exc)) from exc
         except StaleGenesisRevisionError as exc:
             raise HTTPException(409, str(exc)) from exc
         session.commit()

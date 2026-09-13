@@ -681,6 +681,47 @@ def test_map_location_hydrates_native_site_state(monkeypatch, required_session):
         assert "已释放23" in messages[1]["content"]
 
 
+def test_map_binding_does_not_make_same_named_location_ambiguous(required_session):
+    from forwin.protocol.book_state import MapNode
+    from forwin.retrieval.requirements import hydrate_requirements
+
+    repo = BookStateRepository(required_session)
+    repo.create_world_node(
+        WorldNode(
+            id="location-archives",
+            project_id="required",
+            node_type="location",
+            name="原生码头",
+        )
+    )
+    repo.create_map_node(
+        MapNode(
+            id="native-port",
+            project_id="required",
+            node_type="site",
+            name="原生码头",
+        )
+    )
+    repo.create_world_node(
+        WorldNode(
+            id="site-state-native-port",
+            project_id="required",
+            node_type="site_state",
+            name="原生码头",
+            profile={"map_node_id": "native-port"},
+        )
+    )
+    base = base_context(
+        required_session,
+        chapter_plan_one_line="前往原生码头核对登记",
+    )
+
+    hydrated = hydrate_requirements(base, session=required_session)
+
+    assert hydrated.entity_name_candidates["原生码头"] == ["location-archives"]
+    assert "location-archives" in hydrated.required_entity_ids
+
+
 def test_canon_quality_context_preserves_real_obligation_subjects(
     monkeypatch, required_session
 ):

@@ -43,13 +43,18 @@ def hydrate_requirements(
     entities = {e.entity_id: e for e in pack.active_entities}
     relations = {e.relation_id: e for e in pack.active_relations if e.relation_id}
     facts = dict(pack.required_facts)
+    map_entity_ids: set[str] = set()
+    site_state_ids: set[str] = set()
     if session is not None:
         query = BookStateQuery(session, baseline=baseline)
         runtime = query.runtime(pack.project_id, as_of_chapter=baseline.as_of_chapter)
         # Include explicitly referenced retired and non-character objects too: their
         # current inactive state matters more than their optional retrieval rank.
-        entities = {
-            node.id: EntitySnapshot(
+        entities = {}
+        for node in runtime.world.nodes_by_id.values():
+            if str(node.node_type) == "site_state":
+                site_state_ids.add(node.id)
+            entities[node.id] = EntitySnapshot(
                 entity_id=node.id,
                 kind=str(node.node_type),
                 name=node.name or node.id,
@@ -60,9 +65,8 @@ def hydrate_requirements(
                 description=node.description or node.summary,
                 current_state={**runtime.world.get_state(node.id)},
             )
-            for node in runtime.world.nodes_by_id.values()
-        }
         for node in runtime.map.nodes_by_id.values():
+            map_entity_ids.add(node.id)
             if node.id not in entities:
                 entities[node.id] = EntitySnapshot(
                     entity_id=node.id,
@@ -98,8 +102,31 @@ def hydrate_requirements(
             for key, fact in runtime.world.facts_by_id.items()
         }
     aliases: dict[str, set[str]] = defaultdict(set)
+    world_names = {
+        name
+        for entity in entities.values()
+        if entity.entity_id not in map_entity_ids | site_state_ids
+        for name in (entity.name, *entity.aliases)
+        if name
+    }
     for e in entities.values():
-        for name in (e.name, *e.aliases):
+        if e.entity_id in site_state_ids:
+            names = (e.entity_id,)
+        elif e.entity_id in map_entity_ids:
+            # A Genesis location is materialized both as a narrative location and
+            # as a map node/site state. Keep the map identity available for explicit
+            # refs, but do not turn that implementation binding into a name clash.
+            names = (
+                e.entity_id,
+                *(
+                    name
+                    for name in (e.name, *e.aliases)
+                    if name not in world_names
+                ),
+            )
+        else:
+            names = (e.entity_id, e.name, *e.aliases)
+        for name in names:
             if name:
                 aliases[name].add(e.entity_id)
     identity_snapshot = (

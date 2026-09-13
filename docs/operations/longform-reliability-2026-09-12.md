@@ -29,7 +29,7 @@
 
 ## 镜像、运行角色与迁移
 
-可执行候选固定在 `64603f81b2a28bab2ce7e825a0f907ebe6ae27de`，与最终测试补强提交的生产代码相同。使用完整 Git archive 和 `uv.lock`，在独立 `colima-forwinqual20260912` 引擎构建两个原 Dockerfile target，未复制生产源码或应用文本补丁。
+首个可执行候选固定在 `64603f81b2a28bab2ce7e825a0f907ebe6ae27de`，与其后的 `413d638` 测试补强提交的生产代码相同。使用完整 Git archive 和 `uv.lock`，在独立 `colima-forwinqual20260912` 引擎构建两个原 Dockerfile target，未复制生产源码或应用文本补丁。
 
 | 产物 | 身份 |
 |---|---|
@@ -53,5 +53,15 @@
 首个新 smoke 项目为 `5d59b0dce434406a8c6a163f501d7c81`（清河旧账），总目标100章，本次停在20章，每批2章以检验持久续跑。冻结策略版本2：standard、Writer `env-minimax/MiniMax-M2.7`、2500/2800/3200字、无人工检查点、Spark委托、原有限修复预算3；`soak_test/isolated=true`，没有发布角色或账号。六个 Genesis 阶段均经正式 MCP 生成及锁定，未手工修订；实际 Genesis 路由为 `gpt-5.3-codex-spark/codex_bridge`，不能根据 Writer 配置把它记作 MiniMax。
 
 `64603f8` 首次 start-writing 返回409，尚未创建章节任务，MCP 确认仍为 `genesis_ready`、active_count=0。保存的最终 Genesis revision `6de822b3894f4906b9fd5770f29afbca` 经原函数重放，精确复现孤立 ID `loc_304fa7e15e39573d`，对应封存账房库室。它有一条 sealed、hidden、单向且带许可引用的明确通道；结构弱连通性帮助函数排除了 sealed 边，错误地把“不可通行”判成“没有连接”。修复进入计划 Task8Q1，保持实际封闭和人物可见性限制。原样本及失败身份保留；源码改变后必须重新冻结完整运行角色，不能把后续结果记成 `64603f8` 通过。
+
+Task8Q1 修复提交为 `7f67eb6039aa1ae11b3f2d1737815161ac5fcf73`。现有遍历函数只在 authored 结构核验时包含阻断路线，普通可达性与可见性仍沿原逻辑。真实 PostgreSQL 导入和 standalone 校验的反例在修复前为9 failed、3个 hidden 对照通过，修复后12 passed；地图/Genesis 263项及移动相关21项均通过。独立规格及质量复核通过，0新增问题。完整 Ruff 比较另发现测试 import 排序1项，由测试格式提交 `e49b06e` 修正，65项覆盖测试及独立复核通过。最终全仓相同 Ruff 比较为1027→1012，新增0、移除15。
+
+新源码完整 archive SHA-256 为 `37929ac02ceb5a7381a7ea5b7277f100ccff22c6f0086c332ebd2edf3bccb01b`，锁文件未变。完整应用镜像 `sha256:c7e8b4aeaf1ad5baf0a2d71e876f102ea203b45e092cbc7b340c49a1acc2af76` 和浏览器镜像 `sha256:9ecbaa58bd1d98e51a80ae9d8f3654668d045859e7fc7854f6519a3728ddcd58` 均构建成功，各849个源码文件和锁定解释器核验通过。
+
+在 `7f67eb6` 重新运行同一完整 pytest 命令并保存 JUnit：**3710 passed、4 skipped、5 warnings、6 subtests，496.23秒，exit 0**，XML 无 failure/error。153个变更 Python 文件的 F/E9、编译、source guard、diff 和严格 legacy inventory 均通过。后续 `e49b06e` 仅展开同一个测试 import，不改变被复制运行文件或锁，不重记整套 QA 或重造同代码镜像。
+
+MCP 确认没有活跃任务后，隔离四角色切换到 `7f67eb6` 完整应用镜像，模型 bridge 也切到同源 archive 和锁定环境；API/MCP/bridge 健康与源码身份核验通过。ready 脚本只因全局插件仍指向生产150而返回1；隔离 API/MCP 检查均成功，操作继续通过明确指向隔离端点的正式 MCP 客户端，全局插件及生产服务未改。
+
+新项目 `7732e4a8a72f4f4f97aaa25f08751d35`（潮册疑踪）已创建，策略版本2沿用标准策略及每批2章、到20章停止的设定，正在重新生成 Genesis。它未复用旧失败项目的状态或 Genesis，尚未开始章节生产，不能计作 smoke20 通过。
 
 改动交付目标仍为 `origin/for-review`。不自动合并 master、不修旧生产作品、不公开发布。生产替换须满足原路线图的资格并走既定 150 同步路径；这份隔离镜像证据本身不意味着生产已更新。

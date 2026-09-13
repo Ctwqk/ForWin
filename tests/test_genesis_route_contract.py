@@ -160,6 +160,94 @@ def test_disconnected_authored_map_keeps_existing_validation_failure():
     assert len(result.map_edges) == 1
 
 
+def restricted_room_atlas(status: str) -> dict:
+    source = atlas()
+    source["nodes"][2].update(name="资料室", kind="room")
+    source["edges"][1].update(
+        status=status,
+        bidirectional=False,
+        visibility="hidden",
+        discovered_by_default=False,
+        access_rule_id="room-permit",
+    )
+    return source
+
+
+@pytest.mark.parametrize("status", ["sealed", "blocked", "destroyed", "hidden"])
+def test_authored_subworld_counts_restricted_room_route_as_structural_connection(status):
+    source = restricted_room_atlas(status)
+    spec = build_subworld_map_specs_from_genesis(project_id="p", map_atlas=source)[0]
+    result = generate_subworld_map(spec)
+
+    assert result.validation_report.valid, result.validation_report.errors
+    assert len(result.map_nodes) == 3
+    assert len(result.map_edges) == 2
+    assert "some nodes require hidden or undiscovered routes" in result.validation_report.warnings
+
+
+@pytest.mark.parametrize("status", ["sealed", "blocked", "destroyed", "hidden"])
+@pytest.mark.parametrize("cross_world", [False, True])
+def test_authored_book_import_preserves_restricted_room_route_without_granting_passage(status, cross_world):
+    from types import SimpleNamespace
+
+    from forwin.book_state.cognition import CognitionView
+    from forwin.context.assembler_core.map_context import _build_map_context
+    from forwin.map.service import ensure_book_map_from_genesis_atlas, get_book_map_runtime
+    from forwin.models import Project
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.protocol.book_state import CognitionOverlay
+    from tests.postgres import postgres_test_url
+
+    source = restricted_room_atlas(status)
+    if cross_world:
+        source["submaps"].append({"id": "other", "name": "对岸"})
+        source["regions"].append({"id": "other-region", "name": "对岸街区", "subworld_name": "other"})
+        source["nodes"][2].update(parent_subworld="other", parent_region_id="other-region")
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    with get_session_factory(engine)() as session:
+        session.add(Project(id="p", title="书", premise="核查"))
+        session.commit()
+        result = ensure_book_map_from_genesis_atlas(session, project_id="p", map_atlas=source)
+        assert result.validation_report.valid, result.validation_report.errors
+        session.commit()
+        session.expire_all()
+        runtime = get_book_map_runtime(session, "p")
+        nodes = {node.metadata["source_node_id"]: node.id for node in runtime.map_nodes_by_id.values()}
+        edges = {edge.metadata["source_edge_id"]: edge for edge in runtime.map_edges_by_id.values()}
+        assert set(nodes) == {"office", "archive", "finance"}
+        assert set(edges) == {"walk", "transfer"}
+        room_route = edges["transfer"]
+        assert (room_route.from_node_id, room_route.to_node_id) == (nodes["archive"], nodes["finance"])
+        assert room_route.status == status
+        assert room_route.bidirectional is False
+        assert room_route.visibility_default == "hidden"
+        assert room_route.discovered_by_default is False
+        assert room_route.access_rule_id == "room-permit"
+        assert room_route.travel_time == pytest.approx(15 / 60)
+        assert room_route.metadata["source_travel_cost"] == "15分钟；复制手续约半日"
+        assert runtime.map_nodes_by_id[nodes["finance"]].node_type == "room"
+
+        observer = ("character", "visitor")
+        cognition = CognitionView(CognitionOverlay(
+            id="visitor-view", project_id="p", observer_type="character", observer_id="visitor",
+        ))
+        graph = MapGraph(nodes=list(runtime.map_nodes_by_id.values()), edges=list(edges.values()),
+                         cognition_by_observer={observer: cognition})
+        # Knowing the topology does not make an undiscovered route known to a character.
+        assert not graph.shortest_path(nodes["archive"], nodes["finance"], observer=observer).reachable
+        if status != "hidden":
+            assert not graph.shortest_path(nodes["archive"], nodes["finance"], allow_hidden=True).reachable
+        # Even an explicit diagnostic bypass cannot reverse an authored one-way edge.
+        assert graph.shortest_path(nodes["archive"], nodes["finance"], allow_hidden=True, allow_blocked=True).reachable
+        assert not graph.shortest_path(nodes["finance"], nodes["archive"], allow_hidden=True, allow_blocked=True).reachable
+        context = _build_map_context(session, "p", [SimpleNamespace(
+            entity_id="visitor", name="访客", current_state={"location_id": nodes["archive"]},
+        )])
+        assert room_route.id not in {edge["id"] for edge in context["review_graph"]["map_edges"]}
+        assert "15分钟；复制手续约半日" not in _build_genesis_map_overview(source, [])
+
+
 def test_real_map_persistence_keeps_route_endpoints_and_unknown_context():
     from types import SimpleNamespace
 
@@ -211,7 +299,8 @@ def test_real_map_persistence_keeps_route_endpoints_and_unknown_context():
         assert edges["finance-bank"].id not in {e["id"] for e in context["review_graph"]["map_edges"]}
 
 
-def test_disconnected_authored_book_rolls_back_every_map_write():
+@pytest.mark.parametrize("missing_endpoint", [False, True])
+def test_invalid_authored_book_leaves_no_map_writes(missing_endpoint):
     from forwin.map.repository import MapRepository
     from forwin.map.service import ensure_book_map_from_genesis_atlas
     from forwin.models import Project
@@ -220,18 +309,26 @@ def test_disconnected_authored_book_rolls_back_every_map_write():
 
     source = atlas()
     source["edges"] = source["edges"][:1]
+    if missing_endpoint:
+        source["edges"][0]["to"] = "missing-location"
     engine = get_engine(postgres_test_url())
     init_db(engine)
     with get_session_factory(engine)() as session:
         session.add(Project(id="p", title="书", premise="核查"))
         session.commit()
-        result = ensure_book_map_from_genesis_atlas(session, project_id="p", map_atlas=source)
-        assert not result.validation_report.valid
-        assert any("disconnected" in error for error in result.validation_report.errors)
+        if missing_endpoint:
+            with pytest.raises(ValueError, match="endpoint"):
+                ensure_book_map_from_genesis_atlas(session, project_id="p", map_atlas=source)
+        else:
+            result = ensure_book_map_from_genesis_atlas(session, project_id="p", map_atlas=source)
+            assert not result.validation_report.valid
+            assert any("disconnected" in error for error in result.validation_report.errors)
         session.commit()
         repo = MapRepository(session)
         assert repo.list_map_nodes("p") == []
         assert repo.list_map_edges("p") == []
+        assert repo.list_regions("p") == []
+        assert repo.list_region_edges("p") == []
         assert session.get(Project, "p").title == "书"
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.map.generator import generate_subworld_map
 from forwin.book_state.map_graph import MapGraph
 from forwin.map.protocol import SCHEME_C_NAME, MapAnchorNodeSpec, SubWorldMapSpec
@@ -66,3 +68,21 @@ def test_generation_creates_reachable_required_anchors_and_density() -> None:
         anchor_id = next(node.id for node in result.map_nodes if node.name == anchor_name)
         assert graph.shortest_path(entry_id, anchor_id).reachable is True
     assert all(edge.distance >= 0 and edge.travel_time >= 0 for edge in result.map_edges)
+
+
+@pytest.mark.parametrize("status", ["sealed", "blocked", "destroyed"])
+def test_procedural_map_still_requires_traversable_connections(status: str) -> None:
+    from forwin.map.validator import validate_subworld_map
+
+    spec = _spec(9)
+    result = generate_subworld_map(spec)
+    report = validate_subworld_map(
+        spec=spec,
+        regions=result.regions,
+        region_edges=result.region_edges,
+        map_nodes=result.map_nodes,
+        map_edges=[edge.model_copy(update={"status": status}) for edge in result.map_edges],
+    )
+
+    assert not report.valid
+    assert any("disconnected" in error for error in report.errors)

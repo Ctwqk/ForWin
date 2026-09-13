@@ -69,8 +69,11 @@ def validate_subworld_map(
             if float(getattr(edge, field_name) or 0.0) < 0:
                 errors.append(f"edge {edge.id} has negative {field_name}")
 
-    reachable = _reachable_nodes(map_nodes, map_edges, include_hidden=True,
-                                 ignore_direction=spec.authored_edges is not None)
+    reachable = _reachable_nodes(
+        map_nodes, map_edges, include_hidden=True,
+        ignore_direction=spec.authored_edges is not None,
+        include_blocked=spec.authored_edges is not None,
+    )
     if check_connectivity and map_nodes and len(reachable) != len(map_nodes):
         missing = sorted(set(node_by_id) - reachable)
         errors.append(f"subworld graph is disconnected: {missing[:5]}")
@@ -116,9 +119,11 @@ def validate_subworld_map(
 
 
 def book_map_connectivity_errors(nodes: list[MapNode], edges: list[MapEdge]) -> list[str]:
-    # Structural connectivity has no arbitrary start node. Route reachability
-    # remains directional in MapGraph; importing a one-way road never reverses it.
-    reachable = _reachable_nodes(nodes, edges, include_hidden=True, ignore_direction=True)
+    # Authored topology includes every declared connection, even a sealed room.
+    # Direction, status and discovery still constrain runtime MapGraph paths.
+    reachable = _reachable_nodes(
+        nodes, edges, include_hidden=True, ignore_direction=True, include_blocked=True,
+    )
     if nodes and len(reachable) != len(nodes):
         missing = sorted({node.id for node in nodes} - reachable)
         return [f"book map graph is disconnected: {missing[:5]}"]
@@ -131,12 +136,13 @@ def _reachable_nodes(
     *,
     include_hidden: bool,
     ignore_direction: bool = False,
+    include_blocked: bool = False,
 ) -> set[str]:
     if not map_nodes:
         return set()
     adjacency: dict[str, list[str]] = defaultdict(list)
     for edge in map_edges:
-        if edge.status in _BLOCKED_STATUSES:
+        if not include_blocked and edge.status in _BLOCKED_STATUSES:
             continue
         if not include_hidden and (edge.edge_type == "hidden_route" or edge.status == "hidden" or not edge.discovered_by_default):
             continue

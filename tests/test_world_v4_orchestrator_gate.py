@@ -30,6 +30,7 @@ from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+from tests.review_evidence import bind_frozen_review
 
 
 def _build_pipeline(database_url: str, artifact_root: str):
@@ -114,6 +115,7 @@ def _persist_candidate(session, project, chapter, output, verdict):
         issues_json="[]",
         review_meta_json=verdict.model_dump_json(),
     )
+    bind_frozen_review(session, review)
     session.add(review)
     session.flush()
     candidate = CandidateDraftRepository(session).create_reviewed_version(

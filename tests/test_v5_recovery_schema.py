@@ -467,9 +467,8 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         migration_table = capture.tables[table_name]
         additive_columns = {"target_book_revision", "projected_book_revision"} if table_name == "projection_checkpoints" else set()
         assert list(migration_table.c.keys()) == [name for name in metadata_table.c.keys() if name not in additive_columns]
-        for column_name in migration_table.c:
-            metadata_column = metadata_table.c[column_name]
-            migration_column = migration_table.c[column_name]
+        for migration_column in migration_table.c:
+            metadata_column = metadata_table.c[migration_column.name]
             assert type(migration_column.type) is type(metadata_column.type)
             assert getattr(migration_column.type, "length", None) == getattr(
                 metadata_column.type, "length", None

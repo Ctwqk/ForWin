@@ -850,7 +850,10 @@ entries:
       - forwin/book_state/query.py
       - forwin/knowledge_system/page_repository.py
     allow_patterns:
-      - legacy
+      - legacy = evidence.get(key, {}).pop(str(value), None)
+      - if legacy is not None
+      - entries.extend(item for item in legacy if item not in entries)
+      - A read must not supersede or otherwise mutate legacy artifacts
     reason: >
       Historical cognition serialization is normalized only for support still
       present in the accepted view. Derived pages without current dependencies

@@ -7,14 +7,16 @@ from forwin.generation.auto_continue import GenerationAutoContinueController
 from forwin.generation.task_payload import payload_from_json
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
+from tests import test_generation_application_service as application_fixtures
 from tests.test_generation_continuation_outbox import (
     setup_parent,
     finish,
     consume,
     decision,
 )
-from tests.test_generation_application_service import session_factory as session_factory
 
+
+session_factory = application_fixtures.session_factory
 
 @pytest.mark.parametrize("paused", [False, True])
 def test_safe_accepted_pause_marker_does_not_block_continuation(

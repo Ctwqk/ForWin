@@ -676,7 +676,7 @@ class RetrievalBroker:
     def _load_llm_kb_context(
         self, project_id: str, *, pack_kind: str, query: str = "", session=None, baseline=None
     ) -> dict[str, object]:
-        from forwin.llm_kb.source_validation import validated_manifest, validated_file
+        from forwin.llm_kb.source_validation import validated_file, validated_manifest
         store = LLMKnowledgeBaseStore(root=self.llm_kb_root)
         manifest = validated_manifest(store.root, project_id, session, baseline)
         if not manifest:

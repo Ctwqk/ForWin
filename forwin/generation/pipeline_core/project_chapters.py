@@ -1028,8 +1028,12 @@ class ChapterExecutionStage:
                         current_chapter=chapter_num,
                     )
                 chapter_execution_support.record_repair_writer_failure(
-                    self, exc=exc, updater=updater, project_id=project_id,
-                    chapter_number=chapter_num, frozen_artifacts=frozen_artifacts,
+                    self,
+                    exc=exc,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    frozen_artifacts=frozen_artifacts,
                 )
                 updater.mark_chapter_status(project_id, chapter_num, "failed")
                 session.commit()

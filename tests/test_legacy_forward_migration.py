@@ -9,11 +9,11 @@ import pytest
 from alembic import command
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from tests.test_v5_live_migration import EXPECTED_REVISION
 from sqlalchemy import create_engine, inspect, text
 
 from forwin.models.base import alembic_config, run_migrations
 from tests.postgres import postgres_empty_test_url
+from tests.test_v5_live_migration import EXPECTED_REVISION
 
 FIXTURE = Path(__file__).parent / "fixtures/migrations/0001_v5_baseline.py.gz"
 LEGACY_SHA256 = "e382386a1130878df4ee16280b85e1f4ed7b3c454fde9c38ccf2267cbfe2174f"

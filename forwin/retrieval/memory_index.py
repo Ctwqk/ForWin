@@ -13,8 +13,13 @@ import httpx
 from pydantic import ValidationError
 
 from forwin.protocol.context import MemorySnippet
+
+from .embedding_cache import (
+    cached_embeddings,
+    memory_embedding_identity,
+    validate_vector,
+)
 from .source_identity import embedding_input, text_hash, validate_memories
-from .embedding_cache import cached_embeddings, memory_embedding_identity, validate_vector
 
 logger = logging.getLogger(__name__)
 

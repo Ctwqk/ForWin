@@ -9,8 +9,8 @@ import pytest
 from forwin.book_state import BookStateRepository
 from forwin.book_state.query import BookStateQuery
 from forwin.models import Project
-from forwin.models.project import ArcPlanVersion
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.project import ArcPlanVersion
 from forwin.protocol.book_state import FactNode, WorldEdge, WorldNode
 from forwin.protocol.context import ChapterContextPack, RepairContract, WritingPack
 from forwin.protocol.scene import ScenePlan
@@ -281,9 +281,10 @@ def test_actual_sent_writer_requests_retain_required_identity_and_state(
     monkeypatch, required_session, layout
 ):
     import json
+
     from forwin.planning.contracts import PlanTaskItem
-    from forwin.writer.chapter_writer import ChapterWriter
     from forwin.protocol.scene import SceneOutput
+    from forwin.writer.chapter_writer import ChapterWriter
 
     base = base_context(
         required_session,
@@ -341,8 +342,9 @@ def test_live_scene_pipeline_hydrates_after_breakdown_before_any_scene(
     monkeypatch, required_session, reverse
 ):
     import json
-    from forwin.writer.chapter_writer import ChapterWriter
+
     from forwin.protocol.subworld import ChapterEntryTarget
+    from forwin.writer.chapter_writer import ChapterWriter
 
     base = base_context(
         required_session,
@@ -398,8 +400,9 @@ def test_scene_input_failure_stops_without_single_fallback(
     monkeypatch, required_session, fault
 ):
     import json
-    from forwin.writer.chapter_writer import ChapterWriter
+
     from forwin.retrieval.source_identity import CanonBaselineChanged
+    from forwin.writer.chapter_writer import ChapterWriter
 
     _, pack = build_pack(monkeypatch, required_session, base_context(required_session))
     sent = []
@@ -436,9 +439,9 @@ def test_scene_input_failure_stops_without_single_fallback(
 def test_transported_context_needs_reassembly_only_for_missing_accepted_input(
     monkeypatch, required_session
 ):
-    from forwin.retrieval.requirements import hydrate_requirements, RequiredContextError
+    from forwin.retrieval.requirements import RequiredContextError, hydrate_requirements
 
-    broker, pack = build_pack(
+    _broker, pack = build_pack(
         monkeypatch, required_session, base_context(required_session)
     )
     scenes = [ScenePlan(scene_no=1, objective="核对", involved_entities=["证人23"])]
@@ -465,15 +468,16 @@ def test_repair_owner_hydrates_new_authored_targets_against_original_baseline(
     monkeypatch, required_session, scope
 ):
     import json
+
     import forwin.retrieval.broker_core.broker as module
     from forwin.models.project import ChapterPlan
+    from forwin.planning.contracts import load_plan_task_contract
     from forwin.protocol.review import RepairInstruction
     from forwin.review.repair.plan_patch import (
         RepairPlanPatchRequest,
         RepairPlanPatchService,
     )
     from forwin.state.repo import StateRepository
-    from forwin.planning.contracts import load_plan_task_contract
 
     chapter = ChapterPlan(
         id="chapter",
@@ -550,7 +554,7 @@ def test_repair_owner_hydrates_new_authored_targets_against_original_baseline(
     assert result.context.canon_read_baseline == pack.canon_read_baseline
     assert result.context.required_context_hydrator is not None
     assert result.context.repair_contract.must_not_reveal == ["保密标记"]
-    assert not result.context.context_budget_summary == {}
+    assert result.context.context_budget_summary != {}
     if scope == "chapter_plan":
         assert json.loads(chapter.task_contract_json)[0]["target_name"] == "别名23"
 
@@ -559,11 +563,11 @@ def test_repair_owner_hydrates_new_authored_targets_against_original_baseline(
 def test_repair_refuses_actual_canon_change(monkeypatch, required_session, scope):
     from forwin.models.project import ChapterPlan
     from forwin.protocol.review import RepairInstruction
+    from forwin.retrieval.source_identity import CanonBaselineChanged
     from forwin.review.repair.plan_patch import (
         RepairPlanPatchRequest,
         RepairPlanPatchService,
     )
-    from forwin.retrieval.source_identity import CanonBaselineChanged
     from forwin.state.repo import StateRepository
 
     chapter = ChapterPlan(
@@ -635,8 +639,8 @@ def test_required_refs_accept_real_fact_ids_typed_names_and_colon_node_ids(
 
 
 def test_map_location_hydrates_native_site_state(monkeypatch, required_session):
-    from forwin.protocol.book_state import MapNode
     from forwin.planning.constraints import NarrativeConstraintInfo
+    from forwin.protocol.book_state import MapNode
 
     repo = BookStateRepository(required_session)
     repo.create_map_node(
@@ -809,6 +813,7 @@ def test_writer_hydration_does_not_introduce_config_import_cycle():
             "-c",
             "import forwin.config; import forwin.writer; import forwin.retrieval",
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -851,7 +856,7 @@ def test_required_hub_does_not_promote_unrelated_peripheral_cast(
     )
     assert set(pack.required_entity_ids) == {"person-20", "person-21"}
     assert pack.required_relation_ids == ["bond"]
-    assert set(e.entity_id for e in pack.active_entities) == {"person-20", "person-21"}
+    assert {e.entity_id for e in pack.active_entities} == {"person-20", "person-21"}
 
 
 def test_canonical_id_wins_over_alias_collision_and_prefix(
@@ -905,8 +910,8 @@ def test_query_rejects_ambiguous_alias_instead_of_last_row_wins(required_session
 def test_hydration_preserves_accepted_cognition_author_intent_and_repair(
     monkeypatch, required_session
 ):
-    from forwin.protocol.book_state import CognitionOverlay
     from forwin.planning.world_contracts import ChapterWorldDeltaIntent
+    from forwin.protocol.book_state import CognitionOverlay
 
     BookStateRepository(required_session).upsert_cognition_overlay(
         CognitionOverlay(
@@ -966,7 +971,7 @@ def test_trimmed_transport_does_not_infer_global_alias_uniqueness(
         required_session,
         active_narrative_obligations=[{"subject_refs": ["node:person-20"]}],
     )
-    broker, pack = build_pack(monkeypatch, required_session, base, budget=1)
+    _broker, pack = build_pack(monkeypatch, required_session, base, budget=1)
     assert {e.entity_id for e in pack.active_entities} == {"person-20"}
     restored = ChapterContextPack.model_validate(pack.model_dump())
     scene = ScenePlan(scene_no=1, objective="核对", involved_entities=["同名"])
@@ -1068,10 +1073,10 @@ def test_transient_repair_overlay_rebinds_after_commit(
     monkeypatch, committed_required_session, scope, canon_changed
 ):
     from forwin.models.project import ChapterPlan
+    from forwin.planning.world_contracts import ChapterWorldDeltaIntent
     from forwin.protocol.book_state import CognitionOverlay
     from forwin.protocol.review import RepairInstruction
     from forwin.protocol.subworld import ChapterEntryTarget
-    from forwin.planning.world_contracts import ChapterWorldDeltaIntent
     from forwin.retrieval.requirements import RequiredContextError
     from forwin.retrieval.source_identity import CanonBaselineChanged
     from forwin.review.repair.plan_patch import (

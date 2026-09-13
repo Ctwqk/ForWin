@@ -682,8 +682,8 @@ class GenerationApplicationService:
             continuation_event_id,
             enqueue_continuation,
         )
-        from forwin.models.outbox import OutboxEvent
         from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
+        from forwin.models.outbox import OutboxEvent
 
         frozen = GenerationCompletionResult.from_result(result)
         with self.session_factory.begin() as session:
@@ -721,15 +721,15 @@ class GenerationApplicationService:
             if not error and frozen.failed_chapters:
                 failed_str = ", ".join(str(chapter) for chapter in frozen.failed_chapters)
                 error = f"以下章节生成失败: {failed_str}"
-            changes = dict(
-                status=frozen.status,
-                current_stage=frozen.status,
-                completed_chapters=completed,
-                failed_chapters=frozen.failed_chapters,
-                paused_chapters=frozen.paused_chapters,
-                frozen_artifacts=frozen.frozen_artifacts,
-                error=error,
-            )
+            changes = {
+                "status": frozen.status,
+                "current_stage": frozen.status,
+                "completed_chapters": completed,
+                "failed_chapters": frozen.failed_chapters,
+                "paused_chapters": frozen.paused_chapters,
+                "frozen_artifacts": frozen.frozen_artifacts,
+                "error": error,
+            }
             if frozen.status == "capacity_wait":
                 from datetime import timedelta
 

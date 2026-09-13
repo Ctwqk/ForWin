@@ -6,7 +6,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from tests.review_evidence import bind_frozen_review
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -27,6 +26,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
+from tests.review_evidence import bind_frozen_review
 
 
 def _quality_owner():

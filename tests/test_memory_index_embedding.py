@@ -6,7 +6,12 @@ import time
 import httpx
 import pytest
 
-from forwin.retrieval.memory_index import GatewayTextEmbedder, create_memory_index, HashTextEmbedder, memory_embedding_identity
+from forwin.retrieval.memory_index import (
+    GatewayTextEmbedder,
+    HashTextEmbedder,
+    create_memory_index,
+    memory_embedding_identity,
+)
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
@@ -463,7 +468,7 @@ def test_memory_cache_survives_failed_upsert_restart_and_suffix_identity():
             result = QdrantChapterMemoryIndex(url=":memory:", collection_name="cache", embedder=embedder, client=client, qdrant_models=FakeQdrantModels)
             result.session_factory = sessions
             return result
-        kw = dict(project_id="p", chapter_number=1, title="one", summary="summary", body="unchanged input", canon_commit_id="old")
+        kw = {"project_id": "p", "chapter_number": 1, "title": "one", "summary": "summary", "body": "unchanged input", "canon_commit_id": "old"}
         with pytest.raises(RuntimeError, match="interrupted"):
             index(FailingUpsert()).upsert_chapter(**kw)
         index(FakeQdrantClient()).upsert_chapter(**{**kw, "canon_commit_id": "suffix-new"})
@@ -497,9 +502,10 @@ def test_unknown_embedding_identity_cannot_select_space_or_cache():
 
 def test_cache_key_uses_actual_input_and_preprocessing_and_validates_stored_vectors():
     from sqlalchemy import select
-    from forwin.models.embedding import EmbeddingCacheEntry
+
     from forwin.models.base import get_engine, get_session_factory, init_db
-    from forwin.retrieval.embedding_cache import cached_embeddings, LLM_KB_PREPROCESSING
+    from forwin.models.embedding import EmbeddingCacheEntry
+    from forwin.retrieval.embedding_cache import LLM_KB_PREPROCESSING, cached_embeddings
     from tests.postgres import postgres_test_url
     engine = get_engine(postgres_test_url("cache-validation"))
     init_db(engine)
@@ -530,9 +536,13 @@ def test_cache_key_uses_actual_input_and_preprocessing_and_validates_stored_vect
 @pytest.mark.parametrize("response_model", ["other-same-dimension", None, ""])
 def test_remote_response_model_rejected_before_cache_or_point_write(response_model):
     from sqlalchemy import select
+
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.models.embedding import EmbeddingCacheEntry
-    from forwin.retrieval.memory_index import RemoteTextEmbedder, QdrantChapterMemoryIndex
+    from forwin.retrieval.memory_index import (
+        QdrantChapterMemoryIndex,
+        RemoteTextEmbedder,
+    )
     from tests.postgres import postgres_test_url
 
     def handler(_request):
@@ -567,9 +577,13 @@ def test_remote_response_model_rejected_before_cache_or_point_write(response_mod
 
 def test_remote_matching_response_model_persists_and_reuses_cached_vector():
     from sqlalchemy import select
+
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.models.embedding import EmbeddingCacheEntry
-    from forwin.retrieval.memory_index import RemoteTextEmbedder, QdrantChapterMemoryIndex
+    from forwin.retrieval.memory_index import (
+        QdrantChapterMemoryIndex,
+        RemoteTextEmbedder,
+    )
     from tests.postgres import postgres_test_url
 
     requests = []
@@ -608,7 +622,9 @@ def test_remote_matching_response_model_persists_and_reuses_cached_vector():
 def test_postgres_simultaneous_cache_insert_conflict_returns_winning_vector():
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
+
     from sqlalchemy import event, select
+
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.models.embedding import EmbeddingCacheEntry
     from forwin.retrieval.embedding_cache import cached_embeddings

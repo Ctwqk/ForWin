@@ -10,7 +10,11 @@ from forwin.context.assembler_core.assembler import ChapterContextAssembler
 from forwin.context.providers.genesis_provider import GenesisContextProvider
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
-from forwin.protocol.context import AcceptedCognitionSnapshot, EntitySnapshot, WritingPack
+from forwin.protocol.context import (
+    AcceptedCognitionSnapshot,
+    EntitySnapshot,
+    WritingPack,
+)
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.retrieval.broker_core.broker import RetrievalBroker

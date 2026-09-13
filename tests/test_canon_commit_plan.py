@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from tests.review_evidence import bind_frozen_review
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
@@ -39,6 +38,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+from tests.review_evidence import bind_frozen_review
 
 
 def _approved_changes() -> ApprovedGraphDeltaSet:

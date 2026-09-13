@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from tests.review_evidence import bind_frozen_review
 
 from forwin.canon_quality.chapter_review_form.form_builder import build_form
 from forwin.canon_quality.chapter_review_form.form_schema import ChapterReviewAnswers
 from forwin.narrative_obligations.types import NarrativeObligation
+from tests.review_evidence import bind_frozen_review
 
 BODY = "林青取出父亲的遗书，信中写明铜钥匙是父亲临终托付给她的。"
 
@@ -963,8 +963,8 @@ def test_pulp_optional_stopped_debt_remains_stopped_without_blocking_fresh_admis
     prepared_canon, status
 ):
     from forwin.canon.admission import CanonAdmissionService
-    from forwin.models.project import Project
     from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.models.project import Project
     from forwin.runtime.policy import RuntimePolicy
 
     with prepared_canon.Session.begin() as session:

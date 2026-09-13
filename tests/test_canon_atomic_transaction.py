@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
-from tests.review_evidence import bind_frozen_review
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -68,6 +67,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
+from tests.review_evidence import bind_frozen_review
 
 
 @dataclass(frozen=True)

@@ -524,9 +524,10 @@ def test_zero_retry_budget_still_runs_one_writer_attempt_with_a_narrow_signature
 
 def _terminal_input_error(kind):
     import httpx
-    from forwin.writer.llm.errors import LLMInputLimitError
+
     from forwin.retrieval.requirements import RequiredContextError
     from forwin.retrieval.source_identity import CanonBaselineChanged
+    from forwin.writer.llm.errors import LLMInputLimitError
 
     if kind == "input_limit":
         return LLMInputLimitError(

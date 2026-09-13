@@ -1,6 +1,6 @@
 """Add revision checkpoints and immutable embedding cache; preserve old data."""
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0010_incremental_embeddings"
 down_revision = "0009_knowledge_dependencies"

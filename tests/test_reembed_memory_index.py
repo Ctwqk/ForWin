@@ -27,7 +27,7 @@ def test_reembed_dimension_check_prefers_collection_vector_size() -> None:
 
 
 def test_reembed_project_memories_uses_active_source_despite_newer_unaccepted_draft():
-    from tests.test_projection_checkpoints import _add_project, _add_accepted_chapter
+    from tests.test_projection_checkpoints import _add_accepted_chapter, _add_project
     engine = get_engine(postgres_test_url("reembed_memory_index"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -47,10 +47,10 @@ def test_reembed_project_memories_uses_active_source_despite_newer_unaccepted_dr
 
 
 def test_reembed_populates_new_model_space_at_same_canon_revision_and_retains_old():
-    from tests.test_projection_checkpoints import _add_project, _add_accepted_chapter
-    from forwin.models import Project, ChapterPlan
-    from forwin.retrieval.memory_index import QdrantChapterMemoryIndex, HashTextEmbedder
+    from forwin.models import ChapterPlan, Project
+    from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
     from tests.qdrant import FakeQdrantClient, FakeQdrantModels
+    from tests.test_projection_checkpoints import _add_accepted_chapter, _add_project
     engine = get_engine(postgres_test_url("reembed-new-model"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -92,8 +92,8 @@ def test_reembed_populates_new_model_space_at_same_canon_revision_and_retains_ol
 
 
 def test_reembed_dry_run_filters_and_unknown_active_source_are_not_indexed():
-    from tests.test_projection_checkpoints import _add_project, _add_accepted_chapter
     from forwin.models import ChapterPlan
+    from tests.test_projection_checkpoints import _add_accepted_chapter, _add_project
     engine = get_engine(postgres_test_url("reembed-filter"))
     init_db(engine)
     Session = get_session_factory(engine)

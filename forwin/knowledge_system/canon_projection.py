@@ -21,8 +21,8 @@ from forwin.knowledge_system.checkpoints import (
 )
 from forwin.llm_kb import LLMKnowledgeBaseCompiler
 from forwin.models.canon import CanonCommitRecord
-from forwin.retrieval.source_identity import CanonReadBaseline, active_sources
 from forwin.obsidian import ObsidianExporter
+from forwin.retrieval.source_identity import CanonReadBaseline, active_sources
 
 ComponentRunner = Callable[[ProjectionTarget], Any]
 _MAX_TARGET_CONVERGENCE_PASSES = 8

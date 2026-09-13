@@ -7,8 +7,8 @@ if TYPE_CHECKING:
 
 from forwin.protocol.context import (
     AcceptedCognitionSnapshot,
-    CognitionSource,
     CanonEventEvidence,
+    CognitionSource,
     EntitySnapshot,
     PlotThreadSnapshot,
     RelationSnapshot,
@@ -18,7 +18,6 @@ from forwin.protocol.context import (
 from .projection import BookStateProjection
 from .repository import BookStateRepository
 from .runtime import BookStateRuntime
-
 
 _ENTITY_NODE_TYPES = {
     "character",
@@ -154,7 +153,7 @@ class BookStateQuery:
         for key in sorted(keys):
             view = views.get(key)
 
-            def objects(field):
+            def objects(field, view=view):
                 return {
                     ref: value.model_dump(mode="json")
                     if hasattr(value, "model_dump")

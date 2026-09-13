@@ -878,7 +878,10 @@ def test_failed_memory_projection_restart_reuses_cache_then_checkpoints(projecti
 
 
 def test_public_projection_status_preserves_revision_lag_and_unknown_baseline():
-    from forwin.api_schema.projection import ProjectionStatusResponse, ProjectionRefreshResponse
+    from forwin.api_schema.projection import (
+        ProjectionRefreshResponse,
+        ProjectionStatusResponse,
+    )
     payload = {"project_id": "p", "status": "degraded", "target_book_revision": 5, "components": [
         {"projection_kind": "chapter_memory", "status": "degraded", "target_book_revision": 5, "projected_book_revision": 4, "revision_lag": 1},
         {"projection_kind": "llm_kb", "status": "never", "target_book_revision": 5, "projected_book_revision": None, "revision_lag": None},

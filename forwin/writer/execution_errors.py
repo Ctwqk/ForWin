@@ -5,8 +5,8 @@ from __future__ import annotations
 
 def terminal_input_category(exc: BaseException) -> str:
     # Local imports avoid the config -> Writer -> retrieval -> Canon import cycle.
-    from forwin.retrieval.source_identity import CanonBaselineChanged
     from forwin.retrieval.requirements import RequiredContextError
+    from forwin.retrieval.source_identity import CanonBaselineChanged
 
     current: BaseException | None = exc
     seen: set[int] = set()

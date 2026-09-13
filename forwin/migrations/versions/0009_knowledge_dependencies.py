@@ -1,7 +1,7 @@
 """Keep existing projections unknown until regenerated from proven inputs."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0009_knowledge_dependencies"
 down_revision = "0008_generation_continuation"

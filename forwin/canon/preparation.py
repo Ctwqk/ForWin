@@ -6,9 +6,6 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.review.baseline import candidate_review_evidence
-from forwin.retrieval.source_identity import CanonBaselineChanged
-
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.book_state.extraction.contract import (
@@ -39,6 +36,8 @@ from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.retrieval.source_identity import CanonBaselineChanged
+from forwin.review.baseline import candidate_review_evidence
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore

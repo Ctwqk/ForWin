@@ -51,8 +51,8 @@ class GenerationAutoContinueController:
         session = self.session
         from forwin.generation.continuation_events import (
             GenerationContinuationEvent,
-            continuation_event_id,
             continuation_decision_id,
+            continuation_event_id,
         )
 
         project = session.scalar(
@@ -177,10 +177,10 @@ class GenerationAutoContinueController:
             )
 
         # Maintenance is queried without constructing the LLM/pipeline runtime.
-        from forwin.models.maintenance import PostCanonMaintenanceRun
+        from forwin.canon.identity import active_commit_predicate
         from forwin.maintenance.state import post_canon_barrier_ready
         from forwin.models.canon import CanonCommitRecord
-        from forwin.canon.identity import active_commit_predicate
+        from forwin.models.maintenance import PostCanonMaintenanceRun
 
         commit_id = session.scalar(
             select(CanonCommitRecord.id)

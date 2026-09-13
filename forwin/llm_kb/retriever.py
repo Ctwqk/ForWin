@@ -38,7 +38,11 @@ class LLMKnowledgeBaseRetriever:
         session=None,
         baseline=None,
     ) -> list[dict[str, Any]]:
-        from .source_validation import compiled_manifest, validated_manifest, validated_file
+        from .source_validation import (
+            compiled_manifest,
+            validated_file,
+            validated_manifest,
+        )
         from .vector_index import _collect_project_sections
 
         manifest = (

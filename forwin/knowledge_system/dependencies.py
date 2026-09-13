@@ -1,6 +1,7 @@
 """Semantic dependencies captured from the same inputs used to render a page."""
 
 from __future__ import annotations
+
 import json
 from hashlib import sha256
 
@@ -109,6 +110,7 @@ def _llm_kb_inputs(session, project_id, as_of):
 
     repo = BookStateRepository(session)
     from sqlalchemy import select
+
     from forwin.models.world_contract import (
         ArcWorldContractRow,
         ChapterWorldDeltaIntentRow,

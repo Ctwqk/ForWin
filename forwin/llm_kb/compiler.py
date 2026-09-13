@@ -71,8 +71,11 @@ class LLMKnowledgeBaseCompiler:
         project_root = self.root / project_id
         project_root.mkdir(parents=True, exist_ok=True)
         (project_root / "packs").mkdir(exist_ok=True)
+        from forwin.knowledge_system.dependencies import (
+            llm_kb_inputs,
+            page_dependencies,
+        )
         from forwin.retrieval.source_identity import CanonReadBaseline, text_hash
-        from forwin.knowledge_system.dependencies import page_dependencies, llm_kb_inputs
         baseline = CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
         from forwin.book_state.query import BookStateQuery
         runtime = BookStateQuery(self.session, baseline=baseline).runtime(project_id, as_of_chapter=as_of)

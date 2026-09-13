@@ -56,9 +56,10 @@ class KnowledgePageRepository:
         return sorted(_canonical_rows(rows), key=_page_output_key)
 
     def list_valid_rows(self, project_id, *, runtime, as_of_chapter):
-        from .dependencies import dependencies_valid
         # A read must not supersede or otherwise mutate legacy artifacts.
         from forwin.retrieval.source_identity import fresh_orm_reads
+
+        from .dependencies import dependencies_valid
         with fresh_orm_reads(self.session):
             rows = self._load_rows(project_id, page_type="", include_superseded=False)
         from forwin.models import Project

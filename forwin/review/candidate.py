@@ -19,8 +19,8 @@ from forwin.observability.pipeline_trace import PipelineTraceRecorder
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.review.draft_service import DraftReviewService
 from forwin.retrieval.source_identity import CanonReadBaseline
+from forwin.review.draft_service import DraftReviewService
 
 if TYPE_CHECKING:
     from forwin.review.repair.verification import RepairVerifier

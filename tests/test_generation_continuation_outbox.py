@@ -1,18 +1,18 @@
 """PostgreSQL failure boundaries for the application/worker continuation handoff."""
 
+import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
-import json
-import logging
 
 import pytest
 from sqlalchemy import event, select
 
 from forwin.application.errors import GenerationTaskLeaseLost
 from forwin.application.generation_execution import (
-    execute_pipeline_task,
     _build_task_progress_changes,
+    execute_pipeline_task,
 )
 from forwin.generation.pipeline_core.result import RunResult
 from forwin.generation.task_lease import claim_generation_task
@@ -25,13 +25,16 @@ from forwin.outbox.handlers import build_default_outbox_handlers
 from forwin.outbox.worker import run_one_outbox_event
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
+from tests import test_generation_application_service as application_fixtures
+from tests import test_generation_worker_canon_recovery as recovery_fixtures
 from tests.test_generation_application_service import (
-    session_factory as session_factory,
-    _create_project,
     _command,
+    _create_project,
     _service,
 )
 
+session_factory = application_fixtures.session_factory
+recovery_fixture = recovery_fixtures.recovery_fixture
 
 def setup_parent(factory, *, review=False):
     _create_project(factory)
@@ -191,8 +194,8 @@ def test_two_consumers_share_one_decision(session_factory):
     service, task_id, epoch, result = setup_parent(session_factory)
     finish(service, task_id, epoch, result)
     from forwin.generation.continuation_events import (
-        consume_continuation,
         GenerationContinuationEvent,
+        consume_continuation,
     )
 
     with session_factory() as session:
@@ -297,11 +300,12 @@ def test_stop_racing_consumer_never_claims_success_after_child_created(
     session_factory, action
 ):
     from fastapi import HTTPException
-    from forwin.http.project_support import _mutate_generation_task
+
     from forwin.generation.continuation_events import (
-        consume_continuation,
         GenerationContinuationEvent,
+        consume_continuation,
     )
+    from forwin.http.project_support import _mutate_generation_task
 
     service, task_id, epoch, result = setup_parent(session_factory)
     finish(service, task_id, epoch, result)
@@ -408,7 +412,7 @@ def test_worker_finishing_transaction_failure_remains_recoverable(session_factor
 
 
 def test_task_updater_cannot_publish_terminal_completion(session_factory):
-    service, task_id, epoch, result = setup_parent(session_factory)
+    service, task_id, epoch, _result = setup_parent(session_factory)
     with pytest.raises(ValueError, match="finalization"):
         service._task_updater(worker_id="worker", lease_epoch=epoch)(
             task_id, status="completed"
@@ -417,9 +421,6 @@ def test_task_updater_cannot_publish_terminal_completion(session_factory):
         assert session.get(GenerationTask, task_id).status == "running"
 
 
-from tests.test_generation_worker_canon_recovery import (
-    recovery_fixture as recovery_fixture,
-)
 
 
 @pytest.mark.parametrize("daily", [False, True])
@@ -427,12 +428,12 @@ def test_superseded_maintenance_cannot_block_current_ready_continuation(
     recovery_fixture, daily
 ):
     from forwin.canon.admission import CanonAdmissionService
+    from forwin.generation.continuation_events import (
+        GenerationContinuationEvent,
+        consume_continuation,
+    )
     from forwin.models.canon import CanonCommitRecord
     from forwin.models.maintenance import PostCanonMaintenanceRun
-    from forwin.generation.continuation_events import (
-        consume_continuation,
-        GenerationContinuationEvent,
-    )
 
     fixture = recovery_fixture
     outcome = CanonAdmissionService(session_factory=fixture.Session).commit_plan(
@@ -526,8 +527,10 @@ def test_superseded_maintenance_cannot_block_current_ready_continuation(
 
 def _finish_then_exit(database_url, task_id, epoch, result_json):
     import os
+
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
+
     from forwin.generation.continuation_events import GenerationCompletionResult
 
     factory = sessionmaker(bind=create_engine(database_url), expire_on_commit=False)
@@ -544,7 +547,7 @@ def test_process_exit_after_completion_needs_no_in_memory_callback(session_facto
     import multiprocessing
     from dataclasses import asdict
 
-    service, task_id, epoch, result = setup_parent(session_factory)
+    _service_instance, task_id, epoch, result = setup_parent(session_factory)
     process = multiprocessing.get_context("spawn").Process(
         target=_finish_then_exit,
         args=(
@@ -565,6 +568,7 @@ def test_child_commit_before_ack_failure_replays_without_second_child(
     session_factory, monkeypatch
 ):
     from datetime import timedelta
+
     from forwin.outbox import store
 
     service, task_id, epoch, result = setup_parent(session_factory)
@@ -591,8 +595,8 @@ def test_child_commit_before_ack_failure_replays_without_second_child(
 def test_runtime_outbox_continuation_does_not_boot_pipeline_or_model(
     session_factory, monkeypatch
 ):
-    from forwin.runtime.container import RuntimeContainer
     from forwin.config import InfrastructureConfig
+    from forwin.runtime.container import RuntimeContainer
 
     service, task_id, epoch, result = setup_parent(session_factory)
     finish(service, task_id, epoch, result)
@@ -625,8 +629,9 @@ def test_runtime_outbox_continuation_does_not_boot_pipeline_or_model(
 
 def test_migration_preserves_existing_task_rows_and_null_history():
     from alembic import command
-    from sqlalchemy import create_engine, MetaData, Table, text
+    from sqlalchemy import MetaData, Table, create_engine, text
     from sqlalchemy.exc import IntegrityError
+
     from tests.postgres import postgres_empty_test_url
     from tests.test_v5_live_migration import _alembic_config
 
@@ -673,13 +678,12 @@ def test_migration_preserves_existing_task_rows_and_null_history():
                     "UPDATE generation_tasks SET continuation_parent_task_id='parent' WHERE id='old-one'"
                 )
             )
-        with pytest.raises(IntegrityError):
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "UPDATE generation_tasks SET continuation_parent_task_id='parent' WHERE id='old-two'"
-                    )
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE generation_tasks SET continuation_parent_task_id='parent' WHERE id='old-two'"
                 )
+            )
     finally:
         engine.dispose()
 
@@ -689,6 +693,7 @@ def test_parent_stop_holds_project_lock_until_commit_before_consumer(
     session_factory, action
 ):
     from threading import Event, current_thread
+
     from forwin.http.project_support import _mutate_generation_task
 
     service, task_id, epoch, result = setup_parent(session_factory)
@@ -779,7 +784,7 @@ def test_failed_chapter_diagnostic_is_durable_before_late_display_updates(
 def test_operation_exception_finalizes_without_inventing_a_failed_chapter(
     session_factory,
 ):
-    service, task_id, epoch, result = setup_parent(session_factory)
+    service, task_id, epoch, _result = setup_parent(session_factory)
 
     class Pipeline:
         def close(self):

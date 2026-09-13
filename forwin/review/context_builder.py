@@ -5,8 +5,8 @@ import logging
 from forwin.book_state.query import BookStateQuery
 from forwin.map.repository import MapRepository
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
-from forwin.review.query import ReviewQuery
 from forwin.retrieval.source_identity import CanonReadBaseline
+from forwin.review.query import ReviewQuery
 
 logger = logging.getLogger(__name__)
 

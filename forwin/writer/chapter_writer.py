@@ -407,7 +407,10 @@ class ChapterWriter:
         trace_stage_key: str = "chapter_draft",
     ) -> WriterOutput:
         # Local import avoids config -> writer -> retrieval -> Canon -> config.
-        from forwin.retrieval.requirements import RequiredContextError, hydrate_requirements
+        from forwin.retrieval.requirements import (
+            RequiredContextError,
+            hydrate_requirements,
+        )
         from forwin.retrieval.source_identity import CanonBaselineChanged
 
         logger.info(
@@ -922,7 +925,7 @@ class ChapterWriter:
                 stage_key=label,
                 required_list_models=required_list_models,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if getattr(exc, "error_category", "") == "input_limit":
                 raise
             logger.warning(
@@ -946,7 +949,7 @@ class ChapterWriter:
                         valid_windows.append(window_result)
                     else:
                         return window_result
-                except Exception as repair_exc:  # noqa: BLE001
+                except Exception as repair_exc:
                     if getattr(repair_exc, "error_category", "") == "input_limit":
                         raise
                     last_error = repair_exc
@@ -1144,7 +1147,7 @@ class ChapterWriter:
             for index, item in enumerate(raw_list):
                 try:
                     model_cls.model_validate(item)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     raise ValueError(
                         f"structured extraction field {key!r}[{index}] is invalid: {exc}"
                     ) from exc
@@ -1288,7 +1291,7 @@ class ChapterWriter:
                     )
                     self._validate_required_model_lists(data, required_list_models)
                     return data
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     mark_latest_attempt_parse_failure(
                         self.llm_client,
                         parser_name="ChapterWriter JSON parser",
@@ -1298,7 +1301,7 @@ class ChapterWriter:
                         error=exc,
                     )
                     raise
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if getattr(exc, "error_category", "") == "input_limit":
                     raise
                 last_error = exc
@@ -1363,7 +1366,7 @@ class ChapterWriter:
                         )
                     return raw
                 raise ValueError("preview response body is empty")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if getattr(exc, "error_category", "") == "input_limit":
                     raise
                 if raw:

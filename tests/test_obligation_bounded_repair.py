@@ -21,13 +21,13 @@ from forwin.narrative_obligations.repository import NarrativeObligationRepositor
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.protocol.review import ReviewVerdict
 from forwin.review.repair.service import _review_from_canon_gate_block
+from tests.postgres import postgres_test_url
 from tests.test_canon_repair_stage import (
     _build_pipeline,
+    _isolate_canon_repair_from_hard_floor,  # noqa: F401 - imported pytest autouse fixture
     _one_chapter_arc,
     _writer_output,
-    _isolate_canon_repair_from_hard_floor,  # noqa: F401 - imported pytest autouse fixture
 )
-from tests.postgres import postgres_test_url
 
 
 def _obligation(project_id="p", **changes):
@@ -255,38 +255,38 @@ def test_real_pipeline_due_without_signals_repairs_once_then_fresh_admission(
         value = "fulfilled" if "fulfilled" in body else "unknown"
 
         def answer(v):
-            return dict(
-                value=v,
-                evidence_quote=body[:50],
-                subject_of_quote="铜钥匙",
-                confidence=0.95,
-                explanation="以遗书核对铜钥匙来源及持有人。",
-            )
+            return {
+                "value": v,
+                "evidence_quote": body[:50],
+                "subject_of_quote": "铜钥匙",
+                "confidence": 0.95,
+                "explanation": "以遗书核对铜钥匙来源及持有人。",
+            }
 
         answers = ChapterReviewAnswers.model_validate(
-            dict(
-                project_id=kwargs["project_id"],
-                chapter_number=1,
-                form_schema_version=form.form_schema_version,
-                reviewed_body_sha256=form.reviewed_body_sha256,
-                obligations=[
-                    dict(
-                        id="promise",
-                        addressed=answer(value),
-                        payoff_evidence=answer(value),
-                        subject_matches=answer("true"),
-                        condition_results=[
-                            dict(condition=c, assessment=answer(value))
+            {
+                "project_id": kwargs["project_id"],
+                "chapter_number": 1,
+                "form_schema_version": form.form_schema_version,
+                "reviewed_body_sha256": form.reviewed_body_sha256,
+                "obligations": [
+                    {
+                        "id": "promise",
+                        "addressed": answer(value),
+                        "payoff_evidence": answer(value),
+                        "subject_matches": answer("true"),
+                        "condition_results": [
+                            {"condition": c, "assessment": answer(value)}
                             for c in [
                                 obligation.payoff_test,
                                 *obligation.resolution_conditions,
                             ]
                         ],
-                    )
+                    }
                 ]
                 if active
                 else [],
-            )
+            }
         )
         calls.append(kwargs["draft_id"])
         from forwin.canon_quality.cache import persist_quality_projection
@@ -390,12 +390,13 @@ def test_real_pipeline_due_without_signals_repairs_once_then_fresh_admission(
 
 def test_expired_debt_cannot_rewrite_frozen_history_or_gain_exemption():
     from datetime import timedelta
-    from forwin.models.draft import ChapterDraft
+
     from forwin.models.canon import CanonPublicationProtection
+    from forwin.models.draft import ChapterDraft
     from forwin.publisher_runtime.protection import require_revision_unprotected
     from forwin.review.repair.plan_patch import (
-        RepairPlanPatchService,
         RepairPlanPatchRequest,
+        RepairPlanPatchService,
     )
     from forwin.state.repo import StateRepository
     from tests.test_canon_publisher_jobs import _fixture

@@ -29,8 +29,8 @@ from .execution_errors import (
     error_category_from_attempts,
     is_timeout_like,
     is_transient_llm_like,
-    transient_retry_delay,
     terminal_input_category,
+    transient_retry_delay,
 )
 from .execution_telemetry import WriterExecutionTelemetry, prompt_trace_success_summary
 

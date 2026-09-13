@@ -1,9 +1,10 @@
 from alembic import command
 from sqlalchemy import MetaData, Table, create_engine, text
-from tests.postgres import postgres_empty_test_url
-from tests.test_v5_live_migration import _alembic_config
+
 from forwin.models import Project
 from forwin.models.knowledge import KnowledgeProjectionPageRow
+from tests.postgres import postgres_empty_test_url
+from tests.test_v5_live_migration import _alembic_config
 
 
 def test_0009_preserves_all_old_page_bytes_and_marks_dependencies_unknown():
@@ -14,17 +15,17 @@ def test_0009_preserves_all_old_page_bytes_and_marks_dependencies_unknown():
     try:
         with engine.begin() as connection:
             for model, overrides in [
-                (Project, dict(id="p", title="旧书", premise="旧设定")),
+                (Project, {"id": "p", "title": "旧书", "premise": "旧设定"}),
                 (
                     KnowledgeProjectionPageRow,
-                    dict(
-                        id="page",
-                        project_id="p",
-                        page_key="old",
-                        markdown="# Canon\n旧事实\n# Manual Notes\n保留人工笔记",
-                        content_hash="old-hash",
-                        source_digest="old-digest",
-                    ),
+                    {
+                        "id": "page",
+                        "project_id": "p",
+                        "page_key": "old",
+                        "markdown": "# Canon\n旧事实\n# Manual Notes\n保留人工笔记",
+                        "content_hash": "old-hash",
+                        "source_digest": "old-digest",
+                    },
                 ),
             ]:
                 table = Table(model.__tablename__, MetaData(), autoload_with=connection)

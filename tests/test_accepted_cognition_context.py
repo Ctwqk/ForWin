@@ -22,7 +22,7 @@ from forwin.protocol.book_state import (
     WorldNode,
 )
 from forwin.protocol.context import RepairContract, WritingPack
-from forwin.protocol.scene import ScenePlan, SceneOutput
+from forwin.protocol.scene import SceneOutput, ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.retrieval.broker_core.broker import RetrievalBroker
 from forwin.retrieval.source_identity import CanonReadBaseline

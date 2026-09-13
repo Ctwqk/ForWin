@@ -861,7 +861,7 @@ def _run_repair_loop_for_phase(
                     return current_output, current_review, False
                 if rewritten_output is None:
                     raise RuntimeError("writer-returned-none")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # No revised body exists: the Writer owns transport retries, and
                 # only the outer failure owner may persist after its rollback.
                 error_category = error_category_from_attempts([], exc)

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import pytest
+
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.models import Project
 from forwin.protocol.book_state import WorldNode
-from forwin.retrieval.memory_index import create_memory_index, HashTextEmbedder
-from forwin.retrieval.embedding_cache import memory_embedding_identity, LLM_KB_PREPROCESSING
-from tests.test_knowledge_system_v46 import _session_factory, _create_project
+from forwin.retrieval.embedding_cache import (
+    LLM_KB_PREPROCESSING,
+    memory_embedding_identity,
+)
+from forwin.retrieval.memory_index import HashTextEmbedder, create_memory_index
+from tests.test_knowledge_system_v46 import _create_project, _session_factory
 
 
 def test_book_state_cache_refreshes_same_height_revision():
@@ -77,9 +81,9 @@ def test_unknown_memory_is_not_writer_evidence():
 
 
 def test_stale_pages_are_excluded_before_limit_and_secondary_loader(tmp_path):
-    from forwin.obsidian import ObsidianExporter
     from forwin.knowledge_system.context import KnowledgeContextQuery
     from forwin.models.book_state import WorldNodeRow
+    from forwin.obsidian import ObsidianExporter
     from forwin.retrieval.broker_core import RetrievalBroker
 
     Factory, engine = _session_factory()
@@ -118,9 +122,9 @@ def test_stale_pages_are_excluded_before_limit_and_secondary_loader(tmp_path):
 
 def test_llm_kb_secondary_file_and_search_reject_stale_and_forged_text(tmp_path):
     from forwin.llm_kb import LLMKnowledgeBaseCompiler
+    from forwin.models.book_state import WorldNodeRow
     from forwin.retrieval.broker_core import RetrievalBroker
     from forwin.retrieval.source_identity import CanonReadBaseline
-    from forwin.models.book_state import WorldNodeRow
     from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
     Factory, engine = _session_factory()
@@ -171,9 +175,9 @@ def test_llm_kb_secondary_file_and_search_reject_stale_and_forged_text(tmp_path)
 def _accepted_source(
     session, project_id, number, *, plan=None, version=1, text="正式事实"
 ):
-    from forwin.models import ArcPlanVersion, ChapterPlan, ChapterDraft, ChapterReview
-    from forwin.models.draft import CandidateDraftRecord
+    from forwin.models import ArcPlanVersion, ChapterDraft, ChapterPlan, ChapterReview
     from forwin.models.canon import CanonCommitRecord
+    from forwin.models.draft import CandidateDraftRecord
     from forwin.retrieval.source_identity import text_hash
 
     if plan is None:
@@ -223,17 +227,17 @@ def _accepted_source(
     plan.active_commit_id = commit.id
     session.get(Project, project_id).book_revision += 1
     session.flush()
-    return plan, dict(
-        project_id=project_id,
-        chapter_number=number,
-        title=commit.chapter_title,
-        summary=draft.summary,
-        body=draft.body_text,
-        canon_commit_id=commit.id,
-        candidate_id=candidate.id,
-        draft_id=draft.id,
-        body_hash=candidate.body_hash,
-    )
+    return plan, {
+        "project_id": project_id,
+        "chapter_number": number,
+        "title": commit.chapter_title,
+        "summary": draft.summary,
+        "body": draft.body_text,
+        "canon_commit_id": commit.id,
+        "candidate_id": candidate.id,
+        "draft_id": draft.id,
+        "body_hash": candidate.body_hash,
+    }
 
 
 def test_memory_active_source_refill_late_write_forgery_and_unchanged_history():
@@ -308,12 +312,12 @@ def test_memory_active_source_refill_late_write_forgery_and_unchanged_history():
 def test_broker_rebuilds_whole_actual_writer_messages_once(
     tmp_path, monkeypatch, keep_changing
 ):
+    from forwin.context.providers.state_provider import StateContextProvider
     from forwin.models import ChapterPlan
     from forwin.models.book_state import WorldNodeRow
     from forwin.obsidian import ObsidianExporter
     from forwin.retrieval.broker_core import RetrievalBroker
     from forwin.retrieval.source_identity import CanonBaselineChanged
-    from forwin.context.providers.state_provider import StateContextProvider
     from forwin.state.repo import StateRepository
     from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 
@@ -323,8 +327,8 @@ def test_broker_rebuilds_whole_actual_writer_messages_once(
     try:
         with Factory.begin() as session:
             project_id = _create_project(session)
-            from forwin.runtime.policy_store import ProjectPolicyStore
             from forwin.runtime.policy import RuntimePolicy
+            from forwin.runtime.policy_store import ProjectPolicyStore
 
             ProjectPolicyStore(session).initialize(
                 session.get(Project, project_id), RuntimePolicy.for_profile("standard")
@@ -422,14 +426,14 @@ def test_broker_rebuilds_whole_actual_writer_messages_once(
     ["edge_add", "edge_delete", "state", "map", "visibility", "cognition", "aggregate"],
 )
 def test_semantic_dependencies_cover_membership_and_actual_render_inputs(mutation):
-    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
-    from forwin.book_state.map_graph import MapGraph
     from forwin.book_state.cognition import CognitionView
-    from forwin.protocol.book_state import WorldEdge, MapNode, CognitionOverlay
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
     from forwin.knowledge_system.dependencies import (
-        page_dependencies,
         dependencies_valid,
+        page_dependencies,
     )
+    from forwin.protocol.book_state import CognitionOverlay, MapNode, WorldEdge
 
     a = WorldNode(
         id="a", project_id="p", node_type="character", name="A", state={"place": "old"}
@@ -488,8 +492,8 @@ def test_projection_render_uses_runtime_state_not_stale_node_copy(
     tmp_path, monkeypatch
 ):
     from forwin.book_state.projection import BookStateProjection
-    from forwin.obsidian import ObsidianExporter
     from forwin.llm_kb import LLMKnowledgeBaseCompiler
+    from forwin.obsidian import ObsidianExporter
     from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
     Factory, engine = _session_factory()
@@ -538,8 +542,8 @@ def test_projection_render_uses_runtime_state_not_stale_node_copy(
 
 
 def test_memory_refill_is_bounded_and_embeds_query_once():
-    from forwin.retrieval.source_identity import CanonReadBaseline
     from forwin.retrieval.memory_index import HashTextEmbedder, QdrantChapterMemoryIndex
+    from forwin.retrieval.source_identity import CanonReadBaseline
     from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
     class CountingEmbedder(HashTextEmbedder):
@@ -652,6 +656,7 @@ def test_llm_kb_validated_search_reconstructs_payload_and_checks_file_bytes(tmp_
 @pytest.mark.parametrize("fail", [False, True])
 def test_scoped_fresh_reads_preserve_autoflush_and_remove_listener(fail):
     from sqlalchemy import select
+
     from forwin.models.book_state import WorldNodeRow
     from forwin.retrieval.source_identity import fresh_orm_reads
 
@@ -777,8 +782,8 @@ def test_memory_projection_producer_supplies_active_immutable_source_ids():
 
 @pytest.mark.parametrize('pending_title', [False, True])
 def test_obsidian_index_renders_the_same_fresh_project_title_it_certifies(tmp_path, pending_title):
-    from forwin.obsidian import ObsidianExporter
     from forwin.knowledge_system.page_repository import KnowledgePageRepository
+    from forwin.obsidian import ObsidianExporter
     from forwin.retrieval.broker_core import RetrievalBroker
     from forwin.retrieval.source_identity import CanonReadBaseline
 
@@ -821,12 +826,12 @@ def test_llm_kb_late_compiler_preserves_current_points_and_manifest(tmp_path, mo
     from forwin.llm_kb.vector_index import LLMKBVectorIndex
     from forwin.models.book_state import WorldNodeRow
     from forwin.retrieval.memory_index import HashTextEmbedder
-    from forwin.retrieval.source_identity import CanonReadBaseline, CanonBaselineChanged
+    from forwin.retrieval.source_identity import CanonBaselineChanged, CanonReadBaseline
     from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
     Factory, engine = _session_factory()
     client = FakeQdrantClient()
-    index_options = dict(qdrant_client=client, qdrant_models=FakeQdrantModels, qdrant_collection='late-kb')
+    index_options = {"qdrant_client": client, "qdrant_models": FakeQdrantModels, "qdrant_collection": 'late-kb'}
     created = []
     current_result = []
     try:

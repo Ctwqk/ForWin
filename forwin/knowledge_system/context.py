@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
-from forwin.retrieval.source_identity import CanonReadBaseline
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.visibility import node_page_visibility
 from forwin.models.canon_quality import CanonQualitySignalRow
@@ -20,6 +19,7 @@ from forwin.protocol.world_model import (
     WorldModelConflict,
     WorldModelPage,
 )
+from forwin.retrieval.source_identity import CanonReadBaseline
 
 from .page_repository import KnowledgePageRepository
 from .store import load_json

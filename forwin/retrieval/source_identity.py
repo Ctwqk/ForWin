@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from contextlib import contextmanager
+from dataclasses import dataclass
 from hashlib import sha256
-from sqlalchemy import select, event
-from forwin.models import Project, ChapterPlan, ChapterDraft
+
+from sqlalchemy import event, select
+
+from forwin.models import ChapterDraft, ChapterPlan, Project
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.protocol.context import MemorySnippet

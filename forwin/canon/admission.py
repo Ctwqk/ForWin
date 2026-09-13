@@ -452,8 +452,8 @@ class CanonAdmissionService:
             raise CanonStaleVersion("candidate project changed")
         if int(candidate.chapter_number or 0) != plan.chapter_number:
             raise CanonStaleVersion("candidate chapter changed")
-        from forwin.review.baseline import candidate_review_evidence
         from forwin.retrieval.source_identity import CanonBaselineChanged
+        from forwin.review.baseline import candidate_review_evidence
 
         try:
             evidence = candidate_review_evidence(session, candidate, for_update=True)

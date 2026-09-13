@@ -41,7 +41,6 @@ class ChapterContextAssembler:
         *, baseline=None,
     ) -> ChapterContextPack:
         from forwin.context.request import ContextDraft, ContextRequest
-
         from forwin.retrieval.source_identity import CanonReadBaseline
         session = getattr(repo, "session", None)
         if session is not None:

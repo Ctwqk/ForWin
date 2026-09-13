@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
-from forwin.knowledge_system.dependencies import page_dependencies
-from forwin.models.base import get_engine, get_session_factory
-from forwin.models.project import Project
-from forwin.models.knowledge import KnowledgeProjectionPageRow
-from tests.postgres import postgres_test_url
-from sqlalchemy import select
 from forwin.knowledge_system.context import KnowledgeContextQuery
+from forwin.knowledge_system.dependencies import page_dependencies
 from forwin.knowledge_system.store import KnowledgeProjectionStore
+from forwin.models.base import get_engine, get_session_factory
+from forwin.models.knowledge import KnowledgeProjectionPageRow
+from forwin.models.project import Project
 from forwin.obsidian.exporter import ObsidianExporter
 from forwin.obsidian.frontmatter import render_page
 from forwin.protocol.book_state import MapNode, WorldNode
@@ -33,6 +31,7 @@ from forwin.writer.prompt_core.builders import (
     build_scene_stitch_prompt,
     build_single_chapter_draft_prompt,
 )
+from tests.postgres import postgres_test_url
 
 
 def _context() -> ChapterContextPack:

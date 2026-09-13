@@ -1,7 +1,9 @@
 """Validate a compiled file set against current Canon and its exact file bytes."""
 
 from __future__ import annotations
+
 import json
+
 from forwin.book_state.query import BookStateQuery
 from forwin.knowledge_system.dependencies import dependencies_valid, llm_kb_inputs
 from forwin.retrieval.source_identity import text_hash

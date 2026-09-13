@@ -50,4 +50,8 @@
 
 当前尚待新 smoke20，再通过独立全新离线 L100 和结局审读。使用固定标准策略、独立存储和同源码运行角色；记录实际模型、完整策略、项目/任务身份、停止原因及正文审读。旧失败书、程序替身返回和 accepted 行数不能替代新样本结果。
 
+首个新 smoke 项目为 `5d59b0dce434406a8c6a163f501d7c81`（清河旧账），总目标100章，本次停在20章，每批2章以检验持久续跑。冻结策略版本2：standard、Writer `env-minimax/MiniMax-M2.7`、2500/2800/3200字、无人工检查点、Spark委托、原有限修复预算3；`soak_test/isolated=true`，没有发布角色或账号。六个 Genesis 阶段均经正式 MCP 生成及锁定，未手工修订；实际 Genesis 路由为 `gpt-5.3-codex-spark/codex_bridge`，不能根据 Writer 配置把它记作 MiniMax。
+
+`64603f8` 首次 start-writing 返回409，尚未创建章节任务，MCP 确认仍为 `genesis_ready`、active_count=0。保存的最终 Genesis revision `6de822b3894f4906b9fd5770f29afbca` 经原函数重放，精确复现孤立 ID `loc_304fa7e15e39573d`，对应封存账房库室。它有一条 sealed、hidden、单向且带许可引用的明确通道；结构弱连通性帮助函数排除了 sealed 边，错误地把“不可通行”判成“没有连接”。修复进入计划 Task8Q1，保持实际封闭和人物可见性限制。原样本及失败身份保留；源码改变后必须重新冻结完整运行角色，不能把后续结果记成 `64603f8` 通过。
+
 改动交付目标仍为 `origin/for-review`。不自动合并 master、不修旧生产作品、不公开发布。生产替换须满足原路线图的资格并走既定 150 同步路径；这份隔离镜像证据本身不意味着生产已更新。

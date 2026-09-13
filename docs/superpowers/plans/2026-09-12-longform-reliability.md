@@ -160,5 +160,13 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 - [x] 冻结集成源码，跑 `.venv/bin/python -m pytest -q`、compileall、修改文件 F/E9、source closure guard、diff检查和前向迁移回归；全量 Ruff记录新增问题，不能隐瞒既有基线。完整运行在 `64603f8` 为3693 passed/4 skipped，随后仅测试补强的 `413d638` 有162项相关回归及2项提交后对照；生产源码/锁未变。精确证据见[实施记录](../../operations/longform-reliability-2026-09-12.md)。
 - [x] 用 fresh reviewer检查完整diff的规格覆盖、原子性、并发、失效读路径、实际prompt终点；修复并定向复核。2026-09-13 对 `07524a8..413d638` 的独立复核通过，原P1与工程QA阻塞关闭，无新增问题。
 - [x] 终审补强：原始 Canon 评审基线写入现有 ChapterReview.review_meta_json，沿 candidate/review 身份冻结到提交计划；实际评审结束、fresh approval、preparation/admission 均不得改用新版本证明旧评审。缺失旧证明须重新评审，已接纳历史读取与完整后缀修订边界保留。通过真实独立会话审批及评审期间 Canon 变化回归，并收敛全量测试、静态检查和既有模块边界。
-- [ ] 更新已完成/待实跑边界，按已有授权提交并push `origin/for-review`，fetch验证0/0。生产同步前仍须完整镜像/旧库前向迁移验证，不能跨越既有未通过资格。
+- [x] 更新已完成/待实跑边界，按已有授权提交并push `origin/for-review`，fetch验证0/0（`eec7589`）。生产同步前仍须完整镜像/旧库前向迁移验证，不能跨越既有未通过资格。
 - [ ] 继续现有阶段候选的smoke20→独立L100→结局审读；如凭据/配额尚无变化，保留明确阻塞和源码身份，不创建定时任务、不假装通过。
+
+### Task 8Q1：真实 smoke 暴露的地图结构校验阻塞
+
+冻结样本 `64603f8` 在 Genesis 六阶段锁定后，start-writing 409：封存账房库室的唯一通道状态为 sealed，结构校验先排除了通道，再判定库室孤立。新发现独立于已经完成的终审修复；不改样本文案、不开通封闭路线、不把失败记录改成通过。
+
+- [ ] 在既有 validator 内区分 authored 拓扑与实际可通行图，保留所有路线属性；真正没有连接的地点仍拒绝，程序化地图原规则保留。
+- [ ] 先复现再修复，覆盖真实导入 owner、封闭/阻断/毁坏/隐藏与单向路线、真正孤立回滚、人物寻路与可见性限制；跑相关地图/Genesis/移动检查回归并独立审查。
+- [ ] 以新提交完整重建并核验全部角色镜像及同源 bridge，重新冻结候选身份后恢复同一尚无章节的样本；分别保留失败和新运行身份，不能拼接成旧源码通过。

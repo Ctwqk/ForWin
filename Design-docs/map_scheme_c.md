@@ -330,7 +330,7 @@ Reviewer：
 - required anchors 全部存在。
 - required anchors 都有 `subworld_id` 和 `region_id`。
 - 每个 region 至少有 entry/hub/boundary 基础节点。
-- subworld 内主图连通。
+- 程序化生成的 subworld 内主图连通。Genesis 已声明路线的导入另核验全书结构弱连通性，包含隐藏和封闭路线；这不证明人物当前可通行，详见 `CURRENT_DESIGN.md` 的现行导入契约。
 - hidden route 不能成为唯一主路径。
 - blocked edge 不能切断主线可达性。
 - `distance / travel_time / travel_cost / risk_level / narrative_cost` 非负。

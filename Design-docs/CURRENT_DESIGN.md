@@ -2,7 +2,7 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-2026-09-12 更新依据：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。本页按职责记录当前契约；工程审查、完整镜像及真实 smoke20 / 全新离线 L100 的完成情况以执行计划和验证记录为准，彼此不能替代。
+2026-09-13 更新依据：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。本页按职责记录当前契约；工程审查、完整镜像及真实 smoke20 / 全新离线 L100 的完成情况见[本轮验证记录](../docs/operations/longform-reliability-2026-09-12.md)，彼此不能替代。
 
 既有范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
@@ -170,6 +170,8 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 普通续写与历史修订现在复用 ChapterReviewForm 的主体及逐项兑现条件审阅，表单/答案保存实际审阅正文 SHA-256，quality cache v2 保留原表单、答案和校验报告。不可变义务证据计划绑定完整合同、候选、draft、正文及审阅身份；Canon preparation 冻结依赖，admission 在项目/义务锁内复核，并把义务激活、兑现、来源审计与 active Canon 指针同事务写入。接纳后仅读取已提交兑现结果和处理到期，不再以关键词清账。pulp 有适用义务时会调用现有 ChapterReviewForm 获取真实语义证据（可能增加模型调用），无适用义务仍走确定性低成本路径。pulp 表单仅按声明策略保护强制项，非强制 P1 到期项可裁剪，不挤占 P0 证据预算；缓存区分义务策略。未到期未知维持 active；到期/终章要求沿用现有 strict/pulp 策略，历史修订保留完整后缀及六维覆盖。旧 resolved 不重置、不补造证据。
 
 事务外的 CanonPreparationService 收集 review/eligibility、质量分析、实体计划及 BookState extraction 结果，冻结 CanonCommitPlan。共享 QualityAnalysisRunRow 用于避免 draft review 与 Canon 准备重复执行同一候选的 primary quality 分析。
+
+原始语义评审开始前固定 project、book_revision 和 N−1 基线，评审结束后复核，并将证明保存到现有 ChapterReview.review_meta_json。候选快照及不可变提交计划绑定同一 review 身份和证明，人工审批的新会话、preparation 与锁内 admission 不得重新读取当前版本来替旧评审背书。证明缺失、格式错误或基线变化时拒绝新的接纳；旧待审记录仍可读取，但需要重新评审。已接纳结果的幂等读取及历史修订的完整后缀证据保留各自边界，不给旧记录补造当前基线。
 
 事务内的 commit_plan 锁定项目、章节和 candidate，复核版本、正文/计划指纹、实体别名和 worker lease 等前提，再原子提交：
 

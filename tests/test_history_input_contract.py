@@ -12,6 +12,7 @@ from forwin.knowledge_system.context import KnowledgeContextQuery
 from forwin.knowledge_system.dependencies import page_dependencies
 from forwin.knowledge_system.store import KnowledgeProjectionStore
 from forwin.models.base import get_engine, get_session_factory
+from forwin.models.book_state import WorldNodeRow
 from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.models.project import Project
 from forwin.obsidian.exporter import ObsidianExporter
@@ -358,13 +359,42 @@ def test_page_selection_excludes_future_state_before_limit(history_session) -> N
 
 
 def test_missing_canonical_node_cannot_make_projection_visible(history_session) -> None:
-    page = _world_page().model_copy(update={
+    page = _world_page(node_id="missing", forwin_id="character:missing").model_copy(update={
+        "page_key": "character:missing",
         "canonical_source_type": "book_state_node", "canonical_source_id": "missing",
     })
     query = _query_pages(history_session, [page])
+    stored = history_session.scalar(select(KnowledgeProjectionPageRow))
+    assert stored.canonical_source_id == "missing"
+    assert history_session.get(WorldNodeRow, "missing") is None
+    assert history_session.get(WorldNodeRow, "captain") is not None
     world = query.build(project_id="history-contract", chapter_number=8)
+    assert world.relevant_world_pages == []
     for messages in _prompts(_context().model_copy(update={"world_context": world})).values():
         assert "钥匙已放入封存袋。" not in "\n".join(item["content"] for item in messages)
+
+
+def test_existing_canonical_node_with_unknown_page_proof_is_not_writer_evidence(history_session) -> None:
+    page = _world_page()
+    query = _query_pages(history_session, [page])
+    stored = history_session.scalar(select(KnowledgeProjectionPageRow))
+    assert stored.canonical_source_id == "captain"
+    assert history_session.get(WorldNodeRow, "captain") is not None
+    original = (stored.markdown, stored.frontmatter_json, stored.content_hash)
+    proven = query.build(project_id="history-contract", chapter_number=8)
+    assert [item.page_key for item in proven.relevant_world_pages] == [page.page_key]
+    for messages in _prompts(_context().model_copy(update={"world_context": proven})).values():
+        assert "钥匙已放入封存袋。" in "\n".join(item["content"] for item in messages)
+
+    # The Canon source still exists; only the page's historical proof is unknown.
+    stored.dependency_manifest_json = "{}"
+    history_session.commit()
+    unknown = query.build(project_id="history-contract", chapter_number=8)
+    assert unknown.relevant_world_pages == []
+    for messages in _prompts(_context().model_copy(update={"world_context": unknown})).values():
+        assert "钥匙已放入封存袋。" not in "\n".join(item["content"] for item in messages)
+    history_session.refresh(stored)
+    assert (stored.markdown, stored.frontmatter_json, stored.content_hash) == original
 
 
 @pytest.mark.parametrize("hidden", [True, False])

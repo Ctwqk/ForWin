@@ -169,4 +169,15 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 
 - [x] 在既有 validator 内区分 authored 拓扑与实际可通行图，保留所有路线属性；真正没有连接的地点仍拒绝，程序化地图原规则保留。实现 `7f67eb6`。
 - [x] 先复现再修复，覆盖真实导入 owner、封闭/阻断/毁坏/隐藏与单向路线、真正孤立回滚、人物寻路与可见性限制；284项相关回归及独立审查通过。测试格式清理 `e49b06e` 另有65项回归和独立复核。
-- [x] 以新提交完整重建并核验全部角色镜像及同源 bridge，重新跑全量 QA，冻结候选身份后创建全新 smoke 项目。`7f67eb6` 全量3710 passed/4 skipped；同源运行角色健康，新项目 `7732e4a8a72f4f4f97aaa25f08751d35` 正在准备 Genesis，尚未计作 smoke20 通过。原失败项目保留作对照，不计入正式资格。
+- [x] 以新提交完整重建并核验全部角色镜像及同源 bridge，重新跑全量 QA，冻结候选身份后创建全新 smoke 项目。`7f67eb6` 全量3710 passed/4 skipped；同源运行角色健康，新项目 `7732e4a8a72f4f4f97aaa25f08751d35` 在 Genesis 暴露 Task8Q2 问题，尚未计作 smoke20 通过。原失败项目保留作对照，不计入正式资格。
+
+### Task 8Q2：Genesis 模型失败不能保存为成功模板
+
+新 smoke 的 story_engine 在 Spark 额度耗尽、Kimi/DeepSeek 余额不足后，8次实际尝试均失败，却以 deterministic_scaffold 保存 generated revision，将既定主角陆砚替换为默认“抉择”。停在未锁定的写前阶段，保留项目和失败 trace，不以人工改名把这个样本改成通过。
+
+**Scope:** 复用 `forwin/genesis/llm.py` 的调用失败边界；以明确模型失败类型接入现有 application Genesis 生成/修订入口；在既有 writer/llm 错误及 adapter 响应边界区分 provider 解析/可用性失败与普通程序异常，返回可识别错误并保留原因和原诊断。六个正式阶段及其 refine/refine_item 统一处理缺凭据、传输与解析失败；不改变内部 `launch_arc_*` 物化策略、正常响应归一化、初始项目模板或模型路由。无新 schema、验证器、重试层或凭据修改。
+
+- [x] 先在函数及真实 workspace/application 入口复现非 Map 模型失败仍生成新 revision；覆盖生成、完整/定向修订及已锁定的旧阶段保留。
+- [x] 失败不创建 generated/edited revision、成功事件或替代内容，保留原 active pointer、pack、锁状态和旧 trace；错误保留原因，不能吞掉非模型程序错误。沿用现有模型重试，不额外重试。
+- [x] 原“非 Map 保留失败回退”测试按修订契约替换；成功模型、创建空项目与内部物化对照保留。显式模型替身只用于测试准备，不以替身证明真实模型可用。
+- [x] 完成相关回归、全量 QA、静态检查与独立审查。修复 `e8d8600`、`763341a` 经699项相关回归和独立复核；最终全量3990 passed/4 skipped，静态新增问题0。完整镜像及同源隔离角色核验通过，本轮代码与设计/运行记录交付 `origin/for-review`。真实 smoke/L100 仍按 Task8 待验收；Spark 可用前不继续调用生成，不购买额度或静默切换冻结模型。

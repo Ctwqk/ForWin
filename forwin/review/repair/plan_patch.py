@@ -150,41 +150,50 @@ def countdown_repair_rule_anchors(must_fix: list[str]) -> list[str]:
             r"回溯旧倒计时为\s*([^，。,；;]+).*?([0-9]+)\s*分钟级别",
             item,
         )
-        if stale_match:
-            raw_target = str(stale_match.group(1) or "").strip()
-            latest = int(stale_match.group(2))
+        stale_retrospective = bool(stale_match) or any(
+            marker in item for marker in ("旧倒计时", "旧计划", "旧摘要", "回溯")
+        )
+        if stale_retrospective:
+            bound = (
+                f"同一倒计时必须小于等于{int(stale_match.group(2))}分钟；"
+                if stale_match
+                else "同一倒计时的当前上界以本条诊断给出的 canon ledger 数值为准；"
+            )
             anchors.append(
-                "repair countdown hard constraint: 旧计划/旧摘要时间不得写成前文事实；"
-                f"{raw_target}必须删除，或明确改成公开伪数据/误导信息，"
-                f"同一记忆重置周期只能写小于等于{latest}分钟。"
-                "不得写“系统日志原本还有三天/七天/几小时”来解释当前倒计时。"
+                f"repair countdown hard constraint: 依据本次修复合同的倒计时诊断：{item}；"
+                "保持该诊断中的具体倒计时身份和数值证据；"
+                "旧计划/旧摘要时间不得写成前文正式事实；"
+                f"{bound}"
+                "候选修复不得改写 accepted canon ledger；"
+                "只有本条诊断已给出发生在数值变化之前的正文证据，且证据明确同一倒计时 reset "
+                "或明确命名新的 branch clock，才能区分为合法的新周期或支线时钟。"
             )
             continue
         if not any(
-            marker in item for marker in ("回升", "延长", "non_monotonic", "单调")
+            marker in item
+            for marker in (
+                "回升",
+                "延长",
+                "non_monotonic",
+                "non-monotonic",
+                "单调",
+            )
         ):
             continue
         match = re.search(r"从\s*([0-9]+)\s*分钟(?:回升|延长)到\s*([^，。,；;]+)", item)
-        if match:
-            previous = int(match.group(1))
-            raw_target = str(match.group(2) or "").strip()
-            target_digit = re.search(r"([0-9]+)\s*分钟", raw_target)
-            target_constraint = (
-                f"{int(target_digit.group(1))}分钟必须改成小于等于{previous}分钟"
-                if target_digit
-                else f"{raw_target}必须删除或改为小于等于{previous}分钟"
-            )
-            anchors.append(
-                "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
-                f"{target_constraint}，"
-                "并同步修正文中所有相关倒计时、角色判断和摘要。除非正文明确 reset 或 branch clock，"
-                "不得在更小剩余时间之后再写更大的剩余时间。"
-            )
-            continue
+        bound = (
+            f"同一倒计时的当前上界为{int(match.group(1))}分钟；"
+            if match
+            else "同一倒计时的当前上界以本条诊断给出的 canon ledger 数值为准；"
+        )
         anchors.append(
-            "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
-            "重写前先列出正文所有剩余时间，按出现顺序改成不增加序列。除非正文明确 reset 或 branch clock，"
-            "不得在更小剩余时间之后再写更大的剩余时间。"
+            f"repair countdown hard constraint: 依据本次修复合同的倒计时诊断：{item}；"
+            "保持该诊断中的具体倒计时身份和数值证据；"
+            f"{bound}"
+            "同一倒计时在本章全文不得无证据回升或延长；"
+            "候选修复不得改写 accepted canon ledger；"
+            "只有本条诊断已给出发生在数值变化之前的正文证据，且证据明确同一倒计时 reset "
+            "或明确命名新的 branch clock，才能区分为合法的新周期或支线时钟。"
         )
     return anchors
 

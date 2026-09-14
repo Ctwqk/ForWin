@@ -15,6 +15,7 @@ from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePla
 from forwin.protocol.review import RepairInstruction
 from forwin.retrieval import RetrievalBroker
 from forwin.state.repo import StateRepository
+from forwin.writer import prompt_core
 from tests.test_candidate_review_owner import database as _shared_database
 
 database = _shared_database
@@ -47,7 +48,15 @@ def _owner():
     return module, owner
 
 
-def _request(module, session, chapter, *, scope="draft", design_patch=None):
+def _request(
+    module,
+    session,
+    chapter,
+    *,
+    scope="draft",
+    design_patch=None,
+    must_fix=None,
+):
     return module.RepairPlanPatchRequest(
         session=session,
         repo=StateRepository(session),
@@ -68,9 +77,16 @@ def _request(module, session, chapter, *, scope="draft", design_patch=None):
         instruction=RepairInstruction(
             repair_scope=scope,
             failure_type="continuity",
-            must_fix=["补充证据"],
+            must_fix=must_fix if must_fix is not None else ["补充证据"],
             design_patch=design_patch or {"question_hook": "Where?"},
         ),
+    )
+
+
+def _writer_prompt(context):
+    return "\n".join(
+        item["content"]
+        for item in prompt_core.build_single_chapter_draft_prompt(context)
     )
 
 
@@ -183,3 +199,97 @@ def test_accepted_plan_patch_refuses_before_mutation(database):
         owner.apply(_request(module, session, chapter, scope="chapter_plan"))
     assert chapter.experience_plan_json == "{}"
     assert chapter.title == "誓约"
+
+
+def test_stale_countdown_repair_preserves_supplied_identity_and_bound_in_writer_input(
+    database,
+):
+    session, chapter = database
+    module, owner = _owner()
+    diagnostic = (
+        "港口潮汐倒计时 tide_gate 回溯旧倒计时为180分钟，"
+        "accepted canon 当前为45分钟级别。"
+    )
+
+    result = owner.apply(
+        _request(module, session, chapter, must_fix=[diagnostic])
+    )
+
+    anchors = result.context.chapter_experience_plan.rule_anchors
+    assert len(anchors) == 1
+    assert "tide_gate" in anchors[0]
+    assert "180分钟" in anchors[0]
+    assert "45分钟" in anchors[0]
+    assert "小于等于45分钟" in anchors[0]
+    prompt = _writer_prompt(result.context)
+    assert diagnostic in prompt
+    assert anchors[0] in prompt
+    for invented_story_fact in ("记忆重置", "系统日志", "公开伪数据", "误导信息"):
+        assert invented_story_fact not in anchors[0]
+        assert invented_story_fact not in prompt
+
+
+def test_non_monotonic_countdown_repairs_keep_multiple_clocks_separate(database):
+    session, chapter = database
+    module, owner = _owner()
+    diagnostics = [
+        "药效倒计时 med-A 从20分钟回升到45分钟，未给出 reset 或 branch clock 的正文证据。",
+        "设备电量倒计时 battery-B 从12分钟延长到30分钟，未给出 reset 或 branch clock 的正文证据。",
+    ]
+
+    result = owner.apply(
+        _request(module, session, chapter, must_fix=diagnostics)
+    )
+
+    anchors = result.context.chapter_experience_plan.rule_anchors
+    assert len(anchors) == 2
+    med_anchor = next(item for item in anchors if "med-A" in item)
+    battery_anchor = next(item for item in anchors if "battery-B" in item)
+    assert "battery-B" not in med_anchor
+    assert "med-A" not in battery_anchor
+    assert "20分钟" in med_anchor and "45分钟" in med_anchor
+    assert "12分钟" in battery_anchor and "30分钟" in battery_anchor
+    for anchor in anchors:
+        assert "不得无证据回升或延长" in anchor
+        assert "同一倒计时" in anchor
+        assert "正文证据" in anchor
+
+
+def test_countdown_repair_preserves_supplied_branch_evidence_without_rewriting_canon(
+    database,
+):
+    session, chapter = database
+    module, owner = _owner()
+    diagnostic = (
+        "港口潮汐倒计时 tide_gate 从18分钟回升到120分钟；"
+        "正文已明确 tide_gate 切换到支线潮窗 branch clock tide_backup，"
+        "并在数值变化前给出观测站证据。"
+    )
+
+    result = owner.apply(
+        _request(module, session, chapter, must_fix=[diagnostic])
+    )
+
+    anchor = result.context.chapter_experience_plan.rule_anchors[0]
+    assert diagnostic in anchor
+    assert "tide_gate" in anchor and "tide_backup" in anchor
+    assert "本条诊断已给出" in anchor
+    assert "同一倒计时" in anchor
+    assert "候选修复不得改写 accepted canon ledger" in anchor
+    assert "120分钟必须改成小于等于18分钟" not in anchor
+
+
+def test_non_countdown_repair_adds_no_countdown_rule(database):
+    session, chapter = database
+    module, owner = _owner()
+
+    result = owner.apply(
+        _request(
+            module,
+            session,
+            chapter,
+            must_fix=["港口潮汐窗口需要加重气味描写。"],
+        )
+    )
+
+    assert result.context.chapter_experience_plan.rule_anchors == []

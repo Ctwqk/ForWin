@@ -410,6 +410,7 @@ def _structural_patch_debt_sections(items: list[dict]) -> list[ConstraintSection
     if not items:
         return []
     lines = ["  · 结构性计划补丁债务，后续章节必须偿还对应 payoff_tests："]
+    required_countdown_lines: list[str] = []
     for item in items[:6]:
         patch_id = str(item.get("patch_id") or "").strip()
         scope = str(item.get("scope") or "").strip()
@@ -422,18 +423,39 @@ def _structural_patch_debt_sections(items: list[dict]) -> list[ConstraintSection
             raw for raw in item.get("writer_context_injections", []) or [] if isinstance(raw, dict)
         ]
         instruction = ""
-        preserve_instruction = False
+        is_countdown_constraint = False
         if injections:
             instruction = str(injections[0].get("instruction") or "").strip()
-            preserve_instruction = (
+            is_countdown_constraint = (
                 str(injections[0].get("type") or "") == "countdown_constraint"
             )
-        rendered_instruction = instruction if preserve_instruction else instruction[:140]
         payoff = "；".join(payoff_tests[:3])
-        lines.append(
-            f"    · {scope} patch {patch_id}：{rendered_instruction}；payoff_tests={payoff[:180]}"
+        if is_countdown_constraint:
+            if instruction:
+                required_countdown_lines.append(f"    · {instruction}")
+            lines.append(
+                f"    · {scope} patch {patch_id}；payoff_tests={payoff[:180]}"
+            )
+        else:
+            lines.append(
+                f"    · {scope} patch {patch_id}：{instruction[:140]}；payoff_tests={payoff[:180]}"
+            )
+    sections: list[ConstraintSection] = []
+    if required_countdown_lines:
+        sections.append(
+            ConstraintSection(
+                key="structural_countdown_patch_debt",
+                priority=54,
+                must_inject=True,
+                text="\n".join(
+                    [
+                        "  · 必须完整执行的倒计时计划补丁约束：",
+                        *required_countdown_lines,
+                    ]
+                ),
+            )
         )
-    return [
+    sections.append(
         ConstraintSection(
             key="structural_patch_debt",
             priority=55,
@@ -441,7 +463,8 @@ def _structural_patch_debt_sections(items: list[dict]) -> list[ConstraintSection
             text="\n".join(lines),
             max_chars=1200,
         )
-    ]
+    )
+    return sections
 
 
 def _suppressed_prompt_constraint_keys(quality: dict) -> set[str]:

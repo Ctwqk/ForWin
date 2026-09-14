@@ -394,6 +394,66 @@ def test_future_plan_countdown_patch_keeps_long_identity_and_contract_in_writer(
         assert invented_story_fact not in content
 
 
+def test_future_plan_writer_preserves_every_long_countdown_contract_in_any_order() -> None:
+    countdowns = [
+        {
+            "countdown_key": f"outer_harbor_backup_tide_gate_countdown_{index}",
+            "label": f"第三东港外海备用潮位观测站{index}号闸门关闭窗口",
+            "latest_remaining_minutes": 50 - (index * 5) if index < 6 else 0,
+            "latest_chapter": 22,
+        }
+        for index in range(1, 7)
+    ]
+    closed_label = countdowns[-1]["label"]
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=23,
+        trigger_stage="pre_write",
+        plans=[_plan(23, one_line=f"{closed_label}又显示剩余5分钟。")],
+        canon_quality_context={"countdown_constraints": countdowns},
+        obligations=[],
+        target_total_chapters=60,
+        include_current=True,
+    )
+    patches = result.plan_patches
+    assert len(patches) == 6
+
+    def writer_content(ordered_patches):
+        context = ChapterContextPack(
+            project_id="project-1",
+            project_title="港口纪事",
+            premise="港口调度员必须在各潮窗关闭前引导货轮离港。",
+            genre="现实题材",
+            setting_summary="普通商港。",
+            chapter_number=23,
+            chapter_plan_title="最后一班船",
+            chapter_plan_one_line="港口调度员核对各泊位潮窗。",
+            chapter_goals=["完成离港调度"],
+            canon_quality_context={
+                "canon_quality_prompt_budget_chars": 200,
+                "active_structural_patch_debt": [
+                    {
+                        "patch_id": patch.id,
+                        "scope": patch.target_scope,
+                        "payoff_tests": patch.expected_resolution_tests,
+                        "writer_context_injections": patch.writer_context_injections,
+                    }
+                    for patch in ordered_patches
+                ]
+            },
+        )
+        prompt = build_single_chapter_draft_prompt(context)
+        return "\n".join(message["content"] for message in prompt)
+
+    forward_content = writer_content(patches)
+    reverse_content = writer_content(list(reversed(patches)))
+
+    for patch in patches:
+        instruction = patch.writer_context_injections[0]["instruction"]
+        assert instruction in forward_content
+        assert instruction in reverse_content
+
+
 def test_future_plan_auditor_applies_minute_level_hard_rule_to_rule_anchors() -> None:
     plan = _plan(
         23,

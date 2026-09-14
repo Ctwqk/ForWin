@@ -36,6 +36,7 @@ from tests.test_generation_application_service import (
 session_factory = application_fixtures.session_factory
 recovery_fixture = recovery_fixtures.recovery_fixture
 
+
 def setup_parent(factory, *, review=False):
     _create_project(factory)
     service = _service(factory)
@@ -419,8 +420,6 @@ def test_task_updater_cannot_publish_terminal_completion(session_factory):
         )
     with session_factory() as session:
         assert session.get(GenerationTask, task_id).status == "running"
-
-
 
 
 @pytest.mark.parametrize("daily", [False, True])
@@ -834,3 +833,509 @@ def test_expired_same_worker_epoch_cannot_finalize(session_factory):
     with session_factory() as session:
         assert session.scalar(select(OutboxEvent)) is None
         assert session.get(GenerationTask, task_id).status == "running"
+
+
+def maintenance_parent(fixture, *, state="pending", result_changes=None):
+    """Real Canon admission and application completion; deterministic maintenance runners."""
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.maintenance.post_canon import PostCanonMaintenanceService
+
+    outcome = CanonAdmissionService(session_factory=fixture.Session).commit_plan(
+        fixture.plan
+    )
+    assert not outcome.blocked
+    with fixture.Session.begin() as session:
+        project = session.get(Project, fixture.project_id)
+        project.target_total_chapters = 10
+        project.creation_status = "writing"
+        task = session.get(GenerationTask, fixture.task_id)
+        task.execution_payload_json = (
+            payload_from_json(task.execution_payload_json)
+            .model_copy(
+                update={
+                    "auto_continue": True,
+                    "run_until_chapter": 10,
+                    "long_run_mode": "soak_test",
+                    "isolated": True,
+                }
+            )
+            .model_dump_json()
+        )
+        task.status, task.lease_owner, task.lease_epoch = "running", "worker", 1
+        plan = session.get(ChapterPlan, fixture.chapter_plan_id)
+        session.add(
+            ChapterPlan(
+                id="next-maintenance-plan",
+                project_id=project.id,
+                arc_plan_id=plan.arc_plan_id,
+                chapter_number=2,
+                status="planned",
+            )
+        )
+        # Keep real phase3 intent durable but isolate this worker's continuation delivery.
+        for row in session.scalars(select(OutboxEvent)):
+            row.available_at = datetime.now(UTC) + timedelta(days=1)
+    maintenance = PostCanonMaintenanceService(
+        session_factory=fixture.Session,
+        stage_analyzer=None,
+        pacing_strategist=None,
+        replan_governor=None,
+        arc_envelope_manager=None,
+        world_simulator=None,
+        artifact_store=None,
+        llm_client=SimpleNamespace(drain_llm_attempt_events=list),
+    )
+    maintenance._step_runners = {
+        step: lambda session, commit: {}
+        for step in ("planning", "arc", "world", "feedback")
+    }
+    if state != "missing":
+        maintenance._ensure_runs(outcome.commit_id)
+    if state.startswith("controls_"):
+        maintenance.run(canon_commit_id=outcome.commit_id, worker_id="maintenance")
+        if state == "controls_failed":
+            from forwin.maintenance.post_canon import PostCanonMaintenanceError
+
+            def fail_controls(session, commit):
+                raise RuntimeError("temporary controls failure")
+
+            with pytest.raises(PostCanonMaintenanceError):
+                maintenance.run_order_controls(
+                    canon_commit_id=outcome.commit_id, runner=fail_controls
+                )
+    elif state in {"running", "failed"}:
+        claim, _ = maintenance._claim_step(
+            canon_commit_id=outcome.commit_id,
+            step_name="planning",
+            worker_id="maintenance",
+        )
+        if state == "failed":
+            maintenance._fail_claim(claim, RuntimeError("temporary step failure"))
+    service = _service(fixture.Session)
+    result = RunResult(
+        project_id=fixture.project_id,
+        requested_chapters=1,
+        completed_chapters=[1],
+        paused_chapters=[1],
+        **(result_changes or {}),
+    )
+    finish(service, fixture.task_id, 1, result)
+    return maintenance, outcome.commit_id
+
+
+def continuation_row(session, parent_id):
+    from forwin.generation.continuation_events import continuation_event_id
+
+    return session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_id == continuation_event_id(parent_id)
+        )
+    )
+
+
+def child_count(factory, parent_id):
+    with factory() as session:
+        return len(
+            list(
+                session.scalars(
+                    select(GenerationTask).where(
+                        GenerationTask.continuation_parent_task_id == parent_id
+                    )
+                )
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["missing", "pending", "running", "failed", "controls_missing", "controls_failed"],
+)
+def test_maintenance_wait_survives_worker_replay_and_ack_loss(recovery_fixture, state):
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+
+    fixture = recovery_fixture
+    maintenance, commit_id = maintenance_parent(fixture, state=state)
+    first = consume(fixture.Session)
+    assert not first.processed
+    assert first.message == "deferred"
+    assert decision(fixture.Session, fixture.task_id) is None
+    assert child_count(fixture.Session, fixture.task_id) == 0
+    with fixture.Session.begin() as session:
+        row = continuation_row(session, fixture.task_id)
+        assert row.status == "pending"
+        assert row.attempts == 1
+        assert row.available_at.replace(tzinfo=UTC) > datetime.now(UTC)
+        # Expire an interrupted lease / retry deadline; the owner still executes success.
+        for run in session.scalars(select(PostCanonMaintenanceRun)):
+            run.lease_expires_at = datetime.now(UTC)
+            run.available_at = None
+    maintenance.run(canon_commit_id=commit_id, worker_id="recovered-maintenance")
+    maintenance.run_order_controls(
+        canon_commit_id=commit_id, runner=lambda session, commit: {}
+    )
+    with fixture.Session.begin() as session:
+        continuation_row(session, fixture.task_id).available_at = None
+    assert consume(fixture.Session).processed
+    assert child_count(fixture.Session, fixture.task_id) == 1
+    with fixture.Session.begin() as session:
+        continuation_row(session, fixture.task_id).status = "pending"
+    assert consume(fixture.Session).processed
+    assert child_count(fixture.Session, fixture.task_id) == 1
+
+
+@pytest.mark.parametrize(
+    "control,reason",
+    [
+        ("pause", "user_pause_requested"),
+        ("cancel", "cancel_requested"),
+        ("policy", "policy_changed"),
+        ("target", "target_total_reached"),
+    ],
+)
+def test_controls_during_maintenance_wait_permanently_stop(
+    recovery_fixture, control, reason
+):
+    fixture = recovery_fixture
+    maintenance_parent(fixture)
+    assert not consume(fixture.Session).processed
+    with fixture.Session.begin() as session:
+        task = session.get(GenerationTask, fixture.task_id)
+        project = session.get(Project, fixture.project_id)
+        if control == "pause":
+            task.pause_requested = True
+        elif control == "cancel":
+            task.cancel_requested = True
+        elif control == "policy":
+            ProjectPolicyStore(session).save(
+                project, RuntimePolicy.for_profile("pulp"), expected_version=1
+            )
+        else:
+            project.target_total_chapters = 1
+        continuation_row(session, fixture.task_id).available_at = None
+    assert consume(fixture.Session).processed
+    assert decision(fixture.Session, fixture.task_id)["reason"] == reason
+    assert child_count(fixture.Session, fixture.task_id) == 0
+
+
+def test_failed_chapter_is_not_hidden_by_pending_maintenance(recovery_fixture):
+    fixture = recovery_fixture
+    maintenance_parent(fixture, result_changes={"failed_chapters": [2]})
+    assert consume(fixture.Session).processed
+    assert (
+        decision(fixture.Session, fixture.task_id)["reason"]
+        == "failed_chapters_blocker"
+    )
+
+
+@pytest.mark.parametrize(
+    "blocker", ["checkpoint", "future_plan", "manual", "manual_missing"]
+)
+def test_content_blockers_stop_even_before_maintenance_completes(
+    recovery_fixture, blocker
+):
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+    from forwin.models.planning_control import BandCheckpoint
+
+    fixture = recovery_fixture
+    maintenance_parent(
+        fixture, state="missing" if blocker == "manual_missing" else "pending"
+    )
+    with fixture.Session.begin() as session:
+        if blocker.startswith("manual"):
+            session.add(
+                BandCheckpoint(
+                    project_id=fixture.project_id,
+                    arc_id=session.get(
+                        ChapterPlan, fixture.chapter_plan_id
+                    ).arc_plan_id,
+                    band_id="band-1",
+                    boundary_chapter=1,
+                    boundary_kind="chapter_accepted",
+                    trigger_source="manual_boundary",
+                    status="pending",
+                )
+            )
+        else:
+            feedback = session.scalar(
+                select(PostCanonMaintenanceRun).where(
+                    PostCanonMaintenanceRun.step_name == "feedback"
+                )
+            )
+            result = (
+                {"checkpoint": {"status": "fail"}}
+                if blocker == "checkpoint"
+                else {
+                    "future_plan_audit": {"blocking_reasons": ["future plan conflict"]}
+                }
+            )
+            feedback.result_json = json.dumps(
+                {"order_controls": {"status": "blocked", "result": result}}
+            )
+    assert consume(fixture.Session).processed
+    assert decision(fixture.Session, fixture.task_id)["reason"] == "maintenance_blocker"
+    assert child_count(fixture.Session, fixture.task_id) == 0
+
+
+@pytest.mark.parametrize("mode", ["soak_test", "daily_serial"])
+@pytest.mark.parametrize("audit_fail_once", [False, True])
+def test_phase3_outbox_recovers_controls_after_parent_exits(
+    recovery_fixture, monkeypatch, mode, audit_fail_once
+):
+    from types import SimpleNamespace
+
+    from forwin.canon.outbox_events import CANON_PHASE3_REQUESTED
+    from forwin.maintenance.events import build_post_canon_outbox_handlers
+    from forwin.maintenance.order_controls import recover_order_controls
+    from forwin.models.draft import CandidateDraftRecord
+    from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
+
+    fixture = recovery_fixture
+    maintenance, _ = maintenance_parent(fixture, state="failed")
+    selected = []
+    attempts = 0
+
+    def audit(self, **kw):
+        nonlocal attempts
+        attempts += 1
+        if audit_fail_once and attempts == 1:
+            raise RuntimeError("temporary audit provider failure")
+        return FuturePlanAuditRun(
+            project_id=kw["project_id"],
+            current_chapter=kw["current_chapter"],
+            trigger_stage=kw["trigger_stage"],
+        )
+
+    monkeypatch.setattr(FuturePlanAuditor, "audit_and_apply", audit)
+    with fixture.Session.begin() as session:
+        task = session.get(GenerationTask, fixture.task_id)
+        frozen = payload_from_json(task.execution_payload_json)
+        task.execution_payload_json = frozen.model_copy(
+            update={"long_run_mode": mode}
+        ).model_dump_json()
+        candidate = session.get(CandidateDraftRecord, fixture.candidate_id)
+        candidate.metadata_json = json.dumps({"generation_task_id": fixture.task_id})
+    maintenance.order_controls_recovery = lambda commit_id: recover_order_controls(
+        maintenance,
+        commit_id=commit_id,
+        llm_client_factory=lambda policy: (
+            selected.append(policy) or SimpleNamespace(close=lambda: None)
+        ),
+    )
+    assert not consume(fixture.Session).processed
+    with fixture.Session.begin() as session:
+        from forwin.models.maintenance import PostCanonMaintenanceRun
+
+        for row in session.scalars(select(PostCanonMaintenanceRun)):
+            row.available_at = None
+        phase3 = session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == CANON_PHASE3_REQUESTED)
+        )
+        phase3.available_at = None
+    recovered = run_one_outbox_event(
+        session_factory=fixture.Session,
+        worker_id="phase3",
+        handlers=build_post_canon_outbox_handlers(service_provider=lambda: maintenance),
+    )
+    if audit_fail_once:
+        assert not recovered.processed
+        with fixture.Session.begin() as session:
+            continuation_row(session, fixture.task_id).available_at = None
+        assert not consume(fixture.Session).processed
+        assert decision(fixture.Session, fixture.task_id) is None
+        with fixture.Session.begin() as session:
+            phase3 = session.scalar(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                )
+            )
+            assert phase3.status == "pending"
+            phase3.available_at = None
+        recovered = run_one_outbox_event(
+            session_factory=fixture.Session,
+            worker_id="phase3-retry",
+            handlers=build_post_canon_outbox_handlers(
+                service_provider=lambda: maintenance
+            ),
+        )
+    assert recovered.processed
+    assert selected == [frozen.policy_snapshot] * (2 if audit_fail_once else 1)
+    with fixture.Session.begin() as session:
+        phase3 = session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == CANON_PHASE3_REQUESTED)
+        )
+        phase3.status = "pending"  # completion persisted but phase3 ack was lost
+        phase3.available_at = None
+    assert run_one_outbox_event(
+        session_factory=fixture.Session,
+        worker_id="phase3-replay",
+        handlers=build_post_canon_outbox_handlers(service_provider=lambda: maintenance),
+    ).processed
+    assert attempts == (
+        2 if audit_fail_once else 1
+    )  # completed checks are not repeated
+    with fixture.Session.begin() as session:
+        continuation_row(session, fixture.task_id).available_at = None
+    assert consume(fixture.Session).processed
+    assert child_count(fixture.Session, fixture.task_id) == 1
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    ["missing", "unknown_task", "wrong_policy", "wrong_project", "malformed"],
+)
+def test_control_recovery_requires_original_policy_provenance(
+    recovery_fixture, provenance
+):
+    from forwin.maintenance.order_controls import recover_order_controls
+    from forwin.maintenance.state import (
+        post_canon_control_blockers,
+        post_canon_control_result,
+    )
+    from forwin.models.draft import CandidateDraftRecord
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+
+    fixture = recovery_fixture
+    maintenance, commit_id = maintenance_parent(fixture, state="controls_missing")
+    with fixture.Session.begin() as session:
+        candidate = session.get(CandidateDraftRecord, fixture.candidate_id)
+        candidate.metadata_json = json.dumps({"generation_task_id": fixture.task_id})
+        if provenance == "missing":
+            candidate.metadata_json = "{}"
+        elif provenance == "unknown_task":
+            candidate.metadata_json = '{"generation_task_id":"absent"}'
+        elif provenance == "wrong_policy":
+            candidate.policy_version += 1
+        elif provenance == "wrong_project":
+            other = Project(
+                id="other-provenance-project", title="Other", premise="Other"
+            )
+            session.add(other)
+            session.flush()
+            session.get(GenerationTask, fixture.task_id).project_id = other.id
+        else:
+            candidate.metadata_json = "["
+    recover_order_controls(
+        maintenance,
+        commit_id=commit_id,
+        llm_client_factory=lambda policy: pytest.fail(
+            "unknown policy must not build a model client"
+        ),
+    )
+    with fixture.Session() as session:
+        rows = list(session.scalars(select(PostCanonMaintenanceRun)))
+        assert post_canon_control_blockers(post_canon_control_result(rows)) == [
+            "post_canon_policy_provenance_missing"
+        ]
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_intent",
+        "processed_intent",
+        "unknown_step",
+        "bad_json",
+        "bad_control_result",
+    ],
+)
+def test_corrupt_maintenance_state_stops_explainably(recovery_fixture, corruption):
+    from forwin.canon.outbox_events import CANON_PHASE3_REQUESTED
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+
+    fixture = recovery_fixture
+    maintenance_parent(
+        fixture, state="missing" if corruption == "missing_intent" else "pending"
+    )
+    with fixture.Session.begin() as session:
+        if corruption == "missing_intent":
+            session.delete(
+                session.scalar(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                    )
+                )
+            )
+        elif corruption == "processed_intent":
+            session.scalar(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                )
+            ).status = "processed"
+        else:
+            feedback = session.scalar(
+                select(PostCanonMaintenanceRun).where(
+                    PostCanonMaintenanceRun.step_name == "feedback"
+                )
+            )
+            if corruption == "unknown_step":
+                feedback.step_name = "unknown"
+            elif corruption == "bad_json":
+                feedback.result_json = "["
+            else:
+                feedback.result_json = (
+                    '{"order_controls":{"status":"succeeded","result":[]}}'
+                )
+    assert consume(fixture.Session).processed
+    assert (
+        decision(fixture.Session, fixture.task_id)["reason"]
+        == "maintenance_state_invalid"
+    )
+
+
+def test_concurrent_consumers_after_maintenance_wait_create_one_child(recovery_fixture):
+    from forwin.generation.continuation_events import (
+        GenerationContinuationEvent,
+        consume_continuation,
+    )
+
+    fixture = recovery_fixture
+    maintenance, commit_id = maintenance_parent(fixture)
+    assert not consume(fixture.Session).processed
+    maintenance.run(canon_commit_id=commit_id, worker_id="maintenance")
+    maintenance.run_order_controls(
+        canon_commit_id=commit_id, runner=lambda session, commit: {}
+    )
+    with fixture.Session() as session:
+        event = GenerationContinuationEvent.model_validate_json(
+            continuation_row(session, fixture.task_id).payload_json
+        )
+
+    def replay():
+        with fixture.Session.begin() as session:
+            return consume_continuation(session, event, _service(fixture.Session))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        answers = list(pool.map(lambda _: replay(), range(2)))
+    assert answers[0] == answers[1]
+    assert child_count(fixture.Session, fixture.task_id) == 1
+
+
+def test_completed_phase3_rereads_stale_maintenance_snapshot(recovery_fixture):
+    from forwin.canon.outbox_events import CANON_PHASE3_REQUESTED
+    from forwin.maintenance.state import post_canon_continuation_state
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+
+    fixture = recovery_fixture
+    maintenance, commit_id = maintenance_parent(fixture)
+    with fixture.Session() as stale_session:
+        rows = list(stale_session.scalars(select(PostCanonMaintenanceRun)))
+        assert all(row.status == "pending" for row in rows)
+        commit = stale_session.get(CanonCommitRecord, commit_id)
+        maintenance.run(canon_commit_id=commit_id, worker_id="maintenance")
+        maintenance.run_order_controls(
+            canon_commit_id=commit_id, runner=lambda session, commit: {}
+        )
+        with fixture.Session.begin() as session:
+            session.scalar(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                )
+            ).status = "processed"
+        assert (
+            post_canon_continuation_state(rows, session=stale_session, commit=commit)
+            == "ready"
+        )

@@ -194,6 +194,9 @@ def test_phase3_handler_resolves_service_lazily_once() -> None:
         def run(self, **request) -> None:
             calls.append(("run", request))
 
+        def recover_order_controls(self, commit_id):
+            calls.append(("controls", commit_id))
+
     service = Service()
 
     def provider():
@@ -211,7 +214,7 @@ def test_phase3_handler_resolves_service_lazily_once() -> None:
 
     assert calls[0] == "provider"
     assert calls.count("provider") == 1
-    assert [item[0] for item in calls[1:]] == ["resolve", "run", "resolve", "run"]
+    assert [item[0] for item in calls[1:]] == ["resolve", "run", "controls", "resolve", "run", "controls"]
 
 
 def test_publisher_handler_resolves_materializer_lazily_once() -> None:

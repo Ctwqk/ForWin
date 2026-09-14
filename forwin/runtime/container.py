@@ -514,6 +514,17 @@ class RuntimeContainer:
             if service is None:
                 service = self._build_outbox_post_canon_maintenance(core)
                 self._post_canon_maintenance = service
+            from forwin.maintenance.order_controls import recover_order_controls
+
+            service.order_controls_recovery = lambda commit_id: recover_order_controls(
+                service, commit_id=commit_id,
+                llm_client_factory=lambda policy: self._build_llm_client(core.infrastructure, policy),
+                gate_delegation_factory=lambda client: GateDelegationService(
+                    spark_delegate=SparkGateDelegate(
+                        llm_client=client, requested_model=core.infrastructure.codex_default_model,
+                    )
+                ),
+            )
             return service
 
     def _provide_outbox_publisher_jobs(self) -> CanonPublisherJobService:

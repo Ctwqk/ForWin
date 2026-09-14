@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
+from dataclasses import asdict, dataclass
 
 from sqlalchemy import select
 
@@ -18,8 +18,8 @@ from forwin.generation.review_auto_retry import (
 from forwin.generation.run_target import resolve_generation_run_target
 from forwin.generation.task_payload import payload_from_json
 from forwin.generation.task_repository import (
-    GenerationTaskRepository,
     TERMINAL_GENERATION_STATUSES,
+    GenerationTaskRepository,
 )
 from forwin.models.audit import DecisionEvent
 from forwin.models.outbox import OutboxEvent
@@ -169,44 +169,10 @@ class GenerationAutoContinueController:
             (p.chapter_number for p in plans if p.status == "accepted"), default=0
         )
         until = payload.run_until_chapter or project.target_total_chapters
+        if accepted_max >= project.target_total_chapters:
+            return stop("target_total_reached")
         if accepted_max >= until:
-            return stop(
-                "target_total_reached"
-                if accepted_max >= project.target_total_chapters
-                else "run_until_reached"
-            )
-
-        # Maintenance is queried without constructing the LLM/pipeline runtime.
-        from forwin.canon.identity import active_commit_predicate
-        from forwin.maintenance.state import post_canon_barrier_ready
-        from forwin.models.canon import CanonCommitRecord
-        from forwin.models.maintenance import PostCanonMaintenanceRun
-
-        commit_id = session.scalar(
-            select(CanonCommitRecord.id)
-            .where(
-                CanonCommitRecord.project_id == project.id,
-                CanonCommitRecord.chapter_number < accepted_max + 1,
-                CanonCommitRecord.status == "committed",
-                active_commit_predicate(),
-            )
-            .order_by(CanonCommitRecord.chapter_number.desc())
-            .limit(1)
-        )
-        if commit_id:
-            rows = list(
-                session.scalars(
-                    select(PostCanonMaintenanceRun).where(
-                        PostCanonMaintenanceRun.canon_commit_id == commit_id
-                    )
-                )
-            )
-            if not post_canon_barrier_ready(
-                rows,
-                session=session,
-                band_checkpoint_action=payload.policy_snapshot.pause.band_checkpoint_action,
-            ):
-                return stop("maintenance_blocker")
+            return stop("run_until_reached")
 
         terminal = self._terminal_block_reason(event.result)
         retry_plan = None
@@ -237,6 +203,48 @@ class GenerationAutoContinueController:
             return stop("pending_review_blocker")
         if any(p.status == "drafted" for p in plans):
             return stop("pending_acceptance_blocker")
+        # Maintenance is queried without constructing the LLM/pipeline runtime.
+        from forwin.canon.identity import active_commit_predicate
+        from forwin.maintenance.state import post_canon_continuation_state
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.models.maintenance import PostCanonMaintenanceRun
+
+        commit = session.scalar(
+            select(CanonCommitRecord)
+            .where(
+                CanonCommitRecord.project_id == project.id,
+                CanonCommitRecord.chapter_number < accepted_max + 1,
+                CanonCommitRecord.status == "committed",
+                active_commit_predicate(),
+            )
+            .order_by(CanonCommitRecord.chapter_number.desc())
+            .limit(1)
+        )
+        if commit:
+            rows = list(
+                session.scalars(
+                    select(PostCanonMaintenanceRun).where(
+                        PostCanonMaintenanceRun.canon_commit_id == commit.id
+                    )
+                )
+            )
+            maintenance_state = post_canon_continuation_state(
+                rows,
+                session=session,
+                commit=commit,
+                band_checkpoint_action=payload.policy_snapshot.pause.band_checkpoint_action,
+            )
+            if maintenance_state == "waiting":
+                return AutoContinueDecision(
+                    decision="wait", reason="maintenance_pending"
+                )
+            if maintenance_state != "ready":
+                return stop(
+                    "maintenance_blocker"
+                    if maintenance_state == "blocked"
+                    else "maintenance_state_invalid"
+                )
+
         next_chapter = retry_plan.chapter_number if retry_plan else accepted_max + 1
         target = resolve_generation_run_target(
             project,

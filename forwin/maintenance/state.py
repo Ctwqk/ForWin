@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 
@@ -103,12 +103,15 @@ def post_canon_manual_checkpoint_blockers(
     rows: Iterable[Any],
     *,
     session: Any | None = None,
+    project_id: str = "",
+    chapter_number: int = 0,
 ) -> list[str]:
     materialized = list(rows)
-    if session is None or not materialized:
+    if session is None:
         return []
-    project_id = str(getattr(materialized[0], "project_id", "") or "").strip()
-    chapter_number = int(getattr(materialized[0], "chapter_number", 0) or 0)
+    if materialized:
+        project_id = str(getattr(materialized[0], "project_id", "") or "").strip()
+        chapter_number = int(getattr(materialized[0], "chapter_number", 0) or 0)
     if not project_id or chapter_number < 1:
         return []
     from forwin.models.planning_control import BandCheckpoint
@@ -136,9 +139,7 @@ def post_canon_barrier_blockers(
     band_checkpoint_action: str = "pause_on_warn",
 ) -> list[str]:
     materialized = list(rows)
-    blockers = post_canon_control_blockers(
-        post_canon_control_result(materialized)
-    )
+    blockers = post_canon_control_blockers(post_canon_control_result(materialized))
     blockers.extend(
         post_canon_checkpoint_blockers(
             materialized,
@@ -177,6 +178,113 @@ def post_canon_barrier_ready(
     )
 
 
+def post_canon_continuation_state(
+    rows: Iterable[Any],
+    *,
+    session: Any,
+    commit: Any,
+    band_checkpoint_action: str = "pause_on_warn",
+) -> Literal["ready", "waiting", "blocked", "invalid"]:
+    """Separate durable maintenance work from semantic stops, before outbox ack."""
+    from forwin.canon.outbox_events import (
+        CANON_PHASE3_REQUESTED,
+        canon_event_id,
+        parse_canon_event_envelope,
+    )
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+    from forwin.models.outbox import OutboxEvent
+
+    intent = session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_id
+            == canon_event_id(commit.idempotency_key, CANON_PHASE3_REQUESTED)
+        )
+    )
+    materialized = list(rows)
+    if intent is None or intent.status not in {"pending", "running"}:
+        # An owner may have completed between the caller's row read and this
+        # intent read. Re-read completion before declaring recovery unavailable.
+        materialized = list(
+            session.scalars(
+                select(PostCanonMaintenanceRun)
+                .where(PostCanonMaintenanceRun.canon_commit_id == commit.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+    if post_canon_barrier_blockers(
+        materialized,
+        session=session,
+        band_checkpoint_action=band_checkpoint_action,
+    ) or post_canon_manual_checkpoint_blockers(
+        [],
+        session=session,
+        project_id=commit.project_id,
+        chapter_number=commit.chapter_number,
+    ):
+        return "blocked"
+    names = [str(row.step_name) for row in materialized]
+    if len(set(names)) != len(names) or set(names) - set(POST_CANON_STEP_NAMES):
+        return "invalid"
+    if any(
+        row.status not in {"pending", "running", "failed", "succeeded"}
+        for row in materialized
+    ):
+        return "invalid"
+    for row in materialized:
+        try:
+            result = json.loads(row.result_json or "{}")
+        except (ValueError, TypeError):
+            return "invalid"
+        if not isinstance(result, dict):
+            return "invalid"
+        if row.step_name == "feedback" and ORDER_CONTROLS_KEY in result:
+            controls = result[ORDER_CONTROLS_KEY]
+            if (
+                isinstance(controls, dict)
+                and "result" in controls
+                and not isinstance(controls["result"], dict)
+            ):
+                return "invalid"
+            if not isinstance(controls, dict) or controls.get("status") not in {
+                "pending",
+                "running",
+                "failed",
+                "succeeded",
+                "blocked",
+            }:
+                return "invalid"
+    controls = post_canon_order_controls(materialized)
+    if controls.get("status") == "blocked":
+        return "blocked"
+    if (
+        post_canon_phase3_complete(materialized)
+        and controls.get("status") == "succeeded"
+    ):
+        return "ready"
+    # Missing rows are normal before first delivery, but every wait needs a
+    # live durable actor. Never resurrect historical acknowledged events here.
+    if intent is None or intent.status not in {"pending", "running"}:
+        return "invalid"
+    try:
+        parsed = parse_canon_event_envelope(
+            event_type=intent.event_type,
+            event_id=intent.event_id,
+            aggregate_type=intent.aggregate_type,
+            aggregate_id=intent.aggregate_id,
+            payload=json.loads(intent.payload_json),
+        )
+    except (ValueError, TypeError):
+        return "invalid"
+    if (
+        parsed.canon_commit_id != commit.id
+        or parsed.project_id != commit.project_id
+        or parsed.chapter_number != commit.chapter_number
+        or parsed.candidate_id != commit.candidate_id
+    ):
+        return "invalid"
+    return "waiting"
+
+
 def _load_object(value: str) -> dict[str, Any]:
     try:
         decoded = json.loads(value or "{}")
@@ -192,7 +300,7 @@ __all__ = [
     "post_canon_checkpoint_status",
     "post_canon_control_blockers",
     "post_canon_control_result",
+    "post_canon_manual_checkpoint_blockers",
     "post_canon_order_controls",
     "post_canon_phase3_complete",
-    "post_canon_manual_checkpoint_blockers",
 ]

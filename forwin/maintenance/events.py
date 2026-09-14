@@ -40,6 +40,7 @@ def build_post_canon_outbox_handlers(
             canon_commit_id=commit_id,
             worker_id=f"outbox:{event.worker_id}:{event.row_id}:{event.lease_epoch}",
         )
+        service.recover_order_controls(commit_id)
 
     return {CANON_PHASE3_REQUESTED: handle}
 

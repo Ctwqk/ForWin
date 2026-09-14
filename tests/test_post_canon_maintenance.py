@@ -626,9 +626,7 @@ def test_pending_manual_post_acceptance_checkpoint_blocks_durable_barrier() -> N
 
 
 def test_continuation_preflight_resumes_checkpoint_delegation() -> None:
-    checkpoint = SimpleNamespace(id="checkpoint-1", status="warn")
-    project = SimpleNamespace(id="project-1")
-    updater = object()
+    checkpoint = SimpleNamespace(id="checkpoint-1", project_id="project-1", status="warn")
     resolutions: list[dict[str, object]] = []
     commits: list[str] = []
     session = SimpleNamespace(
@@ -636,14 +634,7 @@ def test_continuation_preflight_resumes_checkpoint_delegation() -> None:
         commit=lambda: commits.append("commit"),
     )
     stage = SimpleNamespace(
-        _make_state_helpers=lambda _session: (
-            SimpleNamespace(get_project=lambda _project_id: project),
-            updater,
-            object(),
-        ),
-        _project_policy=lambda _session, _project: RuntimePolicy.for_profile(
-            "standard"
-        ),
+        policy=RuntimePolicy.for_profile("standard"),
         _resolve_checkpoint_gate=lambda **request: (
             resolutions.append(request) or True
         ),
@@ -664,12 +655,13 @@ def test_continuation_preflight_resumes_checkpoint_delegation() -> None:
 
     assert resolutions == [
         {
-            "updater": updater,
+            "updater": resolutions[0]["updater"],
             "checkpoint": checkpoint,
             "gate_kind": "band_checkpoint_pause",
             "chapter_number": 1,
         }
     ]
+    assert resolutions[0]["updater"].session is session
     assert commits == ["commit"]
 
 

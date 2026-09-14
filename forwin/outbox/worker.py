@@ -28,6 +28,10 @@ class OutboxClaim:
     payload_error: str = ""
 
 
+class OutboxDeferred(Exception):
+    """Expected dependency wait, released with the existing fenced retry delay."""
+
+
 OutboxHandler = Callable[[OutboxClaim], None]
 
 
@@ -127,9 +131,7 @@ def run_one_outbox_event(
         "heartbeat_interval_seconds",
     )
     if heartbeat_interval >= lease_duration:
-        raise ValueError(
-            "heartbeat_interval_seconds must be less than lease_seconds"
-        )
+        raise ValueError("heartbeat_interval_seconds must be less than lease_seconds")
 
     with session_factory.begin() as session:
         claim = outbox_store.claim_next_outbox_event(
@@ -164,6 +166,9 @@ def run_one_outbox_event(
                     f"No outbox handler registered for event type: {claim.event_type}"
                 )
             handler(claim)
+        except OutboxDeferred as exc:
+            handler_error = exc
+            logger.info("Outbox event deferred event=%s reason=%s", claim.event_id, exc)
         except Exception as exc:  # noqa: BLE001
             handler_error = exc
             logger.exception(
@@ -188,7 +193,13 @@ def run_one_outbox_event(
             )
             if not updated:
                 return _result_for(claim, processed=False, message="stale_claim")
-            return _result_for(claim, processed=False, message="handler_failed")
+            return _result_for(
+                claim,
+                processed=False,
+                message="deferred"
+                if isinstance(handler_error, OutboxDeferred)
+                else "handler_failed",
+            )
 
         updated = outbox_store.mark_outbox_event_processed(session, claim)
         if not updated:

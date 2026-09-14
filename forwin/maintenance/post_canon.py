@@ -175,6 +175,7 @@ class PostCanonMaintenanceService:
             raise ValueError(
                 "heartbeat_interval_seconds must be less than lease_seconds"
             )
+        self.order_controls_recovery: Callable[[str], dict[str, Any]] | None = None
         self._clock = clock or utcnow
         self._step_runners: dict[str, StepRunner] = {
             "planning": self._run_planning_step,
@@ -390,11 +391,17 @@ class PostCanonMaintenanceService:
                 "run_ids": run_ids,
             }
 
+    def recover_order_controls(self, canon_commit_id: str) -> dict[str, Any]:
+        if self.order_controls_recovery is None:
+            raise ValueError("post-Canon order controls recovery is not configured")
+        return self.order_controls_recovery(canon_commit_id)
+
     def run_order_controls(
         self,
         *,
         canon_commit_id: str,
         runner: OrderControlsRunner,
+        trace_client: Any | None = None,
     ) -> dict[str, Any]:
         commit_id = str(canon_commit_id or "").strip()
         try:
@@ -419,9 +426,9 @@ class PostCanonMaintenanceService:
                     # before entering the short Project-first refresh transaction.
                     pass
                 else:
-                    self._drain_llm_attempts()
+                    self._drain_llm_attempts(trace_client)
                     result = dict(runner(session, commit) or {})
-                    attempts = self._drain_llm_attempts()
+                    attempts = self._drain_llm_attempts(trace_client)
                     trace = self._enqueue_step_trace(
                         session=session,
                         commit=commit,
@@ -456,7 +463,7 @@ class PostCanonMaintenanceService:
         except PostCanonMaintenanceBusy:
             raise
         except Exception as exc:
-            self._discard_llm_attempts()
+            self._discard_llm_attempts(trace_client)
             self._record_order_controls_failure(commit_id, exc)
             if isinstance(exc, PostCanonMaintenanceError):
                 raise
@@ -1137,14 +1144,14 @@ class PostCanonMaintenanceService:
             "effect_observations": effect_observations,
         }
 
-    def _drain_llm_attempts(self) -> list[dict[str, Any]]:
-        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
+    def _drain_llm_attempts(self, client: Any | None = None) -> list[dict[str, Any]]:
+        drain = getattr(client if client is not None else self.llm_client, "drain_llm_attempt_events", None)
         attempts = drain() if callable(drain) else []
         return [dict(item) for item in attempts if isinstance(item, dict)]
 
-    def _discard_llm_attempts(self) -> None:
+    def _discard_llm_attempts(self, client: Any | None = None) -> None:
         try:
-            self._drain_llm_attempts()
+            self._drain_llm_attempts(client)
         except Exception:  # noqa: BLE001
             return
 

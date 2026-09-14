@@ -123,6 +123,10 @@ def build_generation_continuation_handlers(*, session_factory, infrastructure):
             session_factory=session_factory, infrastructure=infrastructure
         )
         with session_factory.begin() as session:
-            consume_continuation(session, event, application)
+            decision = consume_continuation(session, event, application)
+            if decision.decision == "wait":
+                from forwin.outbox.worker import OutboxDeferred
+
+                raise OutboxDeferred(decision.reason)
 
     return {GENERATION_CONTINUATION_REQUESTED: handle}

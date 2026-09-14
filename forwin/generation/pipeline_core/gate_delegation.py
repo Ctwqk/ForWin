@@ -171,3 +171,14 @@ class GateDelegationStage:
 
 
 __all__ = ["GateDelegationStage"]
+
+
+class CheckpointGateResolver(GateDelegationStage):
+    """Explicit dependencies for using the existing gate owner outside Pipeline."""
+
+    def __init__(self, *, session_factory, policy, gate_delegation, audit):
+        self._SessionFactory = session_factory
+        self.policy = policy
+        self.gate_delegation = gate_delegation
+        self._audit_task_id = audit.task_id
+        self._audit_root_event_id = audit.root_event_id

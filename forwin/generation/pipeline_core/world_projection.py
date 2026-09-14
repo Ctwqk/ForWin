@@ -4,20 +4,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from forwin.audit.events import DecisionEventType
-from forwin.audit.gate_outcome import attach_gate_outcome
-from forwin.generation.pipeline_core import chapter_execution_support
-from forwin.generation.pipeline_core.obligation_resolution import (
-    _verify_obligations_after_acceptance,
-)
 from forwin.maintenance.post_canon import (
     PostCanonMaintenanceBlocked,
 )
 from forwin.maintenance.state import post_canon_control_blockers
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.planning_control import BandCheckpoint
-from forwin.planning.checkpoints import BandCheckpointDetail, BandCheckpointIssueInfo
-from forwin.review.issue_groups import issue_group_for_issue
 
 
 class PostCanonStage:
@@ -61,58 +51,18 @@ class PostCanonStage:
                 chapter_number=chapter_number,
             )
 
-        def run_controls(control_session: Session, commit) -> dict[str, Any]:
-            repo, updater, _checker = self._make_state_helpers(control_session)
-            candidate = control_session.get(CandidateDraftRecord, commit.candidate_id)
-            if candidate is None:
-                raise ValueError("post-Canon candidate is unavailable")
-            draft = control_session.get(ChapterDraft, candidate.candidate_draft_id)
-            if draft is None:
-                raise ValueError("accepted post-Canon draft is unavailable")
-            _verify_obligations_after_acceptance(
-                self,
-                session=control_session,
-                project_id=commit.project_id,
-                chapter_number=commit.chapter_number,
-                accepted_text=str(draft.body_text or ""),
-            )
-            future_audit = self._audit_future_plans_after_acceptance(
-                session=control_session,
-                updater=updater,
-                project_id=commit.project_id,
-                chapter_number=commit.chapter_number,
-                trigger_stage=trigger_stage,
-            )
-            self._record_generation_audit_report_if_due(
-                session=control_session,
-                updater=updater,
-                project_id=commit.project_id,
-                chapter_number=commit.chapter_number,
-                future_plan_audit_result=future_audit,
-            )
-            checkpoint = self._run_post_canon_band_checkpoint(
-                session=control_session,
-                repo=repo,
-                updater=updater,
-                project_id=commit.project_id,
-                chapter_number=commit.chapter_number,
-            )
-            return {
-                "project_id": commit.project_id,
-                "chapter_number": int(commit.chapter_number or 0),
-                "trigger_stage": trigger_stage,
-                "blocking_reasons": (
-                    list(future_audit.blocking_reasons)
-                    if future_audit is not None
-                    else []
-                ),
-                "future_plan_audit": (
-                    future_audit.model_dump(mode="json")
-                    if future_audit is not None
-                    else None
-                ),
-                "checkpoint": checkpoint,
-            }
+        from forwin.maintenance.order_controls import PostCanonOrderControls
+
+        owner = PostCanonOrderControls(
+            policy=self.policy, llm_client=self.llm_client,
+            trace_recorder=self.trace_recorder,
+            record_event=self._record_decision_event,
+            checkpoint_evaluator=self._create_auto_band_checkpoint,
+            resolve_checkpoint=self._resolve_checkpoint_gate,
+        )
+
+        def run_controls(control_session, commit):
+            return owner.run(control_session, commit, trigger_stage=trigger_stage)
 
         result = self.post_canon_maintenance.run_order_controls(
             canon_commit_id=commit_id,
@@ -121,92 +71,14 @@ class PostCanonStage:
         session.expire_all()
         return result
 
-    def _run_post_canon_band_checkpoint(
-        self,
-        *,
-        session: Session,
-        repo,
-        updater,
-        project_id: str,
-        chapter_number: int,
-    ) -> dict[str, Any] | None:
-        project = repo.get_project(project_id)
-        if project is None:
-            raise ValueError(f"Project not found: {project_id}")
-        policy = self._project_policy(session, project)
-        if policy.pause.band_checkpoint_action == "continue":
-            return None
-        try:
-            checkpoint = self._create_auto_band_checkpoint(
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-            )
-        except Exception as exc:
-            band_row = repo.get_band_row_for_chapter(project_id, chapter_number)
-            if band_row is None:
-                raise
-            checkpoint = updater.save_band_checkpoint(
-                BandCheckpointDetail(
-                    project_id=project_id,
-                    arc_id=band_row.arc_id,
-                    band_id=band_row.band_id,
-                    chapter_start=int(band_row.chapter_start or 0),
-                    chapter_end=int(band_row.chapter_end or 0),
-                    trigger_source="auto_band_end",
-                    boundary_kind="band_end",
-                    boundary_chapter=chapter_number,
-                    status="error",
-                    summary="band checkpoint evaluator exception; run paused.",
-                    issues=[
-                        BandCheckpointIssueInfo(
-                            code="checkpoint_evaluator_error",
-                            severity="error",
-                            issue_group=issue_group_for_issue(code="runtime"),
-                            description="band checkpoint evaluator failed.",
-                            detail=f"{exc.__class__.__name__}: {exc}",
-                        )
-                    ],
-                )
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                band_id=band_row.band_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.CHECKPOINT_EVALUATOR_ERROR,
-                scope="band",
-                summary="band checkpoint evaluator failed.",
-                reason=str(exc),
-                related_object_type="band_checkpoint",
-                related_object_id=checkpoint.id,
-                payload=attach_gate_outcome(
-                    {
-                        "status": "error",
-                        "error_class": exc.__class__.__name__,
-                        "error_summary": str(exc),
-                    },
-                    chapter_execution_support.checkpoint_event_gate_outcome(
-                        checkpoint,
-                        chapter_number=chapter_number,
-                        policy_version=int(
-                            getattr(project, "runtime_policy_version", 0) or 0
-                        ),
-                        decision="error",
-                        blocked=True,
-                    ),
-                ),
-            )
-        if checkpoint is None:
-            return None
-        return {
-            "id": checkpoint.id,
-            "band_id": checkpoint.band_id,
-            "status": checkpoint.status,
-        }
+    def _run_post_canon_band_checkpoint(self, **kwargs):
+        from forwin.maintenance.order_controls import PostCanonOrderControls
+
+        return PostCanonOrderControls(
+            policy=self.policy, trace_recorder=self.trace_recorder,
+            record_event=self._record_decision_event,
+            checkpoint_evaluator=self._create_auto_band_checkpoint,
+        )._run_post_canon_band_checkpoint(**kwargs)
 
     def _recover_post_canon_before_chapter(
         self,
@@ -277,33 +149,12 @@ class PostCanonStage:
         chapter_number: int,
         controls: dict[str, Any],
     ) -> None:
-        checkpoint_payload = controls.get("checkpoint")
-        if not isinstance(checkpoint_payload, dict):
-            return
-        checkpoint_id = str(checkpoint_payload.get("id") or "").strip()
-        if not checkpoint_id:
-            return
-        checkpoint = session.get(BandCheckpoint, checkpoint_id)
-        if checkpoint is None:
-            return
-        repo, updater, _checker = self._make_state_helpers(session)
-        project = repo.get_project(project_id)
-        if project is None:
-            raise ValueError(f"Project not found: {project_id}")
-        policy = self._project_policy(session, project)
-        status = str(checkpoint.status or "")
-        should_resolve = status in {"fail", "error"} or (
-            status == "warn"
-            and policy.pause.band_checkpoint_action
-            in {"pause_on_warn", "pause_always"}
-        )
-        if not should_resolve:
-            return
-        self._resolve_checkpoint_gate(
-            updater=updater,
-            checkpoint=checkpoint,
-            gate_kind="band_checkpoint_pause",
-            chapter_number=chapter_number,
+        from forwin.maintenance.order_controls import resume_checkpoint_delegation
+
+        resume_checkpoint_delegation(
+            session=session, project_id=project_id, chapter_number=chapter_number,
+            controls=controls, policy=self.policy,
+            resolve_checkpoint=self._resolve_checkpoint_gate,
         )
         session.commit()
 

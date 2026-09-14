@@ -1,6 +1,6 @@
 # 长篇可靠性实施与验证记录
 
-更新：2026-09-13。实施基线：`for-review@f5dec620647c9a1690b1caaa9d99c0b38e6c695c`。依据：[补充设计](../superpowers/specs/2026-09-12-longform-reliability-design.md)和[执行计划](../superpowers/plans/2026-09-12-longform-reliability.md)。
+更新：2026-09-14。实施基线：`for-review@f5dec620647c9a1690b1caaa9d99c0b38e6c695c`。依据：[补充设计](../superpowers/specs/2026-09-12-longform-reliability-design.md)和[执行计划](../superpowers/plans/2026-09-12-longform-reliability.md)。针对后续 `f8362da` 审查的五项问题，补充修复状态见本文末节。
 
 四个工作包已实现，七项实施任务分别完成独立审查。整分支终审又复现了“旧评审在新会话中被当前 Canon 版本重新背书”的 P1，最终修复已通过真实 PostgreSQL 入口回归及全量测试；2026-09-13 独立复核确认原 P1 和整体验证阻塞已关闭，新增 Critical/Important/Minor 均为0。真实 smoke20、全新离线 L100 和结局审读尚未通过；工程测试不能代替这些资格。
 
@@ -83,3 +83,18 @@ Task8Q2 源码修复为 `e8d8600` 和 `763341a`：六个正式阶段及生成、
 在 `763341a` 的写前 smoke 暴露地图绑定名称与叙事地点共用别名空间后，新增修复提交 `c472db34ea00cbbb43a939ca8b97e1d56196c63a`。修复只抑制内部 map/site-state 投影对共享别名解析的碰撞，保留稳定 map ID；真实叙事实体的重复名称和仅地图内的重复名称仍然拒绝。新增回归及地图/Writer/Genesis 合约相关测试 **131 passed**；该提交全量 **3991 passed、4 skipped、5 warnings、6 subtests，508.37 秒，exit 0**，JUnit 无 failure/error。静态检查、compileall、F/E9、source guard、diff、legacy inventory 均通过；Ruff 同基线 1027→1011，新增 0。完整 archive SHA-256 为 `74bc5319cad83db3edda578d326924e5cf5b4793c3bb861383465644d53f135f`，锁文件未变；应用镜像 `sha256:3f0a1de95b2b3ad82a17b5c9dd0a3809f4a0bb6a19eaa402e4c95f4abd1790be`，浏览器镜像 `sha256:c16bcf2a7f66670ccf77b36b0e49ba160901322a135349c2a0bf52f5cb65deff`，各 849 个运行文件核验通过。提交已推送并与 `origin/for-review` 对齐。
 
 基于该提交重新创建 smokeD 项目 `5a2fffe302f5471aa4241a002684749f`，读取并冻结策略版本2后，brief、world、map、story_engine 均经正式 MCP 生成和锁定。`book_blueprint` 在模型调用阶段返回 503，未写入失败的默认蓝图，bootstrap 尚未开始；项目没有章节任务。隔离 bridge 日志明确记录 `gpt-5.3-codex-spark` 当前 5 小时窗口 usage limit，账户配额读取为 100%，无可用 reset credit，预计窗口恢复时间为 2026-09-13 21:33:34 PDT。此前的 MiniMax 静态复核（`qualification/model-preflight-c472db3.json`）返回 HTTP 200 和 `MiniMax-M2.7`，但现有 `planning_json_general` 路由按设计排除 MiniMax，不能把可达性复核记为 Spark 资格或擅自改写冻结模型策略。smokeD 保留所有 MCP、API、bridge 和阶段失败证据，不计入 smoke20 通过；正式 smoke20、独立 L100 与结局审读继续等待冻结模型可用。
+
+## 2026-09-14 正式上下文与续跑补强
+
+本次修复基线为 `1454e8ad9b1fd4bf020fdd85da08fc1b051febce`，依据[补充执行计划](../superpowers/plans/2026-09-14-context-and-continuation-fixes.md)。五项审查发现按四个任务处理，业务时间指纹与重复依赖计算共用同一任务。
+
+| 任务 | 实现与验证状态 |
+|---|---|
+| 正式世界冲突来源 | `37aa9a9` 使用有效 Canon 接纳快照及同一读取基线；实际 Writer 路径红测 2 项按预期失败，相关 98 项回归通过，独立审查通过 |
+| 维护等待与续跑恢复 | `fb5d388` 实现等待延期与共享控制 owner；独立审查又复现委托审计锁冲突与过期完成标记。`74b4ef8`、`204748a` 修复后，锁边界相关 167 项、版本替换相关 145 项回归通过，两轮独立复核通过 |
+| 业务时间指纹及共享依赖准备 | 待实现 |
+| 通用倒计时修复 | 待实现 |
+
+维护恢复检查发现：原 phase3 outbox 仅完成四步，order controls 的调用仅在已退出的 pipeline 内。因此本轮把现有控制编排收敛到维护 owner，pipeline 与原 phase3 事件共用，续跑消费者保持轻量。order controls 从候选关联的原任务读取冻结策略；旧来源缺失时明确阻断，不以当前设置补造。旧已确认事件和不可变最终决定不自动重开，四步维护的全局模型服务配置保持原状。这项范围扩展增加了维护/runtime 审查面，用实际后台恢复测试核验。
+
+本轮尚未启动最终整批 QA 或真实模型生成；也未重新检查当前模型额度。上节配额失败是旧样本当时的记录，不能当作当前仍受限的证明。新源码的 smoke20、全新离线 L100 和结局审读仍待完成，不把旧镜像或旧 smokeD 记作新源码通过。没有创建定时任务或修改生产状态。

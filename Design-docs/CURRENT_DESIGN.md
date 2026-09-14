@@ -61,6 +61,10 @@ BookState runtime 的当前节点状态以 `states_by_node_id` 为准，包括�
 
 生成任务最终结果与 `generation-continuation:{parent_task_id}:v1` 意图通过 `finish_claimed_task` 在同一 lease/epoch fenced 事务提交；普通完成、Canon 恢复完成共用入口，进度回调不再发布终态，展示失败不回改已提交结果。既有 outbox 消费者按 Project → Task 锁检查控制、有效前缀维护、目标、容量和新运行；子任务、review reset 与确定身份的 AUTO_CONTINUE_DECISION 同事务落盘。可空唯一 continuation_parent_task_id 保留历史 NULL，子任务完成或软删除后重放也不会重复创建。未消费意图显示可暂停/终止；消费已创建子任务时父任务停止请求失败，不能冒报成功。子任务复制父策略及离线运行范围；策略版本已变则记录 policy_changed，新的显式运行采用新设置。消费者不构建生成模型服务；无历史 completed 意图补发，发布冻结、5% 存稿及已有修复预算保持。
 
+可由现有维护事件恢复的工作尚未完成时，续跑意图通过现有 outbox 退避等待，不创建子任务或永久停止决定。维护成功后重放原事件，沿原锁和唯一父任务约束创建子任务；用户暂停、取消、策略变化、目标完成及真实内容阻断仍形成停止决定。既有 phase3 事件同时负责四步维护和后续 order controls，后者与 pipeline 共用维护 owner，父任务退出后仍可恢复。后台恢复的 order controls 按接纳候选关联的原生成任务读取冻结策略；缺失或不匹配不以当前项目设置补造。缺少可消费恢复事件的异常旧记录明确阻断，不无限等待，也不重开历史已确认事件或最终决定。四步维护的模型服务配置仍沿既有 provider，本轮不改变其路由。
+
+检查点需要委托时，控制结果先保存为非最终等待，再释放检查阶段的项目锁；委托保留独立审计事务，最终写入前重新核验检查点输入。既有维护记录负责并发互斥和重放，等待期间的续跑不会把未完成委托当作永久拒绝。
+
 `forwin.http.create_app()` 创建每个 App 自己的 `HttpRuntime`。应用服务持有用例，HTTP adapter 只做传输适配。当前实际入口包括：
 
 - `ProjectApplicationService`：项目、Genesis、章节和 review 用例。
@@ -106,6 +110,8 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 本轮已删除主 LLM review 和 repair escalation 的旧 scene 正文输入，改为完整最终 body；结构化状态/事件/时间和 Canon invariants 仍用于核验。场景原始产物没有被销毁，地图检查仍可使用位置等结构化数据。
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
+
+Writer 的世界冲突从当前有效 Canon 的不可变质量接纳快照读取，复用上下文的 N−1 范围与读取基线，并在读取后再次核对版本。候选、未来章节、旧接纳版本和未知来源先排除，再按严重程度排序限额；已解决信号不进入提示。可变质量分析行仍保存审计与候选诊断，当前修复通过原 ReviewVerdict/RepairContract 使用，不把它们提升为正式世界事实。
 
 一次写作上下文固定 project、book_revision 和 N−1 基线；缓存与 ORM 读取按该基线刷新，构造期间变化最多重建一次整包。章节向量只定位来源，实际片段沿 active commit → candidate → draft 核对归属和正文/input hash 后从正式文本重建；未知旧身份被排除，补检限制为每批 20 条、最多 5 批且 query 只嵌入一次。知识页、Obsidian 和 LLM-KB 检查实际渲染输入的语义依赖及文件身份，校验先于排序和限额；渲染使用同一当前状态及标题。章节和知识库索引点包含不可变的来源、内容及 embedding 身份，迟到任务不能替换其他版本；知识库编译结束再次核验基线。不同版本的索引点保留，GC 不在本轮范围。前向迁移 0009 只增加未知依赖字段，旧 Markdown、hash 和人工笔记不变。读基线在进程内上下文副本中保留；序列化内容不携带可复用的读取证明，后续需要基线读取时须重新组装。
 

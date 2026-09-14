@@ -65,16 +65,16 @@
 
 **Interfaces:** 业务 `state`/metadata/角色档案/证物中的 `created_at`、`updated_at`、`refreshed_at` 全部参与 fingerprint。只按明确 schema 边界排除真正系统 audit 字段。manifest 规则版本升级，旧证明 fail closed，现有投影重建后恢复有效。提供单次 runtime/baseline 作用域的依赖准备对象用于批量验证与导出，禁止进程全局缓存。
 
-- [ ] 为三个同名业务时间字段各写 manifest 失效反例，普通 owner 变化与真正系统更新时间噪声作对照；旧 version manifest 被拒、重新投影后的新 manifest 可用，原 Markdown/审计保持。
+- [x] 为三个同名业务时间字段各写 manifest 失效反例，普通 owner 变化与真正系统更新时间噪声作对照；旧 version manifest 被拒、重新投影后的新 manifest 可用，原 Markdown/审计保持。
   ```python
   manifest = page_dependencies(runtime, scope="node", node_id="evidence")
   runtime.world.patch_state("evidence", {"created_at": "04:07"})
   assert not dependencies_valid(manifest, runtime)
   ```
   用实际 runtime 更新接口替换示例，并覆盖实际 list_valid_rows→Writer 和 LLM-KB 读侧。
-- [ ] 操作次数测试经真实 list_valid_rows 与 export 批路径验证 100/200 节点不会出现每页整世界复制；map-only 页不物化无关世界节点。邻接关系增删、认知改变、事实变化仍使相应证明失效；同一对象下一次构建也不能误复用旧状态。
-- [ ] 在现有 dependencies owner 统一规则和共享索引；局部页只取局部依赖，全书 scope 保留完整依赖，避免仅减少正确性检查来伪装优化。业务内容保留原语义，不改 schema 或改写旧记录。
-- [ ] 跑新增依赖测试、knowledge/LLM-KB/Obsidian/source-validation 相关回归，保存红绿证据并提交 `fix(knowledge): preserve business timestamps and reuse dependency preparation`。
+- [x] 操作次数测试经真实 list_valid_rows 与 export 批路径验证 100/200 节点不会出现每页整世界复制；map-only 页不物化无关世界节点。邻接关系增删、认知改变、事实变化仍使相应证明失效；同一对象下一次构建也不能误复用旧状态。
+- [x] 在现有 dependencies owner 统一规则和共享索引；局部页只取局部依赖，全书 scope 保留完整依赖，避免仅减少正确性检查来伪装优化。业务内容保留原语义，不改 schema 或改写旧记录。
+- [x] 跑新增依赖测试、knowledge/LLM-KB/Obsidian/source-validation 相关回归，保存红绿证据并提交 `fix(knowledge): preserve business timestamps and reuse dependency preparation`。
 
 ## Task 4: 倒计时修复去除专属剧情假设
 

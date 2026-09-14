@@ -181,3 +181,5 @@ def test_unreviewed_body_never_resolves_active_obligation(kind, body):
 - [x] 失败不创建 generated/edited revision、成功事件或替代内容，保留原 active pointer、pack、锁状态和旧 trace；错误保留原因，不能吞掉非模型程序错误。沿用现有模型重试，不额外重试。
 - [x] 原“非 Map 保留失败回退”测试按修订契约替换；成功模型、创建空项目与内部物化对照保留。显式模型替身只用于测试准备，不以替身证明真实模型可用。
 - [x] 完成相关回归、全量 QA、静态检查与独立审查。修复 `e8d8600`、`763341a` 经699项相关回归和独立复核；最终全量3990 passed/4 skipped，静态新增问题0。完整镜像及同源隔离角色核验通过，本轮代码与设计/运行记录交付 `origin/for-review`。真实 smoke/L100 仍按 Task8 待验收；Spark 可用前不继续调用生成，不购买额度或静默切换冻结模型。
+
+后续 smokeC 在写前核验中发现 narrative location 与 map/site-state 内部投影共用名称时被错误判为歧义。修复提交 `c472db3` 仅收窄内部 map 绑定名称的共享别名注册，保留稳定 map ID 及真实叙事实体歧义拒绝；相关回归和全量 QA 通过。重新冻结角色后创建 smokeD，前三个阶段成功锁定，`book_blueprint` 因当前 Spark usage limit 返回 503，未保存默认蓝图；MiniMax 可达性不改变 `planning_json_general` 的路由或本次冻结资格。该样本保留为未通过证据，待冻结 Spark 窗口恢复后从现有项目继续或创建同源新项目。

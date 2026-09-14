@@ -77,3 +77,9 @@ Task8Q2 源码修复为 `e8d8600` 和 `763341a`：六个正式阶段及生成、
 2026-09-13 13:05（America/Los_Angeles）复查 Spark 5小时窗口仍为100%，重置时间仍为16:20:13，账户无重置额度。Kimi/DeepSeek 的余额失败按先前实际响应保留，未再次调用验证；MiniMax 的规划路由排除状态不等于模型不可用。原两个失败样本保持不变，没有将失败模板修成通过；正式新 smoke20、独立 L100 与结局审读继续阻塞，需模型资源恢复后使用这个冻结候选创建新样本。没有新建定时任务。
 
 改动交付目标仍为 `origin/for-review`。不自动合并 master、不修旧生产作品、不公开发布。生产替换须满足原路线图的资格并走既定 150 同步路径；这份隔离镜像证据本身不意味着生产已更新。
+
+## 2026-09-13/14 资格续跑记录
+
+在 `763341a` 的写前 smoke 暴露地图绑定名称与叙事地点共用别名空间后，新增修复提交 `c472db34ea00cbbb43a939ca8b97e1d56196c63a`。修复只抑制内部 map/site-state 投影对共享别名解析的碰撞，保留稳定 map ID；真实叙事实体的重复名称和仅地图内的重复名称仍然拒绝。新增回归及地图/Writer/Genesis 合约相关测试 **131 passed**；该提交全量 **3991 passed、4 skipped、5 warnings、6 subtests，508.37 秒，exit 0**，JUnit 无 failure/error。静态检查、compileall、F/E9、source guard、diff、legacy inventory 均通过；Ruff 同基线 1027→1011，新增 0。完整 archive SHA-256 为 `74bc5319cad83db3edda578d326924e5cf5b4793c3bb861383465644d53f135f`，锁文件未变；应用镜像 `sha256:3f0a1de95b2b3ad82a17b5c9dd0a3809f4a0bb6a19eaa402e4c95f4abd1790be`，浏览器镜像 `sha256:c16bcf2a7f66670ccf77b36b0e49ba160901322a135349c2a0bf52f5cb65deff`，各 849 个运行文件核验通过。提交已推送并与 `origin/for-review` 对齐。
+
+基于该提交重新创建 smokeD 项目 `5a2fffe302f5471aa4241a002684749f`，读取并冻结策略版本2后，brief、world、map、story_engine 均经正式 MCP 生成和锁定。`book_blueprint` 在模型调用阶段返回 503，未写入失败的默认蓝图，bootstrap 尚未开始；项目没有章节任务。隔离 bridge 日志明确记录 `gpt-5.3-codex-spark` 当前 5 小时窗口 usage limit，账户配额读取为 100%，无可用 reset credit，预计窗口恢复时间为 2026-09-13 21:33:34 PDT。此前的 MiniMax 静态复核（`qualification/model-preflight-c472db3.json`）返回 HTTP 200 和 `MiniMax-M2.7`，但现有 `planning_json_general` 路由按设计排除 MiniMax，不能把可达性复核记为 Spark 资格或擅自改写冻结模型策略。smokeD 保留所有 MCP、API、bridge 和阶段失败证据，不计入 smoke20 通过；正式 smoke20、独立 L100 与结局审读继续等待冻结模型可用。

@@ -20,8 +20,10 @@ from forwin.protocol.book_state import (
     CognitionOverlay,
     FactNode,
     FactPatch,
+    MapEdge,
     MapNode,
     NodePatch,
+    WorldEdge,
     WorldNode,
 )
 from tests.test_knowledge_system_v46 import _create_project, _session_factory
@@ -387,6 +389,7 @@ def test_reused_exporter_keeps_dependency_work_linear_and_refreshes_preparation(
     tmp_path,
     monkeypatch,
 ) -> None:
+    from forwin.book_state.query import BookStateQuery
     from forwin.obsidian import ObsidianExporter
 
     Session, engine = _session_factory()
@@ -403,19 +406,80 @@ def test_reused_exporter_keeps_dependency_work_linear_and_refreshes_preparation(
                         name=f"Character {index}",
                     )
                 )
+                repo.create_map_node(
+                    MapNode(
+                        id=f"map-{index}",
+                        project_id=project_id,
+                        node_type="site",
+                        name=f"Site {index}",
+                    )
+                )
+            for index in range(99):
+                repo.create_world_edge(
+                    WorldEdge(
+                        id=f"world-edge-{index}",
+                        project_id=project_id,
+                        source_id=f"node-{index}",
+                        target_id=f"node-{index + 1}",
+                        edge_type="knows",
+                        edge_family="knowledge_visibility",
+                    )
+                )
+                repo.create_map_edge(
+                    MapEdge(
+                        id=f"map-edge-{index}",
+                        project_id=project_id,
+                        from_node_id=f"map-{index}",
+                        to_node_id=f"map-{index + 1}",
+                        edge_type="road",
+                    )
+                )
 
-            calls = 0
+            state_reads = 0
+            edge_operations = {"world": 0, "map": 0}
             original_get_state = ObjectiveWorldGraph.get_state
+            original_runtime = BookStateQuery.runtime
 
             def counted_get_state(graph, node_id: str):
-                nonlocal calls
-                calls += 1
+                nonlocal state_reads
+                state_reads += 1
                 return original_get_state(graph, node_id)
 
+            class CountingEdgeDictionary(dict):
+                def __init__(self, kind: str, values) -> None:
+                    super().__init__(values)
+                    self.kind = kind
+
+                def __getitem__(self, key):
+                    edge_operations[self.kind] += 1
+                    return super().__getitem__(key)
+
+                def items(self):
+                    for item in super().items():
+                        edge_operations[self.kind] += 1
+                        yield item
+
+                def values(self):
+                    for value in super().values():
+                        edge_operations[self.kind] += 1
+                        yield value
+
+            def counted_runtime(query, *args, **kwargs):
+                runtime = original_runtime(query, *args, **kwargs)
+                runtime.world.edges_by_id = CountingEdgeDictionary(
+                    "world", runtime.world.edges_by_id
+                )
+                runtime.map.edges_by_id = CountingEdgeDictionary(
+                    "map", runtime.map.edges_by_id
+                )
+                return runtime
+
             monkeypatch.setattr(ObjectiveWorldGraph, "get_state", counted_get_state)
+            monkeypatch.setattr(BookStateQuery, "runtime", counted_runtime)
             exporter = ObsidianExporter(session)
             exporter.export_project(project_id, vault_root=tmp_path)
-            first_calls = calls
+            first_state_reads = state_reads
+            first_edge_operations = dict(edge_operations)
             first_row = (
                 session.query(KnowledgeProjectionPageRow)
                 .filter_by(
@@ -442,18 +506,52 @@ def test_reused_exporter_keeps_dependency_work_linear_and_refreshes_preparation(
                         name=f"Character {index}",
                     )
                 )
+                repo.create_map_node(
+                    MapNode(
+                        id=f"map-{index}",
+                        project_id=project_id,
+                        node_type="site",
+                        name=f"Site {index}",
+                    )
+                )
+            for index in range(99, 199):
+                repo.create_world_edge(
+                    WorldEdge(
+                        id=f"world-edge-{index}",
+                        project_id=project_id,
+                        source_id=f"node-{index}",
+                        target_id=f"node-{index + 1}",
+                        edge_type="knows",
+                        edge_family="knowledge_visibility",
+                    )
+                )
+                repo.create_map_edge(
+                    MapEdge(
+                        id=f"map-edge-{index}",
+                        project_id=project_id,
+                        from_node_id=f"map-{index}",
+                        to_node_id=f"map-{index + 1}",
+                        edge_type="road",
+                    )
+                )
             session.get(Project, project_id).book_revision += 1
-            calls = 0
+            state_reads = 0
+            edge_operations = {"world": 0, "map": 0}
             exporter.export_project(project_id, vault_root=tmp_path)
-            second_calls = calls
+            second_state_reads = state_reads
+            second_edge_operations = dict(edge_operations)
             session.refresh(first_row)
             second_fingerprint = json.loads(first_row.dependency_manifest_json)[
                 "fingerprint"
             ]
 
-        assert first_calls <= 500
-        assert second_calls <= 1_000
-        assert second_calls <= first_calls * 3
+        assert first_state_reads <= 500
+        assert second_state_reads <= 1_000
+        assert second_state_reads <= first_state_reads * 3
+        for kind in ("world", "map"):
+            assert first_edge_operations[kind] <= 1_500
+            assert second_edge_operations[kind] <= 3_000
+            assert second_edge_operations[kind] <= first_edge_operations[kind] * 3
         assert second_fingerprint != first_fingerprint
     finally:
         engine.dispose()

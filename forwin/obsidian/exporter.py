@@ -171,7 +171,12 @@ class ObsidianExporter:
             rel_path = node_page_by_id[node.id]
             page_paths.append(
                 self._write_node_page(
-                    root, project_id, rel_path, node, runtime.world.edges_by_id, as_of
+                    root,
+                    project_id,
+                    rel_path,
+                    node,
+                    self._dependency_preparation.world_edges_for(node.id),
+                    as_of,
                 )
             )
 
@@ -179,7 +184,12 @@ class ObsidianExporter:
             rel_path = map_page_by_id[node.id]
             page_paths.append(
                 self._write_map_node_page(
-                    root, project_id, rel_path, node, runtime.map.edges_by_id, as_of
+                    root,
+                    project_id,
+                    rel_path,
+                    node,
+                    self._dependency_preparation.map_edges_for(node.id),
+                    as_of,
                 )
             )
 

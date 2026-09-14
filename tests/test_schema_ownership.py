@@ -51,6 +51,9 @@ def test_outbox_event_model_is_owned_by_outbox_and_approved_adapters() -> None:
         "forwin/knowledge_system/projection_jobs.py",
         # Trace reads immutable identity; enqueue and lifecycle stay in outbox.
         "forwin/maintenance/trace_upload.py",
+        # Continuation readiness reads/validates the live phase3 intent only;
+        # event status, retry and lease writes remain owned by outbox.
+        "forwin/maintenance/state.py",
         # Export captures its frozen snapshot payload under the existing claim;
         # status, retry and lease mutation remain owned by the outbox service.
         "forwin/novel_export/events.py",

@@ -195,9 +195,11 @@ def test_close_releases_only_materialized_external_resources(monkeypatch) -> Non
 
 
 def test_outbox_phase3_provider_never_builds_generation_bundle(monkeypatch) -> None:
+    from forwin.runtime import container as container_module
     from forwin.runtime.container import RuntimeContainer
 
-    service = object()
+    service = SimpleNamespace(order_controls_recovery=None)
+    builds = []
     core = SimpleNamespace()
     container = _container("outbox_worker")
     monkeypatch.setattr(
@@ -212,15 +214,34 @@ def test_outbox_phase3_provider_never_builds_generation_bundle(monkeypatch) -> N
             AssertionError("outbox phase3 must not build generation services")
         ),
     )
+
+    def no_eager_recovery_models(*_args, **_kwargs):
+        pytest.fail(
+            "registering recovery must not construct task model clients/delegates"
+        )
+
+    monkeypatch.setattr(RuntimeContainer, "_build_llm_client", no_eager_recovery_models)
+    monkeypatch.setattr(
+        container_module, "GateDelegationService", no_eager_recovery_models
+    )
+    monkeypatch.setattr(container_module, "SparkGateDelegate", no_eager_recovery_models)
+
+    def build_service(_self, provided_core):
+        assert provided_core is core
+        builds.append("maintenance")
+        return service
+
     monkeypatch.setattr(
         RuntimeContainer,
         "_build_outbox_post_canon_maintenance",
-        lambda _self, _core: service,
+        build_service,
         raising=False,
     )
 
     assert container._provide_outbox_post_canon_maintenance() is service
     assert container._provide_outbox_post_canon_maintenance() is service
+    assert builds == ["maintenance"]
+    assert callable(service.order_controls_recovery)
     assert container._generation_services is None
 
 

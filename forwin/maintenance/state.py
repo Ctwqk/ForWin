@@ -96,6 +96,15 @@ def post_canon_checkpoint_blockers(
         return []
     if status == "warn" and band_checkpoint_action == "continue":
         return []
+    controls = post_canon_order_controls(rows)
+    if (
+        status in {"warn", "pending"}
+        and controls.get("status") == "pending"
+        and post_canon_control_result(rows).get("checkpoint_delegation_pending") is True
+    ):
+        # The existing phase3 intent still owns an independent delegated review.
+        # Manual checkpoints and hard/future-plan blockers remain terminal.
+        return []
     return [f"band_checkpoint_{status}"]
 
 

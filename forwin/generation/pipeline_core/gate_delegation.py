@@ -16,6 +16,23 @@ from forwin.state.updater import StateUpdater
 logger = logging.getLogger(__name__)
 
 
+def _independently_committed_audit_writer(session_factory):
+    """Commit each audit record before model work can hold its FK locks."""
+    def save_event(event):
+        with session_factory.begin() as session:
+            row = StateUpdater(session).save_decision_event(event)
+            session.expunge(row)
+            return row
+
+    def save_trace(**payload):
+        with session_factory.begin() as session:
+            row = StateUpdater(session).save_prompt_trace(**payload)
+            session.expunge(row)
+            return row
+
+    return GateAuditWriter(save_decision_event=save_event, save_prompt_trace=save_trace)
+
+
 class GateDelegationStage:
     """Owns the gate delegation stage behavior."""
 
@@ -32,6 +49,7 @@ class GateDelegationStage:
         related_object_type: str = "",
         related_object_id: str = "",
         parent_event_id: str = "",
+        release_audit_locks: bool = False,
     ) -> GateResolution:
         request = GateDelegationRequest(
             project_id=project_id,
@@ -53,6 +71,11 @@ class GateDelegationStage:
             )
 
         try:
+            if release_audit_locks:
+                return self.gate_delegation.resolve(
+                    request, policy=self.policy,
+                    audit_writer=_independently_committed_audit_writer(self._SessionFactory),
+                )
             with self._SessionFactory.begin() as audit_session:
                 audit_updater = StateUpdater(audit_session)
                 return self.gate_delegation.resolve(
@@ -78,6 +101,8 @@ class GateDelegationStage:
         checkpoint,
         gate_kind: str,
         chapter_number: int = 0,
+        retry_on_failure: bool = False,
+        release_audit_locks: bool = False,
     ) -> bool:
         if str(getattr(checkpoint, "status", "") or "") not in {"pass", "warn"}:
             return False
@@ -97,6 +122,7 @@ class GateDelegationStage:
             issues = []
         outcome = self._resolve_gate_delegation(
             updater=updater,
+            release_audit_locks=release_audit_locks,
             project_id=str(getattr(checkpoint, "project_id", "") or ""),
             gate_kind=gate_kind,
             scope=(
@@ -141,6 +167,8 @@ class GateDelegationStage:
                 "pause_policy": self.policy.pause.model_dump(mode="json"),
             },
         )
+        if retry_on_failure and outcome.failure_reason:
+            raise RuntimeError(f"Checkpoint delegation unavailable: {outcome.failure_reason}")
         if not outcome.approved:
             return False
         if automatic:

@@ -67,6 +67,8 @@ class PostCanonStage:
         result = self.post_canon_maintenance.run_order_controls(
             canon_commit_id=commit_id,
             runner=run_controls,
+            finalizer=owner.finalize,
+            requires_delegation=owner.requires_delegation,
         )
         session.expire_all()
         return result

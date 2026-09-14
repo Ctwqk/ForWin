@@ -1339,3 +1339,257 @@ def test_completed_phase3_rereads_stale_maintenance_snapshot(recovery_fixture):
             post_canon_continuation_state(rows, session=stale_session, commit=commit)
             == "ready"
         )
+
+
+@pytest.mark.parametrize(
+    "scenario", ["approve", "retry", "changed", "pause", "cached", "crash"]
+)
+def test_phase3_spark_warning_delegation_releases_project_lock(
+    recovery_fixture, monkeypatch, scenario
+):
+    from sqlalchemy import text
+
+    from forwin.canon.outbox_events import CANON_PHASE3_REQUESTED
+    from forwin.maintenance.events import build_post_canon_outbox_handlers
+    from forwin.maintenance.order_controls import (
+        PostCanonOrderControls,
+        recover_order_controls,
+    )
+    from forwin.maintenance.post_canon import PostCanonMaintenanceBusy
+    from forwin.models import BandCheckpoint, BandExperiencePlan, CandidateDraftRecord
+    from forwin.models.genesis import PromptTrace
+    from forwin.models.maintenance import PostCanonMaintenanceRun
+    from forwin.observability.pipeline_trace import (
+        PipelineAuditContext,
+        PipelineTraceRecorder,
+    )
+    from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
+    from tests.test_gate_delegation import FakeSparkLLM, _approval_json
+
+    fixture = recovery_fixture
+    maintenance, commit_id = maintenance_parent(fixture)
+    audits = []
+
+    def audit(self, **kw):
+        audits.append(kw)
+        return FuturePlanAuditRun(
+            project_id=kw["project_id"],
+            current_chapter=kw["current_chapter"],
+            trigger_stage=kw["trigger_stage"],
+        )
+
+    monkeypatch.setattr(FuturePlanAuditor, "audit_and_apply", audit)
+    with fixture.Session.begin() as session:
+        chapter = session.get(ChapterPlan, fixture.chapter_plan_id)
+        session.add(
+            BandExperiencePlan(
+                project_id=fixture.project_id,
+                arc_id=chapter.arc_plan_id,
+                band_id="delegated-band",
+                chapter_start=1,
+                chapter_end=1,
+                task_contract_json=json.dumps(
+                    [
+                        {
+                            "task_type": "plot_advance",
+                            "required_keywords": ["unfulfilled promise"],
+                            "source": "explicit",
+                            "description": "unfulfilled promise",
+                        }
+                    ]
+                ),
+                schedule_json=json.dumps(
+                    {"band_id": "delegated-band", "chapter_start": 1, "chapter_end": 1}
+                ),
+            )
+        )
+        task = session.get(GenerationTask, fixture.task_id)
+        payload = payload_from_json(task.execution_payload_json)
+        policy = payload.policy_snapshot.with_user_settings(gate_delegate="spark")
+        task.execution_payload_json = payload.model_copy(
+            update={"policy_snapshot": policy}
+        ).model_dump_json()
+        session.get(
+            Project, fixture.project_id
+        ).runtime_policy_json = policy.model_dump_json()
+        session.get(
+            CandidateDraftRecord, fixture.candidate_id
+        ).metadata_json = json.dumps({"generation_task_id": fixture.task_id})
+        session.scalar(
+            select(OutboxEvent).where(OutboxEvent.event_type == CANON_PHASE3_REQUESTED)
+        ).available_at = None
+        continuation_row(session, fixture.task_id).available_at = datetime.now(
+            UTC
+        ).replace(year=2099)
+
+    if scenario == "cached":
+        maintenance.run(canon_commit_id=commit_id, worker_id="checks-only")
+        owner = PostCanonOrderControls(
+            policy=policy,
+            trace_recorder=PipelineTraceRecorder(
+                audit=PipelineAuditContext(task_id=fixture.task_id),
+                artifact_store=None,
+                observability=None,
+            ),
+        )
+        maintenance.run_order_controls(canon_commit_id=commit_id, runner=owner.run)
+    if scenario == "crash":
+        original_finalize = PostCanonOrderControls.finalize
+        finalized = []
+
+        def crash_after_finalize(owner, session, commit, result):
+            original_finalize(owner, session, commit, result)
+            finalized.append(True)
+            if len(finalized) == 1:
+                raise RuntimeError("injected crash before final control commit")
+
+        monkeypatch.setattr(PostCanonOrderControls, "finalize", crash_after_finalize)
+
+    class FrozenSpark(FakeSparkLLM):
+        def close(self):
+            pass
+
+        def chat(self, messages, **kwargs):
+            # A fresh worker can inspect the durable wait during independent audit/model work.
+            with fixture.Session.begin() as session:
+                checkpoint = session.scalar(select(BandCheckpoint))
+                assert checkpoint.status == "warn"
+                assert session.scalar(
+                    select(DecisionEvent).where(
+                        DecisionEvent.event_type == "gate_delegation_requested"
+                    )
+                )
+                continuation_row(session, fixture.task_id).available_at = None
+            if scenario == "pause":
+                with fixture.Session.begin() as session:
+                    session.get(GenerationTask, fixture.task_id).pause_requested = True
+            waiting = consume(fixture.Session)
+            if scenario == "pause":
+                assert waiting.processed
+                assert (
+                    decision(fixture.Session, fixture.task_id)["reason"]
+                    == "user_pause_requested"
+                )
+            else:
+                assert not waiting.processed
+                assert waiting.message == "deferred"
+                assert decision(fixture.Session, fixture.task_id) is None
+            # The same persisted controls cannot be delegated by two owners.
+            with pytest.raises(PostCanonMaintenanceBusy):
+                maintenance.recover_order_controls(commit_id)
+            if scenario == "changed":
+                with fixture.Session.begin() as session:
+                    session.scalar(
+                        select(BandExperiencePlan)
+                    ).task_contract_json = json.dumps(
+                        [
+                            {
+                                "task_type": "plot_advance",
+                                "required_keywords": ["changed promise"],
+                                "source": "explicit",
+                                "description": "changed promise",
+                            }
+                        ]
+                    )
+            self.error = (
+                RuntimeError("frozen temporary Spark failure")
+                if scenario == "retry" and not self.calls
+                else None
+            )
+            return super().chat(messages, **kwargs)
+
+    llm = FrozenSpark(_approval_json())
+    maintenance.order_controls_recovery = lambda commit_id: recover_order_controls(
+        maintenance,
+        commit_id=commit_id,
+        llm_client_factory=lambda frozen: llm,
+    )
+    engine = fixture.Session.kw["bind"]
+
+    def bounded_lock(connection):
+        connection.execute(text("SET LOCAL lock_timeout = '500ms'"))
+
+    event.listen(engine, "begin", bounded_lock)
+    try:
+        result = run_one_outbox_event(
+            session_factory=fixture.Session,
+            worker_id="phase3-spark",
+            handlers=build_post_canon_outbox_handlers(
+                service_provider=lambda: maintenance
+            ),
+        )
+        if scenario in {"retry", "crash"}:
+            assert not result.processed
+            assert decision(fixture.Session, fixture.task_id) is None
+            with fixture.Session.begin() as session:
+                requested = session.scalar(
+                    select(DecisionEvent).where(
+                        DecisionEvent.event_type == "gate_delegation_requested"
+                    )
+                )
+                trace = session.scalar(
+                    select(PromptTrace).where(
+                        PromptTrace.decision_event_id == requested.id
+                    )
+                )
+                assert (
+                    trace is not None
+                )  # independent audit survives control rollback/failure
+                assert session.scalar(
+                    select(DecisionEvent).where(
+                        DecisionEvent.event_family == "evaluation_verdict",
+                        DecisionEvent.related_object_id == trace.id,
+                    )
+                )
+                feedback = session.scalar(
+                    select(PostCanonMaintenanceRun).where(
+                        PostCanonMaintenanceRun.step_name == "feedback"
+                    )
+                )
+                control = json.loads(feedback.result_json)["order_controls"]
+                assert control["status"] == "pending"
+                assert control["result"]["checkpoint_delegation_pending"] is True
+                assert session.scalar(select(BandCheckpoint)).status == "warn"
+                session.scalar(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                    )
+                ).available_at = None
+            result = run_one_outbox_event(
+                session_factory=fixture.Session,
+                worker_id="phase3-spark-retry",
+                handlers=build_post_canon_outbox_handlers(
+                    service_provider=lambda: maintenance
+                ),
+            )
+        assert result.processed
+        assert len(llm.calls) == (2 if scenario in {"retry", "crash"} else 1)
+        assert (
+            len(audits) == 1
+        )  # replay resumes delegation, not already committed checks
+        with fixture.Session.begin() as session:
+            checkpoints = list(session.scalars(select(BandCheckpoint)))
+            assert bool(any(row.status == "overridden" for row in checkpoints)) == (
+                scenario != "changed"
+            )
+            assert session.scalar(
+                select(DecisionEvent).where(
+                    DecisionEvent.event_type == "gate_delegation_requested"
+                )
+            )
+            continuation_row(session, fixture.task_id).available_at = None
+            continuation_row(session, fixture.task_id).status = "pending"
+        assert consume(fixture.Session).processed
+        expected_children = 0 if scenario in {"changed", "pause"} else 1
+        assert child_count(fixture.Session, fixture.task_id) == expected_children
+        if scenario == "changed":
+            assert (
+                decision(fixture.Session, fixture.task_id)["reason"]
+                == "maintenance_blocker"
+            )
+        with fixture.Session.begin() as session:
+            continuation_row(session, fixture.task_id).status = "pending"
+        assert consume(fixture.Session).processed
+        assert child_count(fixture.Session, fixture.task_id) == expected_children
+    finally:
+        event.remove(engine, "begin", bounded_lock)

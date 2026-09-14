@@ -428,18 +428,7 @@ class PostCanonOrderControls:
             project_id=commit.project_id,
             chapter_number=commit.chapter_number,
         )
-        if self._resolve_checkpoint is not None:
-            # Resolve delegated warnings before publishing the control result:
-            # continuation must not finalize a stop in the middle of delegation.
-            resume_checkpoint_delegation(
-                session=control_session,
-                project_id=commit.project_id,
-                chapter_number=commit.chapter_number,
-                controls={"checkpoint": checkpoint},
-                policy=self.policy,
-                resolve_checkpoint=self._resolve_checkpoint,
-            )
-        return {
+        result = {
             "project_id": commit.project_id,
             "chapter_number": int(commit.chapter_number or 0),
             "trigger_stage": trigger_stage,
@@ -453,6 +442,36 @@ class PostCanonOrderControls:
             ),
             "checkpoint": checkpoint,
         }
+
+        result["checkpoint_delegation_pending"] = self.requires_delegation(result)
+        return result
+
+    def requires_delegation(self, result):
+        checkpoint = result.get("checkpoint")
+        return bool(
+            self._resolve_checkpoint is not None
+            and not result.get("checkpoint_delegation_completed")
+            and self.policy.pause.gate_delegate == "spark"
+            and self.policy.pause.band_checkpoint_action
+            in {"pause_on_warn", "pause_always"}
+            and isinstance(checkpoint, dict)
+            and checkpoint.get("status") == "warn"
+            and not result.get("blocking_reasons")
+        )
+
+    def finalize(self, session, commit, result):
+        resume_checkpoint_delegation(
+            session=session,
+            project_id=commit.project_id,
+            chapter_number=commit.chapter_number,
+            controls=result,
+            policy=self.policy,
+            resolve_checkpoint=lambda **request: self._resolve_checkpoint(
+                **request, retry_on_failure=True, release_audit_locks=True
+            ),
+        )
+        result.pop("checkpoint_delegation_pending", None)
+        result["checkpoint_delegation_completed"] = True
 
     def _run_post_canon_band_checkpoint(
         self,
@@ -545,6 +564,8 @@ class PostCanonOrderControls:
 def resume_checkpoint_delegation(
     *, session, project_id, chapter_number, controls, policy, resolve_checkpoint
 ):
+    if controls.get("checkpoint_delegation_completed"):
+        return
     checkpoint_payload = controls.get("checkpoint")
     if not isinstance(checkpoint_payload, dict):
         return
@@ -645,30 +666,14 @@ def recover_order_controls(
             trace_recorder=recorder,
             resolve_checkpoint=resolver._resolve_checkpoint_gate,
         )
-        ran_controls = False
-
-        def run_controls(session, commit):
-            nonlocal ran_controls
-            ran_controls = True
-            return owner.run(session, commit, trigger_stage="continuation_preflight")
-
-        result = maintenance.run_order_controls(
+        return maintenance.run_order_controls(
             canon_commit_id=commit_id,
             trace_client=llm_client,
-            runner=run_controls,
+            runner=lambda session, commit: owner.run(
+                session, commit, trigger_stage="continuation_preflight"
+            ),
+            finalizer=owner.finalize,
+            requires_delegation=owner.requires_delegation,
         )
-        if not ran_controls:
-            # Older successful control results can still carry an unresolved
-            # checkpoint. Preserve preflight delegation without rerunning audits.
-            with maintenance.session_factory.begin() as session:
-                resume_checkpoint_delegation(
-                    session=session,
-                    project_id=commit.project_id,
-                    chapter_number=commit.chapter_number,
-                    controls=result,
-                    policy=policy,
-                    resolve_checkpoint=resolver._resolve_checkpoint_gate,
-                )
-        return result
     finally:
         llm_client.close()

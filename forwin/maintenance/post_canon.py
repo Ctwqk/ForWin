@@ -397,15 +397,73 @@ class PostCanonMaintenanceService:
         return self.order_controls_recovery(canon_commit_id)
 
     def run_order_controls(
+        self, *, canon_commit_id: str, runner: OrderControlsRunner,
+        trace_client: Any | None = None, finalizer=None, requires_delegation=None,
+    ) -> dict[str, Any]:
+        result = self._run_order_control_checks(
+            canon_commit_id=canon_commit_id, runner=runner, trace_client=trace_client,
+            requires_delegation=requires_delegation,
+        )
+        if not result.get("checkpoint_delegation_pending"):
+            return result
+        if finalizer is None:
+            raise PostCanonMaintenanceBlocked(
+                "Checkpoint delegation awaits its control owner",
+                canon_commit_id=canon_commit_id, step_name="order_controls",
+            )
+        try:
+            return self._finalize_order_controls(canon_commit_id, finalizer)
+        except PostCanonMaintenanceError:
+            raise
+        except Exception as exc:
+            # Keep the committed pending result for the existing outbox retry.
+            raise PostCanonMaintenanceError(
+                f"post-Canon checkpoint delegation failed: {safe_error_summary(exc)}",
+                canon_commit_id=canon_commit_id, step_name="order_controls",
+            ) from exc
+
+    def _finalize_order_controls(self, canon_commit_id, finalizer):
+        # The checks/checkpoint transaction has committed. Hold only maintenance
+        # rows while the independent Spark audit runs, never its Project FK row.
+        with self.session_factory.begin() as session:
+            rows = self._locked_runs(session, canon_commit_id, skip_locked=True)
+            if len(rows) != len(POST_CANON_STEP_NAMES):
+                raise PostCanonMaintenanceBusy(
+                    "Checkpoint delegation is owned by another runner",
+                    canon_commit_id=canon_commit_id, step_name="order_controls",
+                )
+            self._require_all_steps_succeeded(rows, canon_commit_id)
+            feedback = _row_for_step(rows, "feedback")
+            payload = _load_object(feedback.result_json)
+            controls = dict(payload.get(ORDER_CONTROLS_KEY) or {})
+            result = dict(controls.get("result") or {})
+            if not result.get("checkpoint_delegation_pending"):
+                return result
+            commit = session.get(CanonCommitRecord, canon_commit_id)
+            if commit is None or not is_active_commit(session, commit):
+                raise ValueError("Checkpoint delegation Canon is no longer active")
+            finalizer(session, commit, result)
+            blockers = _blocking_reasons(result)
+            controls.update(
+                status="blocked" if blockers else "succeeded",
+                continuation_blocked=bool(blockers), result=result,
+                completed_at=self._clock().isoformat(),
+            )
+            payload[ORDER_CONTROLS_KEY] = controls
+            feedback.result_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            return result
+
+    def _run_order_control_checks(
         self,
         *,
         canon_commit_id: str,
         runner: OrderControlsRunner,
         trace_client: Any | None = None,
+        requires_delegation=None,
     ) -> dict[str, Any]:
         commit_id = str(canon_commit_id or "").strip()
         try:
-            completed = self._refresh_completed_order_controls(commit_id)
+            completed = self._refresh_completed_order_controls(commit_id, requires_delegation=requires_delegation)
             if completed is not None:
                 return completed
             with self.session_factory.begin() as session:
@@ -421,7 +479,10 @@ class PostCanonMaintenanceService:
                 feedback = _row_for_step(rows, "feedback")
                 payload = _load_object(feedback.result_json)
                 controls = payload.get(ORDER_CONTROLS_KEY)
-                if isinstance(controls, dict) and controls.get("status") == "succeeded":
+                if isinstance(controls, dict) and (
+                    controls.get("status") == "succeeded"
+                    or _delegation_pending(controls)
+                ):
                     # Another runner completed while we waited. Release its rows
                     # before entering the short Project-first refresh transaction.
                     pass
@@ -440,7 +501,8 @@ class PostCanonMaintenanceService:
                     json.dumps(result, ensure_ascii=False, sort_keys=True)
                     blockers = _blocking_reasons(result)
                     payload[ORDER_CONTROLS_KEY] = {
-                        "status": "blocked" if blockers else "succeeded",
+                        "status": ("blocked" if blockers else "pending"
+                                   if result.get("checkpoint_delegation_pending") else "succeeded"),
                         "continuation_blocked": bool(blockers),
                         "completed_at": self._clock().isoformat(),
                         "result": result,
@@ -452,7 +514,7 @@ class PostCanonMaintenanceService:
                     )
                     session.add(feedback)
                     return result
-            completed = self._refresh_completed_order_controls(commit_id)
+            completed = self._refresh_completed_order_controls(commit_id, requires_delegation=requires_delegation)
             if completed is None:
                 raise PostCanonMaintenanceBusy(
                     "Order controls changed during recovery",
@@ -476,7 +538,7 @@ class PostCanonMaintenanceService:
             ) from exc
 
     def _refresh_completed_order_controls(
-        self, commit_id: str
+        self, commit_id: str, *, requires_delegation=None
     ) -> dict[str, Any] | None:
         with self.session_factory.begin() as session:
             snapshot = session.scalar(
@@ -486,7 +548,9 @@ class PostCanonMaintenanceService:
                 )
             )
             controls = _load_object(snapshot).get(ORDER_CONTROLS_KEY)
-            if not isinstance(controls, dict) or controls.get("status") != "succeeded":
+            if not isinstance(controls, dict) or (
+                controls.get("status") != "succeeded" and not _delegation_pending(controls)
+            ):
                 return None
             project_id = session.scalar(
                 select(CanonCommitRecord.project_id).where(
@@ -516,7 +580,9 @@ class PostCanonMaintenanceService:
             feedback = _row_for_step(rows, "feedback")
             payload = _load_object(feedback.result_json)
             controls = payload.get(ORDER_CONTROLS_KEY)
-            if not isinstance(controls, dict) or controls.get("status") != "succeeded":
+            if not isinstance(controls, dict) or (
+                controls.get("status") != "succeeded" and not _delegation_pending(controls)
+            ):
                 return None
             result = dict(controls.get("result") or {})
             checkpoint = result.get("checkpoint")
@@ -541,6 +607,10 @@ class PostCanonMaintenanceService:
                     feedback.result_json = json.dumps(
                         payload, ensure_ascii=False, sort_keys=True
                     )
+            if requires_delegation is not None and requires_delegation(result):
+                result["checkpoint_delegation_pending"] = True
+                payload[ORDER_CONTROLS_KEY] = {**controls, "status": "pending", "result": result}
+                feedback.result_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             return result
 
     def heartbeat(self, claim: PostCanonRunClaim) -> None:
@@ -1297,3 +1367,9 @@ __all__ = [
     "PostCanonRunClaim",
     "post_canon_idempotency_key",
 ]
+
+
+def _delegation_pending(controls: Mapping[str, Any]) -> bool:
+    result = controls.get("result")
+    return (controls.get("status") == "pending" and isinstance(result, dict)
+            and result.get("checkpoint_delegation_pending") is True)

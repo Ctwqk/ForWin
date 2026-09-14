@@ -2,7 +2,7 @@
 
 > 当前路线图：[三阶段改进设计](../docs/superpowers/specs/2026-09-09-forwin-three-stage-design.md)。本页描述开发分支当前实现，生产部署和真实长跑结果另见[实施记录](../docs/operations/three-stage-implementation-2026-09-09.md)。旧 L200 与历史矩阵由本轮 smoke + 全新离线 L100 取代。
 
-2026-09-13 更新依据：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)及[执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。本页按职责记录当前契约；工程审查、完整镜像及真实 smoke20 / 全新离线 L100 的完成情况见[本轮验证记录](../docs/operations/longform-reliability-2026-09-12.md)，彼此不能替代。
+2026-09-14 更新依据：[长篇可靠性设计](../docs/superpowers/specs/2026-09-12-longform-reliability-design.md)、[原执行计划](../docs/superpowers/plans/2026-09-12-longform-reliability.md)及[上下文与续跑补强计划](../docs/superpowers/plans/2026-09-14-context-and-continuation-fixes.md)，修复义务证据、持久续跑、派生事实版本和有效上下文。本页按职责记录当前契约；工程审查、完整镜像及真实 smoke20 / 全新离线 L100 的完成情况见[本轮验证记录](../docs/operations/longform-reliability-2026-09-12.md)，彼此不能替代。
 
 既有范围：`codex/three-stage-improvements` 的版本身份、发布冻结、完整后缀修订、5% 存稿、职责重构、合格反馈链路、地图约束与 Genesis 来源事实传递修复。最终全量回归、角色镜像、长跑及生产切换状态以执行计划为准。
 
@@ -114,6 +114,8 @@ Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。�
 Writer 的世界冲突从当前有效 Canon 的不可变质量接纳快照读取，复用上下文的 N−1 范围与读取基线，并在读取后再次核对版本。候选、未来章节、旧接纳版本和未知来源先排除，再按严重程度排序限额；已解决信号不进入提示。可变质量分析行仍保存审计与候选诊断，当前修复通过原 ReviewVerdict/RepairContract 使用，不把它们提升为正式世界事实。
 
 一次写作上下文固定 project、book_revision 和 N−1 基线；缓存与 ORM 读取按该基线刷新，构造期间变化最多重建一次整包。章节向量只定位来源，实际片段沿 active commit → candidate → draft 核对归属和正文/input hash 后从正式文本重建；未知旧身份被排除，补检限制为每批 20 条、最多 5 批且 query 只嵌入一次。知识页、Obsidian 和 LLM-KB 检查实际渲染输入的语义依赖及文件身份，校验先于排序和限额；渲染使用同一当前状态及标题。章节和知识库索引点包含不可变的来源、内容及 embedding 身份，迟到任务不能替换其他版本；知识库编译结束再次核验基线。不同版本的索引点保留，GC 不在本轮范围。前向迁移 0009 只增加未知依赖字段，旧 Markdown、hash 和人工笔记不变。读基线在进程内上下文副本中保留；序列化内容不携带可复用的读取证明，后续需要基线读取时须重新组装。
+
+知识依赖规则版本为 2：业务状态、角色档案和证物等载荷中的 `created_at`、`updated_at`、`refreshed_at` 全部参与指纹。只在已知 ORM schema 的提取边界排除系统审计列，不按键名递归删除。版本 1 证明保持未知，现有投影重建后才恢复有效；旧 Markdown 和人工笔记不改写为“已验证”。每次批量读取、导出或知识库编译各自建立依赖准备对象，共用认知摘要、邻接索引和按需物化的节点；下次构建重新准备，地图页不读取无关世界状态，全书页仍覆盖完整依赖。
 
 人物和读者的已接纳认知从同一 N−1 基线下的实时 CognitionView 显式状态、override、错误认知及现存证据读取；无记录保持 unknown，可见性默认值不代表知道，知道某个节点不代表知道其全部客观字段。每位观察者从自己的初始快照继续回放，防止其他观察者的新快照跳过其变化。当前证据与历史认知事件分开，更正或清空后的证据不从旧事件补回；事件时点不冒充快照读取时点。Writer 的普通、preview、breakdown、scene、stitch 和 repair 提示及 Reviewer 实际请求区分当前认知、作者计划和本章预期变化；前场景只能通过正文中已经发生的获知事件建立有条件的承接。Reviewer 有数据库会话时按同一基线重读认知，不把序列化上下文当成新鲜度证明。
 

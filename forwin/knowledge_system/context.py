@@ -4,13 +4,13 @@ import hashlib
 import json
 from collections.abc import Iterable
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.visibility import node_page_visibility
-from forwin.models.canon_quality import CanonQualitySignalRow
+from forwin.canon_quality import acceptance
+from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.obsidian.frontmatter import frontmatter_hidden
 from forwin.protocol.world_model import (
@@ -89,7 +89,11 @@ class KnowledgeContextQuery:
                 pages[index] = page.model_copy(update={"frontmatter": {
                     **page.frontmatter, "visibility": "hidden",
                 }})
-        conflicts = self._active_quality_conflicts(project_id)
+        conflicts = self._active_quality_conflicts(
+            project_id,
+            as_of_chapter=as_of,
+            baseline=baseline,
+        )
         snapshot_id = (
             snapshot.id if snapshot is not None else f"book_state:{project_id}:{as_of}"
         )
@@ -157,41 +161,62 @@ class KnowledgeContextQuery:
                 selected = [overview, *selected[: max(0, len(selected) - 1)]]
         return [_page(row) for row in selected]
 
-    def _active_quality_conflicts(self, project_id: str) -> list[WorldModelConflict]:
-        rows = (
-            self.session.execute(
-                select(CanonQualitySignalRow)
-                .where(
-                    CanonQualitySignalRow.project_id == project_id,
-                    CanonQualitySignalRow.status == "open",
-                )
-                .order_by(
-                    CanonQualitySignalRow.severity.desc(),
-                    CanonQualitySignalRow.created_at.desc(),
-                )
-                .limit(8)
-            )
-            .scalars()
-            .all()
+    def _active_quality_conflicts(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int,
+        baseline: CanonReadBaseline,
+    ) -> list[WorldModelConflict]:
+        baseline.assert_current(
+            self.session,
+            project_id=project_id,
+            as_of_chapter=as_of_chapter,
+        )
+        snapshots = acceptance.active_projections(
+            self.session,
+            project_id,
+            before_chapter=as_of_chapter + 1,
+            include_candidate_overlays=False,
+        )
+        signals = [
+            CanonQualitySignal.model_validate(raw)
+            for snapshot in snapshots.values()
+            for raw in snapshot["signals"]
+            if raw.get("status") == "open"
+        ]
+        severity_rank = {"error": 2, "warning": 1, "info": 0}
+        signals.sort(
+            key=lambda item: (
+                severity_rank.get(item.severity, -1),
+                item.chapter_number,
+                item.signal_id,
+            ),
+            reverse=True,
+        )
+        baseline.assert_current(
+            self.session,
+            project_id=project_id,
+            as_of_chapter=as_of_chapter,
         )
         return [
             WorldModelConflict(
-                id=row.id,
-                conflict_type=row.signal_type,
-                severity=row.severity,
-                subject_key=row.subject_key,
-                description=row.description,
+                id=signal.signal_id,
+                conflict_type=signal.signal_type,
+                severity=signal.severity,
+                subject_key=signal.subject_key,
+                description=signal.description,
                 evidence_refs=[
                     EvidenceRef(
                         source_type="canon_quality",
-                        source_id=row.signal_id,
-                        chapter_number=int(row.chapter_number or 0),
-                        summary=row.description,
+                        source_id=signal.signal_id,
+                        chapter_number=int(signal.chapter_number or 0),
+                        summary=signal.description,
                     )
                 ],
-                status=row.status,
+                status=signal.status,
             )
-            for row in rows
+            for signal in signals[:8]
         ]
 
 

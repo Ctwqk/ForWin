@@ -46,7 +46,7 @@ def test_world_conflicts_include_open_canon_quality_signals() -> None:
         engine.dispose()
 
 
-def test_world_context_includes_open_canon_quality_signals() -> None:
+def test_world_context_excludes_unaccepted_quality_diagnostics() -> None:
     engine = get_engine(postgres_test_url("canon_quality_world_context"))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -87,6 +87,9 @@ def test_world_context_includes_open_canon_quality_signals() -> None:
                 chapter_number=6,
             )
 
-        assert any(conflict.conflict_type == "countdown_non_monotonic" for conflict in context.active_world_conflicts)
+        assert not any(
+            conflict.conflict_type == "countdown_non_monotonic"
+            for conflict in context.active_world_conflicts
+        )
     finally:
         engine.dispose()

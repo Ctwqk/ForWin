@@ -336,7 +336,13 @@ def is_candidate_context(session, project_id):
     return project_id in session.info.get(PREFIX, {})
 
 
-def active_projections(session, project_id, before_chapter=None):
+def active_projections(
+    session,
+    project_id,
+    before_chapter=None,
+    *,
+    include_candidate_overlays=True,
+):
     active = session.info.get(PREFIX, {}).get(project_id)
     if active is None:
         active = {
@@ -354,14 +360,15 @@ def active_projections(session, project_id, before_chapter=None):
             snapshot = _load_evidence(session, acceptance_id, project_id, number)
             if snapshot is not None:
                 result[number] = snapshot
-    result.update(
-        {
-            number: data
-            for (book, number), data in session.info.get(OVERLAYS, {}).items()
-            if book == project_id
-            and (before_chapter is None or number < before_chapter)
-        }
-    )
+    if include_candidate_overlays:
+        result.update(
+            {
+                number: data
+                for (book, number), data in session.info.get(OVERLAYS, {}).items()
+                if book == project_id
+                and (before_chapter is None or number < before_chapter)
+            }
+        )
     return result
 
 

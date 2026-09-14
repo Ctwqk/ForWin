@@ -603,6 +603,10 @@ class PostCanonMaintenanceService:
                         if refreshed is not None
                         else {"id": checkpoint["id"], "status": "pending"}
                     )
+                    if result["checkpoint"]["id"] != checkpoint["id"]:
+                        # Completion belongs to the evaluated checkpoint, not its
+                        # replacement after authoritative input evidence changes.
+                        result.pop("checkpoint_delegation_completed", None)
                     payload[ORDER_CONTROLS_KEY] = {**controls, "result": result}
                     feedback.result_json = json.dumps(
                         payload, ensure_ascii=False, sort_keys=True

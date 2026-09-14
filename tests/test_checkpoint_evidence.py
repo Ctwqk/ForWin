@@ -354,6 +354,7 @@ def test_completed_order_controls_refreshes_only_stale_checkpoint(history_sessio
     service._ensure_runs(commit_id)
     previous_result = {
         "checkpoint": before,
+        "checkpoint_delegation_completed": True,
         "future_plan_audit": {"blocking_reasons": [], "id": "retained-audit"},
     }
     for row in session.scalars(
@@ -366,6 +367,16 @@ def test_completed_order_controls_refreshes_only_stale_checkpoint(history_sessio
             row.result_json = json.dumps(
                 {"order_controls": {"status": "succeeded", "result": previous_result}}
             )
+    session.commit()
+
+    def no_repeated_models(_session, _commit):
+        pytest.fail(
+            "completed maintenance models must not run to refresh a deterministic checkpoint"
+        )
+
+    assert service.run_order_controls(
+        canon_commit_id=commit_id, runner=no_repeated_models
+    ) == previous_result
     band = session.scalar(
         select(BandExperiencePlan).where(BandExperiencePlan.project_id == project.id)
     )
@@ -380,16 +391,12 @@ def test_completed_order_controls_refreshes_only_stale_checkpoint(history_sessio
     )
     session.commit()
 
-    def no_repeated_models(_session, _commit):
-        pytest.fail(
-            "completed maintenance models must not run to refresh a deterministic checkpoint"
-        )
-
     after = service.run_order_controls(
         canon_commit_id=commit_id, runner=no_repeated_models
     )
     assert after["checkpoint"]["id"] != before["id"]
     assert after["checkpoint"]["status"] == "warn"
+    assert "checkpoint_delegation_completed" not in after
     assert after["future_plan_audit"] == previous_result["future_plan_audit"]
     assert (
         service.run_order_controls(canon_commit_id=commit_id, runner=no_repeated_models)

@@ -1342,7 +1342,7 @@ def test_completed_phase3_rereads_stale_maintenance_snapshot(recovery_fixture):
 
 
 @pytest.mark.parametrize(
-    "scenario", ["approve", "retry", "changed", "pause", "cached", "crash"]
+    "scenario", ["approve", "retry", "changed", "pause", "cached", "crash", "replaced"]
 )
 def test_phase3_spark_warning_delegation_releases_project_lock(
     recovery_fixture, monkeypatch, scenario
@@ -1452,11 +1452,21 @@ def test_phase3_spark_warning_delegation_releases_project_lock(
         def chat(self, messages, **kwargs):
             # A fresh worker can inspect the durable wait during independent audit/model work.
             with fixture.Session.begin() as session:
-                checkpoint = session.scalar(select(BandCheckpoint))
+                feedback = session.scalar(
+                    select(PostCanonMaintenanceRun).where(
+                        PostCanonMaintenanceRun.step_name == "feedback"
+                    )
+                )
+                controls = json.loads(feedback.result_json)["order_controls"]
+                assert controls["status"] == "pending"
+                checkpoint = session.get(
+                    BandCheckpoint, controls["result"]["checkpoint"]["id"]
+                )
                 assert checkpoint.status == "warn"
                 assert session.scalar(
                     select(DecisionEvent).where(
-                        DecisionEvent.event_type == "gate_delegation_requested"
+                        DecisionEvent.event_type == "gate_delegation_requested",
+                        DecisionEvent.related_object_id == checkpoint.id,
                     )
                 )
                 continuation_row(session, fixture.task_id).available_at = None
@@ -1563,7 +1573,58 @@ def test_phase3_spark_warning_delegation_releases_project_lock(
                 ),
             )
         assert result.processed
-        assert len(llm.calls) == (2 if scenario in {"retry", "crash"} else 1)
+        if scenario == "replaced":
+            with fixture.Session.begin() as session:
+                original_checkpoint = session.scalar(select(BandCheckpoint))
+                assert original_checkpoint.status == "overridden"
+                original_checkpoint_id = original_checkpoint.id
+                session.scalar(select(BandExperiencePlan)).task_contract_json = json.dumps(
+                    [
+                        {
+                            "task_type": "plot_advance",
+                            "required_keywords": ["replacement promise"],
+                            "source": "explicit",
+                            "description": "replacement promise",
+                        }
+                    ]
+                )
+            # Lost-ack replay refreshes approved A into warning B, then an unchanged
+            # replay must reuse B's own completed delegation without another call.
+            for replay in range(2):
+                with fixture.Session.begin() as session:
+                    phase3 = session.scalar(
+                        select(OutboxEvent).where(
+                            OutboxEvent.event_type == CANON_PHASE3_REQUESTED
+                        )
+                    )
+                    phase3.status = "pending"
+                    phase3.available_at = None
+                    continuation_row(session, fixture.task_id).available_at = datetime.now(
+                        UTC
+                    ).replace(year=2099)
+                assert run_one_outbox_event(
+                    session_factory=fixture.Session,
+                    worker_id=f"phase3-replacement-{replay}",
+                    handlers=build_post_canon_outbox_handlers(
+                        service_provider=lambda: maintenance
+                    ),
+                ).processed
+                assert len(llm.calls) == 2
+                assert decision(fixture.Session, fixture.task_id) is None
+                with fixture.Session.begin() as session:
+                    feedback = session.scalar(
+                        select(PostCanonMaintenanceRun).where(
+                            PostCanonMaintenanceRun.step_name == "feedback"
+                        )
+                    )
+                    controls = json.loads(feedback.result_json)["order_controls"]
+                    replacement = session.get(
+                        BandCheckpoint, controls["result"]["checkpoint"]["id"]
+                    )
+                    assert replacement.id != original_checkpoint_id
+                    assert replacement.status == "overridden"
+                    assert controls["status"] == "succeeded"
+        assert len(llm.calls) == (2 if scenario in {"retry", "crash", "replaced"} else 1)
         assert (
             len(audits) == 1
         )  # replay resumes delegation, not already committed checks

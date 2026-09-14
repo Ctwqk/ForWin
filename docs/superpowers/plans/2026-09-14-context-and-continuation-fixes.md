@@ -91,4 +91,4 @@
 
 - [x] 全部任务独立审查通过后，针对 `1454e8a..HEAD` 做一次整体复核；只因明确新发现扩展测试。
 - [x] 同一最终源码跑全量 pytest、compileall、修改文件 F/E9、source guard、diff 和 Ruff 基线比较；不把既有警告当作零警告。
-- [ ] 更新当前设计、执行状态和运行记录；推送并 fetch 核对 `HEAD` 与 `origin/for-review` 一致。旧 smokeD 仍保留旧源码和未通过结果。
+- [x] 更新当前设计、执行状态和运行记录；推送并 fetch 核对 `HEAD` 与 `origin/for-review` 一致。旧 smokeD 仍保留旧源码和未通过结果。

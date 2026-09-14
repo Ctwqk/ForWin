@@ -9,7 +9,9 @@ from forwin.models import Base, ChapterPlan, Project
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.future_plan_audit import FuturePlanAuditor
+from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule
+from forwin.writer.prompt_core import build_single_chapter_draft_prompt
 
 
 def _plan(number: int, *, one_line: str, goals: list[str] | None = None) -> ChapterPlan:
@@ -298,7 +300,85 @@ def test_future_plan_auditor_adds_minute_level_hard_rule_when_missing() -> None:
     assert [issue.issue_type for issue in result.issues] == ["countdown_plan_hard_constraint_missing"]
     assert result.issues[0].blocking is False
     assert result.plan_patches[0].patch_type == "canon_plan_staleness"
-    assert "旧计划/旧摘要时间不得写成前文事实" in result.plan_patches[0].writer_context_injections[0]["instruction"]
+    instruction = result.plan_patches[0].writer_context_injections[0]["instruction"]
+    assert "记忆重置周期（memory_reset）" in instruction
+    assert "accepted Canon 上界90分钟" in instruction
+    assert "同一倒计时单调不增" in instruction
+    assert "候选不得改写 Canon" in instruction
+    assert "既有正文证据先于数值变化" in instruction
+
+
+def test_future_plan_countdown_patch_reaches_writer_without_story_assumptions() -> None:
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=23,
+        trigger_stage="pre_write",
+        plans=[_plan(23, one_line="港口调度员核对下一班船。")],
+        canon_quality_context={
+            "countdown_constraints": [
+                {
+                    "countdown_key": "tide_gate",
+                    "label": "港口潮汐窗",
+                    "latest_remaining_minutes": 45,
+                    "latest_chapter": 22,
+                }
+            ]
+        },
+        obligations=[],
+        target_total_chapters=60,
+        include_current=True,
+    )
+    patch = result.plan_patches[0]
+    context = ChapterContextPack(
+        project_id="project-1",
+        project_title="港口纪事",
+        premise="港口调度员必须在潮窗关闭前引导货轮离港。",
+        genre="现实题材",
+        setting_summary="普通商港。",
+        chapter_number=23,
+        chapter_plan_title="最后一班船",
+        chapter_plan_one_line="港口调度员核对下一班船。",
+        chapter_goals=["完成离港调度"],
+        canon_quality_context={
+            "active_structural_patch_debt": [
+                {
+                    "patch_id": patch.id,
+                    "scope": patch.target_scope,
+                    "payoff_tests": patch.expected_resolution_tests,
+                    "writer_context_injections": patch.writer_context_injections,
+                }
+            ]
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+    instruction = patch.writer_context_injections[0]["instruction"]
+
+    assert instruction in content
+    for required in (
+        "港口潮汐窗",
+        "tide_gate",
+        "45分钟",
+        "同一倒计时单调不增",
+        "候选不得改写 Canon",
+        "既有正文证据先于数值变化",
+        "同一倒计时 reset",
+        "命名新支线",
+        "旧计划/摘要不是事实",
+    ):
+        assert required in instruction
+    for invented_story_fact in (
+        "记忆重置",
+        "系统日志",
+        "主角以为",
+        "公开伪数据",
+        "误导信息",
+        "校准",
+        "熔铸",
+    ):
+        assert invented_story_fact not in instruction
+        assert invented_story_fact not in content
 
 
 def test_future_plan_auditor_applies_minute_level_hard_rule_to_rule_anchors() -> None:
@@ -329,8 +409,15 @@ def test_future_plan_auditor_applies_minute_level_hard_rule_to_rule_anchors() ->
     FuturePlanAuditor().apply_plan_patch(plan, result.plan_patches[0])
     experience = json.loads(plan.experience_plan_json)
 
-    assert any("旧计划/旧摘要时间不得写成前文事实" in item for item in experience["rule_anchors"])
-    assert any("三天/七天" in item for item in experience["rule_anchors"])
+    anchor = next(
+        item for item in experience["rule_anchors"] if "memory_reset" in item
+    )
+    assert "accepted Canon 上界90分钟" in anchor
+    assert "同一倒计时单调不增" in anchor
+    assert "同一倒计时 reset 或命名新支线时合法" in anchor
+    assert "旧计划/摘要不是事实" in anchor
+    for invented_story_fact in ("系统日志", "主角以为", "公开伪数据", "校准", "熔铸"):
+        assert invented_story_fact not in anchor
 
 
 def test_future_plan_auditor_does_not_cross_rewrite_other_countdown_rule_anchors() -> None:

@@ -331,25 +331,12 @@ def _is_false_prior_countdown_clause(clause: str) -> bool:
     )
 
 def _hard_countdown_instruction(*, label: str, key: str, latest: int) -> str:
-    if latest <= 0:
-        return (
-            f"{label}已关闭；本章不得把同一倒计时写成仍有剩余时间，"
-            "除非明确标记为 reset 或 branch clock。"
-        )
-    base = (
-        f"{label}必须延续最新 canon ledger：剩余时间不得超过 {latest} 分钟。"
-        "旧计划/旧摘要时间不得写成前文事实；"
-        "不得写“系统日志原本还有三天/七天/几小时”、"
-        "“主角以为还有几天”或任何大于最新 ledger 的旧尺度，"
-        f"除非明确标记为公开伪数据、误导信息、reset 或 branch clock。"
+    return (
+        f"{label}（{key}）承接 accepted Canon 上界{latest}分钟；"
+        "同一倒计时单调不增，候选不得改写 Canon。"
+        "reset/branch clock 仅当既有正文证据先于数值变化，"
+        "且明确同一倒计时 reset 或命名新支线时合法；旧计划/摘要不是事实。"
     )
-    if key == "memory_reset" or "记忆重置" in label or "重置周期" in label:
-        return (
-            base
-            + f" 本章所有记忆重置/校准/熔铸窗口只能继续小于等于 {latest} 分钟，"
-            "不要写回三天/七天/三小时/两小时等旧尺度。"
-        )
-    return base
 
 def _clause_mentions_countdown(clause: str, *, key: str, label: str) -> bool:
     candidates = _countdown_markers_for(key=key, label=label)

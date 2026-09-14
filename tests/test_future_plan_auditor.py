@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -308,18 +309,30 @@ def test_future_plan_auditor_adds_minute_level_hard_rule_when_missing() -> None:
     assert "既有正文证据先于数值变化" in instruction
 
 
-def test_future_plan_countdown_patch_reaches_writer_without_story_assumptions() -> None:
+@pytest.mark.parametrize(
+    ("latest", "one_line"),
+    [
+        (45, "港口调度员核对下一班船。"),
+        (0, "第三东港外海备用潮位观测站一号闸门关闭窗口又显示剩余5分钟。"),
+    ],
+)
+def test_future_plan_countdown_patch_keeps_long_identity_and_contract_in_writer(
+    latest,
+    one_line,
+) -> None:
+    label = "第三东港外海备用潮位观测站一号闸门关闭窗口"
+    key = "outer_harbor_backup_tide_gate_countdown"
     result = FuturePlanAuditor().audit_plans(
         project_id="project-1",
         current_chapter=23,
         trigger_stage="pre_write",
-        plans=[_plan(23, one_line="港口调度员核对下一班船。")],
+        plans=[_plan(23, one_line=one_line)],
         canon_quality_context={
             "countdown_constraints": [
                 {
-                    "countdown_key": "tide_gate",
-                    "label": "港口潮汐窗",
-                    "latest_remaining_minutes": 45,
+                    "countdown_key": key,
+                    "label": label,
+                    "latest_remaining_minutes": latest,
                     "latest_chapter": 22,
                 }
             ]
@@ -357,9 +370,9 @@ def test_future_plan_countdown_patch_reaches_writer_without_story_assumptions() 
 
     assert instruction in content
     for required in (
-        "港口潮汐窗",
-        "tide_gate",
-        "45分钟",
+        label,
+        key,
+        f"上界{latest}分钟",
         "同一倒计时单调不增",
         "候选不得改写 Canon",
         "既有正文证据先于数值变化",

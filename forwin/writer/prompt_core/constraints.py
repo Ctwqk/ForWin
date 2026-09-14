@@ -422,11 +422,16 @@ def _structural_patch_debt_sections(items: list[dict]) -> list[ConstraintSection
             raw for raw in item.get("writer_context_injections", []) or [] if isinstance(raw, dict)
         ]
         instruction = ""
+        preserve_instruction = False
         if injections:
             instruction = str(injections[0].get("instruction") or "").strip()
+            preserve_instruction = (
+                str(injections[0].get("type") or "") == "countdown_constraint"
+            )
+        rendered_instruction = instruction if preserve_instruction else instruction[:140]
         payoff = "；".join(payoff_tests[:3])
         lines.append(
-            f"    · {scope} patch {patch_id}：{instruction[:140]}；payoff_tests={payoff[:180]}"
+            f"    · {scope} patch {patch_id}：{rendered_instruction}；payoff_tests={payoff[:180]}"
         )
     return [
         ConstraintSection(

@@ -74,12 +74,20 @@ class LLMKnowledgeBaseCompiler:
         from forwin.knowledge_system.dependencies import (
             llm_kb_inputs,
             page_dependencies,
+            prepare_dependencies,
         )
         from forwin.retrieval.source_identity import CanonReadBaseline, text_hash
-        baseline = CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
+
+        baseline = CanonReadBaseline.capture(
+            self.session, project_id, as_of_chapter=as_of
+        )
         from forwin.book_state.query import BookStateQuery
-        runtime = BookStateQuery(self.session, baseline=baseline).runtime(project_id, as_of_chapter=as_of)
-        nodes = [node.model_copy(update={"state": runtime.world.get_state(node.id)}) for node in runtime.world.nodes_by_id.values()]
+
+        runtime = BookStateQuery(self.session, baseline=baseline).runtime(
+            project_id, as_of_chapter=as_of
+        )
+        dependency_preparation = prepare_dependencies(runtime)
+        nodes = list(dependency_preparation.world_nodes().values())
         facts = list(runtime.world.facts_by_id.values())
         safe_nodes = [node for node in nodes if not _hidden_node(node)]
         safe_facts = [fact for fact in facts if not _hidden_fact(fact)]
@@ -87,7 +95,12 @@ class LLMKnowledgeBaseCompiler:
             delta for delta in self.repo.list_graph_deltas(project_id, after_chapter=-1, through_chapter=as_of)
             if not _hidden_delta(delta)
         ]
-        dependency_manifest = page_dependencies(runtime, scope="llm_kb", extra=llm_kb_inputs(self.session, project_id, as_of))
+        dependency_manifest = page_dependencies(
+            runtime,
+            scope="llm_kb",
+            extra=llm_kb_inputs(self.session, project_id, as_of),
+            preparation=dependency_preparation,
+        )
         source_digest = dependency_manifest["fingerprint"]
         common_refs = [f"book_state:snapshot:{as_of}", f"source_digest:{source_digest}"]
 

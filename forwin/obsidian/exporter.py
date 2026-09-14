@@ -109,16 +109,25 @@ class ObsidianExporter:
         manifest_state = load_managed_projection_manifest(root, project_id)
         as_of = self._resolve_as_of(project_id, as_of_chapter)
         from forwin.retrieval.source_identity import CanonReadBaseline
-        self._read_baseline = CanonReadBaseline.capture(self.session, project_id, as_of_chapter=as_of)
+
+        self._read_baseline = CanonReadBaseline.capture(
+            self.session, project_id, as_of_chapter=as_of
+        )
         from forwin.book_state.query import BookStateQuery
+
         runtime = BookStateQuery(self.session, baseline=self._read_baseline).runtime(
             project_id, as_of_chapter=as_of
         )
         self._read_baseline.assert_current(self.session)
         self._dependency_runtime = runtime
-        self._dependency_project_title = self.session.scalar(select(Project.title).where(Project.id == project_id))
+        self._dependency_project_title = self.session.scalar(
+            select(Project.title).where(Project.id == project_id)
+        )
+        from forwin.knowledge_system.dependencies import prepare_dependencies
+
+        self._dependency_preparation = prepare_dependencies(runtime)
         world_nodes = sorted(
-            [node.model_copy(update={"state": runtime.world.get_state(node.id)}) for node in runtime.world.nodes_by_id.values()],
+            self._dependency_preparation.world_nodes().values(),
             key=lambda item: (str(item.node_type), item.id),
         )
         map_nodes = sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id)
@@ -494,9 +503,24 @@ class ObsidianExporter:
                 ):
                     sections[field_name] = current_sections[field_name]
         from forwin.knowledge_system.dependencies import page_dependencies
+
         self._read_baseline.assert_current(self.session)
-        scope = "book" if page_type == "book" else "map_node" if page_type == "map_node" else "node"
-        dependency_manifest = page_dependencies(self._dependency_runtime, scope=scope, node_id="" if scope == "book" else str(frontmatter.get("node_id") or ""), extra={"project_title": self._dependency_project_title} if scope == "book" else None)
+        scope = (
+            "book"
+            if page_type == "book"
+            else "map_node"
+            if page_type == "map_node"
+            else "node"
+        )
+        dependency_manifest = page_dependencies(
+            self._dependency_runtime,
+            scope=scope,
+            node_id="" if scope == "book" else str(frontmatter.get("node_id") or ""),
+            extra={"project_title": self._dependency_project_title}
+            if scope == "book"
+            else None,
+            preparation=self._dependency_preparation,
+        )
         source_digest = _page_source_digest(frontmatter, sections)
         section_digest = _section_digest(sections)
         frontmatter = {

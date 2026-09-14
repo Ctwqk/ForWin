@@ -78,14 +78,14 @@
 
 ## Task 4: 倒计时修复去除专属剧情假设
 
-**Files:** `forwin/review/repair/plan_patch.py`、`tests/test_repair_plan_patch_owner.py`，必要的 countdown/future-plan prompt 回归；核对 `RepairInstruction` 和既有 countdown ledger 的身份/证据字段。
+**Files:** `forwin/review/repair/plan_patch.py`、`forwin/planning/future_plan_audit/helpers.py`、`forwin/writer/prompt_core/constraints.py`、`tests/test_repair_plan_patch_owner.py`，必要的 countdown/future-plan prompt 回归；核对 `RepairInstruction` 和既有 countdown ledger 的身份/证据字段。
 
 **Interfaces:** `countdown_repair_rule_anchors()` 保留具体倒计时的单调、当前值和明确 reset/branch 证据要求，不自动引入记忆重置、系统日志或伪数据。现有修复合同/ledger 传递具体身份，候选修复不能改写正式事实。
 
-- [ ] 用港口潮汐/药效/设备电量等正常题材输入触发旧倒计时与回升修复分支，检查实际 ChapterExperiencePlan.rule_anchors 及 Writer 修复输入不加入无依据的记忆重置/系统日志/伪数据，仍包含具体上界和禁止无证据回升。
-- [ ] 保留真实已给 reset/branch 证据时的合法区别、多倒计时不串线及无倒计时输入无新增规则对照。
-- [ ] 删除通用路径的剧情假设，复用当前 repair contract；已有与错误措辞绑定的测试按业务行为更新，不宽松删除有效倒计时验证。
-- [ ] 跑 repair-plan owner、future-plan auditor、countdown、Writer prompt 回归，保存红绿证据并提交 `fix(review): ground countdown repairs in the supplied contract`。
+- [x] 用港口潮汐/药效/设备电量等正常题材输入触发旧倒计时与回升修复分支，检查实际 ChapterExperiencePlan.rule_anchors 及 Writer 修复输入不加入无依据的记忆重置/系统日志/伪数据，仍包含具体上界和禁止无证据回升。
+- [x] 保留真实已给 reset/branch 证据时的合法区别、多倒计时不串线及无倒计时输入无新增规则对照。
+- [x] 删除通用路径的剧情假设，复用当前 repair contract；同时覆盖 future-plan audit 经 `writer_context_injections` 到实际 Writer 的路径，长时钟名称与 ID 不得导致证据要求被截断。已有与错误措辞绑定的测试按业务行为更新，不宽松删除有效倒计时验证。
+- [x] 跑 repair-plan owner、future-plan auditor、countdown、Writer prompt 回归，保存红绿证据并提交 `fix(review): ground countdown repairs in the supplied contract`。
 
 ## 集成交付
 

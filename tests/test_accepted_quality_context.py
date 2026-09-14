@@ -418,6 +418,51 @@ def test_writer_world_conflicts_use_only_current_accepted_quality_snapshot(
     assert "候选诊断" in repair_prompt
 
 
+def test_writer_world_conflicts_use_current_pointer_with_cached_chapter_plan(
+    accepted_quality_case,
+):
+    with accepted_quality_case.Session() as reader:
+        cached_plan = reader.get(ChapterPlan, "chapter-1")
+        assert cached_plan.active_commit_id == "accept-1-2"
+
+        with accepted_quality_case.Session.begin() as writer:
+            _accept(
+                writer,
+                chapter_number=1,
+                revision=3,
+                signals=[
+                    _signal(
+                        signal_id="revised-current",
+                        chapter_number=1,
+                        draft_id="draft-1-3",
+                        description="修订后正式冲突",
+                    )
+                ],
+            )
+            writer.get(Project, "book").book_revision += 1
+
+        baseline = CanonReadBaseline.capture(reader, "book", as_of_chapter=2)
+        assert baseline.book_revision == 1
+        assert cached_plan.active_commit_id == "accept-1-2"
+
+        world_context = KnowledgeContextQuery(reader).build(
+            project_id="book",
+            chapter_number=3,
+            baseline=baseline,
+        )
+        writer_prompt = render_writer_context(
+            _writer_pack(world_context), layout="single"
+        )
+
+        baseline.assert_current(reader)
+
+    assert [
+        conflict.description for conflict in world_context.active_world_conflicts
+    ] == ["修订后正式冲突"]
+    assert "修订后正式冲突" in writer_prompt
+    assert "：正式冲突" not in writer_prompt
+
+
 def test_world_conflict_read_rejects_baseline_that_changes_after_projection_read(
     accepted_quality_case, monkeypatch
 ):

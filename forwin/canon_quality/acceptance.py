@@ -346,9 +346,12 @@ def active_projections(
     active = session.info.get(PREFIX, {}).get(project_id)
     if active is None:
         active = {
-            chapter.chapter_number: chapter.active_commit_id
-            for chapter in session.scalars(
-                select(ChapterPlan).where(
+            chapter_number: active_commit_id
+            for chapter_number, active_commit_id in session.execute(
+                select(
+                    ChapterPlan.chapter_number,
+                    ChapterPlan.active_commit_id,
+                ).where(
                     ChapterPlan.project_id == project_id,
                     ChapterPlan.active_commit_id.is_not(None),
                 )

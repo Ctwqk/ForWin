@@ -2840,55 +2840,38 @@
     return Boolean(saved);
   }
 
-  function fanqieModalTexts() {
-    return Array.from(document.querySelectorAll('.arco-modal-wrapper, .byte-modal, .semi-modal, .auxo-modal, [role="dialog"]'))
-      .map((node) => String(node?.innerText || node?.textContent || '').trim())
-      .filter(Boolean);
-  }
-
-  function hasFanqieRiskDetectionModal() {
-    return fanqieModalTexts().some((text) => text.includes('是否进行内容风险检测'));
-  }
-
   function hasFanqiePublishSettings() {
-    return fanqieModalTexts().some((text) => includesAny(text, ['发布设置', '非AI', 'AI']))
-      || includesAny(pageText(), ['发布设置', '非AI', 'AI']);
+    return Boolean(findFanqiePublishSettingsModal());
   }
 
   function findFanqiePublishSettingsModal() {
-    return document.querySelector('.publish-confirm-container-new')
-      || Array.from(document.querySelectorAll('.arco-modal, [role="dialog"]'))
-        .find((node) => String(node?.innerText || node?.textContent || '').includes('发布设置'))
+    return Array.from(document.querySelectorAll('.publish-confirm-container-new, .arco-modal, [role="dialog"]'))
+      .find((node) => isVisibleElement(node)
+        && String(node.innerText || node.textContent || '').includes('发布设置'))
       || null;
   }
 
-  async function chooseFanqieNonAiIfPresent() {
+  async function chooseFanqieAiDisclosure() {
     const modal = await waitForCondition(() => findFanqiePublishSettingsModal(), 4000);
-    if (!(modal instanceof HTMLElement)) {
+    if (!(modal instanceof HTMLElement)
+      || !String(modal.innerText || modal.textContent || '').replace(/\s+/g, '').includes('是否使用AI')) {
       return false;
     }
-    const noInput = modal.querySelector('input[type="radio"][value="2"]');
-    const yesInput = modal.querySelector('input[type="radio"][value="1"]');
     const radioLabels = Array.from(modal.querySelectorAll('label.arco-radio'));
-    const noLabel = radioLabels.find((node) => String(node?.innerText || node?.textContent || '').trim() === '否') || null;
-    const clickTarget = noLabel instanceof HTMLElement
-      ? noLabel
-      : (noInput instanceof HTMLElement ? noInput : null);
-    if (!(clickTarget instanceof HTMLElement)) {
+    const yesLabel = radioLabels.find((node) => String(node.innerText || node.textContent || '').trim() === '是');
+    const noLabel = radioLabels.find((node) => String(node.innerText || node.textContent || '').trim() === '否');
+    const yesInput = yesLabel?.querySelector('input[type="radio"]');
+    const noInput = noLabel?.querySelector('input[type="radio"]');
+    if (!(yesLabel instanceof HTMLElement) || !(yesInput instanceof HTMLInputElement)
+      || !(noInput instanceof HTMLInputElement)) {
       return false;
     }
-    clickTarget.click();
-    if (noInput instanceof HTMLInputElement) {
-      noInput.dispatchEvent(new Event('input', { bubbles: true }));
-      noInput.dispatchEvent(new Event('change', { bubbles: true }));
-    }
+    // ForWin's automated chapter production uses AI. Never declare it non-AI.
+    yesLabel.click();
+    yesInput.dispatchEvent(new Event('input', { bubbles: true }));
+    yesInput.dispatchEvent(new Event('change', { bubbles: true }));
     await sleep(400);
-    const selected = await waitForCondition(() => {
-      if (!(noInput instanceof HTMLInputElement)) {
-        return null;
-      }
-      return noInput.checked === true && (!(yesInput instanceof HTMLInputElement) || yesInput.checked === false);
-    }, 2000);
+    const selected = await waitForCondition(() => yesInput.checked === true && noInput.checked === false, 2000);
     return Boolean(selected);
   }
 
@@ -2897,9 +2880,9 @@
     if (!(modal instanceof HTMLElement)) {
       return false;
     }
-    const primary = modal.querySelector('.arco-modal-footer button.arco-btn-primary')
-      || Array.from(modal.querySelectorAll('button, [role="button"]'))
-        .find((node) => String(node?.innerText || node?.textContent || '').trim() === '确认发布')
+    const primary = Array.from(modal.querySelectorAll('button, [role="button"]'))
+      .find((node) => isVisibleElement(node)
+        && String(node.innerText || node.textContent || '').trim() === '确认发布')
       || null;
     if (!(primary instanceof HTMLElement)) {
       return false;
@@ -2910,30 +2893,29 @@
     return Boolean(closed);
   }
 
-  async function handleFanqieRiskDetectionModal() {
-    if (!hasFanqieRiskDetectionModal()) {
-      return false;
+  function findFanqiePublishStep() {
+    const settings = findFanqiePublishSettingsModal();
+    if (settings) {
+      return { settings };
     }
-    const cancelled = await clickExactTexts(['取消'], 2000)
-      || await clickByKeywords(['取消'], 2000);
-    if (!cancelled) {
-      return false;
+    for (const modal of document.querySelectorAll('.arco-modal, [role="dialog"]')) {
+      if (!isVisibleElement(modal)) {
+        continue;
+      }
+      const text = String(modal.innerText || modal.textContent || '');
+      const label = text.includes('检测到你还有错别字未修改') ? '提交'
+        : (text.includes('请选择内容检测方式') ? '仅基础检测' : '');
+      if (!label) {
+        continue;
+      }
+      const button = Array.from(modal.querySelectorAll('button, [role="button"]'))
+        .find((node) => isVisibleElement(node)
+          && String(node.innerText || node.textContent || '').trim() === label);
+      if (button) {
+        return { button };
+      }
     }
-    await waitForCondition(() => !hasFanqieRiskDetectionModal(), 4000);
-    await sleep(500);
-    return true;
-  }
-
-  async function waitForFanqiePublishSettings(timeoutMs = 5000) {
-    return waitForCondition(() => {
-      if (hasFanqiePublishSettings()) {
-        return true;
-      }
-      if (includesAny(pageText(), ['确定', '下一步'])) {
-        return 'intermediate-confirm';
-      }
-      return null;
-    }, timeoutMs);
+    return null;
   }
 
   async function dismissFanqiePublishSettingsIfPresent() {
@@ -2958,50 +2940,29 @@
   }
 
   async function confirmFanqiePublishIfNeeded(publish) {
-    if (!window.location.href.includes('fanqienovel.com')) {
+    if (!publish || !window.location.href.includes('fanqienovel.com')) {
       return false;
     }
-    await dismissFanqieGuideModal();
-    let signal = await waitForFanqiePublishSettings(4000);
-    if (hasFanqieRiskDetectionModal()) {
-      await handleFanqieRiskDetectionModal();
-      signal = await waitForFanqiePublishSettings(5000);
-    }
-    let text = pageText();
-    if (!hasFanqiePublishSettings() && signal === 'intermediate-confirm') {
-      try {
-        const focused = document.activeElement;
-        if (focused instanceof HTMLElement) {
-          focused.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-          focused.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', bubbles: true }));
-          focused.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-          focused.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
-          await sleep(600);
-          text = pageText();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const step = await waitForCondition(() => findFanqiePublishStep(), 5000);
+      if (!step) {
+        return false;
+      }
+      if (step.settings) {
+        setDebugStep('fanqie-publish-settings-open');
+        const selected = await chooseFanqieAiDisclosure();
+        setDebugStep('fanqie-publish-settings-ai', { selected });
+        if (!selected) {
+          return false;
         }
-      } catch (_error) {
-        // Ignore fallback keyboard failures.
+        const confirmed = await submitFanqiePublishSettings();
+        setDebugStep('fanqie-publish-settings-confirmed', { confirmed });
+        return confirmed;
       }
-      if (!hasFanqiePublishSettings()) {
-        await clickExactTexts(['确定', '我知道了', '继续', '下一步'], 2500)
-          || await clickByKeywords(['确定', '我知道了', '继续', '下一步'], 2500);
-        await sleep(800);
-        await waitForFanqiePublishSettings(4000);
-        text = pageText();
-      }
+      step.button.click();
+      await sleep(800);
     }
-    if (!hasFanqiePublishSettings()) {
-      return false;
-    }
-    setDebugStep('fanqie-publish-settings-open');
-    const nonAiSelected = await chooseFanqieNonAiIfPresent();
-    setDebugStep('fanqie-publish-settings-non-ai', { selected: nonAiSelected });
-    const confirmed = await submitFanqiePublishSettings();
-    setDebugStep('fanqie-publish-settings-confirmed', { confirmed });
-    if (!confirmed && !publish) {
-      return false;
-    }
-    return confirmed;
+    return false;
   }
 
   function resolveOfficialStatus(text) {

@@ -2853,13 +2853,34 @@
 
   async function chooseFanqieAiDisclosure() {
     const modal = await waitForCondition(() => findFanqiePublishSettingsModal(), 4000);
-    if (!(modal instanceof HTMLElement)
-      || !String(modal.innerText || modal.textContent || '').replace(/\s+/g, '').includes('是否使用AI')) {
+    const compactText = (node) => String(node?.innerText || node?.textContent || '').replace(/\s+/g, '');
+    if (!(modal instanceof HTMLElement) || !compactText(modal).includes('是否使用AI')) {
       return false;
     }
-    const radioLabels = Array.from(modal.querySelectorAll('label.arco-radio'));
-    const yesLabel = radioLabels.find((node) => String(node.innerText || node.textContent || '').trim() === '是');
-    const noLabel = radioLabels.find((node) => String(node.innerText || node.textContent || '').trim() === '否');
+    // Answer only within the smallest container holding the AI question. A container
+    // that also holds another 是/否 pair is ambiguous, so confirmation stops.
+    const questionScopes = new Set();
+    for (const label of modal.querySelectorAll('label.arco-radio')) {
+      let scope = label.parentElement;
+      while (scope && scope !== modal && !compactText(scope).includes('是否使用AI')) {
+        scope = scope.parentElement;
+      }
+      if (scope) {
+        questionScopes.add(scope);
+      }
+    }
+    const answerPairs = Array.from(questionScopes).map((scope) => {
+      const labels = Array.from(scope.querySelectorAll('label.arco-radio'));
+      return {
+        yes: labels.filter((node) => compactText(node) === '是'),
+        no: labels.filter((node) => compactText(node) === '否'),
+      };
+    }).filter((pair) => pair.yes.length === 1 && pair.no.length === 1);
+    if (answerPairs.length !== 1) {
+      return false;
+    }
+    const [yesLabel] = answerPairs[0].yes;
+    const [noLabel] = answerPairs[0].no;
     const yesInput = yesLabel?.querySelector('input[type="radio"]');
     const noInput = noLabel?.querySelector('input[type="radio"]');
     if (!(yesLabel instanceof HTMLElement) || !(yesInput instanceof HTMLInputElement)
@@ -2878,19 +2899,19 @@
   async function submitFanqiePublishSettings() {
     const modal = await waitForCondition(() => findFanqiePublishSettingsModal(), 4000);
     if (!(modal instanceof HTMLElement)) {
-      return false;
+      return { clicked: false, closed: false };
     }
     const primary = Array.from(modal.querySelectorAll('button, [role="button"]'))
       .find((node) => isVisibleElement(node)
         && String(node.innerText || node.textContent || '').trim() === '确认发布')
       || null;
     if (!(primary instanceof HTMLElement)) {
-      return false;
+      return { clicked: false, closed: false };
     }
     primary.click();
     await sleep(1200);
     const closed = await waitForCondition(() => !findFanqiePublishSettingsModal(), 4000);
-    return Boolean(closed);
+    return { clicked: true, closed: Boolean(closed) };
   }
 
   function findFanqiePublishStep() {
@@ -2941,28 +2962,33 @@
 
   async function confirmFanqiePublishIfNeeded(publish) {
     if (!publish || !window.location.href.includes('fanqienovel.com')) {
-      return false;
+      return { confirmed: false, phase: 'not-requested', publishClicked: false };
     }
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const step = await waitForCondition(() => findFanqiePublishStep(), 5000);
       if (!step) {
-        return false;
+        return { confirmed: false, phase: 'unrecognized-dialog', publishClicked: false };
       }
       if (step.settings) {
         setDebugStep('fanqie-publish-settings-open');
         const selected = await chooseFanqieAiDisclosure();
         setDebugStep('fanqie-publish-settings-ai', { selected });
         if (!selected) {
-          return false;
+          return { confirmed: false, phase: 'ai-disclosure-unverified', publishClicked: false };
         }
-        const confirmed = await submitFanqiePublishSettings();
-        setDebugStep('fanqie-publish-settings-confirmed', { confirmed });
-        return confirmed;
+        const submitted = await submitFanqiePublishSettings();
+        setDebugStep('fanqie-publish-settings-confirmed', submitted);
+        if (!submitted.clicked) {
+          return { confirmed: false, phase: 'confirm-button-missing', publishClicked: false };
+        }
+        return submitted.closed
+          ? { confirmed: true, phase: 'confirmed', publishClicked: true }
+          : { confirmed: false, phase: 'settings-still-open', publishClicked: true };
       }
       step.button.click();
       await sleep(800);
     }
-    return false;
+    return { confirmed: false, phase: 'step-limit', publishClicked: false };
   }
 
   function resolveOfficialStatus(text) {
@@ -3905,8 +3931,25 @@
           return confirmRisk;
         }
         setDebugStep('run-upload-fanqie-confirm-start', { publish: Boolean(payload.publish) });
-        await confirmFanqiePublishIfNeeded(Boolean(payload.publish));
-        setDebugStep('run-upload-fanqie-confirm-done', { publish: Boolean(payload.publish) });
+        const fanqieConfirm = await confirmFanqiePublishIfNeeded(Boolean(payload.publish));
+        setDebugStep('run-upload-fanqie-confirm-done', { publish: Boolean(payload.publish), ...fanqieConfirm });
+        // A stopped confirmation must not fall through to page-text outcome verification.
+        if (payload.publish && !fanqieConfirm.confirmed) {
+          return {
+            ok: false,
+            currentUrl: window.location.href,
+            error: fanqieConfirm.publishClicked
+              ? `番茄已点击确认发布，但发布设置未关闭（${fanqieConfirm.phase}），远端状态未知，需先核对再重试。`
+              : `番茄发布确认在 ${fanqieConfirm.phase} 处停止，未点击确认发布。`,
+            errorCode: 'publish-not-confirmed',
+            resultPayload: {
+              mode: 'publish',
+              chapter_title: payload.chapter_title,
+              confirm_phase: fanqieConfirm.phase,
+              publish_clicked: fanqieConfirm.publishClicked,
+            },
+          };
+        }
       }
       if (window.location.href.includes('write.qq.com') && payload.publish) {
         const confirmRisk = buildRiskPauseResult('before-confirm');

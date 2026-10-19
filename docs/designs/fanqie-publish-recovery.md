@@ -12,9 +12,9 @@ Allow an authorized ForWin-generated chapter to pass Fanqie's current publicatio
 
 ## Design
 
-Draft requests return before any publication dialog action. Publication confirmation recognizes only visible settings dialogs and the observed typo/content-check prompts. Each action targets an exact button in its recognized modal; unknown prompts stop the flow. The confirmation path does not invoke the generic guide dismissor.
+Draft requests return before any publication dialog action. Publication confirmation recognizes only visible settings dialogs and the observed typo/content-check prompts. Each action targets an exact button in its recognized modal; unknown prompts stop the flow. The confirmation path does not invoke the generic guide dismissor. A stopped confirmation ends the upload command with `publish-not-confirmed` and its stop phase, so page-text outcome verification runs only after the settings dialog closes. If “确认发布” was clicked but the dialog stayed open, the error reports an unknown remote state that must be reconciled before any retry.
 
-ForWin-generated text is declared AI-assisted by selecting “是” for “是否使用AI”. The code verifies the radio selection before pressing “确认发布”; an absent or unselectable disclosure form stops confirmation. The current observed form has one 是/否 radio pair and a separate scheduling switch. A maximum of four transitions bounds the flow.
+ForWin-generated text is declared AI-assisted by selecting “是” for “是否使用AI”. The answer is taken from the smallest container that holds that question; if that container also holds another 是/否 pair, confirmation stops. The code verifies the radio selection before pressing “确认发布”; an absent, ambiguous, or unselectable disclosure form stops confirmation. The current observed form has one 是/否 radio pair and a separate scheduling switch. A maximum of four transitions bounds the flow.
 
 Operator recovery must inspect the deployed endpoint rather than infer its behavior from a newer checkout. The legacy project upload endpoint can create a chapter job, while the newer source requires a materialized Canon job. Failure/cancellation never proves that the remote draft is absent: reconcile stable remote IDs and complete normalized text first.
 
@@ -28,8 +28,8 @@ Unknown future platform dialogs stop confirmation. Existing outcome verification
 
 ## Verification
 
-- Eight behavior regressions cover drafts, truthful disclosure, missing/unselectable disclosure, AI sidebar false positives, hidden dialogs, unknown warnings, and the observed publication sequence. Failures were observed before the corresponding fixes.
-- All 190 extension tests pass; Chromium and Firefox packages build.
+- Sixteen behavior regressions run against a selector-aware DOM fixture. They cover drafts, truthful disclosure, missing, ambiguous, or unselectable disclosure, AI sidebar false positives, hidden dialogs, unknown warnings, and the observed publication sequence. Upload-level regressions check that a stopped confirmation returns `publish-not-confirmed` instead of a page-text receipt. Failures were observed before the corresponding fixes.
+- All 198 extension tests pass; Chromium and Firefox packages build.
 - Independent code review found and verified the fix for generic guide dismissal after the publish action.
 - Run operator readiness against the actual production service, using an explicit tunnel endpoint when the direct LAN route is unavailable. Pre-PR evaluation's fixed LAN endpoint may fail independently of the application.
 

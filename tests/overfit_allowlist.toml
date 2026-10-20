@@ -1,0 +1,1790 @@
+# Allowlist for tests/test_no_story_content_in_runtime.py (design §7.2).
+# Story content must be deleted, never allowlisted as catalog/lexicon: until its
+# deletion lands it is registered as pending_removal with remove_in.
+#
+# One entry per (path, symbol); symbol "<file>" is the fixture_term text scan, and an
+# entry without symbol covers the listed checks for the whole file. A hit goes to its
+# symbol entry first, then to the file-level entry.
+# max_literals: pending_removal = current count (may only shrink); other categories =
+# current count rounded up to the next 10 (exact below 10). Growth needs review.
+# A task that trims (rather than deletes) a pending_removal symbol re-registers the
+# residual content under its real category (ledger ruling R2).
+
+[meta]
+completed_phase = ""
+
+[story_id_literal]
+allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
+  "fact_conflict", "thread_closed_too_early", "thread_keep_open", "thread_already_closed",
+  "thread_drift", "thread_time_extraction", "fact_nodes", "gap_between_public_and_actual",
+  # protocol field / enum / ref-namespace names (not story content); "fact_" is the bare
+  # prefix of generated ids such as f"fact_{new_id()}"
+  "thread_beats", "thread_time", "fact_event", "fact_evidence", "fact_node", "fact_"]
+
+[canary]
+seed_terms = [
+  "母星", "殖民", "救父", "父亲被围", "father_sieged", "homeworld", "colony", "回声账",
+  "恢复后门", "家族档案", "记忆重置", "记忆熔铸", "档案署", "钟塔", "民间记忆馆", "地下检修线",
+  "追踪器", "磁力铐", "羁押室", "馆员", "审计员", "巡检员", "工号在线", "刻痕", "插孔",
+  "memory_reset", "archive_cleanup", "terminal_audit_window", "core_access_window",
+  "public_countdown", "失业档案修复师", "地下算法师", "三十万", "陆明", "韩青",
+  # merged from tests/test_no_story_specific_hardcoding.py
+  "d2338a0e8bfe4e00a068b03ce9e9b0bf", "旧城遗档", "白塔重置", "林澈", "沈宴秋", "洛庭若",
+  "顾临川", "林远舟", "沈砚", "白塔", "岫苑", "地下旧轨", "潮汐钟楼", "失忆广场", "档案公会",
+  "白塔巡检员", "林氏", "守仓阙微阑", "礼川诸州", "裴星野", "终端审计", "核心层", "档案清理",
+  "熔铸协议", "隐藏子程序倒计时",
+]
+harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
+ignore = []
+
+[[entry]]
+path = "forwin/application/projects/common.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "续写节拍与护栏文本中的剧本二词；Task 6 删除"
+max_literals = 10
+
+[[entry]]
+path = "forwin/application/projects/common.py"
+symbol = "_EXTENSION_BEATS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "12 个写死的剧本二续写节拍；Task 6 删除"
+max_literals = 24
+
+[[entry]]
+path = "forwin/application/projects/genesis.py"
+symbol = "start_project_writing"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "匹配本系统地图生成异常消息中的“地图”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/audience/feedback.py"
+symbol = "_NEGATIVE_COMMENT_KEYWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "读者评论情绪词（题材中立）"
+max_literals = 8
+
+[[entry]]
+path = "forwin/audience/feedback.py"
+symbol = "_POSITIVE_COMMENT_KEYWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "读者评论情绪词（题材中立）"
+max_literals = 7
+
+[[entry]]
+path = "forwin/audience/feedback.py"
+symbol = "_QUESTION_COMMENT_KEYWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "读者评论疑问词（题材中立）"
+max_literals = 6
+
+[[entry]]
+path = "forwin/audience/feedback.py"
+symbol = "_update_candidate_levels"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "评论目标“整体”的固定写法"
+max_literals = 1
+
+[[entry]]
+path = "forwin/audit/gate_ledger.py"
+symbol = "GateLedgerService._recommendations"
+checks = ["cjk_inline_iteration"]
+category = "prompt_text"
+justification = "给运营的建议说明文字（design §7.2 豁免的说明性文本），不参与判定"
+max_literals = 2
+
+[[entry]]
+path = "forwin/book_state/extraction/cognitive.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一（母星/救父/father_sieged）词；Task 3 删除整个文件"
+max_literals = 7
+
+[[entry]]
+path = "forwin/book_state/extraction/cognitive.py"
+symbol = "CognitiveConsistencyReviewer.review"
+checks = ["story_id_literal", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一 must_not_reveal 键与救父关键词；Task 3 删除 v4 抽取"
+max_literals = 5
+
+[[entry]]
+path = "forwin/book_state/extraction/delta_extractor.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一 colony/homeworld/father_sieged；Task 3 删除整个文件"
+max_literals = 7
+
+[[entry]]
+path = "forwin/book_state/extraction/delta_extractor.py"
+symbol = "BookStateExtractionDeltaExtractor.extract"
+checks = ["story_id_literal"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "写死 line_colony_defense / gap_homeworld_siege 等剧本一世界线与揭示键；Task 3 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/book_state/extraction/evidence_rules.py"
+symbol = "infer_source_type"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "按剧本一（舰队/通讯/求援）关键词推断证据来源；Task 3 删除"
+max_literals = 8
+
+[[entry]]
+path = "forwin/book_state/extraction/graph_delta.py"
+symbol = "_light_state_extraction_delta"
+checks = ["story_id_literal", "cjk_regex"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "pulp_light 正则造节点兜底（含 fact_pulp_light_ch 前缀）；P2 删除"
+max_literals = 4
+
+[[entry]]
+path = "forwin/book_state/extraction/graph_delta.py"
+symbol = "_unique_light_names"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "正则兜底的动词停用表；P2 随兜底一起删除"
+max_literals = 9
+
+[[entry]]
+path = "forwin/book_state/extraction/reveal.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一（母星/父亲被围/father_sieged）词；Task 3 删除整个文件"
+max_literals = 3
+
+[[entry]]
+path = "forwin/book_state/extraction/reveal.py"
+symbol = "RevealReviewer.review"
+checks = ["story_id_literal", "cjk_membership"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一 father_sieged 揭示规则与关键词；Task 3 删除"
+max_literals = 5
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "_NON_NAME_WORDS 中的剧本二名词“回声账”；Task 9b 删除"
+max_literals = 2
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_COMMON_COMPOUND_SURNAMES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "中文复姓"
+max_literals = 60
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_COMMON_SINGLE_CHAR_SURNAMES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "中文单姓"
+max_literals = 1
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_NON_EXPANDED_NAME_SUFFIX_STARTS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "人名切分停用字（虚词）"
+max_literals = 20
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_NON_NAME_END_CHARS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "人名切分停用字"
+max_literals = 9
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_NON_NAME_START_CHARS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "人名切分停用字"
+max_literals = 20
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_NON_NAME_WORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "非人名词表混入剧本二名词（遗书/回声账/首席架构/原型设计…）；Task 9b 只保留功能词，之后改登记为 language_lexicon"
+max_literals = 14
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_NON_PERSON_NAME_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "非人名关键词混入剧本名词；Task 9b 只保留功能词，之后改登记为 language_lexicon"
+max_literals = 66
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "_mother_name_observation_patterns"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "“母亲”锚点观测模式；Task 9b 删除"
+max_literals = 6
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "extract_candidate_character_names"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "候选人名正则，含羁押/营救模式；P2 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/canon_names.py"
+symbol = "extract_canon_name_anchors"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "“母亲”/原型设计者锚点抽取；Task 9b 删除"
+max_literals = 3
+
+[[entry]]
+path = "forwin/canon_quality/chapter_review_form/evidence_validator.py"
+symbol = "PRONOUN_SUBJECTS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "代词"
+max_literals = 10
+
+[[entry]]
+path = "forwin/canon_quality/chapter_review_form/llm_caller.py"
+symbol = "_coerce_bool_field"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "解析 LLM 是/否 回答"
+max_literals = 8
+
+[[entry]]
+path = "forwin/canon_quality/obligation_verifier.py"
+symbol = "ObligationResolutionVerifier._verify_by_type"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "义务兑现标记词；P2 删除"
+max_literals = 10
+
+[[entry]]
+path = "forwin/canon_quality/obligation_verifier.py"
+symbol = "_CAUSAL_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "因果标记词；P2 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/canon_quality/obligation_verifier.py"
+symbol = "_PAYOFF_STOP_WORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "兑现条件措辞的停用词"
+max_literals = 8
+
+[[entry]]
+path = "forwin/canon_quality/obligation_verifier.py"
+symbol = "_matched_payoff_markers"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "章节标签（第N章前/内）解析"
+max_literals = 1
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "BLOCKED_INTERNAL_STATE_KEYS 中的剧本二倒计时键与角色正则中的“巡检员”；Task 9a 删除"
+max_literals = 6
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "BARE_ROLE_PLACEHOLDERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "通用匿名占位"
+max_literals = 1
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "BLOCKED_BODY_PLACEHOLDERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "通用匿名占位"
+max_literals = 2
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "PROTAGONIST_PLACEHOLDER_ROLES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "通用主角占位"
+max_literals = 3
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "_PROTAGONIST_NAME_STOPWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "主角名解析停用词"
+max_literals = 7
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "_analyze_bare_role_placeholder"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "角色占位正则含剧本二“巡检员”；Task 9a 删除该词后余下形态正则改登记为 language_lexicon"
+max_literals = 3
+
+[[entry]]
+path = "forwin/canon_quality/placeholder.py"
+symbol = "extract_expected_protagonist_names"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "解析 premise 中的“主角：X”标注"
+max_literals = 3
+
+[[entry]]
+path = "forwin/canon_quality/readability.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "称谓表中的剧本二称谓（馆员/审计员/巡检员）；Task 9a 删除"
+max_literals = 5
+
+[[entry]]
+path = "forwin/canon_quality/readability.py"
+symbol = "COMMON_APPELLATIONS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "称谓表混入剧本二称谓（馆员/审计员/调度员/接线员/巡检员/摊主）；Task 9a 删除这些词后余下改登记为 language_lexicon"
+max_literals = 15
+
+[[entry]]
+path = "forwin/canon_quality/readability.py"
+symbol = "PROTAGONIST_GENERIC_REFS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "主角泛指混入剧本二称谓（馆员/审计员）；Task 9a 删除后余下改登记为 language_lexicon"
+max_literals = 5
+
+[[entry]]
+path = "forwin/canon_quality/readability.py"
+symbol = "_appellation_referent_conflict_signals"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "代词 他/她"
+max_literals = 2
+
+[[entry]]
+path = "forwin/canon_quality/readability.py"
+symbol = "_chapter_title_mismatch_signal"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "章节标题数字解析"
+max_literals = 1
+
+[[entry]]
+path = "forwin/canon_quality/service.py"
+symbol = "_load_protagonist_names"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "主角/主人公 通用称呼"
+max_literals = 2
+
+[[entry]]
+path = "forwin/chapter_titles.py"
+symbol = "_GENERIC_NUMERIC_TITLE_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "章节标题数字解析"
+max_literals = 1
+
+[[entry]]
+path = "forwin/characters/normalization.py"
+symbol = "GENERIC_CHARACTER_TOKENS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "泛称表含题材称谓（店小二/师兄/师姐/弟子）；P1 改由本书 lexicon 提供"
+max_literals = 12
+
+[[entry]]
+path = "forwin/checker/hard_floor.py"
+symbol = "_MASKED_IDENTIFIER_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "证件/账号等脱敏标识的标签"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/hard_floor_dict.py"
+symbol = "ENDING_HOOK_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "网文章末钩子标记（题材中立）"
+max_literals = 8
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本二标记词（三十万/工号在线/刻痕/插孔）；Task 9b 删除"
+max_literals = 5
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "MYSTERY_PAYOFF_EVIDENCE_WORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "悬疑证据词含剧本二词（工号/刻痕/回执/插孔/时间戳）；Task 9b 删除后余下改登记为 language_lexicon"
+max_literals = 14
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "PULP_BEAT_PROFILES"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按显式 genre track 选择的爽文节拍目录；Task 9b 删除其中的三十万/赔偿金与 inference_words"
+max_literals = 260
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "PULP_GENRE_TRACKS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "显式 genre 到节拍 track 的映射目录"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "REWARD_PAYOFF_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "奖励兑现标记含剧本二标记（权限变更：开放/工号在线/刻痕指向/编号对应）；Task 9b 删除后余下重新分类"
+max_literals = 53
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "SETUP_WORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "铺垫段落标记（题材中立）"
+max_literals = 6
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_BOUNDED_NEGATED_DELIVERY_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "否定/被动前缀"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_DELIVERED_GAIN_ACTIONS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "获得类动词"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_DENIED_OUTCOME_ACTIONS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "驳回类动词"
+max_literals = 6
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_DIRECTION_BLOCKED_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "否定/未然前缀"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_DIRECTION_RESET_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "转折连接词"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_LOSS_DIRECTION_ACTIONS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "失去类动词"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_MARKER_FAILURE_SUFFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "失败类后缀"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_MARKER_NEGATION_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "否定前缀"
+max_literals = 30
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_MARKER_NEGATION_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "否定词正则"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_MARKER_POST_NEGATION_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "后置否定正则"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_NEGATED_DELIVERY_ACTION_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "被动标记"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_NEGATED_DELIVERY_BETWEEN_LEADS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "介词与获得类动词"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_NEGATED_DELIVERY_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "否定前缀"
+max_literals = 40
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_NEGATION_RESET_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "转折连接词"
+max_literals = 8
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_NON_DELIVERY_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "未兑现/未然措辞"
+max_literals = 70
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_POST_MARKER_STATE_LABELS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "状态/身份/结果 标签"
+max_literals = 3
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_POWER_GAIN_TARGETS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "含剧本二词（封存操作/复核操作/查验操作/处置权）；Task 9b 删除后余下改登记为 language_lexicon"
+max_literals = 8
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_POWER_RELIEF_TARGETS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "解除类宾语（限制/封禁…）"
+max_literals = 4
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_RELIEF_ACTIONS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "解除类动词"
+max_literals = 5
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_REWARD_DIRECTION_RESET_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "转折连接词正则"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SHORT_NEGATED_DELIVERY_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "单字否定前缀"
+max_literals = 4
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_GAIN_ACTIONS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "社会评价变化动词"
+max_literals = 9
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_GAIN_TARGETS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "含剧本二词（身份标签/角色标签）；Task 9b 删除后余下改登记为 language_lexicon"
+max_literals = 7
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_NEGATED_RESULT_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "否定前缀"
+max_literals = 20
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_NEGATIVE_RESULTS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "负面评价结果词"
+max_literals = 10
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_POSITIVE_RESULTS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "含剧本二词（承运者/合作方）；Task 9b 删除后余下改登记为 language_lexicon"
+max_literals = 15
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_SOCIAL_RELIEF_TARGETS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "追责类宾语"
+max_literals = 5
+
+[[entry]]
+path = "forwin/checker/pulp_beat.py"
+symbol = "_bounded_negated_delivery_action_present"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "获得类动词"
+max_literals = 5
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "_GENRE_ROLE_SUFFIXES 中的剧本二“巡检员”；Task 9b 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "LANGUAGE_GENERIC_CHARACTER_REFERENCES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "匿名泛称中混入题材称谓（店小二/师兄/师姐/弟子）；P1 移入 lexicon 后余下改登记为 language_lexicon"
+max_literals = 52
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_COMPOUND_IDENTITY_RE"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "复合身份形态正则"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_GENRE_ROLE_SUFFIXES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "从剧本归纳的题材角色后缀；Task 9b 删除"
+max_literals = 17
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_ORGANIZATION_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "从剧本归纳的组织关键词；Task 9b 删除"
+max_literals = 9
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_PARENTHETICAL_CANDIDATE_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "从剧本归纳的括注候选词；Task 9b 删除"
+max_literals = 10
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_POSSESSIVE_GENERIC_ROLE_SUFFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "所有格泛称角色后缀"
+max_literals = 10
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_RELATIONAL_REFERENCE_SUFFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "亲属称谓"
+max_literals = 8
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_RULE_CATALOG"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "规则摘要说明文字（summary=），不参与判定"
+max_literals = 6
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "_STATUS_LABEL_SUFFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "状态标签后缀"
+max_literals = 8
+
+[[entry]]
+path = "forwin/checker/reference_classifier.py"
+symbol = "classify_reference"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "结构助词“的”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/checker/rules.py"
+symbol = "DEAD_STATUS_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "死亡状态关键词判定；P2 改为 BookState 状态"
+max_literals = 6
+
+[[entry]]
+path = "forwin/context/assembler_core/canon_quality_context.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "memory_reset 覆盖主倒计时的分支；Task 9a 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/context/assembler_core/canon_quality_context.py"
+symbol = "_RECENT_CANON_CUSTODY_CAPTURE_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押平行账本标记词；P2 删除"
+max_literals = 12
+
+[[entry]]
+path = "forwin/context/assembler_core/canon_quality_context.py"
+symbol = "_RECENT_CANON_CUSTODY_RELEASE_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押平行账本标记词；P2 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/context/assembler_core/canon_quality_context.py"
+symbol = "_RECENT_CANON_POST_NAME_RELEASE_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押平行账本标记词；P2 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/context/assembler_core/canon_quality_context.py"
+symbol = "_looks_like_final_chapter_label"
+checks = ["cjk_inline_iteration"]
+category = "language_lexicon"
+justification = "终章标签词"
+max_literals = 8
+
+[[entry]]
+path = "forwin/experience/band_scheduler.py"
+symbol = "BandExperienceScheduler.derive_band_delight_schedule"
+checks = ["cjk_inline_iteration"]
+category = "language_lexicon"
+justification = "情感向爽点标签（角色/关系/情感）"
+max_literals = 3
+
+[[entry]]
+path = "forwin/generation/pipeline_core/repair_patches.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本二“记忆重置”倒计时修复锚点；Task 9a 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/generation/pipeline_core/repair_patches.py"
+symbol = "_countdown_repair_rule_anchors"
+checks = ["cjk_regex", "cjk_membership", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本二倒计时修复锚点；Task 9a 删除"
+max_literals = 7
+
+[[entry]]
+path = "forwin/generation/pipeline_core/review_autofix.py"
+symbol = "_apply_placeholder_leakage_autofix"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "通用匿名占位“工作人员”"
+max_literals = 2
+
+[[entry]]
+path = "forwin/genesis/constants.py"
+symbol = "_GENESIS_STAGE_HARD_RULES"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
+max_literals = 20
+
+[[entry]]
+path = "forwin/genesis/constants.py"
+symbol = "_GENESIS_STAGE_LABELS"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
+max_literals = 6
+
+[[entry]]
+path = "forwin/genesis/constants.py"
+symbol = "_GENESIS_STAGE_SYSTEM_PROMPTS"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
+max_literals = 6
+
+[[entry]]
+path = "forwin/genesis/fallbacks.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "fallback 编造的剧本二人名地名（陆明/韩青/钟塔/档案署…）；Task 7 改为结构空壳"
+max_literals = 9
+
+[[entry]]
+path = "forwin/genesis/fallbacks.py"
+symbol = "_FALLBACK_SAMPLE_TERMS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本样例词黑名单本身含剧本人名；Task 7 删除"
+max_literals = 9
+
+[[entry]]
+path = "forwin/genesis/fallbacks.py"
+symbol = "_fallback_location_kind"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "按剧本地名用字猜地点类型；Task 7 删除"
+max_literals = 13
+
+[[entry]]
+path = "forwin/genesis/fallbacks.py"
+symbol = "_fallback_map"
+checks = ["cjk_membership", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "fallback 地图写死剧本二地点词；Task 7 改为结构空壳"
+max_literals = 15
+
+[[entry]]
+path = "forwin/genesis/fallbacks.py"
+symbol = "_fallback_named_entity_seed"
+checks = ["cjk_regex", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "fallback 命名种子写死剧本二地名；Task 7 删除"
+max_literals = 14
+
+[[entry]]
+path = "forwin/genesis/handoff/service.py"
+symbol = "GenesisHandoffService.start_writing"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "匹配本系统地图生成异常消息中的“地图”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "fallback 职业前缀中的剧本二人物设定；Task 7 删除"
+max_literals = 2
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "_BLOCKED_PLACEHOLDER_TERMS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "通用匿名占位"
+max_literals = 2
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "_FALLBACK_PERSON_ROLE_PREFIXES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "fallback 职业前缀含剧本二人物设定（失业档案修复师/地下算法师…）；Task 7 删除"
+max_literals = 16
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "_PREMISE_META_PREFIXES"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "premise 文档的元信息前缀"
+max_literals = 20
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "_extract_story_focus_text"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "解析“围绕‘X’展开”句式"
+max_literals = 3
+
+[[entry]]
+path = "forwin/genesis/helpers.py"
+symbol = "_story_focus_from_blueprint_fallback"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "解析“围绕‘X’”句式"
+max_literals = 1
+
+[[entry]]
+path = "forwin/llm_eval/cases.py"
+symbol = "sample_context"
+checks = ["story_id_literal"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "运行包内的 eval 样例剧本；Task 11 移到 tests/fixtures"
+max_literals = 1
+
+[[entry]]
+path = "forwin/map/generator.py"
+symbol = "_danger_for_role"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "仙侠地形关键词（禁/魔/遗迹/荒）；P1 改由 map_atlas / lexicon 提供"
+max_literals = 5
+
+[[entry]]
+path = "forwin/map/generator.py"
+symbol = "_region_type_for_role"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "仙侠区域关键词（宗门/山门/帝/国）；P1 改由 map_atlas / lexicon 提供"
+max_literals = 9
+
+[[entry]]
+path = "forwin/map/generator.py"
+symbol = "_terrain_for_role"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "地形关键词（山/海/荒/林）；P1 改由 map_atlas / lexicon 提供"
+max_literals = 4
+
+[[entry]]
+path = "forwin/map/genesis_adapter.py"
+symbol = "_DEFAULT_REGION_ROLES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "默认区域角色（主舞台核心区/权力中心区/危险边缘区）；P1 改为题材中立默认值或 lexicon"
+max_literals = 3
+
+[[entry]]
+path = "forwin/map/genesis_adapter.py"
+symbol = "_connection_roles"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "仙侠路线词（传送/门/山/水）；P1 改由 map_atlas / lexicon 提供"
+max_literals = 7
+
+[[entry]]
+path = "forwin/map/genesis_adapter.py"
+symbol = "_danger_base"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "仙侠地形危险词；P1 改由 map_atlas / lexicon 提供"
+max_literals = 6
+
+[[entry]]
+path = "forwin/map/genesis_adapter.py"
+symbol = "_subworld_type"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "仙侠小世界类型词（界/秘境/地下）；P1 改由 map_atlas / lexicon 提供"
+max_literals = 3
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "catalog"
+justification = "“钟塔”是教会文化命名语料中的地名后缀，与剧本二地标同形但属于通用目录"
+max_literals = 1
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "CATEGORY_ALIASES"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 30
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "CULTURES"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 610
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "CultureNameGenerator._resolve_cultures"
+checks = ["cjk_regex", "cjk_membership"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 4
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "GLOBAL_FORBIDDEN"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 50
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "MIXED_EPITHET_TAILS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 10
+
+[[entry]]
+path = "forwin/naming/culture_name_generator.py"
+symbol = "OVERLAY_MARKERS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按 Genesis 文化 profile 选择的命名语料目录"
+max_literals = 20
+
+[[entry]]
+path = "forwin/personality/enrichment.py"
+symbol = "RelationshipPersonalityEnricher._skill_for_relation"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P1"
+justification = "按题材称谓（师父/导师…）选关系技能；P1 改由 lexicon 提供"
+max_literals = 6
+
+[[entry]]
+path = "forwin/personality/library.py"
+symbol = "_looks_incomplete"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "未填写占位“待填写”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/planning/band_plan_patcher.py"
+symbol = "_required_keywords"
+checks = ["cjk_regex", "cjk_membership"]
+category = "language_lexicon"
+justification = "解析“第N章前必须给出…”措辞"
+max_literals = 4
+
+[[entry]]
+path = "forwin/planning/contracts.py"
+symbol = "is_derived_goal_control_instruction"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "派生目标护栏标记；其中“不得回退成几天”“分钟级倒计时不得回退”是剧本二倒计时措辞，Task 6 删除后余下标记改登记为 language_lexicon"
+max_literals = 12
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "剧本二倒计时键与羁押词；倒计时别名表、memory_reset 分支与追踪器措辞由 Task 9c 删除，羁押标记词（磁力铐/羁押室）P2 删除"
+max_literals = 54
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_COUNTDOWN_INSTRUCTION_RE"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时平行账本解析；P2 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_CUSTODY_PLAN_STALE_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押标记词表；P2 删除"
+max_literals = 22
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_CUSTODY_RECAPTURE_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押标记词表；P2 删除"
+max_literals = 15
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_DURATION_RE"
+checks = ["cjk_regex"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时时长解析；P2 随倒计时审计删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_clause_continues_countdown_duration"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时审计措辞；P2 删除"
+max_literals = 8
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_clause_declares_reset_or_branch"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时审计措辞；P2 删除"
+max_literals = 5
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_clause_mentions_other_countdown"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "写死的剧本二倒计时 key 与 label 列表；Task 9c 删除"
+max_literals = 6
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_clause_negates_custody_conflict"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押审计措辞；P2 删除"
+max_literals = 17
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_countdown_markers_for"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本二倒计时别名表；Task 9c 改为每个 key 只有 [key, label]"
+max_literals = 7
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_duration_mentions"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时时长单位；P2 随倒计时审计删除"
+max_literals = 4
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_hard_countdown_instruction"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "memory_reset 分支（记忆重置/重置周期）；Task 9c 删除"
+max_literals = 2
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_is_false_prior_countdown_clause"
+checks = ["cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时审计措辞；P2 删除"
+max_literals = 9
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_parse_chinese_number"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "中文数字解析"
+max_literals = 2
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_plan_has_countdown_instruction_pollution"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时审计措辞；P2 删除"
+max_literals = 5
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_plan_mentions_stale_custody"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押审计（救援窗口/营救窗口）；P2 删除"
+max_literals = 2
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_replace_stale_duration_mentions.replace"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时时长单位；P2 随倒计时审计删除"
+max_literals = 4
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "_strip_countdown_instruction_noise"
+checks = ["cjk_membership"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "倒计时审计措辞；P2 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/patches.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "“已脱困但仍受追踪器或系统权限限制”措辞；Task 9c 改为“已脱困”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/planning/world_contract_service.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本一（母星/殖民/homeworld/colony/father_sieged）；Task 5 删除"
+max_literals = 38
+
+[[entry]]
+path = "forwin/planning/world_contract_service.py"
+symbol = "WorldContractPlanningService.ensure_for_arc_band"
+checks = ["story_id_literal", "chapter_number_literal", "premise_sniff", "cjk_membership"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "嗅探 premise 中的母星/殖民，写死第22/23/25/28章、剧本一世界线与剧情文本；Task 5 删除"
+max_literals = 20
+
+[[entry]]
+path = "forwin/protocol/trope_library.py"
+symbol = "_CATEGORY_DEFAULTS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "按显式类别选择的 trope 默认目录"
+max_literals = 80
+
+[[entry]]
+path = "forwin/protocol/trope_md_loader.py"
+symbol = "_BODY_FIELD_BY_HEADING"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "trope 库 markdown 格式的固定小节标题"
+max_literals = 4
+
+[[entry]]
+path = "forwin/publisher_runtime/bindings.py"
+symbol = "_normalize_audit_state"
+checks = ["cjk_inline_iteration"]
+category = "catalog"
+justification = "发布平台返回的审核状态文案"
+max_literals = 5
+
+[[entry]]
+path = "forwin/publisher_runtime/covers.py"
+symbol = "PublisherCoverService.build_prompt"
+checks = ["cjk_inline_iteration"]
+category = "prompt_text"
+justification = "封面生成 prompt 的字段标签"
+max_literals = 2
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.FANQIE_AUDIENCE"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 20
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.FANQIE_CATEGORY"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 40
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.FANQIE_PLOT_TAGS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 10
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.FANQIE_ROLE_TAGS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 10
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.FANQIE_THEME_TAGS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 20
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.QIDIAN_AUDIENCE"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 20
+
+[[entry]]
+path = "forwin/publisher_runtime/platform_catalogs.py"
+symbol = "PlatformMetadataCatalog.QIDIAN_CATEGORY"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台的元数据目录"
+max_literals = 50
+
+[[entry]]
+path = "forwin/publisher_runtime/upload_jobs.py"
+symbol = "LOGIN_FAILURE_FRAGMENTS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "发布平台登录失效页面的文案片段"
+max_literals = 6
+
+[[entry]]
+path = "forwin/publishers/platforms.py"
+symbol = "SUPPORTED_PLATFORMS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "支持的发布平台目录"
+max_literals = 2
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "DEATH_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 7
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "GROWTH_COMPLETION_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "LOCATION_DESTROY_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "NEGATION_MARKERS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 7
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "RELATION_BREAK_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "RESOURCE_CLOSURE_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "REVEAL_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 7
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "RULE_BREAK_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/constraint_keywords.py"
+symbol = "THREAD_CLOSURE_KEYWORDS"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
+max_literals = 6
+
+[[entry]]
+path = "forwin/review/map_movement.py"
+symbol = "_duration_to_travel_time_budget"
+checks = ["cjk_membership", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "古风时长词表（一炷香/时辰…）；P2 改用 lexicon"
+max_literals = 15
+
+[[entry]]
+path = "forwin/review/personality.py"
+symbol = "REFERENCE_MODEL_LABELS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "人格参考模型名（九型/星座）"
+max_literals = 3
+
+[[entry]]
+path = "forwin/review/personality.py"
+symbol = "UNTRIGGERED_STRESS_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "压力情境词（题材中立）"
+max_literals = 4
+
+[[entry]]
+path = "forwin/review/plan_checks.py"
+symbol = "evaluate_director_imbalance"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "写作术语“伏笔”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/review/publisher_compliance.py"
+symbol = "PublisherComplianceReviewer.__init__"
+checks = ["cjk_regex"]
+category = "language_lexicon"
+justification = "平台合规违规用语（引流/求票）"
+max_literals = 2
+
+[[entry]]
+path = "forwin/review/repair/local_rewrite_executor.py"
+symbol = "LocalRewriteExecutor._rewrite_placeholder"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "模板占位符 {{角色}}/{{地点}}"
+max_literals = 2
+
+[[entry]]
+path = "forwin/review/repair/local_rewrite_executor.py"
+symbol = "_clean_anchor"
+checks = ["cjk_membership"]
+category = "language_lexicon"
+justification = "模板占位符 角色/地点"
+max_literals = 2
+
+[[entry]]
+path = "forwin/review/webnovel.py"
+symbol = "_BRIDGE_KEYWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "网文承接标记"
+max_literals = 10
+
+[[entry]]
+path = "forwin/review/webnovel.py"
+symbol = "_HOOK_MARKERS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "网文钩子标记"
+max_literals = 8
+
+[[entry]]
+path = "forwin/review/webnovel.py"
+symbol = "_TAG_KEYWORDS"
+checks = ["cjk_collection"]
+category = "language_lexicon"
+justification = "网文爽点标记"
+max_literals = 50
+
+[[entry]]
+path = "forwin/simulation/world.py"
+symbol = "WorldSimulator.simulate"
+checks = ["chapter_number_literal"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "chapter_number >= 3 强制 rising 的写死阈值；Task 8 删除"
+max_literals = 1
+
+[[entry]]
+path = "forwin/simulation/world.py"
+symbol = "_KEYWORD_RULES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P4"
+justification = "WorldSimulator 读者评论关键词；P4 删除 WorldSimulator"
+max_literals = 42
+
+[[entry]]
+path = "forwin/skills/prompt_layer.py"
+symbol = "_STRICTNESS_PREFIX"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "技能提示层发给 LLM 的前缀"
+max_literals = 3
+
+[[entry]]
+path = "forwin/subworld_manager.py"
+symbol = "SubWorldManager._window_overlaps"
+checks = ["chapter_number_literal", "cjk_inline_iteration"]
+category = "pending_removal"
+remove_in = "P4"
+justification = "前期/中段/后期 窗口词与写死的章节号；P4 删除 subworld 角色路径"
+max_literals = 10
+
+[[entry]]
+path = "forwin/subworld_manager.py"
+symbol = "_NAME_GIVEN"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "subworld 名字池（旧书人名用字）；Task 8 删除"
+max_literals = 12
+
+[[entry]]
+path = "forwin/subworld_manager.py"
+symbol = "_NAME_SURNAMES"
+checks = ["cjk_collection"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "subworld 名字池（旧书人名用字）；Task 8 删除"
+max_literals = 14
+
+[[entry]]
+path = "forwin/world_templates.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "catalog"
+justification = "“星际殖民地套”是通用经济模板名，与剧本一同形但属于模板目录"
+max_literals = 2
+
+[[entry]]
+path = "forwin/world_templates.py"
+symbol = "_TEMPLATE_LIBRARIES"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "Genesis 按世界类型选择的模板目录"
+max_literals = 70
+
+[[entry]]
+path = "forwin/world_templates.py"
+symbol = "_TITLE_LEXICON_PACK"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "Genesis 按世界类型选择的模板目录"
+max_literals = 240
+
+[[entry]]
+path = "forwin/world_templates.py"
+symbol = "_VALUE_CONFLICT_PROMPTS"
+checks = ["cjk_collection"]
+category = "catalog"
+justification = "Genesis 按世界类型选择的模板目录"
+max_literals = 30
+
+[[entry]]
+path = "forwin/writer/chapter_writer.py"
+symbol = "ChapterWriter._parse_tagged_text"
+checks = ["cjk_regex", "cjk_membership"]
+category = "prompt_text"
+justification = "解析 writer prompt 约定的输出标签（标题/正文/摘要）"
+max_literals = 6
+
+[[entry]]
+path = "forwin/writer/prompt_core/constraints.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P2"
+justification = "羁押提示文本中的羁押室/追踪器；“追踪器”由 Task 8 删除，羁押提示随 P2 平行账本删除"
+max_literals = 2
+
+[[entry]]
+path = "forwin/writer/prompt_core/sections.py"
+checks = ["cjk_regex", "cjk_membership", "cjk_inline_iteration"]
+category = "prompt_text"
+justification = "writer prompt 构造模块（拼接 LLM 说明文字与解析 premise 中的主角标注）"
+max_literals = 20
+
+[[entry]]
+path = "forwin/writer/prompt_core/sections.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "命名规则示例“系统巡检员”；Task 8 删除"
+max_literals = 1

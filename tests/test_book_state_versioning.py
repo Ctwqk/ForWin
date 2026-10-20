@@ -6,9 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
+from forwin.canon import CanonAdmissionService, CanonStaleVersion
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.knowledge import KnowledgeEditProposalRow
+from forwin.proposals import proposal_review
 from forwin.proposals.proposal_review import approve_world_edit_proposal
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
@@ -59,6 +61,14 @@ def _compile(session, project_id: str, chapter: int, *, delta_id: str = "", **pa
                 )
             ],
         )
+    )
+    assert result.committed, result.blocked_reasons
+
+
+def _compile_without_deltas(session, project_id: str, chapter: int) -> None:
+    """Accept a chapter whose writer output produced no BookState deltas."""
+    result = BookStateCompiler(session).compile(
+        ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter, graph_deltas=[])
     )
     assert result.committed, result.blocked_reasons
 
@@ -510,6 +520,20 @@ def test_past_chapter_compile_does_not_clobber_newer_rows() -> None:
     engine.dispose()
 
 
+def _propose(Session, project_id: str, operation: dict) -> str:
+    with Session.begin() as session:
+        row = KnowledgeEditProposalRow(
+            project_id=project_id,
+            source="world_studio",
+            target_node_id=str(operation.get("node_id", "")),
+            proposed_patch_json=json.dumps({"forwin_patch": [operation]}),
+            status="pending",
+        )
+        session.add(row)
+        session.flush()
+        return row.id
+
+
 def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
     engine, Session = _session_factory()
     with Session.begin() as session:
@@ -525,20 +549,7 @@ def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
             ],
         )
 
-    def propose(operation: dict) -> str:
-        with Session.begin() as session:
-            row = KnowledgeEditProposalRow(
-                project_id=project_id,
-                source="world_studio",
-                target_node_id="char_a",
-                proposed_patch_json=json.dumps({"forwin_patch": [operation]}),
-                status="pending",
-            )
-            session.add(row)
-            session.flush()
-            return row.id
-
-    rename = propose({"op": "rename_node", "node_id": "char_a", "name": "B"})
+    rename = _propose(Session, project_id, {"op": "rename_node", "node_id": "char_a", "name": "B"})
     with Session.begin() as session:
         result = approve_world_edit_proposal(session, project_id=project_id, proposal_id=rename)
         delta_chapter = session.get(GraphDeltaRow, result.row.graph_delta_id).chapter_number
@@ -552,9 +563,85 @@ def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
     assert chapter_two.world.get_node("char_a").name == "B"
     assert chapter_two.world.get_state("char_a") == {"status": "awake"}
 
-    stale = propose({"op": "rename_node", "node_id": "char_a", "name": "C", "old_value": "A0"})
+    stale = _propose(Session, project_id, {"op": "rename_node", "node_id": "char_a", "name": "C", "old_value": "A0"})
     with pytest.raises(HTTPException) as rejected:
         with Session.begin() as session:
             approve_world_edit_proposal(session, project_id=project_id, proposal_id=stale)
     assert rejected.value.status_code == 409
+    engine.dispose()
+
+
+def test_world_edit_after_zero_delta_chapter_lands_in_that_chapter() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", state={"status": "idle"})])
+    with Session.begin() as session:
+        _compile_without_deltas(session, project_id, 1)
+    proposal_id = _propose(
+        Session,
+        project_id,
+        {"op": "set_node_field", "node_id": "char_a", "field_path": "state.status", "new_value": "awake"},
+    )
+    with Session.begin() as session:
+        approved = approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+        delta_chapter = session.get(GraphDeltaRow, approved.row.graph_delta_id).chapter_number
+    with Session.begin() as session:
+        _compile(session, project_id, 2, node_patches=[_create_character(project_id, "char_b")])
+
+    with Session() as session:
+        states = [_load(session, project_id, chapter).world.get_state("char_a") for chapter in (0, 1, 2)]
+
+    assert delta_chapter == 1
+    assert states == [{"status": "idle"}, {"status": "awake"}, {"status": "awake"}]
+    engine.dispose()
+
+
+def test_world_edit_behind_latest_canon_chapter_is_stale(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a")])
+    with Session.begin() as session:
+        _compile_without_deltas(session, project_id, 1)
+
+    def past_edit(chapter: int) -> ApprovedGraphDeltaSet:
+        return ApprovedGraphDeltaSet(
+            project_id=project_id,
+            chapter_number=chapter,
+            graph_deltas=[
+                GraphDelta(
+                    id=f"delta_past_edit_{chapter}",
+                    project_id=project_id,
+                    chapter_number=chapter,
+                    node_patches=[
+                        NodePatch(node_id="char_a", node_type="character", op="set", field_path="metadata.note", new_value="x")
+                    ],
+                )
+            ],
+        )
+
+    proposal_id = _propose(Session, project_id, {"op": "append_manual_note", "node_id": "char_a", "text": "x"})
+    with pytest.raises(CanonStaleVersion, match="chapter 1"):
+        with Session.begin() as session:
+            CanonAdmissionService().commit_world_edit(
+                session=session,
+                project_id=project_id,
+                proposal_id=proposal_id,
+                approved_changes=past_edit(0),
+                reason="",
+                trigger="test",
+            )
+
+    # The approval path computes its chapter before taking the project lock; a
+    # chapter accepted in between surfaces as a conflict, not a server error.
+    monkeypatch.setattr(proposal_review, "_world_edit_chapter", lambda *_args: 0)
+    with pytest.raises(HTTPException) as conflict:
+        with Session.begin() as session:
+            approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+    assert conflict.value.status_code == 409
+
+    with Session() as session:
+        assert session.get(KnowledgeEditProposalRow, proposal_id).status == "pending"
+        assert session.query(GraphDeltaRow).filter_by(project_id=project_id).count() == 1
     engine.dispose()

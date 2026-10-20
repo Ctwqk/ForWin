@@ -88,6 +88,13 @@ class NodeVersion:
     state: dict[str, Any]
 
 
+# Only compiles write graph deltas and world snapshots, so together they mark
+# which chapters hold canon.
+_CANON_CHAPTER_COLUMNS = (
+    (GraphDeltaRow, GraphDeltaRow.chapter_number),
+    (WorldSnapshotRow, WorldSnapshotRow.as_of_chapter),
+)
+
 _VERSION_RECENCY = (
     WorldNodeStateRow.as_of_chapter.desc(),
     WorldNodeStateRow.created_at.desc(),
@@ -1434,27 +1441,31 @@ class BookStateRepository:
         ).scalar_one_or_none()
         return _map_snapshot_from_row(row) if row else None
 
-    def latest_graph_delta_chapter(self, project_id: str) -> int | None:
-        return self.session.scalar(
-            select(func.max(GraphDeltaRow.chapter_number)).where(GraphDeltaRow.project_id == project_id)
-        )
+    def latest_canon_chapter(self, project_id: str) -> int | None:
+        """Latest compiled chapter; a chapter accepted without deltas still has a snapshot."""
+        chapters = [
+            self.session.scalar(select(func.max(column)).where(model.project_id == project_id))
+            for model, column in _CANON_CHAPTER_COLUMNS
+        ]
+        return max((chapter for chapter in chapters if chapter is not None), default=None)
 
     def compile_base_chapter(self, project_id: str, chapter_number: int) -> int:
         """Chapter whose runtime a compile into ``chapter_number`` builds on.
 
-        A chapter that already holds deltas is extended from its own canon, so a
+        A chapter that is already compiled is extended from its own canon, so a
         second compile keeps the first one's effects; otherwise the compile
         builds on the chapter before it.
         """
-        chapter_has_deltas = self.session.scalar(
-            select(GraphDeltaRow.id)
-            .where(
-                GraphDeltaRow.project_id == project_id,
-                GraphDeltaRow.chapter_number == chapter_number,
+        compiled = any(
+            self.session.scalar(
+                select(model.id)
+                .where(model.project_id == project_id, column == chapter_number)
+                .limit(1)
             )
-            .limit(1)
+            is not None
+            for model, column in _CANON_CHAPTER_COLUMNS
         )
-        return chapter_number if chapter_has_deltas is not None else max(chapter_number - 1, 0)
+        return chapter_number if compiled else max(chapter_number - 1, 0)
 
     def latest_available_chapter(self, project_id: str) -> int:
         values = [

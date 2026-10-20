@@ -100,7 +100,7 @@ def _world_edit_chapter(session, project_id: str, row: KnowledgeEditProposalRow)
     proposal's chapter, so a value changed since then fails the compiler check.
     """
     requested = proposal_chapter(row)
-    latest = BookStateRepository(session).latest_graph_delta_chapter(project_id)
+    latest = BookStateRepository(session).latest_canon_chapter(project_id)
     return requested if latest is None else max(requested, latest)
 
 

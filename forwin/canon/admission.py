@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from forwin.book_state.compiler import BookStateCompiler
+from forwin.book_state.repository import BookStateRepository
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_body_hash,
@@ -464,6 +465,14 @@ class CanonAdmissionService:
             raise CanonStaleVersion(f"world edit proposal is already {proposal.status}")
         if approved_changes.project_id != project_id:
             raise CanonStaleVersion("world edit project changed")
+        # The caller picked the chapter before this lock; a chapter accepted since
+        # would leave the edit out of its snapshot.
+        latest_chapter = BookStateRepository(session).latest_canon_chapter(project_id)
+        if latest_chapter is not None and approved_changes.chapter_number < latest_chapter:
+            raise CanonStaleVersion(
+                f"world edit targets chapter {approved_changes.chapter_number} "
+                f"but BookState is at chapter {latest_chapter}"
+            )
 
         compile_result = BookStateCompiler(session).compile(
             approved_changes,

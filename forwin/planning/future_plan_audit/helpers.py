@@ -339,9 +339,8 @@ def _hard_countdown_instruction(*, label: str, latest: int) -> str:
     return (
         f"{label}必须延续最新 canon ledger：剩余时间不得超过 {latest} 分钟。"
         "旧计划/旧摘要时间不得写成前文事实；"
-        "不得写“系统日志原本还有三天/七天/几小时”、"
-        "“主角以为还有几天”或任何大于最新 ledger 的旧尺度，"
-        f"除非明确标记为公开伪数据、误导信息、reset 或 branch clock。"
+        "不得写成任何大于最新 ledger 的旧尺度，"
+        "除非明确标记为公开伪数据、误导信息、reset 或 branch clock。"
     )
 
 def _clause_mentions_countdown(clause: str, *, key: str, label: str) -> bool:

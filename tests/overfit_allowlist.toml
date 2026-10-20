@@ -37,6 +37,8 @@ seed_terms = [
   "顾临川", "林远舟", "沈砚", "白塔", "岫苑", "地下旧轨", "潮汐钟楼", "失忆广场", "档案公会",
   "白塔巡检员", "林氏", "守仓阙微阑", "礼川诸州", "裴星野", "终端审计", "核心层", "档案清理",
   "熔铸协议", "隐藏子程序倒计时",
+  # Task 9c review: in-story example lines leaked into the countdown hard instruction
+  "系统日志原本还有",
 ]
 harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
 ignore = []

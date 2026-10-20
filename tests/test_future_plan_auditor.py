@@ -336,7 +336,8 @@ def test_future_plan_auditor_applies_minute_level_hard_rule_to_rule_anchors() ->
     experience = json.loads(plan.experience_plan_json)
 
     assert any("旧计划/旧摘要时间不得写成前文事实" in item for item in experience["rule_anchors"])
-    assert any("三天/七天" in item for item in experience["rule_anchors"])
+    assert any("不得写成任何大于最新 ledger 的旧尺度" in item for item in experience["rule_anchors"])
+    assert not any("三天/七天" in item for item in experience["rule_anchors"])
 
 
 def test_future_plan_auditor_does_not_cross_rewrite_other_countdown_rule_anchors() -> None:
@@ -511,7 +512,7 @@ def test_future_plan_auditor_patches_polluted_plan_even_without_stale_duration()
     plan.experience_plan_json = json.dumps(
         {
             "rule_anchors": [
-                "记忆重置周期必须延续最新 canon ledger：剩余时间不得超过 90 分钟。旧计划/旧摘要时间不得写成前文事实；不得写“系统日志原本还有三天/七天/几小时”、“主角以为还有几天”或任何大于最新 ledger 的旧尺度，除非明确标记为公开伪数据、误导信息、reset 或 branch clock。本章所有记忆重置/校准/熔铸窗口只能继续小于等于 90 分钟，不要写回三天/七天/三小时/两小时等旧尺度。"
+                _hard_countdown_instruction(label="记忆重置周期", latest=90),
             ],
             "progress_markers": [
                 "archive_cleanup必须延续最新 canon ledger：剩余时间不得超过不超过9分钟。",
@@ -778,6 +779,14 @@ def test_countdown_hard_instruction_has_no_label_specific_branch() -> None:
     assert instruction.startswith(f"{label}必须延续最新 canon ledger：剩余时间不得超过 90 分钟。")
     assert "熔铸" not in instruction
     assert "本章所有" not in instruction
+    assert "系统日志" not in instruction
+    assert "主角以为" not in instruction
+    assert instruction == (
+        f"{label}必须延续最新 canon ledger：剩余时间不得超过 90 分钟。"
+        "旧计划/旧摘要时间不得写成前文事实；"
+        "不得写成任何大于最新 ledger 的旧尺度，"
+        "除非明确标记为公开伪数据、误导信息、reset 或 branch clock。"
+    )
     assert instruction.replace(label, "X") == _hard_countdown_instruction(label="X", latest=90)
 
 

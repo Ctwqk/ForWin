@@ -14,8 +14,17 @@ from forwin.api_schema import TaskMutationResponse
 from forwin.audit.events import DecisionEventType
 from forwin.generation.task_repository import GenerationTaskRepository
 import forwin.http.tasks as task_support
+from forwin.outbox.store import delete_project_outbox_events
 from forwin.models.base import Base
 from forwin.models.project import Project, ChapterPlan
+from forwin.models.publisher import (
+    PublisherMilestone,
+    PublisherOperatorAction,
+    PublisherUploadAttempt,
+    PublisherUploadJob,
+    PublisherUploadReceipt,
+    PublisherWorkBinding,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
@@ -78,6 +87,50 @@ def _delete_project(session, project_id: str) -> None:
                 delete(ChapterReview).where(ChapterReview.draft_id.in_(draft_ids))
             )
             session.execute(delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids)))
+
+    # These tables have no project_id column, so the generic loop below cannot
+    # reach them; their foreign keys would otherwise block the parent deletes.
+    upload_job_ids = (
+        session.execute(
+            select(PublisherUploadJob.id).where(
+                PublisherUploadJob.project_id == project_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if upload_job_ids:
+        session.execute(
+            delete(PublisherUploadReceipt).where(
+                PublisherUploadReceipt.upload_job_id.in_(upload_job_ids)
+            )
+        )
+        session.execute(
+            delete(PublisherUploadAttempt).where(
+                PublisherUploadAttempt.upload_job_id.in_(upload_job_ids)
+            )
+        )
+        session.execute(
+            delete(PublisherOperatorAction).where(
+                PublisherOperatorAction.upload_job_id.in_(upload_job_ids)
+            )
+        )
+    work_binding_ids = (
+        session.execute(
+            select(PublisherWorkBinding.id).where(
+                PublisherWorkBinding.project_id == project_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if work_binding_ids:
+        session.execute(
+            delete(PublisherMilestone).where(
+                PublisherMilestone.work_binding_id.in_(work_binding_ids)
+            )
+        )
+    delete_project_outbox_events(session, project_id=project_id)
 
     for table in reversed(Base.metadata.sorted_tables):
         if table.name == "projects" or "project_id" not in table.c:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -11,7 +12,16 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
+from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.publisher import (
+    PublisherMilestone,
+    PublisherOperatorAction,
+    PublisherUploadAttempt,
+    PublisherUploadJob,
+    PublisherUploadReceipt,
+    PublisherWorkBinding,
+)
 from forwin.models.task import GenerationTask
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
@@ -185,6 +195,124 @@ class BulkDeleteApiTests(unittest.TestCase):
             self.assertEqual(session.query(CandidateDraftRecord).count(), 0)
             self.assertEqual(session.query(ChapterRewriteAttempt).count(), 0)
             self.assertEqual(session.query(ChapterReview).count(), 0)
+
+    def test_delete_project_removes_publisher_child_rows_and_project_outbox_events(
+        self,
+    ) -> None:
+        project_a = new_id()
+        project_b = new_id()
+        job_id = new_id()
+        attempt_id = new_id()
+        binding_id = new_id()
+        with self.session_factory() as session:
+            for project_id, title in ((project_a, "发布子表删除"), (project_b, "保留项目")):
+                session.add(
+                    Project(
+                        id=project_id,
+                        title=title,
+                        premise="测试 premise",
+                        genre="玄幻",
+                        setting_summary="",
+                    )
+                )
+            session.flush()
+            session.add(
+                PublisherUploadJob(
+                    id=job_id,
+                    project_id=project_a,
+                    platform_id="fanqie",
+                    status="succeeded",
+                    book_name="测试书",
+                    chapter_title="第一章",
+                    body_text="正文",
+                    publish=False,
+                )
+            )
+            session.add(
+                PublisherWorkBinding(
+                    id=binding_id,
+                    project_id=project_a,
+                    platform_id="fanqie",
+                    book_name="测试书",
+                )
+            )
+            session.flush()
+            session.add(
+                PublisherUploadAttempt(
+                    id=attempt_id,
+                    upload_job_id=job_id,
+                    attempt_number=1,
+                    attempt_kind="upload",
+                    status="succeeded",
+                )
+            )
+            session.add(
+                PublisherOperatorAction(
+                    id=new_id(),
+                    upload_job_id=job_id,
+                    action="pause",
+                    pause_token="token-1",
+                    actor_id="operator",
+                    auth_method="test",
+                    reason="test",
+                    old_state_json="{}",
+                    new_state_json="{}",
+                    occurred_at=datetime(2026, 1, 1),
+                )
+            )
+            session.add(
+                PublisherMilestone(
+                    id=new_id(),
+                    work_binding_id=binding_id,
+                    milestone_type="first_chapter_published",
+                )
+            )
+            session.flush()
+            session.add(
+                PublisherUploadReceipt(
+                    id=new_id(),
+                    upload_job_id=job_id,
+                    upload_attempt_id=attempt_id,
+                    receipt_key="receipt-a",
+                )
+            )
+            session.add_all(
+                [
+                    OutboxEvent(
+                        id=new_id(),
+                        event_id=new_id(),
+                        aggregate_type="project",
+                        aggregate_id=project_a,
+                        event_type="project.test",
+                    ),
+                    OutboxEvent(
+                        id=new_id(),
+                        event_id=new_id(),
+                        aggregate_type="project",
+                        aggregate_id=project_b,
+                        event_type="project.test",
+                    ),
+                ]
+            )
+            session.commit()
+
+        response = api_module.delete_project(project_a)
+
+        self.assertTrue(response.ok)
+        with self.session_factory() as session:
+            self.assertIsNone(session.get(Project, project_a))
+            self.assertEqual(session.query(PublisherUploadJob).count(), 0)
+            self.assertEqual(session.query(PublisherUploadAttempt).count(), 0)
+            self.assertEqual(session.query(PublisherUploadReceipt).count(), 0)
+            self.assertEqual(session.query(PublisherOperatorAction).count(), 0)
+            self.assertEqual(session.query(PublisherWorkBinding).count(), 0)
+            self.assertEqual(session.query(PublisherMilestone).count(), 0)
+            remaining_outbox = session.query(OutboxEvent).all()
+            self.assertEqual(
+                [(row.aggregate_type, row.aggregate_id) for row in remaining_outbox],
+                [("project", project_b)],
+            )
+            self.assertIsNotNone(session.get(Project, project_b))
 
     def test_bulk_delete_tasks_marks_generation_tasks_deleted(self) -> None:
         task_id = "task-delete-1"

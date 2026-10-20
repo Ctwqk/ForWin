@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from forwin.models.base import new_id
@@ -36,6 +36,17 @@ def any_outbox_events_exist(session: Session, *, event_ids: Sequence[str]) -> bo
             )
         )
     )
+
+
+def delete_project_outbox_events(session: Session, *, project_id: str) -> int:
+    """Drop a deleted project's aggregate events; callers own the transaction."""
+    result = session.execute(
+        delete(OutboxEvent).where(
+            OutboxEvent.aggregate_type == "project",
+            OutboxEvent.aggregate_id == project_id,
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 def enqueue_outbox_event(

@@ -87,6 +87,7 @@ def test_v6_enum_and_range_errors(node_type: str, field_path: str, value: object
         validate_world_node(node),
         validate_graph_delta(_delta(node_type, "create", node.model_dump())),
         validate_graph_delta(_delta(node_type, "set", value, field_path)),
+        validate_graph_delta(_delta(node_type, "replace", value, field_path)),
     ):
         assert not report.ok
         assert any(issue.severity == "error" and field_path in issue.target for issue in report.issues)
@@ -122,13 +123,23 @@ def test_set_patch_on_intent_status_is_validated() -> None:
     assert validate_graph_delta(_delta("intent", "set", "resolved", "state.status")).ok
 
 
-def test_create_patch_uses_delta_project_id_for_required_field_validation() -> None:
-    report = validate_graph_delta(_delta("agenda", "create", {"profile": {"goal": "A goal"}}))
+@pytest.mark.parametrize("node_type", ["agenda", "intent", "clock", "character"])
+def test_create_patch_requires_project_id_in_payload(node_type: str) -> None:
+    payload = _node(node_type).model_dump()
+    del payload["project_id"]
+    report = validate_graph_delta(_delta(node_type, "create", payload))
+    assert [issue.code for issue in report.errors] == ["invalid_node_create_patch"]
+    assert report.errors[0].target == "node:node-1"
+    assert "project_id" in report.errors[0].message
+
+
+def test_create_patch_with_project_id_validates_required_fields() -> None:
+    payload = {"project_id": "project-1", "profile": {"goal": "A goal"}}
+    report = validate_graph_delta(_delta("agenda", "create", payload))
     assert [issue.code for issue in report.errors] == ["missing_required_field"]
     assert report.errors[0].target == "node:node-1:profile.owner_ref"
-    assert validate_graph_delta(
-        _delta("agenda", "create", {"profile": {"owner_ref": "node:actor", "goal": "A goal"}})
-    ).ok
+    payload["profile"]["owner_ref"] = "node:actor"
+    assert validate_graph_delta(_delta("agenda", "create", payload)).ok
 
 
 def test_rival_of_is_a_social_edge() -> None:
@@ -175,6 +186,7 @@ def test_v6_valid_values(node_type: str, field_path: str, values: tuple) -> None
         getattr(node, section)[field] = value
         assert validate_world_node(node, strict=True).ok
         assert validate_graph_delta(_delta(node_type, "set", value, field_path), strict=True).ok
+        assert validate_graph_delta(_delta(node_type, "replace", value, field_path), strict=True).ok
 
 
 @pytest.mark.parametrize("node_type", ["character", "faction", "organization", "group"])
@@ -207,6 +219,8 @@ def test_existing_unknown_fields_keep_strictness_behavior() -> None:
     assert not validate_world_node(node, strict=True).ok
 
 
+@pytest.mark.parametrize("op", ["set", "replace"])
+@pytest.mark.parametrize("strict", [False, True])
 @pytest.mark.parametrize(
     ("node_type", "field_path", "value", "ok"),
     [
@@ -222,5 +236,50 @@ def test_existing_unknown_fields_keep_strictness_behavior() -> None:
         ("intent", "state", {"status": "due"}, True),
     ],
 )
-def test_set_patch_validates_nested_and_section_values(node_type: str, field_path: str, value: object, ok: bool) -> None:
-    assert validate_graph_delta(_delta(node_type, "set", value, field_path)).ok is ok
+def test_set_and_replace_patch_validate_nested_and_section_values(
+    node_type: str, field_path: str, value: object, ok: bool, op: str, strict: bool,
+) -> None:
+    report = validate_graph_delta(_delta(node_type, op, value, field_path), strict=strict)
+    assert report.ok is ok
+    if not ok:
+        assert all(issue.code == "invalid_field_value" for issue in report.errors)
+
+
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize(
+    ("node_type", "field_path", "value", "error_paths"),
+    [
+        ("agenda", "state", {"priority": 9}, ["state.priority"]),
+        ("agenda", "state", {"priority": 1}, []),
+        ("agenda", "state", {"status": "done", "priority": 9}, ["state.status", "state.priority"]),
+        ("agenda", "state", {}, []),
+        ("intent", "profile", {"action_type": "teleport"}, ["profile.action_type"]),
+        ("intent", "profile", {"requires_onstage": 1}, ["profile.requires_onstage"]),
+        ("intent", "profile", {"requires_onstage": False}, []),
+        ("intent", "state", {"status": "done"}, ["state.status"]),
+        ("intent", "state", {"status": "due"}, []),
+        ("clock", "state", {"due_at": -1}, ["state.due_at"]),
+        ("character", "state", {"actor_tier": "hero"}, ["state.actor_tier"]),
+        ("character", "state.restraint", {"state": "chained"}, ["state.restraint.state"]),
+        ("character", "state.restraint", {"state": "free"}, []),
+        ("character", "state.restraint", {"by_ref": 1}, ["state.restraint.by_ref"]),
+        ("character", "state.restraint", {"by_ref": "node:actor"}, []),
+        ("character", "state.restraint", {"since": False}, ["state.restraint.since"]),
+        ("character", "state.restraint", {"since": None}, []),
+        ("character", "state.restraint", {}, []),
+        ("character", "state", {"restraint": {"state": "free"}}, ["state.restraint.by_ref", "state.restraint.since"]),
+        ("character", "state", {"restraint": {"state": "free", "by_ref": "", "since": None}}, []),
+        ("rule", "profile", {"hardness": "medium"}, ["profile.hardness"]),
+        ("rule", "profile.checkable", {"kind": ""}, ["profile.checkable.kind"]),
+        ("rule", "profile.checkable", {"kind": "condition"}, []),
+        ("rule", "profile.checkable", {"condition": "value"}, []),
+        ("rule", "profile", {"checkable": {"condition": "value"}}, ["profile.checkable.kind"]),
+    ],
+)
+def test_merge_patch_validates_supplied_members(
+    node_type: str, field_path: str, value: dict, error_paths: list[str], strict: bool,
+) -> None:
+    report = validate_graph_delta(_delta(node_type, "merge", value, field_path), strict=strict)
+    assert report.ok is (not error_paths)
+    assert {issue.target for issue in report.errors} == {f"node:node-1:{path}" for path in error_paths}
+    assert all(issue.code == "invalid_field_value" for issue in report.errors)

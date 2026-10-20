@@ -655,7 +655,7 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
             payload = patch.new_value if isinstance(patch.new_value, dict) else {}
             try:
                 node = WorldNode.model_validate(
-                    {"id": patch.node_id, "project_id": delta.project_id, "node_type": node_type, **payload}
+                    {"id": patch.node_id, "node_type": node_type, **payload}
                 )
             except Exception as exc:  # noqa: BLE001 - validation details belong in the report.
                 issues.append(_issue("error", "invalid_node_create_patch", f"node:{patch.node_id}", str(exc)))
@@ -663,8 +663,15 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
             issues.extend(validate_world_node(node, strict=strict).issues)
         elif patch.field_path:
             issues.extend(_validate_node_patch_field(patch.node_id, node_type, patch.field_path, strict=strict))
-            if str(patch.op) == "set":
+            if str(patch.op) in {"set", "replace"}:
                 issues.extend(_v6_set_patch_issues(node_type, patch.field_path, patch.new_value, target=f"node:{patch.node_id}"))
+            elif str(patch.op) == "merge" and isinstance(patch.new_value, dict):
+                for field, value in patch.new_value.items():
+                    issues.extend(
+                        _v6_set_patch_issues(
+                            node_type, f"{patch.field_path}.{field}", value, target=f"node:{patch.node_id}",
+                        )
+                    )
 
     for patch in delta.edge_patches:
         if str(patch.op) == "create":
@@ -738,7 +745,7 @@ def _v6_set_patch_issues(node_type: str, field_path: str, value: Any, *, target:
         return [_issue("error", "invalid_field_value", f"{target}:{field_path}", f"{parts[0]} must be a mapping")]
     sections = {"profile": {}, "state": {}, parts[0]: payload}
     issues = _v6_value_issues(node_type, sections["profile"], sections["state"], target=target)
-    # A nested set only supplies one member; missing sibling members are unchanged.
+    # A nested update only supplies one member; missing sibling members are unchanged.
     changed_target = f"{target}:{field_path}"
     return [
         issue for issue in issues

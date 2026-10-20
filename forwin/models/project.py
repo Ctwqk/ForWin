@@ -48,6 +48,12 @@ class ArcPlanVersion(Base):
     chapter_start: Mapped[int] = mapped_column(Integer, default=1)
     chapter_end: Mapped[int] = mapped_column(Integer, default=0)
     arc_synopsis: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    goal: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    stakes: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    payoff_direction: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     macro_progression_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
     planned_target_size: Mapped[int] = mapped_column(Integer, default=0)
     planned_soft_min: Mapped[int] = mapped_column(Integer, default=0)

@@ -13,7 +13,7 @@ from tests.postgres import postgres_empty_test_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_REVISION = "0002_drop_dead_tables"
+EXPECTED_REVISION = "0003_book_state_v6"
 
 # Tables that exist only in the production database (left over from v4 and
 # the scenario rehearsal work, never part of 0001). Each maps to the foreign
@@ -148,5 +148,41 @@ def test_upgrade_drops_production_legacy_tables_so_projects_can_be_deleted() -> 
             _delete_project(session, "legacy-project")
         with session_factory() as session:
             assert session.query(Project).count() == 0
+    finally:
+        engine.dispose()
+
+
+def test_upgraded_columns_match_orm_metadata() -> None:
+    database_url = postgres_empty_test_url("v5-column-drift")
+    command.upgrade(_alembic_config(database_url), "head")
+
+    engine = create_engine(database_url, future=True)
+    try:
+        inspector = inspect(engine)
+        database_tables = set(inspector.get_table_names())
+        drift: list[str] = []
+        for table in Base.metadata.sorted_tables:
+            if table.name not in database_tables:
+                drift.append(f"{table.name}: table missing from database")
+                continue
+            database_columns = {
+                column["name"]: column["nullable"]
+                for column in inspector.get_columns(table.name)
+            }
+            orm_columns = {column.name: column.nullable for column in table.columns}
+            if database_columns == orm_columns:
+                continue
+            extra = sorted(set(database_columns) - set(orm_columns))
+            missing = sorted(set(orm_columns) - set(database_columns))
+            nullability = sorted(
+                name
+                for name in set(database_columns) & set(orm_columns)
+                if database_columns[name] != orm_columns[name]
+            )
+            drift.append(
+                f"{table.name}: extra in database={extra}, "
+                f"missing from database={missing}, nullability differs={nullability}"
+            )
+        assert drift == []
     finally:
         engine.dispose()

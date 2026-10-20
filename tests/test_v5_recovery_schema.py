@@ -26,6 +26,16 @@ RECOVERY_TABLES = {
     "publisher_upload_receipts",
     "publisher_operator_actions",
 }
+# Schema added by migrations after 0001. The baseline comparison below only
+# checks what 0001 itself creates, so these are removed from the ORM side.
+TABLES_ADDED_AFTER_BASELINE = {"story_calendars", "book_lexicons"}
+COLUMNS_ADDED_AFTER_BASELINE = {
+    "graph_deltas": {"story_time_start", "story_time_end"},
+    "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
+    "cognition_overlays": {"knowledge_by_ref_json"},
+    "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json"},
+    "arc_plan_versions": {"title", "goal", "stakes", "payoff_direction"},
+}
 
 
 def _table(name: str) -> sa.Table:
@@ -151,6 +161,12 @@ def test_recovery_models_are_registered_and_exported() -> None:
         "PublisherOperatorAction",
     ):
         assert hasattr(models, name)
+
+
+def test_book_frame_models_are_registered() -> None:
+    assert hasattr(models, "StoryCalendarRow")
+    assert hasattr(models, "BookLexiconRow")
+    assert TABLES_ADDED_AFTER_BASELINE <= set(Base.metadata.tables)
 
 
 def test_outbox_has_fenced_lease_columns_and_claim_indexes() -> None:
@@ -460,8 +476,13 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
     for table_name in RECOVERY_TABLES:
         metadata_table = _table(table_name)
         migration_table = capture.tables[table_name]
-        assert list(migration_table.c.keys()) == list(metadata_table.c.keys())
-        for column_name in metadata_table.c.keys():
+        baseline_columns = [
+            column_name
+            for column_name in metadata_table.c.keys()
+            if column_name not in COLUMNS_ADDED_AFTER_BASELINE.get(table_name, set())
+        ]
+        assert list(migration_table.c.keys()) == baseline_columns
+        for column_name in baseline_columns:
             metadata_column = metadata_table.c[column_name]
             migration_column = migration_table.c[column_name]
             assert type(migration_column.type) is type(metadata_column.type)
@@ -514,7 +535,20 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         assert drop_position[dependent] < drop_position[parent]
 
 
-def test_baseline_revision_is_rotated_and_followed_only_by_0002() -> None:
+def test_post_baseline_schema_is_absent_from_0001_and_present_in_orm(
+    baseline_operations: SimpleNamespace,
+) -> None:
+    capture = baseline_operations
+
+    for table_name in TABLES_ADDED_AFTER_BASELINE:
+        assert table_name not in capture.tables
+        assert table_name in Base.metadata.tables
+    for table_name, column_names in COLUMNS_ADDED_AFTER_BASELINE.items():
+        assert column_names <= set(_table(table_name).c.keys())
+        assert not column_names & set(capture.tables[table_name].c.keys())
+
+
+def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() -> None:
     migration = import_module(BASELINE_MODULE)
     versions = sorted(
         path.name
@@ -522,7 +556,11 @@ def test_baseline_revision_is_rotated_and_followed_only_by_0002() -> None:
         if path.name != "__init__.py"
     )
 
-    assert versions == ["0001_v5_baseline.py", "0002_drop_dead_tables.py"]
+    assert versions == [
+        "0001_v5_baseline.py",
+        "0002_drop_dead_tables.py",
+        "0003_book_state_v6.py",
+    ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None
     assert "Revision ID: 0001_v5_recovery" in migration.__doc__

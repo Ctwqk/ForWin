@@ -344,7 +344,11 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         for path in (ROOT / "forwin/migrations/versions").glob("*.py")
         if path.name != "__init__.py"
     )
-    assert versions == ["0001_v5_baseline.py", "0002_drop_dead_tables.py"]
+    assert versions == [
+        "0001_v5_baseline.py",
+        "0002_drop_dead_tables.py",
+        "0003_book_state_v6.py",
+    ]
 
     base_source = _read("forwin/models/base.py")
     for removed in (

@@ -15,6 +15,7 @@ from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
 from .planning_control import BandCheckpoint, NarrativeConstraint
 from .audit import DecisionEvent
+from .book_frame import BookLexiconRow, StoryCalendarRow
 from .observability import PerformanceSpan
 from .outbox import OutboxEvent
 from .maintenance import PostCanonMaintenanceRun
@@ -190,4 +191,7 @@ __all__ = [
     "BookReaderPromiseRow",
     "NarrativeNodeRow",
     "NarrativeEdgeRow",
+    # book frame
+    "StoryCalendarRow",
+    "BookLexiconRow",
 ]

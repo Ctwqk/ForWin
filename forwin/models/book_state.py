@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -53,6 +64,12 @@ class WorldNodeStateRow(Base):
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     node_id: Mapped[str] = mapped_column(String, nullable=False)
     node_type: Mapped[str] = mapped_column(String, default="")
+    name: Mapped[str] = mapped_column(Text, default="", server_default="")
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    profile_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true()
+    )
     as_of_chapter: Mapped[int] = mapped_column(Integer, default=0)
     as_of_story_time: Mapped[str] = mapped_column(Text, default="")
     state_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -186,6 +203,8 @@ class GraphDeltaRow(Base):
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     chapter_number: Mapped[int] = mapped_column(Integer, default=0)
     story_time: Mapped[str] = mapped_column(Text, default="")
+    story_time_start: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    story_time_end: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     delta_type: Mapped[str] = mapped_column(String, default="world_state")
     operation: Mapped[str] = mapped_column(String, default="")
     target_type: Mapped[str] = mapped_column(String, default="")
@@ -248,6 +267,9 @@ class CognitionOverlayRow(Base):
     false_edges_json: Mapped[str] = mapped_column(Text, default="{}")
     false_facts_json: Mapped[str] = mapped_column(Text, default="{}")
     evidence_by_ref_json: Mapped[str] = mapped_column(Text, default="{}")
+    knowledge_by_ref_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}"
+    )
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -291,6 +313,12 @@ class WorldSnapshotRow(Base):
     reader_overlay_digest: Mapped[str] = mapped_column(String, default="")
     character_overlay_digests_json: Mapped[str] = mapped_column(Text, default="{}")
     world_node_state_index_json: Mapped[str] = mapped_column(Text, default="{}")
+    narrative_node_index_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}"
+    )
+    narrative_edge_index_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}"
+    )
     active_edge_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     active_fact_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     active_world_line_ids_json: Mapped[str] = mapped_column(Text, default="[]")

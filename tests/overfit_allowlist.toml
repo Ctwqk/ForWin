@@ -767,15 +767,6 @@ justification = "解析“围绕‘X’展开”句式"
 max_literals = 3
 
 [[entry]]
-path = "forwin/llm_eval/cases.py"
-symbol = "sample_context"
-checks = ["story_id_literal"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "运行包内的 eval 样例剧本；Task 11 移到 tests/fixtures"
-max_literals = 1
-
-[[entry]]
 path = "forwin/map/generator.py"
 symbol = "_danger_for_role"
 checks = ["cjk_inline_iteration"]

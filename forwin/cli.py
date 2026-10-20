@@ -305,6 +305,16 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument(
         "--manifest", default="", help="独立 eval profile manifest JSON"
     )
+    eval_run.add_argument(
+        "--context-file",
+        required=True,
+        help="样例章节上下文 JSON（ChapterContextPack 列表）",
+    )
+    eval_run.add_argument(
+        "--cases-file",
+        required=True,
+        help="eval case 定义 JSON；剧本文本全部来自该文件",
+    )
     eval_run.add_argument("--artifact-root", default="", help="输出 artifact root")
     eval_run.add_argument("--run-id", default="", help="指定 run id；默认自动生成")
     eval_run.add_argument(
@@ -320,6 +330,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_run.add_argument(
         "--skip-mini-real-run", action="store_true", help="只跑 direct stage probes"
+    )
+    eval_run.add_argument(
+        "--mini-premise",
+        default="",
+        help="mini real run 的 premise；与 --mini-genre 同时提供才会执行 mini real run",
+    )
+    eval_run.add_argument(
+        "--mini-genre",
+        default="",
+        help="mini real run 的题材；与 --mini-premise 同时提供才会执行 mini real run",
     )
     eval_report = eval_sub.add_parser("report", help="读取并打印 LLM eval 报告")
     eval_report.add_argument("--run-id", required=True, help="run id")

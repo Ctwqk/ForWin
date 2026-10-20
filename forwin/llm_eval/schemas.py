@@ -86,6 +86,8 @@ class EvalRunConfig(BaseModel):
     suite: str = "medium"
     live: bool = False
     include_mini_real_run: bool = True
+    mini_premise: str = ""
+    mini_genre: str = ""
     request_interval_seconds: float = 6.0
     burst_every_seconds: float = 120.0
     burst_size: int = 3

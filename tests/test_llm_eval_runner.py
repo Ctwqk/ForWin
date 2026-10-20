@@ -236,6 +236,8 @@ def test_mini_real_pipeline_build_failure_closes_container(
         EvalRunConfig(
             run_id="pipeline-build-failure",
             artifact_root=str(tmp_path),
+            mini_premise="a premise",
+            mini_genre="a genre",
         )
     )
     profile = EvalProfile(
@@ -262,6 +264,10 @@ def test_cli_parser_exposes_llm_eval_run_and_report_subcommands() -> None:
             "minimax,kimi,codex-spark",
             "--artifact-root",
             "data/artifacts",
+            "--context-file",
+            "contexts.json",
+            "--cases-file",
+            "cases.json",
         ]
     )
     assert run_args.command == "llm-eval"
@@ -272,3 +278,251 @@ def test_cli_parser_exposes_llm_eval_run_and_report_subcommands() -> None:
     assert report_args.command == "llm-eval"
     assert report_args.llm_eval_command == "report"
     assert report_args.run_id == "run-1"
+
+
+def test_llm_eval_cli_requires_context_and_cases_files(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit) as missing_context:
+        parser.parse_args(["llm-eval", "run", "--cases-file", "cases.json"])
+    assert "required: --context-file" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as missing_cases:
+        parser.parse_args(["llm-eval", "run", "--context-file", "contexts.json"])
+    assert "required: --cases-file" in capsys.readouterr().err
+
+    assert missing_context.value.code == 2
+    assert missing_cases.value.code == 2
+
+
+def test_llm_eval_cli_parses_fixture_files_and_optional_mini_run_inputs() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "llm-eval",
+            "run",
+            "--context-file",
+            "contexts.json",
+            "--cases-file",
+            "cases.json",
+            "--mini-premise",
+            "some premise",
+            "--mini-genre",
+            "some genre",
+        ]
+    )
+    bare = parser.parse_args(
+        [
+            "llm-eval",
+            "run",
+            "--context-file",
+            "contexts.json",
+            "--cases-file",
+            "cases.json",
+        ]
+    )
+
+    assert args.context_file == "contexts.json"
+    assert args.cases_file == "cases.json"
+    assert (args.mini_premise, args.mini_genre) == ("some premise", "some genre")
+    assert (bare.mini_premise, bare.mini_genre) == ("", "")
+
+
+def test_llm_eval_cli_dry_run_loads_cases_from_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from forwin.llm_eval.cli import run_eval_from_args
+    from tests.llm_eval_fixtures import CASES_PATH, CONTEXTS_PATH
+
+    manifest = tmp_path / "profiles.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "dry",
+                        "base_url": "https://example.invalid/v1",
+                        "model": "dry-model",
+                        "api_key": "unused",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(
+        [
+            "llm-eval",
+            "run",
+            "--dry-run",
+            "--suite",
+            "smoke",
+            "--manifest",
+            str(manifest),
+            "--context-file",
+            str(CONTEXTS_PATH),
+            "--cases-file",
+            str(CASES_PATH),
+        ]
+    )
+
+    assert run_eval_from_args(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["cases"] == ["writer_preview", "scene_breakdown"]
+
+
+def test_llm_eval_cli_reports_unreadable_fixture_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from forwin.llm_eval.cli import run_eval_from_args
+    from tests.llm_eval_fixtures import CASES_PATH
+
+    manifest = tmp_path / "profiles.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "dry",
+                        "base_url": "https://example.invalid/v1",
+                        "model": "dry-model",
+                        "api_key": "unused",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args(
+        [
+            "llm-eval",
+            "run",
+            "--dry-run",
+            "--manifest",
+            str(manifest),
+            "--context-file",
+            str(tmp_path / "missing.json"),
+            "--cases-file",
+            str(CASES_PATH),
+        ]
+    )
+
+    assert run_eval_from_args(args) == 2
+    assert "missing.json" in capsys.readouterr().out
+
+
+def test_mini_real_run_is_skipped_without_premise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("mini real run must not build a pipeline without a premise")
+
+    monkeypatch.setattr(runner_module.RuntimeContainer, "from_config", forbidden)
+    profile = EvalProfile(
+        id="minimax",
+        provider="minimax",
+        base_url="https://example.invalid/v1",
+        model="m",
+        api_key="secret",
+    )
+    case = EvalCase(
+        case_id="scene",
+        stage_key="scene_breakdown",
+        task_family="writer",
+        expected_output_kind="json",
+        schema_name="scene_breakdown",
+        messages=[{"role": "user", "content": "只输出 JSON"}],
+    )
+    # --mini-genre alone is not enough: the run needs both inputs.
+    for premise, genre in (("", ""), ("", "some genre"), ("some premise", "")):
+        runner = LLMReliabilityRunner(
+            EvalRunConfig(
+                run_id=f"skip-{bool(premise)}-{bool(genre)}",
+                artifact_root=str(tmp_path),
+                suite="smoke",
+                live=True,
+                include_mini_real_run=True,
+                request_interval_seconds=0,
+                mini_premise=premise,
+                mini_genre=genre,
+            ),
+            adapter_factory=lambda selected: FakeAdapter(selected, ['{"scenes":[{"scene_no":1}]}']),
+        )
+
+        runner.run(profiles=[profile], cases=[case])
+
+        rows = [
+            json.loads(line)
+            for line in runner.full_runs_path.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [(row["status"], row["reason"]) for row in rows] == [
+            ("skipped", "skipped_mini_real")
+        ]
+
+
+def test_mini_real_run_receives_premise_and_genre_from_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pipeline_calls: list[dict[str, object]] = []
+
+    class Pipeline:
+        def run(self, *, premise: str, genre: str, num_chapters: int):
+            pipeline_calls.append(
+                {"premise": premise, "genre": genre, "num_chapters": num_chapters}
+            )
+
+            class Result:
+                project_id = "p1"
+                completed_chapters = [1, 2]
+                failed_chapters: list[int] = []
+
+            return Result()
+
+        def close(self) -> None:
+            return None
+
+    class Container:
+        def build_chapter_pipeline(self):
+            return Pipeline()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        runner_module.RuntimeContainer, "from_config", lambda *_a, **_k: Container()
+    )
+    monkeypatch.setenv("FORWIN_EVAL_DATABASE_URL", "postgresql+psycopg://unused/forwin")
+    runner = LLMReliabilityRunner(
+        EvalRunConfig(
+            run_id="mini-real-inputs",
+            artifact_root=str(tmp_path),
+            mini_premise="a premise",
+            mini_genre="a genre",
+        )
+    )
+    profile = EvalProfile(id="p", base_url="https://example.invalid/v1", model="m")
+
+    payload = runner.run_mini_real_for_profile(profile)
+
+    assert payload["status"] == "completed"
+    assert pipeline_calls == [
+        {"premise": "a premise", "genre": "a genre", "num_chapters": 2}
+    ]
+
+
+def test_mini_real_run_without_inputs_is_rejected_before_building(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("must not build a runtime container")
+
+    monkeypatch.setattr(runner_module.RuntimeContainer, "from_config", forbidden)
+    runner = LLMReliabilityRunner(
+        EvalRunConfig(run_id="no-inputs", artifact_root=str(tmp_path))
+    )
+    profile = EvalProfile(id="p", base_url="https://example.invalid/v1", model="m")
+
+    with pytest.raises(ValueError, match="mini_premise"):
+        runner.run_mini_real_for_profile(profile)

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from forwin.config import InfrastructureConfig
 
-from .cases import default_eval_cases
+from .cases import load_eval_cases, load_sample_contexts
 from .profiles import load_eval_profiles, profile_requires_api_key
 from .runner import EvalRunConfig, LLMReliabilityRunner
 
@@ -31,7 +31,13 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
         print(f"Profiles missing API keys: {', '.join(missing_keys)}")
         return 2
 
-    cases = default_eval_cases(suite=str(getattr(args, "suite", "medium") or "medium"))
+    suite = str(getattr(args, "suite", "medium") or "medium")
+    try:
+        contexts = load_sample_contexts(Path(args.context_file))
+        cases = load_eval_cases(Path(args.cases_file), contexts=contexts, suite=suite)
+    except (OSError, ValueError) as exc:
+        print(f"Failed to load eval fixtures: {exc}")
+        return 2
     if getattr(args, "dry_run", False):
         print(
             json.dumps(
@@ -55,6 +61,8 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
             suite=str(getattr(args, "suite", "medium") or "medium"),
             live=True,
             include_mini_real_run=not bool(getattr(args, "skip_mini_real_run", False)),
+            mini_premise=str(getattr(args, "mini_premise", "") or ""),
+            mini_genre=str(getattr(args, "mini_genre", "") or ""),
             rounds=int(getattr(args, "rounds", 0) or (1 if str(getattr(args, "suite", "medium")) == "smoke" else 20)),
         )
     )

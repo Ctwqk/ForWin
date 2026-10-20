@@ -291,6 +291,11 @@ class LLMReliabilityRunner:
                         profile,
                         reason="codex_cli_direct_eval_only",
                     )
+                elif not (self.config.mini_premise.strip() and self.config.mini_genre.strip()):
+                    self._record_skipped_mini_real_for_profile(
+                        profile,
+                        reason="skipped_mini_real",
+                    )
                 else:
                     self.run_mini_real_for_profile(profile)
         summary = summarize_attempts(attempts)
@@ -462,6 +467,10 @@ class LLMReliabilityRunner:
         )
 
     def run_mini_real_for_profile(self, profile: EvalProfile) -> dict[str, Any]:
+        premise = self.config.mini_premise.strip()
+        genre = self.config.mini_genre.strip()
+        if not premise or not genre:
+            raise ValueError("mini real run needs both mini_premise and mini_genre")
         database_url = os.environ.get("FORWIN_EVAL_DATABASE_URL", InfrastructureConfig.from_env().database_url)
         artifact_root = self.run_dir / f"mini_real_{profile.id}_artifacts"
         started_at = time.perf_counter()
@@ -517,8 +526,8 @@ class LLMReliabilityRunner:
             raise
         try:
             result = pipeline.run(
-                premise="主角在潮雾旧城得到一枚会记录未来声音的罗盘。",
-                genre="玄幻",
+                premise=premise,
+                genre=genre,
                 num_chapters=2,
             )
             payload.update(

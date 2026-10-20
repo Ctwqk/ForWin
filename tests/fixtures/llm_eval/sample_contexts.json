@@ -1,0 +1,206 @@
+[
+  {
+    "project_id": "eval-project-0",
+    "project_title": "潮雾试炼 1",
+    "premise": "主角在沿海旧城发现一枚会记录未来潮声的黑色罗盘。",
+    "genre": "玄幻",
+    "setting_summary": "近海城邦被潮雾、旧术和商会债务共同压迫。",
+    "chapter_number": 2,
+    "chapter_plan_title": "潮声里的账本",
+    "chapter_plan_one_line": "主角在码头追查旧账时撞见同伴隐瞒的线索。",
+    "chapter_goals": [
+      "推进罗盘线索",
+      "制造同伴信任裂缝",
+      "留下章末悬念"
+    ],
+    "previous_chapter_summaries": [
+      "上一章主角得到罗盘，但尚不知道罗盘会记录未来。"
+    ],
+    "active_entities": [
+      {
+        "entity_id": "char-protagonist",
+        "kind": "character",
+        "name": "林夜",
+        "importance": 10,
+        "description": "欠下旧术债务的年轻修士。",
+        "current_state": {
+          "location": "雾港",
+          "goal": "查清罗盘来源"
+        }
+      },
+      {
+        "entity_id": "char-ally",
+        "kind": "character",
+        "name": "周澜",
+        "importance": 8,
+        "description": "熟悉商会账本但藏有秘密的同伴。",
+        "current_state": {
+          "location": "雾港",
+          "secret": "认识账本主人"
+        }
+      }
+    ],
+    "active_threads": [
+      {
+        "thread_id": "thread-compass",
+        "name": "黑色罗盘",
+        "description": "罗盘能记录未来潮声，但代价未知。",
+        "status": "open",
+        "priority": 9,
+        "recent_beats": [
+          "罗盘第一次发热。"
+        ]
+      }
+    ],
+    "timeline": {
+      "current_time_label": "第三日黄昏",
+      "ordinal": 3
+    },
+    "allowed_entities": [
+      "林夜",
+      "周澜"
+    ],
+    "active_world_lines": [
+      "潮雾会遮蔽旧术痕迹。"
+    ],
+    "must_not_reveal": [
+      "罗盘真正来源不能在本章揭示。"
+    ]
+  },
+  {
+    "project_id": "eval-project-1",
+    "project_title": "潮雾试炼 2",
+    "premise": "主角在沿海旧城发现一枚会记录未来潮声的黑色罗盘。",
+    "genre": "玄幻",
+    "setting_summary": "近海城邦被潮雾、旧术和商会债务共同压迫。",
+    "chapter_number": 3,
+    "chapter_plan_title": "潮声里的账本",
+    "chapter_plan_one_line": "主角在码头追查旧账时撞见同伴隐瞒的线索。",
+    "chapter_goals": [
+      "推进罗盘线索",
+      "制造同伴信任裂缝",
+      "留下章末悬念"
+    ],
+    "previous_chapter_summaries": [
+      "上一章主角得到罗盘，但尚不知道罗盘会记录未来。"
+    ],
+    "active_entities": [
+      {
+        "entity_id": "char-protagonist",
+        "kind": "character",
+        "name": "沈烬",
+        "importance": 10,
+        "description": "欠下旧术债务的年轻修士。",
+        "current_state": {
+          "location": "黑潮城",
+          "goal": "查清罗盘来源"
+        }
+      },
+      {
+        "entity_id": "char-ally",
+        "kind": "character",
+        "name": "许青鸢",
+        "importance": 8,
+        "description": "熟悉商会账本但藏有秘密的同伴。",
+        "current_state": {
+          "location": "黑潮城",
+          "secret": "认识账本主人"
+        }
+      }
+    ],
+    "active_threads": [
+      {
+        "thread_id": "thread-compass",
+        "name": "黑色罗盘",
+        "description": "罗盘能记录未来潮声，但代价未知。",
+        "status": "open",
+        "priority": 9,
+        "recent_beats": [
+          "罗盘第一次发热。"
+        ]
+      }
+    ],
+    "timeline": {
+      "current_time_label": "第三日黄昏",
+      "ordinal": 3
+    },
+    "allowed_entities": [
+      "沈烬",
+      "许青鸢"
+    ],
+    "active_world_lines": [
+      "潮雾会遮蔽旧术痕迹。"
+    ],
+    "must_not_reveal": [
+      "罗盘真正来源不能在本章揭示。"
+    ]
+  },
+  {
+    "project_id": "eval-project-2",
+    "project_title": "潮雾试炼 3",
+    "premise": "主角在沿海旧城发现一枚会记录未来潮声的黑色罗盘。",
+    "genre": "玄幻",
+    "setting_summary": "近海城邦被潮雾、旧术和商会债务共同压迫。",
+    "chapter_number": 4,
+    "chapter_plan_title": "潮声里的账本",
+    "chapter_plan_one_line": "主角在码头追查旧账时撞见同伴隐瞒的线索。",
+    "chapter_goals": [
+      "推进罗盘线索",
+      "制造同伴信任裂缝",
+      "留下章末悬念"
+    ],
+    "previous_chapter_summaries": [
+      "上一章主角得到罗盘，但尚不知道罗盘会记录未来。"
+    ],
+    "active_entities": [
+      {
+        "entity_id": "char-protagonist",
+        "kind": "character",
+        "name": "陆沉",
+        "importance": 10,
+        "description": "欠下旧术债务的年轻修士。",
+        "current_state": {
+          "location": "镜湖镇",
+          "goal": "查清罗盘来源"
+        }
+      },
+      {
+        "entity_id": "char-ally",
+        "kind": "character",
+        "name": "白芷",
+        "importance": 8,
+        "description": "熟悉商会账本但藏有秘密的同伴。",
+        "current_state": {
+          "location": "镜湖镇",
+          "secret": "认识账本主人"
+        }
+      }
+    ],
+    "active_threads": [
+      {
+        "thread_id": "thread-compass",
+        "name": "黑色罗盘",
+        "description": "罗盘能记录未来潮声，但代价未知。",
+        "status": "open",
+        "priority": 9,
+        "recent_beats": [
+          "罗盘第一次发热。"
+        ]
+      }
+    ],
+    "timeline": {
+      "current_time_label": "第三日黄昏",
+      "ordinal": 3
+    },
+    "allowed_entities": [
+      "陆沉",
+      "白芷"
+    ],
+    "active_world_lines": [
+      "潮雾会遮蔽旧术痕迹。"
+    ],
+    "must_not_reveal": [
+      "罗盘真正来源不能在本章揭示。"
+    ]
+  }
+]

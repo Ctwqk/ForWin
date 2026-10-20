@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from forwin.context.assembler_core import _build_canon_quality_context
-from forwin.llm_eval.cases import sample_context
 from forwin.models import Project
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -11,6 +10,7 @@ from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterRevie
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.writer.prompt_core import _canon_quality_context_section
 from forwin.audit.events import DecisionEventType
+from tests.llm_eval_fixtures import sample_context
 from tests.postgres import postgres_test_url
 
 

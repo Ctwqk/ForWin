@@ -411,7 +411,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 "frozen_artifact": "",
             }
 
-        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
+        api_state._pipeline = SimpleNamespace(
+            accept_review=accept_review,
+            policy=RuntimePolicy.for_profile("standard"),
+        )
 
         with self.assertRaises(HTTPException) as ctx:
             api_module.approve_chapter_review(
@@ -481,7 +484,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-review-gate-auto-retry"
 
-        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
+        api_state._pipeline = SimpleNamespace(
+            accept_review=accept_review,
+            policy=RuntimePolicy.for_profile("standard"),
+        )
 
         with patch(
             "forwin.http.app._create_continue_generation_task",
@@ -560,7 +566,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
             captured.update(kwargs)
             return "task-approve-workset"
 
-        api_state._pipeline = SimpleNamespace(accept_review=accept_review)
+        api_state._pipeline = SimpleNamespace(
+            accept_review=accept_review,
+            policy=RuntimePolicy.for_profile("standard"),
+        )
 
         with patch(
             "forwin.http.app._create_continue_generation_task",

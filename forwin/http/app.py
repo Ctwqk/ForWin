@@ -130,7 +130,7 @@ def _build_project_application(runtime: HttpRuntime) -> ProjectApplicationServic
         ProjectApplicationDeps(
             get_session=lambda: _get_session(runtime),
             get_config=lambda: runtime.config,
-            get_pipeline=runtime.get_pipeline,
+            get_project_pipeline=runtime.get_project_pipeline,
             get_publisher_manager=runtime.get_publisher_manager,
             display_datetime=lambda value: _display_for(runtime, value),
             build_genesis_service=runtime.build_genesis_service,

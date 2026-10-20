@@ -1260,7 +1260,12 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         old_pipeline = api_module._pipeline
         api_module._pipeline = type(
-            "FakePipeline", (), {"accept_review": staticmethod(accept_review)}
+            "FakePipeline",
+            (),
+            {
+                "accept_review": staticmethod(accept_review),
+                "policy": RuntimePolicy.for_profile("standard"),
+            },
         )()
         try:
             result = self._call_tool(

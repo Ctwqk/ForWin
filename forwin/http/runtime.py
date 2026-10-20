@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from forwin.application.task_center import TaskCenterService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
+from forwin.http.project_pipelines import ProjectPipelineCache
 from forwin.publishers.manager import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
@@ -80,6 +81,7 @@ class HttpRuntime:
         default_factory=threading.RLock,
         repr=False,
     )
+    project_pipelines: ProjectPipelineCache = field(default_factory=ProjectPipelineCache)
     _publisher_lock: threading.RLock = field(
         default_factory=threading.RLock,
         repr=False,
@@ -125,6 +127,10 @@ class HttpRuntime:
                     session.rollback()
             self.pipeline = candidate
             return candidate
+
+    def get_project_pipeline(self, project_id: str) -> ChapterPipeline:
+        shared = self.get_pipeline()
+        return self.project_pipelines.resolve(project_id, shared, self.get_session, self.config)
 
     def get_publisher_manager(self) -> PublisherManager:
         manager = self.publisher_manager
@@ -180,6 +186,7 @@ class HttpRuntime:
         from forwin.http.automation import stop_automation_scheduler
 
         stop_automation_scheduler(self)
+        self.project_pipelines.close()
         container = self.container
         if container is not None:
             container.close()

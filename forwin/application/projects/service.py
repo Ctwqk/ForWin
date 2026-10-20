@@ -28,7 +28,7 @@ from . import chapters, generation, genesis, lifecycle, reviews
 class ProjectApplicationDeps:
     get_session: Callable[[], Any]
     get_config: Callable[[], Any]
-    get_pipeline: Callable[[], Any]
+    get_project_pipeline: Callable[[str], Any]
     get_publisher_manager: Callable[[], Any]
     display_datetime: Callable[[Any], str]
     build_genesis_service: Callable[..., Any]
@@ -371,7 +371,7 @@ class ProjectApplicationService:
             chapter_number,
             req,
             config=deps.get_config(),
-            pipeline=deps.get_pipeline(),
+            pipeline=deps.get_project_pipeline(project_id),
             get_session=deps.get_session,
             display_datetime=deps.display_datetime,
             active_generation_task_error_cls=deps.active_generation_task_error_cls,

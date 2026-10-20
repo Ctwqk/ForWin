@@ -896,6 +896,7 @@ class ForWinAPIClient:
             stage_key=str(raw.get("stage_key", "")),
             status=str(raw.get("status", "todo")),
             locked=bool(raw.get("locked", False)),
+            degraded=bool(raw.get("degraded", False)),
             updated_at=str(raw.get("updated_at", "")),
             last_trace_id=str(raw.get("last_trace_id", "")),
         )

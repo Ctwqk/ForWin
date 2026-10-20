@@ -341,6 +341,44 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
         self.assertEqual(project.materialized_chapter_count, 12)
         self.assertEqual(project.chapter_count, 12)
 
+    def test_degraded_genesis_stage_is_visible_through_mcp_views(self) -> None:
+        stages = {
+            "brief": {"status": "locked", "locked": True},
+            "world": {"status": "generated", "degraded": True},
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/projects/project-1/genesis":
+                return httpx.Response(
+                    200,
+                    json={"project_id": "project-1", "pack": {"stage_states": stages}},
+                    request=request,
+                )
+            self.assertEqual(request.url.path, "/api/projects/project-1")
+            return httpx.Response(
+                200,
+                json={
+                    "id": "project-1",
+                    "genesis_stage_overview": [
+                        {"stage_key": key, **value} for key, value in stages.items()
+                    ],
+                },
+                request=request,
+            )
+
+        client = ForWinAPIClient(
+            base_url="http://forwin.invalid",
+            transport=httpx.MockTransport(handler),
+        )
+
+        genesis = asyncio.run(client.genesis_get("project-1"))
+        project = asyncio.run(client.project_get("project-1"))
+
+        for states in (genesis.stage_states, project.genesis_stage_overview):
+            by_key = {item.stage_key: item for item in states}
+            self.assertTrue(by_key["world"].degraded)
+            self.assertFalse(by_key["brief"].degraded)
+
 
 class ForWinMCPIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:

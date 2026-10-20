@@ -27,6 +27,7 @@ class StageStateView(BaseModel):
     stage_key: str
     status: str = "todo"
     locked: bool = False
+    degraded: bool = False
     updated_at: str = ""
     last_trace_id: str = ""
 

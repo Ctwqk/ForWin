@@ -1,6 +1,6 @@
 # ForWin 当前设计
 
-更新：2026-09-04。范围：当前源码实际实现及本轮已验证的收口修改。
+更新：2026-09-04；2026-10-20 追加世界引擎大修 P0 的现状（见第 13 节）。范围：当前源码实际实现及本轮已验证的收口修改。
 
 当前设计以已集成的 `master@0a06cfa` 为基础，包含随后按外部评审落实的修复验证、trace补传和同日调度修复。分支整合与前轮消融见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)，本轮边界见[运行自主性修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)，本地证据见[修复验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。
 
@@ -84,7 +84,9 @@ RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只
 
 ## 5. Genesis、计划和写作
 
-Genesis 包含 brief、world、map、story_engine、book_blueprint、bootstrap 六阶段。用户可以在写前生成、修订、锁定；handoff 后它变成原始蓝图档案，后续写作以运行计划为准。
+Genesis 包含 brief、world、map、story_engine、book_blueprint、bootstrap 六阶段（`bootstrap` 计划在 P1 改为 `world_seed`）。用户可以在写前生成、修订、锁定；handoff 后它变成原始蓝图档案，后续写作以运行计划为准。创建项目必须显式给出 genre，没有默认题材。模型生成或修订失败时的 Genesis fallback 只返回结构壳（世界概述取自作者的设定摘要，地图为一个未命名子世界/区域/节点，故事引擎与蓝图叙述字段为空），并把 `stage_states[stage].degraded` 置位；后续模型生成、修订或 patch 会清除该标记。
+
+续写（extend-generation）追加一个 planned `ArcPlanVersion`，由现有 arc activation 为其规划章节；Genesis blueprint 中没有该卷时，materializer 用 `ArcPlanVersion` 合成 payload。读模型把有计划卷但尚无章节计划的卷报告为可恢复。未命名的 planned 槽位不会被激活，也不再被赋予编造的名字。
 
 PlanningService 组织 Arc/Band/Chapter 的创建、激活和修订。PlanningQuery 是读侧；PlanHealthService 的实际职责是把 future-plan audit 转成 typed health 结果，供生成控制决定是否阻断。Patch validation 由现有计划修订流程执行，没有经过一个统一健康聚合器。FuturePlanAuditor 可以对未来计划提出并应用合法修正，不能改已接纳章节来抹平历史。
 
@@ -167,9 +169,9 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 ## 11. 已删除的设计
 
-下列内容不能再作为现行方案引用：多种 operation/checkpoint/copilot/reckless 模式、premium 空profile、RuntimeSettingsStore、governance_json、request-level policy override、旧review cutover flags、WritingOrchestrator动态拼装、旧world_model facade、legacy accepted-state双写、独立Scenario rehearsal、Provisional Band Preview、Obsidian reverse import、旧API/private alias、旧迁移链和手写schema升级器。
+下列内容不能再作为现行方案引用：v4 fixture 驱动的 BookState 抽取链路（delta extractor、确定性 gate、reviewers、`BookStateDeltaAdapter`、`forwin.protocol.world_v4`、`WriterOutput` 的 v4 自报字段、`RepairScope.world_model`）、world contracts 中的“母星被围”样例、Genesis fallback 与 writer prompt 里的样例剧本、五张死表（见 `0002_drop_dead_tables`）、多种 operation/checkpoint/copilot/reckless 模式、premium 空profile、RuntimeSettingsStore、governance_json、request-level policy override、旧review cutover flags、WritingOrchestrator动态拼装、旧world_model facade、legacy accepted-state双写、独立Scenario rehearsal、Provisional Band Preview、Obsidian reverse import、旧API/private alias、旧迁移链和手写schema升级器。
 
-保留的普通 writer preview fallback 与 Arc sizing `provisional_window` 不是已经删除的第二套 Provisional writer；保留的 BookState extraction gate 不是旧主 reviewer；两者不能仅凭旧名字相似误删。
+保留的普通 writer preview fallback 与 Arc sizing `provisional_window` 不是已经删除的第二套 Provisional writer；保留的 `BookStateReviewGate`（GraphDelta 入 canon 前的确定性护栏）不是旧主 reviewer；两者不能仅凭旧名字相似误删。
 
 ## 12. 复杂度与消融重点
 
@@ -191,9 +193,21 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 本轮不运行几十或几百章真实测试。消融结果与本地全量测试用于决定本轮可推送的代码；历史全新L200、恢复演练和正式部署门仍在发布设计中，但不伪称已经完成，也不作为本任务继续长跑的理由。
 
-## 13. 文档入口
+## 13. 世界引擎大修 P0 之后（2026-10-20）
+
+设计见[世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0 只做护栏与纯删除，主流程、owner 表和 Canon 事务不变。
+
+- 运行代码只处理结构，故事内容来自 Genesis、BookState 或 LLM 输出。`tests/test_no_story_content_in_runtime.py` 用 AST 扫描 `forwin/`，命中项必须登记于 `tests/overfit_allowlist.toml`；尚未删除的内容登记为 `pending_removal` 并带 `remove_in` 阶段，`completed_phase = "P0"` 时 `remove_in = "P0"` 的条目为零。
+- `scripts/purge_all_projects.py` 是清库入口（默认 dry-run，`--yes-delete-all-projects` 才执行，存在非终态生成/上传任务时拒绝）。
+- BookState 候选 delta 现在由 `WriterContractDeltaBuilder` 从 writer 合同构建，空结果回退 `pulp_light` 正则抽取；Alembic head 为 `0002_drop_dead_tables`；world contracts 只产出通用合同。
+- 泄漏的第二套剧本词汇已从 canon_quality、checker（pulp profile 只按显式 genre 选择）、canon_names（锚点不分角色，来源待 P1）和 future-plan audit 的 P0 范围内清除；writer prompt 示例、ArcDirector 默认世界、SubWorldManager 名字池、WorldSimulator 的 `chapter>=3` 规则已删除。
+- llm_eval fixture 位于 `tests/fixtures/llm_eval`，CLI 必须传 `--context-file` / `--cases-file`。
+- 仍延后：`pulp_light` 正则、倒计时/羁押 future-plan audit、约束关键词表与 `map_movement` 词表（P2）；地图角色词表与通用人物 token（P1）；WorldSimulator 关键词规则与 SubWorldManager 窗口规则（P4）。账本 v6、world_seed、世界引擎、节拍表规划尚未实现，不属于当前设计。
+
+## 14. 文档入口
 
 - 本文：现有设计的完整叙述。
+- [世界引擎大修设计](../docs/designs/2026-10-20-world-engine-overhaul.md)：P0 之后各阶段（P1–P4）的目标设计，其中未落地部分不是当前实现。
 - [CURRENT_ARCHITECTURE](CURRENT_ARCHITECTURE.md)：精简的架构与代码边界。
 - [DESIGN_STATUS](DESIGN_STATUS.md)：旧文档权威性与当前状态。
 - [前轮收口修订](../docs/superpowers/specs/2026-09-04-v5-closure-design.md)：架构收口与发布验收顺序。

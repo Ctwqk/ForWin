@@ -74,11 +74,7 @@ LOCAL_REWRITE_STORY_TERMS = (
 
 ALLOWED_PRODUCTION_FILES: set[str] = set()
 
-ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
-    "forwin/application/projects/lifecycle.py",
-    "forwin/canon_quality/rule_profile.py",
-    "forwin/review/repair/service.py",
-}
+ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = set()
 
 
 def _python_files(paths: list[Path]) -> list[Path]:

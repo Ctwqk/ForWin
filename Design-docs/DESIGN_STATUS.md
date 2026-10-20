@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-09-04
+更新时间：2026-10-20
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -21,6 +21,7 @@
 | `../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md` | active-current | 外部评审阶段一：逐合同三态验证、trace outbox补传、同日阻断恢复及一次批次原子预留；不扩展V5主架构。 |
 | `CURRENT_ARCHITECTURE.md` | active-current | 精简架构边界，固定 RuntimePolicy v2 / report-only Generation Audit / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
+| `../docs/designs/2026-10-20-world-engine-overhaul.md` | active-current | 世界引擎大修设计（破坏性）。P0（护栏与纯删除）已落地；P1–P4 为目标设计，未实现部分不是当前实现。 |
 | `../docs/superpowers/specs/2026-09-04-v5-closure-design.md` | active-current | 最新收口复评：以 fdaeaa6 领先候选为基线，冻结已完成 Track A/B0，修正重复验收与 tag-only 附加门；保留真实恢复及最终全新 L200 no-hotfix。 |
 | `../forwin_architecture_consolidation_audit.md` | historical-plan | 2026-07-09 架构收敛审计（历史论证记录）。其 Phase A-D 已由 v5 hard-cut 完成并替代，Phase A-F 不再作为待办；source-of-truth 思维与测试/风险框架由后续计划继承。 |
 | `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；RuntimePolicy v2，旧项目和旧设置不迁移。 |
@@ -53,6 +54,22 @@
 | `V3_8.md` | baseline-with-overrides | backend observability / audit / PromptTrace 规格；dashboard/SLO 属 future。 |
 | `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除的历史证据；仅供追溯，不是当前 runtime、策略字段或目标架构。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
+
+## 2026-10 世界引擎大修 P0
+
+设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；`tests/overfit_allowlist.toml` 的 `meta.completed_phase` 已推进到 `P0`，`remove_in = "P0"` 的条目为零，`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
+
+- 新增防过拟合 AST 护栏：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py`，带按阶段门控的 `pending_removal` 区段。
+- 新增 `scripts/purge_all_projects.py`（默认 dry-run，`--yes-delete-all-projects` 才执行）；`_delete_project` 现在删除 publisher 子表行与项目 outbox 事件。
+- 删除 v4 抽取链路：`book_state/extraction` 只剩 `contract.py` 与 `graph_delta.py`，`WriterContractDeltaBuilder` 与 `pulp_light` 正则兜底保留（后者 P2 删除）；`WriterOutput` 的 v4 字段与 `RepairScope` 的 `world_model` 已移除。
+- Alembic `0002_drop_dead_tables` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas`；`book_reader_promises` 保留。
+- world contracts 只产出通用合同（homeworld 样例已删）。
+- 续写改为追加一个 planned arc，由 arc activation 规划其章节；materializer 为 blueprint 中缺失的卷合成 payload；读模型把此类卷报告为可恢复。
+- Genesis fallback 只返回结构壳，`stage_states[stage].degraded` 标记 fallback 输出。
+- 删除 writer prompt 的故事示例、ArcDirector 默认世界、SubWorldManager 名字池与 WorldSimulator 的 `chapter>=3` 规则；未命名 planned 槽位不再被激活。
+- 清除 canon_quality、checker（pulp profile 只按显式 genre 选择）、canon_names（锚点不分角色，来源待 P1）与 future-plan audit 中泄漏的第二套剧本词汇。
+- 创建项目必须提供 genre；llm_eval fixture 移至 `tests/fixtures/llm_eval`，CLI 必须传 `--context-file` / `--cases-file`。
+- 延后：P1（地图角色词表、通用人物 token、锚点来源、账本 v6）、P2（`pulp_light` 正则、倒计时/羁押平行审计、约束关键词表、`map_movement` 词表）、P4（WorldSimulator 关键词规则、SubWorldManager 窗口规则）；以 allowlist 的 `pending_removal` 为准。以下各节中的 2026-07/09 记录是当时历史，不代表 P0 之后的现状。
 
 ## 2026-09 外部评审后的修复
 
@@ -107,7 +124,7 @@
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
 | `forwin.reviewer_v4` | removed | `forwin.book_state.extraction` | 已删除 | 旧导入 alias 包已物理删除。 |
 | `forwin.world_v4_review_gate` + `forwin.extractor` | removed | `forwin.book_state.extraction` | 已删除 | extraction contract 与 GraphDelta converter 归同一 owner；`V4Review*` / `WorldDeltaExtractor` 旧类型无 alias。 |
-| `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。 |
+| `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。P0 后只保留 `contract.py` 与 `graph_delta.py`（`pulp_light` 正则兜底待 P2 删除）；v4 抽取/gate/reviewers 与 `forwin.protocol.world_v4` 已删除。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | 项目运行设置只由版本化 RuntimePolicy 持有。 |
 | `forwin.governance*` / `models.governance` / `review.governance` | removed | `forwin.audit` + `forwin.planning` + `forwin.review` | 已删除 | 决策事件、计划控制和草稿规则分别归真实 owner，不保留兼容 facade。 |
@@ -193,7 +210,7 @@
 - `CanonCommitPlan` 在事务外冻结；Canon 事务锁项目/章节/候选并原子提交 BookState、实体、义务、accepted 状态、审计、outbox 与 `CanonCommitRecord`。
 - 五阶段故障注入、stale revalidation、幂等 replay 和 projection retry 已有聚焦测试；world edit proposal 也已归入 Canon 单写者。
 
-Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，唯一 revision 为 `0001_v5_baseline`；生产启动拒绝非 v5 schema，不迁移旧库。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
+Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，当时唯一 revision 为 `0001_v5_baseline`（现 head 为 `0002_drop_dead_tables`，见“2026-10 世界引擎大修 P0”）；生产启动拒绝非 v5 schema，不迁移旧库。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
 
 ## 2026-07 V5 Slice 5 Status
 

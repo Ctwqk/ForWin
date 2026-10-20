@@ -15,7 +15,7 @@
 # residual content under its real category (ledger rulings R2, R6).
 
 [meta]
-completed_phase = ""
+completed_phase = "P0"
 
 [story_id_literal]
 allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",

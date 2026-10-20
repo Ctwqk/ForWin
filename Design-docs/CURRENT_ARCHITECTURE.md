@@ -1,6 +1,6 @@
 # ForWin Current Architecture
 
-更新时间：2026-09-04
+更新时间：2026-10-20（世界引擎大修 P0 收口；见文末“2026-10 世界引擎大修 P0”）
 
 完整的当前设计、运行链路与剩余耦合见 [CURRENT_DESIGN.md](CURRENT_DESIGN.md)。本文保留精简的代码边界。
 
@@ -99,7 +99,7 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 - `forwin.world_model`：已物理删除；可重建页面、proposal 与 Obsidian 能力归 `forwin.knowledge_system` / `forwin.obsidian`。
 - `/world-model/*` HTTP 路径：仅保留传输契约名，适配器直接读取 BookState snapshot、Knowledge Projection page 与 CanonQualitySignal，不对应同名领域包或状态库。
 - `world_model_v4`：已删除的旧 compatibility projection / debug-export bridge；不得重新作为 runtime 写入路径引入。
-- `forwin.book_state.extraction`：BookState candidate extraction 与 GraphDelta conversion 的唯一 owner；不是章节草稿 reviewer。
+- `forwin.book_state.extraction`：BookState candidate extraction 与 GraphDelta conversion 的唯一 owner；不是章节草稿 reviewer。P0 之后该包只保留 `contract.py` 与 `graph_delta.py`：`BookStateGraphDeltaExtractor` 经 `WriterContractDeltaBuilder` 从 writer 合同构建候选 delta，结果为空时回退 `pulp_light` 正则抽取（P2 删除）。v4 抽取链路（delta extractor、确定性 gate、reviewers、`BookStateDeltaAdapter`、`forwin.protocol.world_v4`）已删除。
 - legacy `entity_states / relation_edges / canon_events / event_entity_links / plot_threads / plot_thread_beats / story_time_points / chapter_timelines`：ORM 与表定义均已删除；`entities / entity_aliases` 只作为 Canon 实体准入提交后的身份唯一性索引。
 - Provisional Band Preview runtime：已物理删除；不存在 policy 开关、第二 writer、preview service、执行/ledger 表、审计事件、HTTP/UI 入口或 repair callback。`provisional_window` / `provisional_band_size` 仅表示 Arc sizing 的近端 ChapterPlan 窗口，`ProvisionalPromotionRecord` 仅记录 accepted feedback，普通 writer 失败仍可调用 `write_preview_chapter()`。
 
@@ -109,7 +109,7 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 
 ## Schema 基线
 
-生产 schema 只由 Alembic 管理，当前唯一 revision 为 `0001_v5_baseline`。应用启动只校验 v5 revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
+生产 schema 只由 Alembic 管理。当前 head 为 `0002_drop_dead_tables`，其父 revision 为 `0001_v5_recovery`（文件 `0001_v5_baseline.py`）；已合入的迁移不得原地修改。`0002` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas` 五张无读写的死表；`book_reader_promises` 保留（已批准的世界编辑 proposal 仍写入）。应用启动只校验 head revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
 
 ## 地图红线
 
@@ -118,8 +118,24 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 ## 2026-07 Integrated Runtime Updates
 
 - Semantic retrieval defaults to the LAN embedding gateway (`EMBEDDING_BACKEND=gateway`) with 384-dimensional `all-MiniLM-L6-v2` vectors. `scripts/reembed_memory_index.py` is the supported maintenance path for backfilling accepted chapter memories into the memory index.
-- Pulp BookState extraction keeps the low-cost single-writer path but now emits a light structured world delta when extraction is deferred or degraded and the chapter otherwise has no world facts. Canon remains guarded by `BookStateReviewGate`.
+- Pulp BookState extraction keeps the low-cost single-writer path but now emits a light structured world delta (`pulp_light` regex fallback, scheduled for deletion in P2) when the writer contract yields nothing and the chapter otherwise has no world facts. Canon remains guarded by `BookStateReviewGate`.
 - Arc continuation planning builds an `ArcActivationReviewPack` from accepted chapter summaries, current BookState snapshots, open obligations, recent decisions, audience signals, and faction/group state. The handoff records `ARC_ACTIVATION_REVIEW_PACK_BUILT`; degraded fallback chapter plans are marked `needs_review`.
 - The pulp canon profile uses `pulp_fatal`: expanded fatal continuity signals still block admission, while lower-priority obligations remain review warnings unless they are hard blockers. Auto-review retry refuses hard canon, SubWorld, and active-rule blockers instead of looping blindly.
 - The runtime trope registry expands seed and markdown libraries to a minimum usable 50-template pulp set with genre, audience, platform, payoff, and execution metadata. The chapter scheduler enforces a two-use-per-20-chapters template cooldown and prompt injection includes per-trope execution constraints.
 - The operator task drawer surfaces stop-reason distribution, auto-continue chain health, `needs_review` / `repair_exhausted` queues, repair attempts, canon risk, review decision chains, retry actions, soft-accept actions, and proposal-backed narrative-obligation repairs. Entity admission conflicts remain fail-closed review evidence instead of entering a parallel SubWorld repair path.
+
+## 2026-10 世界引擎大修 P0
+
+设计见 [世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0 只做护栏与纯删除，运行时架构边界不变；以下是 P0 之后的现状。
+
+- **防过拟合护栏**：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py` 用 AST 扫描 `forwin/` 中的故事内容。命中项必须在 allowlist 中分类（`language_lexicon`、`genre_lexicon`、`catalog`、`prompt_text`、`numeric_policy`、`eval_fixture`）；尚未删除的故事内容登记为 `pending_removal` 并带 `remove_in` 阶段（`meta.completed_phase = "P0"`，`remove_in = "P0"` 的条目必须为零）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
+- **清库工具**：`scripts/purge_all_projects.py` 默认 dry-run，仅 `--yes-delete-all-projects` 才删除；存在非终态生成任务或上传任务时拒绝执行，保留全局 publisher 扩展与浏览器会话表。`_delete_project` 现在同时删除 publisher 子表行与项目 outbox 事件。
+- **v4 抽取链路已删除**：见“兼容层”。`WriterOutput` 的 v4 自报字段与 `RepairScope` 的 `world_model` 已移除。
+- **0002 迁移**：见“Schema 基线”。
+- **world contracts 只产出通用合同**：写死的“母星被围”样例（homeworld fixture）已删除。
+- **续写**：extend-generation 追加一个 planned `ArcPlanVersion`，由 arc activation 为其规划章节，不再写入硬编码节拍；blueprint 缺少该卷时 materializer 从 `ArcPlanVersion` 合成 payload；读模型把“有计划卷但无章节计划”的卷报告为可恢复。
+- **Genesis fallback 只返回结构壳**：不再编造人名、地名、职业；`stage_states[stage].degraded` 标记走了 fallback 的阶段。
+- **运行代码移除的故事内容**：writer prompt 里的剧情示例、ArcDirector 默认世界、SubWorldManager 名字池、WorldSimulator 的 `chapter>=3` 规则；未命名的 planned 槽位不再被激活。canon_quality、checker（pulp profile 只按显式 genre 选择）、canon_names（锚点不分角色；锚点来源由 P1 提供）、future-plan audit 中泄漏的第二套剧本词汇已清除。
+- **genre 创建项目必填**：API、ORM、CLI、MCP 与首页表单均无默认题材。
+- **llm_eval**：fixture 移到 `tests/fixtures/llm_eval`，CLI 必须传 `--context-file` / `--cases-file`。
+- **延后**：`pending_removal` 中剩余条目按阶段清理——P1（地图角色词表、通用人物 token、关系 personality 映射），P2（`pulp_light` 正则兜底、倒计时/羁押 future-plan audit、约束关键词表、`map_movement` 时长词表、writer 约束），P4（WorldSimulator 关键词规则、SubWorldManager 窗口重叠规则）。完整清单以 `tests/overfit_allowlist.toml` 为准。

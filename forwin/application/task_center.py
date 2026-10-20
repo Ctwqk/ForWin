@@ -262,7 +262,6 @@ class TaskCenterService:
         failed = list(generation_control.failed_chapters)
         paused = list(generation_control.pending_review_chapters)
         generated = list(generation_control.generated_chapters)
-        planned = list(generation_control.planned_chapters)
         if requested == 0:
             status = "created"
             current_stage = "queued"
@@ -284,8 +283,9 @@ class TaskCenterService:
             if requested == 0
             else "项目入口（当前没有活跃生成任务）"
         )
-        # next_chapter covers planned/failed chapters and a planned arc awaiting activation.
-        can_resume = bool(generation_control.next_chapter and not paused)
+        # The control already blocks on review/acceptance and covers a planned arc
+        # awaiting activation, matching what continue_workset accepts.
+        can_resume = generation_control.can_resume
         stage_history = [
             self.new_stage_history_entry(
                 current_stage,

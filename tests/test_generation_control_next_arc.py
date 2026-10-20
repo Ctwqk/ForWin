@@ -82,6 +82,75 @@ def test_review_and_acceptance_blockers_still_block_next_arc_resume() -> None:
     assert drafted.plan_state == "pending_acceptance"
 
 
+def _task_center_service(session_factory=None) -> TaskCenterService:
+    return TaskCenterService(
+        get_session=session_factory,
+        display_datetime=str,
+        new_stage_history_entry=lambda *_args, **_kwargs: {},
+        generation_task_from_row=lambda _row: {},
+        config_provider=lambda: None,
+        terminal_statuses=set(),
+        terminal_stage_by_status={},
+    )
+
+
+def _project_item(plans: list[ChapterPlan], *, next_arc_chapter_start: int):
+    project = Project(id="project-next-arc", title="Item", premise="前提", genre="玄幻")
+    return _task_center_service()._build_project_task_center_item(
+        project,
+        plans,
+        latest_band_checkpoint=None,
+        decision_events=[],
+        next_arc_chapter_start=next_arc_chapter_start,
+    )
+
+
+def test_task_center_drafted_chapter_blocks_next_arc_resume() -> None:
+    item = _project_item(
+        [_plan(1, "accepted"), _plan(2, "drafted")], next_arc_chapter_start=3
+    )
+
+    assert item.generation_control.can_resume is False
+    assert item.resumable is False
+    assert item.generation_control.plan_state == "pending_acceptance"
+
+
+def test_task_center_pending_review_blocks_next_arc_resume() -> None:
+    item = _project_item(
+        [_plan(1, "accepted"), _plan(2, "needs_review")], next_arc_chapter_start=3
+    )
+
+    assert item.generation_control.can_resume is False
+    assert item.resumable is False
+
+
+def test_task_center_accepted_book_with_next_arc_is_resumable() -> None:
+    item = _project_item(
+        [_plan(1, "accepted"), _plan(2, "accepted")], next_arc_chapter_start=3
+    )
+
+    assert item.generation_control.can_resume is True
+    assert item.resumable is True
+    assert item.generation_control.next_chapter == 3
+
+
+def test_task_center_writing_project_without_plans_resumes_from_next_arc() -> None:
+    item = _project_item([], next_arc_chapter_start=1)
+
+    assert item.requested_chapters == 0
+    assert item.generation_control.plan_state == "none"
+    assert item.generation_control.next_chapter == 1
+    assert item.generation_control.can_resume is True
+    assert item.resumable is True
+
+
+def test_task_center_book_without_plans_or_next_arc_is_not_resumable() -> None:
+    item = _project_item([], next_arc_chapter_start=0)
+
+    assert item.generation_control.can_resume is False
+    assert item.resumable is False
+
+
 def _seed_genesis_book_between_arcs(session, *, project_id: str, status: str) -> Project:
     project = Project(
         id=project_id,
@@ -167,15 +236,7 @@ def test_genesis_book_between_arcs_is_resumable_in_every_read_model() -> None:
             summary = build_project_summaries(
                 session=session, projects=[project], display_datetime=str
             )[0]
-            task_service = TaskCenterService(
-                get_session=Session,
-                display_datetime=str,
-                new_stage_history_entry=lambda *_args, **_kwargs: {},
-                generation_task_from_row=lambda _row: {},
-                config_provider=lambda: None,
-                terminal_statuses=set(),
-                terminal_stage_by_status={},
-            )
+            task_service = _task_center_service(Session)
             task_item = task_service.get_project_backed_task_item_or_404(
                 task_service.project_task_id(project.id)
             )

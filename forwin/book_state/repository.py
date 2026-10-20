@@ -116,12 +116,21 @@ class BookStateRepository:
     ) -> WorldNodeRow:
         """Upsert the latest-value row and append the node's version as of a chapter.
 
-        Without ``version_state`` the version keeps the node's latest state at or
-        before ``version_chapter``.
+        The row's versioned fields follow the newest version, so a past-chapter
+        version never rolls them back. Without ``version_state`` the version keeps
+        the node's latest state at or before ``version_chapter``.
         """
         row = self._upsert_world_node_row(node)
         chapter = int(version_chapter)
-        latest = self._latest_version_row(node.project_id, node.id, as_of_chapter=chapter)
+        newest = self._latest_version_row(node.project_id, node.id)
+        if newest is not None and newest.as_of_chapter > chapter:
+            row.name = newest.name
+            row.aliases_json = newest.aliases_json
+            row.profile_json = newest.profile_json
+            row.is_active = newest.is_active
+            latest = self._latest_version_row(node.project_id, node.id, as_of_chapter=chapter)
+        else:
+            latest = newest
         if version_state is None:
             version_state = _loads(latest.state_json, {}) if latest is not None else {}
         version = WorldNodeStateRow(
@@ -176,6 +185,10 @@ class BookStateRepository:
     def get_world_node(self, node_id: str) -> WorldNode | None:
         row = self.session.get(WorldNodeRow, node_id)
         return _world_node_from_row(row) if row is not None else None
+
+    def get_world_edge(self, edge_id: str) -> WorldEdge | None:
+        row = self.session.get(WorldEdgeRow, edge_id)
+        return _world_edge_from_row(row) if row is not None else None
 
     def create_world_edge(self, edge: WorldEdge) -> WorldEdgeRow:
         row = self.session.get(WorldEdgeRow, edge.id)
@@ -1277,18 +1290,15 @@ class BookStateRepository:
         project_id: str,
         node_id: str,
         *,
-        as_of_chapter: int,
+        as_of_chapter: int | None = None,
     ) -> WorldNodeStateRow | None:
-        return self.session.scalars(
-            select(WorldNodeStateRow)
-            .where(
-                WorldNodeStateRow.project_id == project_id,
-                WorldNodeStateRow.node_id == node_id,
-                WorldNodeStateRow.as_of_chapter <= as_of_chapter,
-            )
-            .order_by(*_VERSION_RECENCY)
-            .limit(1)
-        ).first()
+        stmt = select(WorldNodeStateRow).where(
+            WorldNodeStateRow.project_id == project_id,
+            WorldNodeStateRow.node_id == node_id,
+        )
+        if as_of_chapter is not None:
+            stmt = stmt.where(WorldNodeStateRow.as_of_chapter <= as_of_chapter)
+        return self.session.scalars(stmt.order_by(*_VERSION_RECENCY).limit(1)).first()
 
     def load_base_map_graph(
         self,
@@ -1423,6 +1433,28 @@ class BookStateRepository:
             .limit(1)
         ).scalar_one_or_none()
         return _map_snapshot_from_row(row) if row else None
+
+    def latest_graph_delta_chapter(self, project_id: str) -> int | None:
+        return self.session.scalar(
+            select(func.max(GraphDeltaRow.chapter_number)).where(GraphDeltaRow.project_id == project_id)
+        )
+
+    def compile_base_chapter(self, project_id: str, chapter_number: int) -> int:
+        """Chapter whose runtime a compile into ``chapter_number`` builds on.
+
+        A chapter that already holds deltas is extended from its own canon, so a
+        second compile keeps the first one's effects; otherwise the compile
+        builds on the chapter before it.
+        """
+        chapter_has_deltas = self.session.scalar(
+            select(GraphDeltaRow.id)
+            .where(
+                GraphDeltaRow.project_id == project_id,
+                GraphDeltaRow.chapter_number == chapter_number,
+            )
+            .limit(1)
+        )
+        return chapter_number if chapter_has_deltas is not None else max(chapter_number - 1, 0)
 
     def latest_available_chapter(self, project_id: str) -> int:
         values = [

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+from fastapi import HTTPException
+
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.book_state import GraphDeltaRow
+from forwin.models.knowledge import KnowledgeEditProposalRow
+from forwin.proposals.proposal_review import approve_world_edit_proposal
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionPatch,
@@ -37,14 +45,14 @@ def _create_project(session) -> str:
     ).id
 
 
-def _compile(session, project_id: str, chapter: int, **patches) -> None:
+def _compile(session, project_id: str, chapter: int, *, delta_id: str = "", **patches) -> None:
     result = BookStateCompiler(session).compile(
         ApprovedGraphDeltaSet(
             project_id=project_id,
             chapter_number=chapter,
             graph_deltas=[
                 GraphDelta(
-                    id=f"delta_{project_id}_{chapter}",
+                    id=delta_id or f"delta_{project_id}_{chapter}",
                     project_id=project_id,
                     chapter_number=chapter,
                     **patches,
@@ -367,4 +375,186 @@ def test_active_promise_ids_count_narrative_promise_nodes() -> None:
     assert snapshot.active_promise_ids == ["promise_open"]
     assert set(snapshot.narrative_node_index) == {"promise_open", "promise_paid"}
     assert snapshot.metadata["narrative_indexed"] is True
+    engine.dispose()
+
+
+def test_second_compile_at_same_chapter_keeps_first_compile_effects() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(
+            session,
+            project_id,
+            0,
+            node_patches=[_create_character(project_id, "char_a", name="A0")],
+            narrative_patches=[
+                NarrativePatch(
+                    target_ref="plot_thread:thread_a",
+                    op="create",
+                    new_value={"title": "thread a", "status": "active"},
+                )
+            ],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            1,
+            delta_id="delta_canon_1",
+            node_patches=[
+                NodePatch(node_id="char_a", node_type="character", op="set", field_path="name", old_value="A0", new_value="A1")
+            ],
+            narrative_patches=[
+                NarrativePatch(
+                    target_ref="plot_thread:thread_a",
+                    op="set",
+                    field_path="status",
+                    old_value="active",
+                    new_value="resolved",
+                )
+            ],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            1,
+            delta_id="delta_edit_1",
+            node_patches=[
+                NodePatch(
+                    node_id="char_a",
+                    node_type="character",
+                    op="set",
+                    field_path="metadata.note",
+                    new_value="edited",
+                )
+            ],
+        )
+
+    with Session() as session:
+        runtime = _load(session, project_id, 1)
+        repo = BookStateRepository(session)
+        row = repo.get_world_node("char_a")
+        snapshot = repo.latest_world_snapshot(project_id, 1)
+
+    node = runtime.world.get_node("char_a")
+    assert runtime.narrative.get_node("thread_a").status == "resolved"
+    assert (node.name, node.metadata["note"]) == ("A1", "edited")
+    assert (row.name, row.metadata["note"]) == ("A1", "edited")
+    assert snapshot.source_delta_ids == ["delta_canon_1", "delta_edit_1"]
+    engine.dispose()
+
+
+def test_past_chapter_compile_does_not_clobber_newer_rows() -> None:
+    engine, Session = _session_factory()
+    edge_patch = {
+        "edge_id": "edge_ab",
+        "source_id": "char_a",
+        "target_id": "char_b",
+        "edge_type": "ally_of",
+        "edge_family": "social",
+    }
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(
+            session,
+            project_id,
+            0,
+            node_patches=[_create_character(project_id, "char_a", name="A0"), _create_character(project_id, "char_b")],
+            edge_patches=[EdgePatch(op="create", new_value={"project_id": project_id}, **edge_patch)],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            1,
+            node_patches=[
+                NodePatch(node_id="char_b", node_type="character", op="set", field_path="metadata.seen", new_value=True)
+            ],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            2,
+            node_patches=[
+                NodePatch(node_id="char_a", node_type="character", op="set", field_path="name", old_value="A0", new_value="A2")
+            ],
+            edge_patches=[EdgePatch(op="deactivate", field_path="is_active", old_value=True, **edge_patch)],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            1,
+            delta_id="delta_past_edit",
+            node_patches=[
+                NodePatch(node_id="char_a", node_type="character", op="set", field_path="metadata.note", new_value="past")
+            ],
+            edge_patches=[EdgePatch(op="set", field_path="weight", old_value=1.0, new_value=0.5, **edge_patch)],
+        )
+
+    with Session() as session:
+        repo = BookStateRepository(session)
+        node_row = repo.get_world_node("char_a")
+        edge_row = next(edge for edge in repo.list_world_edges(project_id) if edge.id == "edge_ab")
+        chapter_one = _load(session, project_id, 1)
+        chapter_two = _load(session, project_id, 2)
+
+    assert (node_row.name, node_row.metadata["note"]) == ("A2", "past")
+    assert chapter_one.world.get_node("char_a").name == "A0"
+    assert chapter_two.world.get_node("char_a").name == "A2"
+    assert (edge_row.is_active, edge_row.ended_at_chapter, edge_row.weight) == (False, 2, 0.5)
+    assert chapter_one.world.edges_by_id["edge_ab"].is_active is True
+    assert chapter_two.world.edges_by_id["edge_ab"].is_active is False
+    engine.dispose()
+
+
+def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", name="A0")])
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            2,
+            node_patches=[
+                NodePatch(node_id="char_a", node_type="character", op="set", field_path="state.status", new_value="awake")
+            ],
+        )
+
+    def propose(operation: dict) -> str:
+        with Session.begin() as session:
+            row = KnowledgeEditProposalRow(
+                project_id=project_id,
+                source="world_studio",
+                target_node_id="char_a",
+                proposed_patch_json=json.dumps({"forwin_patch": [operation]}),
+                status="pending",
+            )
+            session.add(row)
+            session.flush()
+            return row.id
+
+    rename = propose({"op": "rename_node", "node_id": "char_a", "name": "B"})
+    with Session.begin() as session:
+        result = approve_world_edit_proposal(session, project_id=project_id, proposal_id=rename)
+        delta_chapter = session.get(GraphDeltaRow, result.row.graph_delta_id).chapter_number
+
+    assert result.projection_refresh["as_of_chapter"] == 2
+    assert delta_chapter == 2
+    with Session() as session:
+        assert BookStateRepository(session).get_world_node("char_a").name == "B"
+        assert _load(session, project_id, 1).world.get_node("char_a").name == "A0"
+        chapter_two = _load(session, project_id, 2)
+    assert chapter_two.world.get_node("char_a").name == "B"
+    assert chapter_two.world.get_state("char_a") == {"status": "awake"}
+
+    stale = propose({"op": "rename_node", "node_id": "char_a", "name": "C", "old_value": "A0"})
+    with pytest.raises(HTTPException) as rejected:
+        with Session.begin() as session:
+            approve_world_edit_proposal(session, project_id=project_id, proposal_id=stale)
+    assert rejected.value.status_code == 409
     engine.dispose()

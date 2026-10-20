@@ -143,9 +143,12 @@ class CanonAdmissionService:
                 candidate_repository = CandidateDraftRepository(session)
                 candidate_repository.transition(plan.candidate_id, "committing")
 
+                # A chapter's contribution builds on the canon before it; world
+                # edits retained at this chapter are replayed after it on rewrite.
                 compile_result = BookStateCompiler(session).compile(
                     plan.approved_book_state_changes,
                     compiler_run_id=f"canon-commit-{commit_id}",
+                    base_chapter=max(plan.chapter_number - 1, 0),
                 )
                 if not compile_result.committed:
                     raise CanonWriteFailure(

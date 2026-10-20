@@ -116,7 +116,11 @@ class BookStateCanonPreparer:
                 blocked_path="book-state-direct-extraction-blocked",
                 extraction=extraction,
             )
-        review = BookStateReviewGate(session).review(extraction.changes)
+        # Chapter canon is reviewed against the canon before the chapter, even
+        # when a historical rewrite still holds the chapter's old deltas.
+        review = BookStateReviewGate(session).review(
+            extraction.changes, base_chapter=max(chapter_number - 1, 0)
+        )
         if not review.accepted or review.approved_changes is None:
             _record_book_state_block(
                 context=context,

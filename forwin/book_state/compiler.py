@@ -36,7 +36,13 @@ class BookStateCompiler:
         approved_changes: ApprovedGraphDeltaSet,
         *,
         compiler_run_id: str = "",
+        base_chapter: int | None = None,
     ) -> BookStateCompileResult:
+        """Compile approved deltas into their chapter.
+
+        ``base_chapter`` defaults to ``BookStateRepository.compile_base_chapter``:
+        a chapter that already holds deltas is extended from its own canon.
+        """
         requested_delta_ids = [delta.id for delta in approved_changes.graph_deltas]
         existing_delta_projects = self.repo.graph_delta_projects(requested_delta_ids)
         cross_project_delta_ids = sorted(
@@ -91,11 +97,21 @@ class BookStateCompiler:
                 blocked_reasons=[f"partial duplicate graph_delta ids: {sorted(existing_delta_ids)}"],
                 forced_accept_reason=approved_changes.forced_accept_reason,
             )
-        base_chapter = max(int(approved_changes.chapter_number or 0) - 1, 0)
+        if base_chapter is None:
+            base_chapter = self.repo.compile_base_chapter(
+                approved_changes.project_id, approved_changes.chapter_number
+            )
         runtime = self.projection.load_runtime_as_of(
             approved_changes.project_id,
             as_of_chapter=base_chapter,
         )
+        extended = (
+            self.repo.latest_world_snapshot(approved_changes.project_id, base_chapter)
+            if base_chapter == approved_changes.chapter_number
+            else None
+        )
+        if extended is not None and extended.as_of_chapter != base_chapter:
+            extended = None
         deltas = [
             delta.model_copy(
                 update={
@@ -131,13 +147,26 @@ class BookStateCompiler:
             self.repo.append_graph_delta(delta)
             self._persist_delta_side_effects(runtime, delta)
 
-        story_time = next((delta.story_time for delta in reversed(deltas) if delta.story_time), "")
+        # Extending a chapter supersedes its snapshot, so carry that snapshot's
+        # provenance forward as historical rewrite does for retained edits.
+        story_time = next(
+            (delta.story_time for delta in reversed(deltas) if delta.story_time),
+            extended.as_of_story_time if extended else "",
+        )
         world_snapshot, map_snapshot, cognition_snapshots = self.projection.persist_snapshots(
             runtime,
             as_of_chapter=approved_changes.chapter_number,
             as_of_story_time=story_time,
-            source_delta_ids=[delta.id for delta in deltas],
-            active_world_line_ids=_unique(delta.world_line_id for delta in deltas if delta.world_line_id),
+            source_delta_ids=[
+                *(extended.source_delta_ids if extended else []),
+                *(delta.id for delta in deltas),
+            ],
+            active_world_line_ids=_unique(
+                [
+                    *(extended.active_world_line_ids if extended else []),
+                    *(delta.world_line_id for delta in deltas if delta.world_line_id),
+                ]
+            ),
         )
         self.session.flush()
         return BookStateCompileResult(
@@ -300,8 +329,24 @@ class BookStateCompiler:
                 source_delta_id=delta.id,
             )
         for patch in delta.edge_patches:
-            if patch.edge_id in runtime.world.edges_by_id:
-                self.repo.create_world_edge(runtime.world.edges_by_id[patch.edge_id])
+            edge = runtime.world.edges_by_id.get(patch.edge_id)
+            if edge is None:
+                continue
+            stored = self.repo.get_world_edge(patch.edge_id)
+            if (
+                edge.ended_at_chapter is None
+                and stored is not None
+                and stored.ended_at_chapter is not None
+                and stored.ended_at_chapter > delta.chapter_number
+            ):
+                # The edge reads active as of this chapter but ends later; keep its end.
+                edge = edge.model_copy(
+                    update={
+                        "is_active": stored.is_active,
+                        "ended_at_chapter": stored.ended_at_chapter,
+                    }
+                )
+            self.repo.create_world_edge(edge)
         for patch in delta.fact_patches:
             if patch.fact_id in runtime.world.facts_by_id:
                 self.repo.create_fact_node(runtime.world.facts_by_id[patch.fact_id])

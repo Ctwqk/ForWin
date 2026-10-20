@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.canon import (
     CanonAdmissionService,
@@ -54,7 +55,7 @@ def approve_world_edit_proposal(
 
     changes = ApprovedGraphDeltaSet(
         project_id=project_id,
-        chapter_number=proposal_chapter(row),
+        chapter_number=_world_edit_chapter(session, project_id, row),
         graph_deltas=[delta],
         approved_by=[f"{trigger}_approval"],
         review_verdict_id=f"proposal_review_{proposal_id}",
@@ -89,6 +90,18 @@ def approve_world_edit_proposal(
             "as_of_chapter": outcome.compile_result.chapter_number,
         },
     )
+
+
+def _world_edit_chapter(session, project_id: str, row: KnowledgeEditProposalRow) -> int:
+    """Compile world edits at the latest canon chapter or later.
+
+    A past-chapter compile would not reach later snapshots; retroactive edits
+    belong to historical rewrite. The patches keep old values read as of the
+    proposal's chapter, so a value changed since then fails the compiler check.
+    """
+    requested = proposal_chapter(row)
+    latest = BookStateRepository(session).latest_graph_delta_chapter(project_id)
+    return requested if latest is None else max(requested, latest)
 
 
 def _load_pending_proposal(

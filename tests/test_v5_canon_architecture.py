@@ -163,6 +163,9 @@ def test_post_canon_phase3_has_one_durable_owner() -> None:
 def test_npc_intent_projection_stays_deleted_from_v5_runtime() -> None:
     offenders = []
     for path in sorted((ROOT / "forwin").rglob("*.py")):
+        # Migrations may name the legacy table to drop it (0002).
+        if "migrations/versions" in path.as_posix():
+            continue
         source = path.read_text(encoding="utf-8").lower()
         if "npc_intent" in source:
             offenders.append(path.relative_to(ROOT).as_posix())

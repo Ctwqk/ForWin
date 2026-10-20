@@ -299,6 +299,45 @@ def test_dead_tables_are_dropped_by_0002() -> None:
         assert f'op.drop_table("{table}")' in upgrade_source
 
 
+def test_production_legacy_tables_are_dropped_by_0002_without_cascade() -> None:
+    from forwin.models import Base
+
+    # Production-only leftovers (never in 0001) whose project foreign keys
+    # would otherwise block every project delete.
+    legacy = (
+        "beliefs",
+        "cognition_snapshots",
+        "knowledge_gaps",
+        "knowledge_update_events",
+        "npc_intent_snapshots",
+        "provisional_band_executions",
+        "provisional_chapter_ledgers",
+        "reader_experience_deltas",
+        "reveal_events",
+        "scenario_plan_patches",
+        "scenario_rehearsal_runs",
+        "world_compile_runs_v4",
+        "world_deltas",
+        "world_lines",
+        "world_model_snapshots_v4",
+    )
+    assert [name for name in legacy if name in Base.metadata.tables] == []
+
+    migration = importlib.import_module("forwin.migrations.versions.0002_drop_dead_tables")
+    upgrade_source = inspect.getsource(migration.upgrade)
+    statements = {
+        name: f'op.execute("DROP TABLE IF EXISTS {name}")' for name in legacy
+    }
+    assert [name for name, sql in statements.items() if sql not in upgrade_source] == []
+    # scenario_plan_patches.run_id references scenario_rehearsal_runs.
+    assert upgrade_source.index(statements["scenario_plan_patches"]) < upgrade_source.index(
+        statements["scenario_rehearsal_runs"]
+    )
+    assert "CASCADE" not in upgrade_source.upper()
+    downgrade_source = inspect.getsource(migration.downgrade)
+    assert [name for name in legacy if f'"{name}"' in downgrade_source] == []
+
+
 def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
     versions = sorted(
         path.name

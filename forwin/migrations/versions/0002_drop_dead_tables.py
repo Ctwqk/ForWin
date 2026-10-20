@@ -9,6 +9,14 @@ world_projection_deltas, story_obligations, reveal_registry_entries,
 artifact_collection_ledgers and book_reader_experience_deltas.
 book_reader_promises is intentionally kept (approved world-edit proposals
 still write it).
+
+Also drops, if present, fifteen legacy v4/scenario tables that exist only in
+the production database (they predate 0001 and were kept when production was
+bridged to 0001_v5_recovery). They are not in the ORM metadata, so project
+deletion cannot clear them, and their non-cascading foreign keys to projects
+(some also to entities or arc_plan_versions) block every project delete.
+Dependent tables drop before the tables they reference; CASCADE is never used
+so nothing else is dropped silently. downgrade() does not recreate them.
 """
 
 from typing import Sequence, Union
@@ -26,6 +34,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    op.execute("DROP TABLE IF EXISTS beliefs")
+    op.execute("DROP TABLE IF EXISTS cognition_snapshots")
+    op.execute("DROP TABLE IF EXISTS knowledge_gaps")
+    op.execute("DROP TABLE IF EXISTS knowledge_update_events")
+    op.execute("DROP TABLE IF EXISTS npc_intent_snapshots")
+    op.execute("DROP TABLE IF EXISTS provisional_band_executions")
+    op.execute("DROP TABLE IF EXISTS provisional_chapter_ledgers")
+    op.execute("DROP TABLE IF EXISTS reader_experience_deltas")
+    op.execute("DROP TABLE IF EXISTS reveal_events")
+    # scenario_plan_patches.run_id references scenario_rehearsal_runs.
+    op.execute("DROP TABLE IF EXISTS scenario_plan_patches")
+    op.execute("DROP TABLE IF EXISTS scenario_rehearsal_runs")
+    op.execute("DROP TABLE IF EXISTS world_compile_runs_v4")
+    op.execute("DROP TABLE IF EXISTS world_deltas")
+    op.execute("DROP TABLE IF EXISTS world_lines")
+    op.execute("DROP TABLE IF EXISTS world_model_snapshots_v4")
+
     op.drop_index(
         "ix_world_projection_deltas_project_projection",
         table_name="world_projection_deltas",
@@ -69,6 +94,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema (recreates the tables exactly as 0001 defined them)."""
+    # The production-only legacy tables dropped in upgrade() are not part of
+    # 0001, so they are intentionally not recreated here.
     op.create_table(
         "artifact_collection_ledgers",
         sa.Column("id", sa.String(), nullable=False),

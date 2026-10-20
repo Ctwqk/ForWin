@@ -1343,24 +1343,6 @@ justification = "“已脱困但仍受追踪器或系统权限限制”措辞；
 max_literals = 1
 
 [[entry]]
-path = "forwin/planning/world_contract_service.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一（母星/殖民/homeworld/colony/father_sieged）；Task 5 删除"
-max_literals = 38
-
-[[entry]]
-path = "forwin/planning/world_contract_service.py"
-symbol = "WorldContractPlanningService.ensure_for_arc_band"
-checks = ["story_id_literal", "chapter_number_literal", "premise_sniff", "cjk_membership"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "嗅探 premise 中的母星/殖民，写死第22/23/25/28章、剧本一世界线与剧情文本；Task 5 删除"
-max_literals = 20
-
-[[entry]]
 path = "forwin/protocol/trope_library.py"
 symbol = "_CATEGORY_DEFAULTS"
 checks = ["cjk_collection"]

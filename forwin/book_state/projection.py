@@ -142,8 +142,14 @@ class BookStateProjection:
                     runtime.cognition_by_observer[key] = view
                     runtime.map.cognition_by_observer[key] = view
                 view.apply_cognition_patch(patch.field_path, str(patch.op), patch.new_value)
+                evidence_keys = (
+                    [str(key) for key in patch.new_value]
+                    if isinstance(patch.new_value, dict)
+                    else [str(patch.new_value)]
+                )
                 for ref in patch.evidence_refs:
-                    view.evidence_by_ref.setdefault(str(patch.new_value), []).append(ref)
+                    for evidence_key in evidence_keys:
+                        view.evidence_by_ref.setdefault(evidence_key, []).append(ref)
         if apply_narrative:
             for patch in delta.narrative_patches:
                 runtime.narrative.apply_narrative_patch(patch, project_id=delta.project_id)

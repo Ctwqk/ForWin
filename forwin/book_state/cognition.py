@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, WorldEdge, WorldNode
+
+FALSE_BELIEF_STATES = frozenset({"believes", "knows"})
 
 
 class CognitionView:
@@ -23,6 +26,7 @@ class CognitionView:
         self.false_edges: dict[str, WorldEdge | MapEdge] = dict(overlay.false_edges)
         self.false_facts: dict[str, FactNode] = dict(overlay.false_facts)
         self.evidence_by_ref: dict[str, list[str]] = dict(overlay.evidence_by_ref)
+        self.knowledge_by_ref: dict[str, str] = dict(overlay.knowledge_by_ref)
 
     @property
     def key(self) -> tuple[str, str]:
@@ -38,6 +42,24 @@ class CognitionView:
         if ref in self.hidden_refs:
             return "hidden"
         return "unknown"
+
+    def knowledge_state(self, fact: FactNode) -> str:
+        """Recorded state for ``fact``; unrecorded secrets are unknown, public facts known."""
+        recorded = self.knowledge_by_ref.get(f"{FACT_REF_PREFIX}{fact.id}")
+        if recorded:
+            return recorded
+        return "unknown" if fact.sensitivity_level in HIDDEN_SENSITIVITY else "knows"
+
+    def false_beliefs(self, facts_by_id: Mapping[str, FactNode]) -> list[str]:
+        """Refs this observer holds wrongly: recorded belief in a false fact, or any field override."""
+        refs = set(self.field_overrides)
+        for ref, state in self.knowledge_by_ref.items():
+            if state not in FALSE_BELIEF_STATES:
+                continue
+            fact = facts_by_id.get(ref.removeprefix(FACT_REF_PREFIX))
+            if fact is not None and fact.truth_value == "false":
+                refs.add(ref)
+        return sorted(refs)
 
     def field_ref(self, target_id: str, field_path: str) -> str:
         return f"field:{target_id}:{field_path}"
@@ -59,7 +81,13 @@ class CognitionView:
             elif op in {"set", "replace"}:
                 self.field_overrides = dict(value)
             return
-        if field_path in {"false_nodes", "false_edges", "false_facts", "evidence_by_ref"} and isinstance(value, dict):
+        if field_path in {
+            "false_nodes",
+            "false_edges",
+            "false_facts",
+            "evidence_by_ref",
+            "knowledge_by_ref",
+        } and isinstance(value, dict):
             current = getattr(self, field_path)
             if op == "merge":
                 current.update(value)
@@ -75,4 +103,5 @@ class CognitionView:
             "false_nodes": sorted(self.false_nodes),
             "false_edges": sorted(self.false_edges),
             "false_facts": sorted(self.false_facts),
+            "knowledge_by_ref": dict(self.knowledge_by_ref),
         }

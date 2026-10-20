@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.cognition import CognitionView
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable
@@ -12,6 +13,7 @@ from forwin.book_state.schema import validate_graph_delta
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     BookStateCompileResult,
+    CognitionPatch,
     EdgePatch,
     FactPatch,
     GraphDelta,
@@ -241,7 +243,9 @@ class BookStateCompiler:
         for patch in delta.cognition_patches:
             key = (str(patch.observer_type), patch.observer_id)
             view = runtime.cognition_by_observer.get(key)
-            if view is None:
+            if patch.field_path == "knowledge_by_ref":
+                current = _knowledge_current(view, patch)
+            elif view is None:
                 current = None
             elif patch.field_path in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}:
                 current = sorted(getattr(view, patch.field_path))
@@ -467,6 +471,14 @@ def _edge_current(runtime: BookStateRuntime, patch: EdgePatch) -> Any:
     if edge is None:
         return None
     return _get_path(edge.model_dump(mode="json"), patch.field_path)
+
+
+def _knowledge_current(view: CognitionView | None, patch: CognitionPatch) -> dict[str, str | None]:
+    """Current state of each ref a merge's ``old_value`` names; the whole map otherwise."""
+    known = view.knowledge_by_ref if view is not None else {}
+    if str(patch.op) == "merge" and isinstance(patch.old_value, dict):
+        return {ref: known.get(ref) for ref in patch.old_value}
+    return dict(known)
 
 
 def _fact_current(runtime: BookStateRuntime, patch: FactPatch) -> Any:

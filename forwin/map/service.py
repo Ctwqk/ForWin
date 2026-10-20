@@ -724,6 +724,7 @@ def _latest_overlay(
         false_edges=false_edges,
         false_facts=false_facts,
         evidence_by_ref=_loads(row.evidence_by_ref_json, {}),
+        knowledge_by_ref=_loads(row.knowledge_by_ref_json, {}),
         metadata=_loads(row.metadata_json, {}),
     )
 

@@ -499,6 +499,7 @@ class CognitionOverlay(_BookStateModel):
     false_edges: dict[str, WorldEdge | MapEdge] = Field(default_factory=dict)
     false_facts: dict[str, FactNode] = Field(default_factory=dict)
     evidence_by_ref: dict[str, list[str]] = Field(default_factory=dict)
+    knowledge_by_ref: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

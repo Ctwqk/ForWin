@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_STATES
 from forwin.protocol.book_state import (
+    CognitionPatch,
     FactNode,
     GraphDelta,
     MapEdge,
@@ -726,7 +728,9 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
             issues.append(_issue("error", "invalid_map_create_patch", patch.target_id, str(exc)))
 
     for patch in delta.cognition_patches:
-        if patch.field_path.endswith("_refs") and patch.new_value is not None:
+        if patch.field_path == "knowledge_by_ref":
+            issues.extend(_knowledge_patch_issues(patch))
+        elif patch.field_path.endswith("_refs") and patch.new_value is not None:
             for ref in _iter_ref_values(patch.new_value):
                 if not _valid_cognition_ref(ref):
                     issues.append(_issue("warning", "noncanonical_cognition_ref", ref, f"noncanonical cognition ref: {ref}"))
@@ -798,6 +802,19 @@ def _unknown_field_issues(
         )
         for field_name in sorted(set(payload) - allowed)
     ]
+
+
+def _knowledge_patch_issues(patch: CognitionPatch) -> list[BookStateSchemaIssue]:
+    target = f"cognition:{patch.observer_type}:{patch.observer_id}:knowledge_by_ref"
+    if not isinstance(patch.new_value, Mapping):
+        return [_issue("error", "invalid_knowledge_patch", target, "knowledge_by_ref must be a mapping of fact ref to state")]
+    issues: list[BookStateSchemaIssue] = []
+    for ref, state in patch.new_value.items():
+        if not str(ref).startswith(FACT_REF_PREFIX):
+            issues.append(_issue("error", "invalid_knowledge_ref", str(ref), f"knowledge ref must start with {FACT_REF_PREFIX!r}: {ref}"))
+        if state not in KNOWLEDGE_STATES:
+            issues.append(_issue("error", "invalid_knowledge_state", str(ref), f"unknown knowledge state: {state!r}"))
+    return issues
 
 
 def _valid_cognition_ref(ref: str) -> bool:

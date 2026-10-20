@@ -513,6 +513,7 @@ class BookStateRepository:
         row.false_edges_json = _dump(overlay.false_edges)
         row.false_facts_json = _dump(overlay.false_facts)
         row.evidence_by_ref_json = _dump(overlay.evidence_by_ref)
+        row.knowledge_by_ref_json = _dump(overlay.knowledge_by_ref)
         row.metadata_json = _dump(overlay.metadata)
         self.session.flush()
         return row
@@ -541,6 +542,7 @@ class BookStateRepository:
             false_edges=dict(view.false_edges),
             false_facts=dict(view.false_facts),
             evidence_by_ref={key: list(value) for key, value in view.evidence_by_ref.items()},
+            knowledge_by_ref=dict(view.knowledge_by_ref),
         )
 
     # ------------------------------------------------------------------
@@ -1773,6 +1775,7 @@ def _cognition_overlay_from_row(row: CognitionOverlayRow) -> CognitionOverlay:
         false_edges=false_edges,
         false_facts=false_facts,
         evidence_by_ref=_loads(row.evidence_by_ref_json, {}),
+        knowledge_by_ref=_loads(row.knowledge_by_ref_json, {}),
         metadata=_loads(row.metadata_json, {}),
     )
 

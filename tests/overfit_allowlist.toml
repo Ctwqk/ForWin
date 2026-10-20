@@ -23,7 +23,9 @@ allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", 
   "thread_drift", "thread_time_extraction", "fact_nodes", "gap_between_public_and_actual",
   # protocol field / enum / ref-namespace names (not story content); "fact_" is the bare
   # prefix of generated ids such as f"fact_{new_id()}"
-  "thread_beats", "thread_time", "fact_event", "fact_evidence", "fact_node", "fact_"]
+  "thread_beats", "thread_time", "fact_event", "fact_evidence", "fact_node", "fact_",
+  # BookState v6 intent profile reference to its owning agenda.
+  "agenda_ref"]
 
 [canary]
 seed_terms = [

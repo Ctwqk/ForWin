@@ -38,6 +38,9 @@ class WorldNodeType(_StrEnum):
     CONTRACT = "contract"
     FACT = "fact"
     OBJECTIVE = "objective"
+    AGENDA = "agenda"
+    INTENT = "intent"
+    CLOCK = "clock"
 
 
 class WorldEdgeFamily(_StrEnum):
@@ -61,7 +64,7 @@ WORLD_EDGE_TYPES_BY_FAMILY: dict[str, set[str]] = {
     "organization": {"member_of", "leader_of", "subordinate_to", "branch_of", "part_of"},
     "possession": {"owns", "possesses", "equipped_with", "bound_to", "created_by", "grants_ability"},
     "control_conflict": {"controls", "governs", "claims", "occupies", "protects", "besieges", "blockades"},
-    "social": {"family_of", "ally_of", "enemy_of", "mentor_of", "romantic_with", "trusts", "distrusts", "owes_debt_to"},
+    "social": {"family_of", "ally_of", "enemy_of", "rival_of", "mentor_of", "romantic_with", "trusts", "distrusts", "owes_debt_to"},
     "capability_rule": {"has_ability", "uses", "requires", "counters", "weak_against", "forbidden_by"},
     "event_causal": {"participates_in", "witnesses", "causes", "prevents", "enables", "results_in", "damages"},
     "fact_evidence": {"supports", "contradicts", "evidence_for", "proves", "disproves"},

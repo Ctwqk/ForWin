@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from forwin.protocol.book_state import (
     FactNode,
@@ -14,9 +14,60 @@ from forwin.protocol.book_state import (
 )
 
 
+ACTOR_NODE_TYPES = ("character", "faction", "organization", "group")
+ACTOR_STATE_FIELDS = {"actor_tier", "next_turn_at", "resources"}
+AGENDA_STATUSES = ("active", "achieved", "abandoned", "failed")
+INTENT_STATUSES = ("planned", "due", "resolved", "disrupted", "vetoed", "held")
+INTENT_ACTION_TYPES = (
+    "move", "confront", "negotiate", "ally", "betray", "acquire", "transfer", "investigate",
+    "spread_info", "deceive", "build", "recruit", "hide", "train", "decree", "other",
+)
+IMPACT_LEVELS = ("minor", "moderate", "major", "critical")
+CLOCK_SCOPES = ("public", "secret")
+CLOCK_STATUSES = ("running", "expired", "resolved")
+ALIVE_STATUSES = ("alive", "dead", "unknown")
+RESTRAINT_STATES = ("free", "restrained", "imprisoned")
+ACTOR_TIERS = ("major", "minor", "background")
+RULE_HARDNESS = ("hard", "soft")
+
+_V46_GENERIC_PROFILE_FIELDS = {
+    "summary",
+    "scope",
+    "status",
+    "source_refs",
+    "visibility_level",
+    "narrative_role",
+    "metadata",
+}
+_V46_GENERIC_STATE_FIELDS = {
+    "status",
+    "current_state",
+    "state_summary",
+    "visibility_level",
+    "last_updated_chapter",
+    "source_refs",
+    "metadata",
+}
+
 WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
+    "agenda": {
+        "profile": {"owner_ref", "goal", "motivation", "horizon"},
+        "state": {"status", "priority", "means_refs", "constraints", "secrecy_refs"},
+    },
+    "intent": {
+        "profile": {
+            "owner_ref", "agenda_ref", "action_type", "summary", "target_refs", "location_id",
+            "preconditions", "expected_effects", "impact_level", "requires_onstage",
+        },
+        "state": {"status", "scheduled_at", "slip_count"},
+    },
+    "clock": {
+        "profile": {"label", "owner_ref", "scope", "on_expire"},
+        "state": {"due_at", "status"},
+    },
     "character": {
         "profile": {
+            "fear",
             "gender",
             "species",
             "age_bracket",
@@ -32,6 +83,10 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
             "first_appearance_chapter",
         },
         "state": {
+            *ACTOR_STATE_FIELDS,
+            "alive_status",
+            "restraint",
+            "travel_mode_ids",
             "location_id",
             "status",
             "health",
@@ -69,6 +124,7 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
             "narrative_role",
         },
         "state": {
+            *ACTOR_STATE_FIELDS,
             "status",
             "headquarters_location_id",
             "controlled_site_ids",
@@ -88,8 +144,13 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
             "state_summary",
         },
     },
+    "organization": {
+        "profile": set(_V46_GENERIC_PROFILE_FIELDS),
+        "state": _V46_GENERIC_STATE_FIELDS | ACTOR_STATE_FIELDS,
+    },
     "group": {
         "profile": {
+            *_V46_GENERIC_PROFILE_FIELDS,
             "group_type",
             "formation_reason",
             "member_rule",
@@ -101,6 +162,8 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
             "initial_member_ids",
         },
         "state": {
+            *_V46_GENERIC_STATE_FIELDS,
+            *ACTOR_STATE_FIELDS,
             "status",
             "location_id",
             "member_ids",
@@ -210,6 +273,9 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
     },
     "rule": {
         "profile": {
+            "hardness",
+            "statement",
+            "checkable",
             "rule_type",
             "scope",
             "authority_source",
@@ -396,26 +462,7 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
     },
 }
 
-_V46_GENERIC_PROFILE_FIELDS = {
-    "summary",
-    "scope",
-    "status",
-    "source_refs",
-    "visibility_level",
-    "narrative_role",
-    "metadata",
-}
-_V46_GENERIC_STATE_FIELDS = {
-    "status",
-    "current_state",
-    "state_summary",
-    "visibility_level",
-    "last_updated_chapter",
-    "source_refs",
-    "metadata",
-}
 for _node_type in (
-    "organization",
     "family",
     "subworld",
     "region",
@@ -476,6 +523,91 @@ class BookStateSchemaReport:
         return not self.errors
 
 
+def _v6_value_issues(
+    node_type: str,
+    profile: Mapping,
+    state: Mapping,
+    *,
+    target: str,
+) -> list[BookStateSchemaIssue]:
+    issues: list[BookStateSchemaIssue] = []
+
+    def invalid(path: str, message: str) -> None:
+        issues.append(_issue("error", "invalid_field_value", f"{target}:{path}", message))
+
+    enum_fields = {
+        "agenda": (("state", "status", AGENDA_STATUSES),),
+        "intent": (
+            ("state", "status", INTENT_STATUSES),
+            ("profile", "action_type", INTENT_ACTION_TYPES),
+            ("profile", "impact_level", IMPACT_LEVELS),
+        ),
+        "clock": (("profile", "scope", CLOCK_SCOPES), ("state", "status", CLOCK_STATUSES)),
+        "character": (("state", "alive_status", ALIVE_STATUSES),),
+        "rule": (("profile", "hardness", RULE_HARDNESS),),
+    }.get(node_type, ())
+    if node_type in ACTOR_NODE_TYPES:
+        enum_fields += (("state", "actor_tier", ACTOR_TIERS),)
+    sections = {"profile": profile, "state": state}
+    for section, field, values in enum_fields:
+        payload = sections[section]
+        if field in payload and payload[field] not in values:
+            invalid(f"{section}.{field}", f"{section}.{field} must be one of {values!r}")
+
+    integer_fields = {
+        "agenda": (("priority", 1, 5),),
+        "intent": (("scheduled_at", 0, None), ("slip_count", 0, None)),
+        "clock": (("due_at", 0, None),),
+    }.get(node_type, ())
+    if node_type in ACTOR_NODE_TYPES:
+        integer_fields += (("next_turn_at", 0, None),)
+    for field, minimum, maximum in integer_fields:
+        if field not in state:
+            continue
+        value = state[field]
+        if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+            bounds = f"{minimum}–{maximum}" if maximum is not None else f">= {minimum}"
+            invalid(f"state.{field}", f"state.{field} must be an int {bounds}")
+
+    if node_type == "character" and "restraint" in state:
+        restraint = state["restraint"]
+        if not isinstance(restraint, dict):
+            invalid("state.restraint", "state.restraint must be a dict with state, by_ref and since")
+        else:
+            if restraint.get("state") not in RESTRAINT_STATES:
+                invalid("state.restraint.state", f"restraint.state must be one of {RESTRAINT_STATES!r}")
+            if not isinstance(restraint.get("by_ref"), str):
+                invalid("state.restraint.by_ref", "restraint.by_ref must be a str")
+            if "since" not in restraint or (restraint["since"] is not None and type(restraint["since"]) is not int):
+                invalid("state.restraint.since", "restraint.since must be an int or None")
+
+    if node_type == "intent" and "requires_onstage" in profile and not isinstance(profile["requires_onstage"], bool):
+        invalid("profile.requires_onstage", "profile.requires_onstage must be a bool")
+    if node_type == "rule" and "checkable" in profile and profile["checkable"] is not None:
+        checkable = profile["checkable"]
+        if not isinstance(checkable, dict):
+            invalid("profile.checkable", "profile.checkable must be None or a dict with a nonempty str kind")
+        elif not isinstance(checkable.get("kind"), str) or not checkable["kind"].strip():
+            invalid("profile.checkable.kind", "checkable.kind must be a nonempty str")
+    return issues
+
+
+def _v6_required_field_issues(node: WorldNode) -> list[BookStateSchemaIssue]:
+    required = {
+        "agenda": (("profile", "owner_ref"), ("profile", "goal")),
+        "intent": (("profile", "owner_ref"), ("profile", "action_type"), ("state", "scheduled_at")),
+        "clock": (("profile", "label"), ("state", "due_at")),
+    }
+    return [
+        _issue(
+            "error", "missing_required_field", f"node:{node.id}:{section}.{field}",
+            f"{node.node_type} requires {section}.{field}",
+        )
+        for section, field in required.get(str(node.node_type), ())
+        if field not in getattr(node, section)
+    ]
+
+
 def validate_world_node(node: WorldNode, *, strict: bool = False) -> BookStateSchemaReport:
     issues: list[BookStateSchemaIssue] = []
     node_type = str(node.node_type)
@@ -486,6 +618,8 @@ def validate_world_node(node: WorldNode, *, strict: bool = False) -> BookStateSc
 
     issues.extend(_unknown_field_issues(node.id, "profile", node.profile, allowed["profile"], strict=strict))
     issues.extend(_unknown_field_issues(node.id, "state", node.state, allowed["state"], strict=strict))
+    issues.extend(_v6_required_field_issues(node))
+    issues.extend(_v6_value_issues(node_type, node.profile, node.state, target=f"node:{node.id}"))
     return BookStateSchemaReport(tuple(issues))
 
 
@@ -520,13 +654,17 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
         if str(patch.op) == "create":
             payload = patch.new_value if isinstance(patch.new_value, dict) else {}
             try:
-                node = WorldNode.model_validate({"id": patch.node_id, "node_type": node_type, **payload})
+                node = WorldNode.model_validate(
+                    {"id": patch.node_id, "project_id": delta.project_id, "node_type": node_type, **payload}
+                )
             except Exception as exc:  # noqa: BLE001 - validation details belong in the report.
                 issues.append(_issue("error", "invalid_node_create_patch", f"node:{patch.node_id}", str(exc)))
                 continue
             issues.extend(validate_world_node(node, strict=strict).issues)
         elif patch.field_path:
             issues.extend(_validate_node_patch_field(patch.node_id, node_type, patch.field_path, strict=strict))
+            if str(patch.op) == "set":
+                issues.extend(_v6_set_patch_issues(node_type, patch.field_path, patch.new_value, target=f"node:{patch.node_id}"))
 
     for patch in delta.edge_patches:
         if str(patch.op) == "create":
@@ -587,6 +725,27 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
                     issues.append(_issue("warning", "noncanonical_cognition_ref", ref, f"noncanonical cognition ref: {ref}"))
 
     return BookStateSchemaReport(tuple(issues))
+
+
+def _v6_set_patch_issues(node_type: str, field_path: str, value: Any, *, target: str) -> list[BookStateSchemaIssue]:
+    parts = field_path.split(".")
+    if parts[0] not in {"profile", "state"}:
+        return []
+    payload = value
+    for part in reversed(parts[1:]):
+        payload = {part: payload}
+    if not isinstance(payload, Mapping):
+        return [_issue("error", "invalid_field_value", f"{target}:{field_path}", f"{parts[0]} must be a mapping")]
+    sections = {"profile": {}, "state": {}, parts[0]: payload}
+    issues = _v6_value_issues(node_type, sections["profile"], sections["state"], target=target)
+    # A nested set only supplies one member; missing sibling members are unchanged.
+    changed_target = f"{target}:{field_path}"
+    return [
+        issue for issue in issues
+        if issue.target == changed_target
+        or issue.target.startswith(f"{changed_target}.")
+        or changed_target.startswith(f"{issue.target}.")
+    ]
 
 
 def _validate_node_patch_field(
@@ -652,9 +811,21 @@ def _issue(severity: str, code: str, target: str, message: str) -> BookStateSche
 
 
 __all__ = [
+    "ACTOR_NODE_TYPES",
+    "ACTOR_STATE_FIELDS",
+    "ACTOR_TIERS",
+    "AGENDA_STATUSES",
+    "ALIVE_STATUSES",
     "BookStateSchemaIssue",
     "BookStateSchemaReport",
     "COGNITION_REF_PREFIXES",
+    "CLOCK_SCOPES",
+    "CLOCK_STATUSES",
+    "IMPACT_LEVELS",
+    "INTENT_ACTION_TYPES",
+    "INTENT_STATUSES",
+    "RESTRAINT_STATES",
+    "RULE_HARDNESS",
     "WORLD_NODE_FIELDS",
     "validate_graph_delta",
     "validate_world_edge",

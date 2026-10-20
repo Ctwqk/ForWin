@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
 
 from forwin.models import (
     GenerationTask,
@@ -18,6 +19,7 @@ from forwin.models import (
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from scripts import purge_all_projects as purge_module
 from scripts.purge_all_projects import (
+    LocalRoot,
     MinioTarget,
     PurgeBlocked,
     PurgeTargets,
@@ -150,6 +152,43 @@ def _count(session_factory, model) -> int:
         return session.query(model).count()
 
 
+def _add_out_of_metadata_blocker(engine, project_id: str) -> None:
+    """Mimic a production-only legacy table whose FK blocks the project delete."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE scenario_rehearsal_runs ("
+                "id varchar PRIMARY KEY, "
+                "project_id varchar NOT NULL REFERENCES projects(id))"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO scenario_rehearsal_runs VALUES ('run-1', :project_id)"),
+            {"project_id": project_id},
+        )
+
+
+def _count_blocker_rows(engine) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.scalar(text("SELECT count(*) FROM scenario_rehearsal_runs"))
+        )
+
+
+def _add_terminal_task(session_factory, project_id: str, task_id: str) -> None:
+    with session_factory.begin() as session:
+        session.add(
+            GenerationTask(
+                id=task_id,
+                project_id=project_id,
+                task_kind="generation",
+                status="completed",
+                current_stage="completed",
+                message="",
+            )
+        )
+
+
 def test_purge_refuses_when_generation_task_active(
     session_factory, targets: PurgeTargets
 ) -> None:
@@ -275,6 +314,8 @@ def test_purge_dry_run_changes_nothing(
     assert report.dry_run is True
     assert report.project_ids == tuple(project_ids)
     assert report.deleted_projects == 0
+    assert report.deleted_project_ids == ()
+    assert report.failed_project_ids == ()
     for pid in project_ids:
         assert str(targets.artifact_root / "projects" / pid) in report.removed_paths
         assert str(targets.local_project_roots[0] / pid) in report.removed_paths
@@ -290,6 +331,119 @@ def test_purge_dry_run_changes_nothing(
         assert all(path.exists() for path in files.values())
     assert qdrant.deleted == []
     assert cover_service.calls == 0
+
+
+def test_purge_dry_run_reports_project_delete_blockers_without_deleting(
+    engine, session_factory, targets: PurgeTargets
+) -> None:
+    blocked_id = _add_project(session_factory, "被外键阻塞")
+    free_id = _add_project(session_factory, "可删除")
+    _add_terminal_task(session_factory, blocked_id, "task-blocked-done")
+    _add_out_of_metadata_blocker(engine, blocked_id)
+    files = _seed_local_files(targets, blocked_id)
+    qdrant = FakeQdrant(list(QDRANT_NAMES))
+    cover_service = FakeCoverService()
+
+    report = purge_all_projects(
+        session_factory=session_factory,
+        targets=targets,
+        dry_run=True,
+        qdrant_client=qdrant,
+        cover_service=cover_service,
+    )
+
+    assert report.failed_project_ids == (blocked_id,)
+    assert report.deleted_project_ids == ()
+    assert len(report.errors) == 1
+    assert blocked_id in report.errors[0]
+    assert "scenario_rehearsal_runs" in report.errors[0]
+    assert free_id not in report.errors[0]
+    assert _count(session_factory, Project) == 2
+    assert _count(session_factory, GenerationTask) == 1
+    assert _count_blocker_rows(engine) == 1
+    assert all(path.exists() for path in files.values())
+    assert qdrant.deleted == []
+    assert cover_service.calls == 0
+
+
+def test_purge_skips_external_cleanup_when_a_project_delete_fails(
+    engine, session_factory, targets: PurgeTargets
+) -> None:
+    blocked_id = _add_project(session_factory, "被外键阻塞")
+    free_id = _add_project(session_factory, "可删除")
+    _add_terminal_task(session_factory, blocked_id, "task-blocked-done")
+    _add_out_of_metadata_blocker(engine, blocked_id)
+    seeded = {pid: _seed_local_files(targets, pid) for pid in (blocked_id, free_id)}
+    qdrant = FakeQdrant(list(QDRANT_NAMES))
+    minio = FakeMinio(["artifacts/projects/a/1.txt"])
+    cover_service = FakeCoverService(removed=["c.png"])
+    targets = PurgeTargets(
+        artifact_root=targets.artifact_root,
+        minio=MinioTarget(
+            endpoint="minio.invalid:9000",
+            access_key="ak",
+            secret_key="sk",
+            bucket="forwin-artifacts",
+            prefix="artifacts",
+            secure=False,
+        ),
+        qdrant_url=targets.qdrant_url,
+        qdrant_collection_names=targets.qdrant_collection_names,
+        local_project_roots=targets.local_project_roots,
+        publisher_cover_dir=targets.publisher_cover_dir,
+    )
+
+    report = purge_all_projects(
+        session_factory=session_factory,
+        targets=targets,
+        dry_run=False,
+        qdrant_client=qdrant,
+        minio_client=minio,
+        cover_service=cover_service,
+    )
+
+    assert report.deleted_project_ids == (free_id,)
+    assert report.failed_project_ids == (blocked_id,)
+    assert len(report.errors) == 1
+    assert blocked_id in report.errors[0]
+    assert "scenario_rehearsal_runs" in report.errors[0]
+    # The failed project's transaction was rolled back as a whole.
+    with session_factory() as session:
+        assert session.query(Project.id).scalar() == blocked_id
+    assert _count(session_factory, GenerationTask) == 1
+    assert _count_blocker_rows(engine) == 1
+    # No external store was touched.
+    for files in seeded.values():
+        assert all(path.exists() for path in files.values())
+    assert report.removed_paths == ()
+    assert qdrant.deleted == []
+    assert report.dropped_qdrant_collections == ()
+    assert minio.list_calls == []
+    assert minio.removed == []
+    assert report.removed_minio_objects == 0
+    assert cover_service.calls == 0
+
+
+def test_purge_report_lists_local_roots_and_whether_they_exist(
+    session_factory, targets: PurgeTargets
+) -> None:
+    (targets.artifact_root / "projects").mkdir(parents=True)
+    targets.local_project_roots[0].mkdir(parents=True)
+
+    report = purge_all_projects(
+        session_factory=session_factory,
+        targets=targets,
+        dry_run=True,
+        qdrant_client=FakeQdrant([]),
+        cover_service=FakeCoverService(),
+    )
+
+    assert report.local_roots == (
+        LocalRoot(path=str(targets.artifact_root / "projects"), exists=True),
+        LocalRoot(path=str(targets.local_project_roots[0]), exists=True),
+        LocalRoot(path=str(targets.local_project_roots[1]), exists=False),
+        LocalRoot(path=str(targets.publisher_cover_dir), exists=False),
+    )
 
 
 def test_purge_deletes_projects_and_local_stores_but_keeps_global_publisher_tables(
@@ -329,6 +483,8 @@ def test_purge_deletes_projects_and_local_stores_but_keeps_global_publisher_tabl
     assert report.dry_run is False
     assert report.deleted_projects == 2
     assert report.project_ids == tuple(sorted(project_ids))
+    assert report.deleted_project_ids == tuple(sorted(project_ids))
+    assert report.failed_project_ids == ()
     assert report.errors == ()
     assert _count(session_factory, Project) == 0
     projects_dir = targets.artifact_root / "projects"
@@ -645,3 +801,36 @@ def test_main_returns_3_when_blocked(main_env, session_factory, capsys) -> None:
 
     assert _count(session_factory, Project) == 1
     assert "task-blocking-1" in capsys.readouterr().err
+
+
+def test_main_returns_4_and_reports_ids_when_a_project_delete_fails(
+    main_env, engine, session_factory, capsys
+) -> None:
+    blocked_id = _add_project(session_factory, "被外键阻塞")
+    free_id = _add_project(session_factory, "可删除")
+    _add_out_of_metadata_blocker(engine, blocked_id)
+
+    assert purge_module.main([]) == 4
+    dry = capsys.readouterr()
+    assert _count(session_factory, Project) == 2
+    assert blocked_id in dry.err
+    assert "scenario_rehearsal_runs" in dry.err
+
+    assert purge_module.main(["--yes-delete-all-projects"]) == 4
+    real = capsys.readouterr()
+    assert _count(session_factory, Project) == 1
+    assert main_env.qdrant.deleted == []
+    assert f"deleted project {free_id}" in real.out
+    assert blocked_id in real.err
+    assert "external-store cleanup skipped" in real.out
+
+
+def test_main_prints_missing_local_roots(main_env, capsys) -> None:
+    (main_env.tmp_path / "artifacts" / "projects").mkdir(parents=True)
+
+    assert purge_module.main([]) == 0
+
+    output = capsys.readouterr().out
+    assert f"exists   {main_env.tmp_path / 'artifacts' / 'projects'}" in output
+    assert f"MISSING  {main_env.tmp_path / 'vaults'}" in output
+    assert f"MISSING  {main_env.tmp_path / 'covers'}" in output

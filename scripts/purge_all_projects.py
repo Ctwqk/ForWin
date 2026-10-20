@@ -4,7 +4,18 @@
 Defaults to a dry run. Nothing is deleted unless ``--yes-delete-all-projects``
 is passed. Global publisher extension/browser-session tables are never touched.
 
-Exit codes: 0 success, 2 external store errors, 3 blocked by active work.
+Each project is deleted in its own transaction. The dry run performs the same
+deletes and always rolls them back, so foreign-key blockers show up in its
+report. If any project fails to delete, the real run keeps the projects it
+could delete but leaves every external store (local files, covers, Qdrant,
+MinIO) untouched.
+
+Exit codes:
+  0  success
+  2  external store errors
+  3  blocked by active generation tasks or publisher upload jobs
+  4  at least one project could not be deleted (in a dry run: would fail);
+     external stores were left untouched
 """
 
 from __future__ import annotations
@@ -19,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from forwin.config import InfrastructureConfig
 from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
@@ -33,6 +45,9 @@ from forwin.retrieval.memory_index import _create_qdrant_client
 
 DEFAULT_PUBLISHER_COVER_DIR = "data/publisher_covers"
 _MAX_BLOCKERS_LISTED = 20
+EXIT_EXTERNAL_STORE_ERRORS = 2
+EXIT_BLOCKED_BY_ACTIVE_WORK = 3
+EXIT_PROJECT_DELETE_FAILED = 4
 
 
 @dataclass(frozen=True)
@@ -56,14 +71,26 @@ class PurgeTargets:
 
 
 @dataclass(frozen=True)
+class LocalRoot:
+    path: str
+    exists: bool
+
+
+@dataclass(frozen=True)
 class PurgeReport:
     dry_run: bool
     project_ids: tuple[str, ...]
-    deleted_projects: int
+    deleted_project_ids: tuple[str, ...]
+    failed_project_ids: tuple[str, ...]
+    local_roots: tuple[LocalRoot, ...]
     removed_paths: tuple[str, ...]
     removed_minio_objects: int
     dropped_qdrant_collections: tuple[str, ...]
     errors: tuple[str, ...]
+
+    @property
+    def deleted_projects(self) -> int:
+        return len(self.deleted_project_ids)
 
 
 class PurgeBlocked(RuntimeError):
@@ -116,41 +143,81 @@ def purge_all_projects(
         project_ids = tuple(
             session.execute(select(Project.id).order_by(Project.id)).scalars().all()
         )
-
-    deleted_projects = 0
-    if not dry_run:
-        for project_id in project_ids:
-            with session_factory() as session:
-                _delete_project(session, project_id)
-                session.commit()
-            deleted_projects += 1
+    local_roots = tuple(
+        LocalRoot(path=str(root), exists=root.is_dir()) for root in _local_roots(targets)
+    )
 
     errors: list[str] = []
-    removed_paths = _purge_local_paths(targets, dry_run=dry_run, errors=errors)
-    if not dry_run:
-        removed_paths.extend(
-            _cleanup_covers(
-                session_factory=session_factory,
-                targets=targets,
-                cover_service=cover_service,
-                errors=errors,
-            )
+    deleted_project_ids: list[str] = []
+    failed_project_ids: list[str] = []
+    for project_id in project_ids:
+        error = _delete_project_in_own_transaction(
+            session_factory, project_id, commit=not dry_run
         )
-    dropped_collections = _purge_qdrant(
-        targets, qdrant_client, dry_run=dry_run, errors=errors
-    )
-    removed_minio_objects = _purge_minio(
-        targets.minio, minio_client, dry_run=dry_run, errors=errors
-    )
+        if error:
+            failed_project_ids.append(project_id)
+            errors.append(f"project {project_id}: {error}")
+        elif not dry_run:
+            deleted_project_ids.append(project_id)
+
+    removed_paths: list[str] = []
+    dropped_collections: list[str] = []
+    removed_minio_objects = 0
+    # Never strip external stores of projects whose rows are still there.
+    if dry_run or not failed_project_ids:
+        removed_paths = _purge_local_paths(targets, dry_run=dry_run, errors=errors)
+        if not dry_run:
+            removed_paths.extend(
+                _cleanup_covers(
+                    session_factory=session_factory,
+                    targets=targets,
+                    cover_service=cover_service,
+                    errors=errors,
+                )
+            )
+        dropped_collections = _purge_qdrant(
+            targets, qdrant_client, dry_run=dry_run, errors=errors
+        )
+        removed_minio_objects = _purge_minio(
+            targets.minio, minio_client, dry_run=dry_run, errors=errors
+        )
     return PurgeReport(
         dry_run=dry_run,
         project_ids=project_ids,
-        deleted_projects=deleted_projects,
+        deleted_project_ids=tuple(deleted_project_ids),
+        failed_project_ids=tuple(failed_project_ids),
+        local_roots=local_roots,
         removed_paths=tuple(removed_paths),
         removed_minio_objects=removed_minio_objects,
         dropped_qdrant_collections=tuple(dropped_collections),
         errors=tuple(errors),
     )
+
+
+def _delete_project_in_own_transaction(
+    session_factory, project_id: str, *, commit: bool
+) -> str:
+    """Delete one project; commit it, or always roll back for a dry run.
+
+    Returns an empty string on success, otherwise the database error.
+    """
+    with session_factory() as session:
+        try:
+            _delete_project(session, project_id)
+            session.flush()
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return _first_line(getattr(exc, "orig", None) or exc)
+        if commit:
+            session.commit()
+        else:
+            session.rollback()
+    return ""
+
+
+def _first_line(error: object) -> str:
+    lines = str(error).strip().splitlines()
+    return lines[0] if lines else type(error).__name__
 
 
 def _raise_if_active_work(session) -> None:
@@ -188,6 +255,14 @@ def _format_ids(ids: list[str]) -> str:
     listed = ", ".join(ids[:_MAX_BLOCKERS_LISTED])
     extra = len(ids) - _MAX_BLOCKERS_LISTED
     return f"[{listed}{f', +{extra} more' if extra > 0 else ''}]"
+
+
+def _local_roots(targets: PurgeTargets) -> tuple[Path, ...]:
+    return (
+        targets.artifact_root / "projects",
+        *targets.local_project_roots,
+        targets.publisher_cover_dir,
+    )
 
 
 def _purge_local_paths(
@@ -336,11 +411,39 @@ def _close_quietly(client: Any) -> None:
 
 
 def _print_report(report: PurgeReport) -> None:
-    mode = "DRY-RUN (nothing was deleted)" if report.dry_run else "PURGE COMPLETE"
-    print(f"{mode}")
-    print(f"projects: {len(report.project_ids)} found, {report.deleted_projects} deleted")
+    if report.dry_run:
+        mode = "DRY-RUN (nothing was deleted)"
+    elif report.failed_project_ids:
+        mode = "PURGE INCOMPLETE"
+    else:
+        mode = "PURGE COMPLETE"
+    print(mode)
+    print("local roots:")
+    for root in report.local_roots:
+        print(f"  {'exists ' if root.exists else 'MISSING'}  {root.path}")
+    print(
+        f"projects: {len(report.project_ids)} found, "
+        f"{report.deleted_projects} deleted, "
+        f"{len(report.failed_project_ids)} failed"
+    )
+    failed = set(report.failed_project_ids)
     for project_id in report.project_ids:
-        print(f"  project {project_id}")
+        if project_id in failed:
+            status = "cannot delete" if report.dry_run else "FAILED to delete"
+        else:
+            status = "would delete" if report.dry_run else "deleted"
+        print(f"  {status} project {project_id}")
+    if report.failed_project_ids:
+        if report.dry_run:
+            print(
+                "a real run would skip external-store cleanup: "
+                f"{len(report.failed_project_ids)} project(s) cannot be deleted"
+            )
+        else:
+            print(
+                "external-store cleanup skipped: "
+                f"{len(report.failed_project_ids)} project(s) failed to delete"
+            )
     verb = "would remove" if report.dry_run else "removed"
     print(f"local paths {verb}: {len(report.removed_paths)}")
     for path in report.removed_paths:
@@ -363,7 +466,12 @@ def main(argv: list[str] | None = None) -> int:
             "Delete every project and its derived stores (database rows, local "
             "artifacts, LLM KB, vaults, covers, Qdrant collections, MinIO "
             "objects). Dry-run unless --yes-delete-all-projects is given."
-        )
+        ),
+        epilog=(
+            "exit codes: 0 success; 2 external store errors; 3 blocked by "
+            "active work; 4 a project could not be deleted (dry run: would "
+            "fail), external stores left untouched"
+        ),
     )
     parser.add_argument(
         "--yes-delete-all-projects",
@@ -386,9 +494,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         except PurgeBlocked as exc:
             print(f"purge blocked: {exc}", file=sys.stderr)
-            return 3
+            return EXIT_BLOCKED_BY_ACTIVE_WORK
         _print_report(report)
-        return 2 if report.errors else 0
+        if report.failed_project_ids:
+            return EXIT_PROJECT_DELETE_FAILED
+        return EXIT_EXTERNAL_STORE_ERRORS if report.errors else 0
     finally:
         engine.dispose()
 

@@ -109,7 +109,7 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 
 ## Schema 基线
 
-生产 schema 只由 Alembic 管理。当前 head 为 `0002_drop_dead_tables`，其父 revision 为 `0001_v5_recovery`（文件 `0001_v5_baseline.py`）；已合入的迁移不得原地修改。`0002` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas` 五张无读写的死表；`book_reader_promises` 保留（已批准的世界编辑 proposal 仍写入）。应用启动只校验 head revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
+生产 schema 只由 Alembic 管理。当前 head 为 `0002_drop_dead_tables`，其父 revision 为 `0001_v5_recovery`（文件 `0001_v5_baseline.py`）；已合入的迁移不得原地修改。`0002` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas` 五张无读写的死表；`book_reader_promises` 保留（已批准的世界编辑 proposal 仍写入）。`0002` 还会 `DROP TABLE IF EXISTS` 只存在于生产库的 15 张 v4/scenario 遗留表（不在 ORM metadata 中，外键指向 `projects` 且不级联，会阻塞项目删除）；不使用 CASCADE，downgrade 不重建它们。应用启动只校验 head revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
 
 ## 地图红线
 
@@ -129,7 +129,7 @@ post-Canon maintenance 按 planning → arc → world → feedback 顺序运行�
 设计见 [世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0 只做护栏与纯删除，运行时架构边界不变；以下是 P0 之后的现状。
 
 - **防过拟合护栏**：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py` 用 AST 扫描 `forwin/` 中的故事内容。命中项必须在 allowlist 中分类（`language_lexicon`、`genre_lexicon`、`catalog`、`prompt_text`、`numeric_policy`、`eval_fixture`）；尚未删除的故事内容登记为 `pending_removal` 并带 `remove_in` 阶段（`meta.completed_phase = "P0"`，`remove_in = "P0"` 的条目必须为零）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
-- **清库工具**：`scripts/purge_all_projects.py` 默认 dry-run，仅 `--yes-delete-all-projects` 才删除；存在非终态生成任务或上传任务时拒绝执行，保留全局 publisher 扩展与浏览器会话表。`_delete_project` 现在同时删除 publisher 子表行与项目 outbox 事件。
+- **清库工具**：`scripts/purge_all_projects.py` 默认 dry-run，仅 `--yes-delete-all-projects` 才删除；存在非终态生成任务或上传任务时拒绝执行，保留全局 publisher 扩展与浏览器会话表。每个项目在独立事务中删除；dry-run 执行同样的删除后一律回滚，以提前暴露外键阻塞。任一项目删除失败时，已删项目保持删除，所有外部存储都不清理，退出码为 4。报告列出各本地根目录是否存在。`_delete_project` 现在同时删除 publisher 子表行与项目 outbox 事件。
 - **v4 抽取链路已删除**：见“兼容层”。`WriterOutput` 的 v4 自报字段与 `RepairScope` 的 `world_model` 已移除。
 - **0002 迁移**：见“Schema 基线”。
 - **world contracts 只产出通用合同**：写死的“母星被围”样例（homeworld fixture）已删除。

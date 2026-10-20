@@ -60,9 +60,9 @@
 设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；`tests/overfit_allowlist.toml` 的 `meta.completed_phase` 已推进到 `P0`，`remove_in = "P0"` 的条目为零，`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
 
 - 新增防过拟合 AST 护栏：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py`，带按阶段门控的 `pending_removal` 区段。
-- 新增 `scripts/purge_all_projects.py`（默认 dry-run，`--yes-delete-all-projects` 才执行）；`_delete_project` 现在删除 publisher 子表行与项目 outbox 事件。
+- 新增 `scripts/purge_all_projects.py`（默认 dry-run，`--yes-delete-all-projects` 才执行；dry-run 回滚式试删以暴露外键阻塞，任一项目删除失败时不清理外部存储并以退出码 4 结束）；`_delete_project` 现在删除 publisher 子表行与项目 outbox 事件。
 - 删除 v4 抽取链路：`book_state/extraction` 只剩 `contract.py` 与 `graph_delta.py`，`WriterContractDeltaBuilder` 与 `pulp_light` 正则兜底保留（后者 P2 删除）；`WriterOutput` 的 v4 字段与 `RepairScope` 的 `world_model` 已移除。
-- Alembic `0002_drop_dead_tables` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas`；`book_reader_promises` 保留。
+- Alembic `0002_drop_dead_tables` 删除 `world_projection_deltas`、`story_obligations`、`reveal_registry_entries`、`artifact_collection_ledgers`、`book_reader_experience_deltas`，并 `DROP TABLE IF EXISTS` 生产库独有、外键阻塞项目删除的 15 张 v4/scenario 遗留表（不用 CASCADE）；`book_reader_promises` 保留。
 - world contracts 只产出通用合同（homeworld 样例已删）。
 - 续写改为追加一个 planned arc，由 arc activation 规划其章节；materializer 为 blueprint 中缺失的卷合成 payload；读模型把此类卷报告为可恢复。
 - Genesis fallback 只返回结构壳，`stage_states[stage].degraded` 标记 fallback 输出。

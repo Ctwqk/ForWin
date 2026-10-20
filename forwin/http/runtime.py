@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from forwin.application.task_center import TaskCenterService
 from forwin.config import InfrastructureConfig
 from forwin.generation.pipeline import ChapterPipeline
+from forwin.generation.task_repository import (
+    TERMINAL_GENERATION_STATUSES as GENERATION_TERMINAL_STATUSES,
+)
 from forwin.http.project_pipelines import ProjectPipelineCache
 from forwin.publishers.manager import PublisherManager
 from forwin.runtime.container import RuntimeContainer
@@ -26,9 +29,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-GENERATION_TERMINAL_STATUSES = frozenset(
-    {"completed", "partial_failed", "failed", "needs_review", "cancelled", "paused"}
-)
 GENERATION_TERMINAL_STAGE_BY_STATUS = {
     "completed": "completed",
     "partial_failed": "failed",

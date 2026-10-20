@@ -17,6 +17,7 @@ from forwin.api_schema import (
 from forwin.generation.continue_workset import (
     ContinueGenerationWorkset,
 )
+from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
 from forwin.audit.events import (
     DecisionEventType,
 )
@@ -35,14 +36,6 @@ from forwin.state.query_helpers import (
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
-_GENERATION_TASK_TERMINAL_STATUSES = {
-    "completed",
-    "partial_failed",
-    "failed",
-    "needs_review",
-    "cancelled",
-    "paused",
-}
 
 
 def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPException:
@@ -70,7 +63,7 @@ def _latest_active_generation_task(session, project_id: str) -> GenerationTask |
             GenerationTask.deleted_at.is_(None),
             GenerationTask.task_kind == "generation",
             GenerationTask.project_id == project_id,
-            GenerationTask.status.notin_(tuple(_GENERATION_TASK_TERMINAL_STATUSES)),
+            GenerationTask.status.notin_(tuple(TERMINAL_GENERATION_STATUSES)),
         )
         .order_by(GenerationTask.updated_at.desc(), GenerationTask.id.desc())
         .limit(1)

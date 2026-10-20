@@ -24,14 +24,6 @@ from forwin.state.updater import StateUpdater
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
-_GENERATION_TASK_TERMINAL_STATUSES = {
-    "completed",
-    "partial_failed",
-    "failed",
-    "needs_review",
-    "cancelled",
-    "paused",
-}
 
 def _build_project_genesis_service(session, project: Project, build_genesis_service):
     policy_record = ProjectPolicyStore(session).load(project)

@@ -49,14 +49,6 @@ from .common import _load_json_object
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
-_GENERATION_TASK_TERMINAL_STATUSES = {
-    "completed",
-    "partial_failed",
-    "failed",
-    "needs_review",
-    "cancelled",
-    "paused",
-}
 
 def _decision_refs_for_types(
     decision_refs: list[Any],

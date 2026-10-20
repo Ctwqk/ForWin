@@ -23,14 +23,6 @@ from .common import (
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
-_GENERATION_TASK_TERMINAL_STATUSES = {
-    "completed",
-    "partial_failed",
-    "failed",
-    "needs_review",
-    "cancelled",
-    "paused",
-}
 
 
 def list_chapters(project_id: str, *, get_session) -> list[ChapterInfo]:

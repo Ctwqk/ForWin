@@ -9,17 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 
-
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = (
-    "brief",
-    "world",
-    "map",
-    "story_engine",
-    "book_blueprint",
-    "bootstrap",
-)
-_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
+from forwin.genesis.constants import GENESIS_STAGE_ORDER
+
 from .service import GenesisWorkspaceService
-from .stages import GENESIS_STAGE_ORDER
 
 __all__ = ["GENESIS_STAGE_ORDER", "GenesisWorkspaceService"]

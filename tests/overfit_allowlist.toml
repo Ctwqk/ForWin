@@ -363,8 +363,8 @@ max_literals = 20
 path = "forwin/checker/pulp_beat.py"
 symbol = "REWARD_PAYOFF_MARKERS"
 checks = ["cjk_collection"]
-category = "catalog"
-justification = "按计划奖励标签（power/social/justice/mystery/emotion）选取的兑现标记目录"
+category = "language_lexicon"
+justification = "网文兑现标记（按奖励标签索引，题材中立）"
 max_literals = 48
 
 [[entry]]

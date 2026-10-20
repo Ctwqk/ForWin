@@ -264,6 +264,11 @@ class ProjectOperationGuardTests(unittest.TestCase):
         )
 
         self.assertEqual(detail.target_total_chapters, 36)
+        control = detail.generation_control
+        self.assertEqual(control.next_chapter, 25)
+        self.assertTrue(control.can_resume)
+        self.assertEqual(control.plan_state, "in_progress")
+        self.assertEqual(control.planned_chapters, [])
         with self.session_factory() as session:
             plan_count_after = (
                 session.query(ChapterPlan)

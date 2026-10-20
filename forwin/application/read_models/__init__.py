@@ -24,6 +24,7 @@ from .generation import (
     _derive_blocking_reason,
     _derive_next_gate,
     effective_target_total_chapters,
+    load_next_planned_arc_starts,
     build_generation_control,
 )
 
@@ -68,6 +69,7 @@ __all__ = [
     '_derive_blocking_reason',
     '_derive_next_gate',
     'effective_target_total_chapters',
+    'load_next_planned_arc_starts',
     'build_generation_control',
     'load_recent_replan_events_by_project',
     '_load_latest_arc_structure_by_project',

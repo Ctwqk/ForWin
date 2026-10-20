@@ -16,7 +16,7 @@ from forwin.api_schema import (
     ThreadInfo,
 )
 from forwin.models.draft import ChapterReview
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
@@ -30,7 +30,11 @@ from .arc_snapshot import (
     _narrative_constraints_by_project,
     project_arc_snapshot_payload,
 )
-from .generation import build_generation_control, effective_target_total_chapters
+from .generation import (
+    build_generation_control,
+    effective_target_total_chapters,
+    load_next_planned_arc_starts,
+)
 from .genesis import (
     _can_start_writing,
     _load_latest_genesis_revision_by_project,
@@ -257,29 +261,10 @@ def build_project_detail(
         latest_band_checkpoint=latest_checkpoint,
         decision_events=decision_timeline,
         future_constraints_enabled=policy_record.policy.planning.future_constraints,
+        next_arc_chapter_start=load_next_planned_arc_starts(
+            session, [project_id]
+        ).get(project_id, 0),
     )
-    has_planned_future_arc = (
-        session.execute(
-            select(ArcPlanVersion.id)
-            .where(
-                ArcPlanVersion.project_id == project_id,
-                ArcPlanVersion.status == "planned",
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        is not None
-    )
-    if (
-        str(getattr(project, "creation_status", "") or "").strip() == "writing"
-        and has_planned_future_arc
-        and not generation_control.pending_review_chapters
-        and not generation_control.drafted_chapters
-    ):
-        generation_control.can_resume = True
-        if generation_control.plan_state == "completed":
-            generation_control.plan_state = "in_progress"
-        if not generation_control.next_gate:
-            generation_control.next_gate = "next_arc_ready"
 
     return ProjectDetail(
         id=project.id,

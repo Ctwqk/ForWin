@@ -11,7 +11,7 @@ from forwin.api_schema import (
     ProjectSummary,
 )
 from forwin.models.draft import ChapterReview
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.project import ChapterPlan, Project
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
@@ -21,7 +21,11 @@ from .arc_snapshot import (
     _latest_band_checkpoint_by_project,
     project_arc_snapshot_payload,
 )
-from .generation import build_generation_control, effective_target_total_chapters
+from .generation import (
+    build_generation_control,
+    effective_target_total_chapters,
+    load_next_planned_arc_starts,
+)
 from .genesis import (
     _can_start_writing,
     _load_latest_genesis_revision_by_project,
@@ -80,24 +84,7 @@ def build_project_summaries(
     genesis_revision_map = _load_latest_genesis_revision_by_project(
         session, project_ids
     )
-    planned_future_projects = (
-        {
-            str(project_id or "").strip()
-            for project_id in session.execute(
-                select(ArcPlanVersion.project_id)
-                .where(
-                    ArcPlanVersion.project_id.in_(project_ids),
-                    ArcPlanVersion.status == "planned",
-                )
-                .distinct()
-            )
-            .scalars()
-            .all()
-            if str(project_id or "").strip()
-        }
-        if project_ids
-        else set()
-    )
+    next_arc_start_map = load_next_planned_arc_starts(session, project_ids)
     latest_checkpoint_map = _latest_band_checkpoint_by_project(session, project_ids)
     decision_timeline_map = _decision_timeline_by_project(
         session, project_ids, limit=20
@@ -167,18 +154,8 @@ def build_project_summaries(
             latest_band_checkpoint=latest_checkpoint,
             decision_events=decision_timeline_map.get(project.id, []),
             future_constraints_enabled=policy_record.policy.planning.future_constraints,
+            next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
         )
-        if (
-            str(getattr(project, "creation_status", "") or "").strip() == "writing"
-            and project.id in planned_future_projects
-            and not generation_control.pending_review_chapters
-            and not generation_control.drafted_chapters
-        ):
-            generation_control.can_resume = True
-            if generation_control.plan_state == "completed":
-                generation_control.plan_state = "in_progress"
-            if not generation_control.next_gate:
-                generation_control.next_gate = "next_arc_ready"
         payload.append(
             ProjectSummary(
                 id=project.id,

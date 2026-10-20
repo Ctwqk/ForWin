@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from typing import Any, Callable
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from forwin.api_schema import (
     GenerationControlInfo,
@@ -17,7 +19,7 @@ from forwin.audit.events import (
     DecisionEventType,
 )
 from forwin.models.planning_control import BandCheckpoint
-from forwin.models.project import ChapterPlan, Project
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from .arc_snapshot import _band_checkpoint_detail
 
 
@@ -235,6 +237,39 @@ def effective_target_total_chapters(project: Project, chapter_count: int) -> int
     return max(stored, planned)
 
 
+def load_next_planned_arc_starts(
+    session: Session, project_ids: list[str]
+) -> dict[str, int]:
+    """Map writing projects to the chapter_start of their next planned arc.
+
+    The next planned arc is the lowest arc_number with status "planned", the
+    same ordering continue_workset uses. Such an arc may have no chapter plans
+    yet (extend-generation, Genesis future arcs); activation plans them.
+    """
+    ids = [str(item or "").strip() for item in project_ids if str(item or "").strip()]
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(ArcPlanVersion.project_id, ArcPlanVersion.chapter_start)
+        .join(Project, Project.id == ArcPlanVersion.project_id)
+        .where(
+            ArcPlanVersion.project_id.in_(ids),
+            ArcPlanVersion.status == "planned",
+            Project.creation_status == "writing",
+        )
+        .order_by(
+            ArcPlanVersion.project_id.asc(),
+            ArcPlanVersion.arc_number.asc(),
+            ArcPlanVersion.created_at.asc(),
+            ArcPlanVersion.id.asc(),
+        )
+    ).all()
+    starts: dict[str, int] = {}
+    for project_id, chapter_start in rows:
+        starts.setdefault(str(project_id), int(chapter_start or 0))
+    return {project_id: start for project_id, start in starts.items() if start > 0}
+
+
 def build_generation_control(
     *,
     plans: list[ChapterPlan],
@@ -247,6 +282,7 @@ def build_generation_control(
     latest_band_checkpoint: BandCheckpoint | None = None,
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
+    next_arc_chapter_start: int = 0,
 ) -> GenerationControlInfo:
     accepted = [plan.chapter_number for plan in plans if plan.status == "accepted"]
     drafted = [plan.chapter_number for plan in plans if plan.status == "drafted"]
@@ -262,6 +298,11 @@ def build_generation_control(
     ]
     next_candidates = planned + failed
     next_chapter = min(next_candidates) if next_candidates else 0
+    # Nothing left to write in materialized plans, but a planned arc is waiting
+    # for activation: the book is resumable from that arc's first chapter.
+    resume_from_next_arc = not next_candidates and int(next_arc_chapter_start or 0) > 0
+    if resume_from_next_arc:
+        next_chapter = int(next_arc_chapter_start)
     if not plans:
         plan_state = "none"
     elif pending_review:
@@ -273,6 +314,8 @@ def build_generation_control(
     elif failed and not planned:
         plan_state = "failed"
     else:
+        plan_state = "in_progress"
+    if resume_from_next_arc and plan_state == "completed":
         plan_state = "in_progress"
     writing_state = "not_started"
     if generated:
@@ -305,6 +348,12 @@ def build_generation_control(
         decision_events=decision_events,
         future_constraints_enabled=future_constraints_enabled,
     )
+    can_resume = bool(
+        (next_candidates or resume_from_next_arc) and not pending_review and not drafted
+    )
+    next_gate = _derive_next_gate(plans=plans, blocking_reason=blocking_reason)
+    if resume_from_next_arc and can_resume and next_gate in {"", "completed"}:
+        next_gate = "next_arc_ready"
     return GenerationControlInfo(
         plan_state=plan_state,
         writing_state=writing_state,
@@ -319,14 +368,14 @@ def build_generation_control(
         failed_chapters=failed,
         pending_review_chapters=pending_review,
         can_pause=can_pause,
-        can_resume=bool(next_candidates and not pending_review and not drafted),
+        can_resume=can_resume,
         pause_requested=bool(pause_requested),
         review_interval_chapters=review_interval,
         chapters_until_review=chapters_until_review,
         chapters_until_replan_eligible=chapters_until_replan,
         blocking_reason=blocking_reason,
         latest_band_checkpoint=_band_checkpoint_detail(latest_band_checkpoint),
-        next_gate=_derive_next_gate(plans=plans, blocking_reason=blocking_reason),
+        next_gate=next_gate,
     )
 
 
@@ -334,5 +383,6 @@ __all__ = [
     "_derive_blocking_reason",
     "_derive_next_gate",
     "effective_target_total_chapters",
+    "load_next_planned_arc_starts",
     "build_generation_control",
 ]

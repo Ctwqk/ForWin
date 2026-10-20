@@ -7,7 +7,11 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.application.read_models import build_generation_control, _recent_rows_by_project
+from forwin.application.read_models import (
+    build_generation_control,
+    load_next_planned_arc_starts,
+    _recent_rows_by_project,
+)
 from forwin.api_schema import TaskCenterItemResponse
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent
@@ -152,6 +156,9 @@ class TaskCenterService:
                 session,
                 [project.id for project in projects],
             )
+            next_arc_start_map = load_next_planned_arc_starts(
+                session, [project.id for project in projects]
+            )
             items: list[TaskCenterItemResponse] = []
             for project in projects:
                 if project.id in live_project_ids:
@@ -162,6 +169,7 @@ class TaskCenterService:
                         plans_by_project.get(project.id, []),
                         latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                         decision_events=decision_timeline_map.get(project.id, []),
+                        next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
                     )
                 )
             return items
@@ -193,6 +201,9 @@ class TaskCenterService:
                 plans_by_project.get(project.id, []),
                 latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                 decision_events=decision_timeline_map.get(project.id, []),
+                next_arc_chapter_start=load_next_planned_arc_starts(
+                    session, [project.id]
+                ).get(project.id, 0),
             )
         finally:
             session.close()
@@ -232,6 +243,7 @@ class TaskCenterService:
         *,
         latest_band_checkpoint: BandCheckpoint | None,
         decision_events: list[Any],
+        next_arc_chapter_start: int = 0,
     ) -> TaskCenterItemResponse:
         requested = len(plans)
         config = self.config_provider()
@@ -244,6 +256,7 @@ class TaskCenterService:
             review_interval_chapters=review_interval,
             latest_band_checkpoint=latest_band_checkpoint,
             decision_events=decision_events,
+            next_arc_chapter_start=next_arc_chapter_start,
         )
         accepted = list(generation_control.accepted_chapters)
         failed = list(generation_control.failed_chapters)
@@ -271,7 +284,8 @@ class TaskCenterService:
             if requested == 0
             else "项目入口（当前没有活跃生成任务）"
         )
-        can_resume = bool((planned or failed) and not paused)
+        # next_chapter covers planned/failed chapters and a planned arc awaiting activation.
+        can_resume = bool(generation_control.next_chapter and not paused)
         stage_history = [
             self.new_stage_history_entry(
                 current_stage,
@@ -287,7 +301,6 @@ class TaskCenterService:
                 else generation_control.plan_state,
                 "current_stage": current_stage,
                 "current_chapter": current_chapter,
-                "next_chapter": min(planned + failed, default=0),
                 "can_resume": can_resume,
             }
         )

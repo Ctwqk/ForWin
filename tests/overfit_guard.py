@@ -44,7 +44,8 @@ _HARVEST_TERM = re.compile(r"[㐀-鿿]{2,6}")
 _STORY_ID_PREFIXES = r"(?:line|gap|world_line|hidden_line|fact|thread|intent|agenda)_"
 _STORY_ID = re.compile(_STORY_ID_PREFIXES + r"[a-z0-9_]+")
 _STORY_ID_PREFIX = re.compile(_STORY_ID_PREFIXES)
-_STORY_ID_KEYWORD = re.compile(_STORY_ID_PREFIXES + r"id")
+# world_line_id=, gap_id= and compounds such as related_gap_id= / primary_world_line_id=
+_STORY_ID_KEYWORD = re.compile(r"(?:[a-z0-9]+_)*" + _STORY_ID_PREFIXES + r"id")
 _LEADING_ID_TOKEN = re.compile(r"[a-z0-9_]+")
 _CHAPTER_NAME = re.compile(
     r"chapter(?:_number|_start|_end|_hint)?|current_chapter|target_chapter"
@@ -388,13 +389,21 @@ class Entry:
     justification: str
     max_literals: int
     remove_in: str = ""
+    literals: tuple[str, ...] = ()
 
     def matches(self, hit: Hit) -> bool:
         return (
             hit.path == self.path
             and hit.check in self.checks
             and (not self.symbol or self.symbol == hit.symbol)
+            and (not self.literals or hit.literal in self.literals)
         )
+
+    def budget_exceeded(self, count: int) -> bool:
+        """pending_removal budgets are exact, so every trim forces an entry update."""
+        if self.category == "pending_removal":
+            return count != self.max_literals
+        return count > self.max_literals
 
 
 @dataclass(frozen=True)
@@ -412,12 +421,15 @@ class Allowlist:
     entries: tuple[Entry, ...]
 
     def _assign(self, hits: Iterable[Hit]) -> tuple[list[list[Hit]], list[Hit]]:
-        """Give each hit to its most specific entry (symbol entries before file entries)."""
+        """Give each hit to its most specific entry: symbol before file-level, and an entry
+        restricted by ``literals`` before an unrestricted one."""
         by_path: dict[str, list[int]] = {}
         for index, entry in enumerate(self.entries):
             by_path.setdefault(entry.path, []).append(index)
         for indexes in by_path.values():
-            indexes.sort(key=lambda index: not self.entries[index].symbol)
+            indexes.sort(
+                key=lambda index: (not self.entries[index].symbol, not self.entries[index].literals)
+            )
         assigned: list[list[Hit]] = [[] for _ in self.entries]
         unallowed: list[Hit] = []
         for hit in hits:
@@ -442,12 +454,12 @@ class Allowlist:
         return [
             (entry, len(matched))
             for entry, matched in zip(self.entries, assigned)
-            if len(matched) > entry.max_literals
+            if entry.budget_exceeded(len(matched))
         ]
 
 
 _ENTRY_REQUIRED = {"path", "checks", "category", "justification", "max_literals"}
-_ENTRY_OPTIONAL = {"symbol", "remove_in"}
+_ENTRY_OPTIONAL = {"symbol", "remove_in", "literals"}
 
 
 def _load_entry(raw: dict[str, object]) -> Entry:
@@ -463,6 +475,13 @@ def _load_entry(raw: dict[str, object]) -> Entry:
         raise ValueError(f"allowlist entry {label}: invalid checks {list(checks)}")
     if not str(raw["justification"]).strip():
         raise ValueError(f"allowlist entry {label}: empty justification")
+    literals = raw.get("literals", [])
+    if "literals" in raw and (
+        not isinstance(literals, list)
+        or not literals
+        or not all(isinstance(item, str) and item for item in literals)
+    ):
+        raise ValueError(f"allowlist entry {label}: literals must be a non-empty list of strings")
     return Entry(
         path=str(raw["path"]),
         symbol=str(raw.get("symbol", "")),
@@ -471,6 +490,7 @@ def _load_entry(raw: dict[str, object]) -> Entry:
         justification=str(raw["justification"]),
         max_literals=int(raw["max_literals"]),
         remove_in=str(raw.get("remove_in", "")),
+        literals=tuple(literals),
     )
 
 

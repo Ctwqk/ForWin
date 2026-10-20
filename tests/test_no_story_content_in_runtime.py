@@ -71,6 +71,18 @@ def test_scanner_detects_story_id_keyword_literal_once() -> None:
     assert _literals(hits, "story_id_literal") == ["line_a", "g1"]
 
 
+def test_scanner_detects_compound_story_id_keywords() -> None:
+    hits = _scan(
+        """
+        foo(related_gap_id="secret")
+        foo(primary_world_line_id="colony")
+        foo(gate_id="x")
+        foo(timeline_id="x")
+        """
+    )
+    assert _literals(hits, "story_id_literal") == ["secret", "colony"]
+
+
 def test_scanner_detects_must_not_reveal_membership() -> None:
     hits = _scan(
         """
@@ -289,6 +301,68 @@ def test_allowlist_matching_prefers_symbol_entries(tmp_path: Path) -> None:
     assert [entry.path for entry in allowlist.stale_entries(hits)] == ["forwin/b.py"]
 
 
+def test_allowlist_literals_split_entries_and_pending_budgets_are_exact(tmp_path: Path) -> None:
+    allowlist_path = tmp_path / "allowlist.toml"
+    allowlist_path.write_text(
+        textwrap.dedent(
+            """
+            [meta]
+            completed_phase = ""
+
+            [story_id_literal]
+            allowed_values = []
+
+            [canary]
+            seed_terms = []
+            harvest_keys = []
+            ignore = []
+
+            [[entry]]
+            path = "forwin/a.py"
+            symbol = "<file>"
+            checks = ["fixture_term"]
+            literals = ["追踪器"]
+            category = "pending_removal"
+            remove_in = "P0"
+            justification = "test"
+            max_literals = 3
+
+            [[entry]]
+            path = "forwin/a.py"
+            symbol = "<file>"
+            checks = ["fixture_term"]
+            category = "pending_removal"
+            remove_in = "P2"
+            justification = "test"
+            max_literals = 1
+
+            [[entry]]
+            path = "forwin/b.py"
+            checks = ["cjk_collection"]
+            category = "language_lexicon"
+            justification = "test"
+            max_literals = 3
+            """
+        ),
+        encoding="utf-8",
+    )
+    allowlist = load_allowlist(allowlist_path)
+    p0, p2, lexicon = allowlist.entries
+    hits = [
+        Hit("fixture_term", "forwin/a.py", "<file>", 1, "追踪器"),
+        Hit("fixture_term", "forwin/a.py", "<file>", 2, "追踪器"),
+        Hit("fixture_term", "forwin/a.py", "<file>", 3, "羁押室"),
+        Hit("cjk_collection", "forwin/b.py", "WORDS", 1, "一"),
+    ]
+
+    assert allowlist.unallowed(hits) == []
+    # 2 of 3 P0 literals left: a trimmed pending_removal entry must be updated.
+    # The lexicon entry stays under its budget, which is fine.
+    assert allowlist.over_budget(hits) == [(p0, 2)]
+    assert allowlist.stale_entries(hits) == []
+    assert (p2.literals, lexicon.literals) == ((), ())
+
+
 # --- repository guard ---
 
 
@@ -324,9 +398,13 @@ def test_allowlist_has_no_stale_entries(allowlist, runtime_hits) -> None:
 
 def test_allowlist_entries_stay_within_budget(allowlist, runtime_hits) -> None:
     over = allowlist.over_budget(runtime_hits)
-    assert over == [], "命中数超过 max_literals，需要复审：\n" + "\n".join(
-        f"{entry.path} {entry.symbol or '<file>'}: {count} > {entry.max_literals}"
-        for entry, count in over
+    assert over == [], (
+        "命中数与 max_literals 不符（pending_removal 必须相等，其它类别不得超过），需要更新条目或复审：\n"
+        + "\n".join(
+            f"{entry.path} {entry.symbol or '<file>'} [{entry.category}]: "
+            f"{count} vs max_literals {entry.max_literals}"
+            for entry, count in over
+        )
     )
 
 

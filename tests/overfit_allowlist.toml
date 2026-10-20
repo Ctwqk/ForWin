@@ -3,12 +3,16 @@
 # deletion lands it is registered as pending_removal with remove_in.
 #
 # One entry per (path, symbol); symbol "<file>" is the fixture_term text scan, and an
-# entry without symbol covers the listed checks for the whole file. A hit goes to its
-# symbol entry first, then to the file-level entry.
-# max_literals: pending_removal = current count (may only shrink); other categories =
-# current count rounded up to the next 10 (exact below 10). Growth needs review.
+# entry without symbol covers the listed checks for the whole file. Optional
+# `literals = [...]` restricts an entry to hits with those literals; it splits a symbol
+# whose content is removed in different phases (e.g. P0 vs P2 canary terms in one file).
+# A hit goes to its symbol entry before a file-level entry, and to a literals-restricted
+# entry before an unrestricted one.
+# max_literals: pending_removal must EQUAL the current count, so every trim forces an
+# entry update; other categories may not exceed it (count rounded up to the next 10,
+# exact below 10). Growth needs review.
 # A task that trims (rather than deletes) a pending_removal symbol re-registers the
-# residual content under its real category (ledger ruling R2).
+# residual content under its real category (ledger rulings R2, R6).
 
 [meta]
 completed_phase = ""
@@ -492,9 +496,10 @@ max_literals = 14
 path = "forwin/checker/pulp_beat.py"
 symbol = "PULP_BEAT_PROFILES"
 checks = ["cjk_collection"]
-category = "catalog"
-justification = "按显式 genre track 选择的爽文节拍目录；Task 9b 删除其中的三十万/赔偿金与 inference_words"
-max_literals = 260
+category = "pending_removal"
+remove_in = "P0"
+justification = "爽文节拍 profile 含剧本二标记词（三十万/赔偿金）与 inference_words；Task 9b 删除它们后，余下的显式 genre 节拍目录改登记为 catalog（ruling R6）"
+max_literals = 254
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -1131,6 +1136,7 @@ max_literals = 3
 path = "forwin/naming/culture_name_generator.py"
 symbol = "<file>"
 checks = ["fixture_term"]
+literals = ["钟塔"]
 category = "catalog"
 justification = "“钟塔”是教会文化命名语料中的地名后缀，与剧本二地标同形但属于通用目录"
 max_literals = 1
@@ -1221,10 +1227,22 @@ max_literals = 12
 path = "forwin/planning/future_plan_audit/helpers.py"
 symbol = "<file>"
 checks = ["fixture_term"]
+literals = ["追踪器", "memory_reset", "archive_cleanup", "terminal_audit_window",
+  "core_access_window", "public_countdown", "记忆重置", "记忆熔铸", "档案清理", "终端审计", "核心层"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "剧本二倒计时键/别名（memory_reset 分支与别名表）与“追踪器”改写措辞；Task 9c 删除"
+max_literals = 48
+
+[[entry]]
+path = "forwin/planning/future_plan_audit/helpers.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+literals = ["磁力铐", "羁押室"]
 category = "pending_removal"
 remove_in = "P2"
-justification = "剧本二倒计时键与羁押词；倒计时别名表、memory_reset 分支与追踪器措辞由 Task 9c 删除，羁押标记词（磁力铐/羁押室）P2 删除"
-max_literals = 54
+justification = "羁押标记词与改写键（磁力铐/羁押室）；P2 随羁押平行账本删除"
+max_literals = 6
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"
@@ -1728,6 +1746,7 @@ max_literals = 14
 path = "forwin/world_templates.py"
 symbol = "<file>"
 checks = ["fixture_term"]
+literals = ["colony", "殖民"]
 category = "catalog"
 justification = "“星际殖民地套”是通用经济模板名，与剧本一同形但属于模板目录"
 max_literals = 2
@@ -1768,10 +1787,21 @@ max_literals = 6
 path = "forwin/writer/prompt_core/constraints.py"
 symbol = "<file>"
 checks = ["fixture_term"]
+literals = ["追踪器"]
+category = "pending_removal"
+remove_in = "P0"
+justification = "脱困提示中的“追踪器”（:255）；Task 8 改为“可以写TA仍受伤势、行动范围等限制。”"
+max_literals = 1
+
+[[entry]]
+path = "forwin/writer/prompt_core/constraints.py"
+symbol = "<file>"
+checks = ["fixture_term"]
+literals = ["羁押室"]
 category = "pending_removal"
 remove_in = "P2"
-justification = "羁押提示文本中的羁押室/追踪器；“追踪器”由 Task 8 删除，羁押提示随 P2 平行账本删除"
-max_literals = 2
+justification = "羁押提示文本中的“羁押室”（:254）；P2 随羁押平行账本删除"
+max_literals = 1
 
 [[entry]]
 path = "forwin/writer/prompt_core/sections.py"

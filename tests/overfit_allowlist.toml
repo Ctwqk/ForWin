@@ -924,18 +924,7 @@ symbol = "is_derived_goal_control_instruction"
 checks = ["cjk_inline_iteration"]
 category = "language_lexicon"
 justification = "派生目标里“承接 canon / 连续性护栏”类控制指令的识别措辞（题材中立）"
-max_literals = 10
-
-[[entry]]
-path = "forwin/planning/future_plan_audit/helpers.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-literals = ["追踪器", "memory_reset", "archive_cleanup", "terminal_audit_window",
-  "core_access_window", "public_countdown", "记忆重置", "记忆熔铸", "档案清理", "终端审计", "核心层"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本二倒计时键/别名（memory_reset 分支与别名表）与“追踪器”改写措辞；Task 9c 删除"
-max_literals = 48
+max_literals = 8
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"
@@ -1003,15 +992,6 @@ max_literals = 5
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"
-symbol = "_clause_mentions_other_countdown"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "写死的剧本二倒计时 key 与 label 列表；Task 9c 删除"
-max_literals = 6
-
-[[entry]]
-path = "forwin/planning/future_plan_audit/helpers.py"
 symbol = "_clause_negates_custody_conflict"
 checks = ["cjk_inline_iteration"]
 category = "pending_removal"
@@ -1021,30 +1001,12 @@ max_literals = 17
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"
-symbol = "_countdown_markers_for"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本二倒计时别名表；Task 9c 改为每个 key 只有 [key, label]"
-max_literals = 7
-
-[[entry]]
-path = "forwin/planning/future_plan_audit/helpers.py"
 symbol = "_duration_mentions"
 checks = ["cjk_membership"]
 category = "pending_removal"
 remove_in = "P2"
 justification = "倒计时时长单位；P2 随倒计时审计删除"
 max_literals = 4
-
-[[entry]]
-path = "forwin/planning/future_plan_audit/helpers.py"
-symbol = "_hard_countdown_instruction"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "memory_reset 分支（记忆重置/重置周期）；Task 9c 删除"
-max_literals = 2
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"
@@ -1097,15 +1059,6 @@ checks = ["cjk_membership"]
 category = "pending_removal"
 remove_in = "P2"
 justification = "倒计时审计措辞；P2 删除"
-max_literals = 1
-
-[[entry]]
-path = "forwin/planning/future_plan_audit/patches.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "“已脱困但仍受追踪器或系统权限限制”措辞；Task 9c 改为“已脱困”"
 max_literals = 1
 
 [[entry]]

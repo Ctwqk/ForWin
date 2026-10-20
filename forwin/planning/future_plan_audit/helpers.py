@@ -58,7 +58,7 @@ _DURATION_RE = re.compile(
     r"(不到|不超过|约|大约|剩余|还有|还剩|第)?\s*([0-9]+|[零一二两三四五六七八九十百]+)\s*(分钟|分|小时|钟头|天|日)"
 )
 _COUNTDOWN_INSTRUCTION_RE = re.compile(
-    r"(?:[A-Za-z_]+|[\u4e00-\u9fff]+)必须延续最新 canon ledger：剩余时间不得超过(?:不超过)?\s*[0-9零一二两三四五六七八九十百]+\s*分钟。?"
+    r"(?P<subject>[A-Za-z_]+|[\u4e00-\u9fff]+)必须延续最新 canon ledger：剩余时间不得超过(?:不超过)?\s*[0-9零一二两三四五六七八九十百]+\s*分钟。?"
 )
 
 
@@ -227,7 +227,7 @@ def _clause_negates_custody_conflict(clause: str) -> bool:
 def _hard_custody_instruction(*, character_name: str, latest_chapter: int) -> str:
     prefix = f"{character_name}已在第{latest_chapter}章脱困" if latest_chapter else f"{character_name}已脱困"
     return (
-        f"{prefix}；本章必须承接已脱困但仍受追踪器或系统权限限制的状态，"
+        f"{prefix}；本章必须承接已脱困的状态，"
         f"不得把{character_name}写回被捕/羁押/固定状态。"
         "如果剧情需要再次关押，必须先写出明确的再次被捕桥接事件。"
     )
@@ -236,28 +236,28 @@ def _rewrite_stale_custody_text(text: str, *, character_name: str) -> str:
     if not text or not character_name:
         return text
     replacements = {
-        f"在不破坏{character_name}被捕状态的前提下": f"在承接{character_name}已脱困但仍受追踪器或系统权限限制的前提下",
-        "在不破坏被捕状态的前提下": "在承接已脱困但仍受追踪器或系统权限限制的前提下",
-        f"{character_name}仍被羁押": f"{character_name}已脱困但仍受追踪器或系统权限限制",
-        f"{character_name}仍被关押": f"{character_name}已脱困但仍受追踪器或系统权限限制",
-        f"{character_name}被羁押": f"{character_name}受追踪器或系统权限限制",
-        f"{character_name}被关押": f"{character_name}受追踪器或系统权限限制",
-        f"救出{character_name}": f"保护已脱困的{character_name}并解除追踪器",
-        f"营救{character_name}": f"保护已脱困的{character_name}并解除追踪器",
-        "救援窗口": "追踪器解除窗口",
-        "营救窗口": "追踪器解除窗口",
-        "被捕状态": "已脱困但仍受追踪器或系统权限限制的状态",
-        "仍被羁押": "已脱困但仍受追踪器或系统权限限制",
-        "仍被关押": "已脱困但仍受追踪器或系统权限限制",
-        "被羁押": "受追踪器或系统权限限制",
-        "被关押": "受追踪器或系统权限限制",
-        "临时羁押室": "临时监听点",
-        "羁押室": "监听点",
-        "被固定": "受权限限制",
-        "被束缚": "受权限限制",
-        "被锁在": "受权限限制于",
-        "被磁力铐": "受追踪器",
-        "被磁扣锁": "受追踪器",
+        f"在不破坏{character_name}被捕状态的前提下": f"在承接{character_name}已脱困的前提下",
+        "在不破坏被捕状态的前提下": "在承接已脱困的前提下",
+        f"{character_name}仍被羁押": f"{character_name}已脱困",
+        f"{character_name}仍被关押": f"{character_name}已脱困",
+        f"{character_name}被羁押": f"{character_name}已脱困",
+        f"{character_name}被关押": f"{character_name}已脱困",
+        f"救出{character_name}": f"保护已脱困的{character_name}",
+        f"营救{character_name}": f"保护已脱困的{character_name}",
+        "救援窗口": "脱困后的衔接窗口",
+        "营救窗口": "脱困后的衔接窗口",
+        "被捕状态": "已脱困的状态",
+        "仍被羁押": "已脱困",
+        "仍被关押": "已脱困",
+        "被羁押": "已脱困",
+        "被关押": "已脱困",
+        "临时羁押室": "临时场所",
+        "羁押室": "场所",
+        "被固定": "已脱困",
+        "被束缚": "已脱困",
+        "被锁在": "已脱困于",
+        "被磁力铐": "已脱困",
+        "被磁扣锁": "已脱困",
     }
     output = text
     for old, new in replacements.items():
@@ -330,63 +330,35 @@ def _is_false_prior_countdown_clause(clause: str) -> bool:
         )
     )
 
-def _hard_countdown_instruction(*, label: str, key: str, latest: int) -> str:
+def _hard_countdown_instruction(*, label: str, latest: int) -> str:
     if latest <= 0:
         return (
             f"{label}已关闭；本章不得把同一倒计时写成仍有剩余时间，"
             "除非明确标记为 reset 或 branch clock。"
         )
-    base = (
+    return (
         f"{label}必须延续最新 canon ledger：剩余时间不得超过 {latest} 分钟。"
         "旧计划/旧摘要时间不得写成前文事实；"
         "不得写“系统日志原本还有三天/七天/几小时”、"
         "“主角以为还有几天”或任何大于最新 ledger 的旧尺度，"
         f"除非明确标记为公开伪数据、误导信息、reset 或 branch clock。"
     )
-    if key == "memory_reset" or "记忆重置" in label or "重置周期" in label:
-        return (
-            base
-            + f" 本章所有记忆重置/校准/熔铸窗口只能继续小于等于 {latest} 分钟，"
-            "不要写回三天/七天/三小时/两小时等旧尺度。"
-        )
-    return base
 
 def _clause_mentions_countdown(clause: str, *, key: str, label: str) -> bool:
     candidates = _countdown_markers_for(key=key, label=label)
     return any(candidate and candidate in clause for candidate in candidates)
 
 def _clause_mentions_other_countdown(clause: str, *, key: str, label: str) -> bool:
-    current = set(_countdown_markers_for(key=key, label=label))
-    for other_key, other_label in (
-        ("memory_reset", "记忆重置周期"),
-        ("archive_cleanup", "档案清理窗口"),
-        ("terminal_audit_window", "终端审计窗口"),
-        ("core_access_window", "核心层授权窗口"),
-        ("public_countdown", "公开数据倒计时"),
-        ("main", "主倒计时"),
-    ):
-        if other_key == key:
-            continue
-        for candidate in _countdown_markers_for(key=other_key, label=other_label):
-            if candidate and candidate not in current and candidate in clause:
-                return True
-    return False
+    """True when the clause carries a synthesized hard-rule instruction for another countdown."""
+    own_markers = [marker for marker in _countdown_markers_for(key=key, label=label) if marker]
+    return any(
+        not any(match.group("subject").endswith(marker) for marker in own_markers)
+        for match in _COUNTDOWN_INSTRUCTION_RE.finditer(clause)
+    )
 
 def _countdown_markers_for(*, key: str, label: str) -> list[str]:
-    candidates = [key, label]
-    if key == "memory_reset" or "记忆" in label or "重置" in label:
-        candidates.extend(["记忆重置", "重置周期", "记忆熔铸", "熔铸倒计时", "熔铸窗口", "memory_reset"])
-    if key == "archive_cleanup" or "档案清理" in label:
-        candidates.extend(["档案清理", "清理窗口", "archive_cleanup"])
-    if key == "terminal_audit_window" or "终端审计" in label:
-        candidates.extend(["终端审计", "终端审计窗口", "terminal_audit_window"])
-    if key == "core_access_window" or "核心层" in label or "授权" in label:
-        candidates.extend(["核心层入口", "核心层授权窗口", "核心层的授权窗口", "入口关闭", "core_access_window"])
-    if key == "public_countdown" or "公开" in label:
-        candidates.extend(["公开数据", "公开窗口", "对外数据", "public_countdown"])
-    if key == "main":
-        candidates.extend(["主倒计时", "倒计时"])
-    return candidates
+    """A countdown is recognised by its ledger key and label only, never by story aliases."""
+    return [key, label]
 
 def _clause_continues_countdown_duration(clause: str) -> bool:
     if not _duration_mentions(clause):

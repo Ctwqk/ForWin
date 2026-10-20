@@ -91,8 +91,6 @@ def is_derived_goal_control_instruction(text: str) -> bool:
             "连续性护栏",
             "最新 canon ledger",
             "旧计划/旧摘要",
-            "不要回退成几天",
-            "不要写成几天",
         )
     )
 

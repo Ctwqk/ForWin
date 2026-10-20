@@ -78,7 +78,7 @@ class FuturePlanPatchMixin:
             if latest <= 0
             else f"{label}必须延续最新 canon ledger：剩余时间不得超过 {latest} 分钟。"
         )
-        hard_instruction = str(patch.new_contract.get("hard_rule") or _hard_countdown_instruction(label=label, key=key, latest=latest))
+        hard_instruction = str(patch.new_contract.get("hard_rule") or _hard_countdown_instruction(label=label, latest=latest))
         plan.title = _rewrite_stale_countdown_text(
             str(plan.title or ""),
             key=key,
@@ -200,7 +200,7 @@ class FuturePlanPatchMixin:
         rule_anchors = [str(item) for item in experience.get("rule_anchors", []) if str(item).strip()]
         if hard_instruction and hard_instruction not in rule_anchors:
             rule_anchors.insert(0, hard_instruction)
-        progress = f"承接{character_name}已脱困但仍受追踪器或系统权限限制的状态。"
+        progress = f"承接{character_name}已脱困的状态。"
         if character_name and progress not in progress_markers:
             progress_markers.insert(0, progress)
         experience["progress_markers"] = progress_markers[:5]

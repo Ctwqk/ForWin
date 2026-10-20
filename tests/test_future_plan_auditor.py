@@ -9,6 +9,12 @@ from forwin.models import Base, ChapterPlan, Project
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.future_plan_audit import FuturePlanAuditor
+from forwin.planning.future_plan_audit.helpers import (
+    _countdown_markers_for,
+    _hard_countdown_instruction,
+    _hard_custody_instruction,
+    _rewrite_stale_custody_text,
+)
 from forwin.protocol.experience import BandDelightSchedule
 
 
@@ -40,7 +46,7 @@ def test_future_plan_auditor_flags_day_scale_memory_reset_after_minute_ledger() 
         trigger_stage="post_acceptance",
         plans=[
             _plan(23, one_line="陆明发现记忆重置周期只剩不到十天。"),
-            _plan(24, one_line="第九天，核心系统审计窗口继续逼近。", goals=["确认记忆重置还剩九天"]),
+            _plan(24, one_line="第九天，核心系统审计窗口继续逼近。", goals=["确认记忆重置周期还剩九天"]),
         ],
         canon_quality_context={
             "countdown_constraints": [
@@ -179,7 +185,7 @@ def test_future_plan_auditor_keeps_countdown_keys_separate() -> None:
         current_chapter=22,
         trigger_stage="post_acceptance",
         plans=[
-            _plan(23, one_line="终端审计授权窗口还有四小时，记忆重置周期只剩九十分钟。"),
+            _plan(23, one_line="终端审计窗口还有四小时，记忆重置周期只剩九十分钟。"),
         ],
         canon_quality_context={
             "countdown_constraints": [
@@ -210,7 +216,7 @@ def test_future_plan_auditor_applies_countdown_patch_to_plan_source() -> None:
     plan = _plan(
         23,
         one_line="陆明发现记忆重置周期只剩不到十天。",
-        goals=["确认记忆重置还剩九天"],
+        goals=["确认记忆重置周期还剩九天"],
     )
     result = FuturePlanAuditor().audit_plans(
         project_id="project-1",
@@ -379,6 +385,46 @@ def test_future_plan_auditor_does_not_cross_rewrite_other_countdown_rule_anchors
     assert "archive_cleanup必须延续最新 canon ledger：剩余时间不得超过不超过9分钟" not in joined
 
 
+def test_future_plan_auditor_does_not_cross_rewrite_countdowns_with_arbitrary_keys() -> None:
+    plan = _plan(23, one_line="陆明在营地整理补给。")
+    plan.experience_plan_json = json.dumps(
+        {
+            "rule_anchors": [
+                (
+                    "甲钟必须延续最新 canon ledger：剩余时间不得超过 9 分钟。"
+                    "乙钟必须延续最新 canon ledger：剩余时间不得超过 11 分钟。"
+                )
+            ]
+        },
+        ensure_ascii=False,
+    )
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=23,
+        trigger_stage="pre_write",
+        plans=[plan],
+        canon_quality_context={
+            "countdown_constraints": [
+                {
+                    "countdown_key": "clock_a",
+                    "label": "甲钟",
+                    "latest_remaining_minutes": 9,
+                    "latest_chapter": 22,
+                }
+            ]
+        },
+        obligations=[],
+        target_total_chapters=60,
+        include_current=True,
+    )
+
+    FuturePlanAuditor().apply_plan_patch(plan, result.plan_patches[0])
+    joined = json.dumps(json.loads(plan.experience_plan_json)["rule_anchors"], ensure_ascii=False)
+
+    assert "乙钟必须延续最新 canon ledger：剩余时间不得超过 11 分钟" in joined
+    assert "乙钟必须延续最新 canon ledger：剩余时间不得超过不超过9分钟" not in joined
+
+
 def test_future_plan_auditor_cleans_polluted_countdown_instructions_from_plan_text() -> None:
     plan = _plan(
         23,
@@ -389,7 +435,7 @@ def test_future_plan_auditor_cleans_polluted_countdown_instructions_from_plan_te
         ),
         goals=[
             "main必须延续最新 canon ledger：剩余时间不得超过 9 分钟。",
-            "确认记忆重置还剩九天",
+            "确认记忆重置周期还剩九天",
         ],
     )
     plan.experience_plan_json = json.dumps(
@@ -447,7 +493,7 @@ def test_future_plan_auditor_cleans_polluted_countdown_instructions_from_plan_te
     assert "不超过不超过" not in serialized
     assert "不到十天" not in plan.one_line
     assert "不超过90分钟" in plan.one_line
-    assert "确认记忆重置不超过90分钟" in json.loads(plan.goals_json)
+    assert "确认记忆重置周期不超过90分钟" in json.loads(plan.goals_json)
     assert experience["immersion_anchors"] == ["[midpoint] 陆明发现核心系统异常。"]
     assert experience["progress_markers"] == ["给出真实线索"]
     assert any("记忆重置周期必须延续最新 canon ledger" in item for item in experience["rule_anchors"])
@@ -516,7 +562,7 @@ def test_future_plan_auditor_flags_false_accepted_canon_countdown_contract() -> 
                 goals=[
                     (
                         "第24章 accepted canon：陆明独自进入核心系统底层电梯确认启动紧急重置协议；"
-                        "韩青被系统巡检员抓获；记忆重置倒计时不超过9分钟。"
+                        "韩青被系统巡检员抓获；记忆重置周期倒计时不超过9分钟。"
                         "第25-36章必须紧接此状态。"
                     )
                 ],
@@ -550,7 +596,7 @@ def test_future_plan_auditor_rewrites_false_accepted_canon_countdown_contract() 
         goals=[
             (
                 "第24章 accepted canon：陆明独自进入核心系统底层电梯确认启动紧急重置协议；"
-                "韩青被系统巡检员抓获；记忆重置倒计时不超过9分钟。"
+                "韩青被系统巡检员抓获；记忆重置周期倒计时不超过9分钟。"
                 "第25-36章必须紧接此状态。"
             )
         ],
@@ -659,8 +705,111 @@ def test_future_plan_auditor_rewrites_custody_plan_after_recent_release() -> Non
     assert "救援窗口" not in serialized
     assert "被捕状态" not in serialized
     assert "仍被羁押" not in serialized
-    assert "已脱困但仍受追踪器或系统权限限制" in serialized
+    assert "已脱困" in serialized
+    assert "追踪器" not in serialized
+    assert "系统权限" not in serialized
     assert "不得把韩青写回被捕/羁押/固定状态" in serialized
+    assert json.loads(plan.experience_plan_json)["progress_markers"][0] == "承接韩青已脱困的状态。"
+
+
+def test_custody_hard_instruction_states_only_the_free_state() -> None:
+    assert _hard_custody_instruction(character_name="韩青", latest_chapter=31) == (
+        "韩青已在第31章脱困；本章必须承接已脱困的状态，"
+        "不得把韩青写回被捕/羁押/固定状态。"
+        "如果剧情需要再次关押，必须先写出明确的再次被捕桥接事件。"
+    )
+
+
+def test_custody_rewrite_never_invents_restriction_wording() -> None:
+    stale_phrases = [
+        "在不破坏韩青被捕状态的前提下",
+        "在不破坏被捕状态的前提下",
+        "韩青仍被羁押",
+        "韩青仍被关押",
+        "韩青被羁押",
+        "韩青被关押",
+        "救出韩青",
+        "营救韩青",
+        "救援窗口",
+        "营救窗口",
+        "被捕状态",
+        "仍被羁押",
+        "仍被关押",
+        "被羁押",
+        "被关押",
+        "临时羁押室",
+        "羁押室",
+        "被固定",
+        "被束缚",
+        "被锁在",
+        "被磁力铐",
+        "被磁扣锁",
+    ]
+    for phrase in stale_phrases:
+        rewritten = _rewrite_stale_custody_text(phrase, character_name="韩青")
+        assert phrase not in rewritten
+        for invented in ("追踪器", "系统权限", "权限", "监听"):
+            assert invented not in rewritten, (phrase, rewritten)
+
+    assert _rewrite_stale_custody_text("韩青仍被羁押", character_name="韩青") == "韩青已脱困"
+    assert (
+        _rewrite_stale_custody_text("在不破坏韩青被捕状态的前提下行动", character_name="韩青")
+        == "在承接韩青已脱困的前提下行动"
+    )
+
+
+def test_countdown_markers_are_exactly_the_ledger_key_and_label() -> None:
+    for key, label in (
+        ("memory_reset", "记忆重置周期"),
+        ("archive_cleanup", "档案清理窗口"),
+        ("terminal_audit_window", "终端审计窗口"),
+        ("core_access_window", "核心层授权窗口"),
+        ("public_countdown", "公开数据倒计时"),
+        ("main", "主倒计时"),
+        ("custom_clock", "自定义时钟"),
+    ):
+        assert _countdown_markers_for(key=key, label=label) == [key, label]
+
+
+def test_countdown_hard_instruction_has_no_label_specific_branch() -> None:
+    label = "记忆重置周期"
+    instruction = _hard_countdown_instruction(label=label, latest=90)
+
+    assert instruction.startswith(f"{label}必须延续最新 canon ledger：剩余时间不得超过 90 分钟。")
+    assert "熔铸" not in instruction
+    assert "本章所有" not in instruction
+    assert instruction.replace(label, "X") == _hard_countdown_instruction(label="X", latest=90)
+
+
+def test_future_plan_auditor_matches_countdown_by_ledger_key_or_label_only() -> None:
+    ledger = {
+        "countdown_constraints": [
+            {
+                "countdown_key": "memory_reset",
+                "label": "记忆重置周期",
+                "latest_remaining_minutes": 90,
+                "latest_chapter": 22,
+            }
+        ]
+    }
+
+    def audit(one_line: str):
+        return FuturePlanAuditor().audit_plans(
+            project_id="project-1",
+            current_chapter=22,
+            trigger_stage="post_acceptance",
+            plans=[_plan(23, one_line=one_line)],
+            canon_quality_context=ledger,
+            obligations=[],
+            target_total_chapters=60,
+            include_current=False,
+        )
+
+    assert audit("陆明发现记忆重置还剩九天。").issues == []
+    assert audit("陆明发现记忆熔铸倒计时还剩九天。").issues == []
+    for mention in ("记忆重置周期", "memory_reset"):
+        result = audit(f"陆明发现{mention}还剩九天。")
+        assert [issue.issue_type for issue in result.issues] == ["countdown_future_plan_conflict"]
 
 
 def test_audit_and_apply_clears_blocker_after_successful_future_plan_patch() -> None:

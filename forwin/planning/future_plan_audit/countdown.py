@@ -123,7 +123,7 @@ class FuturePlanCountdownMixin:
                 result.append((issue, patch))
                 continue
             if not stale_mentions:
-                hard_instruction = _hard_countdown_instruction(label=label, key=key, latest=latest)
+                hard_instruction = _hard_countdown_instruction(label=label, latest=latest)
                 is_current_plan = int(plan.chapter_number or 0) <= int(current_chapter or 0)
                 has_instruction_pollution = is_current_plan and _plan_has_countdown_instruction_pollution(plan)
                 if has_instruction_pollution or (is_current_plan and latest <= 180 and hard_instruction not in text):
@@ -213,7 +213,7 @@ class FuturePlanCountdownMixin:
         metadata: dict[str, Any],
     ) -> NarrativePlanPatch:
         chapter_number = int(plan.chapter_number or 0)
-        hard_instruction = _hard_countdown_instruction(label=label, key=countdown_key, latest=latest)
+        hard_instruction = _hard_countdown_instruction(label=label, latest=latest)
         return NarrativePlanPatch(
             id=new_id(),
             project_id=project_id,

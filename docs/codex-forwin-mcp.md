@@ -80,6 +80,17 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
 2. Prefer `task_pause` for a safe checkpointed stop.
 3. Continue polling with `task_get` until the task reaches a paused or terminal state.
 
+### Recover Platform Uploads
+
+1. Record the deployed source/image identity and inspect the running endpoint contract before diagnosing a missing upload job. A newer checkout's Canon-job release prerequisite does not prove that an older deployed project upload endpoint cannot create a job. Use the project's supported endpoint for its actual runtime; never substitute a raw database write or skip that runtime's gates.
+2. Inspect accepted chapter content through MCP, then inspect jobs, bindings, and the existing remote work before enqueueing. Older bindings can lack chapter numbers and remote IDs. Failed or cancelled jobs can still have saved remote drafts; reconcile remote identity and the complete normalized body before retrying.
+3. Wait for the platform's chapter list to finish loading. An initial empty list or zero word count during page initialization is not evidence of missing content. Reopen the saved chapter, compare its complete body with the accepted source, and record the remote book/chapter IDs and normalized SHA-256.
+4. Keep draft upload, submission for review, and public availability as separate outcomes. `publish=false` cannot meet a request for public release. With publication authorized, advance the verified chapter through the platform's release flow and record the actual audit state. An expired inspection schedule or repeated unchanged observations do not count as recovery.
+5. ForWin-generated chapters must disclose AI use truthfully. The extension selects “是” on Fanqie's recognized AI disclosure form and stops if that selection cannot be verified. Draft jobs never confirm publication. Unknown dialogs require inspection, not generic “next” clicks.
+6. Keep generation and publication blockers separate. A later chapter's Canon repair does not itself prevent uploading an earlier accepted chapter. A login problem on another platform does not block Fanqie. Preserve genuine missing-provenance gates and published content.
+
+These instructions do not authorize an incompatible deployment. Source fixes must follow the approved complete-image and forward-migration release process; do not patch production source strings or claim a local test changed the running extension.
+
 ## Tool Boundaries
 
 - `project_create` creates a Genesis-backed project. It does not make the project writing-ready.

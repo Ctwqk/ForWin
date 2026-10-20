@@ -6,18 +6,17 @@ from .signals import CanonQualitySignal, make_signal_id
 
 
 BLOCKED_BODY_PLACEHOLDERS = ("一名相关人员", "相关人员")
-BLOCKED_INTERNAL_STATE_KEYS = (
-    "memory_reset",
-    "archive_cleanup",
-    "terminal_audit_window",
-    "core_access_window",
-    "public_countdown",
-    "countdown_key",
-)
+BLOCKED_INTERNAL_STATE_KEYS = {"countdown_key"}
 BLOCKED_INTERNAL_STATE_KEY_PATTERNS = (
     re.compile(r"trait-[a-z][a-z0-9-]*"),
     re.compile(r"<<FORWIN_[A-Z0-9_]+>>"),
 )
+# snake_case identifiers (state keys, ledger keys, field names) never belong in prose.
+INTERNAL_IDENTIFIER_IN_PROSE = re.compile(
+    r"(?<![A-Za-z0-9_])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_])"
+)
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
+_SENTENCE_BOUNDARY = re.compile(r"[。！？!?\n\r]+")
 BARE_ROLE_PLACEHOLDERS = ("工作人员",)
 PROTAGONIST_PLACEHOLDER_ROLES = (
     "工作人员",
@@ -46,25 +45,17 @@ def analyze_placeholder_leakage(
 ) -> list[CanonQualitySignal]:
     signals: list[CanonQualitySignal] = []
     text = str(body or "")
-    for token in BLOCKED_INTERNAL_STATE_KEYS:
+    for token in sorted(BLOCKED_INTERNAL_STATE_KEYS):
         start = text.find(token)
         if start < 0:
             continue
-        subject = f"internal_state_key:{token}"
         signals.append(
-            CanonQualitySignal(
-                signal_id=make_signal_id(project_id, chapter_number, "internal_state_key_leakage", subject),
+            _internal_state_key_signal(
                 project_id=project_id,
                 chapter_number=chapter_number,
-                signal_type="internal_state_key_leakage",
-                severity="error",
-                target_scope="body",
-                subject_key=subject,
-                description=f"章节正文泄漏内部状态键「{token}」，不能进入 canon。",
-                evidence_refs=[f"body:{start}-{start + len(token)}"],
-                span_start=start,
-                span_end=start + len(token),
-                payload={"draft_id": draft_id, "internal_state_key": token},
+                draft_id=draft_id,
+                token=token,
+                start=start,
             )
         )
         return signals
@@ -72,22 +63,26 @@ def analyze_placeholder_leakage(
         match = pattern.search(text)
         if match is None:
             continue
-        token = match.group(0)
-        subject = f"internal_state_key:{token}"
         signals.append(
-            CanonQualitySignal(
-                signal_id=make_signal_id(project_id, chapter_number, "internal_state_key_leakage", subject),
+            _internal_state_key_signal(
                 project_id=project_id,
                 chapter_number=chapter_number,
-                signal_type="internal_state_key_leakage",
-                severity="error",
-                target_scope="body",
-                subject_key=subject,
-                description=f"章节正文泄漏内部状态键「{token}」，不能进入 canon。",
-                evidence_refs=[f"body:{match.start()}-{match.end()}"],
-                span_start=match.start(),
-                span_end=match.end(),
-                payload={"draft_id": draft_id, "internal_state_key": token},
+                draft_id=draft_id,
+                token=match.group(0),
+                start=match.start(),
+            )
+        )
+        return signals
+    identifier_hit = _find_internal_identifier_in_prose(text)
+    if identifier_hit is not None:
+        start, token = identifier_hit
+        signals.append(
+            _internal_state_key_signal(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                draft_id=draft_id,
+                token=token,
+                start=start,
             )
         )
         return signals
@@ -163,6 +158,47 @@ def analyze_placeholder_leakage(
     return signals
 
 
+def _find_internal_identifier_in_prose(text: str) -> tuple[int, str] | None:
+    """First snake_case identifier inside a sentence that contains CJK text."""
+    sentence_start = 0
+    boundaries = [*_SENTENCE_BOUNDARY.finditer(text), None]
+    for boundary in boundaries:
+        sentence_end = boundary.start() if boundary is not None else len(text)
+        sentence = text[sentence_start:sentence_end]
+        if _CJK_CHAR.search(sentence):
+            match = INTERNAL_IDENTIFIER_IN_PROSE.search(sentence)
+            if match is not None:
+                return sentence_start + match.start(), match.group(0)
+        if boundary is not None:
+            sentence_start = boundary.end()
+    return None
+
+
+def _internal_state_key_signal(
+    *,
+    project_id: str,
+    chapter_number: int,
+    draft_id: str,
+    token: str,
+    start: int,
+) -> CanonQualitySignal:
+    subject = f"internal_state_key:{token}"
+    return CanonQualitySignal(
+        signal_id=make_signal_id(project_id, chapter_number, "internal_state_key_leakage", subject),
+        project_id=project_id,
+        chapter_number=chapter_number,
+        signal_type="internal_state_key_leakage",
+        severity="error",
+        target_scope="body",
+        subject_key=subject,
+        description=f"章节正文泄漏内部状态键「{token}」，不能进入 canon。",
+        evidence_refs=[f"body:{start}-{start + len(token)}"],
+        span_start=start,
+        span_end=start + len(token),
+        payload={"draft_id": draft_id, "internal_state_key": token},
+    )
+
+
 def _analyze_bare_role_placeholder(
     *,
     project_id: str,
@@ -184,7 +220,7 @@ def _analyze_bare_role_placeholder(
             body,
         )
         role_as_name = re.search(
-            rf"(队长|巡检员|操作员|守卫)[，,、：:\s]*({re.escape(placeholder)})(?=[。”，,、\s])",
+            rf"(队长|操作员|守卫)[，,、：:\s]*({re.escape(placeholder)})(?=[。”，,、\s])",
             body,
         )
         match = standalone or label_context or actor_context or role_as_name
@@ -194,7 +230,7 @@ def _analyze_bare_role_placeholder(
         subject = f"placeholder:{placeholder}:bare_role"
         repair_hint = (
             f"删除正文中所有作为角色标签的「{placeholder}」。"
-            "改用具体姓名，或改成可追踪且非占位的稳定代号，例如「旧书摊主」「地下管理员」；"
+            "改用具体姓名，或改成可追踪且非占位的稳定代号；"
             f"修复后正文和 summary 都不应再用「{placeholder}」称呼关键行动者。"
         )
         return CanonQualitySignal(

@@ -34,6 +34,7 @@ def test_polluted_ch13_readability_signals_block_fatal_gate() -> None:
         chapter_number=output.chapter_number,
         writer_output=output,
         protagonist_names={"陆明"},
+        appellations={"馆员"},
     )
     signal_types = {signal.signal_type for signal in signals}
     gate = evaluate_canon_admission(
@@ -51,6 +52,19 @@ def test_polluted_ch13_readability_signals_block_fatal_gate() -> None:
     assert gate.commit_allowed is False
     assert gate.verdict == "fail"
     assert gate.blocking_issue_count >= 3
+
+
+def test_appellations_come_from_the_caller_not_a_built_in_story_vocabulary() -> None:
+    output = _fixture("ch13_polluted.json")
+
+    signals = analyze_writer_output_readability(
+        project_id=output.project_id,
+        chapter_number=output.chapter_number,
+        writer_output=output,
+        protagonist_names={"陆明"},
+    )
+
+    assert "appellation_referent_conflict" not in {signal.signal_type for signal in signals}
 
 
 def test_title_mismatch_and_empty_summary_are_readability_blockers() -> None:

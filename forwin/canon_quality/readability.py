@@ -8,13 +8,8 @@ from .signals import CanonQualitySignal, dedupe_signals, make_signal_id
 
 
 COMMON_APPELLATIONS = (
-    "馆员",
-    "审计员",
-    "调度员",
-    "接线员",
     "工作人员",
     "管理员",
-    "巡检员",
     "操作员",
     "负责人",
     "工程师",
@@ -22,7 +17,6 @@ COMMON_APPELLATIONS = (
     "高管",
     "队长",
     "守卫",
-    "摊主",
 )
 INTERNAL_KEY_PATTERNS = (
     re.compile(r"trait-[a-z][a-z0-9-]*"),
@@ -39,7 +33,7 @@ EXPERIENCE_PLAN_FIELD_NAMES = (
     "subworld_id",
     "band_id",
 )
-PROTAGONIST_GENERIC_REFS = ("主角", "主人公", "工作人员", "馆员", "审计员")
+PROTAGONIST_GENERIC_REFS = ("主角", "主人公", "工作人员")
 
 
 def analyze_writer_output_readability(

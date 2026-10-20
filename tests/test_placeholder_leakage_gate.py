@@ -37,17 +37,40 @@ def test_placeholder_in_body_dialogue_blocks_canon() -> None:
 
 
 def test_internal_countdown_state_key_leakage_blocks_canon() -> None:
+    identifier_signals = analyze_placeholder_leakage(
+        project_id="p1",
+        chapter_number=26,
+        draft_id="d26",
+        body="陆明低头看见手腕上写着：archive_window_close剩余78分钟。",
+        summary="",
+    )
+
+    assert [signal.signal_type for signal in identifier_signals] == ["internal_state_key_leakage"]
+    assert identifier_signals[0].severity == "error"
+    assert identifier_signals[0].subject_key == "internal_state_key:archive_window_close"
+
+    countdown_key_signals = analyze_placeholder_leakage(
+        project_id="p1",
+        chapter_number=26,
+        draft_id="d26",
+        body="陆明低头看见手腕上写着：countdown_key。",
+        summary="",
+    )
+
+    assert [signal.signal_type for signal in countdown_key_signals] == ["internal_state_key_leakage"]
+    assert countdown_key_signals[0].subject_key == "internal_state_key:countdown_key"
+
+
+def test_snake_case_identifier_is_not_flagged_outside_cjk_sentences() -> None:
     signals = analyze_placeholder_leakage(
         project_id="p1",
         chapter_number=26,
         draft_id="d26",
-        body="陆明低头看见手腕上写着：memory_reset剩余78分钟，archive_cleanup剩余10分钟。",
+        body="陆明抬起头。\nfinal_report_ready\n他把纸折好。",
         summary="",
     )
 
-    assert [signal.signal_type for signal in signals] == ["internal_state_key_leakage"]
-    assert signals[0].severity == "error"
-    assert signals[0].subject_key == "internal_state_key:memory_reset"
+    assert signals == []
 
 
 def test_internal_state_key_leakage_blocks_trait_skill_ids() -> None:
@@ -125,7 +148,7 @@ def test_generic_staff_role_used_as_actor_name_blocks_canon() -> None:
         chapter_number=2,
         draft_id="d1",
         body="系统巡检部第七小队队长，工作人员。工作人员停下脚步，抬头看向陆明。",
-        summary="系统巡检员工作人员拦截陆明。",
+        summary="系统操作员工作人员拦截陆明。",
         expected_character_names={"陆明"},
     )
 

@@ -253,15 +253,6 @@ max_literals = 1
 
 [[entry]]
 path = "forwin/canon_quality/placeholder.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "BLOCKED_INTERNAL_STATE_KEYS 中的剧本二倒计时键与角色正则中的“巡检员”；Task 9a 删除"
-max_literals = 6
-
-[[entry]]
-path = "forwin/canon_quality/placeholder.py"
 symbol = "BARE_ROLE_PLACEHOLDERS"
 checks = ["cjk_collection"]
 category = "language_lexicon"
@@ -296,9 +287,8 @@ max_literals = 7
 path = "forwin/canon_quality/placeholder.py"
 symbol = "_analyze_bare_role_placeholder"
 checks = ["cjk_regex"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "角色占位正则含剧本二“巡检员”；Task 9a 删除该词后余下形态正则改登记为 language_lexicon"
+category = "language_lexicon"
+justification = "通用占位角色识别正则（职务词、标签词、动作词）"
 max_literals = 3
 
 [[entry]]
@@ -311,30 +301,19 @@ max_literals = 3
 
 [[entry]]
 path = "forwin/canon_quality/readability.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "称谓表中的剧本二称谓（馆员/审计员/巡检员）；Task 9a 删除"
-max_literals = 5
-
-[[entry]]
-path = "forwin/canon_quality/readability.py"
 symbol = "COMMON_APPELLATIONS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "称谓表混入剧本二称谓（馆员/审计员/调度员/接线员/巡检员/摊主）；Task 9a 删除这些词后余下改登记为 language_lexicon"
-max_literals = 15
+category = "language_lexicon"
+justification = "通用职务称谓表"
+max_literals = 9
 
 [[entry]]
 path = "forwin/canon_quality/readability.py"
 symbol = "PROTAGONIST_GENERIC_REFS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "主角泛指混入剧本二称谓（馆员/审计员）；Task 9a 删除后余下改登记为 language_lexicon"
-max_literals = 5
+category = "language_lexicon"
+justification = "主角通用指代"
+max_literals = 3
 
 [[entry]]
 path = "forwin/canon_quality/readability.py"
@@ -776,15 +755,6 @@ max_literals = 6
 
 [[entry]]
 path = "forwin/context/assembler_core/canon_quality_context.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "memory_reset 覆盖主倒计时的分支；Task 9a 删除"
-max_literals = 1
-
-[[entry]]
-path = "forwin/context/assembler_core/canon_quality_context.py"
 symbol = "_RECENT_CANON_CUSTODY_CAPTURE_MARKERS"
 checks = ["cjk_collection"]
 category = "pending_removal"
@@ -825,24 +795,6 @@ checks = ["cjk_inline_iteration"]
 category = "language_lexicon"
 justification = "情感向爽点标签（角色/关系/情感）"
 max_literals = 3
-
-[[entry]]
-path = "forwin/generation/pipeline_core/repair_patches.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本二“记忆重置”倒计时修复锚点；Task 9a 删除"
-max_literals = 1
-
-[[entry]]
-path = "forwin/generation/pipeline_core/repair_patches.py"
-symbol = "_countdown_repair_rule_anchors"
-checks = ["cjk_regex", "cjk_membership", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本二倒计时修复锚点；Task 9a 删除"
-max_literals = 7
 
 [[entry]]
 path = "forwin/generation/pipeline_core/review_autofix.py"

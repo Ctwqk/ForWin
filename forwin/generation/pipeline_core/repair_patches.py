@@ -11,7 +11,6 @@ from forwin.models.phase import (
 )
 import json
 from forwin.models import new_id
-import re
 from forwin.protocol.review import RepairInstruction
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
@@ -41,14 +40,11 @@ def _chapter_experience_patch_payload(
     current_plan: ChapterExperiencePlan,
     repair_instruction: RepairInstruction,
 ) -> dict[str, object]:
-    repair_rule_anchors = _countdown_repair_rule_anchors(repair_instruction.must_fix)
-    repair_rule_anchors.extend(
-        [
-            f"repair must fix: {item}"
-            for item in repair_instruction.must_fix[:3]
-            if str(item or "").strip()
-        ]
-    )
+    repair_rule_anchors = [
+        f"repair must fix: {item}"
+        for item in repair_instruction.must_fix[:3]
+        if str(item or "").strip()
+    ]
     update: dict[str, object] = {
         "planned_reward_tags": list(
             repair_instruction.design_patch.get("planned_reward_tags")
@@ -115,57 +111,6 @@ def _chapter_experience_patch_payload(
     if repair_instruction.failure_type == "stall" and not update["question_hook"]:
         update["question_hook"] = "补出一个比当前更强的新问题"
     return update
-
-
-def _countdown_repair_rule_anchors(must_fix: list[str]) -> list[str]:
-    anchors: list[str] = []
-    for raw in must_fix:
-        item = str(raw or "").strip()
-        if not item:
-            continue
-        if "倒计时" not in item:
-            continue
-        stale_match = re.search(
-            r"回溯旧倒计时为\s*([^，。,；;]+).*?([0-9]+)\s*分钟级别",
-            item,
-        )
-        if stale_match:
-            raw_target = str(stale_match.group(1) or "").strip()
-            latest = int(stale_match.group(2))
-            anchors.append(
-                "repair countdown hard constraint: 旧计划/旧摘要时间不得写成前文事实；"
-                f"{raw_target}必须删除，或明确改成公开伪数据/误导信息，"
-                f"同一记忆重置周期只能写小于等于{latest}分钟。"
-                "不得写“系统日志原本还有三天/七天/几小时”来解释当前倒计时。"
-            )
-            continue
-        if not any(
-            marker in item for marker in ("回升", "延长", "non_monotonic", "单调")
-        ):
-            continue
-        match = re.search(r"从\s*([0-9]+)\s*分钟(?:回升|延长)到\s*([^，。,；;]+)", item)
-        if match:
-            previous = int(match.group(1))
-            raw_target = str(match.group(2) or "").strip()
-            target_digit = re.search(r"([0-9]+)\s*分钟", raw_target)
-            target_constraint = (
-                f"{int(target_digit.group(1))}分钟必须改成小于等于{previous}分钟"
-                if target_digit
-                else f"{raw_target}必须删除或改为小于等于{previous}分钟"
-            )
-            anchors.append(
-                "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
-                f"{target_constraint}，"
-                "并同步修正文中所有相关倒计时、角色判断和摘要。除非正文明确 reset 或 branch clock，"
-                "不得在更小剩余时间之后再写更大的剩余时间。"
-            )
-            continue
-        anchors.append(
-            "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
-            "重写前先列出正文所有剩余时间，按出现顺序改成不增加序列。除非正文明确 reset 或 branch clock，"
-            "不得在更小剩余时间之后再写更大的剩余时间。"
-        )
-    return anchors
 
 
 def _band_schedule_patch_payload(
@@ -334,10 +279,6 @@ class RepairPlanningStage:
         current_plan: ChapterExperiencePlan, repair_instruction: RepairInstruction
     ) -> dict[str, object]:
         return _chapter_experience_patch_payload(current_plan, repair_instruction)
-
-    @staticmethod
-    def _countdown_repair_rule_anchors(must_fix: list[str]) -> list[str]:
-        return _countdown_repair_rule_anchors(must_fix)
 
     @staticmethod
     def _band_schedule_patch_payload(

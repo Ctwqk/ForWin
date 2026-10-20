@@ -86,7 +86,7 @@ def test_init_db_creates_future_plan_audit_runs_table() -> None:
         engine.dispose()
 
 
-def test_canon_quality_context_keeps_string_false_countdown_observations_without_stale_main() -> None:
+def test_canon_quality_context_keeps_string_false_countdown_observations() -> None:
     engine = get_engine(postgres_test_url("future-plan-audit-countdown-context"))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -98,8 +98,8 @@ def test_canon_quality_context_keeps_string_false_countdown_observations_without
             session.add(
                 CountdownLedgerRow(
                     project_id=project.id,
-                    countdown_key="memory_reset",
-                    label="memory_reset",
+                    countdown_key="side",
+                    label="side",
                     chapter_number=22,
                     normalized_remaining_minutes=90,
                     raw_mention="九十分钟",
@@ -132,7 +132,7 @@ def test_canon_quality_context_keeps_string_false_countdown_observations_without
             item["countdown_key"]: item["latest_remaining_minutes"]
             for item in context["countdown_constraints"]
         }
-        assert constraints == {"memory_reset": 90}
+        assert constraints == {"side": 90, "main": 9}
     finally:
         engine.dispose()
 
@@ -408,13 +408,13 @@ def test_canon_quality_context_projects_book_state_rule_as_immutable_invariant()
         engine.dispose()
 
 
-def test_canon_quality_context_drops_stale_generic_main_when_memory_reset_is_active() -> None:
-    engine = get_engine(postgres_test_url("future-plan-audit-drop-stale-main-context"))
+def test_canon_quality_context_keeps_latest_entry_per_countdown_key() -> None:
+    engine = get_engine(postgres_test_url("future-plan-audit-latest-countdown-context"))
     init_db(engine)
     session_factory = get_session_factory(engine)
     try:
         with session_factory() as session:
-            project = Project(title="主线倒计时去重", premise="测试", genre="悬疑", target_total_chapters=36)
+            project = Project(title="倒计时最新条目", premise="测试", genre="悬疑", target_total_chapters=36)
             session.add(project)
             session.flush()
             session.add_all(
@@ -424,14 +424,32 @@ def test_canon_quality_context_drops_stale_generic_main_when_memory_reset_is_act
                         countdown_key="main",
                         label="main",
                         chapter_number=15,
+                        normalized_remaining_minutes=90,
+                        raw_mention="九十分钟",
+                        status="consistent",
+                    ),
+                    CountdownLedgerRow(
+                        project_id=project.id,
+                        countdown_key="main",
+                        label="main",
+                        chapter_number=29,
                         normalized_remaining_minutes=9,
                         raw_mention="九分钟",
                         status="consistent",
                     ),
                     CountdownLedgerRow(
                         project_id=project.id,
-                        countdown_key="memory_reset",
-                        label="memory_reset",
+                        countdown_key="side",
+                        label="side",
+                        chapter_number=20,
+                        normalized_remaining_minutes=120,
+                        raw_mention="两小时",
+                        status="consistent",
+                    ),
+                    CountdownLedgerRow(
+                        project_id=project.id,
+                        countdown_key="side",
+                        label="side",
                         chapter_number=31,
                         normalized_remaining_minutes=44,
                         raw_mention="44分钟",
@@ -450,13 +468,21 @@ def test_canon_quality_context_drops_stale_generic_main_when_memory_reset_is_act
 
         assert context["countdown_constraints"] == [
             {
-                "countdown_key": "memory_reset",
-                "label": "memory_reset",
+                "countdown_key": "main",
+                "label": "main",
+                "latest_remaining_minutes": 9,
+                "latest_chapter": 29,
+                "raw_mention": "九分钟",
+                "status": "consistent",
+            },
+            {
+                "countdown_key": "side",
+                "label": "side",
                 "latest_remaining_minutes": 44,
                 "latest_chapter": 31,
                 "raw_mention": "44分钟",
                 "status": "consistent",
-            }
+            },
         ]
     finally:
         engine.dispose()

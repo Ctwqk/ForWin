@@ -84,14 +84,6 @@ def _build_canon_quality_context(
                 latest_by_key[key] = entry
                 continue
             latest_by_key[key] = entry
-        memory_entry = latest_by_key.get("memory_reset")
-        main_entry = latest_by_key.get("main")
-        if memory_entry is not None and main_entry is not None:
-            memory_chapter = int(memory_entry.get("chapter_number") or 0)
-            main_chapter = int(main_entry.get("chapter_number") or 0)
-            memory_remaining = int(memory_entry.get("normalized_remaining_minutes") or 0)
-            if memory_chapter >= main_chapter or memory_remaining <= 180:
-                latest_by_key.pop("main", None)
         countdown_constraints = [
             {
                 "countdown_key": key,

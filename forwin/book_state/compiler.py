@@ -18,7 +18,6 @@ from forwin.protocol.book_state import (
     GraphDeltaType,
     MapPatch,
     NodePatch,
-    ReaderExperienceDeltaRecord,
     ReaderPromise,
     WorldNode,
 )
@@ -357,7 +356,6 @@ class BookStateCompiler:
             )
             persisted_cognition_keys.add(key)
         self._persist_reader_promise_patch_side_effects(delta)
-        self._persist_reader_experience_side_effects(delta)
 
     def _persist_reader_promise_patch_side_effects(self, delta: GraphDelta) -> None:
         patches = _reader_promise_patches(delta)
@@ -404,44 +402,6 @@ class BookStateCompiler:
             promise = ReaderPromise.model_validate(payload)
             self.repo.upsert_reader_promise(promise)
             promises[promise_id] = promise.model_dump(mode="json")
-
-    def _persist_reader_experience_side_effects(self, delta: GraphDelta) -> None:
-        payload = delta.metadata.get("reader_experience_delta") if isinstance(delta.metadata, dict) else None
-        if not isinstance(payload, dict):
-            return
-        reader_delta = ReaderExperienceDeltaRecord.model_validate(
-            {
-                **payload,
-                "project_id": delta.project_id,
-                "chapter_number": int(payload.get("chapter_number") or delta.chapter_number or 0),
-            }
-        )
-        self.repo.upsert_reader_experience_delta(reader_delta)
-        promise_id = str(payload.get("promise_id") or f"promise:{reader_delta.reader_experience_delta_id}")
-        self.repo.upsert_reader_promise(
-            ReaderPromise(
-                promise_id=promise_id,
-                project_id=delta.project_id,
-                promise_type=reader_delta.payoff_type or "reader_experience",
-                summary=reader_delta.reader_state_after or reader_delta.next_desire,
-                created_at_chapter=reader_delta.chapter_number,
-                current_debt_level=max(int(reader_delta.promise_debt_change or 0), 0),
-                reward_tags=list(reader_delta.reward_tags),
-                linked_threads=list(reader_delta.metadata.get("linked_threads", []))
-                if isinstance(reader_delta.metadata, dict)
-                else [],
-                linked_knowledge_gaps=list(reader_delta.metadata.get("linked_knowledge_gaps", []))
-                if isinstance(reader_delta.metadata, dict)
-                else [],
-                status="open" if int(reader_delta.promise_debt_change or 0) > 0 else "resolved",
-                source_refs=list(reader_delta.source_refs),
-                metadata={
-                    "source_delta_id": delta.id,
-                    "reader_experience_delta_id": reader_delta.reader_experience_delta_id,
-                    **(reader_delta.metadata if isinstance(reader_delta.metadata, dict) else {}),
-                },
-            )
-        )
 
 
 def _node_current(runtime: BookStateRuntime, patch: NodePatch) -> Any:

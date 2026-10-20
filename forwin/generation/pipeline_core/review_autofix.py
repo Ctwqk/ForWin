@@ -216,9 +216,6 @@ def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
         "identity_conflict",
         "identity_ambiguity",
         "payoff_miss",
-        "unpaid_promise_debt",
-        "world_model_conflict",
-        "cognition_conflict",
     }
     structural_target_scopes = {
         "ledger",
@@ -226,7 +223,6 @@ def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
         "band",
         "arc",
         "book",
-        "world_model",
     }
     for issue in getattr(review, "issues", []) or []:
         issue_type = str(getattr(issue, "issue_type", "") or "").strip()

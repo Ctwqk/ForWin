@@ -52,11 +52,6 @@ from .tasks import (
 )
 
 from .world import (
-    WorldModelV4DebugResponse,
-    WorldModelV4LineInfo,
-    WorldModelV4GapInfo,
-    WorldModelV4RevealInfo,
-    WorldModelV4ExportResponse,
     BookStateRuntimeResponse,
     BookStatePathResponse,
     PersonalityLoadoutUpdateRequest,
@@ -253,11 +248,6 @@ __all__ = [
     "TaskBulkDeleteItem",
     "TaskBulkDeleteRequest",
     "ProjectBulkDeleteRequest",
-    "WorldModelV4DebugResponse",
-    "WorldModelV4LineInfo",
-    "WorldModelV4GapInfo",
-    "WorldModelV4RevealInfo",
-    "WorldModelV4ExportResponse",
     "BookStateRuntimeResponse",
     "BookStatePathResponse",
     "PersonalityLoadoutUpdateRequest",

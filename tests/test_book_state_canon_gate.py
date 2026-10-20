@@ -10,6 +10,7 @@ from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_plan_revision,
 )
+from forwin.book_state import BookStateRepository
 from forwin.canon import CanonAdmissionOutcome, CanonPreparationOutcome
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent
@@ -17,12 +18,13 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan
-from forwin.planning.world_contracts import (
-    ChapterWorldDeltaIntent,
-    WorldContractRepository,
-)
-from forwin.protocol.book_state import BookStateCompileResult
+from forwin.protocol.book_state import BookStateCompileResult, WorldNode
 from forwin.protocol.review import ReviewVerdict
+from forwin.protocol.state_change import (
+    EventCandidate,
+    StateChangeCandidate,
+    TimeAdvance,
+)
 from forwin.protocol.writer import WriterOutput
 from forwin.naming import EntityRegistrar
 from forwin.runtime.container import RuntimeContainer
@@ -50,6 +52,32 @@ def _build_pipeline(database_url: str, artifact_root: str):
     ).build_chapter_pipeline()
 
 
+def _contract_output(project_id: str, **overrides) -> WriterOutput:
+    """WriterOutput whose time advance and state change feed the writer contract."""
+    fields = {
+        "project_id": project_id,
+        "chapter_number": 1,
+        "title": "乱码呼号",
+        "body": "防线修复后，通讯台传出乱码和父亲旧部呼号。",
+        "end_of_chapter_summary": "收到异常通讯。",
+        "time_advance": TimeAdvance(
+            new_time_label="当夜", duration_description="数小时后"
+        ),
+        "state_changes": [
+            StateChangeCandidate(
+                entity_name="通讯台",
+                entity_kind="item",
+                field="status",
+                old_value="",
+                new_value="修复完成",
+                reason="防线修复后通讯台恢复运转",
+            )
+        ],
+    }
+    fields.update(overrides)
+    return WriterOutput(**fields)
+
+
 def _setup_project(session):
     updater = StateUpdater(session)
     project = updater.create_project(
@@ -68,21 +96,6 @@ def _setup_project(session):
         title="乱码呼号",
         one_line="修复防线并收到异常通讯",
         goals=["修复防线", "处理乱码通讯"],
-    )
-    WorldContractRepository(session).save_chapter_intent(
-        ChapterWorldDeltaIntent(
-            intent_id="chapter_1_intent",
-            project_id=project.id,
-            chapter_plan_id=chapter.id,
-            chapter_number=1,
-            visible_delta_intents=["殖民地防线修复"],
-            hint_delta_intents=["乱码通讯", "父亲旧部呼号"],
-            must_not_reveal=["father_sieged"],
-            expected_observer_state_changes={
-                "reader": "hidden -> hinted",
-                "protagonist": "unknown -> suspected",
-            },
-        )
     )
     return project, chapter
 
@@ -168,13 +181,7 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
                 session,
                 project,
                 chapter,
-                WriterOutput(
-                    project_id=project.id,
-                    chapter_number=1,
-                    title="乱码呼号",
-                    body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
-                    end_of_chapter_summary="收到异常通讯。",
-                ),
+                _contract_output(project.id),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
             assert preparation.plan is not None
@@ -196,7 +203,7 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
         assert "projection.legacy_world_model_projection" not in payloads
 
 
-def test_canon_admission_blocks_review_failure_before_book_state_commit() -> None:
+def test_canon_admission_blocks_rule_rewrite_before_book_state_commit() -> None:
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("pipeline-bookstate-review-block")
         engine = get_engine(db_path)
@@ -205,17 +212,36 @@ def test_canon_admission_blocks_review_failure_before_book_state_commit() -> Non
         pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
         with Session() as session:
             project, chapter = _setup_project(session)
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="rule-transit-protocol",
+                    project_id=project.id,
+                    node_type="rule",
+                    name="通行协议",
+                    profile={"public_version": "三印同亮，门右移一格。"},
+                    created_at_chapter=0,
+                )
+            )
             outcome = _prepare_candidate(
                 pipeline,
                 session,
                 project,
                 chapter,
-                WriterOutput(
-                    project_id=project.id,
-                    chapter_number=1,
-                    title="提前揭示",
-                    body="通讯接通后，父亲明确说自己已经在母星被围。",
-                    end_of_chapter_summary="提前揭示母星危机。",
+                _contract_output(
+                    project.id,
+                    title="改写规则",
+                    body="众人误称通行协议会让门右移两格。",
+                    end_of_chapter_summary="正文改写了既有规则。",
+                    state_changes=[
+                        StateChangeCandidate(
+                            entity_name="通行协议",
+                            entity_kind="rule",
+                            field="public_version",
+                            old_value="三印同亮，门右移一格。",
+                            new_value="三印同亮，门右移两格。",
+                            reason="正文改写了规则定义",
+                        )
+                    ],
                 ),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
@@ -258,13 +284,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
                 session,
                 project,
                 chapter,
-                WriterOutput(
-                    project_id=project.id,
-                    chapter_number=1,
-                    title="乱码呼号",
-                    body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
-                    end_of_chapter_summary="收到异常通讯。",
-                ),
+                _contract_output(project.id),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
             assert preparation.plan is not None

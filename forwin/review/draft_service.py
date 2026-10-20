@@ -911,7 +911,6 @@ class DraftReviewService:
             "band": 2,
             "band_plan": 3,
             "arc": 3,
-            "world_model": 4,
         }
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],

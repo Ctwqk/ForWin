@@ -108,51 +108,6 @@ justification = "给运营的建议说明文字（design §7.2 豁免的说明�
 max_literals = 2
 
 [[entry]]
-path = "forwin/book_state/extraction/cognitive.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一（母星/救父/father_sieged）词；Task 3 删除整个文件"
-max_literals = 7
-
-[[entry]]
-path = "forwin/book_state/extraction/cognitive.py"
-symbol = "CognitiveConsistencyReviewer.review"
-checks = ["story_id_literal", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一 must_not_reveal 键与救父关键词；Task 3 删除 v4 抽取"
-max_literals = 5
-
-[[entry]]
-path = "forwin/book_state/extraction/delta_extractor.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一 colony/homeworld/father_sieged；Task 3 删除整个文件"
-max_literals = 7
-
-[[entry]]
-path = "forwin/book_state/extraction/delta_extractor.py"
-symbol = "BookStateExtractionDeltaExtractor.extract"
-checks = ["story_id_literal"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "写死 line_colony_defense / gap_homeworld_siege 等剧本一世界线与揭示键；Task 3 删除"
-max_literals = 7
-
-[[entry]]
-path = "forwin/book_state/extraction/evidence_rules.py"
-symbol = "infer_source_type"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "按剧本一（舰队/通讯/求援）关键词推断证据来源；Task 3 删除"
-max_literals = 8
-
-[[entry]]
 path = "forwin/book_state/extraction/graph_delta.py"
 symbol = "_light_state_extraction_delta"
 checks = ["story_id_literal", "cjk_regex"]
@@ -169,24 +124,6 @@ category = "pending_removal"
 remove_in = "P2"
 justification = "正则兜底的动词停用表；P2 随兜底一起删除"
 max_literals = 9
-
-[[entry]]
-path = "forwin/book_state/extraction/reveal.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一（母星/父亲被围/father_sieged）词；Task 3 删除整个文件"
-max_literals = 3
-
-[[entry]]
-path = "forwin/book_state/extraction/reveal.py"
-symbol = "RevealReviewer.review"
-checks = ["story_id_literal", "cjk_membership"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本一 father_sieged 揭示规则与关键词；Task 3 删除"
-max_literals = 5
 
 [[entry]]
 path = "forwin/canon_names.py"

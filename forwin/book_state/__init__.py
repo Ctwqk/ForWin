@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .adapter import BookStateDeltaAdapter
 from .compiler import BookStateCompiler
 from .cognition import CognitionView
 from .map_graph import MapGraph
@@ -17,7 +16,6 @@ from .writer_contract import WriterContractDeltaBuilder
 __all__ = [
     "BookStateRuntime",
     "BookStateCompiler",
-    "BookStateDeltaAdapter",
     "BookStateProjection",
     "BookStateQuery",
     "BookStateRepository",

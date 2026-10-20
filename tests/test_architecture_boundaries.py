@@ -1006,18 +1006,16 @@ def test_book_state_extraction_has_one_current_owner() -> None:
     assert not list((ROOT / "forwin/extractor").glob("*.py"))
 
     owner = ROOT / "forwin/book_state/extraction"
-    assert (owner / "__init__.py").is_file()
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(owner.glob("*.py"))
+    assert sorted(path.name for path in owner.glob("*.py")) == [
+        "__init__.py",
+        "contract.py",
+        "graph_delta.py",
+    ]
+    assert not (ROOT / "forwin/book_state/adapter.py").exists()
+    assert not (ROOT / "forwin/protocol/world_v4.py").exists()
+    assert "BookStateGraphDeltaExtractor" in (owner / "graph_delta.py").read_text(
+        encoding="utf-8"
     )
-    for current_type in (
-        "BookStateExtractionGate",
-        "BookStateExtractionGateIssue",
-        "BookStateExtractionGateVerdict",
-        "BookStateExtractionDeltaExtractor",
-        "BookStateGraphDeltaExtractor",
-    ):
-        assert current_type in source
 
     production = "\n".join(
         path.read_text(encoding="utf-8")
@@ -1028,8 +1026,27 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "V4" + "ReviewIssue",
         "V4" + "ReviewGateVerdict",
         "World" + "DeltaExtractor",
+        "BookStateExtractionGate",
+        "BookStateExtractionDeltaExtractor",
+        "BookStateDeltaAdapter",
     ):
         assert removed_type not in production
+
+
+def test_writer_output_has_no_v4_fields() -> None:
+    from forwin.protocol.writer import WriterOutput
+
+    removed_fields = {
+        "world_deltas",
+        "belief_updates",
+        "knowledge_gap_updates",
+        "reveal_events",
+        "reader_experience_deltas",
+        "observer_visibility_updates",
+        "must_preserve_facts",
+        "must_not_reveal_violations",
+    }
+    assert removed_fields.isdisjoint(WriterOutput.model_fields)
 
 
 def test_application_read_models_have_one_current_owner() -> None:

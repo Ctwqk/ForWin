@@ -9,26 +9,12 @@ from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.canon.preparation import CanonPreparationContext
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
-from forwin.book_state.extraction.graph_delta import (
-    BookStateGraphDeltaExtractor,
-    _filter_graph_delta_layers,
-)
+from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
 from forwin.generation.pipeline_core import quality_gates
-from forwin.protocol.book_state import (
-    CognitionPatch,
-    FactPatch,
-    GraphDelta,
-    GraphDeltaType,
-    MapPatch,
-    NarrativePatch,
-    NodePatch,
-)
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
-from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
-from forwin.book_state.extraction.types import BookStateExtractionGateVerdict
 from tests.postgres import postgres_test_url
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models import Project
@@ -459,239 +445,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         }
 
 
-def test_world_only_layer_filter_removes_non_world_patches() -> None:
-    delta = GraphDelta(
-        id="delta-1",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.WORLD_STATE,
-        summary="测试 delta",
-        node_patches=[
-            NodePatch(
-                node_id="event-a",
-                node_type="event",
-                op="set",
-                field_path="state.status",
-                new_value="active",
-            )
-        ],
-        map_patches=[
-            MapPatch(
-                target_type="location",
-                target_id="loc-a",
-                op="set",
-                field_path="x",
-                new_value="y",
-            )
-        ],
-        cognition_patches=[
-            CognitionPatch(
-                observer_type="character",
-                observer_id="a",
-                op="set",
-                field_path="belief",
-                new_value="b",
-            )
-        ],
-        narrative_patches=[
-            NarrativePatch(
-                target_ref="thread:a",
-                op="set",
-                field_path="status",
-                new_value="active",
-            )
-        ],
-        metadata={"source": "existing"},
-    )
-
-    filtered = _filter_graph_delta_layers([delta], {"world"})
-
-    assert len(filtered) == 1
-    assert filtered[0].node_patches == delta.node_patches
-    assert filtered[0].map_patches == []
-    assert filtered[0].cognition_patches == []
-    assert filtered[0].narrative_patches == []
-    assert filtered[0].metadata["source"] == "existing"
-    assert filtered[0].metadata["requested_book_state_layers"] == ["world"]
-    assert filtered[0].metadata["filtered_patch_counts"]["map"] == 1
-    assert filtered[0].metadata["filtered_patch_counts"]["cognition"] == 1
-    assert filtered[0].metadata["filtered_patch_counts"]["narrative"] == 1
-    assert len(delta.map_patches) == 1
-    assert len(delta.cognition_patches) == 1
-    assert len(delta.narrative_patches) == 1
-    assert delta.metadata == {"source": "existing"}
-
-
-def test_world_only_layer_filter_drops_narrative_only_delta() -> None:
-    delta = GraphDelta(
-        id="delta-narrative",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.NARRATIVE_CONTROL,
-        operation="update_reader_promise",
-        target_type="reader_experience",
-        target_id="promise-a",
-        summary="只更新读者承诺",
-        narrative_patches=[
-            NarrativePatch(
-                target_ref="promise:a",
-                op="set",
-                field_path="status",
-                new_value="active",
-            )
-        ],
-        metadata={"source": "narrative"},
-    )
-
-    filtered = _filter_graph_delta_layers([delta], {"world"})
-
-    assert filtered == []
-    assert len(delta.narrative_patches) == 1
-    assert delta.metadata == {"source": "narrative"}
-
-
-def test_default_layer_filter_preserves_all_patches_and_metadata() -> None:
-    delta = GraphDelta(
-        id="delta-all",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.WORLD_STATE,
-        node_patches=[
-            NodePatch(
-                node_id="event-a",
-                node_type="event",
-                op="set",
-                field_path="state.status",
-                new_value="active",
-            )
-        ],
-        fact_patches=[
-            FactPatch(
-                fact_id="fact-a",
-                op="set",
-                field_path="truth_value",
-                new_value="true",
-            )
-        ],
-        map_patches=[
-            MapPatch(
-                target_type="location",
-                target_id="loc-a",
-                op="set",
-                field_path="status",
-                new_value="open",
-            )
-        ],
-        cognition_patches=[
-            CognitionPatch(
-                observer_type="character",
-                observer_id="a",
-                op="set",
-                field_path="visible_refs",
-                new_value=["fact:a"],
-            )
-        ],
-        narrative_patches=[
-            NarrativePatch(
-                target_ref="thread:a",
-                op="set",
-                field_path="status",
-                new_value="active",
-            )
-        ],
-        metadata={"source": "existing"},
-    )
-
-    filtered = _filter_graph_delta_layers([delta], BookStateGraphDeltaExtractor().layers)
-
-    assert len(filtered) == 1
-    assert filtered[0].node_patches == delta.node_patches
-    assert filtered[0].fact_patches == delta.fact_patches
-    assert filtered[0].map_patches == delta.map_patches
-    assert filtered[0].cognition_patches == delta.cognition_patches
-    assert filtered[0].narrative_patches == delta.narrative_patches
-    assert filtered[0].metadata["source"] == "existing"
-    assert filtered[0].metadata["requested_book_state_layers"] == [
-        "cognition",
-        "map",
-        "narrative",
-        "world",
-    ]
-    assert filtered[0].metadata["filtered_patch_counts"] == {}
-    assert delta.metadata == {"source": "existing"}
-
-
-def test_layer_filter_drops_patchless_delta() -> None:
-    delta = GraphDelta(
-        id="delta-empty",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.WORLD_STATE,
-    )
-
-    filtered = _filter_graph_delta_layers([delta], BookStateGraphDeltaExtractor().layers)
-
-    assert filtered == []
-
-
-def test_world_layer_filter_preserves_summary_only_world_delta() -> None:
-    delta = GraphDelta(
-        id="delta-summary-only",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.WORLD_STATE,
-        operation="legacy_summary",
-        target_type="world_delta",
-        target_id="legacy-1",
-        source_type="legacy_import",
-        source_id="legacy-1",
-        world_line_id="main",
-        summary="旧版 world delta 摘要。",
-        metadata={"legacy_summary_only": True},
-    )
-
-    filtered = _filter_graph_delta_layers([delta], {"world"})
-
-    assert len(filtered) == 1
-    assert filtered[0].id == "delta-summary-only"
-    assert filtered[0].metadata["legacy_summary_only"] is True
-    assert filtered[0].metadata["filtered_patch_counts"] == {}
-
-
-def _install_empty_world_delta_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    class EmptyBookStateExtractionDeltaExtractor:
-        def extract(self, writer_output, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
-            return ExtractedWorldChangeSet(
-                project_id=writer_output.project_id,
-                chapter_number=writer_output.chapter_number,
-            )
-
-    class PassingBookStateExtractionGate:
-        def review(self, extracted, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
-            return BookStateExtractionGateVerdict(
-                passed=True,
-                approved_changes=ApprovedWorldChangeSet(
-                    project_id=extracted.project_id,
-                    chapter_number=extracted.chapter_number,
-                ),
-                issues=[],
-            )
-
-    monkeypatch.setattr(
-        "forwin.book_state.extraction.graph_delta.BookStateExtractionDeltaExtractor",
-        EmptyBookStateExtractionDeltaExtractor,
-    )
-    monkeypatch.setattr(
-        "forwin.book_state.extraction.graph_delta.BookStateExtractionGate",
-        PassingBookStateExtractionGate,
-    )
-
-
-def test_deferred_single_writer_empty_extraction_creates_light_state_delta(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_empty_world_delta_path(monkeypatch)
-
+def test_deferred_single_writer_empty_extraction_creates_light_state_delta() -> None:
     extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
         BookStateExtractionRequest(
             project_id="project-1",
@@ -728,11 +482,7 @@ def test_deferred_single_writer_empty_extraction_creates_light_state_delta(
     assert "pulp_light_structured_fallback" not in str(delta.model_dump(mode="json"))
 
 
-def test_deferred_single_writer_empty_light_extraction_blocks_summary_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_empty_world_delta_path(monkeypatch)
-
+def test_deferred_single_writer_empty_light_extraction_blocks_summary_only() -> None:
     extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
         BookStateExtractionRequest(
             project_id="project-1",
@@ -755,8 +505,7 @@ def test_deferred_single_writer_empty_light_extraction_blocks_summary_only(
     assert extraction.metadata["extraction_path"] == "pulp_light_state_extraction"
 
 
-def test_light_state_delta_commits_to_book_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_empty_world_delta_path(monkeypatch)
+def test_light_state_delta_commits_to_book_state() -> None:
     engine = get_engine(postgres_test_url("pulp_light_world_fact_commit"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -800,61 +549,6 @@ def test_light_state_delta_commits_to_book_state(monkeypatch: pytest.MonkeyPatch
         assert any("林夜获得玄铁令" in fact.proposition for fact in facts)
     finally:
         engine.dispose()
-
-
-def test_layer_filter_is_idempotent_and_preserves_filtered_counts() -> None:
-    delta = GraphDelta(
-        id="delta-idempotent",
-        project_id="project-1",
-        chapter_number=1,
-        delta_type=GraphDeltaType.WORLD_STATE,
-        node_patches=[
-            NodePatch(
-                node_id="event-a",
-                node_type="event",
-                op="set",
-                field_path="state.status",
-                new_value="active",
-            )
-        ],
-        map_patches=[
-            MapPatch(
-                target_type="location",
-                target_id="loc-a",
-                op="set",
-                field_path="status",
-                new_value="open",
-            )
-        ],
-        cognition_patches=[
-            CognitionPatch(
-                observer_type="character",
-                observer_id="a",
-                op="set",
-                field_path="visible_refs",
-                new_value=["fact:a"],
-            )
-        ],
-        narrative_patches=[
-            NarrativePatch(
-                target_ref="thread:a",
-                op="set",
-                field_path="status",
-                new_value="active",
-            )
-        ],
-    )
-
-    first_pass = _filter_graph_delta_layers([delta], {"world"})
-    second_pass = _filter_graph_delta_layers(first_pass, {"world"})
-
-    assert len(first_pass) == 1
-    assert second_pass[0].model_dump(mode="json") == first_pass[0].model_dump(mode="json")
-    assert first_pass[0].metadata["filtered_patch_counts"] == {
-        "map": 1,
-        "cognition": 1,
-        "narrative": 1,
-    }
 
 
 def test_book_state_layer_constructor_normalizes_known_layer_names() -> None:

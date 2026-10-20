@@ -4,20 +4,17 @@ from sqlalchemy import func, select
 
 from forwin.book_state import (
     BookStateCompiler,
-    BookStateDeltaAdapter,
     BookStateProjection,
     BookStateRepository,
     BookStateReviewGate,
     CognitionView,
     MapGraph,
-    NarrativeControlGraph,
     distance_between_world_nodes,
 )
 from forwin.book_state.schema import validate_world_node
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.book_state import FactNodeRow, GraphDeltaRow, NarrativeNodeRow, WorldNodeRow
-from forwin.models.entity import Entity
+from forwin.models.book_state import GraphDeltaRow
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionOverlay,
@@ -27,7 +24,6 @@ from forwin.protocol.book_state import (
     NodePatch,
     WorldNode,
 )
-from forwin.protocol.world_v4 import DeltaKind, DeltaSource, DeltaSourceType, ExtractedWorldChangeSet, WorldDelta
 from tests.postgres import postgres_test_url
 
 
@@ -138,97 +134,3 @@ def test_review_gate_blocks_unknown_location_id_and_ignores_old_location_field()
     assert verdict.accepted is False
     assert severities["node:char_mc"] == "error"
     assert "node:char_old" not in severities
-
-
-def test_v4_adapter_create_book_state_rows_without_import() -> None:
-    Session = _session()
-    with Session.begin() as session:
-        project_id = _project(session)
-        entity = Entity(project_id=project_id, kind="character", name="陆沉", created_at_chapter=1)
-        session.add(entity)
-        session.flush()
-
-        source = DeltaSource(source_type=DeltaSourceType.CHARACTER_ACTION, actor_id="char_mc")
-        changes = ExtractedWorldChangeSet(
-            project_id=project_id,
-            chapter_number=2,
-            world_deltas=[
-                WorldDelta(
-                    delta_id="wd1",
-                    project_id=project_id,
-                    world_line_id="line_main",
-                    delta_kind=DeltaKind.VISIBLE,
-                    summary="主角进入黑石城",
-                    narrative_chapter=2,
-                    source=source,
-                    affected_entities=[entity.id],
-                )
-            ],
-        )
-        approved = BookStateDeltaAdapter().from_world_change_set(changes)
-        result = BookStateCompiler(session).compile(approved)
-        node_count = session.scalar(select(func.count()).select_from(WorldNodeRow))
-        narrative_count = session.scalar(select(func.count()).select_from(NarrativeNodeRow))
-
-    assert result.committed is True
-    assert node_count == 1
-    assert narrative_count >= 1
-    assert NarrativeControlGraph(nodes=[]).open_gap_ids() == []
-
-
-def test_v4_adapter_scopes_canonical_rows_across_projects() -> None:
-    Session = _session()
-    with Session.begin() as session:
-        first_project_id = _project(session)
-        second_project_id = _project(session)
-        source = DeltaSource(
-            source_type=DeltaSourceType.CHARACTER_ACTION,
-            actor_id="char_mc",
-        )
-
-        def approved_changes(project_id: str) -> ApprovedGraphDeltaSet:
-            return BookStateDeltaAdapter().from_world_change_set(
-                ExtractedWorldChangeSet(
-                    project_id=project_id,
-                    chapter_number=1,
-                    world_deltas=[
-                        WorldDelta(
-                            delta_id="delta_ch1_visible",
-                            project_id=project_id,
-                            world_line_id="line_main",
-                            delta_kind=DeltaKind.VISIBLE,
-                            summary="第一章台前推进",
-                            narrative_chapter=1,
-                            source=source,
-                        )
-                    ],
-                )
-            )
-
-        first = BookStateCompiler(session).compile(
-            approved_changes(first_project_id)
-        )
-        second = BookStateCompiler(session).compile(
-            approved_changes(second_project_id)
-        )
-        delta_rows = session.execute(select(GraphDeltaRow)).scalars().all()
-        node_rows = session.execute(select(WorldNodeRow)).scalars().all()
-        fact_rows = session.execute(select(FactNodeRow)).scalars().all()
-
-    assert first.committed is True
-    assert second.committed is True
-    assert {row.project_id for row in delta_rows} == {
-        first_project_id,
-        second_project_id,
-    }
-    assert {row.project_id for row in node_rows} == {
-        first_project_id,
-        second_project_id,
-    }
-    assert {row.project_id for row in fact_rows} == {
-        first_project_id,
-        second_project_id,
-    }
-    assert len({row.id for row in delta_rows}) == 2
-    assert len({row.id for row in node_rows}) == 2
-    assert len({row.id for row in fact_rows}) == 2

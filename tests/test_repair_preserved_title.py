@@ -96,7 +96,6 @@ def _run_title_repair(
         time_advance=TimeAdvance(
             new_time_label="辰正三刻", duration_description="交割后一刻"
         ),
-        must_preserve_facts=["交割已完成"],
         generation_meta={"source": "repair-writer-fixture"},
     )
     seen_outputs: list[WriterOutput] = []

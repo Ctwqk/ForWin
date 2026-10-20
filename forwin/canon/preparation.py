@@ -26,7 +26,6 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
-from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -86,10 +85,6 @@ class BookStateCanonPreparer:
         verdict: ReviewVerdict,
     ) -> BookStatePreparationOutcome:
         del verdict
-        chapter_intent = WorldContractRepository(session).get_chapter_intent(
-            project_id,
-            chapter_number,
-        )
         extraction = BookStateGraphDeltaExtractor(
             layers=set(context.policy.canon.book_state_layers),
             session=session,
@@ -100,7 +95,6 @@ class BookStateCanonPreparer:
                 writer_output=writer_output.model_copy(
                     update={"project_id": project_id}
                 ),
-                chapter_intent=chapter_intent,
                 review_verdict_id=(
                     f"book_state_direct_review_{project_id}_{chapter_number}"
                 ),

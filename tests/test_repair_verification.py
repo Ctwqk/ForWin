@@ -114,7 +114,6 @@ def test_repair_verifier_does_not_send_partial_oversized_context() -> None:
             )
         ],
         prompt_trace={"raw_prompt": huge_payload},
-        extracted_actuals={"raw_form": huge_payload},
     )
     after_review = ReviewVerdict(
         verdict="warn",

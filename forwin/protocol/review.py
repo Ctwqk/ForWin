@@ -16,7 +16,6 @@ RepairScope = Literal[
     "chapter",
     "band",
     "arc",
-    "world_model",
 ]
 RepairFailureType = Literal[
     "continuity",
@@ -25,13 +24,6 @@ RepairFailureType = Literal[
     "stall",
     "hook_failure",
     "mixed",
-    "character_omniscience",
-    "missing_delta_source",
-    "missing_world_line",
-    "early_reveal",
-    "unpaid_promise_debt",
-    "cognition_conflict",
-    "world_model_conflict",
 ]
 FinalResidualDecisionKind = Literal[
     "force_accept",
@@ -40,7 +32,7 @@ FinalResidualDecisionKind = Literal[
 ]
 CanonRiskLevel = Literal["low", "high"]
 
-_V4_REPAIR_SCOPES = {"scene", "chapter", "band", "arc", "world_model"}
+_V4_REPAIR_SCOPES = {"scene", "chapter", "band", "arc"}
 _METADATA_REPAIR_SCOPES = {"active_rules", "operator"}
 _KNOWN_REPAIR_SCOPES = {"draft", "chapter_plan", "band_plan", *_METADATA_REPAIR_SCOPES, *_V4_REPAIR_SCOPES}
 
@@ -84,10 +76,6 @@ class RepairInstruction(BaseModel):
     must_fix: list[str] = Field(default_factory=list)
     must_preserve: list[str] = Field(default_factory=list)
     must_not_reveal: list[str] = Field(default_factory=list)
-    required_delta_patch: dict[str, object] = Field(default_factory=dict)
-    required_belief_patch: dict[str, object] = Field(default_factory=dict)
-    required_hint_patch: dict[str, object] = Field(default_factory=dict)
-    required_payoff_patch: dict[str, object] = Field(default_factory=dict)
     scope_reason: str = ""
     design_patch: dict[str, object] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
@@ -160,7 +148,3 @@ class ReviewVerdict(BaseModel):
     residual_review_issues: list[ContinuityIssue] = Field(default_factory=list)
     forced_accept_applied: bool = False
     prompt_trace: dict[str, object] = Field(default_factory=dict)
-    extracted_actuals: dict[str, object] = Field(default_factory=dict)
-    approved_delta_refs: list[str] = Field(default_factory=list)
-    rejected_delta_refs: list[str] = Field(default_factory=list)
-    compiler_gate_status: str = ""

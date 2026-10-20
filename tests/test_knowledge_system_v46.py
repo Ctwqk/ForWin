@@ -15,7 +15,7 @@ from forwin.api_schema import (
     WorldModelExportRequest,
 )
 from forwin.http.adapters.api_world_model_routes import build_handlers as build_world_model_handlers
-from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateRepository
+from forwin.book_state import BookStateCompiler, BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever
 from forwin.llm_kb.store import LLMKnowledgeBaseStore
@@ -37,7 +37,6 @@ from forwin.protocol.book_state import (
     WorldEdge,
     WorldNode,
 )
-from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ReaderExperienceDelta
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
@@ -170,47 +169,6 @@ def test_book_state_v46_fields_api_and_gate() -> None:
             )
         assert blocked.accepted is False
         assert any(issue.code == "delta_not_allowed_for_canon" for issue in blocked.issues)
-    finally:
-        engine.dispose()
-
-
-def test_reader_experience_syncs_into_book_state_native_tables() -> None:
-    Session, engine = _session_factory()
-    try:
-        with Session.begin() as session:
-            project_id = _create_project(session)
-            approved = ApprovedWorldChangeSet(
-                project_id=project_id,
-                chapter_number=3,
-                reader_experience_deltas=[
-                    ReaderExperienceDelta(
-                        reader_experience_delta_id="reader_exp_ch3",
-                        project_id=project_id,
-                        chapter_number=3,
-                        reader_state_before="读者等待矿难真相。",
-                        reader_state_after="读者确认有人隐瞒矿难线索。",
-                        cognition_transition="hinted -> suspected",
-                        payoff_type="mid_term_delight",
-                        reward_tags=["mystery", "payoff"],
-                        emotional_effect="期待增强",
-                        promise_debt_change=2,
-                        next_desire="想看林烬追问档案。",
-                        fairness_evidence=["chapter:3"],
-                        source_refs=["chapter:3"],
-                    )
-                ],
-                approved_by=["test"],
-                review_verdict_id="review_reader_exp",
-            )
-            graph_changes = BookStateDeltaAdapter().from_world_change_set(approved)
-            result = BookStateCompiler(session).compile(graph_changes)
-            assert result.committed is True
-
-        handlers = build_book_state_handlers(get_session=Session)
-        promises = handlers["list_book_state_reader_promises"](project_id, as_of_chapter=3)
-        assert promises["reader_promises"][0]["promise_id"] == "promise:reader_exp_ch3"
-        assert promises["reader_promises"][0]["current_debt_level"] == 2
-        assert promises["reader_experience_deltas"][0]["reader_experience_delta_id"] == "reader_exp_ch3"
     finally:
         engine.dispose()
 

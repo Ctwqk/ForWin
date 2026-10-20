@@ -33,36 +33,6 @@ DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
 )
 
 
-class LLMConfig(BaseModel):
-    minimax_api_key: str = ""
-    minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
-    minimax_model: str = DEFAULT_MINIMAX_MODEL
-    timeout_seconds: float = 90.0
-    retry_attempts: int = 2
-    max_tokens: int = 16384
-
-
-class StorageConfig(BaseModel):
-    database_url: str = DEFAULT_DATABASE_URL
-    artifact_backend: str = "local"
-    artifact_root: str = "data/artifacts"
-    retrieval_backend: str = "qdrant"
-    qdrant_url: str = DEFAULT_QDRANT_URL
-
-
-class PublisherConfig(BaseModel):
-    extension_api_key: str = ""
-    session_secret: str = ""
-    session_encryption_required: bool = False
-    login_discord_webhook_url: str = ""
-
-
-class ObservabilityConfig(BaseModel):
-    enabled: bool = True
-    performance_enabled: bool = True
-    span_sample_rate: float = 1.0
-
-
 class FormBlockingPolicy(BaseModel):
     character_dead: Literal["error", "warning"] = "error"
     character_wounded: Literal["error", "warning"] = "warning"
@@ -76,13 +46,6 @@ class FormBlockingPolicy(BaseModel):
     signal_worsened: Literal["error", "warning"] = "error"
     final_dangling: Literal["error", "warning"] = "error"
     final_denied: Literal["error", "warning"] = "error"
-
-
-class CodexConfig(BaseModel):
-    enabled: bool = False
-    bridge_url: str = "http://host.docker.internal:8897"
-    default_model: str = DEFAULT_CODEX_MODEL
-    max_concurrent: int = 1
 
 
 class ModelProfileConfig(BaseModel):
@@ -258,9 +221,6 @@ def _infrastructure_env_values() -> dict[str, object]:
         "observability_record_db_spans": _env_bool(
             env, "FORWIN_OBSERVABILITY_RECORD_DB_SPANS", True
         ),
-        "observability_record_payload_sizes": _env_bool(
-            env, "FORWIN_OBSERVABILITY_RECORD_PAYLOAD_SIZES", True
-        ),
         "retention_cleanup_on_startup": _env_bool(
             env, "FORWIN_RETENTION_CLEANUP_ON_STARTUP", True
         ),
@@ -285,7 +245,6 @@ def _infrastructure_env_values() -> dict[str, object]:
             env, "FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT", False
         ),
         "http_bind": _env_str(env, "FORWIN_HTTP_BIND", "127.0.0.1"),
-        "http_port": _env_int(env, "FORWIN_HTTP_PORT", 8899),
         "http_basic_user": _env_str(env, "FORWIN_HTTP_BASIC_USER"),
         "http_basic_password": _env_str(env, "FORWIN_HTTP_BASIC_PASSWORD"),
         "http_trusted_operator_header": _env_str(
@@ -349,12 +308,8 @@ def _infrastructure_env_values() -> dict[str, object]:
             "FORWIN_CODEX_DEFAULT_MODEL",
             _env_str(env, "FORWIN_CODEX_MODEL", DEFAULT_CODEX_MODEL),
         ),
-        "codex_max_concurrent": _env_int(env, "FORWIN_CODEX_MAX_CONCURRENT", 1),
         "codex_sync_timeout_seconds": _env_float(
             env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 900.0
-        ),
-        "codex_job_timeout_seconds": _env_float(
-            env, "FORWIN_CODEX_JOB_TIMEOUT_SECONDS", 900.0
         ),
         "default_scene_count": _env_int(env, "DEFAULT_SCENE_COUNT", 3),
         "max_scene_count": _env_int(env, "MAX_SCENE_COUNT", 4),
@@ -390,7 +345,6 @@ class _InfrastructureFields:
     observability_span_sample_rate: float = 1.0
     observability_slow_span_threshold_ms: int = 1000
     observability_record_db_spans: bool = True
-    observability_record_payload_sizes: bool = True
     retention_cleanup_on_startup: bool = True
     performance_span_retention_days: int = 30
     publisher_extension_api_key: str = ""
@@ -401,7 +355,6 @@ class _InfrastructureFields:
     publisher_preferred_client_id: str = ""
     publisher_strict_preferred_client: bool = False
     http_bind: str = "127.0.0.1"
-    http_port: int = 8899
     http_basic_user: str = ""
     http_basic_password: str = ""
     http_trusted_operator_header: str = ""
@@ -434,9 +387,7 @@ class _InfrastructureFields:
     codex_bridge_url: str = "http://host.docker.internal:8897"
     codex_bridge_token: str = ""
     codex_default_model: str = DEFAULT_CODEX_MODEL
-    codex_max_concurrent: int = 1
     codex_sync_timeout_seconds: float = 900.0
-    codex_job_timeout_seconds: float = 900.0
     default_scene_count: int = 3
     max_scene_count: int = 4
     prompt_budget_chars: int = 12000
@@ -557,49 +508,3 @@ class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ig
             prompt_budget_chars=self.prompt_budget_chars,
         )
 
-    @property
-    def llm(self) -> LLMConfig:
-        return LLMConfig(
-            minimax_api_key=self.minimax_api_key,
-            minimax_base_url=self.minimax_base_url,
-            minimax_model=self.minimax_model,
-            timeout_seconds=self.llm_timeout_seconds,
-            retry_attempts=self.llm_retry_attempts,
-            max_tokens=self.max_tokens,
-        )
-
-    @property
-    def storage(self) -> StorageConfig:
-        return StorageConfig(
-            database_url=self.database_url,
-            artifact_backend=self.artifact_backend,
-            artifact_root=self.artifact_root,
-            retrieval_backend=self.retrieval_backend,
-            qdrant_url=self.qdrant_url,
-        )
-
-    @property
-    def publisher(self) -> PublisherConfig:
-        return PublisherConfig(
-            extension_api_key=self.publisher_extension_api_key,
-            session_secret=self.publisher_session_secret,
-            session_encryption_required=self.publisher_session_encryption_required,
-            login_discord_webhook_url=self.publisher_login_discord_webhook_url,
-        )
-
-    @property
-    def observability(self) -> ObservabilityConfig:
-        return ObservabilityConfig(
-            enabled=self.observability_enabled,
-            performance_enabled=self.observability_performance_enabled,
-            span_sample_rate=self.observability_span_sample_rate,
-        )
-
-    @property
-    def codex(self) -> CodexConfig:
-        return CodexConfig(
-            enabled=self.codex_enabled,
-            bridge_url=self.codex_bridge_url,
-            default_model=self.codex_default_model,
-            max_concurrent=self.codex_max_concurrent,
-        )

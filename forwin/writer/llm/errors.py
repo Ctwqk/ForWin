@@ -12,6 +12,39 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 _LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
+_TRANSIENT_ERROR_TOKENS = (
+    "http 529",
+    "status code 529",
+    "529 unknown status code",
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "temporarily unavailable",
+    "service unavailable",
+    "rate limit",
+    "too many requests",
+    "overloaded",
+    "connection reset",
+    "connection refused",
+    "remoteprotocolerror",
+    "server disconnected",
+    "network error",
+    "timed out",
+    "timeout",
+)
+
+
+def is_transient_error_chain(exc: BaseException) -> bool:
+    """Return True when any exception in the cause/context chain reads as transient."""
+    current: BaseException | None = exc
+    while current is not None:
+        message = " ".join(str(current).lower().split())
+        if any(token in message for token in _TRANSIENT_ERROR_TOKENS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class ErrorsMixin:
@@ -110,34 +143,7 @@ class ErrorsMixin:
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code if exc.response is not None else 0
             return status_code in _RETRYABLE_HTTP_STATUS_CODES
-        current: BaseException | None = exc
-        while current is not None:
-            message = str(current).lower()
-            if any(
-                token in message
-                for token in (
-                    "http 529",
-                    "status code 529",
-                    "429",
-                    "500",
-                    "502",
-                    "503",
-                    "504",
-                    "temporarily unavailable",
-                    "service unavailable",
-                    "rate limit",
-                    "too many requests",
-                    "overloaded",
-                    "connection reset",
-                    "server disconnected",
-                    "network error",
-                    "timed out",
-                    "timeout",
-                )
-            ):
-                return True
-            current = current.__cause__ or current.__context__
-        return False
+        return is_transient_error_chain(exc)
 
     def _retry_delay(
         self,
@@ -171,4 +177,5 @@ class ErrorsMixin:
 
 __all__ = [
     'ErrorsMixin',
+    'is_transient_error_chain',
 ]

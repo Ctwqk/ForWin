@@ -45,6 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
 from forwin.protocol.writer import WriterOutput
+from forwin.writer.llm.errors import is_transient_error_chain
 from forwin.review.decision.engine import AutoDecisionEngine
 from forwin.review.decision.rules.review_outcome import (
     build_review_outcome_rules,
@@ -144,39 +145,7 @@ def _is_timeout_like(exc: Exception) -> bool:
 
 
 def _is_transient_llm_like(exc: Exception) -> bool:
-    current: BaseException | None = exc
-    while current is not None:
-        message = str(current).lower()
-        compact = " ".join(message.split())
-        if any(
-            token in compact
-            for token in (
-                "http 529",
-                "status code 529",
-                "529 unknown status code",
-                "429",
-                "500",
-                "502",
-                "503",
-                "504",
-                "temporarily unavailable",
-                "service unavailable",
-                "rate limit",
-                "too many requests",
-                "overloaded",
-                "connection reset",
-                "connection refused",
-                "remoteprotocolerror",
-                "server disconnected",
-                "network error",
-                "timed out",
-                "timeout",
-                "read operation timed out",
-            )
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
+    return is_transient_error_chain(exc)
 
 
 def _transient_retry_delay(attempt: int) -> float:

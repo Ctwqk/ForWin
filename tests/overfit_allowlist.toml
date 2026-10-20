@@ -42,24 +42,6 @@ harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
 ignore = []
 
 [[entry]]
-path = "forwin/application/projects/common.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "续写节拍与护栏文本中的剧本二词；Task 6 删除"
-max_literals = 10
-
-[[entry]]
-path = "forwin/application/projects/common.py"
-symbol = "_EXTENSION_BEATS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "12 个写死的剧本二续写节拍；Task 6 删除"
-max_literals = 24
-
-[[entry]]
 path = "forwin/application/projects/genesis.py"
 symbol = "start_project_writing"
 checks = ["cjk_membership"]
@@ -1155,10 +1137,9 @@ max_literals = 4
 path = "forwin/planning/contracts.py"
 symbol = "is_derived_goal_control_instruction"
 checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "派生目标护栏标记；其中“不得回退成几天”“分钟级倒计时不得回退”是剧本二倒计时措辞，Task 6 删除后余下标记改登记为 language_lexicon"
-max_literals = 12
+category = "language_lexicon"
+justification = "派生目标里“承接 canon / 连续性护栏”类控制指令的识别措辞（题材中立）"
+max_literals = 10
 
 [[entry]]
 path = "forwin/planning/future_plan_audit/helpers.py"

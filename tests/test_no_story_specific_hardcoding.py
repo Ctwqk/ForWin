@@ -68,7 +68,6 @@ ALLOWED_PRODUCTION_FILES: set[str] = set()
 
 ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
     "forwin/application/projects/lifecycle.py",
-    "forwin/application/projects/common.py",
     "forwin/canon_quality/rule_profile.py",
     "forwin/review/repair/service.py",
     "forwin/generation/pipeline_core/repair_patches.py",

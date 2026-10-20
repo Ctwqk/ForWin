@@ -26,7 +26,6 @@ from forwin.models.genesis import PromptTrace
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.task import GenerationTask
-from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
@@ -212,69 +211,6 @@ def _export_project_audit_bundle(
     return str(path)
 
 
-_EXTENSION_BEATS: tuple[tuple[str, str], ...] = (
-    (
-        "协议启动的代价",
-        "紧接上一章启动的关键协议，确认倒计时仍是分钟级危机，并让主角付出明确代价。",
-    ),
-    (
-        "核心区的回声",
-        "主角在核心区域取得恢复后门的第一段证据，同时确认被扣押盟友的位置和救援代价。",
-    ),
-    (
-        "被扣押的证人",
-        "推进盟友被扣押后的桥接，不让角色无解释脱身，并让证人提供能验证协议状态的线索。",
-    ),
-    (
-        "恢复后门的第一把锁",
-        "解释父亲在算法中留下的恢复后门如何运作，避免把倒计时重置成几天或新的无约束周期。",
-    ),
-    (
-        "反派的反制",
-        "让主要反派针对紧急协议发起反制，迫使主角在公开真相和保住个人记忆之间做选择。",
-    ),
-    (
-        "组织旧账的清算",
-        "让关键组织旧账浮出水面，补足谁授权、谁执行、谁受益的因果证据链。",
-    ),
-    (
-        "旧城集体记忆震荡",
-        "展示协议造成的城市级后果，但时间推进必须受最新 canon 约束，不能跳成数日后。",
-    ),
-    (
-        "盟友的救援窗口",
-        "在不破坏被捕状态的前提下打开救援窗口，并明确盟友是否仍受追踪器或系统权限限制。",
-    ),
-    (
-        "家族守门人的真相",
-        "揭示家族维护者身份的完整因果，关闭家族档案为何被拆散和抹除的主线缺口。",
-    ),
-    (
-        "核心层的审判",
-        "把关键盟友、主要反派、父辈后门和系统规则集中到核心层冲突中验证。",
-    ),
-    (
-        "倒计时的终止条件",
-        "明确倒计时是被终止、锁定、转移还是以代价完成，不留下主线 ledger 悬空。",
-    ),
-    (
-        "遗档的归档",
-        "终章关闭记忆重置、家族档案、盟友状态和公开真相等主线承诺，只保留非主线续作钩子。",
-    ),
-)
-
-
-def _extension_continuity_guard(req: ProjectExtendGenerationRequest) -> str:
-    explicit = str(getattr(req, "continuity_guard", "") or "").strip()
-    if explicit:
-        return explicit
-    return (
-        "必须紧接最新 accepted canon；尊重最新倒计时、地点、身份和角色状态。"
-        "如果 canon 已进入分钟级危机，后续计划不得回退成几天或数日；"
-        "任何时间跳跃都必须先解释倒计时被中止、锁定、转移或分支。"
-    )
-
-
 def _extension_arc_synopsis(
     *,
     req: ProjectExtendGenerationRequest,
@@ -285,50 +221,12 @@ def _extension_arc_synopsis(
         str(req.arc_title or "").strip()
         or f"续写弧线：第{start_chapter}-{end_chapter}章"
     )
-    synopsis = str(req.arc_synopsis or "").strip()
-    guard = _extension_continuity_guard(req)
     parts = [title]
-    if synopsis:
-        parts.append(synopsis)
-    parts.append(guard)
+    for raw in (req.arc_synopsis, req.continuity_guard):
+        value = str(raw or "").strip()
+        if value:
+            parts.append(value)
     return "\n".join(parts)
-
-
-def _extension_chapter_blueprint(
-    *,
-    chapter_number: int,
-    offset: int,
-    guard: str,
-    end_chapter: int,
-) -> tuple[str, str, list[str], ChapterExperiencePlan]:
-    beat_title, beat_line = (
-        _EXTENSION_BEATS[offset]
-        if offset < len(_EXTENSION_BEATS)
-        else (
-            f"续写推进 {offset + 1}",
-            "推进最新 canon 后果，关闭已登记的主线缺口，并保持倒计时、地点、身份和角色状态连续。",
-        )
-    )
-    title = f"第{chapter_number}章 {beat_title}"
-    one_line = f"{beat_line} 连续性护栏：{guard}"
-    goals = [
-        "承接上一章 accepted canon，不改写已发生事实。",
-        guard,
-        beat_line,
-    ]
-    if chapter_number == end_chapter:
-        goals.append(
-            "作为当前追加段落的终点，必须关闭 P0/P1 主线缺口，不能留下主线倒计时或身份债。"
-        )
-    experience_plan = ChapterExperiencePlan(
-        question_hook="最新 canon 的分钟级危机如何被推进或关闭？",
-        question_resolution=beat_line,
-        immersion_anchors=["核心区域", "倒计时终端", "家族档案后门"],
-        progress_markers=[guard, beat_line],
-        rule_anchors=["canon 优先于旧计划", "分钟级倒计时不得回退成几天或数日"],
-        relationship_or_status_shift="跟踪主角、盟友、反派与系统权限的最新状态变化。",
-    )
-    return title, one_line, goals, experience_plan
 
 
 def _normalize_chapter_page(offset: int, limit: int) -> tuple[int, int]:

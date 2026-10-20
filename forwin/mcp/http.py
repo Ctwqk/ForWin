@@ -272,7 +272,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "project_extend_generation",
-        "Append planned future chapters to an existing writing project before continuing generation. Use this when the user asks to extend the target chapter count; existing planned chapters are allowed, but active, review, drafted, or failed gates must be handled first.",
+        "Append one planned arc covering additional_chapters new chapters to an existing writing project and raise its target chapter count. Use this when the user asks to extend the target chapter count; no chapter plans are created here, the new arc's chapters are planned from the book state when continue generation activates it. Existing planned chapters are allowed, but active, review, drafted, or failed gates must be handled first.",
     )
     async def project_extend_generation(
         project_id: str,

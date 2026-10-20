@@ -17,6 +17,24 @@ from forwin.observability.payloads import audit_payload
 from forwin.state.updater import StateUpdater
 
 
+def _arc_payload_from_row(arc_row: ArcPlanVersion) -> dict[str, Any]:
+    chapter_start = int(arc_row.chapter_start or 1) or 1
+    chapter_end = max(chapter_start, int(arc_row.chapter_end or chapter_start))
+    chapter_count = chapter_end - chapter_start + 1
+    return {
+        "arc_number": int(arc_row.arc_number or 0),
+        "title": "",
+        "arc_synopsis": str(arc_row.arc_synopsis or ""),
+        "goal": "",
+        "stakes": "",
+        "payoff_direction": "",
+        "chapter_start": chapter_start,
+        "chapter_end": chapter_end,
+        "chapter_count": chapter_count,
+        "target_size": int(arc_row.planned_target_size or 0) or chapter_count,
+    }
+
+
 class GenesisChapterMaterializer:
     def __init__(self, owner: Any) -> None:
         self.owner = owner
@@ -38,17 +56,6 @@ class GenesisChapterMaterializer:
             if isinstance(pack.get("book_arc_blueprint"), dict)
             else {}
         )
-        arc_payload = next(
-            (
-                item
-                for item in (blueprint.get("arcs") or [])
-                if isinstance(item, dict)
-                and int(item.get("arc_number", 0) or 0) == int(arc_number or 0)
-            ),
-            None,
-        )
-        if arc_payload is None:
-            raise ValueError(f"Genesis blueprint 不存在 arc {arc_number}")
         arc_row = session.execute(
             select(ArcPlanVersion)
             .where(
@@ -59,6 +66,17 @@ class GenesisChapterMaterializer:
         ).scalar_one_or_none()
         if arc_row is None:
             raise ValueError(f"Arc {arc_number} skeleton 不存在")
+        # Arcs appended after Genesis (extend-generation) are absent from the
+        # blueprint; their payload comes from the ArcPlanVersion row itself.
+        arc_payload = next(
+            (
+                item
+                for item in (blueprint.get("arcs") or [])
+                if isinstance(item, dict)
+                and int(item.get("arc_number", 0) or 0) == int(arc_number or 0)
+            ),
+            None,
+        ) or _arc_payload_from_row(arc_row)
         existing = session.execute(
             select(func.count(ChapterPlan.id)).where(
                 ChapterPlan.arc_plan_id == arc_row.id

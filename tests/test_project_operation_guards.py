@@ -22,6 +22,7 @@ from forwin.api_schema import (
     StartWritingRequest,
 )
 from forwin.config import InfrastructureConfig
+from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.planning_control import BandCheckpoint
@@ -191,30 +192,33 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertTrue(detail.generation_control.pause_requested)
         self.assertFalse(detail.generation_control.can_resume)
 
-    def test_extend_generation_appends_future_plans_after_completed_workset(
+    def _seed_accepted_arc(
         self,
+        project_id: str,
+        *,
+        arc_id: str,
+        chapter_start: int,
+        chapter_end: int,
+        arc_number: int = 1,
+        status: str = "active",
     ) -> None:
-        project = self._create_project(project_id="proj-extend-after-24")
         with self.session_factory() as session:
-            project = session.get(Project, project.id)
-            project.creation_status = "writing"
-            project.target_total_chapters = 24
             arc = ArcPlanVersion(
-                id="arc-extend-1",
-                project_id=project.id,
-                arc_synopsis="已完成弧线",
-                status="active",
-                arc_number=1,
-                chapter_start=1,
-                chapter_end=24,
-                planned_target_size=24,
+                id=arc_id,
+                project_id=project_id,
+                arc_synopsis=f"弧线{arc_number}",
+                status=status,
+                arc_number=arc_number,
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                planned_target_size=chapter_end - chapter_start + 1,
             )
             session.add(arc)
-            for chapter_number in range(1, 25):
+            for chapter_number in range(chapter_start, chapter_end + 1):
                 session.add(
                     ChapterPlan(
-                        id=f"plan-extend-{chapter_number}",
-                        project_id=project.id,
+                        id=f"{arc_id}-plan-{chapter_number}",
+                        project_id=project_id,
                         arc_plan_id=arc.id,
                         chapter_number=chapter_number,
                         title=f"第{chapter_number}章",
@@ -223,60 +227,146 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 )
             session.commit()
 
-        detail = project_generation.extend_project_generation(
-            project.id,
-            ProjectExtendGenerationRequest(
-                additional_chapters=12,
-                continuity_guard="第24章 canon 已确认记忆重置剩余79分钟，不要回退成几天或数日。",
-                reason="operator wants to continue the interrupted sixty-chapter run",
-            ),
+    def _extend(self, project_id: str, **request_fields):
+        return project_generation.extend_project_generation(
+            project_id,
+            ProjectExtendGenerationRequest(**request_fields),
             get_session=self.session_factory,
             display_datetime=lambda value: str(value),
             project_has_active_generation_task=lambda *_args, **_kwargs: False,
             generation_task_conflict_message=lambda project_id: f"active {project_id}",
         )
 
-        self.assertEqual(detail.target_total_chapters, 36)
-        self.assertEqual(detail.generation_control.next_chapter, 25)
-        self.assertEqual(
-            detail.generation_control.planned_chapters, list(range(25, 37))
+    def test_extend_generation_appends_one_planned_arc_without_chapter_plans(
+        self,
+    ) -> None:
+        project = self._create_project(project_id="proj-extend-after-24")
+        with self.session_factory() as session:
+            project = session.get(Project, project.id)
+            project.creation_status = "writing"
+            project.target_total_chapters = 24
+            session.commit()
+        self._seed_accepted_arc(
+            project.id, arc_id="arc-extend-1", chapter_start=1, chapter_end=24
+        )
+        with self.session_factory() as session:
+            plan_count_before = (
+                session.query(ChapterPlan)
+                .filter(ChapterPlan.project_id == project.id)
+                .count()
+            )
+
+        detail = self._extend(
+            project.id,
+            additional_chapters=12,
+            continuity_guard="第24章 canon 已确认剩余79分钟。",
+            reason="operator wants to continue the interrupted run",
         )
 
+        self.assertEqual(detail.target_total_chapters, 36)
         with self.session_factory() as session:
-            plans = (
+            plan_count_after = (
                 session.query(ChapterPlan)
-                .filter(
-                    ChapterPlan.project_id == project.id,
-                    ChapterPlan.chapter_number >= 25,
-                )
-                .order_by(ChapterPlan.chapter_number)
-                .all()
+                .filter(ChapterPlan.project_id == project.id)
+                .count()
             )
             arcs = (
+                session.query(ArcPlanVersion)
+                .filter(ArcPlanVersion.project_id == project.id)
+                .order_by(ArcPlanVersion.arc_number)
+                .all()
+            )
+            workset = build_continue_generation_workset(session, project.id)
+
+        self.assertEqual(plan_count_after, plan_count_before)
+        self.assertEqual([arc.arc_number for arc in arcs], [1, 2])
+        new_arc = arcs[1]
+        self.assertEqual(new_arc.status, "planned")
+        self.assertEqual((new_arc.chapter_start, new_arc.chapter_end), (25, 36))
+        self.assertEqual(new_arc.planned_target_size, 12)
+        self.assertEqual(new_arc.planned_soft_min, 10)
+        self.assertEqual(new_arc.planned_soft_max, 14)
+        self.assertIn("第24章 canon 已确认剩余79分钟。", new_arc.arc_synopsis)
+        self.assertEqual(workset.reason, "future_arc_materialization_required")
+        self.assertEqual(workset.chapter_numbers, tuple(range(25, 37)))
+
+    def test_extend_generation_starts_after_last_genesis_arc(self) -> None:
+        project = self._create_project(project_id="proj-extend-genesis-arcs")
+        with self.session_factory() as session:
+            project = session.get(Project, project.id)
+            project.creation_status = "writing"
+            project.target_total_chapters = 20
+            session.commit()
+        self._seed_accepted_arc(
+            project.id, arc_id="arc-genesis-1", chapter_start=1, chapter_end=10
+        )
+        with self.session_factory() as session:
+            # Genesis creates future arcs as skeleton rows without chapter plans.
+            session.add(
+                ArcPlanVersion(
+                    id="arc-genesis-2",
+                    project_id=project.id,
+                    arc_synopsis="未展开的第二卷",
+                    status="planned",
+                    arc_number=2,
+                    chapter_start=11,
+                    chapter_end=20,
+                    planned_target_size=10,
+                )
+            )
+            session.commit()
+
+        detail = self._extend(project.id, additional_chapters=5)
+
+        self.assertEqual(detail.target_total_chapters, 25)
+        with self.session_factory() as session:
+            new_arc = (
+                session.query(ArcPlanVersion)
+                .filter(
+                    ArcPlanVersion.project_id == project.id,
+                    ArcPlanVersion.arc_number == 3,
+                )
+                .one()
+            )
+        self.assertEqual((new_arc.chapter_start, new_arc.chapter_end), (21, 25))
+        self.assertEqual(new_arc.status, "planned")
+
+    def test_extend_generation_has_no_default_story_text(self) -> None:
+        project = self._create_project(project_id="proj-extend-no-default-text")
+        with self.session_factory() as session:
+            project = session.get(Project, project.id)
+            project.creation_status = "writing"
+            project.target_total_chapters = 3
+            session.commit()
+        self._seed_accepted_arc(
+            project.id, arc_id="arc-plain-1", chapter_start=1, chapter_end=3
+        )
+
+        self._extend(project.id, additional_chapters=2)
+
+        with self.session_factory() as session:
+            new_arc = (
                 session.query(ArcPlanVersion)
                 .filter(
                     ArcPlanVersion.project_id == project.id,
                     ArcPlanVersion.arc_number == 2,
                 )
-                .all()
+                .one()
             )
+            new_plans = (
+                session.query(ChapterPlan)
+                .filter(
+                    ChapterPlan.project_id == project.id,
+                    ChapterPlan.chapter_number > 3,
+                )
+                .count()
+            )
+        self.assertEqual(new_arc.arc_synopsis, "续写弧线：第4-5章")
+        self.assertEqual(new_plans, 0)
 
-        self.assertEqual([plan.chapter_number for plan in plans], list(range(25, 37)))
-        self.assertEqual([plan.status for plan in plans], ["planned"] * 12)
-        self.assertEqual(len(arcs), 1)
-        self.assertEqual(arcs[0].chapter_start, 25)
-        self.assertEqual(arcs[0].chapter_end, 36)
-        first_future_contract = " ".join(
-            [
-                plans[0].one_line,
-                plans[0].goals_json,
-                plans[0].experience_plan_json,
-            ]
-        )
-        self.assertIn("79分钟", first_future_contract)
-        self.assertIn("不要回退成几天", first_future_contract)
-
-    def test_extend_generation_appends_after_existing_planned_workset(self) -> None:
+    def test_extend_generation_appends_arc_after_existing_planned_workset(
+        self,
+    ) -> None:
         project = self._create_project(project_id="proj-extend-with-planned")
         with self.session_factory() as session:
             project = session.get(Project, project.id)
@@ -317,36 +407,36 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 )
             session.commit()
 
-        detail = project_generation.extend_project_generation(
+        detail = self._extend(
             project.id,
-            ProjectExtendGenerationRequest(
-                additional_chapters=45,
-                reason="operator wants one sixty-chapter run before planned workset is exhausted",
-            ),
-            get_session=self.session_factory,
-            display_datetime=lambda value: str(value),
-            project_has_active_generation_task=lambda *_args, **_kwargs: False,
-            generation_task_conflict_message=lambda project_id: f"active {project_id}",
+            additional_chapters=45,
+            reason="operator wants one sixty-chapter run before planned workset is exhausted",
         )
 
         self.assertEqual(detail.target_total_chapters, 60)
-        self.assertEqual(detail.generation_control.planned_chapters, list(range(6, 61)))
+        # The already-planned chapters stay the pending workset; the appended
+        # arc contributes no chapter plans until arc activation plans it.
+        self.assertEqual(detail.generation_control.planned_chapters, list(range(6, 16)))
 
         with self.session_factory() as session:
-            appended = (
+            plan_count = (
                 session.query(ChapterPlan)
+                .filter(ChapterPlan.project_id == project.id)
+                .count()
+            )
+            new_arc = (
+                session.query(ArcPlanVersion)
                 .filter(
-                    ChapterPlan.project_id == project.id,
-                    ChapterPlan.chapter_number >= 16,
+                    ArcPlanVersion.project_id == project.id,
+                    ArcPlanVersion.arc_number == 2,
                 )
-                .order_by(ChapterPlan.chapter_number)
-                .all()
+                .one()
             )
 
-        self.assertEqual(
-            [plan.chapter_number for plan in appended], list(range(16, 61))
-        )
-        self.assertEqual([plan.status for plan in appended], ["planned"] * 45)
+        self.assertEqual(plan_count, 15)
+        self.assertEqual(new_arc.status, "planned")
+        self.assertEqual((new_arc.chapter_start, new_arc.chapter_end), (16, 60))
+        self.assertEqual(new_arc.planned_target_size, 45)
 
     def test_extend_generation_rejects_active_generation_task(self) -> None:
         project = self._create_project(

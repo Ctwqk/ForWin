@@ -772,7 +772,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         self.assertEqual([item.chapter_number for item in chapters.chapters], [1])
 
-    def test_extend_generation_via_mcp_appends_future_plans(self) -> None:
+    def test_extend_generation_via_mcp_appends_planned_arc(self) -> None:
         with self.session_factory() as session:
             updater = StateUpdater(session)
             project = updater.create_project(
@@ -820,17 +820,12 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertIsNotNone(result.project)
-        self.assertEqual(result.project.chapter_count, 4)
-        self.assertEqual(result.project.generation_control.planned_chapters, [3, 4])
+        self.assertEqual(result.project.target_total_chapters, 4)
         with self.session_factory() as session:
-            plans = (
+            plan_count = (
                 session.query(ChapterPlan)
-                .filter(
-                    ChapterPlan.project_id == project_id,
-                    ChapterPlan.chapter_number >= 3,
-                )
-                .order_by(ChapterPlan.chapter_number)
-                .all()
+                .filter(ChapterPlan.project_id == project_id)
+                .count()
             )
             arc = (
                 session.query(ArcPlanVersion)
@@ -841,9 +836,10 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 .one()
             )
 
+        self.assertEqual(plan_count, 2)
         self.assertEqual(arc.status, "planned")
-        self.assertEqual([plan.status for plan in plans], ["planned", "planned"])
-        self.assertIn("79分钟", plans[0].goals_json)
+        self.assertEqual((arc.chapter_start, arc.chapter_end), (3, 4))
+        self.assertIn("最新 canon 剩余79分钟，不要回退成几天。", arc.arc_synopsis)
 
     def test_task_get_includes_task_timestamps(self) -> None:
         task_id = "task-with-time"

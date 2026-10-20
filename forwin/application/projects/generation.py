@@ -24,8 +24,6 @@ from forwin.state.updater import StateUpdater
 from .common import (
     _continue_workset_http_error,
     _extension_arc_synopsis,
-    _extension_chapter_blueprint,
-    _extension_continuity_guard,
 )
 
 
@@ -268,7 +266,17 @@ def extend_project_generation(
             )
 
         additional_chapters = int(req.additional_chapters or 0)
-        last_chapter = max([int(plan.chapter_number or 0) for plan in plans] or [0])
+        # Genesis creates future arcs as skeleton rows without chapter plans, so
+        # the book's last chapter is the furthest of planned arc ends and plans.
+        max_arc_chapter_end = session.execute(
+            select(func.max(ArcPlanVersion.chapter_end)).where(
+                ArcPlanVersion.project_id == project_id
+            )
+        ).scalar_one()
+        last_chapter = max(
+            [int(plan.chapter_number or 0) for plan in plans]
+            + [int(max_arc_chapter_end or 0)]
+        )
         start_chapter = last_chapter + 1
         end_chapter = start_chapter + additional_chapters - 1
         if end_chapter <= last_chapter:
@@ -280,13 +288,12 @@ def extend_project_generation(
             )
         ).scalar_one()
         next_arc_number = int(max_arc_number or 0) + 1
-        guard = _extension_continuity_guard(req)
         updater = StateUpdater(session)
         project.target_total_chapters = max(
             int(project.target_total_chapters or 0), end_chapter
         )
         session.add(project)
-        arc = updater.create_arc_plan(
+        updater.create_arc_plan(
             project_id=project_id,
             arc_synopsis=_extension_arc_synopsis(
                 req=req,
@@ -304,22 +311,6 @@ def extend_project_generation(
                 additional_chapters, int(round(additional_chapters * 1.20))
             ),
         )
-        for offset, chapter_number in enumerate(range(start_chapter, end_chapter + 1)):
-            title, one_line, goals, experience_plan = _extension_chapter_blueprint(
-                chapter_number=chapter_number,
-                offset=offset,
-                guard=guard,
-                end_chapter=end_chapter,
-            )
-            updater.create_chapter_plan(
-                project_id=project_id,
-                arc_plan_id=arc.id,
-                chapter_number=chapter_number,
-                title=title,
-                one_line=one_line,
-                goals=goals,
-                experience_plan=experience_plan,
-            )
         session.commit()
         return build_project_detail(
             session=session,

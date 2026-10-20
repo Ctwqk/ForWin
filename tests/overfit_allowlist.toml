@@ -877,83 +877,12 @@ justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
 max_literals = 6
 
 [[entry]]
-path = "forwin/genesis/fallbacks.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "fallback 编造的剧本二人名地名（陆明/韩青/钟塔/档案署…）；Task 7 改为结构空壳"
-max_literals = 9
-
-[[entry]]
-path = "forwin/genesis/fallbacks.py"
-symbol = "_FALLBACK_SAMPLE_TERMS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本样例词黑名单本身含剧本人名；Task 7 删除"
-max_literals = 9
-
-[[entry]]
-path = "forwin/genesis/fallbacks.py"
-symbol = "_fallback_location_kind"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "按剧本地名用字猜地点类型；Task 7 删除"
-max_literals = 13
-
-[[entry]]
-path = "forwin/genesis/fallbacks.py"
-symbol = "_fallback_map"
-checks = ["cjk_membership", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "fallback 地图写死剧本二地点词；Task 7 改为结构空壳"
-max_literals = 15
-
-[[entry]]
-path = "forwin/genesis/fallbacks.py"
-symbol = "_fallback_named_entity_seed"
-checks = ["cjk_regex", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "fallback 命名种子写死剧本二地名；Task 7 删除"
-max_literals = 14
-
-[[entry]]
 path = "forwin/genesis/handoff/service.py"
 symbol = "GenesisHandoffService.start_writing"
 checks = ["cjk_membership"]
 category = "language_lexicon"
 justification = "匹配本系统地图生成异常消息中的“地图”"
 max_literals = 1
-
-[[entry]]
-path = "forwin/genesis/helpers.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "fallback 职业前缀中的剧本二人物设定；Task 7 删除"
-max_literals = 2
-
-[[entry]]
-path = "forwin/genesis/helpers.py"
-symbol = "_BLOCKED_PLACEHOLDER_TERMS"
-checks = ["cjk_collection"]
-category = "language_lexicon"
-justification = "通用匿名占位"
-max_literals = 2
-
-[[entry]]
-path = "forwin/genesis/helpers.py"
-symbol = "_FALLBACK_PERSON_ROLE_PREFIXES"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "fallback 职业前缀含剧本二人物设定（失业档案修复师/地下算法师…）；Task 7 删除"
-max_literals = 16
 
 [[entry]]
 path = "forwin/genesis/helpers.py"
@@ -970,14 +899,6 @@ checks = ["cjk_regex"]
 category = "language_lexicon"
 justification = "解析“围绕‘X’展开”句式"
 max_literals = 3
-
-[[entry]]
-path = "forwin/genesis/helpers.py"
-symbol = "_story_focus_from_blueprint_fallback"
-checks = ["cjk_regex"]
-category = "language_lexicon"
-justification = "解析“围绕‘X’”句式"
-max_literals = 1
 
 [[entry]]
 path = "forwin/llm_eval/cases.py"

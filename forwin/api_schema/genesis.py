@@ -12,6 +12,7 @@ class BookGenesisStageState(BaseModel):
     locked: bool = False
     updated_at: str = ""
     last_trace_id: str = ""
+    degraded: bool = False
 
 
 class BookGenesisPack(BaseModel):

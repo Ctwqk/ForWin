@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from forwin.genesis.constants import GENESIS_STAGE_ORDER
-from forwin.genesis.fallbacks import _fallback_culture_profiles
 from forwin.genesis.helpers import (
     _normalize_stage_target_path,
     _pack_stage_payload,
@@ -159,4 +158,4 @@ class GenesisNameSuggestionService:
                 return profile_by_id[culture_profile_id]
         if profiles:
             return profiles[0]
-        return _fallback_culture_profiles(project, pack)[0]
+        return {}

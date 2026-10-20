@@ -125,6 +125,7 @@ def _empty_stage_states() -> dict[str, dict[str, Any]]:
             "locked": False,
             "updated_at": "",
             "last_trace_id": "",
+            "degraded": False,
         }
         for stage_key in GENESIS_STAGE_ORDER
     }
@@ -300,20 +301,10 @@ def _extract_story_focus_text(value: str) -> str:
     return re.sub(r"\s+", " ", focus).strip(" 。；;")
 
 
-def _clean_story_focus_from_pack(project: Project, pack: dict[str, Any]) -> str:
-    book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
-    focus = _extract_story_focus_text(str(book_brief.get("one_line") or ""))
-    if not focus:
-        focus = _fallback_story_premise_excerpt(project)
-    return focus[:96]
-
-
 def _story_focus_from_blueprint_fallback(project: Project, fallback: dict[str, Any]) -> str:
     fallback_arcs = [item for item in (fallback.get("arcs") or []) if isinstance(item, dict)]
     synopsis = str((fallback_arcs[0] if fallback_arcs else {}).get("arc_synopsis") or "").strip()
-    match = re.search(r"围绕“(.+?)”", synopsis)
-    focus = _extract_story_focus_text(match.group(1) if match else synopsis)
-    return focus[:96] or _fallback_story_premise_excerpt(project)
+    return _extract_story_focus_text(synopsis)[:96]
 
 
 def _fallback_brief(project: Project, book_brief: dict[str, Any]) -> dict[str, Any]:
@@ -336,32 +327,6 @@ def _fallback_brief(project: Project, book_brief: dict[str, Any]) -> dict[str, A
         "promise": book_brief.get("narrative_promise") or "持续升级、逐步揭示世界真相。",
         "guardrails": book_brief.get("content_guardrails") or [],
     }
-
-
-_FALLBACK_PERSON_ROLE_PREFIXES = (
-    "主角：",
-    "主角",
-    "主人公：",
-    "主人公",
-    "失业档案修复师",
-    "前调查记者",
-    "企业继承人",
-    "地下算法师",
-    "失忆警员",
-    "档案修复师",
-    "调查记者",
-    "继承人",
-    "算法师",
-    "警员",
-    "记者",
-    "修复师",
-)
-_BLOCKED_PLACEHOLDER_TERMS = {
-    "相关人员",
-    "一名相关人员",
-}
-
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

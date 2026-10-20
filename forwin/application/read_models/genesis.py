@@ -81,6 +81,7 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
             locked=bool(stage_raw.get("locked", False)),
             updated_at=str(stage_raw.get("updated_at", "") or ""),
             last_trace_id=str(stage_raw.get("last_trace_id", "") or ""),
+            degraded=bool(stage_raw.get("degraded", False)),
         )
     return BookGenesisPack(
         book_brief=payload.get("book_brief")

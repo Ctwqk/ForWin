@@ -98,7 +98,7 @@ def _normalized_submaps(atlas: dict[str, Any]) -> list[dict[str, Any]]:
         return [
             {
                 "id": "subworld-main-stage",
-                "name": "主舞台总图",
+                "name": "未命名小世界",
                 "scope": "macro_region",
                 "summary": str(atlas.get("overview", "") or ""),
                 "culture_traits": [],

@@ -19,12 +19,10 @@ from forwin.genesis.helpers import (
     _json_clone,
     _story_focus_from_blueprint_fallback,
 )
-from forwin.genesis.fallbacks import (
-    _culture_profile_generator_civilization,
-    _fallback_world_bible,
-    _generate_culture_names,
-)
+from forwin.genesis.fallbacks import _fallback_world_bible
 from forwin.genesis.names_paths import (
+    _culture_profile_generator_civilization,
+    _generate_culture_names,
     _normalize_generator_civilization,
 )
 
@@ -206,7 +204,7 @@ def _normalize_blueprint_payload(
                 "arc_number": index,
                 "title": str(arc.get("title", "")).strip() or f"Arc {index}",
                 "arc_synopsis": str(arc.get("arc_synopsis", "")).strip()
-                or f"围绕“{story_focus}”推进第 {index} 段冲突。",
+                or (f"围绕“{story_focus}”推进第 {index} 段冲突。" if story_focus else ""),
                 "goal": str(arc.get("goal", "")).strip() or "推进主线并扩大代价",
                 "stakes": str(arc.get("stakes", "")).strip() or "角色将承担更高损失风险",
                 "payoff_direction": str(arc.get("payoff_direction", "")).strip() or "局部兑现 + 长线抬高",

@@ -17,12 +17,10 @@ from forwin.api_schema import (
 )
 from forwin.genesis import BookGenesisService
 from forwin.genesis import StaleGenesisRevisionError
-from forwin.genesis.fallbacks import (
-    _fallback_blueprint,
-    _fallback_map,
-    _fallback_named_entity_seed,
-)
-from forwin.genesis.helpers import _fallback_brief
+from forwin.arc_sizing import allocate_arc_chapter_sizes
+from forwin.genesis.fallbacks import _fallback_blueprint
+from forwin.genesis.helpers import _fallback_brief, _story_focus_from_blueprint_fallback
+from forwin.genesis.workspace.name_suggestions import GenesisNameSuggestionService
 from forwin.config import InfrastructureConfig
 from forwin.audit.events import DecisionEventType
 from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
@@ -102,33 +100,6 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(response.creation_status, "creating")
         self.assertTrue(response.workspace_url.endswith(f"project_id={project.id}"))
 
-    def test_fallback_map_does_not_promote_placeholder_guardrails_to_places(
-        self,
-    ) -> None:
-        pack = {
-            "book_brief": {
-                "premise": "主角：陆明。质量要求：不要使用“相关人员”等正文占位符。",
-                "setting_seed": "地下检修线、钟塔、旧港、档案署、中央广场是核心场景。",
-            },
-            "world": {
-                "world_bible": {
-                    "overview": "旧城由核心系统记忆系统维持公共档案秩序。",
-                    "culture_profiles": [
-                        {"id": "culture-main-stage", "generator_civilization": "中华"}
-                    ],
-                }
-            },
-        }
-
-        seed = _fallback_named_entity_seed(pack)
-        fallback_map = _fallback_map(pack)
-        serialized = json.dumps({"seed": seed, "map": fallback_map}, ensure_ascii=False)
-
-        self.assertIn("陆明", seed["characters"])
-        for name in ("地下检修线", "钟塔", "旧港", "档案署", "中央广场"):
-            self.assertIn(name, serialized)
-        self.assertNotIn("相关人员", serialized)
-
     def test_fallback_brief_prefers_story_conflict_over_test_metadata(self) -> None:
         project = Project(
             title="灰城遗档",
@@ -151,14 +122,13 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertNotIn("ForWin", brief["one_line"])
         self.assertNotIn("质量要求", brief["one_line"])
 
-    def test_fallback_blueprint_uses_clean_brief_focus_for_arc_synopsis(self) -> None:
+    def test_fallback_blueprint_keeps_arc_sizes_but_no_story_content(self) -> None:
         project = Project(
             title="灰城遗档",
             genre="悬疑科幻",
             premise=(
                 "本书用于 ForWin 新 canon quality gate 真实端到端复测。\n"
                 "主角：陆明，旧城档案修复师。\n"
-                "背景：一座每隔十年会遗失一段历史的城市。\n"
                 "核心冲突：陆明必须在记忆重置前找回家族档案，并决定是否公开核心系统真相。\n"
                 "质量要求：不要使用正文占位符。"
             ),
@@ -168,14 +138,48 @@ class BookGenesisFlowTests(unittest.TestCase):
         pack = {"book_brief": _fallback_brief(project, {})}
 
         blueprint = _fallback_blueprint(project, pack)
-        serialized = json.dumps(blueprint, ensure_ascii=False)
 
-        self.assertIn("陆明必须在记忆重置前", serialized)
-        self.assertNotIn("悬疑科幻长篇，围绕", serialized)
-        self.assertNotIn("展开”推进", serialized)
-        self.assertNotIn("ForWin", serialized)
-        self.assertNotIn("质量要求", serialized)
-        self.assertNotIn("主角：", serialized)
+        sizes = list(allocate_arc_chapter_sizes(60))
+        self.assertEqual([arc["chapter_count"] for arc in blueprint["arcs"]], sizes)
+        self.assertEqual([arc["target_size"] for arc in blueprint["arcs"]], sizes)
+        self.assertEqual(blueprint["arcs"][0]["chapter_start"], 1)
+        self.assertEqual(blueprint["arcs"][-1]["chapter_end"], 60)
+        for arc in blueprint["arcs"]:
+            for key in ("title", "arc_synopsis", "goal", "stakes", "payoff_direction"):
+                self.assertEqual(arc[key], "")
+        self.assertEqual(blueprint["summary"], "")
+        serialized = json.dumps(blueprint, ensure_ascii=False)
+        self.assertNotIn("陆明", serialized)
+        self.assertNotIn("灰城遗档", serialized)
+
+    def test_story_focus_from_blueprint_fallback_is_empty_for_empty_synopsis(
+        self,
+    ) -> None:
+        project = Project(
+            title="灰城遗档",
+            genre="悬疑科幻",
+            premise="核心冲突：陆明必须在记忆重置前找回家族档案。",
+            target_total_chapters=6,
+        )
+        blueprint = _fallback_blueprint(project, {"book_brief": {}})
+
+        self.assertEqual(_story_focus_from_blueprint_fallback(project, blueprint), "")
+        self.assertEqual(_story_focus_from_blueprint_fallback(project, {}), "")
+
+    def test_name_suggestion_profile_is_empty_when_world_has_no_culture_profile(
+        self,
+    ) -> None:
+        project = Project(title="空文化书", genre="玄幻", premise="先留白。")
+
+        profile = GenesisNameSuggestionService.resolve_name_generation_profile(
+            project=project,
+            stage_key="world",
+            pack={"world": {"world_bible": {"culture_profiles": []}}},
+            stage_payload={},
+            target_path="",
+        )
+
+        self.assertEqual(profile, {})
 
     def test_continue_generation_is_blocked_before_start_writing(self) -> None:
         created = api_module.create_project(
@@ -1109,7 +1113,7 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         self.assertIn("overview", detail.pack.world["map_atlas"])
 
-    def test_map_and_story_fallbacks_include_subworld_metadata_and_links(self) -> None:
+    def test_map_and_story_fallbacks_are_shells_with_stable_id_links(self) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
@@ -1169,149 +1173,149 @@ class BookGenesisFlowTests(unittest.TestCase):
                 BookGenesisStageRunRequest.model_validate({}),
             )
 
-        culture_profile = detail.pack.world["world_bible"]["culture_profiles"][0]
-        submap = detail.pack.world["map_atlas"]["submaps"][0]
-        region = detail.pack.world["map_atlas"]["regions"][0]
-        child_region = detail.pack.world["map_atlas"]["regions"][1]
-        node = detail.pack.world["map_atlas"]["nodes"][0]
-        protagonist = detail.pack.world["story_engine"]["core_cast"][0]
-        faction = detail.pack.world["story_engine"]["factions"][0]
-        opposition = detail.pack.world["story_engine"]["opposition"][0]
+        world = detail.pack.world
+        self.assertEqual(world["world_bible"]["culture_profiles"], [])
+        atlas = world["map_atlas"]
+        self.assertEqual(len(atlas["submaps"]), 1)
+        self.assertEqual(len(atlas["regions"]), 1)
+        self.assertEqual(len(atlas["nodes"]), 1)
+        self.assertEqual(atlas["edges"], [])
+        submap = atlas["submaps"][0]
+        region = atlas["regions"][0]
+        node = atlas["nodes"][0]
 
-        self.assertEqual(culture_profile["id"], "culture-project-seed")
-        self.assertTrue(culture_profile["character_name_examples"])
-        self.assertTrue(culture_profile["region_name_examples"])
-        self.assertTrue(culture_profile["location_name_examples"])
-        self.assertEqual(submap["culture_profile_id"], culture_profile["id"])
-        self.assertIn("culture_traits", submap)
-        self.assertIn("climate", submap)
-        self.assertIn("terrain", submap)
-        self.assertIn("governing_power", submap)
-        self.assertIn("resident_factions", submap)
+        # Ids chain the shell together; names are the normalizer's placeholders, not
+        # fabricated story content.
+        self.assertEqual(submap["id"], "subworld-1")
+        self.assertEqual(submap["name"], "未命名小世界")
+        self.assertEqual(region["id"], "region-1")
+        self.assertEqual(region["name"], "地区1")
+        self.assertEqual(region["subworld_name"], submap["name"])
         self.assertEqual(region["level"], 1)
-        self.assertEqual(region["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(child_region["level"], 2)
-        self.assertEqual(child_region["parent_region_id"], region["id"])
-        self.assertEqual(child_region["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(submap["id"], "subworld-main-stage")
-        self.assertEqual(node["id"], "node-main-stage")
+        self.assertEqual(region["parent_region_id"], "")
+        self.assertEqual(node["id"], "node-1")
+        self.assertEqual(node["name"], "未命名地点")
         self.assertEqual(node["parent_subworld"], submap["id"])
         self.assertEqual(node["parent_region_id"], region["id"])
-        self.assertEqual(node["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(protagonist["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(protagonist["home_subworld"], submap["id"])
-        self.assertEqual(protagonist["home_region"], region["id"])
-        self.assertEqual(protagonist["home_location"], node["id"])
-        self.assertEqual(protagonist["current_region"], region["id"])
-        self.assertEqual(protagonist["current_base"], node["id"])
-        self.assertEqual(faction["id"], "faction-main-stage")
-        self.assertEqual(protagonist["affiliated_faction"], faction["id"])
-        self.assertEqual(
-            len(
-                [
-                    item
-                    for item in protagonist["faction_memberships"]
-                    if item["is_primary"]
-                ]
-            ),
-            1,
-        )
-        self.assertEqual(faction["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(faction["base_subworld"], submap["id"])
-        self.assertEqual(faction["headquarters_region"], child_region["id"])
-        self.assertEqual(faction["footprint"][0]["region_id"], region["id"])
-        self.assertEqual(opposition["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(opposition["backing_faction"], faction["id"])
-        self.assertEqual(opposition["base_region"], child_region["id"])
-        self.assertEqual(opposition["backing_factions"], [faction["id"]])
 
-    def test_fallback_genesis_preserves_named_entities_from_project_input(self) -> None:
+        story_engine = world["story_engine"]
+        for key in (
+            "core_cast",
+            "factions",
+            "opposition",
+            "relationship_axes",
+            "reader_promises",
+            "long_arcs",
+        ):
+            self.assertEqual(story_engine[key], [])
+
+        for stage_key in ("brief", "world", "map", "story_engine"):
+            self.assertTrue(detail.pack.stage_states[stage_key].degraded, stage_key)
+
+    def _stub_genesis_chat(self, llm_state: dict[str, bool]):
+        """Patch the Genesis LLM transport: invalid JSON until ``llm_state["on"]``, then valid."""
+        valid_world = json.dumps(
+            {
+                "world_bible": {
+                    "overview": "被模型写出的世界观。",
+                    "axioms": ["规则 1"],
+                    "history_slice": "历史片段",
+                    "naming_style": "简洁",
+                    "forbidden_zones": [],
+                    "culture_profiles": [],
+                }
+            },
+            ensure_ascii=False,
+        )
+
+        def fake_chat(_service, messages, **kwargs):
+            if llm_state["on"]:
+                return valid_world
+            return "这不是 JSON，模型没有按格式回答。"
+
+        return patch(
+            "forwin.genesis.BookGenesisService._call_llm_chat", new=fake_chat
+        )
+
+    def _create_degraded_world_project(self, title: str) -> str:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
-                {
-                    "title": "三十日回响压力测试",
-                    "premise": (
-                        "失业档案修复师陆明在第零日收到母亲十年前留下的空白遗书，随后发现整座城市"
-                        "每过一天就会抹去一段公共记忆。为了在三十日内找回真相，他必须联合前调查记者许安、"
-                        "企业继承人韩砚、地下算法师阿棠和失忆警员周岚，逐步揭开回声账本、临潮集团、"
-                        "旧港火灾、母亲失踪和城市记忆循环之间的关系。"
-                    ),
-                    "setting_summary": (
-                        "近未来海港城市「临潮」，旧城区、跨海企业、民间记忆馆、地下数据市场并存。"
-                        "城市有一套名为回声账本的记忆审计系统，会把重大谎言记录为可追踪的回响。"
-                    ),
-                    "genre": "都市悬疑科幻",
-                    "target_total_chapters": 30,
-                }
+                {"title": title, "premise": "测试降级标记。", "genre": "玄幻"}
             )
         )
+        return created.project_id
 
-        def fake_fallback_call(
-            _service,
-            *,
-            messages,
-            fallback,
-            stage_key,
-            temperature=0.45,
-            max_tokens=None,
-        ):
-            return (
-                fallback,
-                {
-                    "effective_system_prompt": f"genesis {stage_key}",
-                    "prompt_layers": [
-                        {"role": "system", "content": f"genesis {stage_key}"}
-                    ],
-                    "input_snapshot": {"stage_key": stage_key},
-                    "model_profile": {"model": "fallback-model"},
-                    "attempts": [{"attempt": 1, "status": "fallback"}],
-                    "output_summary": {"mode": "fallback"},
-                },
-            )
+    def test_fallback_generation_marks_stage_degraded_and_successful_refine_clears_it(
+        self,
+    ) -> None:
+        project_id = self._create_degraded_world_project("Genesis 降级标记书")
+        llm_state = {"on": False}
 
-        with patch(
-            "forwin.genesis.BookGenesisService._call_json_with_trace",
-            new=fake_fallback_call,
-        ):
-            api_module.generate_project_genesis_stage(
-                created.project_id,
-                "brief",
-                BookGenesisStageRunRequest.model_validate({}),
-            )
-            api_module.generate_project_genesis_stage(
-                created.project_id,
-                "world",
-                BookGenesisStageRunRequest.model_validate({}),
-            )
-            api_module.generate_project_genesis_stage(
-                created.project_id,
-                "map",
-                BookGenesisStageRunRequest.model_validate({}),
-            )
+        with self._stub_genesis_chat(llm_state):
             detail = api_module.generate_project_genesis_stage(
-                created.project_id,
-                "story_engine",
-                BookGenesisStageRunRequest.model_validate({}),
+                project_id, "world", BookGenesisStageRunRequest.model_validate({})
+            )
+            self.assertIs(detail.pack.stage_states["world"].degraded, True)
+            self.assertIs(detail.pack.stage_states["map"].degraded, False)
+            self.assertEqual(
+                detail.prompt_traces[0].output_summary["mode"], "fallback"
             )
 
-        world = detail.pack.world
-        cast_names = {item["name"] for item in world["story_engine"]["core_cast"]}
-        faction_names = {item["name"] for item in world["story_engine"]["factions"]}
-        opposition_names = {
-            item["name"] for item in world["story_engine"]["opposition"]
-        }
-        map_names = {
-            *(item["name"] for item in world["map_atlas"]["submaps"]),
-            *(item["name"] for item in world["map_atlas"]["regions"]),
-            *(item["name"] for item in world["map_atlas"]["nodes"]),
-        }
+            llm_state["on"] = True
+            detail = api_module.refine_project_genesis_stage(
+                project_id,
+                "world",
+                BookGenesisRefineRequest.model_validate(
+                    {"instruction": "把世界观写得更具体。", "reason": "test"}
+                ),
+            )
+            self.assertIs(detail.pack.stage_states["world"].degraded, False)
+            self.assertEqual(
+                detail.pack.world["world_bible"]["overview"], "被模型写出的世界观。"
+            )
 
-        self.assertIn("陆明", cast_names)
-        self.assertTrue({"许安", "韩砚", "阿棠", "周岚"}.issubset(cast_names))
-        self.assertIn("临潮集团", faction_names | opposition_names)
-        self.assertIn("临潮", map_names)
-        self.assertIn("旧城区", map_names)
-        self.assertIn("民间记忆馆", map_names)
+            # A later fallback revision marks the stage again, and a successful
+            # generation clears it.
+            llm_state["on"] = False
+            detail = api_module.refine_project_genesis_stage(
+                project_id,
+                "world",
+                BookGenesisRefineRequest.model_validate(
+                    {"instruction": "再改一次。", "reason": "test"}
+                ),
+            )
+            self.assertIs(detail.pack.stage_states["world"].degraded, True)
+
+            llm_state["on"] = True
+            detail = api_module.generate_project_genesis_stage(
+                project_id, "world", BookGenesisStageRunRequest.model_validate({})
+            )
+            self.assertIs(detail.pack.stage_states["world"].degraded, False)
+
+    def test_lock_keeps_degraded_and_patching_the_stage_clears_it(self) -> None:
+        project_id = self._create_degraded_world_project("Genesis 降级锁定书")
+        llm_state = {"on": False}
+
+        with self._stub_genesis_chat(llm_state):
+            api_module.generate_project_genesis_stage(
+                project_id, "world", BookGenesisStageRunRequest.model_validate({})
+            )
+
+        detail = api_module.lock_project_genesis_stage(project_id, "world")
+        world_state = detail.pack.stage_states["world"]
+        self.assertTrue(world_state.locked)
+        self.assertIs(world_state.degraded, True)
+
+        # Editing the stage replaces the fallback shell with the author's own content.
+        detail = api_module.patch_project_genesis(
+            project_id,
+            BookGenesisPatchRequest.model_validate(
+                {"world": {"world_bible": {"overview": "作者亲手写下的世界观。"}}}
+            ),
+        )
+        world_state = detail.pack.stage_states["world"]
+        self.assertFalse(world_state.locked)
+        self.assertIs(world_state.degraded, False)
 
     def test_refine_stage_target_path_only_updates_selected_item(self) -> None:
         created = api_module.create_project(

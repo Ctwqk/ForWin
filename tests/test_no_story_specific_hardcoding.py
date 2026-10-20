@@ -4,9 +4,17 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from forwin.genesis.fallbacks import _fallback_map, _fallback_world
+from forwin.arc_sizing import allocate_arc_chapter_sizes
+from forwin.genesis.fallbacks import (
+    _fallback_blueprint,
+    _fallback_map,
+    _fallback_story_engine,
+    _fallback_world,
+)
+from tests.overfit_guard import canary_terms, load_allowlist
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+ALLOWLIST_PATH = REPO_ROOT / "tests" / "overfit_allowlist.toml"
 
 PRODUCTION_PATHS = [
     REPO_ROOT / "forwin",
@@ -160,7 +168,7 @@ def test_local_rewrite_executor_has_no_case_specific_placeholder_defaults() -> N
     assert _violations(inspected_files, terms=LOCAL_REWRITE_STORY_TERMS) == []
 
 
-def test_genesis_deterministic_fallback_has_no_case_specific_story_anchors() -> None:
+def test_fallback_stages_are_structural_shells() -> None:
     project = SimpleNamespace(
         title="六十章最终审计压力测试·星门余烬",
         genre="科幻悬疑",
@@ -184,8 +192,55 @@ def test_genesis_deterministic_fallback_has_no_case_specific_story_anchors() -> 
     world = _fallback_world(project, pack)
     fallback_pack = {**pack, "world": world}
     map_atlas = _fallback_map(fallback_pack)
-    serialized = json.dumps({"world": world, "map": map_atlas}, ensure_ascii=False)
+    story_engine = _fallback_story_engine(fallback_pack)
+    blueprint = _fallback_blueprint(project, fallback_pack)
 
-    for banned in ("陆明", "韩青", "主舞台", "权力中心", "危险边缘", "待补充", "默认占位"):
-        assert banned not in serialized
-    assert "宁望舒" in serialized
+    # The world overview is the author's own setting summary, carried verbatim; every
+    # other field is empty structure.
+    world_bible = world["world_bible"]
+    assert world_bible == {
+        "overview": project.setting_summary,
+        "axioms": [],
+        "history_slice": "",
+        "naming_style": "",
+        "forbidden_zones": [],
+        "culture_profiles": [],
+    }
+
+    assert [item["id"] for item in map_atlas["submaps"]] == ["subworld-1"]
+    assert [item["id"] for item in map_atlas["regions"]] == ["region-1"]
+    assert [item["id"] for item in map_atlas["nodes"]] == ["node-1"]
+    assert map_atlas["edges"] == []
+    for row in (*map_atlas["submaps"], *map_atlas["regions"], *map_atlas["nodes"]):
+        assert row["name"] == ""
+
+    assert story_engine == {
+        "core_cast": [],
+        "factions": [],
+        "opposition": [],
+        "relationship_axes": [],
+        "reader_promises": [],
+        "long_arcs": [],
+    }
+
+    sizes = list(allocate_arc_chapter_sizes(project.target_total_chapters))
+    assert [arc["chapter_count"] for arc in blueprint["arcs"]] == sizes
+    assert [arc["target_size"] for arc in blueprint["arcs"]] == sizes
+    for arc in blueprint["arcs"]:
+        for key in ("title", "arc_synopsis", "goal", "stakes", "payoff_direction"):
+            assert arc[key] == ""
+
+    # Nothing from the premise and nothing from the seed blacklist may be fabricated into
+    # the shells. The world root's template libraries are a catalog the fallback does not
+    # write, so only the fallback's own world_bible is inspected.
+    shells = {
+        "world_bible": {**world_bible, "overview": ""},
+        "map": map_atlas,
+        "story_engine": story_engine,
+        "blueprint": blueprint,
+    }
+    serialized = json.dumps(shells, ensure_ascii=False)
+    for name in ("宁望舒", "星门"):
+        assert name not in serialized
+    blacklist = canary_terms(REPO_ROOT, load_allowlist(ALLOWLIST_PATH).canary)
+    assert sorted(term for term in blacklist if term in serialized) == []

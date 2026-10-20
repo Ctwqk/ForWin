@@ -26,6 +26,19 @@ def test_overview_only_map_atlas_builds_valid_default_spec() -> None:
     assert result.map_nodes
 
 
+def test_default_submap_for_a_pack_without_submaps_carries_no_story_name() -> None:
+    for atlas in ({}, {"overview": "只有概述。"}, {"submaps": []}):
+        specs = build_subworld_map_specs_from_genesis(
+            project_id="p1",
+            genesis_revision_id="rev1",
+            map_atlas=atlas,
+        )
+
+        assert len(specs) == 1
+        assert specs[0].name == "未命名小世界"
+        assert "主舞台" not in specs[0].name
+
+
 def test_genesis_adapter_preserves_source_ids_and_seed_stability() -> None:
     atlas = {
         "overview": "旧城与遗迹组成主舞台。",

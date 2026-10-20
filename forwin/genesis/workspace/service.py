@@ -49,6 +49,12 @@ def _ensure_genesis_mutable(
         raise ValueError("Genesis 已冻结；写作启动后不能直接修改 Genesis revision。")
 
 
+def _trace_fell_back(trace_payload: dict[str, Any]) -> bool:
+    """Whether the stage payload came from the deterministic fallback, not the model."""
+    summary = trace_payload.get("output_summary")
+    return isinstance(summary, dict) and summary.get("mode") == "fallback"
+
+
 class GenesisWorkspaceService:
     """Human-facing Genesis workspace operations.
 
@@ -180,6 +186,7 @@ class GenesisWorkspaceService:
                     "stage_key": stage_key,
                     "status": "edited",
                     "locked": False,
+                    "degraded": False,
                     "updated_at": now,
                 }
             )
@@ -248,6 +255,7 @@ class GenesisWorkspaceService:
                 "stage_key": stage_key,
                 "status": "generated",
                 "locked": False,
+                "degraded": _trace_fell_back(trace_payload),
                 "updated_at": _utc_iso(),
             }
         )
@@ -358,6 +366,7 @@ class GenesisWorkspaceService:
                 "stage_key": stage_key,
                 "status": "edited",
                 "locked": False,
+                "degraded": _trace_fell_back(trace_payload),
                 "updated_at": _utc_iso(),
             }
         )

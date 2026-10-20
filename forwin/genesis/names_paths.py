@@ -239,6 +239,7 @@ def _initial_pack_dummy_merge(payload: dict[str, Any]) -> dict[str, Any]:
         state.setdefault("locked", False)
         state.setdefault("updated_at", "")
         state.setdefault("last_trace_id", "")
+        state.setdefault("degraded", False)
         merged["stage_states"][stage_key] = state
     return merged
 

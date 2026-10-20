@@ -86,7 +86,6 @@ class BookStateCanonPreparer:
     ) -> BookStatePreparationOutcome:
         del verdict
         extraction = BookStateGraphDeltaExtractor(
-            layers=set(context.policy.canon.book_state_layers),
             session=session,
         ).extract(
             BookStateExtractionRequest(

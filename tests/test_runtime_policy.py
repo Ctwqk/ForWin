@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy import CanonPolicy, RuntimePolicy
+
+
+def test_canon_policy_has_no_layer_switch() -> None:
+    assert "book_state_layers" not in CanonPolicy.model_fields
+    RuntimePolicy.for_profile("pulp")
+    RuntimePolicy.for_profile("standard")
 
 
 def test_standard_policy_is_strict_and_complete() -> None:
@@ -18,7 +24,6 @@ def test_standard_policy_is_strict_and_complete() -> None:
     assert "generation_audit_" + "interval" not in policy.pause.model_dump()
     assert "generation_audit_" + "pauses" not in policy.pause.model_dump()
     assert policy.canon.hard_floor is True
-    assert policy.canon.book_state_layers == ("world", "map", "cognition", "narrative")
     assert policy.review.allows_signal("canon_quality")
     assert policy.review.allows_repair_scope("book")
     assert policy.review.effective_rewrite_limit(has_blocking_issue=False) == 3
@@ -37,7 +42,6 @@ def test_pulp_policy_is_deliberately_small_but_keeps_hard_floor() -> None:
     assert policy.review.effective_rewrite_limit(has_blocking_issue=True) == 1
     assert policy.planning.use_llm_simulation is False
     assert policy.canon.hard_floor is True
-    assert policy.canon.book_state_layers == ("world",)
 
 
 def test_runtime_policy_rejects_removed_values_and_invalid_lengths() -> None:

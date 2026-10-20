@@ -22,21 +22,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
-DEFAULT_BOOK_STATE_LAYERS = {"world", "map", "cognition", "narrative"}
-
-
-def _normalize_book_state_layers(layers: set[str] | None) -> set[str]:
-    if layers is None:
-        return set(DEFAULT_BOOK_STATE_LAYERS)
-    normalized = {str(layer).strip().lower() for layer in layers if str(layer).strip()}
-    unknown = normalized - DEFAULT_BOOK_STATE_LAYERS
-    if unknown:
-        raise ValueError(
-            "unknown BookState extraction layers: " + ", ".join(sorted(unknown))
-        )
-    return normalized or set(DEFAULT_BOOK_STATE_LAYERS)
-
-
 class BookStateGraphDeltaExtractor:
     """Extract BookState GraphDelta candidates from writer output.
 
@@ -49,10 +34,8 @@ class BookStateGraphDeltaExtractor:
     def __init__(
         self,
         *,
-        layers: set[str] | None = None,
         session: Session | None = None,
     ) -> None:
-        self.layers = _normalize_book_state_layers(layers)
         self.session = session
 
     def extract(self, request: BookStateExtractionRequest) -> BookStateExtractionResult:
@@ -86,7 +69,7 @@ class BookStateGraphDeltaExtractor:
                     metadata={"extraction_path": "writer_contract"},
                 )
             graph_deltas.extend(contract_result.graph_deltas)
-        if not graph_deltas and "world" in self.layers and _needs_light_structured_extraction(writer_output):
+        if not graph_deltas and _needs_light_structured_extraction(writer_output):
             light_delta = _light_state_extraction_delta(
                 project_id=request.project_id,
                 chapter_number=request.chapter_number,

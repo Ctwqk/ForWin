@@ -446,7 +446,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
 
 def test_deferred_single_writer_empty_extraction_creates_light_state_delta() -> None:
-    extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+    extraction = BookStateGraphDeltaExtractor().extract(
         BookStateExtractionRequest(
             project_id="project-1",
             chapter_number=1,
@@ -483,7 +483,7 @@ def test_deferred_single_writer_empty_extraction_creates_light_state_delta() -> 
 
 
 def test_deferred_single_writer_empty_light_extraction_blocks_summary_only() -> None:
-    extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+    extraction = BookStateGraphDeltaExtractor().extract(
         BookStateExtractionRequest(
             project_id="project-1",
             chapter_number=1,
@@ -515,7 +515,7 @@ def test_light_state_delta_commits_to_book_state() -> None:
             session.add(project)
             session.flush()
             project_id = project.id
-            changes = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+            changes = BookStateGraphDeltaExtractor().extract(
                 BookStateExtractionRequest(
                     project_id=project_id,
                     chapter_number=1,
@@ -549,14 +549,3 @@ def test_light_state_delta_commits_to_book_state() -> None:
         assert any("林夜获得玄铁令" in fact.proposition for fact in facts)
     finally:
         engine.dispose()
-
-
-def test_book_state_layer_constructor_normalizes_known_layer_names() -> None:
-    extractor = BookStateGraphDeltaExtractor(layers={"World", "map", ""})
-
-    assert extractor.layers == {"world", "map"}
-
-
-def test_book_state_layer_constructor_rejects_unknown_layers() -> None:
-    with pytest.raises(ValueError, match="foo"):
-        BookStateGraphDeltaExtractor(layers={"foo"})

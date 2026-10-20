@@ -1066,7 +1066,6 @@ def sample_runtime_policy() -> dict[str, Any]:
         "canon": {
             "hard_floor": True,
             "quality_gate": "strict",
-            "book_state_layers": ["world", "map", "cognition", "narrative"],
         },
         "writer_attention_retries": 3,
     }

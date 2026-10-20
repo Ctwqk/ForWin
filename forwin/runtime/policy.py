@@ -61,7 +61,6 @@ class PlanningPolicy(FrozenPolicyModel):
 class CanonPolicy(FrozenPolicyModel):
     hard_floor: bool = True
     quality_gate: Literal["strict", "pulp_fatal"] = "strict"
-    book_state_layers: tuple[Literal["world", "map", "cognition", "narrative"], ...]
 
 
 class RuntimePolicy(FrozenPolicyModel):
@@ -91,7 +90,7 @@ class RuntimePolicy(FrozenPolicyModel):
                     repair_models=(),
                 ),
                 planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
-                canon=CanonPolicy(quality_gate="pulp_fatal", book_state_layers=("world",)),
+                canon=CanonPolicy(quality_gate="pulp_fatal"),
                 writer_attention_retries=1,
             )
         return cls(
@@ -106,7 +105,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 repair_models=("deepseek-reasoner", "deepseek-reasoner", "gpt-5.3-codex-spark"),
             ),
             planning=PlanningPolicy(future_constraints=True, plan_health=True, use_llm_simulation=True, context_recency_window=0),
-            canon=CanonPolicy(book_state_layers=("world", "map", "cognition", "narrative")),
+            canon=CanonPolicy(),
             writer_attention_retries=3,
         )
 

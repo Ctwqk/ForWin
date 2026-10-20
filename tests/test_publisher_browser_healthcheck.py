@@ -37,7 +37,14 @@ def test_heartbeat_check_script_emits_structured_failure() -> None:
     assert payload["message"].startswith("database URL is invalid")
 
 
-def _seed_db(path, *, client_id: str, heartbeat_at: datetime, backend_base_url: str = "http://forwin:8899") -> None:
+def _seed_db(
+    path,
+    *,
+    client_id: str,
+    heartbeat_at: datetime,
+    backend_base_url: str = "http://forwin:8899",
+    platform_heartbeat_at: datetime | None = None,
+) -> None:
     conn = sqlite3.connect(path)
     cur = conn.cursor()
     cur.execute(
@@ -84,7 +91,10 @@ def _seed_db(path, *, client_id: str, heartbeat_at: datetime, backend_base_url: 
             client_id, platform_id, connected, last_heartbeat_at
         ) VALUES (?, 'fanqie', 1, ?)
         """,
-        (client_id, stamp),
+        (
+            client_id,
+            (platform_heartbeat_at or heartbeat_at).replace(tzinfo=None).isoformat(sep=" "),
+        ),
     )
     conn.commit()
     conn.close()
@@ -140,6 +150,31 @@ def test_get_preferred_client_heartbeat_rejects_stale_client(tmp_path, monkeypat
     assert result.ok is False
     assert result.client_id == "preferred-client"
     assert result.message == "preferred publisher client heartbeat is stale"
+
+
+def test_get_preferred_client_heartbeat_is_liveness_without_recent_platforms(tmp_path, monkeypatch):
+    db_path = tmp_path / "novel.db"
+    now = datetime.now(timezone.utc)
+    _seed_db(
+        db_path,
+        client_id="preferred-client",
+        heartbeat_at=now,
+        platform_heartbeat_at=now - timedelta(minutes=5),
+    )
+    database_url = _patch_healthcheck_engine(monkeypatch, db_path)
+
+    result = get_preferred_client_heartbeat(
+        database_url,
+        preferred_client_id="preferred-client",
+        stale_seconds=90,
+    )
+
+    # This check backs the publisher-browser container healthcheck and the
+    # launcher's profile auto-reset, so it only asks whether the extension is
+    # alive. Job claimability (which also needs recent platform heartbeats) is
+    # decided by ExtensionConnectionService.preferred_client_heartbeat instead.
+    assert result.ok is True
+    assert result.recent_platforms == ()
 
 
 def test_get_preferred_client_heartbeat_falls_back_to_latest_recent_client(tmp_path, monkeypatch):

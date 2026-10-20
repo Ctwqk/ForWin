@@ -1292,6 +1292,76 @@ class BookGenesisFlowTests(unittest.TestCase):
             )
             self.assertIs(detail.pack.stage_states["world"].degraded, False)
 
+    def test_fallback_blueprint_is_stored_as_a_shell_without_story_text(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 蓝图空壳书",
+                    "premise": "蓝图降级后不应带任何编造的剧情文字。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 18,
+                }
+            )
+        )
+        sizes = list(allocate_arc_chapter_sizes(18))
+        llm_state = {"on": False}
+
+        def assert_stored_blueprint_is_shell(detail) -> list[dict]:
+            blueprint = detail.pack.book_arc_blueprint
+            arcs = blueprint["arcs"]
+            self.assertEqual(blueprint["summary"], "")
+            self.assertEqual([arc["chapter_count"] for arc in arcs], sizes)
+            self.assertEqual([arc["target_size"] for arc in arcs], sizes)
+            self.assertEqual(arcs[0]["chapter_start"], 1)
+            self.assertEqual(arcs[-1]["chapter_end"], 18)
+            for arc in arcs:
+                for key in ("arc_synopsis", "goal", "stakes", "payoff_direction"):
+                    self.assertEqual(arc[key], "", key)
+            return arcs
+
+        with self._stub_genesis_chat(llm_state):
+            detail = api_module.generate_project_genesis_stage(
+                created.project_id,
+                "book_blueprint",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+            self.assertIs(detail.pack.stage_states["book_blueprint"].degraded, True)
+            assert_stored_blueprint_is_shell(detail)
+
+            # A refine that falls back keeps the stored shell empty as well.
+            detail = api_module.refine_project_genesis_stage(
+                created.project_id,
+                "book_blueprint",
+                BookGenesisRefineRequest.model_validate(
+                    {"instruction": "把每个 arc 写具体。", "reason": "test"}
+                ),
+            )
+            arcs = assert_stored_blueprint_is_shell(detail)
+
+        # The arc materializer copes with the empty narrative fields.
+        with self.session_factory.begin() as session:
+            project = session.get(Project, created.project_id)
+            assert project is not None
+            revision = session.get(
+                BookGenesisRevision, str(project.active_genesis_revision_id)
+            )
+            assert revision is not None
+            service = BookGenesisService(llm_client=object())
+            rows = service.materialize_book_arcs(
+                session=session,
+                updater=StateUpdater(session),
+                project=project,
+                revision=revision,
+            )
+            self.assertEqual(
+                [row.planned_target_size for row in rows],
+                [arc["target_size"] for arc in arcs],
+            )
+            self.assertEqual(
+                [row.arc_synopsis for row in rows],
+                [f"Arc {index}" for index in range(1, len(arcs) + 1)],
+            )
+
     def test_lock_keeps_degraded_and_patching_the_stage_clears_it(self) -> None:
         project_id = self._create_degraded_world_project("Genesis 降级锁定书")
         llm_state = {"on": False}

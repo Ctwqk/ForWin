@@ -205,9 +205,9 @@ def _normalize_blueprint_payload(
                 "title": str(arc.get("title", "")).strip() or f"Arc {index}",
                 "arc_synopsis": str(arc.get("arc_synopsis", "")).strip()
                 or (f"围绕“{story_focus}”推进第 {index} 段冲突。" if story_focus else ""),
-                "goal": str(arc.get("goal", "")).strip() or "推进主线并扩大代价",
-                "stakes": str(arc.get("stakes", "")).strip() or "角色将承担更高损失风险",
-                "payoff_direction": str(arc.get("payoff_direction", "")).strip() or "局部兑现 + 长线抬高",
+                "goal": str(arc.get("goal", "")).strip(),
+                "stakes": str(arc.get("stakes", "")).strip(),
+                "payoff_direction": str(arc.get("payoff_direction", "")).strip(),
                 "chapter_start": chapter_start,
                 "chapter_end": chapter_end,
                 "chapter_count": chapter_count,

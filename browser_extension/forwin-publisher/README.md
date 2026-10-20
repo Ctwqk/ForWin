@@ -54,8 +54,8 @@ Firefox 临时加载：
 
   ```bash
   python scripts/check_production_publisher_baseline.py \
-    --api-base http://10.0.0.126:8899 \
-    --mcp-health-url http://10.0.0.126:8896/health \
+    --api-base http://ccttww-lap.local:8899 \
+    --mcp-health-url http://ccttww-lap.local:8896/health \
     --docker-context swarm-manager-150 \
     --colima-profile swarmbridged
   ```

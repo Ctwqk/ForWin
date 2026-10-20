@@ -28,7 +28,7 @@ def test_forwin_operator_plugin_declares_forwin_mcp_server() -> None:
 
     assert mcp["mcpServers"]["forwin"] == {
         "transport": "streamable_http",
-        "url": "http://10.0.0.150:8896/mcp",
+        "url": "http://ccttww-lap.local:8896/mcp",
     }
 
 
@@ -37,7 +37,7 @@ def test_forwin_operator_agent_dependency_uses_swarm_manager_lan_endpoint() -> N
         encoding="utf-8"
     )
 
-    assert 'url: "http://10.0.0.150:8896/mcp"' in agent
+    assert 'url: "http://ccttww-lap.local:8896/mcp"' in agent
 
 
 def test_forwin_operator_plugin_marketplace_entry_is_local() -> None:

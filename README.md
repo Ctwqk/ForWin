@@ -144,8 +144,8 @@ heartbeat. Verify the routine path with:
 
 ```bash
 python scripts/check_production_publisher_baseline.py \
-  --api-base http://10.0.0.126:8899 \
-  --mcp-health-url http://10.0.0.126:8896/health \
+  --api-base http://ccttww-lap.local:8899 \
+  --mcp-health-url http://ccttww-lap.local:8896/health \
   --docker-context swarm-manager-150 \
   --colima-profile swarmbridged
 ```
@@ -174,30 +174,35 @@ single-host compose layout described above.
 - Source-of-truth code: GitHub repository `Ctwqk/ForWin`, branch `master`.
   Use a fresh local clone or isolated worktree for code changes.
 - Production deploy target:
-  `10.0.0.126:/Users/magi1/ForWin-swarm`.
+  `magi1:/Users/magi1/ForWin-swarm` (the ForWin Mac mini, `magi1.local`).
 - Current baseline Swarm services for this repository:
   `forwin-app-swarm`, `forwin-generation-worker-swarm`,
   `forwin-mcp-swarm`, `forwin-publisher-worker-swarm`,
   `forwin-outbox-worker-swarm`, and
   `forwin-publisher-browser-swarm`.
-- User-facing URL: `http://10.0.0.126:8899`.
-- MCP/API helper port: `10.0.0.126:8896`.
+- User-facing URL: `http://ccttww-lap.local:8899` (Swarm ingress on the
+  manager `ccttww-lap`).
+- MCP/API helper port: `ccttww-lap.local:8896`.
+- Machines are addressed by name (`infra-150` / `ccttww-lap.local`, `magi1`,
+  `magi2`); LAN addresses change with the network. In-cluster service URLs use
+  the persistent `10.0.0.0/24` cluster identity addresses instead.
 - Production deploys are picked up by the 150 GitHub sync job after changes are
   pushed to GitHub. The ForWin deploy builds both `forwin-forwin:deploy-<commit>`
   and `forwin-publisher-browser:deploy-<commit>`, then updates the app, worker,
   MCP, outbox, publisher-worker, and publisher-browser Swarm services together.
 
-The 126 directory is a deployment output with `.deploy-sync-project` and
+The `magi1` deploy directory is a deployment output with `.deploy-sync-project` and
 `.deploy-sync-source-commit` markers. Do not create a long-lived Codex coding
 project there unless the task is explicitly about inspecting the deployed copy.
 The former LAN development host at `10.0.0.246` is retired/unavailable; clone
 from GitHub instead of using either 246 or the deploy output as the source
 workspace.
 
-Production data stores are centralized on `10.0.0.150`. This repository still
-contains database models, migrations, storage code, and local compose profiles,
-but production ForWin should connect to the 150-hosted Postgres/Qdrant/MinIO
-services instead of starting app-local stateful containers on 126.
+Production data stores are centralized on `ccttww-lap` (cluster address
+`10.0.0.150` inside services). This repository still contains database models,
+migrations, storage code, and local compose profiles, but production ForWin
+should connect to the 150-hosted Postgres/Qdrant/MinIO services instead of
+starting app-local stateful containers on `magi1`.
 
 The API process should handle UI/API/read/enqueue work. Generation execution is
 owned by the durable generation worker, publisher backend jobs by the publisher
@@ -211,8 +216,8 @@ publishing content:
 
 ```bash
 python scripts/check_production_publisher_baseline.py \
-  --api-base http://10.0.0.126:8899 \
-  --mcp-health-url http://10.0.0.126:8896/health \
+  --api-base http://ccttww-lap.local:8899 \
+  --mcp-health-url http://ccttww-lap.local:8896/health \
   --docker-context swarm-manager-150 \
   --colima-profile swarmbridged
 ```

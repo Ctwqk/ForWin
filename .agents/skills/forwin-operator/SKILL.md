@@ -19,7 +19,7 @@ Before operating a running backend from the ForWin server, confirm the operator 
 
 If the readiness check says the ForWin API or MCP endpoint is unavailable, report that setup problem and stop. Do not compensate by reading SQLite directly or by calling raw ForWin HTTP routes when an equivalent MCP tool exists.
 
-The repository defaults to the Swarm manager LAN endpoints at `10.0.0.150`. Use the readiness command's explicit URL flags only when intentionally operating a separate local development stack.
+The repository defaults to the Swarm manager endpoints at `ccttww-lap.local`. Use the readiness command's explicit URL flags only when intentionally operating a separate local development stack.
 
 ## When To Use The MCP Server
 

@@ -412,8 +412,8 @@ def build_baseline(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ForWin production publisher baseline verifier.")
-    parser.add_argument("--api-base", default="http://10.0.0.126:8899")
-    parser.add_argument("--mcp-health-url", default="http://10.0.0.126:8896/health")
+    parser.add_argument("--api-base", default="http://ccttww-lap.local:8899")
+    parser.add_argument("--mcp-health-url", default="http://ccttww-lap.local:8896/health")
     parser.add_argument("--docker-context", default="swarm-manager-150")
     parser.add_argument("--colima-profile", default="swarmbridged")
     parser.add_argument("--skip-browser", action="store_true")

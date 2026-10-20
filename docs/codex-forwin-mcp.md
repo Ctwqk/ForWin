@@ -10,7 +10,7 @@ Install or enable the repo-local plugin from `.agents/plugins/marketplace.json`,
 [@forwin-operator](plugin://forwin-operator@forwin-local)
 ```
 
-The plugin contributes the `forwin-operator` skill and a `forwin` MCP server definition pointing at the Swarm manager LAN endpoint, `http://10.0.0.150:8896/mcp`.
+The plugin contributes the `forwin-operator` skill and a `forwin` MCP server definition pointing at the Swarm manager LAN endpoint, `http://ccttww-lap.local:8896/mcp`.
 
 On the ForWin server, make sure the backend and MCP endpoint are reachable from the Codex process:
 
@@ -20,9 +20,9 @@ python3 scripts/check_codex_operator_ready.py
 
 Expected required readiness:
 
-- `http://10.0.0.150:8899/health` returns healthy.
-- `http://10.0.0.150:8896/health` returns healthy.
-- The repo-local plugin declares `forwin` MCP at `http://10.0.0.150:8896/mcp`.
+- `http://ccttww-lap.local:8899/health` returns healthy.
+- `http://ccttww-lap.local:8896/health` returns healthy.
+- The repo-local plugin declares `forwin` MCP at `http://ccttww-lap.local:8896/mcp`.
 
 The checker also prints optional diagnostics for Docker Compose visibility, global `codex mcp list` registration, and Python test dependencies. These diagnostics are warnings by default because plugin invocation can provide the MCP definition without global Codex registration.
 
@@ -43,7 +43,7 @@ Recover the deployment through the approved 150 deploy sync path. Use local Dock
 Global MCP registration is optional for plugin use. It is only needed when you want to use the `forwin` MCP server outside this plugin:
 
 ```bash
-codex mcp add forwin --url http://10.0.0.150:8896/mcp
+codex mcp add forwin --url http://ccttww-lap.local:8896/mcp
 codex mcp list
 ```
 

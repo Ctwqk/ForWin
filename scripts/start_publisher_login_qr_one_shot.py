@@ -525,7 +525,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Send one fresh publisher login QR from the production browser to an operator Discord webhook.",
     )
     parser.add_argument("--platform", required=True, choices=sorted(PLATFORM_LOGIN_URLS))
-    parser.add_argument("--api-base", default=os.environ.get("FORWIN_API_BASE", "http://10.0.0.126:8899"))
+    parser.add_argument("--api-base", default=os.environ.get("FORWIN_API_BASE", "http://ccttww-lap.local:8899"))
     parser.add_argument("--ttl-seconds", type=int, default=300)
     parser.add_argument("--max-dispatches", type=int, default=1)
     parser.add_argument("--webhook-url-env", default=DEFAULT_WEBHOOK_ENV)

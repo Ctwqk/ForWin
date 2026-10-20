@@ -123,7 +123,7 @@ def test_readme_names_service_process_target_roles() -> None:
     assert "forwin-mcp-swarm" in readme
     assert "forwin-publisher-worker-swarm" in readme
     assert "forwin-publisher-browser-swarm" in readme
-    assert "Postgres/Qdrant/MinIO services instead of starting app-local stateful containers on 126" in normalized
+    assert "Postgres/Qdrant/MinIO services instead of starting app-local stateful containers on `magi1`" in normalized
 
 
 def test_compose_defines_publisher_worker_service() -> None:

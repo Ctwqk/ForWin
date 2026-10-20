@@ -9,7 +9,8 @@ Use the `forwin` MCP server for project, Genesis, task, and chapter truth whenev
 - Treat `/Users/magi1/ForWin-swarm` as a production deploy output copied by the 150 deploy sync. It is useful for inspecting the currently deployed copy and `.deploy-sync-*` markers, but it is not a long-lived coding workspace.
 - If a Codex thread starts in `/Users/magi1/ForWin-swarm` and the task requires code or documentation edits, switch to `/Users/magi1/ForWin-source-github` before editing.
 - After changes are committed and pushed, deploy ForWin through the 150 sync path:
-  `ssh 10.0.0.150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`.
+  `ssh infra-150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`.
+- Address machines by name, never by LAN IP: `infra-150` / `ccttww-lap.local` (Swarm manager, data stores, ForWin API `:8899` and MCP `:8896`), `magi1` / `magi1.local` (ForWin runtime Mac mini), `magi2` / `magi2.local` (VideoProcess Mac). SSH aliases live in each machine's `~/.ssh/config`; LAN addresses change with the network. Only in-cluster service URLs use the `10.0.0.0/24` cluster identity addresses (for example `10.0.0.150`), which are persistent secondary addresses independent of the LAN.
 - If an emergency edit is ever made in the deploy output, immediately compare it against `/Users/magi1/ForWin-source-github` and backport the tracked source changes before considering the work complete.
 
 ## Workflow Rules

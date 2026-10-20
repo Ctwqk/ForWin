@@ -153,9 +153,9 @@ def test_main_defaults_to_swarm_manager_lan_endpoints(monkeypatch) -> None:
 
     assert main([]) == 0
     assert captured == {
-        "api_health_url": "http://10.0.0.150:8899/health",
-        "mcp_health_url": "http://10.0.0.150:8896/health",
-        "mcp_url": "http://10.0.0.150:8896/mcp",
+        "api_health_url": "http://ccttww-lap.local:8899/health",
+        "mcp_health_url": "http://ccttww-lap.local:8896/health",
+        "mcp_url": "http://ccttww-lap.local:8896/mcp",
     }
 
 

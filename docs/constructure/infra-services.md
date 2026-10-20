@@ -5,17 +5,37 @@ runtime. Use it when changing application services so production keeps one
 shared infra layer instead of recreating databases or browser managers inside
 each app.
 
-Status date: 2026-06-27.
+Status date: 2026-06-27 (addressing updated 2026-10-19).
 
 ## Current Topology
 
-| Host | Role | Runtime identity |
-| --- | --- | --- |
-| `10.0.0.150` / `ccttww-lap` | Swarm manager, shared infrastructure, GPU services, dashboard, IBKR, VNC/browser state | Docker Swarm manager node `ccttww-lap` |
-| `10.0.0.126` / `CASPERs-Mac-mini.local` | ForWin and news application runtime | Colima/Swarm node `colima-swarmbridged`; host forwards expose app ports |
-| `10.0.0.127` / `Wenjies-Mac-mini.local` | VideoProcess, PDS, feature aggregator, and arb application runtime | Colima/Swarm node `colima-127`; host forwards expose app ports |
+| Host (SSH alias / mDNS name) | Role | Runtime identity | Cluster address |
+| --- | --- | --- | --- |
+| `infra-150` / `ccttww-lap.local` | Swarm manager, shared infrastructure, GPU services, dashboard, IBKR, VNC/browser state | Docker Swarm manager node `ccttww-lap` | `10.0.0.150` |
+| `magi1` / `magi1.local` | ForWin and news application runtime | Colima/Swarm node `colima-swarmbridged` | `10.0.0.18` (VM) |
+| `magi2` / `magi2.local` | VideoProcess, PDS, feature aggregator, and arb application runtime | Colima/Swarm node `colima-127` | — |
 
-Constructure as a folder/concept exists only on `10.0.0.150`. The two Mac
+### Addressing (updated 2026-10-19)
+
+Refer to machines by SSH alias or mDNS name, never by LAN address. The home LAN
+moved from `10.0.0.0/24` to `192.168.0.0/24` in 2026-10 and DHCP addresses may
+change again; only the alias definitions in each machine's `~/.ssh/config` know
+current addresses (the aliases on `ccttww-lap` use the Thunderbolt link
+`192.168.20.0/24`).
+
+- Control plane (SSH, deploy sync, operator URLs): names only. The deploy sync
+  script on 150 targets `FORWIN_MAC_HOST` / `VP_MAC_HOST` (default `magi1` /
+  `magi2`) and maps legacy `10.0.0.126` / `10.0.0.127` arguments to them.
+- Data plane (Swarm advertise addresses, in-container service URLs such as
+  Postgres/Qdrant/embedding at `10.0.0.150`): the `10.0.0.0/24` addresses are
+  now cluster identity addresses, configured as persistent secondary addresses
+  (NetworkManager on `ccttww-lap`, `50-swarm-identity.conf` in the colima VM)
+  independent of the LAN. Containers cannot resolve `.local` names.
+- `ccttww-lap` must not publish IPv6 mDNS records (`use-ipv6=no` in
+  `/etc/avahi/avahi-daemon.conf`): ForWin ports listen on IPv4 only, and HTTP
+  clients on the Macs otherwise try the IPv6 record first and hang.
+
+Constructure as a folder/concept exists only on `ccttww-lap`. The two Mac
 hosts should keep project-specific directories such as `ForWin-swarm` and
 `VideoProcess-app`; do not create a new Constructure root there for production
 apps.
@@ -27,14 +47,14 @@ Production is deployed by GitHub-tracked repositories, but the runtime copies on
 
 | Project | Source-of-truth edit location | Production target |
 | --- | --- | --- |
-| ForWin | GitHub repo `Ctwqk/ForWin` on branch `master`; use a fresh local clone or isolated worktree for edits | `10.0.0.126:/Users/magi1/ForWin-swarm` |
-| VideoProcess | GitHub repo `Ctwqk/videoprocess` on branch `main`; auxiliary checkout `10.0.0.150:/home/taiwei/Constructure-repos/videoprocess` | `10.0.0.127:/Users/wenjieliu/VideoProcess-app` |
-| Policy Decision Service | `10.0.0.150:/home/taiwei/Constructure-repos/policy-decision-service` | `10.0.0.127:/Users/wenjieliu/.deploy-build/policy-decision-service` |
-| VP Feature Aggregator | `10.0.0.150:/home/taiwei/Constructure-repos/vp-feature-aggregator` | `10.0.0.127:/Users/wenjieliu/.deploy-build/vp-feature-aggregator` |
-| Arb | `10.0.0.150:/home/taiwei/Constructure-repos/arb` | `10.0.0.127:/Users/wenjieliu/arb-swarm-src` |
-| News | GitHub repo `Ctwqk/news`; deploy mirror currently at `10.0.0.150:/home/taiwei/deploy-github-sync/repos/news` | `10.0.0.126:/Users/magi1/Constructure/news` |
-| IBKR | `10.0.0.150:/home/taiwei/Constructure-repos/ibkr` | 150 only |
-| Runtime control / dashboard / shared infra | `10.0.0.150:/home/taiwei/Constructure-repos/constructure-runtime*` | 150 only |
+| ForWin | GitHub repo `Ctwqk/ForWin` on branch `master`; use a fresh local clone or isolated worktree for edits | `magi1:/Users/magi1/ForWin-swarm` |
+| VideoProcess | GitHub repo `Ctwqk/videoprocess` on branch `main`; auxiliary checkout `infra-150:/home/taiwei/Constructure-repos/videoprocess` | `magi2:/Users/wenjieliu/VideoProcess-app` |
+| Policy Decision Service | `infra-150:/home/taiwei/Constructure-repos/policy-decision-service` | `magi2:/Users/wenjieliu/.deploy-build/policy-decision-service` |
+| VP Feature Aggregator | `infra-150:/home/taiwei/Constructure-repos/vp-feature-aggregator` | `magi2:/Users/wenjieliu/.deploy-build/vp-feature-aggregator` |
+| Arb | `infra-150:/home/taiwei/Constructure-repos/arb` | `magi2:/Users/wenjieliu/arb-swarm-src` |
+| News | GitHub repo `Ctwqk/news`; deploy mirror currently at `infra-150:/home/taiwei/deploy-github-sync/repos/news` | `magi1:/Users/magi1/Constructure/news` |
+| IBKR | `infra-150:/home/taiwei/Constructure-repos/ibkr` | 150 only |
+| Runtime control / dashboard / shared infra | `infra-150:/home/taiwei/Constructure-repos/constructure-runtime*` | 150 only |
 
 The 126/127 directories with `.deploy-sync-project` and
 `.deploy-sync-source-commit` are deployment outputs. Do not create long-lived
@@ -68,14 +88,14 @@ same overlay network.
 
 | Surface | URL / port | Notes |
 | --- | --- | --- |
-| ForWin UI/API | `http://10.0.0.126:8899` | Host-forwarded from the 126 Colima/Swarm runtime |
-| ForWin MCP | `10.0.0.126:8896` | Host-forwarded from the 126 runtime |
-| News server health/API | `http://10.0.0.126:6551` | Host-forwarded from the 126 runtime |
-| ForWin/browser helper ports | `10.0.0.126:18896`, `10.0.0.126:18899` | Host-forwarded browser/helper surfaces |
-| VideoProcess frontend | `http://10.0.0.127:3001` | Host-forwarded from the 127 Colima/Swarm runtime |
-| VideoProcess API | `http://10.0.0.127:18080` | Host-forwarded from the 127 runtime |
-| Dashboard | SSH tunnel to `10.0.0.150:7700` localhost | Do not expose directly on LAN without redesign |
-| IBKR VNC | SSH tunnel to `10.0.0.150:5999` localhost | Used for IBKR Mobile / Gateway login checks |
+| ForWin UI/API | `http://ccttww-lap.local:8899` | Swarm ingress (routing mesh answers on every node) |
+| ForWin MCP | `http://ccttww-lap.local:8896/mcp` | Swarm ingress |
+| News server health/API | `http://magi1.local:6551` | Host-forwarded from the 126 runtime |
+| ForWin/browser helper ports | `magi1.local:18896`, `magi1.local:18899` | Host-forwarded browser/helper surfaces |
+| VideoProcess frontend | `http://magi2.local:3001` | Host-forwarded from the 127 Colima/Swarm runtime |
+| VideoProcess API | `http://magi2.local:18080` | Host-forwarded from the 127 runtime |
+| Dashboard | SSH tunnel to `infra-150:7700` localhost | Do not expose directly on LAN without redesign |
+| IBKR VNC | SSH tunnel to `infra-150:5999` localhost | Used for IBKR Mobile / Gateway login checks |
 
 ## Swarm Services
 

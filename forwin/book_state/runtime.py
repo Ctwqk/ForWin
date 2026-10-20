@@ -74,7 +74,7 @@ class ObjectiveWorldGraph:
         for patch in graph_delta.node_patches:
             self.apply_node_patch(patch)
         for patch in graph_delta.edge_patches:
-            self.apply_edge_patch(patch)
+            self.apply_edge_patch(patch, chapter_number=graph_delta.chapter_number)
         for patch in graph_delta.fact_patches:
             self.apply_fact_patch(patch)
 
@@ -112,12 +112,9 @@ class ObjectiveWorldGraph:
 
         payload = node.model_dump(mode="json")
         apply_path_patch(payload, patch.field_path, patch.new_value, op=op)
-        updated = WorldNode.model_validate(payload)
-        self.nodes_by_id[patch.node_id] = updated
-        if "state" in payload:
-            self.states_by_node_id[patch.node_id] = dict(updated.state)
+        self.nodes_by_id[patch.node_id] = WorldNode.model_validate(payload)
 
-    def apply_edge_patch(self, patch: EdgePatch) -> None:
+    def apply_edge_patch(self, patch: EdgePatch, *, chapter_number: int) -> None:
         op = str(patch.op)
         if op == "create":
             payload = patch.new_value if isinstance(patch.new_value, dict) else {}
@@ -137,7 +134,9 @@ class ObjectiveWorldGraph:
         if edge is None:
             raise KeyError(f"unknown world edge: {patch.edge_id}")
         if op == "deactivate":
-            self.edges_by_id[patch.edge_id] = edge.model_copy(update={"is_active": False})
+            self.edges_by_id[patch.edge_id] = edge.model_copy(
+                update={"is_active": False, "ended_at_chapter": chapter_number}
+            )
             return
         payload = edge.model_dump(mode="json")
         apply_path_patch(payload, patch.field_path, patch.new_value, op=op)

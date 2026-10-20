@@ -220,7 +220,8 @@ def test_canon_admission_blocks_rule_rewrite_before_book_state_commit() -> None:
                     name="通行协议",
                     profile={"public_version": "三印同亮，门右移一格。"},
                     created_at_chapter=0,
-                )
+                ),
+                version_chapter=0,
             )
             outcome = _prepare_candidate(
                 pipeline,

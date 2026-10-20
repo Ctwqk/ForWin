@@ -480,6 +480,7 @@ def build_handlers(
                 for node in repo.list_world_nodes(project_id)
                 if str(node.node_type) == "character"
             ]
+            version_chapter = repo.latest_available_chapter(project_id)
             for node in nodes:
                 existing = (
                     node.profile.get("personality_loadout")
@@ -553,7 +554,8 @@ def build_handlers(
                         repo.create_world_node(
                             node.model_copy(
                                 update={"profile": profile, "metadata": metadata}
-                            )
+                            ),
+                            version_chapter=version_chapter,
                         )
                 items.append(
                     {
@@ -678,7 +680,8 @@ def build_handlers(
             profile["personality_loadout"] = new_loadout
             metadata["personality_assignment"] = result.report.model_dump(mode="json")
             repo.create_world_node(
-                node.model_copy(update={"profile": profile, "metadata": metadata})
+                node.model_copy(update={"profile": profile, "metadata": metadata}),
+                version_chapter=repo.latest_available_chapter(project_id),
             )
             StateUpdater(session).save_decision_event(
                 DecisionEventInfo(
@@ -822,7 +825,9 @@ def build_handlers(
                 "reason": req.reason,
             }
             updated = node.model_copy(update={"profile": profile, "metadata": metadata})
-            repo.create_world_node(updated)
+            repo.create_world_node(
+                updated, version_chapter=repo.latest_available_chapter(project_id)
+            )
             StateUpdater(session).save_decision_event(
                 DecisionEventInfo(
                     project_id=project_id,

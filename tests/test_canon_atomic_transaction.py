@@ -509,7 +509,8 @@ def historical_rewrite_scenario(
                         "source": "map_generation",
                         "writer_state": {"access": "open"},
                     },
-                )
+                ),
+                version_chapter=0,
             )
             metadata_checkpoint = [
                 GraphDelta(

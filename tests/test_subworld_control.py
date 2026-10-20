@@ -227,7 +227,8 @@ class SubWorldControlTests(unittest.TestCase):
                         node_type="character",
                         name="陆沉",
                         description="BookState canon 角色",
-                    )
+                    ),
+                    version_chapter=0,
                 )
                 manager = SubWorldManager()
 
@@ -267,7 +268,8 @@ class SubWorldControlTests(unittest.TestCase):
                         node_type="character",
                         name="陆沉",
                         description="BookState canon 角色",
-                    )
+                    ),
+                    version_chapter=0,
                 )
 
                 detail = build_project_detail(
@@ -403,7 +405,8 @@ class SubWorldControlTests(unittest.TestCase):
                                 "overrides": {},
                             }
                         },
-                    )
+                    ),
+                    version_chapter=0,
                 )
                 book_state.create_world_node(
                     WorldNode(
@@ -425,7 +428,8 @@ class SubWorldControlTests(unittest.TestCase):
                                 "overrides": {},
                             }
                         },
-                    )
+                    ),
+                    version_chapter=0,
                 )
                 book_state.create_world_node(
                     WorldNode(
@@ -434,7 +438,8 @@ class SubWorldControlTests(unittest.TestCase):
                         node_type="location",
                         name="旧宅",
                         description="地点",
-                    )
+                    ),
+                    version_chapter=0,
                 )
                 global_core = updater.create_subworld(
                     project_id=project.id,
@@ -1131,7 +1136,8 @@ class SubWorldControlTests(unittest.TestCase):
                         node_type="character",
                         name="阿青",
                         description="主角团成员",
-                    )
+                    ),
+                    version_chapter=0,
                 )
                 manager.ensure_registry(session, project.id)
                 arc_local = updater.create_subworld(
@@ -1414,7 +1420,8 @@ class SubWorldControlTests(unittest.TestCase):
                             "book_state_node_id": "char_canonical_zhou",
                         }
                     },
-                )
+                ),
+                version_chapter=0,
             )
             roster = updater.create_roster_item(
                 project_id=project.id,

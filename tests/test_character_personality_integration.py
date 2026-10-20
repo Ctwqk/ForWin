@@ -52,7 +52,8 @@ def _seed_allowed_bare_character(session, *, creation_status: str | None = None,
             name="裸角色",
             description="允许角色",
             metadata={"character_identity": {"canonical_character_id": "char_bare", "book_state_node_id": "char_bare"}},
-        )
+        ),
+        version_chapter=0,
     )
     return project.id, chapter
 

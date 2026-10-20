@@ -73,10 +73,8 @@ def test_compiler_persists_delta_snapshots_and_review_gate() -> None:
     with Session.begin() as session:
         project_id = _project(session)
         repo = BookStateRepository(session)
-        repo.create_world_node(WorldNode(id="char_mc", project_id=project_id, node_type="character", state={"location_id": "loc_a"}))
-        repo.append_world_node_state(project_id=project_id, node_id="char_mc", node_type="character", as_of_chapter=0, state={"location_id": "loc_a"})
-        repo.create_world_node(WorldNode(id="char_origin", project_id=project_id, node_type="character", state={"location_id": "loc_a"}))
-        repo.append_world_node_state(project_id=project_id, node_id="char_origin", node_type="character", as_of_chapter=0, state={"location_id": "loc_a"})
+        repo.create_world_node(WorldNode(id="char_mc", project_id=project_id, node_type="character", state={"location_id": "loc_a"}), version_chapter=0, version_state={"location_id": "loc_a"})
+        repo.create_world_node(WorldNode(id="char_origin", project_id=project_id, node_type="character", state={"location_id": "loc_a"}), version_chapter=0, version_state={"location_id": "loc_a"})
         repo.create_map_node(MapNode(id="loc_a", project_id=project_id, node_type="settlement"))
         repo.create_map_node(MapNode(id="loc_b", project_id=project_id, node_type="settlement"))
         repo.create_map_edge(MapEdge(id="edge_ab", project_id=project_id, from_node_id="loc_a", to_node_id="loc_b", edge_type="road", travel_time=1))

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -75,6 +77,24 @@ def _as_jsonable(value: Any) -> Any:
     return value
 
 
+@dataclass(frozen=True)
+class NodeVersion:
+    """A world node's chapter-versioned identity and state."""
+
+    name: str
+    aliases: list[str]
+    profile: dict[str, Any]
+    is_active: bool
+    state: dict[str, Any]
+
+
+_VERSION_RECENCY = (
+    WorldNodeStateRow.as_of_chapter.desc(),
+    WorldNodeStateRow.created_at.desc(),
+    WorldNodeStateRow.id.desc(),
+)
+
+
 class BookStateRepository:
     """Persistence boundary for the final BookState graph tables."""
 
@@ -85,7 +105,48 @@ class BookStateRepository:
     # Core graph rows
     # ------------------------------------------------------------------
 
-    def create_world_node(self, node: WorldNode) -> WorldNodeRow:
+    def create_world_node(
+        self,
+        node: WorldNode,
+        *,
+        version_chapter: int,
+        version_state: dict[str, Any] | None = None,
+        as_of_story_time: str = "",
+        source_delta_id: str = "",
+    ) -> WorldNodeRow:
+        """Upsert the latest-value row and append the node's version as of a chapter.
+
+        Without ``version_state`` the version keeps the node's latest state at or
+        before ``version_chapter``.
+        """
+        row = self._upsert_world_node_row(node)
+        chapter = int(version_chapter)
+        latest = self._latest_version_row(node.project_id, node.id, as_of_chapter=chapter)
+        if version_state is None:
+            version_state = _loads(latest.state_json, {}) if latest is not None else {}
+        version = WorldNodeStateRow(
+            project_id=node.project_id,
+            node_id=node.id,
+            node_type=str(node.node_type),
+            name=node.name,
+            aliases_json=_dump(node.aliases),
+            profile_json=_dump(node.profile),
+            is_active=bool(node.is_active),
+            as_of_chapter=chapter,
+            as_of_story_time=as_of_story_time,
+            state_json=_dump(version_state),
+            source_delta_id=source_delta_id,
+        )
+        if latest is not None and latest.as_of_chapter == chapter:
+            # created_at defaults to the transaction timestamp, so versions written
+            # in one transaction would tie; keep same-chapter versions in write order.
+            version.created_at = latest.created_at + timedelta(microseconds=1)
+        self.session.add(version)
+        self.session.flush()
+        return row
+
+    def _upsert_world_node_row(self, node: WorldNode) -> WorldNodeRow:
+        """Write only the latest-value projection row, without a version."""
         row = self.session.get(WorldNodeRow, node.id)
         if row is None:
             row = WorldNodeRow(id=node.id, project_id=node.project_id, node_type=str(node.node_type))
@@ -115,30 +176,6 @@ class BookStateRepository:
     def get_world_node(self, node_id: str) -> WorldNode | None:
         row = self.session.get(WorldNodeRow, node_id)
         return _world_node_from_row(row) if row is not None else None
-
-    def append_world_node_state(
-        self,
-        *,
-        project_id: str,
-        node_id: str,
-        node_type: str,
-        as_of_chapter: int,
-        state: dict[str, Any],
-        as_of_story_time: str = "",
-        source_delta_id: str = "",
-    ) -> WorldNodeStateRow:
-        row = WorldNodeStateRow(
-            project_id=project_id,
-            node_id=node_id,
-            node_type=node_type,
-            as_of_chapter=int(as_of_chapter or 0),
-            as_of_story_time=as_of_story_time,
-            state_json=_dump(state),
-            source_delta_id=source_delta_id,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return row
 
     def create_world_edge(self, edge: WorldEdge) -> WorldEdgeRow:
         row = self.session.get(WorldEdgeRow, edge.id)
@@ -226,11 +263,7 @@ class BookStateRepository:
         )
         if as_of_chapter is None:
             return [_world_edge_from_row(row) for row in rows]
-        return [
-            _world_edge_from_row(row)
-            for row in rows
-            if row.ended_at_chapter is None or row.ended_at_chapter > int(as_of_chapter)
-        ]
+        return [_world_edge_as_of(_world_edge_from_row(row), int(as_of_chapter)) for row in rows]
 
     def list_fact_nodes(self, project_id: str, *, as_of_chapter: int | None = None) -> list[FactNode]:
         stmt = select(FactNodeRow).where(FactNodeRow.project_id == project_id)
@@ -672,7 +705,6 @@ class BookStateRepository:
                     )
                 )
             elif patch_type == "fact":
-                fact_base = {key: value for key, value in base.items() if key != "field_path"}
                 fact_patches.append(
                     FactPatch(
                         fact_id=str(metadata.get("fact_id", "")),
@@ -680,7 +712,7 @@ class BookStateRepository:
                         truth_value=str(metadata.get("truth_value", "")),
                         related_refs=list(metadata.get("related_refs", [])),
                         sensitivity_level=str(metadata.get("sensitivity_level", "")),
-                        **fact_base,
+                        **base,
                     )
                 )
             elif patch_type == "map":
@@ -823,7 +855,7 @@ class BookStateRepository:
     ) -> None:
         """Use patch provenance, since older creates may have chapter zero metadata."""
         bindings = {
-            "node": (WorldNodeRow, _world_node_from_row, self.create_world_node),
+            "node": (WorldNodeRow, _world_node_from_row, self._upsert_world_node_row),
             "edge": (WorldEdgeRow, _world_edge_from_row, self.create_world_edge),
             "fact": (FactNodeRow, _fact_node_from_row, self.create_fact_node),
             "map_node": (MapNodeRow, _map_node_from_row, self.create_map_node),
@@ -977,6 +1009,8 @@ class BookStateRepository:
             value = decode(row)
             payload = value.model_dump(mode="json")
             apply_path_patch(payload, field_path, patch["old_value"])
+            if kind == "edge" and patch.get("op") == "deactivate":
+                payload["ended_at_chapter"] = None
             persist(type(value).model_validate(payload))
         for kind, target in created:
             if kind not in bindings:
@@ -1144,7 +1178,7 @@ class BookStateRepository:
         if world.objective_digest() != snapshot.objective_graph_digest:
             raise ValueError(failure)
         for node in candidates.values():
-            self.create_world_node(node)
+            self._upsert_world_node_row(node)
 
     # ------------------------------------------------------------------
     # Runtime loading
@@ -1157,8 +1191,9 @@ class BookStateRepository:
         as_of_chapter: int,
         state_index: dict[str, dict[str, Any]] | None = None,
     ) -> ObjectiveWorldGraph:
+        versions = self._latest_version_index(project_id, as_of_chapter)
         nodes = [
-            _world_node_from_row(row)
+            _versioned_world_node(_world_node_from_row(row), versions.get(row.id))
             for row in self.session.execute(
                 select(WorldNodeRow)
                 .where(
@@ -1171,7 +1206,7 @@ class BookStateRepository:
             .all()
             if row.retired_at_chapter is None or row.retired_at_chapter > as_of_chapter
         ]
-        states = self._latest_state_index(project_id, as_of_chapter)
+        states = {node_id: dict(version.state) for node_id, version in versions.items()}
         if state_index:
             states.update(
                 {
@@ -1181,7 +1216,7 @@ class BookStateRepository:
                 }
             )
         edges = [
-            _world_edge_from_row(row)
+            _world_edge_as_of(_world_edge_from_row(row), as_of_chapter)
             for row in self.session.execute(
                 select(WorldEdgeRow)
                 .where(
@@ -1192,7 +1227,6 @@ class BookStateRepository:
             )
             .scalars()
             .all()
-            if row.ended_at_chapter is None or row.ended_at_chapter > as_of_chapter
         ]
         facts = [
             _fact_node_from_row(row)
@@ -1209,7 +1243,7 @@ class BookStateRepository:
         ]
         return ObjectiveWorldGraph(nodes=nodes, states_by_node_id=states, edges=edges, facts=facts)
 
-    def _latest_state_index(self, project_id: str, as_of_chapter: int) -> dict[str, dict[str, Any]]:
+    def _latest_version_index(self, project_id: str, as_of_chapter: int) -> dict[str, NodeVersion]:
         rows = list(
             self.session.execute(
                 select(WorldNodeStateRow)
@@ -1219,20 +1253,42 @@ class BookStateRepository:
                 )
                 .order_by(
                     WorldNodeStateRow.node_id.asc(),
-                    WorldNodeStateRow.as_of_chapter.desc(),
-                    WorldNodeStateRow.created_at.desc(),
-                    WorldNodeStateRow.id.desc(),
+                    *_VERSION_RECENCY,
                 )
             )
             .scalars()
             .all()
         )
-        states: dict[str, dict[str, Any]] = {}
+        versions: dict[str, NodeVersion] = {}
         for row in rows:
-            if row.node_id in states:
+            if row.node_id in versions:
                 continue
-            states[row.node_id] = _loads(row.state_json, {})
-        return states
+            versions[row.node_id] = NodeVersion(
+                name=row.name,
+                aliases=_loads(row.aliases_json, []),
+                profile=_loads(row.profile_json, {}),
+                is_active=bool(row.is_active),
+                state=_loads(row.state_json, {}),
+            )
+        return versions
+
+    def _latest_version_row(
+        self,
+        project_id: str,
+        node_id: str,
+        *,
+        as_of_chapter: int,
+    ) -> WorldNodeStateRow | None:
+        return self.session.scalars(
+            select(WorldNodeStateRow)
+            .where(
+                WorldNodeStateRow.project_id == project_id,
+                WorldNodeStateRow.node_id == node_id,
+                WorldNodeStateRow.as_of_chapter <= as_of_chapter,
+            )
+            .order_by(*_VERSION_RECENCY)
+            .limit(1)
+        ).first()
 
     def load_base_map_graph(
         self,
@@ -1403,6 +1459,8 @@ class BookStateRepository:
             reader_overlay_digest=snapshot.reader_overlay_digest,
             character_overlay_digests_json=_dump(snapshot.character_overlay_digests),
             world_node_state_index_json=_dump(snapshot.world_node_state_index),
+            narrative_node_index_json=_dump(snapshot.narrative_node_index),
+            narrative_edge_index_json=_dump(snapshot.narrative_edge_index),
             active_edge_ids_json=_dump(snapshot.active_edge_ids),
             active_fact_ids_json=_dump(snapshot.active_fact_ids),
             active_world_line_ids_json=_dump(snapshot.active_world_line_ids),
@@ -1472,6 +1530,26 @@ def _world_node_from_row(row: WorldNodeRow) -> WorldNode:
         profile=_loads(row.profile_json, {}),
         metadata=_loads(row.metadata_json, {}),
     )
+
+
+def _versioned_world_node(node: WorldNode, version: NodeVersion | None) -> WorldNode:
+    if version is None:
+        return node
+    return node.model_copy(
+        update={
+            "name": version.name,
+            "aliases": list(version.aliases),
+            "profile": dict(version.profile),
+            "is_active": version.is_active,
+        }
+    )
+
+
+def _world_edge_as_of(edge: WorldEdge, as_of_chapter: int) -> WorldEdge:
+    """An edge deactivated after ``as_of_chapter`` was still active then."""
+    if edge.ended_at_chapter is not None and edge.ended_at_chapter > as_of_chapter:
+        return edge.model_copy(update={"is_active": True, "ended_at_chapter": None})
+    return edge
 
 
 def _world_edge_from_row(row: WorldEdgeRow) -> WorldEdge:
@@ -1674,6 +1752,14 @@ def _world_snapshot_from_row(row: WorldSnapshotRow) -> WorldSnapshot:
         reader_overlay_digest=getattr(row, "reader_overlay_digest", "") or "",
         character_overlay_digests=_loads(getattr(row, "character_overlay_digests_json", "{}"), {}),
         world_node_state_index=_loads(row.world_node_state_index_json, {}),
+        narrative_node_index={
+            key: NarrativeNode.model_validate(value)
+            for key, value in _loads(row.narrative_node_index_json, {}).items()
+        },
+        narrative_edge_index={
+            key: NarrativeEdge.model_validate(value)
+            for key, value in _loads(row.narrative_edge_index_json, {}).items()
+        },
         active_edge_ids=_loads(row.active_edge_ids_json, []),
         active_fact_ids=_loads(row.active_fact_ids_json, []),
         active_world_line_ids=_loads(row.active_world_line_ids_json, []),

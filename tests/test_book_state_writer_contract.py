@@ -62,7 +62,8 @@ def test_review_gate_blocks_writer_rewrite_of_canonical_rule_definition() -> Non
                 name="通行协议",
                 profile={"public_version": "三印同亮，门右移一格。"},
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
 
         verdict = BookStateReviewGate(session).review(
@@ -123,7 +124,8 @@ def test_book_state_preparer_records_review_block_reason() -> None:
                 name="通行协议",
                 profile={"public_version": "三印同亮，门右移一格。"},
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
         output = WriterOutput(
             project_id=project.id,
@@ -329,7 +331,8 @@ def test_writer_rule_lore_rewrite_is_rejected_end_to_end() -> None:
                 name="通行协议",
                 profile={"public_version": "三印同亮，门右移一格。"},
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
         output = WriterOutput(
             project_id=project.id,
@@ -392,7 +395,8 @@ def test_writer_contract_preserves_existing_rule_definition_when_lore_paraphrase
                 aliases=["三印协议"],
                 profile={"public_version": "三印同亮，门右移一格。"},
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
         output = WriterOutput(
             project_id=project.id,
@@ -455,14 +459,9 @@ def test_writer_contract_maps_structured_output_into_book_state_deltas() -> None
                 aliases=[],
                 description="主角",
                 state={"status": "active", "goal": "调查"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project.id,
-            node_id="char-luming",
-            node_type="character",
-            as_of_chapter=1,
-            state={"status": "active", "goal": "调查"},
+            ),
+            version_chapter=1,
+            version_state={"status": "active", "goal": "调查"},
         )
         output = WriterOutput(
             project_id=project.id,
@@ -567,14 +566,9 @@ def test_location_change_resolves_embedded_map_names_to_canonical_ids() -> None:
                 node_type="character",
                 name="季澈",
                 state={"location_id": "loc-repair"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project.id,
-            node_id="char-jiche",
-            node_type="character",
-            as_of_chapter=0,
-            state={"location_id": "loc-repair"},
+            ),
+            version_chapter=0,
+            version_state={"location_id": "loc-repair"},
         )
         repo.create_map_node(
             MapNode(
@@ -664,7 +658,8 @@ def test_unresolved_location_description_does_not_enter_location_id() -> None:
                 project_id=project.id,
                 node_type="character",
                 name="季澈",
-            )
+            ),
+            version_chapter=0,
         )
         output = WriterOutput(
             project_id=project.id,
@@ -731,14 +726,9 @@ def test_canonical_unreachable_location_change_remains_blocked() -> None:
                 node_type="character",
                 name="季澈",
                 state={"location_id": "loc-a"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project.id,
-            node_id="char-jiche",
-            node_type="character",
-            as_of_chapter=0,
-            state={"location_id": "loc-a"},
+            ),
+            version_chapter=0,
+            version_state={"location_id": "loc-a"},
         )
         repo.create_map_node(
             MapNode(

@@ -257,10 +257,12 @@ class BookStateCompiler:
         return values
 
     def _persist_delta_side_effects(self, runtime: BookStateRuntime, delta: GraphDelta) -> None:
+        versioned_node_ids: dict[str, None] = {}
         for patch in delta.node_patches:
             node = runtime.world.nodes_by_id.get(patch.node_id)
             if node is None:
                 continue
+            versioned_node_ids[patch.node_id] = None
             if str(patch.op) == "create" and str(node.node_type) == "character":
                 profile = dict(node.profile) if isinstance(node.profile, dict) else {}
                 if not profile.get("personality_loadout"):
@@ -286,19 +288,17 @@ class BookStateCompiler:
                         )
                     )
                     if result.world_node:
-                        node = WorldNode.model_validate(result.world_node)
-                        runtime.world.nodes_by_id[patch.node_id] = node
-            self.repo.create_world_node(node)
-            if str(patch.op) == "create" or patch.field_path.startswith("state."):
-                self.repo.append_world_node_state(
-                    project_id=delta.project_id,
-                    node_id=patch.node_id,
-                    node_type=str(node.node_type),
-                    as_of_chapter=delta.chapter_number,
-                    as_of_story_time=delta.story_time,
-                    state=runtime.world.get_state(patch.node_id),
-                    source_delta_id=delta.id,
-                )
+                        runtime.world.nodes_by_id[patch.node_id] = WorldNode.model_validate(
+                            result.world_node
+                        )
+        for node_id in versioned_node_ids:
+            self.repo.create_world_node(
+                runtime.world.nodes_by_id[node_id],
+                version_chapter=delta.chapter_number,
+                version_state=runtime.world.get_state(node_id),
+                as_of_story_time=delta.story_time,
+                source_delta_id=delta.id,
+            )
         for patch in delta.edge_patches:
             if patch.edge_id in runtime.world.edges_by_id:
                 self.repo.create_world_edge(runtime.world.edges_by_id[patch.edge_id])

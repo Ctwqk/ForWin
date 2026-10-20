@@ -306,6 +306,7 @@ def _ensure_site_state_map_bindings(session: Session, project_id: str) -> list[d
         if not source_node_id and node_role != "anchor":
             continue
         site_state_id = f"site_state_{source_node_id or node.id}"
+        created_at_chapter = int(node.metadata.get("created_at_chapter") or 0)
         book_repo.create_world_node(
             WorldNode(
                 id=site_state_id,
@@ -322,9 +323,10 @@ def _ensure_site_state_map_bindings(session: Session, project_id: str) -> list[d
                     "map_node_id": node.id,
                     "source_node_id": source_node_id,
                     "source": "map_generation",
-                    "created_at_chapter": int(node.metadata.get("created_at_chapter") or 0),
+                    "created_at_chapter": created_at_chapter,
                 },
-            )
+            ),
+            version_chapter=created_at_chapter,
         )
         bound_map_node_ids.add(node.id)
         created.append(

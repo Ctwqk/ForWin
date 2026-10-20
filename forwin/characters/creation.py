@@ -139,20 +139,17 @@ class CharacterCreationHelper:
             state=dict(request.state),
             metadata=metadata,
         )
-        self.repo.create_world_node(node)
+        self.repo.create_world_node(
+            node,
+            version_chapter=node.created_at_chapter,
+            version_state=dict(request.state),
+        )
         self._sync_identity_map(
             request,
             character_id=node.id,
             display_name=node.name,
             aliases=list(node.aliases),
             genesis_ref_id=genesis_ref_id,
-        )
-        self.repo.append_world_node_state(
-            project_id=request.project_id,
-            node_id=node.id,
-            node_type="character",
-            as_of_chapter=int(request.created_at_chapter or 0),
-            state=dict(request.state),
         )
         decision_ids = [
             self._save_event(

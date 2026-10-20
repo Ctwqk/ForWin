@@ -30,7 +30,8 @@ def _seed_book_state_character(session, project_id: str) -> None:
             name="陈昭宁",
             description="既有角色",
             created_at_chapter=1,
-        )
+        ),
+        version_chapter=1,
     )
 
 
@@ -198,7 +199,8 @@ def test_entity_admission_plan_applies_only_at_canon_boundary() -> None:
                 name=registered.canonical_name,
                 aliases=registered.aliases,
                 created_at_chapter=6,
-            )
+            ),
+            version_chapter=6,
         )
         EntityAdmissionCommitter(session).apply(
             project_id=project.id,

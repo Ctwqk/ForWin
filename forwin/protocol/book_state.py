@@ -530,6 +530,8 @@ class WorldSnapshot(_BookStateModel):
     reader_overlay_digest: str = ""
     character_overlay_digests: dict[str, str] = Field(default_factory=dict)
     world_node_state_index: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    narrative_node_index: dict[str, NarrativeNode] = Field(default_factory=dict)
+    narrative_edge_index: dict[str, NarrativeEdge] = Field(default_factory=dict)
     active_edge_ids: list[str] = Field(default_factory=list)
     active_fact_ids: list[str] = Field(default_factory=list)
     active_world_line_ids: list[str] = Field(default_factory=list)

@@ -382,7 +382,8 @@ def test_canon_quality_context_projects_book_state_rule_as_immutable_invariant()
                         "hidden_version_fact_id": "fact-secret-backdoor",
                     },
                     state={"status": "active"},
-                )
+                ),
+                version_chapter=5,
             )
             session.commit()
 

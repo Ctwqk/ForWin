@@ -74,7 +74,8 @@ def test_book_state_v46_fields_api_and_gate() -> None:
                     tags=["archive"],
                     valid_from_chapter=1,
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_world_node(
                 WorldNode(
@@ -83,7 +84,8 @@ def test_book_state_v46_fields_api_and_gate() -> None:
                     node_type="reader_promise",
                     name="灵矿真相",
                     summary="读者承诺：灵矿真相会被逐层兑现。",
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_world_edge(
                 WorldEdge(
@@ -189,7 +191,8 @@ def test_obsidian_export_human_index_and_generic_proposal_review(tmp_path: Path)
                     summary="旧城线主角。",
                     state={"location_id": "loc_gate", "status": "investigating"},
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_world_node(
                 WorldNode(
@@ -200,7 +203,8 @@ def test_obsidian_export_human_index_and_generic_proposal_review(tmp_path: Path)
                     summary="隐藏秘密。",
                     status="hidden",
                     tags=["hidden"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_map_node(MapNode(id="loc_gate", project_id=project_id, node_type="settlement", name="矿门"))
             repo.create_map_node(MapNode(id="loc_archive", project_id=project_id, node_type="site", name="旧档案室"))
@@ -382,7 +386,8 @@ def test_obsidian_export_records_projection_cache_metadata_and_skips_unchanged_p
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
 
         vault_root = tmp_path / "vault"
@@ -448,7 +453,8 @@ def test_projection_api_refresh_status_and_pages(tmp_path: Path) -> None:
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
 
         handlers = build_projection_handlers(
@@ -496,7 +502,8 @@ def test_structured_patch_sets_personality_loadout_via_proposal(tmp_path: Path) 
                     name="林烬",
                     summary="旧城线主角。",
                     profile={"personality_loadout": {}},
-                )
+                ),
+                version_chapter=0,
             )
 
         loadout = {
@@ -573,7 +580,8 @@ def test_generic_proposal_deltas_preserve_row_source_without_obsidian_identities
                     node_type="character",
                     name="林烬",
                     summary="旧城线主角。",
-                )
+                ),
+                version_chapter=0,
             )
             obsidian_row = KnowledgeEditProposalRow(
                 project_id=project_id,
@@ -652,7 +660,8 @@ def test_structured_patch_old_value_mismatch_blocks_without_forced_accept(tmp_pa
                     node_type="character",
                     name="林烬",
                     summary="旧城线主角。",
-                )
+                ),
+                version_chapter=0,
             )
             row = KnowledgeEditProposalRow(
                 project_id=project_id,
@@ -715,7 +724,8 @@ def test_structured_patch_cognition_ops_commit_through_proposal(tmp_path: Path) 
                     node_type="character",
                     name="林烬",
                     summary="旧城线主角。",
-                )
+                ),
+                version_chapter=0,
             )
             repo.upsert_cognition_overlay(
                 CognitionOverlay(
@@ -1007,7 +1017,8 @@ def test_unified_proposal_api_creates_reviews_and_updates_loadout(tmp_path: Path
                     name="林烬",
                     summary="旧城线主角。",
                     profile={"personality_loadout": {}},
-                )
+                ),
+                version_chapter=0,
             )
 
         loadout = {
@@ -1117,7 +1128,8 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_fact_node(
                 FactNode(
@@ -1209,7 +1221,8 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_fact_node(
                 FactNode(
@@ -1288,7 +1301,8 @@ def test_llm_kb_vector_rebuild_skips_unchanged_section_digests(tmp_path: Path) -
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             compiler = LLMKnowledgeBaseCompiler(
                 session,
@@ -1331,7 +1345,8 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             ObsidianExporter(session).export_project(project_id, vault_root=tmp_path / "vault", as_of_chapter=1)
 
@@ -1478,7 +1493,8 @@ mode: instruction_only
                     node_type="character",
                     name="林烬",
                     summary="旧城线主角。",
-                )
+                ),
+                version_chapter=0,
             )
 
         SkillVectorIndex(
@@ -1547,7 +1563,8 @@ def test_active_personality_context_enters_world_model_and_llm_kb_role_packs(tmp
                     name="林烬",
                     summary="旧城线主角。",
                     profile={"personality_loadout": loadout},
-                )
+                ),
+                version_chapter=0,
             )
 
         with Session() as session:
@@ -1600,7 +1617,8 @@ def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: 
                     name="林烬",
                     summary="旧城线主角。",
                     source_refs=["chapter:1"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_world_node(
                 WorldNode(
@@ -1611,7 +1629,8 @@ def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: 
                     summary="隐藏真相：王都密令导致矿难。",
                     status="hidden",
                     tags=["hidden"],
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_fact_node(
                 FactNode(

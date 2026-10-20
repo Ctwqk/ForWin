@@ -64,7 +64,8 @@ def test_arc_activation_review_pack_collects_canon_feedback() -> None:
                     summary="主角",
                     importance=9,
                     state={"status": "持有玄铁令"},
-                )
+                ),
+                version_chapter=0,
             )
             repo.create_fact_node(
                 FactNode(

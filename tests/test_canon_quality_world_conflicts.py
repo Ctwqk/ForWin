@@ -61,7 +61,8 @@ def test_world_context_includes_open_canon_quality_signals() -> None:
                     project_id=project.id,
                     node_type="rule",
                     name="倒计时规则",
-                )
+                ),
+                version_chapter=0,
             )
             CanonQualityRepository(session).save_signals(
                 [

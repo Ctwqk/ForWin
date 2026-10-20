@@ -268,15 +268,11 @@ class FinalizationStage:
                 state=initial_state if isinstance(initial_state, dict) else {},
                 metadata={"source": "arc_plan_seed"},
             )
-            book_state.create_world_node(node)
-            if node.state:
-                book_state.append_world_node_state(
-                    project_id=project_id,
-                    node_id=node.id,
-                    node_type="location",
-                    as_of_chapter=0,
-                    state=node.state,
-                )
+            book_state.create_world_node(
+                node,
+                version_chapter=node.created_at_chapter,
+                version_state=dict(node.state),
+            )
             entity_map[node.name] = node.id
 
         # Entities: factions
@@ -294,15 +290,11 @@ class FinalizationStage:
                 state=initial_state if isinstance(initial_state, dict) else {},
                 metadata={"source": "arc_plan_seed"},
             )
-            book_state.create_world_node(node)
-            if node.state:
-                book_state.append_world_node_state(
-                    project_id=project_id,
-                    node_id=node.id,
-                    node_type="faction",
-                    as_of_chapter=0,
-                    state=node.state,
-                )
+            book_state.create_world_node(
+                node,
+                version_chapter=node.created_at_chapter,
+                version_state=dict(node.state),
+            )
             entity_map[node.name] = node.id
 
         # Relations

@@ -125,7 +125,10 @@ class RelationshipPersonalityEnricher:
         new_loadout = _compact_loadout(loadout)
         profile["personality_loadout"] = new_loadout
         updated = node.model_copy(update={"profile": profile})
-        self.repo.create_world_node(updated)
+        self.repo.create_world_node(
+            updated,
+            version_chapter=self.repo.latest_available_chapter(node.project_id),
+        )
         return {
             "character_id": node.id,
             "target_character_id": target_character_id,

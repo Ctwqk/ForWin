@@ -287,7 +287,8 @@ def test_book_state_personality_handlers_update_character_profile(tmp_path: Path
                 node_type="character",
                 name="韩砚",
                 profile={"public_identity": "军师"},
-            )
+            ),
+            version_chapter=0,
         )
         project_id = project.id
 

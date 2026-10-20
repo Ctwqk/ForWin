@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
+from forwin.book_state.narrative import NarrativeControlGraph
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.models.base import new_id
@@ -21,6 +22,7 @@ from forwin.protocol.book_state import (
 
 _BLOCKED_EDGE_STATUSES = {"blocked", "destroyed", "sealed"}
 _HIDDEN_EDGE_STATUSES = {"hidden"}
+_ACTIVE_PROMISE_STATUSES = {"open", "active"}
 
 
 class BookStateProjection:
@@ -69,7 +71,18 @@ class BookStateProjection:
             ),
             cognition_by_observer=cognition_views,
         )
-        narrative = self.repo.load_narrative_graph(project_id, as_of_chapter=as_of_chapter)
+        world_after = world_snapshot.as_of_chapter if world_snapshot else -1
+        if world_snapshot is not None and world_snapshot.metadata.get("narrative_indexed"):
+            narrative = NarrativeControlGraph(
+                nodes=list(world_snapshot.narrative_node_index.values()),
+                edges=list(world_snapshot.narrative_edge_index.values()),
+            )
+            narrative_after = world_after
+        else:
+            # Older snapshots predate the narrative index, and narrative rows only
+            # record creates; rebuild from the rows and replay every narrative delta.
+            narrative = self.repo.load_narrative_graph(project_id, as_of_chapter=as_of_chapter)
+            narrative_after = -1
         runtime = BookStateRuntime(
             project_id=project_id,
             as_of_chapter=as_of_chapter,
@@ -79,12 +92,8 @@ class BookStateProjection:
             narrative=narrative,
         )
 
-        world_after = world_snapshot.as_of_chapter if world_snapshot else -1
         map_after = map_snapshot.as_of_chapter if map_snapshot else -1
         cognition_after = max((int(view.as_of_chapter or 0) for view in cognition_views.values()), default=-1)
-        # Narrative rows are persisted as side effects without full snapshots; replay
-        # narrative deltas from the beginning and rely on graph upserts to be idempotent.
-        narrative_after = -1
         after_chapter = min(world_after, map_after, cognition_after, narrative_after)
         for delta in self.repo.list_graph_deltas(
             project_id,
@@ -178,6 +187,8 @@ class BookStateProjection:
                 node_id: dict(state)
                 for node_id, state in runtime.world.states_by_node_id.items()
             },
+            narrative_node_index=dict(runtime.narrative.nodes_by_id),
+            narrative_edge_index=dict(runtime.narrative.edges_by_id),
             active_edge_ids=[
                 edge_id
                 for edge_id, edge in runtime.world.edges_by_id.items()
@@ -188,12 +199,13 @@ class BookStateProjection:
             open_gap_ids=open_gap_ids or runtime.narrative.open_gap_ids(),
             active_promise_ids=[
                 node_id
-                for node_id, node in runtime.world.nodes_by_id.items()
-                if node.node_type == "reader_promise" and node.is_active
+                for node_id, node in runtime.narrative.nodes_by_id.items()
+                if node.node_type == "promise" and node.status in _ACTIVE_PROMISE_STATUSES
             ],
             objective_state_summary=_summary_from_runtime(runtime),
             reader_state_summary=_reader_summary_from_runtime(runtime),
             source_delta_ids=source_delta_ids,
+            metadata={"narrative_indexed": True},
         )
         map_snapshot = MapSnapshot(
             id=f"map_snapshot_{runtime.project_id}_{as_of_chapter}_{new_id()}",

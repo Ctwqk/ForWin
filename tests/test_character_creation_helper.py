@@ -205,7 +205,8 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
                 project_id=project.id,
                 node_type="character",
                 name="同名角色",
-            )
+            ),
+            version_chapter=0,
         )
         repo.create_world_node(
             WorldNode(
@@ -214,7 +215,8 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
                 node_type="character",
                 name="同名角色",
                 metadata={"roster_item_ids": ["roster_b"]},
-            )
+            ),
+            version_chapter=0,
         )
         repo.create_world_node(
             WorldNode(
@@ -223,7 +225,8 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
                 node_type="character",
                 name="本名",
                 aliases=["别名"],
-            )
+            ),
+            version_chapter=0,
         )
         registry = CharacterRegistry(session)
 
@@ -309,7 +312,8 @@ def test_character_integrity_gate_checks_existing_book_state_node(tmp_path: Path
         session.flush()
         repo = BookStateRepository(session)
         repo.create_world_node(
-            WorldNode(id="char_bare", project_id=project.id, node_type="character", name="裸角色")
+            WorldNode(id="char_bare", project_id=project.id, node_type="character", name="裸角色"),
+            version_chapter=0,
         )
         repo.create_world_node(
             WorldNode(
@@ -327,7 +331,8 @@ def test_character_integrity_gate_checks_existing_book_state_node(tmp_path: Path
                         "overrides": {},
                     }
                 },
-            )
+            ),
+            version_chapter=0,
         )
         helper = CharacterCreationHelper(session, personality_library=CharacterPersonalityLibrary(library_root))
 
@@ -351,7 +356,8 @@ def test_character_api_create_preview_coverage_report_and_backfill(tmp_path: Pat
         session.flush()
         project_id = project.id
         BookStateRepository(session).create_world_node(
-            WorldNode(id="char_bare", project_id=project.id, node_type="character", name="赵平", description="镇民。")
+            WorldNode(id="char_bare", project_id=project.id, node_type="character", name="赵平", description="镇民。"),
+            version_chapter=0,
         )
 
     handlers = build_handlers(get_session=Session, personality_library_root=str(library_root))

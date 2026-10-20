@@ -41,7 +41,8 @@ def _create_project_with_node(session) -> str:
             name="林烬",
             summary="旧城线主角。",
             source_refs=["chapter:1"],
-        )
+        ),
+        version_chapter=0,
     )
     return project.id
 

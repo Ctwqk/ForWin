@@ -116,7 +116,8 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
                 project_id=project_id,
                 node_type="event",
                 name="Genesis name",
-            )
+            ),
+            version_chapter=0,
         )
         result = BookStateCompiler(session).compile(
             ApprovedGraphDeltaSet(
@@ -150,7 +151,8 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
                 node_type="event",
                 name="Independent material",
                 created_at_chapter=1,
-            )
+            ),
+            version_chapter=1,
         )
 
     if old_value is None:
@@ -219,7 +221,8 @@ def test_historical_invalidation_recovers_missing_node_metadata_before_image(
                 project_id=project_id,
                 node_type="site_state",
                 metadata=metadata,
-            )
+            ),
+            version_chapter=0,
         )
         preceding_patches = [
             NodePatch(
@@ -349,7 +352,8 @@ def test_historical_invalidation_rewinds_unversioned_writer_location_from_contra
                 project_id=project_id,
                 node_type="item",
                 metadata={"source": "arc_plan_seed"},
-            )
+            ),
+            version_chapter=0,
         )
         compiler = BookStateCompiler(session)
         base = compiler.compile(
@@ -416,7 +420,8 @@ def test_historical_invalidation_rewinds_unmatched_writer_location_trace() -> No
                 project_id=project_id,
                 node_type="item",
                 metadata={"source": "arc_plan_seed"},
-            )
+            ),
+            version_chapter=0,
         )
         compiler = BookStateCompiler(session)
         assert compiler.compile(
@@ -468,7 +473,8 @@ def test_historical_invalidation_rewinds_unmatched_writer_location_trace() -> No
                         },
                     }
                 }
-            )
+            ),
+            version_chapter=0,
         )
 
     with Session.begin() as session:
@@ -732,14 +738,9 @@ def test_repository_roundtrip_loads_runtime_with_map_and_cognition() -> None:
                 node_type="character",
                 name="陆沉",
                 state={"location_id": "loc_city"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project_id,
-            node_id="char_mc",
-            node_type="character",
-            as_of_chapter=0,
-            state={"location_id": "loc_city", "status": "idle"},
+            ),
+            version_chapter=0,
+            version_state={"location_id": "loc_city", "status": "idle"},
         )
         repo.create_map_node(MapNode(id="loc_city", project_id=project_id, node_type="settlement", name="黑石城"))
         repo.create_map_node(MapNode(id="loc_inner", project_id=project_id, node_type="room", name="遗迹内殿"))
@@ -798,7 +799,8 @@ def test_projection_honors_created_at_chapter_for_world_and_map_rows() -> None:
                 node_type="character",
                 name="未来角色",
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
         repo.create_map_node(MapNode(id="loc_now", project_id=project_id, node_type="settlement"))
         repo.create_map_node(
@@ -878,14 +880,9 @@ def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
                         "overrides": {},
                     }
                 },
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project_id,
-            node_id="char_mc",
-            node_type="character",
-            as_of_chapter=1,
-            state={"location_id": "loc_city"},
+            ),
+            version_chapter=1,
+            version_state={"location_id": "loc_city"},
         )
         BookStateCompiler(session).compile(
             ApprovedGraphDeltaSet(
@@ -937,14 +934,9 @@ def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
                 node_type="character",
                 name="陆沉",
                 state={"location_id": "loc_village"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project_id,
-            node_id="char_mc",
-            node_type="character",
-            as_of_chapter=0,
-            state={"location_id": "loc_village"},
+            ),
+            version_chapter=0,
+            version_state={"location_id": "loc_village"},
         )
         repo.create_map_node(MapNode(id="loc_village", project_id=project_id, node_type="settlement"))
         repo.create_map_node(MapNode(id="loc_city", project_id=project_id, node_type="settlement"))
@@ -1084,7 +1076,8 @@ def test_compiler_preserves_explicit_character_id_when_future_name_duplicate_exi
                 node_type="character",
                 name="舟七",
                 created_at_chapter=5,
-            )
+            ),
+            version_chapter=5,
         )
         result = BookStateCompiler(session).compile(
             ApprovedGraphDeltaSet(
@@ -1271,13 +1264,10 @@ def test_compiler_blocks_stale_old_value_without_writing_delta() -> None:
     with Session.begin() as session:
         project_id = _create_project(session)
         repo = BookStateRepository(session)
-        repo.create_world_node(WorldNode(id="char_mc", project_id=project_id, node_type="character"))
-        repo.append_world_node_state(
-            project_id=project_id,
-            node_id="char_mc",
-            node_type="character",
-            as_of_chapter=0,
-            state={"status": "idle"},
+        repo.create_world_node(
+            WorldNode(id="char_mc", project_id=project_id, node_type="character"),
+            version_chapter=0,
+            version_state={"status": "idle"},
         )
 
         result = BookStateCompiler(session).compile(

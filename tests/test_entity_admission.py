@@ -294,14 +294,9 @@ def test_admission_reuses_known_non_character_canon_entity() -> None:
                 node_type="rule",
                 name="R11",
                 state={"status": "active"},
-            )
-        )
-        repo.append_world_node_state(
-            project_id=project.id,
-            node_id="rule-r11",
-            node_type="rule",
-            as_of_chapter=2,
-            state={"status": "active"},
+            ),
+            version_chapter=2,
+            version_state={"status": "active"},
         )
 
         result = EntityRegistrar(

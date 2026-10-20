@@ -162,7 +162,8 @@ def test_assemble_context_uses_default_provider_chain() -> None:
                             "overrides": {},
                         }
                     },
-                )
+                ),
+                version_chapter=0,
             )
             repo = _FakeRepo(session)
             chapter_plan = SimpleNamespace(

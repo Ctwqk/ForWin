@@ -8,89 +8,17 @@ from typing import Iterable
 _CJK_NAME = r"[\u4e00-\u9fff]{2,4}"
 _QUOTE_OPEN = "“\"「『"
 _QUOTE_CLOSE = "”\"」』"
-_NON_NAME_WORDS = {
-    "母亲",
-    "父亲",
-    "名字",
-    "声音",
-    "遗书",
-    "的遗书",
-    "系统",
-    "账本",
-    "回声账",
-    "回声账本",
-    "首席架构",
-    "原型设计",
-    "设计者之",
-    "设计协议",
-}
+# Closed-class function words (pronouns, copula/negation, modals, localizers) that never
+# belong to a person name. Content words are deliberately absent: which words can follow
+# a canonical name in a given book is not something runtime code may enumerate.
 _NON_PERSON_NAME_KEYWORDS = (
-    "系统",
-    "账本",
-    "集团",
-    "实验室",
-    "记忆",
-    "档案",
-    "遗书",
-    "原型",
-    "设计",
-    "架构",
-    "协议",
-    "首席",
-    "核心",
-    "项目",
-    "成员",
-    "负责人",
-    "失踪",
-    "删除",
-    "留下",
-    "最后",
-    "出现",
-    "消失",
-    "申请",
-    "外包",
-    "之间",
-    "可能",
-    "约定",
-    "神秘",
-    "工位",
-    "工作",
-    "暗号",
-    "关系",
-    "录音",
-    "音频",
-    "视频",
-    "语音",
-    "文件",
-    "结束",
-    "警告",
-    "区域",
-    "残骸",
-    "曲线",
-    "真相",
-    "数据",
-    "备份",
-    "签署",
-    "签名",
-    "授权",
-    "姓名",
-    "名字",
-    "本人",
-    "呼吸",
-    "康复",
-    "手术",
-    "找到",
-    "看到",
-    "知道",
-    "参与",
-    "吻合",
-    "坐",
-    "下属",
     "你",
     "他",
     "她",
     "不是",
-    "普通",
+    "之间",
+    "可能",
+    "本人",
 )
 _COMMON_SINGLE_CHAR_SURNAMES = set(
     "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜"
@@ -116,7 +44,7 @@ _COMMON_COMPOUND_SURNAMES = (
     "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐", "段干", "百里",
     "呼延", "东郭", "南门", "羊舌", "微生", "梁丘", "左丘", "东门", "西门",
 )
-_NON_NAME_START_CHARS = ("的", "署", "是", "在", "和", "与", "把", "被", "从", "向", "为")
+_NON_NAME_START_CHARS = ("的", "是", "在", "和", "与", "把", "被", "从", "向", "为")
 _NON_NAME_END_CHARS = ("的", "后", "前", "时", "中", "里", "上", "下", "在")
 _NON_EXPANDED_NAME_SUFFIX_STARTS = (
     "的",
@@ -158,49 +86,15 @@ class CanonNameViolation:
     reason: str
 
 
-def extract_canon_name_anchors(texts: Iterable[str]) -> list[CanonNameAnchor]:
-    anchors: list[CanonNameAnchor] = []
-    seen: set[tuple[str, str]] = set()
-    patterns = [
-        re.compile(
-            rf"原型设计者[:：]\s*[{re.escape(_QUOTE_OPEN)}]?({_CJK_NAME})"
-            rf"[{re.escape(_QUOTE_CLOSE)}]?[，,]?(?:即|就是)母亲(?:的名字)?"
-        ),
-        re.compile(
-            rf"({_CJK_NAME})[{re.escape(_QUOTE_CLOSE)}]?[，,]?(?:即|就是)母亲(?:的名字)?"
-        ),
-        re.compile(
-            rf"母亲(?:的名字)?(?:是|叫|名为|署名为|署名是)[:：]?"
-            rf"[{re.escape(_QUOTE_OPEN)}]?({_CJK_NAME})"
-        ),
-    ]
-    for raw in texts:
-        text = str(raw or "").strip()
-        if not text:
-            continue
-        for pattern in patterns:
-            for match in pattern.finditer(text):
-                name = _clean_name(match.group(1))
-                if not _looks_like_person_name(name):
-                    continue
-                key = ("母亲", name)
-                if key in seen:
-                    continue
-                seen.add(key)
-                anchors.append(
-                    CanonNameAnchor(
-                        role_label="母亲",
-                        canonical_name=name,
-                        source_text=_evidence_window(text, match.start(), match.end()),
-                    )
-                )
-    return anchors
-
-
 def find_canon_name_violations(
-    text: str,
     anchors: Iterable[CanonNameAnchor],
+    text: str,
 ) -> list[CanonNameViolation]:
+    """Report names in ``text`` that extend an anchored canonical name (``甲乙`` -> ``甲乙丙``).
+
+    Every anchor is treated alike whatever its ``role_label``; the anchors themselves come
+    from the caller (book state), never from patterns over prose.
+    """
     body = str(text or "")
     if not body:
         return []
@@ -209,15 +103,14 @@ def find_canon_name_violations(
     for anchor in anchors:
         role = str(anchor.role_label or "").strip()
         canonical = _clean_name(anchor.canonical_name)
-        if role != "母亲" or not _looks_like_person_name(canonical):
+        if not role or not canonical:
             continue
-
         expanded_pattern = re.compile(
             rf"{re.escape(canonical)}(?P<suffix>[\u4e00-\u9fff]{{1,2}})(?![\u4e00-\u9fff])"
         )
         for match in expanded_pattern.finditer(body):
             observed = _clean_name(match.group(0))
-            if observed == canonical or not _looks_like_expanded_person_name(canonical, observed):
+            if observed == canonical or not _looks_like_expanded_name(canonical, observed):
                 continue
             _append_violation(
                 violations,
@@ -228,21 +121,6 @@ def find_canon_name_violations(
                 evidence=_evidence_window(body, match.start(), match.end()),
                 reason="expanded_canonical_name",
             )
-
-        for pattern in _mother_name_observation_patterns():
-            for match in pattern.finditer(body):
-                observed = _clean_name(match.group("name"))
-                if not _looks_like_person_name(observed) or observed == canonical:
-                    continue
-                _append_violation(
-                    violations,
-                    seen,
-                    role=role,
-                    canonical=canonical,
-                    observed=observed,
-                    evidence=_evidence_window(body, match.start(), match.end()),
-                    reason="role_name_replacement",
-                )
     return violations
 
 
@@ -282,49 +160,6 @@ def extract_candidate_character_names(text: str) -> set[str]:
     return names
 
 
-def _mother_name_observation_patterns() -> list[re.Pattern[str]]:
-    prefix = rf"(?:你(?:的)?|他(?:的)?|她(?:的)?|{_CJK_NAME}(?:的)?)?母亲"
-    return [
-        re.compile(
-            rf"{prefix}(?:叫|名叫|名字是|的名字是|名为|署名为|署名是)[:：]?"
-            rf"[{re.escape(_QUOTE_OPEN)}]?(?P<name>{_CJK_NAME})"
-        ),
-        re.compile(
-            rf"{prefix}(?!的)[，,、\s]*[{re.escape(_QUOTE_OPEN)}]?"
-            rf"(?P<name>{_CJK_NAME})[{re.escape(_QUOTE_CLOSE)}]?"
-            rf"(?=的|是|，|、|曾|在|十年前|授权|[—-]|（|\()"
-        ),
-        re.compile(
-            rf"{prefix}[\s\S]{{0,100}}(?:签名栏|签名|署名|授权书|遗书|协议)"
-            rf"[^。！？!?]{{0,45}}(?:名字|姓名|署名)?[:：]\s*"
-            rf"[{re.escape(_QUOTE_OPEN)}]?(?P<name>{_CJK_NAME})"
-            rf"[{re.escape(_QUOTE_CLOSE)}]?"
-            rf"(?=$|[\s，,。；;、！？!?]|的|是|曾|在|十年前|授权)"
-        ),
-        re.compile(
-            rf"(?:你(?:的)?|他(?:的)?|她(?:的)?|{_CJK_NAME}(?:的)?)?"
-            rf"母亲(?:的名字|姓名|的姓名|的签名|签名)"
-            rf"[\s，,：:、—-]+[{re.escape(_QUOTE_OPEN)}]?"
-            rf"(?P<name>{_CJK_NAME})[{re.escape(_QUOTE_CLOSE)}]?"
-            rf"(?=$|[\s，,。；;、！？!?])"
-        ),
-        re.compile(
-            rf"(?P<name>{_CJK_NAME})"
-            rf"[\s，,。；;、！？!?—-]{{0,12}}"
-            rf"(?:{_CJK_NAME}(?:的)?|你(?:的)?|他(?:的)?|她(?:的)?)?"
-            rf"母亲(?:的名字|的签名|签名)"
-        ),
-        re.compile(
-            rf"(?:名字|姓名|署名|签名|算法签名|解析结果)"
-            rf"[^。！？!?]{{0,45}}[:：]\s*"
-            rf"[{re.escape(_QUOTE_OPEN)}]?(?P<name>{_CJK_NAME})"
-            rf"[{re.escape(_QUOTE_CLOSE)}]?"
-            rf"[\s，,。；;、！？!?]{{0,8}}"
-            rf"(?:{_CJK_NAME}的|你(?:的)?|他(?:的)?|她(?:的)?)?母亲"
-        ),
-    ]
-
-
 def _clean_name(value: str) -> str:
     return str(value or "").strip().strip(f"{_QUOTE_OPEN}{_QUOTE_CLOSE}：:，,。；; ")
 
@@ -336,8 +171,6 @@ def _looks_like_person_name(name: str) -> bool:
     if text.startswith(_NON_NAME_START_CHARS):
         return False
     if text.endswith(_NON_NAME_END_CHARS):
-        return False
-    if text in _NON_NAME_WORDS:
         return False
     if any(word in text for word in _NON_PERSON_NAME_KEYWORDS):
         return False
@@ -352,15 +185,21 @@ def _has_common_chinese_name_prefix(text: str) -> bool:
     return text[0] in _COMMON_SINGLE_CHAR_SURNAMES
 
 
-def _looks_like_expanded_person_name(canonical: str, observed: str) -> bool:
-    clean_canonical = _clean_name(canonical)
-    clean_observed = _clean_name(observed)
-    if not clean_observed.startswith(clean_canonical):
+def _looks_like_expanded_name(canonical: str, observed: str) -> bool:
+    """True if ``observed`` reads as ``canonical`` plus extra name characters.
+
+    ``canonical`` is a trusted anchor, so only the added suffix is judged.
+    """
+    if not observed.startswith(canonical):
         return False
-    suffix = clean_observed[len(clean_canonical) :]
+    suffix = observed[len(canonical) :]
     if not suffix or suffix.startswith(_NON_EXPANDED_NAME_SUFFIX_STARTS):
         return False
-    return _looks_like_person_name(clean_observed)
+    if suffix.endswith(_NON_NAME_END_CHARS):
+        return False
+    if any(word in suffix for word in _NON_PERSON_NAME_KEYWORDS):
+        return False
+    return bool(re.fullmatch(_CJK_NAME, observed))
 
 
 def _evidence_window(text: str, start: int, end: int, *, radius: int = 22) -> str:

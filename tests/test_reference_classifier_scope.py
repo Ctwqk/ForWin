@@ -35,7 +35,9 @@ def test_global_reference_short_circuit_is_language_only() -> None:
 
     candidates = {
         "馆员": "project",
-        "基金会代理人": "genre_candidate",
+        "基金会代理人": "project",
+        "云顶集团": "project",
+        "江沅（远程）": "project",
         "无脸人": "project",
         "AI-7": "genre_candidate",
         "锚点037": "project",

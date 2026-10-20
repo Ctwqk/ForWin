@@ -133,7 +133,7 @@ def test_must_not_reveal_and_missing_event_fail() -> None:
 
 def test_clean_chapter_passes() -> None:
     result = _run(
-        "角色A推开门，看见证据。他当场拿出合同，反派赔偿三十万。门外忽然传来密令？"
+        "角色A推开门，看见证据。他当场拿出合同，反派赔偿现金。门外忽然传来密令？"
     )
 
     assert result.passed is True
@@ -152,7 +152,7 @@ def test_pulp_missing_visible_payoff_is_warning_only() -> None:
 
 def test_pulp_track_prefers_project_genre_over_incidental_body_terms() -> None:
     body = (
-        "沈川检查包裹里的一枚灵石后，当场拿出赔偿单，确认赔偿金已经到账。"
+        "沈川检查包裹里的一枚灵石后，当场拿出赔偿单，确认赔偿款已经到账。"
         "门外忽然传来新的催单声？"
     )
 
@@ -170,11 +170,64 @@ def test_pulp_track_prefers_project_genre_over_incidental_body_terms() -> None:
     assert "pulp_visible_payoff" not in result.warning_reasons
 
 
-def test_pulp_hard_floor_uses_planned_mystery_reward_contract() -> None:
+def test_unmatched_genre_uses_neutral_pulp_profile() -> None:
     body = (
-        "三份记录叠好，边缘刚好卡进环形刻痕的缺口，缺口共同指向检测台底部的插孔。"
-        "终端随后弹出提示：未登记工号，当前在线。"
+        "众人嘲笑他没资格。林远当场拿出合同，老板脸色大变，当众道歉，还赔偿现金。"
+        "门外忽然传来新的威胁。"
     )
+
+    result = run_hard_floor(
+        writer_output=_writer(body),
+        context_pack=_context(genre="星际"),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        policy=_policy("pulp"),
+    )
+
+    assert result.passed is True
+    assert result.metadata["pulp_beat_track"] == "none"
+    beat = result.metadata["pulp_beat"]
+    assert beat["visible_payoff_present"] is False
+    assert beat["visible_payoff_evidence"] == []
+    assert not any(
+        beat[field]
+        for field in (
+            "pressure_present",
+            "protagonist_action_present",
+            "audience_reaction_present",
+            "enemy_or_obstacle_damage_present",
+            "new_gain_or_status_shift_present",
+            "next_hook_present",
+        )
+    )
+    assert "pulp_visible_payoff" in result.warning_reasons
+
+
+def test_unmatched_genre_still_counts_planned_reward_delivery() -> None:
+    body = "三份记录叠好，名单上的名字与地点逐一对上。门外忽然传来脚步声？"
+
+    result = run_hard_floor(
+        writer_output=_writer(body),
+        context_pack=_context(
+            genre="星际",
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["mystery"]
+            ),
+        ),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        policy=_policy("pulp"),
+    )
+
+    assert result.metadata["pulp_beat_track"] == "none"
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
+    assert "pulp_visible_payoff" not in result.warning_reasons
+
+
+def test_pulp_hard_floor_uses_planned_mystery_reward_contract() -> None:
+    body = "三份记录叠好，名单上的名字与地点逐一对上。门外忽然传来脚步声？"
 
     result = run_hard_floor(
         writer_output=_writer(body),
@@ -198,7 +251,7 @@ def test_pulp_hard_floor_uses_planned_mystery_reward_contract() -> None:
 
 def test_pulp_hard_floor_uses_explicit_planned_power_delivery() -> None:
     body = (
-        "系统结算完成，权限变更：开放【异常收件人复核】功能。"
+        "系统结算完成，已向沈川开放复核功能。"
         "沈川立刻调出完整面单，门外忽然响起新的催单声？"
     )
 
@@ -222,7 +275,7 @@ def test_pulp_hard_floor_uses_explicit_planned_power_delivery() -> None:
 
 
 def test_pulp_hard_floor_uses_declared_delivered_payoff() -> None:
-    body = "系统回执写明：陈默的临时追件视野已解锁，他立刻看见了目标的因果线。"
+    body = "系统提示写明：陈默的临时追件视野已解锁，他立刻看见了目标的因果线。"
     result = run_hard_floor(
         writer_output=_writer(
             body,

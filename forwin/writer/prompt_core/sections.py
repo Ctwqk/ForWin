@@ -6,8 +6,9 @@ produces fluent Chinese web-novel prose and metadata without code-switching.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
-from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
+from forwin.canon_names import CanonNameAnchor, canon_name_anchor_lines
 from forwin.protocol.context import ChapterContextPack
 
 
@@ -457,12 +458,14 @@ def _active_threads_section(context: ChapterContextPack, *, limit: int) -> str |
     return "\n".join(lines)
 
 
-def _canon_name_anchor_section(context: ChapterContextPack) -> str | None:
-    texts: list[str] = []
-    for thread in list(getattr(context, "active_threads", []) or []):
-        texts.append(str(getattr(thread, "description", "") or ""))
-        texts.extend(str(beat or "") for beat in (getattr(thread, "recent_beats", []) or []))
-    lines = canon_name_anchor_lines(extract_canon_name_anchors(texts))
+def _canon_name_anchor_section(
+    context: ChapterContextPack,
+    *,
+    anchors: Sequence[CanonNameAnchor] = (),
+) -> str | None:
+    # Callers pass no anchors yet; P1 derives them from BookState kinship edges and
+    # supplies them here instead of parsing thread prose.
+    lines = canon_name_anchor_lines(anchors)
     if not lines:
         return None
     return (

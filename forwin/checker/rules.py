@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.review.issue_groups import issue_group_for_issue
-from forwin.canon_names import extract_canon_name_anchors, find_canon_name_violations
+from forwin.canon_names import CanonNameAnchor, find_canon_name_violations
 
 logger = logging.getLogger(__name__)
 DEAD_STATUS_KEYWORDS = {
@@ -125,8 +125,8 @@ class ContinuityChecker:
         if not anchors:
             return []
         violations = find_canon_name_violations(
-            self._canon_name_scan_text(output),
             anchors,
+            self._canon_name_scan_text(output),
         )
         issues: list[ContinuityIssue] = []
         for violation in violations:
@@ -163,27 +163,13 @@ class ContinuityChecker:
         project_id: str,
         *,
         as_of_chapter: int = 10**9,
-    ):
-        if self.book_state is None:
-            return []
-        try:
-            threads = list(
-                self.book_state.active_threads(
-                    project_id,
-                    as_of_chapter=as_of_chapter,
-                )
-                or []
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("canon name anchor check skipped: %s", exc)
-            return []
-        texts: list[str] = []
-        for thread in threads:
-            texts.append(str(getattr(thread, "description", "") or ""))
-            texts.extend(
-                str(beat or "") for beat in (getattr(thread, "recent_beats", []) or [])
-            )
-        return extract_canon_name_anchors(texts)
+    ) -> list[CanonNameAnchor]:
+        """Canon name anchors in force before ``as_of_chapter``.
+
+        No anchors are produced yet: they will come from BookState kinship edges
+        (design §7.3, P1), never from patterns over thread prose.
+        """
+        return []
 
     @staticmethod
     def _canon_name_scan_text(output: WriterOutput) -> str:

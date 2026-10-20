@@ -6,19 +6,21 @@ import pytest
 
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
-from forwin.checker.pulp_beat import verify_pulp_beats
+from forwin.checker.pulp_beat import pulp_track_for_genre, verify_pulp_beats
 from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
+from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
 
 
-def test_verify_pulp_beats_detects_core_payoff() -> None:
-    body = "众人嘲笑他没资格。林远当场拿出合同，老板脸色大变，当众道歉，还赔偿三十万。门外忽然传来新的威胁。"
+_URBAN_BODY = "众人嘲笑他没资格。林远当场拿出合同，老板脸色大变，当众道歉，还赔偿现金。门外忽然传来新的威胁。"
 
-    result = verify_pulp_beats(body)
+
+def test_verify_pulp_beats_detects_core_payoff() -> None:
+    result = verify_pulp_beats(_URBAN_BODY, track="urban")
 
     assert result.pressure_present is True
     assert result.protagonist_action_present is True
@@ -29,8 +31,57 @@ def test_verify_pulp_beats_detects_core_payoff() -> None:
     assert result.next_hook_present is True
 
 
+def test_unmatched_genre_uses_neutral_pulp_profile() -> None:
+    assert pulp_track_for_genre("星际") is None
+    for track in (pulp_track_for_genre("星际"), "", "no-such-track"):
+        result = verify_pulp_beats(_URBAN_BODY, track=track)
+
+        assert result.pressure_present is False
+        assert result.protagonist_action_present is False
+        assert result.visible_payoff_present is False
+        assert result.audience_reaction_present is False
+        assert result.enemy_or_obstacle_damage_present is False
+        assert result.new_gain_or_status_shift_present is False
+        assert result.next_hook_present is False
+        assert result.visible_payoff_evidence == []
+        assert "visible_payoff_present" in result.missing_fields
+
+
+def test_unknown_track_still_counts_planned_reward_tags_and_structured_payoffs() -> None:
+    tagged = verify_pulp_beats(
+        "系统开放了角色A的复核功能。", track=None, reward_tags=("power",)
+    )
+    declared = verify_pulp_beats(
+        "陈默收到提示：临时视野已解锁。",
+        track=None,
+        delivered_payoffs=[
+            DeliveredPayoffCandidate(
+                entity_name="陈默",
+                category="power",
+                direction="gain",
+                before_state="没有视野",
+                after_state="临时视野已解锁",
+                evidence_quote="陈默收到提示：临时视野已解锁",
+            )
+        ],
+        new_events=[
+            EventCandidate(
+                summary="陈默解锁视野。",
+                significance="major",
+                involved_entity_names=["陈默"],
+                roles=["protagonist"],
+            )
+        ],
+    )
+
+    assert tagged.visible_payoff_present is True
+    assert declared.visible_payoff_present is True
+    assert declared.visible_payoff_evidence == ["delivered_payoff:陈默:power:临时视野已解锁"]
+    assert declared.pressure_present is False
+
+
 def test_verify_pulp_beats_flags_missing_payoff() -> None:
-    result = verify_pulp_beats("他走在路上，想了很多前情，夜色越来越深。")
+    result = verify_pulp_beats("他走在路上，想了很多前情，夜色越来越深。", track="urban")
 
     assert result.visible_payoff_present is False
     assert "visible_payoff_present" in result.missing_fields
@@ -49,10 +100,7 @@ def test_unplanned_profile_payoff_accepts_delivery_after_contrast() -> None:
 
 
 def test_verify_pulp_beats_uses_planned_mystery_reward_contract() -> None:
-    body = (
-        "三份记录叠好，边缘刚好卡进环形刻痕的缺口，缺口共同指向检测台底部的插孔。"
-        "终端随后弹出提示：未登记工号，当前在线。"
-    )
+    body = "三份记录叠好，名单上的名字与地点逐一对上。"
 
     result = verify_pulp_beats(
         body,
@@ -66,7 +114,7 @@ def test_verify_pulp_beats_uses_planned_mystery_reward_contract() -> None:
 
 def test_verify_pulp_beats_uses_delivered_power_permission_change() -> None:
     result = verify_pulp_beats(
-        "系统结算完成，权限变更：开放【异常收件人复核】功能。",
+        "系统结算完成，已向角色A开放复核功能。",
         track="urban",
         reward_tags=("power", "social"),
     )
@@ -76,9 +124,9 @@ def test_verify_pulp_beats_uses_delivered_power_permission_change() -> None:
 
 def test_verify_pulp_beats_uses_delivered_role_and_permission_transition() -> None:
     body = (
-        "系统刚才更新了他的角色标签。"
-        "撤销了单一错投责任标记，改为潜在原收件人兼争议承运者。"
-        "工作人员重新看向角色A，语气变了：你有权限了，封存操作可以执行。"
+        "系统刚才更新了他的职位。"
+        "撤销了单一错投指控，改为潜在原收件人兼争议负责人。"
+        "工作人员重新看向角色A，语气变了：你有权限了，可以执行。"
     )
 
     result = verify_pulp_beats(
@@ -133,7 +181,7 @@ def test_planned_power_does_not_count_a_pending_permission_request() -> None:
 
 def test_planned_social_relief_respects_negation() -> None:
     result = verify_pulp_beats(
-        "系统确认尚未撤销角色A的责任标记。",
+        "系统确认尚未撤销角色A的指控。",
         track="urban",
         reward_tags=("social",),
     )
@@ -143,7 +191,7 @@ def test_planned_social_relief_respects_negation() -> None:
 
 def test_planned_social_relief_does_not_count_a_pending_request() -> None:
     result = verify_pulp_beats(
-        "角色A申请撤销责任标记，审批结果尚未公布。",
+        "角色A申请撤销指控，审批结果尚未公布。",
         track="urban",
         reward_tags=("social",),
     )
@@ -173,7 +221,7 @@ def test_planned_social_profile_marker_respects_negation() -> None:
 
 def test_planned_social_does_not_count_a_negative_role_reclassification() -> None:
     result = verify_pulp_beats(
-        "系统更新角色标签为失信人员。",
+        "系统更新职位为失信人员。",
         track="urban",
         reward_tags=("social",),
     )
@@ -183,7 +231,7 @@ def test_planned_social_does_not_count_a_negative_role_reclassification() -> Non
 
 def test_planned_social_counts_a_positive_role_reclassification() -> None:
     result = verify_pulp_beats(
-        "系统将角色标签改为正式承运者。",
+        "系统将职位改为正式负责人。",
         track="urban",
         reward_tags=("social",),
     )
@@ -193,7 +241,7 @@ def test_planned_social_counts_a_positive_role_reclassification() -> None:
 
 def test_planned_social_counts_role_reclassification_across_a_comma() -> None:
     result = verify_pulp_beats(
-        "系统更新角色标签，改为正式承运者。",
+        "系统更新职位，改为正式负责人。",
         track="urban",
         reward_tags=("social",),
     )
@@ -266,21 +314,21 @@ def test_planned_power_does_not_count_a_directly_negated_gain() -> None:
     [
         ("系统不授予角色A资格。", "power"),
         ("系统不开放查验权限。", "power"),
-        ("系统不更新角色标签为正式成员。", "social"),
+        ("系统不更新职位为正式成员。", "social"),
         ("系统不予授予角色A资格。", "power"),
         ("系统未予开放查验权限。", "power"),
         ("系统不再开放查验权限。", "power"),
         ("系统不可开放查验权限。", "power"),
         ("角色A不被授予资格。", "power"),
         ("角色A未被授予资格。", "power"),
-        ("角色A的责任标记未被撤销。", "social"),
+        ("角色A的指控未被撤销。", "social"),
         ("系统不允许开放查验权限。", "power"),
         ("系统未获批准开放查验权限。", "power"),
-        ("系统不允许撤销责任标记。", "social"),
+        ("系统不允许撤销指控。", "social"),
         ("审批组不同意向角色A授予资格。", "power"),
-        ("审批组不允许为角色A撤销责任标记。", "social"),
+        ("审批组不允许为角色A撤销指控。", "social"),
         ("审批组不同意最终向角色A授予资格。", "power"),
-        ("审批组不允许最终为角色A撤销责任标记。", "social"),
+        ("审批组不允许最终为角色A撤销指控。", "social"),
     ],
 )
 def test_planned_reward_does_not_count_a_negated_delivery_action(
@@ -402,9 +450,9 @@ def test_planned_power_does_not_count_a_failed_track_payoff(body: str) -> None:
     [
         ("系统开放查验权限失败。", "power"),
         ("系统授予角色A资格未果。", "power"),
-        ("系统更新角色标签为正式成员失败。", "social"),
+        ("系统更新职位为正式成员失败。", "social"),
         ("系统解除权限限制失败。", "power"),
-        ("系统撤销责任标记失败。", "social"),
+        ("系统撤销指控失败。", "social"),
     ],
 )
 def test_planned_reward_does_not_count_a_failed_transition(
@@ -435,7 +483,7 @@ def test_planned_power_does_not_let_an_adjacent_repeat_hide_failure() -> None:
     [
         ("角色A的资格授予申请被驳回。", "power"),
         ("角色A的资格授予申请被否决。", "power"),
-        ("角色A的责任标记撤销申请未通过。", "social"),
+        ("角色A的指控撤销申请未通过。", "social"),
     ],
 )
 def test_planned_reward_does_not_count_a_denied_outcome(
@@ -454,7 +502,7 @@ def test_planned_reward_does_not_count_a_denied_outcome(
 @pytest.mark.parametrize(
     ("body", "reward_tag"),
     [
-        ("系统撤销角色A的责任标记。", "social"),
+        ("系统撤销角色A的指控。", "social"),
         ("系统取消角色A的封禁。", "power"),
         ("系统撤销角色A的处罚。", "power"),
     ],
@@ -485,8 +533,8 @@ def test_planned_power_counts_a_new_gain_after_a_denied_old_request() -> None:
 @pytest.mark.parametrize(
     "body",
     [
-        "系统更新角色标签为非正式成员。",
-        "系统将角色标签改为不合格成员。",
+        "系统更新职位为非正式成员。",
+        "系统将职位改为不合格成员。",
     ],
 )
 def test_planned_social_does_not_count_a_negated_positive_result(body: str) -> None:
@@ -570,7 +618,7 @@ def test_planned_power_counts_delivery_after_unrelated_missing_information() -> 
 
 def test_planned_power_does_not_count_social_relief_only() -> None:
     result = verify_pulp_beats(
-        "系统撤销角色A的单一错投责任标记。",
+        "系统撤销角色A的单一错投指控。",
         track="urban",
         reward_tags=("power",),
     )

@@ -109,15 +109,6 @@ max_literals = 9
 
 [[entry]]
 path = "forwin/canon_names.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "_NON_NAME_WORDS 中的剧本二名词“回声账”；Task 9b 删除"
-max_literals = 2
-
-[[entry]]
-path = "forwin/canon_names.py"
 symbol = "_COMMON_COMPOUND_SURNAMES"
 checks = ["cjk_collection"]
 category = "language_lexicon"
@@ -154,34 +145,15 @@ symbol = "_NON_NAME_START_CHARS"
 checks = ["cjk_collection"]
 category = "language_lexicon"
 justification = "人名切分停用字"
-max_literals = 20
-
-[[entry]]
-path = "forwin/canon_names.py"
-symbol = "_NON_NAME_WORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "非人名词表混入剧本二名词（遗书/回声账/首席架构/原型设计…）；Task 9b 只保留功能词，之后改登记为 language_lexicon"
-max_literals = 14
+max_literals = 10
 
 [[entry]]
 path = "forwin/canon_names.py"
 symbol = "_NON_PERSON_NAME_KEYWORDS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "非人名关键词混入剧本名词；Task 9b 只保留功能词，之后改登记为 language_lexicon"
-max_literals = 66
-
-[[entry]]
-path = "forwin/canon_names.py"
-symbol = "_mother_name_observation_patterns"
-checks = ["cjk_regex"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "“母亲”锚点观测模式；Task 9b 删除"
-max_literals = 6
+category = "language_lexicon"
+justification = "人名切分停用词：封闭类功能词（代词/否定系词/情态/方位）"
+max_literals = 7
 
 [[entry]]
 path = "forwin/canon_names.py"
@@ -191,15 +163,6 @@ category = "pending_removal"
 remove_in = "P2"
 justification = "候选人名正则，含羁押/营救模式；P2 删除"
 max_literals = 7
-
-[[entry]]
-path = "forwin/canon_names.py"
-symbol = "extract_canon_name_anchors"
-checks = ["cjk_regex"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "“母亲”/原型设计者锚点抽取；Task 9b 删除"
-max_literals = 3
 
 [[entry]]
 path = "forwin/canon_quality/chapter_review_form/evidence_validator.py"
@@ -374,30 +337,19 @@ max_literals = 8
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "剧本二标记词（三十万/工号在线/刻痕/插孔）；Task 9b 删除"
-max_literals = 5
-
-[[entry]]
-path = "forwin/checker/pulp_beat.py"
 symbol = "MYSTERY_PAYOFF_EVIDENCE_WORDS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "悬疑证据词含剧本二词（工号/刻痕/回执/插孔/时间戳）；Task 9b 删除后余下改登记为 language_lexicon"
-max_literals = 14
+category = "language_lexicon"
+justification = "悬疑线索证据名词（题材中立）"
+max_literals = 9
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
 symbol = "PULP_BEAT_PROFILES"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "爽文节拍 profile 含剧本二标记词（三十万/赔偿金）与 inference_words；Task 9b 删除它们后，余下的显式 genre 节拍目录改登记为 catalog（ruling R6）"
-max_literals = 254
+category = "catalog"
+justification = "按显式 genre 选取的节拍词目录（genre 无匹配时用空 profile，不从正文推断）"
+max_literals = 224
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -411,10 +363,9 @@ max_literals = 20
 path = "forwin/checker/pulp_beat.py"
 symbol = "REWARD_PAYOFF_MARKERS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "奖励兑现标记含剧本二标记（权限变更：开放/工号在线/刻痕指向/编号对应）；Task 9b 删除后余下重新分类"
-max_literals = 53
+category = "catalog"
+justification = "按计划奖励标签（power/social/justice/mystery/emotion）选取的兑现标记目录"
+max_literals = 48
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -556,10 +507,9 @@ max_literals = 3
 path = "forwin/checker/pulp_beat.py"
 symbol = "_POWER_GAIN_TARGETS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "含剧本二词（封存操作/复核操作/查验操作/处置权）；Task 9b 删除后余下改登记为 language_lexicon"
-max_literals = 8
+category = "language_lexicon"
+justification = "获得类宾语（权限/功能/资格/职位）"
+max_literals = 4
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -605,10 +555,9 @@ max_literals = 9
 path = "forwin/checker/pulp_beat.py"
 symbol = "_SOCIAL_GAIN_TARGETS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "含剧本二词（身份标签/角色标签）；Task 9b 删除后余下改登记为 language_lexicon"
-max_literals = 7
+category = "language_lexicon"
+justification = "社会评价变化宾语（职位/称呼/评价…）"
+max_literals = 5
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -630,10 +579,9 @@ max_literals = 10
 path = "forwin/checker/pulp_beat.py"
 symbol = "_SOCIAL_POSITIVE_RESULTS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "含剧本二词（承运者/合作方）；Task 9b 删除后余下改登记为 language_lexicon"
-max_literals = 15
+category = "language_lexicon"
+justification = "正面评价结果词"
+max_literals = 13
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -641,7 +589,7 @@ symbol = "_SOCIAL_RELIEF_TARGETS"
 checks = ["cjk_collection"]
 category = "language_lexicon"
 justification = "追责类宾语"
-max_literals = 5
+max_literals = 4
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"
@@ -650,15 +598,6 @@ checks = ["cjk_membership"]
 category = "language_lexicon"
 justification = "获得类动词"
 max_literals = 5
-
-[[entry]]
-path = "forwin/checker/reference_classifier.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "_GENRE_ROLE_SUFFIXES 中的剧本二“巡检员”；Task 9b 删除"
-max_literals = 1
 
 [[entry]]
 path = "forwin/checker/reference_classifier.py"
@@ -676,33 +615,6 @@ checks = ["cjk_regex"]
 category = "language_lexicon"
 justification = "复合身份形态正则"
 max_literals = 1
-
-[[entry]]
-path = "forwin/checker/reference_classifier.py"
-symbol = "_GENRE_ROLE_SUFFIXES"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "从剧本归纳的题材角色后缀；Task 9b 删除"
-max_literals = 17
-
-[[entry]]
-path = "forwin/checker/reference_classifier.py"
-symbol = "_ORGANIZATION_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "从剧本归纳的组织关键词；Task 9b 删除"
-max_literals = 9
-
-[[entry]]
-path = "forwin/checker/reference_classifier.py"
-symbol = "_PARENTHETICAL_CANDIDATE_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "从剧本归纳的括注候选词；Task 9b 删除"
-max_literals = 10
 
 [[entry]]
 path = "forwin/checker/reference_classifier.py"
@@ -726,7 +638,7 @@ symbol = "_RULE_CATALOG"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "规则摘要说明文字（summary=），不参与判定"
-max_literals = 6
+max_literals = 5
 
 [[entry]]
 path = "forwin/checker/reference_classifier.py"

@@ -30,9 +30,17 @@ class PulpBeatProfile(BaseModel):
     damage_words: tuple[str, ...]
     gain_words: tuple[str, ...]
     hook_words: tuple[str, ...]
-    inference_words: tuple[str, ...] = ()
 
 
+_NEUTRAL_PROFILE = PulpBeatProfile(
+    pressure_words=(),
+    action_words=(),
+    payoff_words=(),
+    audience_words=(),
+    damage_words=(),
+    gain_words=(),
+    hook_words=(),
+)
 PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
     "urban": PulpBeatProfile(
         pressure_words=(
@@ -49,9 +57,8 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         payoff_words=("到账", "赔偿", "合同", "资格", "名额", "升职", "奖励"),
         audience_words=("众人", "全场", "同事", "邻居", "直播间", "村里", "当众"),
         damage_words=("道歉", "跪下", "开除", "赔钱", "封杀", "脸色大变", "失去资格"),
-        gain_words=("职位", "资源", "现金", "股份", "权限", "证据", "三十万", "赔偿金"),
+        gain_words=("职位", "资源", "现金", "股份", "权限", "证据"),
         hook_words=("忽然", "没想到", "就在这时", "门外", "电话响起", "新的威胁"),
-        inference_words=("合同", "升职", "同事", "直播间", "老板"),
     ),
     "xuanhuan": PulpBeatProfile(
         pressure_words=("威胁", "逐", "废物", "压迫", "挑衅", "夺令牌", "宗门责罚"),
@@ -61,7 +68,6 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         damage_words=("受创", "吐血", "败退", "退下", "经脉", "跪地", "道心崩裂"),
         gain_words=("灵石", "功法", "境界", "令牌", "传承", "法器", "入袋"),
         hook_words=("忽然", "秘境", "天门", "雷劫", "古碑", "传送阵", "入口开启"),
-        inference_words=("宗门", "灵石", "境界", "秘境", "长老", "擂台"),
     ),
     "rural": PulpBeatProfile(
         pressure_words=("村里", "乡亲", "逼债", "瞧不起", "抢地", "赶出", "亲戚奚落"),
@@ -71,7 +77,6 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         damage_words=("道歉", "赔钱", "灰溜溜", "被赶走", "脸色发白"),
         gain_words=("地契", "订单", "现金", "货款", "渠道", "分红"),
         hook_words=("忽然", "镇上", "电话", "来人", "新订单", "县里"),
-        inference_words=("村里", "乡亲", "镇上", "地契", "承包"),
     ),
     "rebirth_period": PulpBeatProfile(
         pressure_words=("名声", "举报", "扣帽子", "粮票", "厂里", "排挤", "逼婚"),
@@ -81,7 +86,6 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         damage_words=("处分", "道歉", "丢名额", "脸色发白", "被带走"),
         gain_words=("名额", "票证", "工分", "岗位", "证明", "口碑"),
         hook_words=("忽然", "广播", "通知", "门口", "信封", "新政策"),
-        inference_words=("粮票", "工分", "大队", "厂里", "票证", "知青"),
     ),
     "treasure_medicine": PulpBeatProfile(
         pressure_words=("质疑", "没眼力", "庸医", "骗子", "掌柜", "假专家", "讥笑"),
@@ -91,7 +95,6 @@ PULP_BEAT_PROFILES: dict[str, PulpBeatProfile] = {
         damage_words=("脸色大变", "认错", "退钱", "假专家", "当场噎住", "露馅"),
         gain_words=("证书到手", "古玉", "诊金", "药方", "人情", "名声"),
         hook_words=("忽然", "求救声", "后院", "急诊", "暗格", "新宝物"),
-        inference_words=("古玉", "施针", "鉴定", "药方", "病人", "掌柜"),
     ),
 }
 PULP_GENRE_TRACKS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -108,8 +111,6 @@ REWARD_PAYOFF_MARKERS: dict[str, tuple[str, ...]] = {
         "权限打开",
         "权限解锁",
         "权限已发放",
-        "权限变更：开放",
-        "权限变更:开放",
         "权限变更为",
         "权限已开放",
         "功能已开放",
@@ -151,9 +152,6 @@ REWARD_PAYOFF_MARKERS: dict[str, tuple[str, ...]] = {
         "记录显示",
         "证据表明",
         "真相浮出",
-        "工号在线",
-        "刻痕指向",
-        "编号对应",
     ),
     "emotion": (
         "主动靠近",
@@ -174,12 +172,7 @@ MYSTERY_PAYOFF_EVIDENCE_WORDS = (
     "符号",
     "矛盾",
     "证据",
-    "工号",
-    "刻痕",
     "编号",
-    "回执",
-    "插孔",
-    "时间戳",
     "名单",
 )
 _REWARD_SENTENCE_RE = re.compile(r"[。！？!?；;…\n]+")
@@ -266,10 +259,6 @@ _POWER_GAIN_TARGETS = (
     "功能",
     "资格",
     "职位",
-    "封存操作",
-    "复核操作",
-    "查验操作",
-    "处置权",
 )
 _SOCIAL_GAIN_ACTIONS = (
     "更新",
@@ -283,8 +272,6 @@ _SOCIAL_GAIN_ACTIONS = (
     "提升",
 )
 _SOCIAL_GAIN_TARGETS = (
-    "身份标签",
-    "角色标签",
     "职位",
     "称呼",
     "评价",
@@ -303,8 +290,6 @@ _SOCIAL_POSITIVE_RESULTS = (
     "核心",
     "负责人",
     "管理者",
-    "承运者",
-    "合作方",
     "成员",
     "代表",
 )
@@ -481,7 +466,6 @@ _NEGATED_DELIVERY_BETWEEN_LEADS = (
 )
 _POWER_RELIEF_TARGETS = ("限制", "封禁", "禁令", "处罚")
 _SOCIAL_RELIEF_TARGETS = (
-    "责任标记",
     "处罚",
     "追责",
     "指控",
@@ -651,7 +635,7 @@ def verify_pulp_beats(
     new_events: Sequence[EventCandidate] = (),
 ) -> PulpBeatResult:
     text = str(body or "")
-    profile = _profile_for(text, track=track)
+    profile = _profile_for(track)
     structured_payoff_evidence = _structured_payoff_evidence(
         text,
         delivered_payoffs=delivered_payoffs,
@@ -973,19 +957,10 @@ def pulp_track_for_genre(genre: str) -> str | None:
     return None
 
 
-def _profile_for(body: str, *, track: str | None) -> PulpBeatProfile:
-    requested = str(track or "").strip()
-    if requested in PULP_BEAT_PROFILES:
-        return PULP_BEAT_PROFILES[requested]
-    inferred = _infer_track(body)
-    return PULP_BEAT_PROFILES[inferred]
+def _profile_for(track: str | None) -> PulpBeatProfile:
+    """Genre profile for an explicit track; any other track gets the empty profile.
 
-
-def _infer_track(body: str) -> str:
-    text = str(body or "")
-    for key, profile in PULP_BEAT_PROFILES.items():
-        if key == "urban":
-            continue
-        if _has_any(text, profile.inference_words):
-            return key
-    return "urban"
+    The track is never guessed from the chapter body: without a matching genre only
+    planned reward tags and structured delivered payoffs can show a payoff.
+    """
+    return PULP_BEAT_PROFILES.get(str(track or "").strip(), _NEUTRAL_PROFILE)

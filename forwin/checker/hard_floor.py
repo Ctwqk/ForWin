@@ -109,7 +109,7 @@ def run_hard_floor(
             "writer_char_count": writer_char_count,
             "min_chapter_chars": min_chapter_chars,
             "must_not_reveal_hits": hidden_hits,
-            "pulp_beat_track": pulp_beat_track or "body_inferred",
+            "pulp_beat_track": pulp_beat_track or "none",
             "planned_reward_tags": list(planned_reward_tags),
             "pulp_beat": pulp_beats.model_dump(mode="json"),
         },

@@ -103,48 +103,6 @@ _RELATIONAL_REFERENCE_SUFFIXES = (
     "哥哥",
     "弟弟",
 )
-_GENRE_ROLE_SUFFIXES = (
-    "技术员",
-    "工程师",
-    "程序员",
-    "黑客",
-    "线人",
-    "中间人",
-    "摊主",
-    "追踪者",
-    "巡检员",
-    "安保",
-    "保镖",
-    "警员",
-    "警察",
-    "主管",
-    "代理人",
-    "残影",
-    "调度员",
-)
-_ORGANIZATION_KEYWORDS = (
-    "集团",
-    "公司",
-    "机构",
-    "报社",
-    "系统",
-    "董事会",
-    "委员会",
-    "管理局",
-    "审计局",
-)
-_PARENTHETICAL_CANDIDATE_KEYWORDS = (
-    "远程",
-    "信号",
-    "声音",
-    "录音",
-    "投影",
-    "影像",
-    "备份",
-    "副本",
-    "意识",
-    "人格",
-)
 
 _TECHNICAL_ID_RE = re.compile(
     r"^(?=.*(?:[A-Za-zＡ-Ｚａ-ｚ]|[0-9０-９]))"
@@ -184,13 +142,8 @@ _RULE_CATALOG = (
         scope="genre_candidate",
     ),
     ReferenceRuleDescriptor(
-        rule_key="reference.role_or_organization_shape",
-        summary="职业或组织形态，仅作为准入候选特征",
-        scope="genre_candidate",
-    ),
-    ReferenceRuleDescriptor(
         rule_key="reference.identity_annotation_shape",
-        summary="复合身份、状态和括注形态，仅作为准入候选特征",
+        summary="复合身份与状态标签形态，仅作为准入候选特征",
         scope="genre_candidate",
     ),
 )
@@ -232,12 +185,6 @@ def classify_reference(name: str) -> ReferenceClassification:
         features.append("compound_identity")
     if _looks_like_status_label(text):
         features.append("status_label")
-    if any(text.endswith(suffix) for suffix in _GENRE_ROLE_SUFFIXES):
-        features.append("role_shape")
-    if any(keyword in text for keyword in _ORGANIZATION_KEYWORDS):
-        features.append("organization_shape")
-    if _has_parenthetical_candidate_label(text):
-        features.append("identity_annotation")
     if features:
         return ReferenceClassification(
             scope="genre_candidate",
@@ -250,15 +197,6 @@ def _looks_like_status_label(text: str) -> bool:
     if not _STATUS_LABEL_RE.fullmatch(text):
         return False
     return re.split(r"[-_－—]", text)[-1] in _STATUS_LABEL_SUFFIXES
-
-
-def _has_parenthetical_candidate_label(text: str) -> bool:
-    for opener, closer in (("（", "）"), ("(", ")")):
-        if opener not in text or not text.endswith(closer):
-            continue
-        label = text.rsplit(opener, 1)[1][: -len(closer)]
-        return any(keyword in label for keyword in _PARENTHETICAL_CANDIDATE_KEYWORDS)
-    return False
 
 
 def looks_like_generic_character_reference(name: str) -> bool:

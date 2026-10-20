@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from forwin.application.read_models import build_project_detail
 from forwin.book_state import BookStateRepository
-from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
+from forwin.canon_names import CanonNameAnchor, find_canon_name_violations
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler_core import assemble_context
 from forwin.director.arc_director import ArcDirector
@@ -45,7 +45,10 @@ from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
 from tests.postgres import postgres_test_url
-from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import (
+    _canon_name_anchor_section,
+    build_single_chapter_draft_prompt,
+)
 
 
 class _BookStateQueryStub:
@@ -69,6 +72,24 @@ class _BookStateQueryStub:
         as_of_chapter: int,
     ) -> list[object]:
         return []
+
+
+class _AnchoredContinuityChecker(ContinuityChecker):
+    """ContinuityChecker with explicit canon name anchors, as BookState will supply them."""
+
+    def __init__(self, anchors: list[CanonNameAnchor]) -> None:
+        super().__init__(SimpleNamespace())
+        self._anchors = anchors
+        self.anchor_reads: list[tuple[str, int]] = []
+
+    def _canon_name_anchors(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int = 10**9,
+    ) -> list[CanonNameAnchor]:
+        self.anchor_reads.append((project_id, as_of_chapter))
+        return list(self._anchors)
 
 
 class SubWorldControlTests(unittest.TestCase):
@@ -613,7 +634,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("沈知遥", content)
         self.assertIn("命名人物只能使用允许名单里的名字", content)
 
-    def test_writer_prompt_includes_recent_thread_beats_for_canon_names(self) -> None:
+    def test_writer_prompt_includes_recent_thread_beats_without_deriving_name_anchors(self) -> None:
         context = SimpleNamespace(
             project_title="测试书",
             genre="都市悬疑",
@@ -655,10 +676,28 @@ class SubWorldControlTests(unittest.TestCase):
         content = prompt[1]["content"]
 
         self.assertIn("原型设计者：林若", content)
-        self.assertIn("母亲姓名：林若", content)
+        self.assertNotIn("Canon 命名锚点", content)
+        self.assertNotIn("母亲姓名", content)
         self.assertIn("不得把前情中已经出现的姓名扩写、替换或另造别名", content)
 
-    def test_writer_prompt_does_not_drop_canon_name_thread_after_three_threads(self) -> None:
+    def test_canon_name_anchor_section_renders_explicit_anchors_for_any_role(self) -> None:
+        section = _canon_name_anchor_section(
+            SimpleNamespace(),
+            anchors=[
+                CanonNameAnchor(role_label="师父", canonical_name="甲乙"),
+                CanonNameAnchor(role_label="母亲", canonical_name="丙丁"),
+                CanonNameAnchor(role_label="", canonical_name="戊己"),
+            ],
+        )
+
+        assert section is not None
+        self.assertIn("【Canon 命名锚点】", section)
+        self.assertIn("师父姓名：甲乙；必须逐字沿用，不得扩写、替换或另造别名。", section)
+        self.assertIn("母亲姓名：丙丁", section)
+        self.assertNotIn("戊己", section)
+        self.assertIsNone(_canon_name_anchor_section(SimpleNamespace()))
+
+    def test_writer_prompt_does_not_drop_active_thread_after_three_threads(self) -> None:
         context = SimpleNamespace(
             project_title="测试书",
             genre="都市悬疑",
@@ -702,63 +741,52 @@ class SubWorldControlTests(unittest.TestCase):
         content = prompt[1]["content"]
 
         self.assertIn("原型设计者：林若", content)
-        self.assertIn("母亲姓名：林若", content)
+        self.assertNotIn("母亲姓名", content)
         self.assertIn("陈伯伦", content)
         self.assertLess(content.index("母亲线索"), content.index("合作与危机"))
 
-    def test_continuity_checker_rejects_canon_mother_name_drift(self) -> None:
-        book_state = _BookStateQueryStub(
-            ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
-        )
-        checker = ContinuityChecker(
-            SimpleNamespace(),
-            book_state_query=book_state,
+    def test_continuity_checker_rejects_canon_name_drift_for_explicit_anchors(self) -> None:
+        checker = _AnchoredContinuityChecker(
+            [CanonNameAnchor(role_label="师父", canonical_name="甲乙")]
         )
         verdict = checker.check(
             "p1",
             WriterOutput(
                 chapter_number=3,
                 title="第二日",
-                body=(
-                    "韩砚说：“你母亲叫林静安，十年前是临潮集团算法部的核心成员。”"
-                    "残片里又有人称她为林若水。"
-                )
-                * 30,
-                end_of_chapter_summary="陆明确认母亲林静安是回声账本设计者。",
+                body="山门前站着师父甲乙丙。他回头看了一眼，甲乙说：“走吧。”" * 30,
+                end_of_chapter_summary="弟子认出师父甲乙丁。",
             ),
         )
 
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
         observed = {issue.entity_names[0] for issue in issues}
         self.assertEqual(verdict.verdict, "fail")
-        self.assertIn("林静安", observed)
-        self.assertIn("林若水", observed)
-        self.assertTrue(all("林若" in issue.suggested_fix for issue in issues))
-        self.assertEqual(book_state.thread_reads, [("p1", 2)])
+        self.assertEqual(observed, {"甲乙丙", "甲乙丁"})
+        self.assertTrue(all(issue.entity_names[1] == "甲乙" for issue in issues))
+        self.assertTrue(all("师父" in issue.description for issue in issues))
+        self.assertTrue(all("甲乙" in issue.suggested_fix for issue in issues))
+        self.assertEqual(checker.anchor_reads, [("p1", 2)])
 
-    def test_continuity_checker_rejects_canon_mother_name_drift_in_state_metadata(self) -> None:
-        book_state = _BookStateQueryStub(
-            ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
-        )
-        checker = ContinuityChecker(
-            SimpleNamespace(),
-            book_state_query=book_state,
+    def test_continuity_checker_rejects_canon_name_drift_in_state_metadata(self) -> None:
+        checker = _AnchoredContinuityChecker(
+            [CanonNameAnchor(role_label="师父", canonical_name="甲乙")]
         )
         verdict = checker.check(
             "p1",
             WriterOutput(
                 chapter_number=7,
                 title="第六日",
-                body=("陆明确认母亲林若留下了协议覆写线索。") * 80,
-                end_of_chapter_summary="陆明确认母亲林若与协议真相有关。",
+                body="师父甲乙留下了线索。" * 80,
+                end_of_chapter_summary="弟子确认师父甲乙与旧事有关。",
                 state_changes=[
                     StateChangeCandidate(
-                        entity_name="陆明",
+                        entity_name="弟子",
                         entity_kind="character",
                         field="knowledge",
-                        old_value="未知母亲参与协议修改",
-                        new_value="得知母亲林清和在旧港火灾当晚登录集团系统并启动继承协议覆写",
-                        reason="阿棠修复协议数据后发现母亲林清和的授权时间戳",
+                        old_value="不知师父来历",
+                        new_value="得知师父甲乙丁。",
+                        reason="翻看旧档",
                     )
                 ],
             ),
@@ -766,283 +794,101 @@ class SubWorldControlTests(unittest.TestCase):
 
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
         self.assertEqual(verdict.verdict, "fail")
-        self.assertEqual([issue.entity_names[0] for issue in issues], ["林清和"])
-        self.assertEqual(book_state.thread_reads, [("p1", 6)])
+        self.assertEqual([issue.entity_names[0] for issue in issues], ["甲乙丁"])
+        self.assertEqual(checker.anchor_reads, [("p1", 6)])
 
-    def test_canon_name_anchor_ignores_role_title_as_mother_name(self) -> None:
-        anchors = extract_canon_name_anchors(
-            [
-                "污染过的线程摘要写成：首席架构，即母亲。",
-                "终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
-            ]
+    def test_continuity_checker_has_no_canon_name_anchors_by_default(self) -> None:
+        book_state = _BookStateQueryStub(
+            ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
         )
-
-        self.assertEqual([anchor.canonical_name for anchor in anchors], ["林若"])
-
-    def test_canon_name_observation_ignores_mother_possessive_noun(self) -> None:
-        violations = find_canon_name_violations(
-            "许安说：“你母亲的遗书是空白的。但如果她留下了其他线索——”",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        checker = ContinuityChecker(
+            SimpleNamespace(),
+            book_state_query=book_state,
         )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_mother_event_phrase(self) -> None:
-        violations = find_canon_name_violations(
-            "他不知道自己为什么会有这个能力，只知道十年前母亲失踪后，他就开始能看到残片。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_mother_last_appearance_phrase(self) -> None:
-        violations = find_canon_name_violations(
-            "旧港是旧港火灾发生的地方，也是母亲最后出现的地方。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_mother_negative_description(self) -> None:
-        violations = find_canon_name_violations(
-            "韩砚说：“你母亲不是普通的档案管理员。”",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_mother_ordinary_verb_phrases(self) -> None:
-        violations = find_canon_name_violations(
-            (
-                "许安说：“因为是我帮你母亲申请的工位。”"
-                "档案显示，你母亲是外包的档案修复师。"
-                "这是他和母亲之间的暗号。"
-            ),
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_verb_phrase(self) -> None:
-        violations = find_canon_name_violations(
-            "这块设备的核心数据林若还在，但需要专业设备才能读取。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_disappear_verb(self) -> None:
-        violations = find_canon_name_violations(
-            "十年前，旧港火灾，母亲失踪，林若消失，所有线索被拧在一起。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_time_preposition(self) -> None:
-        violations = find_canon_name_violations(
-            "他记得陆明的遗书提到母亲林若在十年前失踪。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_metadata_nouns(self) -> None:
-        violations = find_canon_name_violations(
-            "实验对象为林若本人。五人决定前往旧港三号码头寻找林若备份。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_match_verb(self) -> None:
-        violations = find_canon_name_violations(
-            "旧港火灾目击记录显示，一名女性目击者的描述与林若吻合。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_sit_verb(self) -> None:
-        violations = find_canon_name_violations(
-            "屏幕转为一段视频，母亲林若坐在实验室里，背景是一排服务器机架。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_role_relation(self) -> None:
-        violations = find_canon_name_violations(
-            "审查元数据写道：灰衣男声称自己是林若下属，提供旧港火灾前监控和录音。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_allows_canonical_name_in_normal_sentence(self) -> None:
-        violations = find_canon_name_violations(
-            "陆明确认母亲林若是回声账本原型设计者之一，也找到了林若的签名。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_reports_wrong_name_before_possessive_fact(self) -> None:
-        violations = find_canon_name_violations(
-            "陆明从残片中提取到母亲林清漪的声音残片，确认她是回声账本原型设计者。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["林清漪"])
-
-    def test_canon_name_observation_reports_wrong_name_before_dash_clause(self) -> None:
-        violations = find_canon_name_violations(
-            "韩砚说：“你母亲苏晚晴——不是普通的档案管理员。”",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["苏晚晴"])
-
-    def test_canon_name_observation_reports_wrong_name_after_qi_mother_prefix(self) -> None:
-        violations = find_canon_name_violations(
-            "韩砚告知陆明其母亲苏晚晴是回声系统原型设计者之一。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["苏晚晴"])
-
-    def test_canon_name_observation_reports_wrong_name_before_parenthetical_alias(self) -> None:
-        violations = find_canon_name_violations(
-            "档案残片显示母亲苏敏（林若溪）曾参与原型设计。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(
-            [violation.observed_name for violation in violations],
-            ["林若溪", "苏敏"],
-        )
-
-    def test_canon_name_observation_reports_document_name_in_mother_context(self) -> None:
-        violations = find_canon_name_violations(
-            (
-                "韩砚说：“你母亲留下的不只是遗书，还有一份她亲手签名的协议。”"
-                "陆明看到纸上的内容——一个签名栏，签名栏上方是打印体的名字：林清漪。"
-            ),
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["林清漪"])
-
-    def test_canon_name_observation_reports_name_followed_by_mother_apposition(self) -> None:
-        violations = find_canon_name_violations(
-            (
-                "算法签名。\n\n"
-                "一个名字出现在解析结果的末尾：叶知秋。\n\n"
-                "陆明的母亲。"
-            ),
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["叶知秋"])
-
-    def test_canon_name_observation_reports_name_followed_by_mother_signature(self) -> None:
-        violations = find_canon_name_violations(
-            (
-                "陆明看到家属签字栏里那个名字时，胸腔里的空气像是被抽走了。\n\n"
-                "林婉清。\n\n"
-                "母亲的签名。他认得这笔字。"
-            ),
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["林婉清"])
-
-    def test_canon_name_observation_reports_dash_appositive_mother_name(self) -> None:
-        violations = find_canon_name_violations(
-            "档案上印着一个人名：苏瑾——陆明母亲的名字，标注为主架构师。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["苏瑾"])
-
-    def test_canon_name_observation_reports_mother_name_after_separator(self) -> None:
-        violations = find_canon_name_violations(
-            "手术同意书的家属签字栏——林若母亲的名字，林薇。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual([violation.observed_name for violation in violations], ["林薇"])
-
-    def test_canon_name_observation_ignores_breath_before_canonical_name_apposition(self) -> None:
-        violations = find_canon_name_violations(
-            "陆明的呼吸林若。母亲的名字像一根针，精准地刺进他不敢触碰的区域。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_name_noun(self) -> None:
-        violations = find_canon_name_violations(
-            "音频残片中断前，母亲叫林若名字卡在噪音里。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_canonical_name_followed_by_speech_noun(self) -> None:
-        violations = find_canon_name_violations(
-            "他想起母亲教他修复档案时林若话：“每一条痕迹都有代价。”",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_verb_pronoun_before_canonical_name(self) -> None:
-        violations = find_canon_name_violations(
-            "项目立项书，署林若你母亲的名字——林若。",
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_canon_name_observation_ignores_signature_followed_by_verb_phrase(self) -> None:
-        violations = find_canon_name_violations(
-            (
-                "陆明反复回放着母亲最后的口型。"
-                "周岚把医疗记录摊开在台面上，指着手术同意书上的签名：“林若下这份同意书的时间，是旧港火灾发生后的第二天。”"
-            ),
-            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
-        )
-
-        self.assertEqual(violations, [])
-
-    def test_continuity_checker_ignores_legacy_repo_threads_without_book_state(self) -> None:
-        class LegacyRepo:
-            def get_active_threads(self, _project_id: str) -> list[object]:
-                return [
-                    SimpleNamespace(
-                        description="",
-                        recent_beats=[
-                            "污染过的线程摘要写成：首席架构，即母亲。",
-                            "终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
-                        ],
-                    )
-                ]
-
-        checker = ContinuityChecker(LegacyRepo())
         verdict = checker.check(
             "p1",
             WriterOutput(
                 chapter_number=3,
                 title="第二日",
-                body=("许安说：“你母亲的遗书是空白的。”周岚说：“你母亲叫林婉清。”") * 30,
-                end_of_chapter_summary="陆明发现母亲林婉清是回声账本设计者。",
+                body="周岚说：“你母亲叫林婉清。”残片里又有人称她为林若水。" * 30,
+                end_of_chapter_summary="陆明发现母亲林婉清是设计者。",
             ),
         )
 
-        issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
-        self.assertEqual(verdict.verdict, "warn")
-        self.assertEqual(issues, [])
+        self.assertEqual(
+            [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"],
+            [],
+        )
+        self.assertEqual(book_state.thread_reads, [])
+
+    def test_canon_name_violations_are_role_agnostic(self) -> None:
+        for role in ("师父", "母亲", "盟友"):
+            with self.subTest(role=role):
+                violations = find_canon_name_violations(
+                    [CanonNameAnchor(role_label=role, canonical_name="甲乙")],
+                    "山门前站着甲乙丙。",
+                )
+
+                self.assertEqual(len(violations), 1)
+                violation = violations[0]
+                self.assertEqual(violation.role_label, role)
+                self.assertEqual(violation.canonical_name, "甲乙")
+                self.assertEqual(violation.observed_name, "甲乙丙")
+                self.assertEqual(violation.reason, "expanded_canonical_name")
+                self.assertIn("甲乙丙", violation.evidence)
+
+    def test_canon_name_violations_cover_every_anchor_once_per_observed_name(self) -> None:
+        violations = find_canon_name_violations(
+            [
+                CanonNameAnchor(role_label="师父", canonical_name="甲乙"),
+                CanonNameAnchor(role_label="盟友", canonical_name="丙丁"),
+            ],
+            "师父甲乙丙。盟友丙丁戊。后来又提到师父甲乙丙。",
+        )
+
+        self.assertEqual(
+            [(v.role_label, v.observed_name) for v in violations],
+            [("师父", "甲乙丙"), ("盟友", "丙丁戊")],
+        )
+
+    def test_canon_name_violations_allow_the_canonical_name_in_ordinary_prose(self) -> None:
+        violations = find_canon_name_violations(
+            [CanonNameAnchor(role_label="师父", canonical_name="甲乙")],
+            "弟子拜见师父甲乙，也找到了甲乙的剑。甲乙说：“进来。”这把剑是甲乙的。",
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_violations_ignore_function_word_continuations(self) -> None:
+        for text in (
+            "说的就是甲乙了。",
+            "他们只提到甲乙和。",
+            "没人提起甲乙他。",
+            "不会是甲乙不是。",
+        ):
+            with self.subTest(text=text):
+                violations = find_canon_name_violations(
+                    [CanonNameAnchor(role_label="师父", canonical_name="甲乙")],
+                    text,
+                )
+
+                self.assertEqual(violations, [])
+
+    def test_canon_name_violations_need_usable_anchors_and_text(self) -> None:
+        anchor = CanonNameAnchor(role_label="师父", canonical_name="甲乙")
+
+        self.assertEqual(find_canon_name_violations([], "师父甲乙丙。"), [])
+        self.assertEqual(find_canon_name_violations([anchor], ""), [])
+        self.assertEqual(
+            find_canon_name_violations(
+                [
+                    CanonNameAnchor(role_label="", canonical_name="甲乙"),
+                    CanonNameAnchor(role_label="师父", canonical_name=""),
+                ],
+                "师父甲乙丙。",
+            ),
+            [],
+        )
 
     def test_canon_name_drift_autofix_replaces_observed_name_across_writer_output(self) -> None:
         output = WriterOutput(
@@ -1095,7 +941,7 @@ class SubWorldControlTests(unittest.TestCase):
                     rule_name="canon_name_drift",
                     severity="error",
                     description="误报的母亲姓名漂移。",
-                    entity_names=["申请", "林若"],
+                    entity_names=["本人", "林若"],
                 ),
                 ContinuityIssue(
                     rule_name="canon_name_drift",

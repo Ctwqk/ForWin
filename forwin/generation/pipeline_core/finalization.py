@@ -377,7 +377,7 @@ class FinalizationStage:
 
         # Initial timeline
         initial_time = arc_plan.get("initial_time", {})
-        if initial_time:
+        if initial_time and (initial_time.get("label") or initial_time.get("description")):
             delta_id = f"genesis_story_time:{project_id}"
             if not book_state.graph_delta_ids_exist([delta_id]):
                 book_state.append_graph_delta(

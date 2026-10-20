@@ -735,10 +735,6 @@ class WorldSimulator:
             shifts.append("读者对悬念的追问正在放大世界压迫感")
         elif dominant_sentiment == "positive":
             shifts.append("读者期待正在推高后续兑现压力")
-        if chapter_number >= 3:
-            shifts.append("世界正在对主角行动产生连锁反应")
-            if pressure_level == "steady":
-                pressure_level = "rising"
         if not shifts:
             shifts.append("主要矛盾仍处于可控推进状态")
 

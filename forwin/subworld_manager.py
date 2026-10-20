@@ -32,12 +32,6 @@ from forwin.protocol import (
 )
 
 
-_NAME_SURNAMES = (
-    "沈", "顾", "林", "陆", "苏", "许", "周", "谢", "秦", "江", "宋", "裴", "陈", "白",
-)
-_NAME_GIVEN = (
-    "临川", "知遥", "明序", "清和", "宴秋", "昭宁", "星野", "景川", "怀瑾", "时雨", "砚书", "听澜",
-)
 def _load_json(raw: str, default):
     try:
         return json.loads(raw or "")
@@ -670,6 +664,11 @@ class SubWorldManager:
                     continue
                 if subworld_id == global_core_id and not roster_item.is_core:
                     continue
+                # Names come from the plan, never from the runtime: a slot
+                # without a display name stays a planned_slot.
+                entity_name = str(roster_item.display_name or "").strip()
+                if not entity_name:
+                    continue
                 metadata = _load_json(roster_item.metadata_json, {})
                 requested_hint = int(metadata.get("entry_target_chapter") or 0)
                 chapter_hint = (
@@ -687,15 +686,6 @@ class SubWorldManager:
                 )
                 if chapter_hint <= 0:
                     break
-                entity_name = str(roster_item.display_name or "").strip()
-                if not entity_name:
-                    entity_name = self.fallback_slot_name(
-                        project_id=roster_item.project_id,
-                        subworld_id=roster_item.subworld_id,
-                        slot_key=roster_item.slot_key,
-                        role_hint=roster_item.role_hint,
-                    )
-                roster_item.display_name = entity_name
                 roster_item.status = "activated_named"
                 if not roster_item.activation_chapter:
                     roster_item.activation_chapter = chapter_hint
@@ -914,13 +904,6 @@ class SubWorldManager:
         session.flush()
         for lookup_key in lookup_keys:
             roster_lookup[lookup_key] = row.id
-
-    def fallback_slot_name(self, *, project_id: str, subworld_id: str, slot_key: str, role_hint: str) -> str:
-        payload = f"{project_id}:{subworld_id}:{slot_key}:{role_hint}".encode("utf-8")
-        digest = md5(payload).hexdigest()
-        surname = _NAME_SURNAMES[int(digest[:2], 16) % len(_NAME_SURNAMES)]
-        given = _NAME_GIVEN[int(digest[2:4], 16) % len(_NAME_GIVEN)]
-        return f"{surname}{given}"
 
     def _fallback_initial_delta(self, arc_plan: dict) -> SubWorldPlanDelta:
         return SubWorldPlanDelta(

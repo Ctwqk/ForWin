@@ -6,6 +6,7 @@ from forwin.writer.prompt_core import (
     build_lore_timeline_notes_extraction_prompt,
     build_single_chapter_draft_prompt,
 )
+from forwin.writer.prompt_core.sections import _story_basics_section
 
 
 def test_writer_prompt_includes_protagonist_naming_contract() -> None:
@@ -232,9 +233,9 @@ def test_writer_prompt_includes_character_state_constraints() -> None:
         genre="悬疑科幻",
         setting_summary="核心系统记忆系统维持公共档案秩序。",
         chapter_number=32,
-        chapter_plan_title="追踪器解除窗口",
+        chapter_plan_title="会合窗口",
         chapter_plan_one_line="陆明与韩青会合。",
-        chapter_goals=["解除追踪器"],
+        chapter_goals=["与韩青会合"],
         canon_quality_context={
             "character_state_constraints": [
                 {
@@ -253,7 +254,31 @@ def test_writer_prompt_includes_character_state_constraints() -> None:
     assert "已进入 canon 的角色状态约束" in content
     assert "韩青：第31章已脱困/自由" in content
     assert "不得把TA写回被捕、被关押、被羁押、被固定、仍在羁押室或等待救援" in content
-    assert "可以写TA仍受追踪器、系统权限、伤势或路线限制" in content
+    assert "可以写TA仍受伤势、行动范围等限制。" in content
+    assert "追踪器" not in content
+    assert "系统权限" not in content
+
+
+def test_story_basics_section_has_no_example_roles_or_countdowns() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统记忆系统维持公共档案秩序。",
+        chapter_number=1,
+        chapter_plan_title="档案室的裂缝",
+        chapter_plan_one_line="陆明发现家族档案被抹除。",
+        chapter_goals=["陆明发现倒计时"],
+    )
+
+    section = _story_basics_section(context)
+
+    assert "主角姓名：陆明" in section
+    assert "倒计时约束：不同倒计时各自独立，不得混用、合并或互相替换。" in section
+    assert "系统巡检员" not in section
+    assert "剩余4小时" not in section
+    assert "剩余7天" not in section
 
 
 def test_writer_prompt_includes_future_plan_audit_summary() -> None:

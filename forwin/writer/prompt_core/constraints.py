@@ -252,7 +252,7 @@ def _character_state_constraint_sections(items: list[dict]) -> list[ConstraintSe
             lines.append(
                 f"    · {character_name}：第{chapter}章已脱困/自由；本章不得把TA写回被捕、被关押、"
                 "被羁押、被固定、仍在羁押室或等待救援，除非正文先写清楚新的再次被捕桥接。"
-                "可以写TA仍受追踪器、系统权限、伤势或路线限制。"
+                "可以写TA仍受伤势、行动范围等限制。"
             )
         else:
             lines.append(

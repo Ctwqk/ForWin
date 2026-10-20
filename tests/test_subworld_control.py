@@ -135,6 +135,14 @@ class SubWorldControlTests(unittest.TestCase):
 
             subworld_a = result_a.new_subworlds[0].subworld_id
             subworld_b = result_b.new_subworlds[0].subworld_id
+            # Planned slots stay unnamed until the plan supplies a name; only
+            # named slots can be activated into entry targets.
+            for owner_id, slot_name in ((project_a.id, "甲联络员名"), (project_b.id, "乙联络员名")):
+                for slot in session.execute(
+                    select(SubWorldRosterItem).where(SubWorldRosterItem.project_id == owner_id)
+                ).scalars():
+                    slot.display_name = slot_name
+            session.flush()
             activation_a = manager.plan_band_activation(
                 session=session,
                 project_id=project_a.id,
@@ -1293,6 +1301,7 @@ class SubWorldControlTests(unittest.TestCase):
                     project_id=project.id,
                     subworld_id=arc_local.id,
                     entity_id=None,
+                    display_name="林舟",
                     slot_key="jiangcheng-contact",
                     role_hint="江城关键联系人",
                     description="本段首次进入视野的联系人",
@@ -1403,6 +1412,7 @@ class SubWorldControlTests(unittest.TestCase):
                 project_id=project.id,
                 subworld_id=subworld.id,
                 entity_id=None,
+                display_name="阿青",
                 slot_key="guard",
                 role_hint="护卫",
                 description="冷静护卫，负责保护主角。",
@@ -1431,16 +1441,87 @@ class SubWorldControlTests(unittest.TestCase):
             engine.dispose()
 
         self.assertEqual(len(activation.chapter_entry_targets), 1)
-        self.assertEqual(
-            activation.chapter_entry_targets[0].entity_name,
-            roster.display_name,
-        )
+        self.assertEqual(activation.chapter_entry_targets[0].entity_name, "阿青")
+        self.assertEqual(roster.display_name, "阿青")
         self.assertEqual(nodes, [])
         self.assertEqual(roster.status, "activated_named")
         self.assertEqual(metadata.get("entry_target_chapter"), 3)
         self.assertTrue(metadata.get("pending_entity_admission"))
         self.assertNotIn("character_id", metadata)
         self.assertNotIn("book_state_node_id", metadata)
+
+    def test_band_activation_skips_unnamed_planned_slots(self) -> None:
+        engine = get_engine(postgres_test_url("planned-slot-unnamed-skip"))
+        init_db(engine)
+        session = get_session_factory(engine)()
+        try:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="书",
+                premise="p",
+                genre="g",
+                runtime_policy=RuntimePolicy.for_profile("standard"),
+            )
+            subworld = updater.create_subworld(
+                project_id=project.id,
+                origin_arc_id=None,
+                parent_subworld_id=None,
+                name="江城",
+                purpose="本地线",
+                scope="arc_local",
+                metadata={"chapter_window_hint": "3-5"},
+            )
+            named = updater.create_roster_item(
+                project_id=project.id,
+                subworld_id=subworld.id,
+                entity_id=None,
+                display_name="阿青",
+                slot_key="named-slot",
+                role_hint="护卫",
+                description="有名字的槽位。",
+                status="planned_slot",
+            )
+            unnamed = updater.create_roster_item(
+                project_id=project.id,
+                subworld_id=subworld.id,
+                entity_id=None,
+                slot_key="unnamed-slot",
+                role_hint="联络人",
+                description="没有名字的槽位。",
+                status="planned_slot",
+            )
+
+            activation = SubWorldManager().plan_band_activation(
+                session=session,
+                project_id=project.id,
+                chapter_start=3,
+                chapter_end=5,
+                active_band=[
+                    SimpleNamespace(
+                        title="江城",
+                        one_line="本地线展开",
+                        goals_json='["引入角色"]',
+                    )
+                ],
+            )
+            session.flush()
+            session.refresh(named)
+            session.refresh(unnamed)
+            unnamed_metadata = json.loads(unnamed.metadata_json or "{}")
+        finally:
+            session.close()
+            engine.dispose()
+
+        self.assertEqual(
+            [target.entity_name for target in activation.chapter_entry_targets],
+            ["阿青"],
+        )
+        self.assertEqual(named.status, "activated_named")
+        self.assertEqual(unnamed.status, "planned_slot")
+        self.assertEqual(unnamed.display_name, "")
+        self.assertFalse(unnamed.activation_chapter)
+        self.assertNotIn("pending_entity_admission", unnamed_metadata)
+        self.assertNotIn("entry_target_chapter", unnamed_metadata)
 
     def test_band_activation_does_not_reintroduce_canon_bound_roster_item(self) -> None:
         engine = get_engine(postgres_test_url("planned-slot-canonical-metadata"))

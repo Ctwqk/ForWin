@@ -1512,15 +1512,6 @@ max_literals = 50
 
 [[entry]]
 path = "forwin/simulation/world.py"
-symbol = "WorldSimulator.simulate"
-checks = ["chapter_number_literal"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "chapter_number >= 3 强制 rising 的写死阈值；Task 8 删除"
-max_literals = 1
-
-[[entry]]
-path = "forwin/simulation/world.py"
 symbol = "_KEYWORD_RULES"
 checks = ["cjk_collection"]
 category = "pending_removal"
@@ -1544,24 +1535,6 @@ category = "pending_removal"
 remove_in = "P4"
 justification = "前期/中段/后期 窗口词与写死的章节号；P4 删除 subworld 角色路径"
 max_literals = 10
-
-[[entry]]
-path = "forwin/subworld_manager.py"
-symbol = "_NAME_GIVEN"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "subworld 名字池（旧书人名用字）；Task 8 删除"
-max_literals = 12
-
-[[entry]]
-path = "forwin/subworld_manager.py"
-symbol = "_NAME_SURNAMES"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "subworld 名字池（旧书人名用字）；Task 8 删除"
-max_literals = 14
 
 [[entry]]
 path = "forwin/world_templates.py"
@@ -1608,16 +1581,6 @@ max_literals = 6
 path = "forwin/writer/prompt_core/constraints.py"
 symbol = "<file>"
 checks = ["fixture_term"]
-literals = ["追踪器"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "脱困提示中的“追踪器”（:255）；Task 8 改为“可以写TA仍受伤势、行动范围等限制。”"
-max_literals = 1
-
-[[entry]]
-path = "forwin/writer/prompt_core/constraints.py"
-symbol = "<file>"
-checks = ["fixture_term"]
 literals = ["羁押室"]
 category = "pending_removal"
 remove_in = "P2"
@@ -1631,11 +1594,3 @@ category = "prompt_text"
 justification = "writer prompt 构造模块（拼接 LLM 说明文字与解析 premise 中的主角标注）"
 max_literals = 20
 
-[[entry]]
-path = "forwin/writer/prompt_core/sections.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-category = "pending_removal"
-remove_in = "P0"
-justification = "命名规则示例“系统巡检员”；Task 8 删除"
-max_literals = 1

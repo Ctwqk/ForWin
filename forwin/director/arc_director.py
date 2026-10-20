@@ -71,10 +71,7 @@ class ArcDirector:
         result = {
             "arc_synopsis": str(core.get("arc_synopsis", "")).strip(),
             "setting_summary": str(core.get("setting_summary", "")).strip(),
-            "initial_time": core.get("initial_time") or {
-                "label": "现代雨季",
-                "description": "故事开始于一场持续不断的雨夜。",
-            },
+            "initial_time": core.get("initial_time") or {"label": "", "description": ""},
             "chapters": normalized_chapters,
             "arc_outlines": arc_outlines,
             "characters": characters,
@@ -190,15 +187,9 @@ class ArcDirector:
 
     def _plan_core(self, premise: str, genre: str) -> dict:
         fallback = {
-            "arc_synopsis": (
-                f"《{genre}》故事围绕“{premise}”展开。主角会在不断升级的危机里逼近真相，"
-                "并在结尾做出一次高代价抉择。"
-            ),
-            "setting_summary": "故事发生在现代城市与隐秘超常规则并存的世界里，表层日常之下埋着危险秘密。",
-            "initial_time": {
-                "label": "故事开始的第一场雨夜",
-                "description": "一切异变都从这个夜晚开始。",
-            },
+            "arc_synopsis": "",
+            "setting_summary": "",
+            "initial_time": {"label": "", "description": ""},
         }
         prompt = [
             {

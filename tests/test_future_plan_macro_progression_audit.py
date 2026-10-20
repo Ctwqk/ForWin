@@ -76,7 +76,7 @@ def test_arc_macro_boundary_blocks_unmet_status_target() -> None:
 
 def test_audit_and_apply_blocks_finished_arc_with_unmet_macro_target() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ArcPlanVersion(
             id="a1",
@@ -130,7 +130,7 @@ def test_audit_and_apply_blocks_finished_arc_with_unmet_macro_target() -> None:
 
 def test_audit_and_apply_blocks_unmet_macro_target_after_boundary_was_passed() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ArcPlanVersion(
             id="a1",
@@ -184,7 +184,7 @@ def test_audit_and_apply_blocks_unmet_macro_target_after_boundary_was_passed() -
 
 def test_audit_and_apply_skips_successfully_audited_macro_boundary() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ArcPlanVersion(
             id="a1",

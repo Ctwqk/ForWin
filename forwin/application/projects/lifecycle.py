@@ -70,10 +70,13 @@ def create_project(
     try:
         title = str(req.title or "").strip()
         premise = str(req.premise or "").strip()
+        genre = str(req.genre or "").strip()
         if not title:
             raise HTTPException(400, "书名不能为空")
         if not premise:
             raise HTTPException(400, "作品 premise 不能为空")
+        if not genre:
+            raise HTTPException(400, "作品 genre 不能为空")
 
         publish_bindings = [
             {
@@ -113,7 +116,7 @@ def create_project(
         project = updater.create_project(
             title=title,
             premise=premise,
-            genre=str(req.genre or "").strip() or "玄幻",
+            genre=genre,
             setting_summary=str(req.setting_summary or "").strip(),
             target_total_chapters=max(1, int(req.target_total_chapters or 1)),
             runtime_policy=policy,

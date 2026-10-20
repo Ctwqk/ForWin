@@ -67,7 +67,7 @@ class RunControlStage:
     def run(
         self,
         premise: str,
-        genre: str = "玄幻",
+        genre: str,
         num_chapters: int = 3,
     ) -> RunResult:
         """Generate *num_chapters* chapters from a premise.

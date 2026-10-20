@@ -38,7 +38,7 @@ def test_repository_persists_region_node_and_non_negative_edge() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.add(SubWorld(id="sw1", project_id="p1", name="苍澜大陆", subworld_type="continent"))
         session.commit()
         repo = MapRepository(session)
@@ -93,8 +93,8 @@ def test_persist_generation_rejects_foreign_subworld_before_deleting_rows() -> N
     with Session() as session:
         session.add_all(
             [
-                Project(id="p1", title="甲书", premise="premise"),
-                Project(id="p2", title="乙书", premise="premise"),
+                Project(id="p1", title="甲书", premise="premise", genre="玄幻"),
+                Project(id="p2", title="乙书", premise="premise", genre="玄幻"),
             ]
         )
         session.commit()
@@ -139,8 +139,8 @@ def test_upsert_map_node_rejects_foreign_subworld() -> None:
     with Session() as session:
         session.add_all(
             [
-                Project(id="p1", title="甲书", premise="premise"),
-                Project(id="p2", title="乙书", premise="premise"),
+                Project(id="p1", title="甲书", premise="premise", genre="玄幻"),
+                Project(id="p2", title="乙书", premise="premise", genre="玄幻"),
             ]
         )
         session.commit()
@@ -166,8 +166,8 @@ def test_persist_generation_scopes_cleanup_to_project() -> None:
     with Session() as session:
         session.add_all(
             [
-                Project(id="p1", title="甲书", premise="premise"),
-                Project(id="p2", title="乙书", premise="premise"),
+                Project(id="p1", title="甲书", premise="premise", genre="玄幻"),
+                Project(id="p2", title="乙书", premise="premise", genre="玄幻"),
             ]
         )
         session.commit()
@@ -210,8 +210,8 @@ def test_persist_generation_rejects_result_identity_before_deleting_rows() -> No
     with Session() as session:
         session.add_all(
             [
-                Project(id="p1", title="甲书", premise="premise"),
-                Project(id="p2", title="乙书", premise="premise"),
+                Project(id="p1", title="甲书", premise="premise", genre="玄幻"),
+                Project(id="p2", title="乙书", premise="premise", genre="玄幻"),
             ]
         )
         session.commit()

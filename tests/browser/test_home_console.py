@@ -47,6 +47,10 @@ def test_book_modal_validates_bindings_and_opens_genesis(page, browser_test_base
     page.locator("#book_form_title").fill("潮雾测试书")
     page.locator("#book_form_premise").fill("长文本 premise：主角在潮雾里发现被抹掉的航线。")
     page.locator("#book_form_content_guardrails").fill("不提前揭示密钥\n不跳过人工 checkpoint")
+    expect(page.locator("#book_form_genre")).to_have_value("")
+    page.get_by_role("button", name="创建并进入创世").click()
+    expect(page.locator("#global_status")).to_contain_text("必须填写 Genre")
+    page.locator("#book_form_genre").fill("海洋悬疑")
     page.locator("#book_form_publish_platform_1").select_option("fanqie")
     page.locator("#book_form_publish_mode_1").select_option("create_book")
     page.locator("#book_form_publish_book_name_1").fill("番茄潮雾")
@@ -62,6 +66,7 @@ def test_book_modal_validates_bindings_and_opens_genesis(page, browser_test_base
     expect(page.locator("#genesis_modal_shell")).to_have_class(re.compile(r".*\bopen\b.*"))
     payload = backend.captured_payloads("/api/projects")[-1]
     assert payload["title"] == "潮雾测试书"
+    assert payload["genre"] == "海洋悬疑"
     assert payload["content_guardrails"] == ["不提前揭示密钥", "不跳过人工 checkpoint"]
     assert len(payload["publish_bindings"]) == 2
     assert payload["publish_bindings"][0]["create_if_missing"] is True

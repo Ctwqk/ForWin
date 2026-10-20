@@ -23,6 +23,7 @@ def session() -> Session:
 
 def test_project_policy_store_round_trips_and_increments_version(session: Session) -> None:
     project = Project(
+        genre="玄幻",
         id="p1",
         title="T",
         premise="P",
@@ -46,6 +47,7 @@ def test_project_policy_store_round_trips_and_increments_version(session: Sessio
 
 def test_project_policy_store_rejects_stale_and_missing_policy(session: Session) -> None:
     project = Project(
+        genre="玄幻",
         id="p2",
         title="T",
         premise="P",

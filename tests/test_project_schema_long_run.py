@@ -4,20 +4,48 @@ import pytest
 from pydantic import ValidationError
 
 from forwin.api_schema.project import ProjectCreateRequest, ProjectExtendGenerationRequest
+from forwin.cli import build_parser
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
 from tests.postgres import postgres_test_url
 
 
 def test_project_create_accepts_thousand_chapter_target() -> None:
-    req = ProjectCreateRequest(title="长篇", premise="p", target_total_chapters=1000)
+    req = ProjectCreateRequest(
+        title="长篇", premise="p", genre="都市", target_total_chapters=1000
+    )
 
     assert req.target_total_chapters == 1000
 
 
 def test_project_create_rejects_above_contract_limit() -> None:
     with pytest.raises(ValidationError):
-        ProjectCreateRequest(title="太长", premise="p", target_total_chapters=5001)
+        ProjectCreateRequest(
+            title="太长", premise="p", genre="都市", target_total_chapters=5001
+        )
+
+
+def test_project_create_requires_genre() -> None:
+    with pytest.raises(ValidationError):
+        ProjectCreateRequest(title="长篇", premise="p", target_total_chapters=10)
+
+
+def test_project_create_rejects_empty_genre() -> None:
+    with pytest.raises(ValidationError):
+        ProjectCreateRequest(
+            title="长篇", premise="p", genre="", target_total_chapters=10
+        )
+
+
+def test_cli_generate_requires_genre() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["generate", "--title", "书", "--premise", "p"])
+    args = parser.parse_args(
+        ["generate", "--title", "书", "--premise", "p", "--genre", "都市"]
+    )
+    assert args.genre == "都市"
 
 
 def test_project_extend_accepts_factory_sized_extension() -> None:

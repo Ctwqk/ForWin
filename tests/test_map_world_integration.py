@@ -84,7 +84,7 @@ def test_service_persists_generation_run_and_builds_runtime() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
 
         result = create_or_update_subworld_map(session, _spec())
@@ -102,7 +102,7 @@ def test_book_map_generation_links_subworlds_with_world_gate_path() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
 
         result = create_or_update_book_map(session, [_spec(), _realm_spec()])
@@ -143,7 +143,7 @@ def test_book_map_generation_rolls_back_partial_rows_when_later_subworld_fails(m
     monkeypatch.setattr(map_service, "create_or_update_subworld_map", fake_create_or_update_subworld_map)
 
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
 
         result = create_or_update_book_map(session, [_spec(), _realm_spec()])
@@ -165,7 +165,7 @@ def test_regenerating_subworld_preserves_valid_inter_subworld_edges() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
 
         create_or_update_book_map(session, [_spec(), _realm_spec()])
@@ -199,7 +199,7 @@ def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:
         ],
     }
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
         first_spec = build_subworld_map_specs_from_genesis(
             project_id="p1",
@@ -252,7 +252,7 @@ def test_arc_map_expansion_uses_explicit_atlas_cross_subworld_edges() -> None:
         ],
     }
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
         first_spec = build_subworld_map_specs_from_genesis(
             project_id="p1",
@@ -559,7 +559,7 @@ def test_map_context_is_compact_and_filters_hidden_edges() -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
-        session.add(Project(id="p1", title="书", premise="premise"))
+        session.add(Project(id="p1", title="书", premise="premise", genre="玄幻"))
         session.commit()
         result = create_or_update_subworld_map(session, _spec())
         city = next(node for node in result.map_nodes if node.name == "帝都")

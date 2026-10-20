@@ -1201,6 +1201,18 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(policy.policy.pause.band_checkpoint_action, "pause_on_warn")
         self.assertTrue(policy.policy.pause.manual_checkpoints)
 
+    def test_create_project_rejects_blank_genre(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.create_project(
+                ProjectCreateRequest(
+                    title="治理测试书",
+                    premise="一个关于治理层的 premise",
+                    genre="   ",
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+
     def test_continue_generation_rejects_failed_band_checkpoint(self) -> None:
         project = self._create_project(
             project_id="proj-band-checkpoint", creation_status="writing"

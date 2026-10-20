@@ -273,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate = sub.add_parser("generate", help="创建 Genesis 项目并启动写作")
     generate.add_argument("--title", required=True, help="书名")
     generate.add_argument("--premise", required=True, help="小说设定/前提")
-    generate.add_argument("--genre", default="玄幻", help="类型")
+    generate.add_argument("--genre", required=True, help="类型")
     generate.add_argument("--setting-summary", default="", help="世界设定摘要")
     generate.add_argument("--chapters", type=int, default=3, help="目标章节数")
 

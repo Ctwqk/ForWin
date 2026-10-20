@@ -271,7 +271,7 @@
       fillPlatformSelect('book_form_publish_platform_1', primaryBinding.platform || '', true);
       fillPlatformSelect('book_form_publish_platform_2', secondaryBinding.platform || '', true);
       document.getElementById('book_form_title').value = prefill.title || '';
-      document.getElementById('book_form_genre').value = prefill.genre || @@DEFAULT_GENRE_JSON@@;
+      document.getElementById('book_form_genre').value = prefill.genre || '';
       document.getElementById('book_form_target_total_chapters').value = prefill.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@;
       document.getElementById('book_form_audience_hint').value = prefill.audience_hint || '';
       document.getElementById('book_form_core_emotion').value = prefill.core_emotion || '';
@@ -313,7 +313,7 @@
         const payload = {
           title: document.getElementById('book_form_title').value.trim(),
           premise: document.getElementById('book_form_premise').value.trim(),
-          genre: document.getElementById('book_form_genre').value.trim() || @@DEFAULT_GENRE_JSON@@,
+          genre: document.getElementById('book_form_genre').value.trim(),
           target_total_chapters: Number(document.getElementById('book_form_target_total_chapters').value || @@DEFAULT_CHAPTERS_JSON@@),
           audience_hint: document.getElementById('book_form_audience_hint').value.trim(),
           core_emotion: document.getElementById('book_form_core_emotion').value.trim(),
@@ -333,6 +333,10 @@
         }
         if (!payload.premise) {
           setGlobalStatus('新建书本必须填写 premise / prompt。', '书本管理');
+          return;
+        }
+        if (!payload.genre) {
+          setGlobalStatus('新建书本必须填写 Genre。', '书本管理');
           return;
         }
         if (!Number.isFinite(payload.target_total_chapters) || payload.target_total_chapters < 1 || payload.target_total_chapters > 5000) {

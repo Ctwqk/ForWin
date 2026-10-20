@@ -27,7 +27,7 @@ class CodexGovernedActionTests(unittest.TestCase):
 
     def test_world_edit_proposal_action_creates_pending_proposal_only(self) -> None:
         with self.session_factory() as session:
-            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。")
+            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。", genre="玄幻")
             session.add(project)
             session.flush()
 
@@ -55,7 +55,7 @@ class CodexGovernedActionTests(unittest.TestCase):
 
     def test_non_whitelisted_action_is_rejected(self) -> None:
         with self.session_factory() as session:
-            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。")
+            project = Project(title="Codex Actions", premise="测试 Codex 受控写入。", genre="玄幻")
             session.add(project)
             session.flush()
 
@@ -73,7 +73,7 @@ class CodexGovernedActionTests(unittest.TestCase):
 
     def test_prompt_trace_records_codex_metadata_columns(self) -> None:
         with self.session_factory() as session:
-            project = Project(title="Codex Trace", premise="测试 Codex trace。")
+            project = Project(title="Codex Trace", premise="测试 Codex trace。", genre="玄幻")
             session.add(project)
             session.flush()
 

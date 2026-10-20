@@ -221,7 +221,7 @@ class ProjectDeleteResponse(BaseModel):
 class ProjectCreateRequest(BaseModel):
     title: str
     premise: str
-    genre: str = "玄幻"
+    genre: str = Field(min_length=1)
     setting_summary: str = ""
     target_total_chapters: int = Field(default=50, ge=1, le=5000)
     audience_hint: str = ""

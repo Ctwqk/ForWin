@@ -26,7 +26,6 @@ _HOME_SCRIPT_PATHS = (
 
 def render_home_page(
     *,
-    default_genre: str = "玄幻",
     default_chapters: int = 3,
     extension_api_key_configured: bool = False,
     extension_install_path: str = "browser_extension/forwin-publisher",
@@ -45,8 +44,6 @@ def render_home_page(
             "@@EXTENSION_READY_TEXT@@": "已配置"
             if extension_api_key_configured
             else "未配置",
-            "@@DEFAULT_GENRE@@": default_genre,
-            "@@DEFAULT_GENRE_JSON@@": json.dumps(default_genre, ensure_ascii=False),
             "@@DEFAULT_CHAPTERS@@": str(normalized_default_chapters),
             "@@DEFAULT_CHAPTERS_JSON@@": json.dumps(normalized_default_chapters),
             "@@EXTENSION_READY@@": json.dumps(bool(extension_api_key_configured)),

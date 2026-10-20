@@ -15,7 +15,7 @@ def _session():
 
 def test_macro_status_projection_derives_from_accepted_chapter_experience() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ArcPlanVersion(
             id="a1",
@@ -61,7 +61,7 @@ def test_macro_status_projection_derives_from_accepted_chapter_experience() -> N
 
 def test_macro_status_prefers_book_state_fact_evidence() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ChapterPlan(
             project_id="p1",
@@ -117,7 +117,7 @@ def test_macro_status_prefers_book_state_fact_evidence() -> None:
 
 def test_macro_status_uses_explicit_accepted_chapter_evidence() -> None:
     session = _session()
-    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000))
+    session.add(Project(id="p1", title="t", premise="p", target_total_chapters=1000, genre="玄幻"))
     session.add(
         ChapterPlan(
             project_id="p1",

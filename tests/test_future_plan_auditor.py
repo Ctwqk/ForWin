@@ -824,6 +824,7 @@ def test_future_plan_auditor_matches_countdown_by_ledger_key_or_label_only() -> 
 def test_audit_and_apply_clears_blocker_after_successful_future_plan_patch() -> None:
     session = _session()
     project = Project(
+        genre="玄幻",
         id="project-1",
         title="未来计划修补",
         premise="测试",

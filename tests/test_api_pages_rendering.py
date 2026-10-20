@@ -240,6 +240,21 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("JSON.stringify(detail, null, 2)", html)
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
 
+    def test_home_page_does_not_prefill_genre(self) -> None:
+        html = render_home_page()
+
+        match = re.search(r'<input id="book_form_genre"[^>]*>', html)
+        self.assertIsNotNone(match)
+        genre_input = match.group(0)
+        self.assertNotIn("value=", genre_input)
+        self.assertIn("placeholder=", genre_input)
+        self.assertNotIn("玄幻", genre_input)
+        self.assertNotIn("@@DEFAULT_GENRE", html)
+        # JS must neither prefill nor fall back to a default genre.
+        self.assertIn("book_form_genre').value = prefill.genre || '';", html)
+        self.assertNotRegex(html, r"book_form_genre'\)\.value\.trim\(\) \|\|")
+        self.assertIn("新建书本必须填写 Genre", html)
+
     def test_home_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
         html = render_home_page()
 

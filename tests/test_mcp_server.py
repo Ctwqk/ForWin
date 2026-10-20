@@ -575,6 +575,12 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             all("Use this when" in (tool.description or "") for tool in tools)
         )
 
+    def test_mcp_project_create_schema_requires_genre(self) -> None:
+        tool = next(t for t in self._list_tools() if t.name == "project_create")
+
+        self.assertIn("genre", tool.inputSchema["required"])
+        self.assertIsNone(tool.inputSchema["properties"]["genre"].get("default"))
+
     def test_project_decision_events_filters_before_database_limit(self) -> None:
         with self.session_factory() as session:
             updater = StateUpdater(session)

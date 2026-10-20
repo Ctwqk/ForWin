@@ -91,6 +91,7 @@ def _durable_service():
     with sessions.begin() as session:
         session.add(
             Project(
+                genre="玄幻",
                 id="project-1",
                 title="Project",
                 premise="Premise",

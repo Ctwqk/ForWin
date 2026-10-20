@@ -15,7 +15,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String, nullable=False)
     premise: Mapped[str] = mapped_column(Text, nullable=False)
-    genre: Mapped[str] = mapped_column(String, default="玄幻")
+    genre: Mapped[str] = mapped_column(String)
     setting_summary: Mapped[str] = mapped_column(Text, default="")
     target_total_chapters: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
     creation_status: Mapped[str] = mapped_column(String, default="creating")

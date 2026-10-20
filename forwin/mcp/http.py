@@ -169,7 +169,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
     async def project_create(
         title: str,
         premise: str,
-        genre: str = "玄幻",
+        genre: str,
         setting_summary: str = "",
         target_total_chapters: int = 3,
     ) -> MutationResult:

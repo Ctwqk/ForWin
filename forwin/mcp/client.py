@@ -193,7 +193,7 @@ class ForWinAPIClient:
         *,
         title: str,
         premise: str,
-        genre: str = "玄幻",
+        genre: str,
         setting_summary: str = "",
         target_total_chapters: int = 3,
     ) -> MutationResult:
@@ -201,6 +201,8 @@ class ForWinAPIClient:
             raise ValueError("title is required")
         if not premise.strip():
             raise ValueError("premise is required")
+        if not genre.strip():
+            raise ValueError("genre is required")
         if target_total_chapters < 1 or target_total_chapters > 5000:
             raise ValueError("target_total_chapters must be between 1 and 5000")
         payload = await self._request_json(

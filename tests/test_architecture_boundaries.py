@@ -680,11 +680,7 @@ def test_legacy_governance_namespace_is_replaced_by_real_domain_owners() -> None
 def test_removed_repair_dead_code_stays_removed() -> None:
     assert not (ROOT / "forwin/pipeline/repair_coordinator.py").exists()
 
-    loop_detector = importlib.import_module("forwin.review.repair_loop_detector")
-    assert hasattr(loop_detector, "RepairAttemptRecord")
-    assert not hasattr(loop_detector, "RepairLoopDetector")
-    assert not hasattr(loop_detector, "RepairLoopResult")
-    assert not hasattr(loop_detector, "attempt_record_from_history_item")
+    assert not (ROOT / "forwin/review/repair_loop_detector.py").exists()
 
     scope_router = importlib.import_module("forwin.review.repair_scope_router")
     assert hasattr(scope_router, "RepairScopeKind")

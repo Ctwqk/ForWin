@@ -73,29 +73,6 @@ class MapGraph:
         self.outgoing_edges[edge.from_node_id].append(edge.id)
         self.incoming_edges[edge.to_node_id].append(edge.id)
 
-    def get_location(self, location_id: str) -> MapNode | None:
-        return self.nodes_by_id.get(location_id)
-
-    def get_children(self, parent_id: str) -> list[MapNode]:
-        return [
-            self.nodes_by_id[node_id]
-            for node_id in self.children_by_parent.get(parent_id, [])
-            if node_id in self.nodes_by_id
-        ]
-
-    def get_ancestors(self, node_id: str) -> list[MapNode]:
-        ancestors: list[MapNode] = []
-        current = self.nodes_by_id.get(node_id)
-        seen: set[str] = set()
-        while current is not None and current.parent_id and current.parent_id not in seen:
-            seen.add(current.parent_id)
-            parent = self.nodes_by_id.get(current.parent_id)
-            if parent is None:
-                break
-            ancestors.append(parent)
-            current = parent
-        return ancestors
-
     def get_accessible_neighbors(
         self,
         node_id: str,

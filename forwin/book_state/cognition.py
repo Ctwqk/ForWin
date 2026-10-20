@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from forwin.book_state.path_patch import apply_path_patch
 
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, WorldEdge, WorldNode
 
@@ -29,13 +28,6 @@ class CognitionView:
     def key(self) -> tuple[str, str]:
         return (self.observer_type, self.observer_id)
 
-    def can_see(self, ref: str) -> bool:
-        if ref in self.hidden_refs:
-            return False
-        if ref in self.visible_refs or ref in self.confirmed_refs or ref in self.suspected_refs:
-            return True
-        return True
-
     def get_belief(self, ref: str) -> str:
         if ref in self.confirmed_refs:
             return "confirmed"
@@ -52,16 +44,6 @@ class CognitionView:
 
     def get_field_override(self, target_id: str, field_path: str, default: Any = None) -> Any:
         return self.field_overrides.get(self.field_ref(target_id, field_path), default)
-
-    def get_visible_state(self, node_id: str, objective_state: dict[str, Any]) -> dict[str, Any]:
-        visible = dict(objective_state)
-        prefix = f"field:{node_id}:"
-        for ref, value in self.field_overrides.items():
-            if not ref.startswith(prefix):
-                continue
-            field_path = ref.removeprefix(prefix)
-            apply_path_patch(visible, field_path, value)
-        return visible
 
     def apply_cognition_patch(self, field_path: str, op: str, value: Any) -> None:
         target = getattr(self, field_path, None)

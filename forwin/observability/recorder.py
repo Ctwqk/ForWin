@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from .context import OperationContext
@@ -84,27 +83,5 @@ class LogRecorder:
             event_type=event_type,
             summary=summary,
             payload=error_payload,
-            **kwargs,
-        )
-
-    def record_stage(
-        self,
-        context: OperationContext,
-        *,
-        event_type: str,
-        summary: str,
-        started_at: float | None = None,
-        payload: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ):
-        stage_payload = dict(payload or {})
-        if started_at is not None:
-            stage_payload["duration_ms"] = max(0, int((time.perf_counter() - started_at) * 1000))
-        return self.record_event(
-            context,
-            event_family="runtime_observation",
-            event_type=event_type,
-            summary=summary,
-            payload=stage_payload,
             **kwargs,
         )

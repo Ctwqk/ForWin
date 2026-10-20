@@ -70,31 +70,6 @@ class ObjectiveWorldGraph:
         for ref in fact.related_node_refs + fact.related_edge_refs:
             self.facts_by_related_ref[ref].append(fact.id)
 
-    def get_edges(self, source_id: str, edge_type: str | None = None) -> list[WorldEdge]:
-        edges = [
-            self.edges_by_id[edge_id]
-            for edge_id in self.outgoing_edges.get(source_id, [])
-            if edge_id in self.edges_by_id
-        ]
-        if edge_type is not None:
-            edges = [edge for edge in edges if edge.edge_type == edge_type]
-        return edges
-
-    def get_neighbors(self, node_id: str, edge_type: str | None = None) -> list[WorldNode]:
-        neighbors: list[WorldNode] = []
-        for edge in self.get_edges(node_id, edge_type=edge_type):
-            target = self.nodes_by_id.get(edge.target_id)
-            if target is not None:
-                neighbors.append(target)
-        return neighbors
-
-    def get_facts_about(self, ref: str) -> list[FactNode]:
-        return [
-            self.facts_by_id[fact_id]
-            for fact_id in self.facts_by_related_ref.get(ref, [])
-            if fact_id in self.facts_by_id
-        ]
-
     def apply_delta(self, graph_delta: GraphDelta) -> None:
         for patch in graph_delta.node_patches:
             self.apply_node_patch(patch)

@@ -94,11 +94,3 @@ class WorldContextPack(BaseModel):
     active_promises: list[WorldModelPage] = Field(default_factory=list)
     active_resource_constraints: list[WorldModelPage] = Field(default_factory=list)
     active_institution_rules: list[WorldModelPage] = Field(default_factory=list)
-
-
-class WorldModelExportResult(BaseModel):
-    ok: bool = True
-    project_id: str = ""
-    vault_root: str = ""
-    exported_count: int = 0
-    message: str = ""

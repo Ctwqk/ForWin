@@ -444,9 +444,6 @@ class LLMCallRouter:
     def _estimate_tokens_from_chars(chars: int) -> int:
         return max(0, int(max(0, chars) * 0.25))
 
-    def _should_use_codex(self, intent: LLMCallIntent) -> bool:
-        return self._codex_policy(intent) == "codex_primary"
-
     def _codex_policy(self, intent: LLMCallIntent) -> str:
         family = str(intent.task_family or "").strip().lower()
         stage = str(intent.stage_key or "").strip().lower()

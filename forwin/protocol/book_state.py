@@ -375,26 +375,6 @@ class ReaderExperienceDeltaRecord(_BookStateModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ReaderExperienceState(_BookStateModel):
-    state_id: str
-    project_id: str
-    as_of_chapter: int = 0
-    short_term_delight: list[str] = Field(default_factory=list)
-    mid_term_delight: list[str] = Field(default_factory=list)
-    long_term_delight: list[str] = Field(default_factory=list)
-    active_promise_ids: list[str] = Field(default_factory=list)
-    promise_debt_by_id: dict[str, int] = Field(default_factory=dict)
-    suspense_delays: dict[str, int] = Field(default_factory=dict)
-    reveal_windows: dict[str, str] = Field(default_factory=dict)
-    emotion_curve: list[str] = Field(default_factory=list)
-    expectation_intensity: dict[str, float] = Field(default_factory=dict)
-    reader_misunderstandings: list[str] = Field(default_factory=list)
-    reader_extra_knowledge_refs: list[str] = Field(default_factory=list)
-    protagonist_extra_knowledge_refs: list[str] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class NodePatch(_BookStateModel):
     node_id: str
     node_type: WorldNodeType | str

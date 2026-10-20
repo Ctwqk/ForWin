@@ -241,11 +241,6 @@ class CultureNameGenerator:
                 self._remember(name, scope)
         return result[0] if count == 1 else result
 
-    def reset_history(self) -> None:
-        self.used.clear()
-        self.used_compact.clear()
-        self.history_by_scope.clear()
-
     def _parse(self, civilization: str | Sequence[str], request: str | None) -> tuple[list[str], str]:
         if request is None:
             if not isinstance(civilization, str):

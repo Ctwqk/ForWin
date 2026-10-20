@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.planning.checkpoints import BandCheckpointDetail
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import (
     derive_band_task_contract,
     derive_chapter_task_contract,
@@ -28,7 +27,6 @@ from forwin.models import (
     ChapterRewriteAttempt,
     ChapterReview,
     DecisionEvent,
-    NarrativeConstraint,
     Project,
     PromptTrace,
     SubWorld,
@@ -467,74 +465,6 @@ class StateUpdater:
             ),
             related_task_id=related_task_id,
         )
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-    def update_band_checkpoint(
-        self,
-        checkpoint_id: str,
-        *,
-        status: str | None = None,
-        summary: str | None = None,
-        reason: str | None = None,
-        issues: list[dict[str, object]] | None = None,
-    ) -> BandCheckpoint | None:
-        row = self.session.get(BandCheckpoint, checkpoint_id)
-        if row is None:
-            return None
-        if status is not None:
-            row.status = status
-        if summary is not None:
-            row.summary = summary
-        if reason is not None:
-            row.reason = reason
-        if issues is not None:
-            row.issues_json = json.dumps(issues, ensure_ascii=False)
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-    def save_narrative_constraint(
-        self,
-        info: NarrativeConstraintInfo,
-    ) -> NarrativeConstraint:
-        row = NarrativeConstraint(
-            id=info.id or new_id(),
-            project_id=info.project_id,
-            arc_id=info.arc_id,
-            band_id=info.band_id,
-            constraint_type=info.constraint_type,
-            level=info.level,
-            subject_name=info.subject_name,
-            description=info.description,
-            payload_json=json.dumps(info.payload, ensure_ascii=False),
-            effective_from_chapter=info.effective_from_chapter,
-            protect_until_chapter=info.protect_until_chapter,
-            status=info.status,
-        )
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-    def update_narrative_constraint(
-        self,
-        constraint_id: str,
-        info: NarrativeConstraintInfo,
-    ) -> NarrativeConstraint | None:
-        row = self.session.get(NarrativeConstraint, constraint_id)
-        if row is None:
-            return None
-        row.arc_id = info.arc_id
-        row.band_id = info.band_id
-        row.constraint_type = info.constraint_type
-        row.level = info.level
-        row.subject_name = info.subject_name
-        row.description = info.description
-        row.payload_json = json.dumps(info.payload, ensure_ascii=False)
-        row.effective_from_chapter = info.effective_from_chapter
-        row.protect_until_chapter = info.protect_until_chapter
-        row.status = info.status
         self.session.add(row)
         self.session.flush()
         return row

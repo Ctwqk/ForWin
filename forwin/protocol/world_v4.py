@@ -89,14 +89,6 @@ class KnowledgeUpdateType(_StrEnum):
     DRAMATIC_IRONY = "dramatic_irony"
 
 
-class SourceRef(BaseModel):
-    source_type: str = ""
-    source_id: str = ""
-    chapter_number: int | None = None
-    label: str = ""
-    quote: str = ""
-
-
 class DeltaSource(BaseModel):
     source_type: DeltaSourceType
     actor_id: str = ""

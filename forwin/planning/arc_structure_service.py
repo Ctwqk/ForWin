@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import ArcPolicyTier
 from forwin.models import ArcPlanVersion, ArcStructureDraft, ChapterPlan, Project, new_id
-from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 
 
 def _json_list(raw: str, default: list[Any] | None = None) -> list[Any]:
@@ -47,13 +46,6 @@ class ArcStructurePlanningResult:
     structure: ArcStructureDraftData
     row: ArcStructureDraft
     experience_payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class ArcPlanningBundle:
-    structure: ArcStructureDraftData
-    reader_promise: ReaderPromise
-    arc_payoff_map: ArcPayoffMap
 
 
 class ArcStructurePlanningService:

@@ -25,23 +25,3 @@ class GenesisTraceService:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-
-    def prepare_trace_payload_for_save(self, trace_payload: dict[str, Any], *, project_id: str) -> dict[str, Any]:
-        return self.owner._prepare_trace_payload_for_save(trace_payload, project_id=project_id)
-
-    def record_llm_events_for_trace(
-        self,
-        *,
-        updater: Any,
-        project_id: str,
-        trace_id: str,
-        trace_payload: dict[str, Any],
-        decision_event_id: str = "",
-    ) -> None:
-        self.owner._record_llm_events_for_trace(
-            updater=updater,
-            project_id=project_id,
-            trace_id=trace_id,
-            trace_payload=trace_payload,
-            decision_event_id=decision_event_id,
-        )

@@ -12,30 +12,6 @@ class GenesisNormalizer:
     def normalize_world_root(self, *, project: Any, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
         return self.owner._normalize_world_root_payload(project=project, payload=payload, fallback=fallback)
 
-    def normalize_map(
-        self,
-        *,
-        payload: dict[str, Any],
-        fallback: dict[str, Any],
-        world_bible: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self.owner._normalize_map_payload(payload=payload, fallback=fallback, world_bible=world_bible)
-
-    def normalize_story_engine(
-        self,
-        *,
-        payload: dict[str, Any],
-        fallback: dict[str, Any],
-        world_bible: dict[str, Any] | None = None,
-        map_atlas: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self.owner._normalize_story_engine_payload(
-            payload=payload,
-            fallback=fallback,
-            world_bible=world_bible,
-            map_atlas=map_atlas,
-        )
-
     def normalize_book_blueprint(
         self,
         *,

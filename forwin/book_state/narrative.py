@@ -76,16 +76,6 @@ class NarrativeControlGraph:
     def get_node(self, node_id: str) -> NarrativeNode | None:
         return self.nodes_by_id.get(node_id)
 
-    def get_edges(self, source_id: str, edge_type: str | None = None) -> list[NarrativeEdge]:
-        edges = [
-            self.edges_by_id[edge_id]
-            for edge_id in self.outgoing_edges.get(source_id, [])
-            if edge_id in self.edges_by_id
-        ]
-        if edge_type is not None:
-            edges = [edge for edge in edges if edge.edge_type == edge_type]
-        return edges
-
     def active_world_line_ids(self) -> list[str]:
         return [
             node_id

@@ -291,40 +291,4 @@ def _reader_summary_from_runtime(runtime: BookStateRuntime) -> str:
     )
 
 
-def _apply_payload_patch(payload: dict[str, Any], field_path: str, op: str, value: Any) -> None:
-    if not field_path:
-        if isinstance(value, dict) and op in {"set", "replace", "merge"}:
-            payload.update(value)
-        return
-    parts = [part for part in field_path.split(".") if part]
-    cursor = payload
-    for part in parts[:-1]:
-        nested = cursor.get(part)
-        if not isinstance(nested, dict):
-            nested = {}
-            cursor[part] = nested
-        cursor = nested
-    key = parts[-1]
-    if op == "append":
-        current = cursor.setdefault(key, [])
-        if isinstance(current, list):
-            current.append(value)
-        else:
-            cursor[key] = [current, value]
-    elif op == "remove":
-        current = cursor.get(key)
-        if isinstance(current, list):
-            cursor[key] = [item for item in current if item != value]
-        else:
-            cursor.pop(key, None)
-    elif op == "merge" and isinstance(value, dict):
-        current = cursor.get(key)
-        if not isinstance(current, dict):
-            current = {}
-        current.update(value)
-        cursor[key] = current
-    else:
-        cursor[key] = value
-
-
 __all__ = ["BookStateProjection"]

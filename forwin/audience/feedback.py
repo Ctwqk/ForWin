@@ -750,27 +750,6 @@ class FeedbackCooldown:
     def __init__(self, cooldown_chapters: int = 3) -> None:
         self.cooldown_chapters = max(1, cooldown_chapters)
 
-    def is_cooled(
-        self,
-        session: Session,
-        project_id: str,
-        signal_key: str,
-        chapter_number: int,
-    ) -> bool:
-        """Return True if the signal is past its cooldown and can trigger an action."""
-        last_action = session.execute(
-            select(FeedbackActionRecord)
-            .where(
-                FeedbackActionRecord.project_id == project_id,
-                FeedbackActionRecord.signal_key == signal_key,
-            )
-            .order_by(FeedbackActionRecord.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if last_action is None:
-            return True
-        return chapter_number >= last_action.cooldown_until_chapter
-
     def _latest_actions_by_signal_key(
         self,
         session: Session,

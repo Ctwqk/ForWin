@@ -7,25 +7,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.canon_quality import (
-    ArtifactCollectionLedgerRow,
     CanonAdmissionRunRow,
     CanonQualitySignalRow,
-    ChapterBodyMetricRow,
     CharacterStateTransitionRow,
     CountdownLedgerRow,
     QualityAnalysisRunRow,
-    RevealRegistryEntryRow,
 )
 from forwin.models.draft import CandidateDraftRecord
 
 from .signals import (
-    ArtifactLedgerEntry,
     CanonAdmissionGateResult,
     CanonQualitySignal,
-    ChapterBodyMetrics,
     CharacterStateTransition,
     CountdownLedgerEntry,
-    RevealRegistryEntry,
 )
 
 
@@ -351,66 +345,6 @@ class CanonQualityRepository:
         for row in rows:
             result[int(row.chapter_number or 0)] = str(row.candidate_draft_id or "")
         return result
-
-    def save_artifact_entries(self, entries: list[ArtifactLedgerEntry]) -> list[ArtifactCollectionLedgerRow]:
-        rows: list[ArtifactCollectionLedgerRow] = []
-        for item in entries:
-            row = ArtifactCollectionLedgerRow(
-                project_id=item.project_id,
-                collection_key=item.collection_key,
-                collection_name=item.collection_name,
-                target_total=item.target_total,
-                chapter_number=item.chapter_number,
-                mentioned_index=item.mentioned_index,
-                mentioned_remaining=item.mentioned_remaining,
-                collected_count_after=item.collected_count_after,
-                new_items_json=_json(item.new_items),
-                consumed_items_json=_json(item.consumed_items),
-                evidence_refs_json=_json(item.evidence_refs),
-                confidence=item.confidence,
-                status=item.status,
-                payload_json=_json(item.payload),
-            )
-            self.session.add(row)
-            rows.append(row)
-        self.session.flush()
-        return rows
-
-    def save_reveal_entries(self, entries: list[RevealRegistryEntry]) -> list[RevealRegistryEntryRow]:
-        rows: list[RevealRegistryEntryRow] = []
-        for item in entries:
-            row = RevealRegistryEntryRow(
-                project_id=item.project_id,
-                reveal_key=item.reveal_key,
-                claim_summary=item.claim_summary,
-                first_revealed_chapter=item.first_revealed_chapter,
-                latest_chapter=item.latest_chapter,
-                repeat_count=item.repeat_count,
-                status=item.status,
-                subject_refs_json=_json(item.subject_refs),
-                evidence_refs_json=_json(item.evidence_refs),
-                payload_json=_json(item.payload),
-            )
-            self.session.add(row)
-            rows.append(row)
-        self.session.flush()
-        return rows
-
-    def save_body_metrics(self, metrics: ChapterBodyMetrics) -> ChapterBodyMetricRow:
-        row = ChapterBodyMetricRow(
-            project_id=metrics.project_id,
-            chapter_number=metrics.chapter_number,
-            draft_id=metrics.draft_id,
-            paragraph_hashes_json=_json(metrics.paragraph_hashes),
-            dialogue_fingerprints_json=_json(metrics.dialogue_fingerprints),
-            scene_fingerprints_json=_json(metrics.scene_fingerprints),
-            duplicate_spans_json=_json(metrics.duplicate_spans),
-            style_motifs_json=_json(metrics.style_motifs),
-            metrics_json=_json(metrics.metrics),
-        )
-        self.session.add(row)
-        self.session.flush()
-        return row
 
 
 def _signal_from_row(row: CanonQualitySignalRow) -> CanonQualitySignal:

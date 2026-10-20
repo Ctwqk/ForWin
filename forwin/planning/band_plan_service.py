@@ -40,12 +40,6 @@ class BandPlanningResult:
     updated_chapter_numbers: list[int]
 
 
-@dataclass(slots=True)
-class BandPlanningBundle:
-    request: BandPlanningRequest
-    result: BandPlanningResult
-
-
 class BandPlanService:
     def __init__(
         self,

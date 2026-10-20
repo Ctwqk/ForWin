@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import BaseModel, Field
-
 
 ACTION_ACTIVE_TASK = "active_task"
 ACTION_WAITING_REVIEW = "waiting_review"
@@ -13,15 +9,6 @@ ACTION_RAN_REVIEW_JOBS = "ran_review_jobs"
 ACTION_STARTED_PUBLISH_JOBS = "started_publish_jobs"
 ACTION_IDLE = "idle"
 ACTION_BLOCKED = "blocked"
-
-
-class ProductionDecisionEvent(BaseModel):
-    project_id: str
-    action: str
-    blocked_reason: str = ""
-    task_id: str = ""
-    publish_job_count: int = 0
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 def action_for_blocked_reason(reason: str) -> str:

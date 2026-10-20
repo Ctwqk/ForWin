@@ -35,7 +35,6 @@ from forwin.state.updater import StateUpdater
 
 from .name_suggestions import GenesisNameSuggestionService
 from .normalizer import GenesisNormalizer
-from .prompts import GenesisPromptBuilder
 from .revision_service import GenesisRevisionService
 
 
@@ -61,7 +60,6 @@ class GenesisWorkspaceService:
     def __init__(self, owner: Any) -> None:
         self.owner = owner
         self.revisions = GenesisRevisionService()
-        self.prompts = GenesisPromptBuilder(owner)
         self.normalizer = GenesisNormalizer(owner)
         self.name_suggestions = GenesisNameSuggestionService(owner)
 
@@ -313,24 +311,6 @@ class GenesisWorkspaceService:
         session.add(project)
         session.flush()
         return new_row, trace
-
-    def rerun_stage(
-        self,
-        *,
-        session: Session,
-        updater: StateUpdater,
-        project: Project,
-        revision: BookGenesisRevision,
-        stage_key: str,
-    ) -> tuple[BookGenesisRevision, PromptTrace]:
-        return self.generate_stage(
-            session=session,
-            updater=updater,
-            project=project,
-            revision=revision,
-            stage_key=stage_key,
-            event_type=DecisionEventType.GENESIS_STAGE_RERUN,
-        )
 
     def refine_stage(
         self,

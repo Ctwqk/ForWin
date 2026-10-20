@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 
 from forwin.protocol.context import LintSignal
-from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 
 
@@ -151,38 +150,3 @@ class LintSignalCollector:
             for line in lines[:20]
         ]
 
-class LintReviewer(LintSignalCollector):
-    """Compatibility wrapper while callers move to lint-as-signal mode."""
-
-    def review(self, writer_output: WriterOutput) -> ReviewVerdict:
-        signals = self.collect(writer_output)
-        issues = [
-            ContinuityIssue(
-                rule_name=f"{signal.tool}:{signal.code}",
-                severity="error" if signal.severity == "error" else "warning",
-                description=signal.message,
-                reviewer="lint",
-                issue_type="lint",
-                target_scope="chapter",
-                evidence_refs=list(signal.evidence_refs),
-            )
-            for signal in signals
-        ]
-        verdict = (
-            "fail"
-            if any(signal.severity == "error" for signal in signals)
-            else "warn" if signals else "pass"
-        )
-        return ReviewVerdict(
-            verdict=verdict,
-            issues=issues,
-            recommended_action=(
-                "rewrite" if verdict == "fail" else "pause_for_review" if verdict == "warn" else "continue"
-            ),
-            review_summary=(
-                f"lint findings={len(signals)} from {','.join(sorted({signal.tool for signal in signals}))}"
-                if signals
-                else ""
-            ),
-            lint_signals=signals,
-        )

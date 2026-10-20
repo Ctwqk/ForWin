@@ -25,6 +25,9 @@ test = [
     "pytest-asyncio>=0.24",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.setuptools.packages.find]
 include = ["forwin*"]
 

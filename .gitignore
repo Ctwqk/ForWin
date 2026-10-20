@@ -19,3 +19,8 @@ forwin.egg-info/
 .worktrees/
 output/
 qidian-auth-*-latest.png
+.DS_Store
+.forwin-run-logs/
+.artifacts/
+.superpowers/
+.codex

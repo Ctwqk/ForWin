@@ -8,3 +8,15 @@ data/novel.db
 frontend/world-studio/node_modules/
 frontend/world-studio/dist/
 frontend/world-studio/tsconfig.tsbuildinfo
+.worktrees/
+.superpowers/
+.artifacts/
+.forwin-run-logs/
+.codex-tmp/
+data/
+UI_Design/
+docs/
+Design-docs/
+reports/
+tests/
+.DS_Store

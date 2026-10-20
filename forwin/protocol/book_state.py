@@ -435,6 +435,8 @@ class GraphDelta(_BookStateModel):
     project_id: str
     chapter_number: int = 0
     story_time: str = ""
+    story_time_start: int | None = None
+    story_time_end: int | None = None
     delta_type: GraphDeltaType | str = GraphDeltaType.WORLD_STATE
     operation: str = ""
     target_type: str = ""

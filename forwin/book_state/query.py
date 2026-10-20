@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.models.book_state import GraphDeltaRow
 from forwin.protocol.context import (
     CanonEventEvidence,
     EntitySnapshot,
@@ -52,6 +54,22 @@ class BookStateQuery:
             )
             self._runtime_cache[key] = runtime
         return runtime
+
+    def current_story_minute(self, project_id: str, *, as_of_chapter: int) -> int | None:
+        return self.session.scalar(
+            select(GraphDeltaRow.story_time_end)
+            .where(
+                GraphDeltaRow.project_id == project_id,
+                GraphDeltaRow.chapter_number <= as_of_chapter,
+                GraphDeltaRow.story_time_end.is_not(None),
+            )
+            .order_by(
+                GraphDeltaRow.chapter_number.desc(),
+                GraphDeltaRow.created_at.desc(),
+                GraphDeltaRow.id.desc(),
+            )
+            .limit(1)
+        )
 
     def active_entities(
         self,

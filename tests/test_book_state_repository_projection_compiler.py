@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from sqlalchemy import func, select
 import pytest
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
+from forwin.book_state.query import BookStateQuery
 from forwin.context.assembler_core import assemble_context
 from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.models import ArcPlanVersion, ChapterPlan
@@ -42,6 +44,60 @@ def _create_project(session, title: str = "BookState 测试") -> str:
         runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     return project.id
+
+
+def test_graph_delta_story_minutes_round_trip_and_current_minute() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+    timestamp = datetime(2026, 1, 1)
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        other_project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        query = BookStateQuery(session)
+        assert query.current_story_minute(project_id, as_of_chapter=2) is None
+        repo.append_graph_delta(GraphDelta(
+            id="clock-opening", project_id=project_id, chapter_number=0,
+            story_time_start=0, story_time_end=100,
+        ))
+        row = repo.append_graph_delta(GraphDelta(
+            id="clock-chapter-2", project_id=project_id, chapter_number=2,
+            story_time_start=100, story_time_end=400,
+        ))
+        row.created_at = timestamp - timedelta(days=1)
+        repo.append_graph_delta(GraphDelta(
+            id="clock-untimed", project_id=project_id, chapter_number=3,
+        ))
+        repo.append_graph_delta(GraphDelta(
+            id="clock-other", project_id=other_project_id, chapter_number=2,
+            story_time_end=999,
+        ))
+
+    with Session.begin() as session:
+        repo = BookStateRepository(session)
+        query = BookStateQuery(session)
+        deltas = repo.list_graph_deltas(project_id, through_chapter=3)
+        assert [(delta.story_time_start, delta.story_time_end) for delta in deltas] == [
+            (0, 100), (100, 400), (None, None),
+        ]
+        assert query.current_story_minute(project_id, as_of_chapter=-1) is None
+        assert query.current_story_minute(project_id, as_of_chapter=1) == 100
+        assert query.current_story_minute(project_id, as_of_chapter=2) == 400
+        assert query.current_story_minute(project_id, as_of_chapter=3) == 400
+        for delta_id, created_at, end_minute in (
+            ("clock-z-older", timestamp - timedelta(seconds=1), 900),
+            ("clock-a-newer", timestamp, 600),
+            ("clock-b-newer", timestamp, 500),
+        ):
+            row = repo.append_graph_delta(GraphDelta(
+                id=delta_id, project_id=project_id, chapter_number=2,
+                story_time_end=end_minute,
+            ))
+            row.created_at = created_at
+        session.flush()
+        assert query.current_story_minute(project_id, as_of_chapter=3) == 500
+    engine.dispose()
 
 
 @pytest.mark.parametrize("old_value", ["Genesis name", None])

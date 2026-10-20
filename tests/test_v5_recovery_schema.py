@@ -514,7 +514,7 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         assert drop_position[dependent] < drop_position[parent]
 
 
-def test_baseline_revision_is_rotated_and_is_the_only_revision() -> None:
+def test_baseline_revision_is_rotated_and_followed_only_by_0002() -> None:
     migration = import_module(BASELINE_MODULE)
     versions = sorted(
         path.name
@@ -522,7 +522,7 @@ def test_baseline_revision_is_rotated_and_is_the_only_revision() -> None:
         if path.name != "__init__.py"
     )
 
-    assert versions == ["0001_v5_baseline.py"]
+    assert versions == ["0001_v5_baseline.py", "0002_drop_dead_tables.py"]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None
     assert "Revision ID: 0001_v5_recovery" in migration.__doc__

@@ -11,7 +11,7 @@ from tests.postgres import postgres_empty_test_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_REVISION = "0001_v5_recovery"
+EXPECTED_REVISION = "0002_drop_dead_tables"
 
 
 def _alembic_config(database_url: str) -> Config:

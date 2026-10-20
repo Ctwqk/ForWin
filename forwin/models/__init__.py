@@ -4,15 +4,12 @@ from .base import Base, get_engine, get_session_factory, init_db, new_id
 from .canon import CanonCommitRecord
 from .draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from .canon_quality import (
-    ArtifactCollectionLedgerRow,
     CanonAdmissionRunRow,
     CanonQualitySignalRow,
     ChapterBodyMetricRow,
     CharacterStateTransitionRow,
     CountdownLedgerRow,
     QualityAnalysisRunRow,
-    RevealRegistryEntryRow,
-    StoryObligationRow,
 )
 from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
@@ -35,7 +32,6 @@ from .phase import (
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalPromotionRecord,
-    WorldProjectionDeltaRow,
 )
 from .phase4 import WorldSimulationTurn
 from .progression import ProjectProgressionRule
@@ -83,7 +79,6 @@ from .world_contract import (
 from .book_state import (
     BookCognitionSnapshotRow,
     CharacterIdentityMapRow,
-    BookReaderExperienceDeltaRow,
     BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
@@ -137,21 +132,17 @@ __all__ = [
     "BandExperiencePlan",
     "ChapterRewriteAttempt",
     "ProvisionalPromotionRecord",
-    "WorldProjectionDeltaRow",
     "WorldSimulationTurn",
     # draft
     "ChapterDraft",
     "ChapterReview",
     "CandidateDraftRecord",
-    "ArtifactCollectionLedgerRow",
     "CanonAdmissionRunRow",
     "CanonQualitySignalRow",
     "ChapterBodyMetricRow",
     "CharacterStateTransitionRow",
     "CountdownLedgerRow",
     "QualityAnalysisRunRow",
-    "RevealRegistryEntryRow",
-    "StoryObligationRow",
     "KnowledgeProjectionPageRow",
     "KnowledgeEditProposalRow",
     # publisher
@@ -197,7 +188,6 @@ __all__ = [
     "MapSnapshotRow",
     "BookCognitionSnapshotRow",
     "BookReaderPromiseRow",
-    "BookReaderExperienceDeltaRow",
     "NarrativeNodeRow",
     "NarrativeEdgeRow",
 ]

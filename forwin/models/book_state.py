@@ -174,33 +174,6 @@ class BookReaderPromiseRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
-class BookReaderExperienceDeltaRow(Base):
-    __tablename__ = "book_reader_experience_deltas"
-    __table_args__ = (
-        Index("ux_book_reader_exp_deltas_project_delta", "project_id", "reader_experience_delta_id", unique=True),
-        Index("ix_book_reader_exp_deltas_project_chapter", "project_id", "chapter_number"),
-        Index("ix_book_reader_exp_deltas_project_payoff", "project_id", "payoff_type"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    reader_experience_delta_id: Mapped[str] = mapped_column(String, nullable=False)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
-    reader_state_before: Mapped[str] = mapped_column(Text, default="")
-    reader_state_after: Mapped[str] = mapped_column(Text, default="")
-    cognition_transition: Mapped[str] = mapped_column(Text, default="")
-    payoff_type: Mapped[str] = mapped_column(String, default="")
-    reward_tags_json: Mapped[str] = mapped_column(Text, default="[]")
-    emotional_effect: Mapped[str] = mapped_column(Text, default="")
-    promise_debt_change: Mapped[int] = mapped_column(Integer, default=0)
-    next_desire: Mapped[str] = mapped_column(Text, default="")
-    fairness_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
-    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-
-
 class GraphDeltaRow(Base):
     __tablename__ = "graph_deltas"
     __table_args__ = (

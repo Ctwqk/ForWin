@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -69,29 +69,6 @@ class CanonQualitySignalRow(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-class StoryObligationRow(Base):
-    __tablename__ = "story_obligations"
-    __table_args__ = (
-        Index("ix_story_obligations_project_status", "project_id", "status", "priority"),
-        Index("ix_story_obligations_project_deadline", "project_id", "deadline_chapter"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    obligation_type: Mapped[str] = mapped_column(String, default="hook")
-    summary: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String, default="open")
-    priority: Mapped[str] = mapped_column(String, default="P1")
-    started_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    deadline_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    resolved_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    source_signal_id: Mapped[str] = mapped_column(String, default="")
-    resolution_signal_id: Mapped[str] = mapped_column(String, default="")
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-
-
 class CharacterStateTransitionRow(Base):
     __tablename__ = "character_state_transitions"
     __table_args__ = (
@@ -112,30 +89,6 @@ class CharacterStateTransitionRow(Base):
     requires_bridge_from_transition_id: Mapped[str] = mapped_column(String, default="")
     bridge_event_id: Mapped[str] = mapped_column(String, default="")
     evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ArtifactCollectionLedgerRow(Base):
-    __tablename__ = "artifact_collection_ledgers"
-    __table_args__ = (
-        Index("ix_artifact_ledgers_project_collection", "project_id", "collection_key", "chapter_number"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    collection_key: Mapped[str] = mapped_column(String, default="main")
-    collection_name: Mapped[str] = mapped_column(String, default="core_artifacts")
-    target_total: Mapped[int] = mapped_column(Integer, default=0)
-    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
-    mentioned_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    mentioned_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    collected_count_after: Mapped[int] = mapped_column(Integer, default=0)
-    new_items_json: Mapped[str] = mapped_column(Text, default="[]")
-    consumed_items_json: Mapped[str] = mapped_column(Text, default="[]")
-    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    confidence: Mapped[float] = mapped_column(Float, default=1.0)
-    status: Mapped[str] = mapped_column(String, default="consistent")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
@@ -162,28 +115,6 @@ class CountdownLedgerRow(Base):
     evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class RevealRegistryEntryRow(Base):
-    __tablename__ = "reveal_registry_entries"
-    __table_args__ = (
-        Index("ix_reveal_registry_project_key", "project_id", "reveal_key"),
-        Index("ix_reveal_registry_project_status", "project_id", "status", "latest_chapter"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    reveal_key: Mapped[str] = mapped_column(String, default="")
-    claim_summary: Mapped[str] = mapped_column(Text, default="")
-    first_revealed_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    latest_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    repeat_count: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String, default="new")
-    subject_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 class ChapterBodyMetricRow(Base):

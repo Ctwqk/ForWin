@@ -212,12 +212,6 @@ def build_handlers(
                         project_id, as_of_chapter=as_of
                     )
                 ],
-                "reader_experience_deltas": [
-                    item.model_dump(mode="json")
-                    for item in repo.list_reader_experience_deltas(
-                        project_id, through_chapter=as_of
-                    )
-                ],
             }
 
     def get_book_state_path(

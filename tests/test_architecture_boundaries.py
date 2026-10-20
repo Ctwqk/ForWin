@@ -272,13 +272,40 @@ def test_v5_schema_has_no_dead_world_v4_model_or_tables() -> None:
     assert [table for table in sorted(dead_tables) if f'"{table}"' in baseline] == []
 
 
+def test_dead_tables_are_dropped_by_0002() -> None:
+    from forwin.models import Base
+
+    dead = {
+        "world_projection_deltas": "WorldProjectionDeltaRow",
+        "story_obligations": "StoryObligationRow",
+        "reveal_registry_entries": "RevealRegistryEntryRow",
+        "artifact_collection_ledgers": "ArtifactCollectionLedgerRow",
+        "book_reader_experience_deltas": "BookReaderExperienceDeltaRow",
+    }
+    assert [name for name in dead if name in Base.metadata.tables] == []
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        if "migrations/versions" not in path.as_posix()
+    )
+    assert [cls for cls in dead.values() if cls in production_source] == []
+
+    migration = importlib.import_module("forwin.migrations.versions.0002_drop_dead_tables")
+    assert migration.revision == "0002_drop_dead_tables"
+    assert migration.down_revision == "0001_v5_recovery"
+    upgrade_source = inspect.getsource(migration.upgrade)
+    for table in dead:
+        assert f'op.drop_table("{table}")' in upgrade_source
+
+
 def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
     versions = sorted(
         path.name
         for path in (ROOT / "forwin/migrations/versions").glob("*.py")
         if path.name != "__init__.py"
     )
-    assert versions == ["0001_v5_baseline.py"]
+    assert versions == ["0001_v5_baseline.py", "0002_drop_dead_tables.py"]
 
     base_source = _read("forwin/models/base.py")
     for removed in (

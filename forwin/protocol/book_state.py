@@ -358,23 +358,6 @@ class ReaderPromise(_BookStateModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ReaderExperienceDeltaRecord(_BookStateModel):
-    reader_experience_delta_id: str
-    project_id: str
-    chapter_number: int
-    reader_state_before: str = ""
-    reader_state_after: str = ""
-    cognition_transition: str = ""
-    payoff_type: str = ""
-    reward_tags: list[str] = Field(default_factory=list)
-    emotional_effect: str = ""
-    promise_debt_change: int = 0
-    next_desire: str = ""
-    fairness_evidence: list[str] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class NodePatch(_BookStateModel):
     node_id: str
     node_type: WorldNodeType | str

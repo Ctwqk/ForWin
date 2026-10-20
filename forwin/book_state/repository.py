@@ -15,7 +15,6 @@ from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.map.models import MapEdgeRow, MapNodeRow
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
-    BookReaderExperienceDeltaRow,
     BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
@@ -46,7 +45,6 @@ from forwin.protocol.book_state import (
     NarrativeNode,
     NarrativePatch,
     NodePatch,
-    ReaderExperienceDeltaRecord,
     ReaderPromise,
     WorldEdge,
     WorldNode,
@@ -325,38 +323,6 @@ class BookStateRepository:
         self.session.flush()
         return row
 
-    def upsert_reader_experience_delta(
-        self,
-        reader_delta: ReaderExperienceDeltaRecord,
-    ) -> BookReaderExperienceDeltaRow:
-        row = self.session.execute(
-            select(BookReaderExperienceDeltaRow).where(
-                BookReaderExperienceDeltaRow.project_id == reader_delta.project_id,
-                BookReaderExperienceDeltaRow.reader_experience_delta_id
-                == reader_delta.reader_experience_delta_id
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = BookReaderExperienceDeltaRow(
-                reader_experience_delta_id=reader_delta.reader_experience_delta_id,
-                project_id=reader_delta.project_id,
-            )
-            self.session.add(row)
-        row.chapter_number = int(reader_delta.chapter_number or 0)
-        row.reader_state_before = reader_delta.reader_state_before
-        row.reader_state_after = reader_delta.reader_state_after
-        row.cognition_transition = reader_delta.cognition_transition
-        row.payoff_type = reader_delta.payoff_type
-        row.reward_tags_json = _dump(reader_delta.reward_tags)
-        row.emotional_effect = reader_delta.emotional_effect
-        row.promise_debt_change = int(reader_delta.promise_debt_change or 0)
-        row.next_desire = reader_delta.next_desire
-        row.fairness_evidence_json = _dump(reader_delta.fairness_evidence)
-        row.source_refs_json = _dump(reader_delta.source_refs)
-        row.metadata_json = _dump(reader_delta.metadata)
-        self.session.flush()
-        return row
-
     def list_reader_promises_native(
         self,
         project_id: str,
@@ -370,27 +336,6 @@ class BookStateRepository:
             _reader_promise_from_row(row)
             for row in self.session.execute(
                 stmt.order_by(BookReaderPromiseRow.created_at_chapter.asc(), BookReaderPromiseRow.promise_id.asc())
-            )
-            .scalars()
-            .all()
-        ]
-
-    def list_reader_experience_deltas(
-        self,
-        project_id: str,
-        *,
-        through_chapter: int | None = None,
-    ) -> list[ReaderExperienceDeltaRecord]:
-        stmt = select(BookReaderExperienceDeltaRow).where(BookReaderExperienceDeltaRow.project_id == project_id)
-        if through_chapter is not None:
-            stmt = stmt.where(BookReaderExperienceDeltaRow.chapter_number <= int(through_chapter))
-        return [
-            _reader_experience_delta_from_row(row)
-            for row in self.session.execute(
-                stmt.order_by(
-                    BookReaderExperienceDeltaRow.chapter_number.asc(),
-                    BookReaderExperienceDeltaRow.reader_experience_delta_id.asc(),
-                )
             )
             .scalars()
             .all()
@@ -863,22 +808,6 @@ class BookStateRepository:
                 WorldNodeStateRow.source_delta_id.in_(delta_ids),
             )
         )
-        experience_ids = {
-            payload["reader_experience_delta_id"]
-            for delta in deltas
-            if isinstance(
-                payload := delta.metadata.get("reader_experience_delta"), dict
-            )
-            and payload.get("reader_experience_delta_id")
-        }
-        self.session.execute(
-            delete(BookReaderExperienceDeltaRow).where(
-                BookReaderExperienceDeltaRow.project_id == project_id,
-                BookReaderExperienceDeltaRow.reader_experience_delta_id.in_(
-                    experience_ids
-                ),
-            )
-        )
         self.session.flush()
 
     def _rewind_materialized_rows(
@@ -947,13 +876,6 @@ class BookStateRepository:
                 patches.append(
                     ("reader_promise", str(patch.get("promise_id") or ""), patch)
                 )
-            experience = delta.metadata.get("reader_experience_delta")
-            if isinstance(experience, dict):
-                promise_id = str(
-                    experience.get("promise_id")
-                    or f"promise:{experience.get('reader_experience_delta_id')}"
-                )
-                patches.append(("reader_promise", promise_id, {"op": "create"}))
         created = {
             (kind, target)
             for kind, target, patch in patches
@@ -992,13 +914,6 @@ class BookStateRepository:
         for delta in prior_deltas:
             for patch in delta.metadata.get("reader_promise_patches", []):
                 prior_refs.add(f"reader_promise:{patch.get('promise_id')}")
-            experience = delta.metadata.get("reader_experience_delta")
-            if isinstance(experience, dict):
-                promise_id = str(
-                    experience.get("promise_id")
-                    or f"promise:{experience.get('reader_experience_delta_id')}"
-                )
-                prior_refs.add(f"reader_promise:{promise_id}")
         if collisions := sorted(
             f"{kind}:{target}"
             for kind, target in created
@@ -1617,25 +1532,6 @@ def _reader_promise_from_row(row: BookReaderPromiseRow) -> ReaderPromise:
         linked_threads=_loads(row.linked_threads_json, []),
         linked_knowledge_gaps=_loads(row.linked_knowledge_gaps_json, []),
         status=row.status,
-        source_refs=_loads(row.source_refs_json, []),
-        metadata=_loads(row.metadata_json, {}),
-    )
-
-
-def _reader_experience_delta_from_row(row: BookReaderExperienceDeltaRow) -> ReaderExperienceDeltaRecord:
-    return ReaderExperienceDeltaRecord(
-        reader_experience_delta_id=row.reader_experience_delta_id,
-        project_id=row.project_id,
-        chapter_number=row.chapter_number,
-        reader_state_before=row.reader_state_before,
-        reader_state_after=row.reader_state_after,
-        cognition_transition=row.cognition_transition,
-        payoff_type=row.payoff_type,
-        reward_tags=_loads(row.reward_tags_json, []),
-        emotional_effect=row.emotional_effect,
-        promise_debt_change=row.promise_debt_change,
-        next_desire=row.next_desire,
-        fairness_evidence=_loads(row.fairness_evidence_json, []),
         source_refs=_loads(row.source_refs_json, []),
         metadata=_loads(row.metadata_json, {}),
     )

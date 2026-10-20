@@ -10,8 +10,6 @@ from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.models import ArcPlanVersion, ChapterPlan
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
-    BookReaderExperienceDeltaRow,
-    BookReaderPromiseRow,
     GraphDeltaPatchRow,
     GraphDeltaRow,
     WorldNodeStateRow,
@@ -118,44 +116,6 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
             repo.invalidate_project_range(project_id, from_chapter=1, through_chapter=1)
             assert repo.get_world_node("base-item").name == "Genesis name"
             assert repo.get_world_node("external-item").name == "Independent material"
-    engine.dispose()
-
-
-def test_historical_invalidation_retires_reader_experience_by_delta_provenance() -> (
-    None
-):
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
-    Session = get_session_factory(engine)
-    with Session.begin() as session:
-        project_id = _create_project(session)
-        result = BookStateCompiler(session).compile(
-            ApprovedGraphDeltaSet(
-                project_id=project_id,
-                chapter_number=1,
-                graph_deltas=[
-                    GraphDelta(
-                        id="old-reader-delta",
-                        project_id=project_id,
-                        chapter_number=1,
-                        metadata={
-                            "reader_experience_delta": {
-                                "reader_experience_delta_id": "retired-reader-experience",
-                                "reader_state_after": "Obsolete event",
-                            }
-                        },
-                    )
-                ],
-            )
-        )
-        assert result.committed
-        BookStateRepository(session).invalidate_project_range(
-            project_id,
-            from_chapter=1,
-            through_chapter=1,
-        )
-        assert session.scalar(select(func.count(BookReaderExperienceDeltaRow.id))) == 0
-        assert session.scalar(select(func.count(BookReaderPromiseRow.id))) == 0
     engine.dispose()
 
 

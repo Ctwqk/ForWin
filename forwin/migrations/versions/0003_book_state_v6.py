@@ -20,9 +20,16 @@ now, versioned with the rest of the narrative layer. downgrade() recreates the
 table empty, exactly as 0001 defined it.
 
 Every new NOT NULL column carries a server default so add_column works on
-populated tables. downgrade() removes everything in reverse order.
+populated tables. Existing world_node_states rows then copy name, aliases,
+profile and is_active from their world_nodes row, since a state row's
+identity now overrides the node's. Stored project runtime policies lose
+canon.book_state_layers, which CanonPolicy no longer accepts.
+
+downgrade() removes the schema in reverse order. The two data steps are not
+reversed: the copied columns are dropped, and the policy key is not put back.
 """
 
+import json
 from typing import Sequence, Union
 
 from alembic import op
@@ -104,6 +111,11 @@ def upgrade() -> None:
         "world_node_states",
         sa.Column("is_active", sa.Boolean(), server_default=sa.true(), nullable=False),
     )
+    op.execute(
+        "UPDATE world_node_states AS s SET name = n.name, aliases_json = n.aliases_json, "
+        "profile_json = n.profile_json, is_active = n.is_active FROM world_nodes AS n "
+        "WHERE s.node_id = n.id AND s.project_id = n.project_id"
+    )
 
     op.add_column(
         "cognition_overlays",
@@ -152,6 +164,30 @@ def upgrade() -> None:
         "ix_book_reader_promises_project_chapter", table_name="book_reader_promises"
     )
     op.drop_table("book_reader_promises")
+
+    _drop_book_state_layers_from_policies()
+
+
+def _drop_book_state_layers_from_policies() -> None:
+    """Strip canon.book_state_layers from stored policies, leaving every other key as stored."""
+    bind = op.get_bind()
+    rows = bind.execute(sa.text("SELECT id, runtime_policy_json FROM projects")).all()
+    for project_id, raw_policy in rows:
+        try:
+            policy = json.loads(raw_policy or "")
+        except ValueError:
+            continue
+        canon = policy.get("canon") if isinstance(policy, dict) else None
+        if not isinstance(canon, dict) or "book_state_layers" not in canon:
+            continue
+        del canon["book_state_layers"]
+        bind.execute(
+            sa.text("UPDATE projects SET runtime_policy_json = :policy WHERE id = :id"),
+            {
+                "policy": json.dumps(policy, ensure_ascii=False, separators=(",", ":")),
+                "id": project_id,
+            },
+        )
 
 
 def downgrade() -> None:

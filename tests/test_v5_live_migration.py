@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.http.project_support import _delete_project
 from forwin.models import Base, Project
 from forwin.models.base import get_session_factory
+from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_empty_test_url
 
 
@@ -184,5 +188,72 @@ def test_upgraded_columns_match_orm_metadata() -> None:
                 f"missing from database={missing}, nullability differs={nullability}"
             )
         assert drift == []
+    finally:
+        engine.dispose()
+
+
+def _seed_populated_0002(connection, policies: dict[str, str]) -> None:
+    """Rows written by 0002-era code: projects with stored policies and one node with a state row."""
+    for project_id, policy_json in policies.items():
+        connection.execute(
+            text(
+                "INSERT INTO projects (id, title, premise, genre, setting_summary, creation_status, "
+                "active_genesis_revision_id, automation_json, runtime_policy_json, runtime_policy_version, "
+                "created_at, updated_at) VALUES (:id, 't', 'p', 'g', '', 'writing', '', '{}', :policy, 1, now(), now())"
+            ),
+            {"id": project_id, "policy": policy_json},
+        )
+    connection.execute(
+        text(
+            "INSERT INTO world_nodes (id, project_id, node_type, name, aliases_json, summary, description, "
+            "status, importance, scope, tags_json, created_at_chapter, valid_from_chapter, source_refs_json, "
+            "is_active, profile_json, metadata_json, created_at, updated_at) VALUES ('char-1', 'p-layers', "
+            "'character', 'Alice', '[\"Al\"]', '', '', 'active', 3, 'book', '[]', 0, 0, '[]', false, "
+            "'{\"role\": \"lead\"}', '{}', now(), now())"
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO world_node_states (id, project_id, node_id, node_type, as_of_chapter, "
+            "as_of_story_time, state_json, source_delta_id, created_at) VALUES ('state-1', 'p-layers', "
+            "'char-1', 'character', 0, '', '{\"location_id\": \"node-1\"}', 'delta-1', now())"
+        )
+    )
+
+
+def test_populated_0002_upgrade_keeps_node_identity_and_loadable_policies() -> None:
+    database_url = postgres_empty_test_url("v5-populated-0003")
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0002_drop_dead_tables")
+    layered = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    layered["canon"]["book_state_layers"] = ["world", "map", "cognition", "narrative"]
+    untouched = {
+        "p-empty": "",
+        "p-not-json": "not json",
+        "p-list": "[1, 2]",
+        "p-no-canon": json.dumps({"schema_version": 2}),
+    }
+
+    engine = create_engine(database_url, future=True)
+    try:
+        with engine.begin() as connection:
+            _seed_populated_0002(connection, {"p-layers": json.dumps(layered), **untouched})
+
+        command.upgrade(config, "head")
+
+        with Session(engine) as session:
+            graph = BookStateRepository(session).load_base_world_graph("p-layers", as_of_chapter=0)
+            node = graph.nodes_by_id["char-1"]
+            assert (node.name, node.aliases, node.profile, node.is_active) == ("Alice", ["Al"], {"role": "lead"}, False)
+            assert graph.get_state("char-1") == {"location_id": "node-1"}
+            stored = dict(session.execute(text("SELECT id, runtime_policy_json FROM projects")).all())
+        expected = json.loads(json.dumps(layered))
+        del expected["canon"]["book_state_layers"]
+        assert json.loads(stored["p-layers"]) == expected
+        RuntimePolicy.model_validate_json(stored["p-layers"])
+        assert {key: stored[key] for key in untouched} == untouched
+
+        command.downgrade(config, "0002_drop_dead_tables")
+        assert _database_state(database_url)[1] == "0002_drop_dead_tables"
     finally:
         engine.dispose()

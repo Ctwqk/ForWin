@@ -1050,87 +1050,6 @@ justification = "支持的发布平台目录"
 max_literals = 2
 
 [[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "DEATH_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 7
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "GROWTH_COMPLETION_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "LOCATION_DESTROY_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "NEGATION_MARKERS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 7
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "RELATION_BREAK_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "RESOURCE_CLOSURE_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "REVEAL_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 7
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "RULE_BREAK_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
-path = "forwin/review/constraint_keywords.py"
-symbol = "THREAD_CLOSURE_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "约束关键词判定；P2 review 栈改用 BookState 审查门"
-max_literals = 6
-
-[[entry]]
 path = "forwin/review/map_movement.py"
 symbol = "_duration_to_travel_time_budget"
 checks = ["cjk_membership", "cjk_inline_iteration"]
@@ -1154,14 +1073,6 @@ checks = ["cjk_collection"]
 category = "language_lexicon"
 justification = "压力情境词（题材中立）"
 max_literals = 4
-
-[[entry]]
-path = "forwin/review/plan_checks.py"
-symbol = "evaluate_director_imbalance"
-checks = ["cjk_membership"]
-category = "language_lexicon"
-justification = "写作术语“伏笔”"
-max_literals = 1
 
 [[entry]]
 path = "forwin/review/publisher_compliance.py"

@@ -73,6 +73,15 @@ def _loads(raw: str | None, default: Any) -> Any:
         return default
 
 
+def plan_goal_targets(goals: Any) -> list[tuple[str, str]]:
+    """Keep the original goal positions even when invalid entries are skipped."""
+    return [
+        (f"goal:{index}", goal)
+        for index, goal in enumerate(goals if isinstance(goals, list) else [], start=1)
+        if isinstance(goal, str) and goal.strip()
+    ]
+
+
 def _fulfillment_targets(session: Session, project_id: str, plan: ChapterPlan | None) -> tuple[FulfillmentTarget, ...]:
     if plan is None:
         return ()
@@ -80,9 +89,8 @@ def _fulfillment_targets(session: Session, project_id: str, plan: ChapterPlan | 
     contract = _loads(plan.task_contract_json, {})
     experience = _loads(plan.experience_plan_json, {})
     targets = [
-        FulfillmentTarget(f"goal:{index}", goal)
-        for index, goal in enumerate(goals if isinstance(goals, list) else [], start=1)
-        if isinstance(goal, str) and goal.strip()
+        FulfillmentTarget(target_id, goal)
+        for target_id, goal in plan_goal_targets(goals)
     ]
     obligation_ids: list[str] = []
     # Existing obligation patches store this key in the experience plan.

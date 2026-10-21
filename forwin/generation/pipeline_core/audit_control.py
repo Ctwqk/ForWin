@@ -13,14 +13,9 @@ from forwin.models.audit import DecisionEvent
 from forwin.planning.future_plan_audit import FuturePlanAuditRun
 import json
 from forwin.review.plan_checks import (
-    band_combined_text,
     evaluate_band_obligation_contract,
-    evaluate_constraint_issues,
     evaluate_director_imbalance,
     evaluate_intra_band_consistency,
-    evaluate_next_band_task_compatibility,
-    evaluate_resource_closure_risk,
-    evaluate_task_contract,
 )
 from forwin.planning.checkpoints import (
     band_is_first_chapter,
@@ -749,15 +744,8 @@ class AuditControlStage:
             for row in repo.list_band_checkpoints(project_id, band_id=band_row.band_id)
             if row.status == "pending"
         ]
-        constraints_enabled = (
-            bool(repo.future_constraints_enabled(project_id))
-            if hasattr(repo, "future_constraints_enabled")
-            else True
-        )
         issues: list[BandCheckpointIssueInfo] = []
         status = "pass"
-        chapter_bodies: list[str] = []
-        chapter_summaries: list[str] = []
         unresolved_review_chapters: list[int] = []
         review_fail_chapters: list[int] = []
         review_metas: list[dict[str, Any]] = []
@@ -772,8 +760,6 @@ class AuditControlStage:
             )
             if latest_draft is None:
                 continue
-            chapter_bodies.append(str(latest_draft.body_text or ""))
-            chapter_summaries.append(str(latest_draft.summary or ""))
             latest_review = (
                 session.query(ChapterReview)
                 .filter(ChapterReview.draft_id == latest_draft.id)
@@ -838,27 +824,6 @@ class AuditControlStage:
                     detail="; ".join(issue.evidence_refs),
                 )
             )
-        combined_text = band_combined_text(
-            chapter_bodies=chapter_bodies,
-            chapter_summaries=chapter_summaries,
-        )
-        band_task_issues = evaluate_task_contract(
-            repo.get_band_task_contract_for_chapter(project_id, chapter_number),
-            combined_text=combined_text,
-            reviewer="plan_control",
-            issue_type="band_task_completion",
-            target_scope="band",
-        )
-        for issue in band_task_issues:
-            issues.append(
-                BandCheckpointIssueInfo(
-                    code="band_task_completion",
-                    severity=issue.severity,
-                    issue_group=issue.issue_group,
-                    description=issue.description,
-                    detail="; ".join(issue.evidence_refs),
-                )
-            )
         try:
             schedule_payload = json.loads(band_row.schedule_json or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -910,88 +875,6 @@ class AuditControlStage:
                     detail="; ".join(issue.evidence_refs),
                 )
             )
-        next_band_summary = repo.get_next_band_summary(project_id, chapter_number)
-        constraint_chapter = (
-            int(next_band_summary.chapter_start or 0)
-            if next_band_summary is not None
-            else chapter_number + 1
-        )
-        future_constraints = (
-            repo.list_active_narrative_constraints(
-                project_id,
-                chapter_number=max(chapter_number, constraint_chapter),
-            )
-            if constraints_enabled
-            else []
-        )
-        if constraints_enabled:
-            compatibility_issues = evaluate_constraint_issues(
-                future_constraints,
-                combined_text=combined_text,
-                chapter_delta=None,
-                reviewer="plan_control",
-                issue_type="next_band_compatibility",
-                target_scope="band",
-            )
-            compatibility_issues.extend(
-                evaluate_next_band_task_compatibility(
-                    next_band_summary=next_band_summary,
-                    combined_text=combined_text,
-                    reviewer="plan_control",
-                    target_scope="band",
-                )
-            )
-            for issue in compatibility_issues:
-                issues.append(
-                    BandCheckpointIssueInfo(
-                        code="next_band_compatibility"
-                        if issue.severity == "error"
-                        else "future_constraint",
-                        severity=issue.severity,
-                        issue_group=issue.issue_group,
-                        description=issue.description,
-                        detail="; ".join(issue.evidence_refs),
-                    )
-                )
-            next_band_targets = [
-                *[
-                    task.target_name
-                    for task in (
-                        next_band_summary.band_task_contract
-                        if next_band_summary is not None
-                        else []
-                    )
-                    if str(task.target_name or "").strip()
-                ],
-                *[
-                    constraint.subject_name
-                    for constraint in future_constraints
-                    if str(constraint.subject_name or "").strip()
-                ],
-            ]
-            future_risk_issues = evaluate_resource_closure_risk(
-                combined_text=combined_text,
-                next_band_targets=list(dict.fromkeys(next_band_targets)),
-                reviewer="plan_control",
-                target_scope="band",
-            )
-            for issue in future_risk_issues:
-                category = ""
-                for ref in issue.evidence_refs:
-                    text = str(ref or "")
-                    if text.startswith("category="):
-                        category = text.split("=", 1)[1].strip()
-                        break
-                issues.append(
-                    BandCheckpointIssueInfo(
-                        code="future_resource_preservation",
-                        severity="warning",
-                        category=category,
-                        issue_group=issue.issue_group,
-                        description=issue.description,
-                        detail="; ".join(issue.evidence_refs),
-                    )
-                )
         if status != "fail" and any(issue.severity == "error" for issue in issues):
             status = "fail"
         elif status == "pass" and any(issue.severity == "warning" for issue in issues):

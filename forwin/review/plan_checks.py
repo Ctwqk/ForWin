@@ -1,101 +1,14 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 from forwin.book_state.extraction.chapter_delta_schema import (
     NEW_REF_PREFIX,
     ChapterDeltaExtraction,
 )
 from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.checkpoints import NextBandSummary
-from forwin.planning.contracts import (
-    PlanTaskItem,
-    is_derived_goal_control_instruction,
-)
 from forwin.review.issue_groups import issue_group_for_issue
-from forwin.review.constraint_keywords import (
-    constraint_keywords,
-    first_unnegated_keyword,
-    text_has_unnegated_keyword,
-)
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.review import ContinuityIssue
-from forwin.protocol.writer import WriterOutput
-
-_KEYWORDS = constraint_keywords()
-_DEATH_KEYWORDS = _KEYWORDS.death
-_REVEAL_KEYWORDS = _KEYWORDS.reveal
-_RELATION_BREAK_KEYWORDS = _KEYWORDS.relation_break
-_LOCATION_DESTROY_KEYWORDS = _KEYWORDS.location_destroy
-_RULE_BREAK_KEYWORDS = _KEYWORDS.rule_break
-_RESOURCE_CLOSURE_KEYWORDS = _KEYWORDS.resource_closure
-_THREAD_CLOSURE_KEYWORDS = _KEYWORDS.thread_closure
-_GROWTH_COMPLETION_KEYWORDS = _KEYWORDS.growth_completion
-
-
-def chapter_combined_text(writer_output: WriterOutput) -> str:
-    delta = writer_output.chapter_delta
-    parts = [
-        str(writer_output.title or ""),
-        str(writer_output.body or ""),
-        str(writer_output.end_of_chapter_summary or ""),
-        *(str(event.summary or "") for event in (delta.events if delta else [])),
-        *(str(beat.new_thread_title or "") for beat in (delta.thread_beats if delta else [])),
-        *(str(change.new_value or "") for change in (delta.entity_changes if delta else [])),
-    ]
-    return "\n".join(part for part in parts if part.strip())
-
-
-def band_combined_text(
-    *,
-    chapter_bodies: Iterable[str],
-    chapter_summaries: Iterable[str],
-    event_summaries: Iterable[str] = (),
-    beat_descriptions: Iterable[str] = (),
-) -> str:
-    parts = [
-        *(str(item or "") for item in chapter_bodies),
-        *(str(item or "") for item in chapter_summaries),
-        *(str(item or "") for item in event_summaries),
-        *(str(item or "") for item in beat_descriptions),
-    ]
-    return "\n".join(part for part in parts if part.strip())
-
-
-def evaluate_task_contract(
-    tasks: list[PlanTaskItem],
-    *,
-    combined_text: str,
-    reviewer: str,
-    issue_type: str,
-    target_scope: str,
-) -> list[ContinuityIssue]:
-    issues: list[ContinuityIssue] = []
-    for task in tasks:
-        if _is_low_signal_derived_task(task):
-            continue
-        if not _task_is_satisfied(task, combined_text):
-            issues.append(
-                ContinuityIssue(
-                    rule_name="plan_task_unfulfilled",
-                    severity="warning",
-                    description=f"规划任务未明显交付：{task.description or task.target_name or task.task_type}",
-                    entity_names=[task.target_name] if task.target_name else [],
-                    reviewer=reviewer,
-                    issue_type=issue_type,
-                    target_scope=target_scope,
-                    issue_group=issue_group_for_issue(
-                        issue_type=issue_type, rule_name="plan_task_unfulfilled"
-                    ),
-                    evidence_refs=[
-                        f"task_type={task.task_type}",
-                        f"task_source={task.source}",
-                    ],
-                    suggested_fix="补足该章/该 band 需要交付的规划任务，或显式调整任务合同。",
-                )
-            )
-    return issues
 
 
 def evaluate_band_obligation_contract(
@@ -185,101 +98,6 @@ def evaluate_band_obligation_contract(
     return issues
 
 
-def _is_low_signal_derived_task(task: PlanTaskItem) -> bool:
-    if str(task.source or "") != "derived_from_goals":
-        return False
-    description = str(task.description or "").strip()
-    return len(description) < 2 or is_derived_goal_control_instruction(description)
-
-
-def evaluate_constraint_issues(
-    constraints: list[NarrativeConstraintInfo],
-    *,
-    combined_text: str,
-    chapter_delta: ChapterDeltaExtraction | None,
-    reviewer: str,
-    issue_type: str,
-    target_scope: str,
-) -> list[ContinuityIssue]:
-    issues: list[ContinuityIssue] = []
-    lower_text = combined_text.lower()
-    for constraint in constraints:
-        severity = _constraint_severity(constraint.level)
-        entity_names = [constraint.subject_name] if constraint.subject_name else []
-        evidence_refs = [
-            f"constraint={constraint.id}",
-            f"constraint_type={constraint.constraint_type}",
-        ]
-        matched, detail = _constraint_triggered(
-            constraint,
-            combined_text=combined_text,
-            lower_text=lower_text,
-            chapter_delta=chapter_delta,
-        )
-        if not matched:
-            continue
-        issues.append(
-            ContinuityIssue(
-                rule_name="future_constraint_violation",
-                severity=severity,
-                description=f"叙事约束被触发：{constraint.description or constraint.subject_name or constraint.constraint_type}",
-                entity_names=entity_names,
-                reviewer=reviewer,
-                issue_type=issue_type,
-                target_scope=target_scope,
-                issue_group=issue_group_for_issue(
-                    issue_type=issue_type, rule_name="future_constraint_violation"
-                ),
-                evidence_refs=[*evidence_refs, detail],
-                suggested_fix="撤回会锁死未来空间的写法，或下调/修改该约束。",
-            )
-        )
-    return issues
-
-
-def evaluate_resource_closure_risk(
-    *,
-    combined_text: str,
-    next_band_targets: list[str],
-    reviewer: str,
-    target_scope: str,
-) -> list[ContinuityIssue]:
-    text = combined_text.strip()
-    if not text:
-        return []
-    issues: list[ContinuityIssue] = []
-    for target in next_band_targets:
-        name = str(target or "").strip()
-        if not name:
-            continue
-        if name not in text:
-            continue
-        if not (
-            any(keyword in text for keyword in _RESOURCE_CLOSURE_KEYWORDS)
-            or any(keyword in text for keyword in _GROWTH_COMPLETION_KEYWORDS)
-        ):
-            continue
-        category = _resource_closure_category(text)
-        issues.append(
-            ContinuityIssue(
-                rule_name="future_resource_preservation_risk",
-                severity="warning",
-                description=f"当前内容可能过早封闭未来资源：{name}",
-                entity_names=[name],
-                reviewer=reviewer,
-                issue_type="future_resource_preservation",
-                target_scope=target_scope,
-                issue_group=issue_group_for_issue(
-                    issue_type="future_resource_preservation",
-                    rule_name="future_resource_preservation_risk",
-                ),
-                evidence_refs=[f"target={name}", f"category={category}"],
-                suggested_fix="避免把后续 band 仍可能要使用的角色、线索或关系写成彻底关闭。",
-            )
-        )
-    return issues
-
-
 def evaluate_intra_band_consistency(
     *,
     unresolved_review_chapters: list[int],
@@ -333,62 +151,6 @@ def evaluate_intra_band_consistency(
                 issue_group=issue_group_for_issue(issue_type="intra_band_consistency"),
                 evidence_refs=[f"pending_checkpoint_count={pending_checkpoint_count}"],
                 suggested_fix="处理已有 checkpoint 后再创建新的 band 放行判断。",
-            )
-        )
-    return issues
-
-
-def evaluate_next_band_task_compatibility(
-    *,
-    next_band_summary: NextBandSummary | None,
-    combined_text: str,
-    reviewer: str,
-    target_scope: str,
-) -> list[ContinuityIssue]:
-    if next_band_summary is None:
-        return []
-    text = combined_text.strip()
-    if not text:
-        return []
-    issues: list[ContinuityIssue] = []
-    for task in next_band_summary.band_task_contract:
-        evidence: list[str] = []
-        forbidden_hits = [
-            str(keyword)
-            for keyword in task.forbidden_keywords
-            if str(keyword or "").strip() and str(keyword) in text
-        ]
-        if forbidden_hits:
-            evidence.append(f"forbidden_keywords={','.join(forbidden_hits)}")
-        target = str(task.target_name or "").strip()
-        if target and target in text:
-            if task.task_type == "withhold" and any(
-                keyword in text for keyword in _REVEAL_KEYWORDS
-            ):
-                evidence.append(f"withhold_target_revealed={target}")
-            if any(
-                keyword in text
-                for keyword in (*_RESOURCE_CLOSURE_KEYWORDS, *_THREAD_CLOSURE_KEYWORDS)
-            ):
-                evidence.append(f"target_prematurely_closed={target}")
-        if not evidence:
-            continue
-        issues.append(
-            ContinuityIssue(
-                rule_name="next_band_task_compatibility_risk",
-                severity="warning",
-                description=f"当前 band 末状态可能影响下一 band 任务：{task.description or task.target_name or task.task_type}",
-                entity_names=[target] if target else [],
-                reviewer=reviewer,
-                issue_type="next_band_compatibility",
-                target_scope=target_scope,
-                issue_group=issue_group_for_issue(issue_type="next_band_compatibility"),
-                evidence_refs=[
-                    f"next_band_id={next_band_summary.band_id}",
-                    f"task_type={task.task_type}",
-                    *evidence,
-                ],
-                suggested_fix="保留下个 band 需要使用的状态，不要提前揭露、关闭或写死。",
             )
         )
     return issues
@@ -453,7 +215,6 @@ def evaluate_director_imbalance(
         issue_types = {
             str(item) for item in (meta.get("issue_types") or []) if str(item).strip()
         }
-        notes = " ".join(str(item) for item in (meta.get("review_notes") or []))
         if delivered:
             reward_chapters.append(chapter_number)
             delivery_count += 1
@@ -485,7 +246,7 @@ def evaluate_director_imbalance(
             planned_social_or_emotion.append(chapter_number)
         if delivered & {"social", "emotion"}:
             delivered_social_or_emotion.add(chapter_number)
-        if "setup" in notes or "setup" in issue_types or "伏笔" in notes:
+        if "setup" in issue_types:
             setup_like_count += 1
 
     if len(reward_chapters) >= 2:
@@ -587,35 +348,45 @@ def evaluate_director_imbalance(
     return issues
 
 
-def _task_is_satisfied(task: PlanTaskItem, combined_text: str) -> bool:
-    text = combined_text.strip()
-    if not text:
-        return False
-    required_hits = [
-        keyword
-        for keyword in task.required_keywords
-        if str(keyword or "").strip() and str(keyword) in text
-    ]
-    forbidden_hits = [
-        keyword
-        for keyword in task.forbidden_keywords
-        if str(keyword or "").strip() and str(keyword) in text
-    ]
-    target_hit = bool(task.target_name and task.target_name in text)
-    description_hit = bool(task.description and task.description in text)
-    if task.task_type == "withhold":
-        if forbidden_hits:
-            return False
-        if task.required_keywords:
-            return len(required_hits) == len(task.required_keywords)
-        return not description_hit
-    if task.required_keywords:
-        return len(required_hits) == len(task.required_keywords)
-    if task.target_name:
-        return target_hit
-    # A prose description is guidance, not a machine-checkable assertion. Exact
-    # sentence matching would report ordinary paraphrases as missing delivery.
-    return True
+def evaluate_constraint_issues(
+    constraints: list[NarrativeConstraintInfo],
+    *,
+    chapter_delta: ChapterDeltaExtraction | None,
+    reviewer: str,
+    issue_type: str,
+    target_scope: str,
+) -> list[ContinuityIssue]:
+    issues: list[ContinuityIssue] = []
+    for constraint in constraints:
+        severity = _constraint_severity(constraint.level)
+        entity_names = [constraint.subject_name] if constraint.subject_name else []
+        evidence_refs = [
+            f"constraint={constraint.id}",
+            f"constraint_type={constraint.constraint_type}",
+        ]
+        matched, detail = _constraint_triggered(
+            constraint,
+            chapter_delta=chapter_delta,
+        )
+        if not matched:
+            continue
+        issues.append(
+            ContinuityIssue(
+                rule_name="future_constraint_violation",
+                severity=severity,
+                description=f"叙事约束被触发：{constraint.description or constraint.subject_name or constraint.constraint_type}",
+                entity_names=entity_names,
+                reviewer=reviewer,
+                issue_type=issue_type,
+                target_scope=target_scope,
+                issue_group=issue_group_for_issue(
+                    issue_type=issue_type, rule_name="future_constraint_violation"
+                ),
+                evidence_refs=[*evidence_refs, detail],
+                suggested_fix="撤回会锁死未来空间的写法，或下调/修改该约束。",
+            )
+        )
+    return issues
 
 
 def _constraint_severity(level: str) -> str:
@@ -634,119 +405,15 @@ def _ref_label(ref: str) -> str:
 def _constraint_triggered(
     constraint: NarrativeConstraintInfo,
     *,
-    combined_text: str,
-    lower_text: str,
     chapter_delta: ChapterDeltaExtraction | None,
 ) -> tuple[bool, str]:
+    if constraint.constraint_type != "thread_keep_open" or chapter_delta is None:
+        return False, ""
     subject = str(constraint.subject_name or "").strip()
-    state_changes = [
-        (_ref_label(change.new_entity.name if change.new_entity else change.ref), change)
-        for change in (chapter_delta.entity_changes if chapter_delta else [])
-    ]
-    thread_beats = [
-        (_ref_label(beat.thread_ref or beat.new_thread_title), beat)
-        for beat in (chapter_delta.thread_beats if chapter_delta else [])
-    ]
-    event_refs = {
-        _ref_label(ref)
-        for event in (chapter_delta.events if chapter_delta else [])
-        for ref in event.participant_refs
-    }
-    payload = dict(constraint.payload or {})
-    payload_keywords = [
-        str(item).strip()
-        for item in (payload.get("keywords") or payload.get("forbidden_keywords") or [])
-        if str(item).strip()
-    ]
-    if constraint.constraint_type == "character_availability":
-        for entity_name, change in state_changes:
-            if subject and entity_name != subject:
-                continue
-            new_value = str(change.new_value or "")
-            if any(keyword in new_value for keyword in _DEATH_KEYWORDS):
-                return (
-                    True,
-                    f"state_change={entity_name}:{change.field}->{new_value}",
-                )
-        if (
-            subject
-            and subject in combined_text
-            and text_has_unnegated_keyword(combined_text, _DEATH_KEYWORDS)
-        ):
-            return True, f"subject={subject}"
-    elif constraint.constraint_type == "secret_withhold":
-        if payload_keywords:
-            keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
-            if keyword:
-                return True, f"keyword={keyword}"
-        if (
-            subject
-            and subject in combined_text
-            and text_has_unnegated_keyword(combined_text, _REVEAL_KEYWORDS)
-        ):
-            return True, f"subject={subject}"
-    elif constraint.constraint_type == "relationship_preserve":
-        if (
-            subject
-            and subject in combined_text
-            and text_has_unnegated_keyword(combined_text, _RELATION_BREAK_KEYWORDS)
-        ):
-            return True, f"subject={subject}"
-    elif constraint.constraint_type == "thread_keep_open":
-        for thread_name, beat in thread_beats:
-            if subject and thread_name != subject:
-                continue
-            if beat.beat_type == "resolution":
-                return True, f"thread={thread_name}"
-    elif constraint.constraint_type == "location_availability":
-        for entity_name, change in state_changes:
-            if subject and entity_name != subject:
-                continue
-            if any(
-                keyword in str(change.new_value or "")
-                for keyword in _LOCATION_DESTROY_KEYWORDS
-            ):
-                return True, f"state_change={entity_name}:{change.field}"
-        if (
-            subject
-            and subject in combined_text
-            and text_has_unnegated_keyword(combined_text, _LOCATION_DESTROY_KEYWORDS)
-        ):
-            return True, f"subject={subject}"
-    elif constraint.constraint_type == "rule_preserve":
-        for entity_name, change in state_changes:
-            if subject and entity_name != subject:
-                continue
-            if any(
-                keyword in str(change.new_value or "")
-                for keyword in _RULE_BREAK_KEYWORDS
-            ):
-                return True, f"state_change={entity_name}:{change.field}"
-    if payload_keywords:
-        keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
-        if keyword:
-            return True, f"keyword={keyword}"
-    if subject and subject in event_refs:
-        if constraint.constraint_type in {
-            "character_availability",
-            "secret_withhold",
-        } and text_has_unnegated_keyword(
-            combined_text,
-            (*_DEATH_KEYWORDS, *_REVEAL_KEYWORDS),
-        ):
-            return True, f"event_subject={subject}"
+    for beat in chapter_delta.thread_beats:
+        thread_name = _ref_label(beat.thread_ref or beat.new_thread_title)
+        if subject and thread_name != subject:
+            continue
+        if beat.beat_type == "resolution":
+            return True, f"thread={thread_name}"
     return False, ""
-
-
-def _resource_closure_category(text: str) -> str:
-    if any(keyword in text for keyword in _DEATH_KEYWORDS):
-        return "character_locked_out"
-    if any(keyword in text for keyword in _RELATION_BREAK_KEYWORDS):
-        return "relationship_closed_too_early"
-    if any(keyword in text for keyword in _REVEAL_KEYWORDS):
-        return "secret_over_explained"
-    if any(keyword in text for keyword in _GROWTH_COMPLETION_KEYWORDS):
-        return "growth_arc_completed_too_early"
-    if any(keyword in text for keyword in _THREAD_CLOSURE_KEYWORDS):
-        return "thread_closed_too_early"
-    return "thread_closed_too_early"

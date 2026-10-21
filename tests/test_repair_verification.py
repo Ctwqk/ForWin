@@ -119,7 +119,7 @@ def test_repair_verifier_does_not_send_partial_oversized_context() -> None:
         verdict="warn",
         issues=[
             ContinuityIssue(
-                rule_name="plan_task_unfulfilled",
+                rule_name="plan_goal_partial",
                 severity="warning",
                 description="计划任务还可以更明确。",
                 issue_type="plan_task_fulfillment",

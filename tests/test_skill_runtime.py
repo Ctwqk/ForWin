@@ -12,6 +12,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
 from forwin.skills import build_skill_runtime_components
 from forwin.writer.chapter_writer import ChapterWriter
+from tests.chapter_delta_helpers import chapter_delta
 
 
 class _FakeWriterLLM:
@@ -216,6 +217,7 @@ class SkillRuntimeTests(unittest.TestCase):
             experience_review_enabled=False,
             lint_review_enabled=False,
         )
+        body = "雨夜里，他第一次看见那面会说话的镜子。"
 
         verdict = hub.review(
             project_id="project-skill",
@@ -226,9 +228,13 @@ class SkillRuntimeTests(unittest.TestCase):
                     project_id="project-skill",
                     chapter_number=1,
                     title="第一章 雨夜",
-                    body="雨夜里，他第一次看见那面会说话的镜子。",
+                    body=body,
                     char_count=20,
                     end_of_chapter_summary="主角拿到了危险线索。",
+                    chapter_delta=chapter_delta(body, plan_fulfillment=[
+                        {"target_id": "goal:1", "status": "done", "evidence": body},
+                        {"target_id": "goal:2", "status": "done", "evidence": body},
+                    ]),
                 )
             ),
             continuity_checker=_PassChecker(),

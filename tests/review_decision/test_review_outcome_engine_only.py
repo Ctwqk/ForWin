@@ -180,7 +180,7 @@ def test_engine_accepts_unrouted_nonblocking_warning_as_observation() -> None:
                 verdict="warn",
                 issues=[
                     ContinuityIssue(
-                        rule_name="plan_task_unfulfilled",
+                        rule_name="plan_goal_partial",
                         severity="warning",
                         description="计划任务未明显交付。",
                         issue_type="plan_task_fulfillment",

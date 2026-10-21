@@ -771,7 +771,7 @@ def test_legacy_governance_namespace_is_replaced_by_real_domain_owners() -> None
     assert (ROOT / "forwin/planning/constraints.py").exists()
     assert (ROOT / "forwin/planning/checkpoints.py").exists()
     assert (ROOT / "forwin/review/plan_checks.py").exists()
-    assert (ROOT / "forwin/review/constraint_keywords.py").exists()
+    assert not (ROOT / "forwin/review/constraint_keywords.py").exists()
     assert (ROOT / "forwin/review/plan_reviewer.py").exists()
 
 

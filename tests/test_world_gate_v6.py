@@ -102,7 +102,7 @@ def _pack(
     return {
         "world": {
             "story_engine": story_engine,
-            "map_atlas": {"nodes": [{"id": f"node-{number}"} for number in range(1, 6)]},
+            "map_atlas": {"nodes": [{"id": f"node-{number}", "name": f"node-{number}"} for number in range(1, 6)]},
         },
         "world_seed": seed,
         "book_arc_blueprint": {"arcs": TWO_ARCS},

@@ -29,6 +29,7 @@ from forwin.book_state.story_clock import (
     unit_minutes,
 )
 from forwin.protocol.book_state import WORLD_EDGE_TYPES
+from forwin.map.genesis_adapter import buildable_atlas_node_ids
 
 
 WORLD_SEED_KEYS: tuple[str, ...] = (
@@ -217,7 +218,7 @@ def validate_world_seed(
         issue("invalid_lexicon", "lexicon", str(exc))
 
     actor_refs = story_engine_actor_refs(story_engine)
-    location_refs = {_text(item.get("id")) for item in _objects(map_atlas.get("nodes")) if item.get("id")}
+    location_refs = buildable_atlas_node_ids(dict(map_atlas))
     facts = _objects(seed.get("facts"))
     fact_refs = {_text(item.get("id")) for item in facts if item.get("id")}
     all_refs = set(actor_refs) | fact_refs

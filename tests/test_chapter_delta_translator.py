@@ -99,7 +99,7 @@ def _pack() -> dict[str, Any]:
     return {
         "world": {
             "story_engine": story_engine,
-            "map_atlas": {"nodes": [{"id": "node-1"}, {"id": "node-2"}, {"id": "node-3"}]},
+            "map_atlas": {"nodes": [{"id": f"node-{number}", "name": f"node-{number}"} for number in range(1, 4)]},
         },
         "world_seed": seed,
         "book_arc_blueprint": {"arcs": [{"arc_number": 1}]},

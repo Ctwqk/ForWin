@@ -13,7 +13,7 @@ from forwin.world_templates import (
     default_world_extensions,
 )
 from forwin.models.project import Project
-from forwin.protocol.book_state import WORLD_EDGE_TYPES
+from forwin.protocol.book_state import MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _deep_merge,
     _empty_stage_world,
@@ -226,6 +226,25 @@ def _normalize_blueprint_payload(
         "arcs": normalized,
     }
 
+def _normalize_map_danger_level(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return int(number) if 0 <= number <= 5 and number.is_integer() else None
+
+
+def _normalize_map_bool(value: Any, *, default: bool) -> bool:
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any], world_bible: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = payload if isinstance(payload, dict) else {}
     culture_profile_ids = {
@@ -246,11 +265,13 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
         name = str(item.get("name", "")).strip() or "未命名小世界"
+        scope = str(item.get("scope", "")).strip()
         normalized_submaps.append(
             {
                 "id": subworld_id,
                 "name": name,
-                "scope": str(item.get("scope", "")).strip() or "other",
+                "scope": scope if scope in {"continent", "realm", "plane", "underground"} else "continent",
+                "danger_level": _normalize_map_danger_level(item.get("danger_level")),
                 "parent_scope": str(item.get("parent_scope", "")).strip(),
                 "culture_profile_id": culture_profile_id,
                 "summary": str(item.get("summary", "")).strip(),
@@ -346,6 +367,7 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
                 "description": str(item.get("description", "")).strip(),
                 "control": str(item.get("control", "")).strip(),
                 "danger": str(item.get("danger", "")).strip(),
+                "danger_level": _normalize_map_danger_level(item.get("danger_level")),
                 "climate_note": str(item.get("climate_note", "")).strip(),
                 "terrain_note": str(item.get("terrain_note", "")).strip(),
                 "culture_note": str(item.get("culture_note", "")).strip(),
@@ -353,13 +375,31 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
             }
         )
         node_ids.add(node_id)
+    normalized_edges = []
+    edge_types = {kind.value for kind in MapEdgeType}
+    for item in (normalized.get("edges") or fallback.get("edges") or []):
+        if not isinstance(item, dict):
+            continue
+        from_node_id = str(item.get("from_node_id") or item.get("source_node_id") or item.get("from") or item.get("source") or "").strip()
+        to_node_id = str(item.get("to_node_id") or item.get("target_node_id") or item.get("to") or item.get("target") or "").strip()
+        if from_node_id not in node_ids or to_node_id not in node_ids:
+            continue
+        kind = str(item.get("kind") or item.get("edge_type") or item.get("type") or "").strip()
+        normalized_edges.append({
+            "id": f"edge-{len(normalized_edges) + 1}",
+            "from_node_id": from_node_id,
+            "to_node_id": to_node_id,
+            "kind": kind if kind in edge_types else "road",
+            "bidirectional": _normalize_map_bool(item.get("bidirectional"), default=True),
+            "hidden": _normalize_map_bool(item.get("hidden"), default=False),
+        })
     result = {
         "overview": str(normalized.get("overview", "")).strip() or str(fallback.get("overview", "")),
         "topology_rules": [str(item).strip() for item in (normalized.get("topology_rules") or fallback.get("topology_rules") or []) if str(item).strip()],
         "submaps": normalized_submaps,
         "regions": normalized_regions,
         "nodes": normalized_nodes,
-        "edges": [item for item in (normalized.get("edges") or fallback.get("edges") or []) if isinstance(item, dict)],
+        "edges": normalized_edges,
     }
     return result
 

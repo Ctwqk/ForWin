@@ -129,6 +129,7 @@ _GENESIS_STAGE_HARD_RULES = {
         "id 要稳定、可复用、易于程序读取，不要只返回名字没有 id。",
         "每个关键舞台都要体现移动成本、控制权、危险或资源主题，避免纯装饰性地点。",
         "如果已有 culture_profiles，优先把文化 id 绑定到 submaps、regions、nodes。",
+        "scope、danger_level 与 edges 必须遵守输出要求中的枚举、整数范围、端点引用和布尔类型约束；未知危险等级用 null。",
     ],
     "story_engine": [
         "core_cast 不是人名清单；每个核心角色都要有欲望、恐惧、secrets 字符串列表或长期矛盾来源，不输出 secret。",

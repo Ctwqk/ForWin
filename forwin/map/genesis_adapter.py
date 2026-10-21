@@ -26,6 +26,27 @@ _SAFE_NODE_TYPES = {
 }
 
 
+def _has_atlas_node_name(node: dict[str, Any]) -> bool:
+    return bool(str(node.get("name", "") or "").strip())
+
+
+def buildable_atlas_node_ids(map_atlas: dict[str, Any] | None) -> frozenset[str]:
+    """Return source ids of the atlas nodes selected for generated map anchors."""
+    atlas = map_atlas if isinstance(map_atlas, dict) else {}
+    submaps = _normalized_submaps(atlas)
+    nodes = [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)]
+    return frozenset(
+        node_id
+        for submap in submaps
+        for node in _rows_for_subworld(
+            nodes, str(submap["id"]), str(submap["name"]),
+            single_subworld=len(submaps) == 1, ref_key="parent_subworld",
+        )
+        if _has_atlas_node_name(node)
+        if (node_id := str(node.get("id", "") or "").strip())
+    )
+
+
 def build_subworld_map_specs_from_genesis(
     *,
     project_id: str,
@@ -183,7 +204,7 @@ def _anchor_specs(
     anchors: list[MapAnchorNodeSpec] = []
     for index, item in enumerate(node_rows, start=1):
         name = str(item.get("name", "") or "").strip()
-        if not name:
+        if not _has_atlas_node_name(item):
             continue
         source_region_id = str(item.get("parent_region_id", "") or "").strip()
         anchors.append(
@@ -318,4 +339,4 @@ def _unique(values: list[str]) -> list[str]:
     return result
 
 
-__all__ = ["build_subworld_map_specs_from_genesis"]
+__all__ = ["buildable_atlas_node_ids", "build_subworld_map_specs_from_genesis"]

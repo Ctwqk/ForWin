@@ -24,7 +24,7 @@ def story_engine():
 
 @pytest.fixture
 def map_atlas():
-    return {"nodes": [{"id": "node-1"}, {"id": "node-2"}]}
+    return {"nodes": [{"id": "node-1", "name": "A"}, {"id": "node-2", "name": "B"}]}
 
 
 @pytest.fixture
@@ -73,6 +73,24 @@ def validate(seed, story_engine, map_atlas):
 def test_valid_seed_has_no_issues(seed, story_engine, map_atlas):
     assert validate(seed, story_engine, map_atlas) == []
     assert story_engine_actor_refs(story_engine) == {"cast-1": "character", "opp-1": "character", "faction-1": "faction"}
+
+
+def test_unbuildable_node_is_unknown_location_at_lock(seed, story_engine, map_atlas):
+    from forwin.genesis.helpers import _world_seed_validation_issues
+
+    map_atlas["nodes"].append({"id": "nameless"})
+    seed["actors"][0]["location_ref"] = "nameless"
+    seed["actors"][0]["intents"][0]["location_ref"] = "nameless"
+    pack = {
+        "world": {"map_atlas": map_atlas, "story_engine": story_engine},
+        "world_seed": seed,
+        "book_arc_blueprint": {"arcs": [{"arc_number": 1}, {"arc_number": 2}]},
+        "stage_states": {"map": {"locked": True}},
+    }
+    assert [(issue.code, issue.path) for issue in _world_seed_validation_issues(pack)] == [
+        ("unknown_location_ref", "actors[0].location_ref"),
+        ("unknown_location_ref", "actors[0].intents[0].location_ref"),
+    ]
 
 
 def test_validate_reports_unknown_time_unit(seed, story_engine, map_atlas):

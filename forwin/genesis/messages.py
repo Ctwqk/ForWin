@@ -17,7 +17,7 @@ from forwin.book_state.schema import (
     RULE_HARDNESS,
 )
 from forwin.models.project import Project
-from forwin.protocol.book_state import WORLD_EDGE_TYPES
+from forwin.protocol.book_state import MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _book_arc_list,
     _locked_stage_context,
@@ -34,6 +34,18 @@ from forwin.genesis.world_seed import (
     RELATION_VISIBILITIES,
     WORLD_SEED_KEYS,
 )
+
+
+def _map_output_requirement() -> str:
+    return (
+        "返回 MapAtlas JSON，至少包含 overview、topology_rules、submaps、regions、nodes、edges。"
+        "submaps[].scope 只能为 continent、realm、plane、underground，默认 continent。"
+        "submaps[] 与 nodes[] 的 danger_level 为 0–5 的整数；缺失、非法或未知时用 null，不编造或截断。"
+        "edges 每项为 {id, from_node_id, to_node_id, kind, bidirectional, hidden}，id 按 edge-{n} 编号；"
+        "from_node_id 与 to_node_id 必须引用已有 nodes[].id，无效端点的边丢弃。"
+        f"kind 只能为 {' / '.join(kind.value for kind in MapEdgeType)}，非法时用 road；"
+        "bidirectional 与 hidden 为布尔值，默认分别为 true 和 false。"
+    )
 
 
 def _world_seed_output_requirement() -> str:
@@ -112,7 +124,7 @@ def _build_stage_generation_messages(
     elif stage_key == "map":
         user_content = _prompt_sections(
             ("阶段", f"{label} ({stage_key})"),
-            ("输出要求", "返回 MapAtlas JSON，至少包含 overview、topology_rules、submaps、regions、nodes、edges。"),
+            ("输出要求", _map_output_requirement()),
             ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
             ("已锁定阶段上下文（视为当前真值）", locked_context),
             ("BookBrief", book_brief),
@@ -205,6 +217,8 @@ def _build_stage_refine_messages(
     output_requirement: list[tuple[str, Any]] = (
         [("输出要求", _world_seed_output_requirement())] if stage_key == "world_seed" else []
     )
+    if stage_key == "map":
+        output_requirement = [("输出要求", _map_output_requirement())]
     sections: list[tuple[str, Any]] = [
         ("阶段", f"{label} ({stage_key})"),
         ("用户指令", instruction),

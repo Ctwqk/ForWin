@@ -64,7 +64,7 @@ def story_engine():
 
 @pytest.fixture
 def map_atlas():
-    return {"nodes": [{"id": "node-1"}, {"id": "node-2"}]}
+    return {"nodes": [{"id": "node-1", "name": "node-1"}, {"id": "node-2", "name": "node-2"}]}
 
 
 @pytest.fixture

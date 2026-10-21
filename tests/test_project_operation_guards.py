@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from forwin.application.projects import generation as project_generation
 from forwin.application.projects import genesis as project_genesis
-from forwin.audit.events import DecisionEventType
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.api_schema import (
     ChapterReviewApproveRequest,
     ChapterReviewRetryRequest,
@@ -23,6 +23,7 @@ from forwin.api_schema import (
 )
 from forwin.config import InfrastructureConfig
 from forwin.generation.continue_workset import build_continue_generation_workset
+from forwin.genesis.handoff.commands import HandoffStageError
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
 from forwin.models.planning_control import BandCheckpoint
@@ -940,6 +941,99 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 create_continue_generation_task=fail_task_creation,
             )
 
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            self.assertEqual(project_row.creation_status, "genesis_ready")
+
+    def _start_writing_with_handoff(self, project_id: str, handoff, task_calls: list):
+        class FakeGenesisService:
+            def __init__(self):
+                self.handoff = handoff
+
+        def record_task_creation(**kwargs):
+            task_calls.append(kwargs)
+            return "task-unexpected"
+
+        return project_genesis.start_project_writing(
+            project_id,
+            get_session=self.session_factory,
+            config=api_state._config,
+            build_genesis_service=lambda _runtime_config, **_kwargs: (
+                FakeGenesisService()
+            ),
+            close_genesis_service=lambda _service: None,
+            require_genesis_project=lambda _project: None,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(
+                id="revision-start-writing-failure"
+            ),
+            project_has_active_generation_task=lambda _project_id, *, session=None: (
+                False
+            ),
+            generation_task_conflict_message=lambda _project_id: "conflict",
+            create_continue_generation_task=record_task_creation,
+        )
+
+    def test_start_writing_commits_handoff_stage_failure_event(self) -> None:
+        project = self._create_project(
+            project_id="proj-start-writing-stage-failure",
+            creation_status="genesis_ready",
+        )
+
+        class StageFailingHandoff:
+            def start_writing(self, *, session, updater, command):
+                # The handoff has rolled back its own writes and flushed this event.
+                updater.save_decision_event(
+                    DecisionEventInfo(
+                        project_id=command.project_id,
+                        scope="project",
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.WORLD_SEED_COMMIT_FAILED,
+                        actor_type="system",
+                        summary="stage failure",
+                    )
+                )
+                raise HandoffStageError("stage failed without naming the stage")
+
+        task_calls: list = []
+        with self.assertRaises(HTTPException) as raised:
+            self._start_writing_with_handoff(
+                project.id, StageFailingHandoff(), task_calls
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("stage failed without naming the stage", raised.exception.detail)
+        self.assertEqual(task_calls, [])
+        with self.session_factory() as session:
+            event_types = [
+                event.event_type
+                for event in session.query(DecisionEvent).filter(
+                    DecisionEvent.project_id == project.id
+                )
+            ]
+            project_row = session.get(Project, project.id)
+            self.assertEqual(event_types, [DecisionEventType.WORLD_SEED_COMMIT_FAILED])
+            self.assertEqual(project_row.creation_status, "genesis_ready")
+
+    def test_start_writing_rolls_back_untyped_handoff_value_error(self) -> None:
+        project = self._create_project(
+            project_id="proj-start-writing-value-error",
+            creation_status="genesis_ready",
+        )
+
+        class ValueErrorHandoff:
+            def start_writing(self, *, session, updater, command):
+                project = session.get(Project, command.project_id)
+                project.creation_status = "writing"
+                session.add(project)
+                session.flush()
+                raise ValueError("Genesis map is missing an active arc")
+
+        task_calls: list = []
+        with self.assertRaises(HTTPException) as raised:
+            self._start_writing_with_handoff(project.id, ValueErrorHandoff(), task_calls)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(task_calls, [])
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
             self.assertEqual(project_row.creation_status, "genesis_ready")

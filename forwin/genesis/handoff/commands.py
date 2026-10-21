@@ -5,7 +5,11 @@ from typing import Any
 
 
 class HandoffStageError(ValueError):
-    """A typed failure of one start-writing handoff stage."""
+    """A typed failure of one start-writing handoff stage.
+
+    The handoff rolls back its writes and records the stage's failure event; the
+    caller commits that event and refuses the request.
+    """
 
 
 @dataclass(slots=True)
@@ -24,5 +28,6 @@ class StartWritingHandoffResult:
     created_chapter_plan_count: int
     active_chapter_plan_count: int
     map_bootstrap_summary: dict[str, Any] = field(default_factory=dict)
+    world_seed_summary: dict[str, Any] = field(default_factory=dict)
     project_status: str = "writing"
 

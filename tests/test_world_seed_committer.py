@@ -4,9 +4,9 @@ import json
 from copy import deepcopy
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
-from forwin.audit.events import DecisionEventType
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.book_state import BookStateProjection, BookStateRepository
 from forwin.book_state.lexicon import lexicon_from_payload
 from forwin.book_state.query import BookStateQuery
@@ -448,6 +448,22 @@ def test_commit_world_seed_writes_book_state_calendar_and_lexicon(pack) -> None:
         ).one()
         assert outbox.event_type == "knowledge.projection.refresh_requested"
         assert json.loads(outbox.payload_json)["as_of_chapter"] == 0
+
+
+def test_commit_world_seed_lock_lets_other_sessions_reference_the_project(pack) -> None:
+    # Start-writing enqueues its generation task from another session before it commits.
+    Session = _session_factory()
+    with Session.begin() as session:
+        project_id, revision_id = _setup_project(session, pack)
+    with Session() as seeding:
+        _commit(seeding, project_id, revision_id, pack)
+        with Session.begin() as other:
+            other.execute(text("SET LOCAL lock_timeout = '2s'"))
+            StateUpdater(other).save_decision_event(DecisionEventInfo(
+                project_id=project_id, scope="project",
+                event_type=DecisionEventType.CONTINUE_REQUESTED, actor_type="api", summary="enqueue",
+            ))
+        seeding.rollback()
 
 
 def test_commit_world_seed_is_idempotent(pack) -> None:

@@ -43,6 +43,11 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.helpers.genesis_seed import (
+    seeded_map_atlas,
+    seeded_story_engine,
+    seeded_world_seed,
+)
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 
@@ -478,8 +483,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 {
                     "world": {
                         "world_bible": {"overview": "旧城与禁术并存的世界。"},
-                        "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
-                        "story_engine": {"long_arcs": ["旧术复苏", "主角代价升级"]},
+                        "map_atlas": seeded_map_atlas("旧城、城外荒原、地下遗迹。"),
+                        "story_engine": seeded_story_engine(["旧术复苏", "主角代价升级"]),
                     },
                     "book_arc_blueprint": {
                         "summary": "两段式蓝图",
@@ -514,13 +519,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "world_seed": {
-                        "calendar": {
-                            "epoch_label": "旧历",
-                            "opening_minute": 0,
-                            "units": [{"name": "日", "minutes": 1440}],
-                        },
-                    },
+                    "world_seed": seeded_world_seed(),
                 }
             ),
         )

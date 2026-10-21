@@ -126,6 +126,10 @@ class StateUpdater:
         planned_target_size: int = 0,
         planned_soft_min: int = 0,
         planned_soft_max: int = 0,
+        title: str = "",
+        goal: str = "",
+        stakes: str = "",
+        payoff_direction: str = "",
     ) -> ArcPlanVersion:
         """Create an arc plan version."""
         arc = ArcPlanVersion(
@@ -136,6 +140,10 @@ class StateUpdater:
             chapter_start=max(1, int(chapter_start or 1)),
             chapter_end=max(0, int(chapter_end or 0)),
             arc_synopsis=arc_synopsis,
+            title=title,
+            goal=goal,
+            stakes=stakes,
+            payoff_direction=payoff_direction,
             planned_target_size=max(0, int(planned_target_size or 0)),
             planned_soft_min=max(0, int(planned_soft_min or 0)),
             planned_soft_max=max(0, int(planned_soft_max or 0)),

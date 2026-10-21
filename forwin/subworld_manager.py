@@ -12,10 +12,8 @@ from forwin.book_state import BookStateRepository
 from forwin.book_state.query import BookStateQuery
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
-    ArcPlanVersion,
     ChapterPlan,
     Entity,
-    Project,
     SubWorld,
     SubWorldRosterItem,
     new_id,
@@ -225,74 +223,6 @@ class SubWorldManager:
             )
         return result
 
-    def ensure_initial_registry_for_active_arc(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-    ) -> None:
-        self.ensure_registry(session, project_id)
-        subworlds = session.execute(
-            select(SubWorld)
-            .where(SubWorld.project_id == project_id)
-            .order_by(SubWorld.created_at.asc())
-        ).scalars().all()
-        roster_count = session.execute(
-            select(SubWorldRosterItem)
-            .where(SubWorldRosterItem.project_id == project_id)
-        ).scalars().all()
-        if len(subworlds) > 1 or roster_count:
-            return
-
-        if self.director is None:
-            return
-        project = session.get(Project, project_id)
-        active_arc = session.execute(
-            select(ArcPlanVersion)
-            .where(
-                ArcPlanVersion.project_id == project_id,
-                ArcPlanVersion.status == "active",
-            )
-            .order_by(ArcPlanVersion.version.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        chapter_plans = session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.status.in_(("planned", "failed", "accepted", "needs_review")),
-            )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-        if project is None or active_arc is None or not chapter_plans:
-            return
-
-        chapter_seed = [
-            {
-                "chapter_number": plan.chapter_number,
-                "title": plan.title,
-                "one_line": plan.one_line,
-                "goals": load_goals_json(plan.goals_json),
-            }
-            for plan in chapter_plans[:4]
-        ]
-        delta = self.director.plan_subworld_delta(
-            premise=project.premise,
-            genre=project.genre,
-            arc_synopsis=active_arc.arc_synopsis,
-            chapter_seed=chapter_seed,
-            existing_subworlds=self.summarize_registry(session, project_id),
-            focus_threads=[],
-        )
-        self.apply_arc_delta(
-            session=session,
-            project_id=project_id,
-            arc_id=active_arc.id,
-            delta=SubWorldPlanDelta.model_validate(delta),
-            chapter_number=0,
-            entity_map={},
-        )
-
     def apply_initial_arc_plan(
         self,
         *,
@@ -300,7 +230,6 @@ class SubWorldManager:
         project_id: str,
         arc_id: str,
         arc_plan: dict,
-        entity_map: dict[str, str],
     ) -> None:
         self.ensure_registry(session, project_id)
         delta = SubWorldPlanDelta.model_validate(
@@ -313,7 +242,6 @@ class SubWorldManager:
             arc_id=arc_id,
             delta=delta,
             chapter_number=0,
-            entity_map=entity_map,
         )
 
     def apply_arc_delta(
@@ -324,9 +252,7 @@ class SubWorldManager:
         arc_id: str,
         delta: SubWorldPlanDelta,
         chapter_number: int,
-        entity_map: dict[str, str] | None = None,
     ) -> SubWorldPlanDelta:
-        entity_map = dict(entity_map or {})
         global_core_id = self.ensure_registry(session, project_id)
         roster_lookup = self._roster_lookup(session, project_id)
         resolved_reuse_ids: list[str] = []
@@ -441,46 +367,8 @@ class SubWorldManager:
                         seeds=item.region_seeds,
                     )
 
+            # Core seeds stay roster items until entity admission lands them at canon time.
             for seed in item.core_named_characters:
-                character_id = entity_map.get(seed.name) or ""
-                roster_metadata: dict[str, object]
-                if int(chapter_number or 0) <= 0:
-                    from forwin.characters.creation import CharacterCreationHelper
-                    from forwin.characters.models import CharacterCreationRequest
-
-                    result = CharacterCreationHelper(session).create_character(
-                        CharacterCreationRequest(
-                            project_id=project_id,
-                            source="subworld_core_named_character",
-                            source_ref=f"{target_row.id}:{seed.name}",
-                            character_id=character_id,
-                            roster_item_id="",
-                            name=seed.name,
-                            aliases=list(seed.aliases),
-                            description=seed.description,
-                            importance=max(1, int(seed.importance or 5)),
-                            created_at_chapter=0,
-                            profile={
-                                "role_hint": seed.role_hint,
-                                "role_archetype": seed.role_hint,
-                            },
-                            state=dict(seed.initial_state or {}),
-                            audit_reason="subworld core named character",
-                        )
-                    )
-                    character_id = result.character_id
-                    entity_map[result.character_name] = result.character_id
-                    roster_metadata = {
-                        "character_id": result.character_id,
-                        "book_state_node_id": result.character_id,
-                        "canon_source": "book_state",
-                    }
-                else:
-                    character_id = ""
-                    roster_metadata = {
-                        "pending_entity_admission": True,
-                        "planned_at_chapter": int(chapter_number),
-                    }
                 self._ensure_roster_item(
                     session=session,
                     project_id=project_id,
@@ -494,7 +382,10 @@ class SubWorldManager:
                     is_core=True,
                     status="seeded_named",
                     activation_chapter=max(0, int(chapter_number or 0)),
-                    metadata=roster_metadata,
+                    metadata={
+                        "pending_entity_admission": True,
+                        "planned_at_chapter": max(0, int(chapter_number or 0)),
+                    },
                 )
 
             for slot in item.planned_slots:

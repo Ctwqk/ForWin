@@ -46,14 +46,6 @@ harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
 ignore = []
 
 [[entry]]
-path = "forwin/application/projects/genesis.py"
-symbol = "start_project_writing"
-checks = ["cjk_membership"]
-category = "language_lexicon"
-justification = "匹配本系统地图生成异常消息中的“地图”"
-max_literals = 1
-
-[[entry]]
 path = "forwin/audience/feedback.py"
 symbol = "_NEGATIVE_COMMENT_KEYWORDS"
 checks = ["cjk_collection"]
@@ -743,14 +735,6 @@ checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
 max_literals = 6
-
-[[entry]]
-path = "forwin/genesis/handoff/service.py"
-symbol = "GenesisHandoffService.start_writing"
-checks = ["cjk_membership"]
-category = "language_lexicon"
-justification = "匹配本系统地图生成异常消息中的“地图”"
-max_literals = 1
 
 [[entry]]
 path = "forwin/genesis/helpers.py"

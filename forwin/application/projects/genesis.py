@@ -18,7 +18,7 @@ from forwin.genesis import (
     GenesisStageInvalidError,
     StaleGenesisRevisionError,
 )
-from forwin.genesis.handoff import StartWritingCommand
+from forwin.genesis.handoff import HandoffStageError, StartWritingCommand
 from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
@@ -427,19 +427,13 @@ def start_project_writing(
                     runtime_config=infrastructure,
                 ),
             )
+        except HandoffStageError as exc:
+            # The handoff rolled back its writes; keep the stage failure event it recorded.
+            session.commit()
+            raise HTTPException(409, f"Genesis 交接失败，不能启动写作：{exc}") from exc
         except ValueError as exc:
-            failure_summary = str(exc) or "Genesis map_atlas 无法生成 BookMap。"
-            if (
-                "map" in failure_summary.lower()
-                or "地图" in failure_summary
-                or "BookMap" in failure_summary
-            ):
-                session.commit()
-                raise HTTPException(
-                    409, f"地图生成失败，不能启动写作：{failure_summary}"
-                ) from exc
             session.rollback()
-            raise HTTPException(409, failure_summary) from exc
+            raise HTTPException(409, str(exc) or "Genesis 交接失败，不能启动写作。") from exc
         try:
             requested_chapters = int(handoff_result.active_chapter_plan_count or 0)
             task_max_chapters = max_chapters

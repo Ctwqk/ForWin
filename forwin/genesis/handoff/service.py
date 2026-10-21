@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,8 +16,9 @@ from forwin.state.updater import StateUpdater
 
 from .arc_materializer import GenesisArcMaterializer
 from .chapter_materializer import GenesisChapterMaterializer
-from .commands import StartWritingCommand, StartWritingHandoffResult
-from .map_bootstrap import GenesisMapBootstrap
+from .commands import HandoffStageError, StartWritingCommand, StartWritingHandoffResult
+from .map_bootstrap import GenesisMapBootstrap, GenesisMapBootstrapError
+from .world_seed_committer import WorldSeedCommitError, WorldSeedCommitter
 
 
 class GenesisHandoffService:
@@ -26,6 +29,7 @@ class GenesisHandoffService:
         self.arc_materializer = GenesisArcMaterializer(owner)
         self.chapter_materializer = GenesisChapterMaterializer(owner)
         self.map_bootstrap = GenesisMapBootstrap()
+        self.world_seed_committer = WorldSeedCommitter()
 
     def start_writing(
         self,
@@ -34,6 +38,11 @@ class GenesisHandoffService:
         updater: StateUpdater,
         command: StartWritingCommand,
     ) -> StartWritingHandoffResult:
+        """Arcs, then the book map, then the chapter-0 world seed, then arc-1 chapter plans.
+
+        Only flushes. On a ``HandoffStageError`` the session is rolled back and holds
+        just the stage's failure event, flushed, when the error is re-raised.
+        """
         actor_type = str(command.actor_type or "").strip()
         if actor_type != "manual_ui":
             raise ValueError("start-writing 必须由 manual_ui 显式触发。")
@@ -49,7 +58,6 @@ class GenesisHandoffService:
         project_id_for_failure = project.id
         revision_id_for_failure = revision.id
         decision_id = ""
-        in_map_bootstrap = False
         try:
             decision = updater.save_decision_event(
                 DecisionEventInfo(
@@ -87,6 +95,22 @@ class GenesisHandoffService:
             active_arc = next((row for row in arcs if row.status == "active"), None)
             if active_arc is None:
                 raise ValueError("Genesis blueprint 缺少 active arc。")
+            pack = self.owner.load_pack(revision)
+            map_summary = self.map_bootstrap.bootstrap_book_map_from_genesis(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                pack=pack,
+                decision_event_id=decision.id,
+            )
+            # The seed places actors on map nodes, and arc-1 planning reads the seeded BookState.
+            seed_summary = self.world_seed_committer.commit(
+                session=session,
+                project=project,
+                revision=revision,
+                pack=pack,
+            )
             existing_chapter_count = int(
                 session.execute(
                     select(func.count(ChapterPlan.id)).where(
@@ -104,7 +128,6 @@ class GenesisHandoffService:
                 decision_event_id=decision.id,
                 ensure_arc_map=False,
             )
-            pack = self.owner.load_pack(revision)
             world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
             world_bible = (
                 world.get("world_bible")
@@ -115,16 +138,6 @@ class GenesisHandoffService:
                 project.setting_summary = str(
                     world_bible.get("overview", "") or ""
                 ).strip()
-            in_map_bootstrap = True
-            map_summary = self.map_bootstrap.bootstrap_book_map_from_genesis(
-                session=session,
-                updater=updater,
-                project=project,
-                revision=revision,
-                pack=pack,
-                decision_event_id=decision.id,
-            )
-            in_map_bootstrap = False
             revision.status = "locked"
             session.add(revision)
             project.creation_status = "writing"
@@ -148,37 +161,56 @@ class GenesisHandoffService:
                 ),
                 active_chapter_plan_count=active_chapter_count,
                 map_bootstrap_summary=map_summary,
+                world_seed_summary=asdict(seed_summary),
                 project_status="writing",
             )
-        except ValueError as exc:
-            failure_summary = str(exc) or "Genesis handoff failed."
-            if (
-                not in_map_bootstrap
-                and "map" not in failure_summary.lower()
-                and "BookMap" not in failure_summary
-                and "地图" not in failure_summary
-            ):
-                raise
+        except HandoffStageError as exc:
             session.rollback()
-            failure_updater = StateUpdater(session)
-            failure_updater.save_decision_event(
-                DecisionEventInfo(
+            StateUpdater(session).save_decision_event(
+                _stage_failure_event(
+                    exc,
                     project_id=project_id_for_failure,
-                    scope="project",
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.MAP_GENERATION_FAILED,
-                    actor_type="system",
-                    summary="Genesis map_atlas 生成 Scheme C BookMap 失败。",
-                    reason=failure_summary,
-                    payload=event_error_payload(
-                        exc,
-                        stage="map_generation",
-                        failure_summary=failure_summary,
-                    ),
-                    related_object_type="book_genesis_revision",
-                    related_object_id=revision_id_for_failure,
+                    revision_id=revision_id_for_failure,
                     parent_event_id=decision_id,
                 )
             )
             session.flush()
             raise
+
+
+def _stage_failure_event(
+    exc: HandoffStageError,
+    *,
+    project_id: str,
+    revision_id: str,
+    parent_event_id: str,
+) -> DecisionEventInfo:
+    if isinstance(exc, WorldSeedCommitError):
+        event_type = DecisionEventType.WORLD_SEED_COMMIT_FAILED
+        stage = "world_seed_commit"
+        summary = "Genesis world_seed 写入第 0 章 BookState 失败。"
+    elif isinstance(exc, GenesisMapBootstrapError):
+        event_type = DecisionEventType.MAP_GENERATION_FAILED
+        stage = "map_generation"
+        summary = "Genesis map_atlas 生成 Scheme C BookMap 失败。"
+    else:
+        raise TypeError(f"no failure event for {type(exc).__name__}") from exc
+    failure_summary = str(exc) or summary
+    return DecisionEventInfo(
+        project_id=project_id,
+        scope="project",
+        event_family="runtime_observation",
+        event_type=event_type,
+        actor_type="system",
+        summary=summary,
+        reason=failure_summary,
+        payload=event_error_payload(
+            exc,
+            stage=stage,
+            failure_summary=failure_summary,
+            issues=list(exc.issues),
+        ),
+        related_object_type="book_genesis_revision",
+        related_object_id=revision_id,
+        parent_event_id=parent_event_id,
+    )

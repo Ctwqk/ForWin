@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import func, select
@@ -20,9 +21,44 @@ from forwin.models.project import Project
 from forwin.observability.payloads import audit_payload
 from forwin.state.updater import StateUpdater
 
+from .commands import HandoffStageError
+
+
+class GenesisMapBootstrapError(HandoffStageError):
+    """The Genesis map_atlas cannot become the book map; ``issues`` lists each failure."""
+
+    def __init__(self, issues: Iterable[str]) -> None:
+        self.issues = tuple(issues)
+        super().__init__("; ".join(self.issues))
+
 
 class GenesisMapBootstrap:
     def bootstrap_book_map_from_genesis(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        revision: BookGenesisRevision,
+        pack: dict[str, Any],
+        decision_event_id: str,
+    ) -> dict[str, Any]:
+        """Build the book map from the Genesis atlas; every failure raises ``GenesisMapBootstrapError``."""
+        try:
+            return self._bootstrap(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                pack=pack,
+                decision_event_id=decision_event_id,
+            )
+        except GenesisMapBootstrapError:
+            raise
+        except ValueError as exc:
+            raise GenesisMapBootstrapError([str(exc)]) from exc
+
+    def _bootstrap(
         self,
         *,
         session: Session,
@@ -78,7 +114,7 @@ class GenesisMapBootstrap:
             map_atlas=map_atlas,
         )
         if not specs:
-            raise ValueError("Genesis map_atlas 未能生成 BookMap spec。")
+            raise GenesisMapBootstrapError(["Genesis map_atlas 未能生成 BookMap spec。"])
 
         updater.save_decision_event(
             DecisionEventInfo(
@@ -115,11 +151,9 @@ class GenesisMapBootstrap:
             commit=False,
         )
         if not result.validation_report.valid:
-            message = (
-                "；".join(result.validation_report.errors)
-                or "BookMap validation failed."
+            raise GenesisMapBootstrapError(
+                result.validation_report.errors or ["BookMap validation failed."]
             )
-            raise ValueError(message)
 
         summary = {
             "skipped": False,

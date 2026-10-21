@@ -4,17 +4,32 @@ import json
 import unittest
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from forwin.genesis import BookGenesisService
-from forwin.genesis.handoff.commands import StartWritingCommand
 from forwin.audit.events import DecisionEventType
+from forwin.book_state import BookStateRepository
+from forwin.genesis import BookGenesisService
+from forwin.genesis.handoff.chapter_materializer import _arc_payload_from_row
+from forwin.genesis.handoff.commands import HandoffStageError, StartWritingCommand
+from forwin.genesis.handoff.map_bootstrap import (
+    GenesisMapBootstrap,
+    GenesisMapBootstrapError,
+)
+from forwin.genesis.handoff.world_seed_committer import WorldSeedCommitter
+from forwin.map.models import MapNodeRow
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
-from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.audit import DecisionEvent
+from forwin.models.base import get_engine, get_session_factory, init_db, new_id
+from forwin.models.book_state import GraphDeltaRow
+from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.state.updater import StateUpdater
+from tests.helpers.genesis_seed import (
+    seeded_map_atlas,
+    seeded_story_engine,
+    seeded_world_seed,
+)
 from tests.postgres import postgres_test_url
 
 
@@ -69,8 +84,8 @@ class GenesisHandoffServiceTests(unittest.TestCase):
             patch={
                 "world": {
                     "world_bible": {"overview": "旧城与禁术并存的世界。"},
-                    "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
-                    "story_engine": {"long_arcs": ["旧术复苏"]},
+                    "map_atlas": seeded_map_atlas("旧城、城外荒原、地下遗迹。"),
+                    "story_engine": seeded_story_engine(["旧术复苏"]),
                 },
                 "book_arc_blueprint": {
                     "summary": "两段式蓝图",
@@ -105,13 +120,7 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                         },
                     ],
                 },
-                "world_seed": {
-                    "calendar": {
-                        "epoch_label": "旧历",
-                        "opening_minute": 0,
-                        "units": [{"name": "日", "minutes": 1440}],
-                    },
-                },
+                "world_seed": seeded_world_seed(),
             },
         )
         for stage_key in (
@@ -303,18 +312,73 @@ class GenesisHandoffServiceTests(unittest.TestCase):
             )
         )
 
-    def test_map_bootstrap_failure_rolls_back_handoff_and_records_failure_event(
+    def _start_writing(self, service: BookGenesisService, session, project_id: str):
+        return service.handoff.start_writing(
+            session=session,
+            updater=StateUpdater(session),
+            command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
+        )
+
+    def test_start_writing_commits_world_seed_after_map_and_before_chapter_plans(
         self,
     ) -> None:
+        service = self._service()
+        observed: dict[str, object] = {}
+        with self.session_factory() as session:
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-seed-order"
+            )
+            fake_launch_arc_call = self._fake_launch_arc_call
+
+            def recording_launch_arc_call(_owner, **kwargs):
+                if str(kwargs["stage_key"]).startswith("launch_arc_"):
+                    observed["character_names"] = sorted(
+                        node.name
+                        for node in BookStateRepository(session).list_world_nodes(
+                            project.id
+                        )
+                        if str(node.node_type) == "character"
+                    )
+                    observed["map_node_count"] = session.execute(
+                        select(func.count(MapNodeRow.id)).where(
+                            MapNodeRow.project_id == project.id
+                        )
+                    ).scalar_one()
+                return fake_launch_arc_call(**kwargs)
+
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=recording_launch_arc_call,
+            ):
+                result = self._start_writing(service, session, project.id)
+            session.commit()
+            revision = session.get(
+                BookGenesisRevision, project.active_genesis_revision_id
+            )
+            revision_status = revision.status if revision is not None else ""
+
+        self.assertEqual(observed["character_names"], ["陶然", "顾衡"])
+        self.assertGreater(observed["map_node_count"], 0)
+        self.assertIs(result.world_seed_summary["skipped"], False)
+        self.assertEqual(
+            result.world_seed_summary["actor_count"],
+            len(seeded_world_seed()["actors"]),
+        )
+        self.assertEqual(revision_status, "locked")
+        self.assertEqual(result.project_status, "writing")
+
+    def test_map_failure_is_typed_and_persists_failure_event(self) -> None:
         service = self._service()
         with self.session_factory() as session:
             project = self._create_ready_project(
                 session, service, project_id="proj-handoff-map-failure"
             )
-            updater = StateUpdater(session)
+            # The failure text names no map at all: the handoff must go by type.
             invalid_map = BookMapGenerationResult(
                 project_id=project.id,
-                validation_report=MapValidationReport(valid=False, errors=["bad map"]),
+                validation_report=MapValidationReport(
+                    valid=False, errors=["anchor node unreachable"]
+                ),
             )
             with (
                 patch(
@@ -325,18 +389,21 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                     "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
                     return_value=invalid_map,
                 ),
-                self.assertRaises(ValueError),
+                self.assertRaises(GenesisMapBootstrapError) as raised,
             ):
-                service.handoff.start_writing(
-                    session=session,
-                    updater=updater,
-                    command=StartWritingCommand(
-                        project_id=project.id, actor_type="manual_ui"
-                    ),
-                )
+                self._start_writing(service, session, project.id)
             session.commit()
 
             project_row = session.get(Project, project.id)
+            arcs = (
+                session.execute(
+                    select(ArcPlanVersion).where(
+                        ArcPlanVersion.project_id == project.id
+                    )
+                )
+                .scalars()
+                .all()
+            )
             chapters = (
                 session.execute(
                     select(ChapterPlan).where(ChapterPlan.project_id == project.id)
@@ -344,23 +411,129 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 .scalars()
                 .all()
             )
-            events = (
-                session.execute(
+            event_types = [
+                event.event_type
+                for event in session.execute(
                     select(DecisionEvent).where(DecisionEvent.project_id == project.id)
+                ).scalars()
+            ]
+            failure = session.execute(
+                select(DecisionEvent).where(
+                    DecisionEvent.project_id == project.id,
+                    DecisionEvent.event_type
+                    == DecisionEventType.MAP_GENERATION_FAILED,
+                )
+            ).scalar_one()
+
+        message = str(raised.exception)
+        for word in ("map", "地图", "BookMap"):
+            self.assertNotIn(word.lower(), message.lower())
+        self.assertIsInstance(raised.exception, HandoffStageError)
+        self.assertEqual(raised.exception.issues, ("anchor node unreachable",))
+        assert project_row is not None
+        self.assertEqual(project_row.creation_status, "genesis_ready")
+        self.assertEqual(arcs, [])
+        self.assertEqual(chapters, [])
+        self.assertNotIn(DecisionEventType.START_WRITING_REQUESTED, event_types)
+        self.assertEqual(
+            json.loads(failure.payload_json)["issues"], ["anchor node unreachable"]
+        )
+
+    def test_arc_plan_versions_persist_blueprint_goal_stakes_payoff(self) -> None:
+        service = self._service()
+        with self.session_factory() as session:
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-arc-fields"
+            )
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=self._fake_launch_arc_call,
+            ):
+                self._start_writing(service, session, project.id)
+            session.commit()
+            arcs = (
+                session.execute(
+                    select(ArcPlanVersion)
+                    .where(ArcPlanVersion.project_id == project.id)
+                    .order_by(ArcPlanVersion.arc_number.asc())
                 )
                 .scalars()
                 .all()
             )
+            fields = [
+                (arc.title, arc.goal, arc.stakes, arc.payoff_direction)
+                for arc in arcs
+            ]
+            payload = _arc_payload_from_row(arcs[0])
 
-        assert project_row is not None
-        self.assertEqual(project_row.creation_status, "genesis_ready")
-        self.assertEqual(chapters, [])
-        self.assertTrue(
-            any(
-                event.event_type == DecisionEventType.MAP_GENERATION_FAILED
-                for event in events
-            )
+        self.assertEqual(
+            fields,
+            [
+                ("旧城开局", "立主冲突", "会失去立足点与关键同伴", "局部揭秘"),
+                ("遗迹升级", "升级世界冲突", "旧术外泄导致更大灾难", "更大悬念"),
+            ],
         )
+        self.assertEqual(
+            (
+                payload["title"],
+                payload["goal"],
+                payload["stakes"],
+                payload["payoff_direction"],
+            ),
+            fields[0],
+        )
+
+    def test_handoff_retry_reuses_seed(self) -> None:
+        service = self._service()
+        with self.session_factory() as session:
+            project = self._create_ready_project(
+                session, service, project_id="proj-handoff-seed-retry"
+            )
+            revision = service.active_revision(session, project)
+            pack = service.load_pack(revision)
+            # An earlier attempt already built the map and committed the seed.
+            GenesisMapBootstrap().bootstrap_book_map_from_genesis(
+                session=session,
+                updater=StateUpdater(session),
+                project=project,
+                revision=revision,
+                pack=pack,
+                decision_event_id="",
+            )
+            WorldSeedCommitter().commit(
+                session=session, project=project, revision=revision, pack=pack
+            )
+            session.commit()
+
+            with patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=self._fake_launch_arc_call,
+            ):
+                result = self._start_writing(service, session, project.id)
+            session.commit()
+            delta_count = session.execute(
+                select(func.count(GraphDeltaRow.id)).where(
+                    GraphDeltaRow.project_id == project.id
+                )
+            ).scalar_one()
+            committed_event_count = session.execute(
+                select(func.count(DecisionEvent.id)).where(
+                    DecisionEvent.project_id == project.id,
+                    DecisionEvent.event_type
+                    == DecisionEventType.WORLD_SEED_COMMITTED,
+                )
+            ).scalar_one()
+            project_row = session.get(Project, project.id)
+
+        self.assertIs(result.world_seed_summary["skipped"], True)
+        self.assertEqual(
+            result.world_seed_summary["actor_count"],
+            len(seeded_world_seed()["actors"]),
+        )
+        self.assertEqual(delta_count, 3)
+        self.assertEqual(committed_event_count, 1)
+        assert project_row is not None
+        self.assertEqual(project_row.creation_status, "writing")
 
     def test_handoff_reuses_existing_arc_and_chapter_rows(self) -> None:
         service = self._service()

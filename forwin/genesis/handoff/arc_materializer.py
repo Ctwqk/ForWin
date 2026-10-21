@@ -40,6 +40,10 @@ class GenesisArcMaterializer:
                 updater.create_arc_plan(
                     project_id=project.id,
                     arc_synopsis=str(arc_payload.get("arc_synopsis", "")).strip() or f"Arc {index}",
+                    title=str(arc_payload.get("title", "") or "").strip(),
+                    goal=str(arc_payload.get("goal", "") or "").strip(),
+                    stakes=str(arc_payload.get("stakes", "") or "").strip(),
+                    payoff_direction=str(arc_payload.get("payoff_direction", "") or "").strip(),
                     version=index,
                     status="active" if index == 1 else "planned",
                     arc_number=int(arc_payload.get("arc_number", index) or index),

@@ -28,16 +28,53 @@ from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.audit import DecisionEvent
+from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
+from tests.helpers.genesis_seed import (
+    seeded_map_atlas,
+    seeded_story_engine,
+    seeded_world_seed,
+)
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness
+
+
+def _fake_single_arc_genesis_call(
+    self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
+):
+    if str(stage_key).startswith("launch_arc_"):
+        return (
+            {
+                "chapters": [
+                    {"title": "雨夜", "one_line": "主角进入旧城。", "goals": ["建立危机"]},
+                    {"title": "债务", "one_line": "势力围拢。", "goals": ["扩大冲突"]},
+                    {"title": "遗迹", "one_line": "得到遗迹坐标。", "goals": ["转入下一阶段"]},
+                ]
+            },
+            {
+                "effective_system_prompt": "launch arc planner",
+                "prompt_layers": [],
+                "input_snapshot": {"stage_key": stage_key},
+                "model_profile": {"model": "fake-model"},
+                "attempts": [{"attempt": 1, "status": "success"}],
+                "output_summary": {"mode": "success"},
+            },
+        )
+    return fallback, {
+        "effective_system_prompt": "fallback",
+        "prompt_layers": [],
+        "input_snapshot": {},
+        "model_profile": {"model": "fake-model"},
+        "attempts": [{"attempt": 1, "status": "fallback"}],
+        "output_summary": {"mode": "fallback"},
+    }
 
 
 class BookGenesisFlowTests(unittest.TestCase):
@@ -308,8 +345,8 @@ class BookGenesisFlowTests(unittest.TestCase):
                 {
                     "world": {
                         "world_bible": {"overview": "旧城与禁术并存的世界。"},
-                        "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
-                        "story_engine": {"long_arcs": ["旧术复苏", "主角代价升级"]},
+                        "map_atlas": seeded_map_atlas("旧城、城外荒原、地下遗迹。"),
+                        "story_engine": seeded_story_engine(["旧术复苏", "主角代价升级"]),
                     },
                     "book_arc_blueprint": {
                         "summary": "两段式蓝图",
@@ -344,13 +381,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "world_seed": {
-                        "calendar": {
-                            "epoch_label": "旧历",
-                            "opening_minute": 0,
-                            "units": [{"name": "日", "minutes": 1440}],
-                        },
-                    },
+                    "world_seed": seeded_world_seed(),
                 }
             ),
         )
@@ -522,12 +553,12 @@ class BookGenesisFlowTests(unittest.TestCase):
             )
         )
 
-    def test_start_writing_blocks_when_initial_book_map_generation_fails(self) -> None:
+    def _create_single_arc_ready_project(self, *, title: str, premise: str) -> str:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
-                    "title": "Genesis 地图失败书",
-                    "premise": "启动写作前地图生成失败时不能进入写作。",
+                    "title": title,
+                    "premise": premise,
                     "genre": "玄幻",
                     "target_total_chapters": 3,
                 }
@@ -540,8 +571,8 @@ class BookGenesisFlowTests(unittest.TestCase):
                 {
                     "world": {
                         "world_bible": {"overview": "旧城与禁术并存的世界。"},
-                        "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
-                        "story_engine": {"long_arcs": ["旧术复苏"]},
+                        "map_atlas": seeded_map_atlas("旧城、城外荒原、地下遗迹。"),
+                        "story_engine": seeded_story_engine(["旧术复苏"]),
                     },
                     "book_arc_blueprint": {
                         "summary": "单 arc 蓝图",
@@ -560,13 +591,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "world_seed": {
-                        "calendar": {
-                            "epoch_label": "旧历",
-                            "opening_minute": 0,
-                            "units": [{"name": "日", "minutes": 1440}],
-                        },
-                    },
+                    "world_seed": seeded_world_seed(),
                 }
             ),
         )
@@ -579,57 +604,24 @@ class BookGenesisFlowTests(unittest.TestCase):
             "world_seed",
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
+        return created.project_id
 
-        def fake_genesis_call(
-            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
-        ):
-            if str(stage_key).startswith("launch_arc_"):
-                return (
-                    {
-                        "chapters": [
-                            {
-                                "title": "雨夜",
-                                "one_line": "主角进入旧城。",
-                                "goals": ["建立危机"],
-                            },
-                            {
-                                "title": "债务",
-                                "one_line": "势力围拢。",
-                                "goals": ["扩大冲突"],
-                            },
-                            {
-                                "title": "遗迹",
-                                "one_line": "得到遗迹坐标。",
-                                "goals": ["转入下一阶段"],
-                            },
-                        ]
-                    },
-                    {
-                        "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [],
-                        "input_snapshot": {"stage_key": stage_key},
-                        "model_profile": {"model": "fake-model"},
-                        "attempts": [{"attempt": 1, "status": "success"}],
-                        "output_summary": {"mode": "success"},
-                    },
-                )
-            return fallback, {
-                "effective_system_prompt": "fallback",
-                "prompt_layers": [],
-                "input_snapshot": {},
-                "model_profile": {"model": "fake-model"},
-                "attempts": [{"attempt": 1, "status": "fallback"}],
-                "output_summary": {"mode": "fallback"},
-            }
-
+    def test_start_writing_blocks_when_initial_book_map_generation_fails(self) -> None:
+        project_id = self._create_single_arc_ready_project(
+            title="Genesis 地图失败书",
+            premise="启动写作前地图生成失败时不能进入写作。",
+        )
+        # The failure text names no map: the application must go by the error type.
         invalid_map = BookMapGenerationResult(
-            project_id=created.project_id,
-            validation_report=MapValidationReport(valid=False, errors=["bad map"]),
+            project_id=project_id,
+            validation_report=MapValidationReport(
+                valid=False, errors=["anchor node unreachable"]
+            ),
         )
         with (
             patch(
                 "forwin.genesis.BookGenesisService._call_json_with_trace",
-                new=fake_genesis_call,
+                new=_fake_single_arc_genesis_call,
             ),
             patch(
                 "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
@@ -638,26 +630,22 @@ class BookGenesisFlowTests(unittest.TestCase):
             patch("forwin.http.app._create_continue_generation_task") as task_mock,
         ):
             with self.assertRaises(HTTPException) as raised:
-                api_module.start_project_writing(created.project_id)
+                api_module.start_project_writing(project_id)
 
         self.assertEqual(raised.exception.status_code, 409)
         task_mock.assert_not_called()
         with self.session_factory() as session:
-            project = session.get(Project, created.project_id)
+            project = session.get(Project, project_id)
             plans = (
                 session.execute(
-                    select(ChapterPlan).where(
-                        ChapterPlan.project_id == created.project_id
-                    )
+                    select(ChapterPlan).where(ChapterPlan.project_id == project_id)
                 )
                 .scalars()
                 .all()
             )
             events = (
                 session.execute(
-                    select(DecisionEvent).where(
-                        DecisionEvent.project_id == created.project_id
-                    )
+                    select(DecisionEvent).where(DecisionEvent.project_id == project_id)
                 )
                 .scalars()
                 .all()
@@ -671,6 +659,60 @@ class BookGenesisFlowTests(unittest.TestCase):
                 event.event_type == DecisionEventType.MAP_GENERATION_FAILED
                 for event in events
             )
+        )
+
+    def test_world_seed_failure_rolls_back_handoff_and_records_failure_event(
+        self,
+    ) -> None:
+        project_id = self._create_single_arc_ready_project(
+            title="Genesis 种子失败书",
+            premise="初始世界无法落地时不能进入写作。",
+        )
+        with (
+            patch(
+                "forwin.genesis.BookGenesisService._call_json_with_trace",
+                new=_fake_single_arc_genesis_call,
+            ),
+            # The generated book map lost every Genesis node the seed is placed at.
+            patch(
+                "forwin.genesis.handoff.world_seed_committer.map_node_ids_by_genesis_ref",
+                return_value={},
+            ),
+            patch("forwin.http.app._create_continue_generation_task") as task_mock,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api_module.start_project_writing(project_id)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        task_mock.assert_not_called()
+        with self.session_factory() as session:
+            project = session.get(Project, project_id)
+
+            def project_rows(model):
+                return (
+                    session.execute(select(model).where(model.project_id == project_id))
+                    .scalars()
+                    .all()
+                )
+
+            arcs = project_rows(ArcPlanVersion)
+            plans = project_rows(ChapterPlan)
+            map_nodes = project_rows(MapNodeRow)
+            deltas = project_rows(GraphDeltaRow)
+            failures = [
+                event
+                for event in project_rows(DecisionEvent)
+                if event.event_type == DecisionEventType.WORLD_SEED_COMMIT_FAILED
+            ]
+
+        assert project is not None
+        self.assertEqual(project.creation_status, "genesis_ready")
+        self.assertEqual((arcs, plans, map_nodes, deltas), ([], [], [], []))
+        self.assertEqual(len(failures), 1)
+        issues = json.loads(failures[0].payload_json)["issues"]
+        self.assertTrue(issues)
+        self.assertTrue(
+            all(issue.startswith("unresolved_location_ref ") for issue in issues)
         )
 
     def test_arc_envelope_uses_genesis_persisted_arc_sizing(self) -> None:
@@ -691,8 +733,8 @@ class BookGenesisFlowTests(unittest.TestCase):
                 {
                     "world": {
                         "world_bible": {"overview": "世界规则已锁定。"},
-                        "map_atlas": {"overview": "一城一野一遗迹。"},
-                        "story_engine": {"long_arcs": ["根冲突", "外部升级"]},
+                        "map_atlas": seeded_map_atlas("一城一野一遗迹。"),
+                        "story_engine": seeded_story_engine(["根冲突", "外部升级"]),
                     },
                     "book_arc_blueprint": {
                         "summary": "单 arc 启动蓝图",
@@ -713,13 +755,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "world_seed": {
-                        "calendar": {
-                            "epoch_label": "旧历",
-                            "opening_minute": 0,
-                            "units": [{"name": "日", "minutes": 1440}],
-                        },
-                    },
+                    "world_seed": seeded_world_seed(),
                 }
             ),
         )

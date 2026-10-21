@@ -364,7 +364,6 @@ class FinalizationStage:
             project_id=project_id,
             arc_id=first_arc.id if first_arc is not None else "",
             arc_plan=arc_plan,
-            entity_map=entity_map,
         )
 
         # Initial timeline

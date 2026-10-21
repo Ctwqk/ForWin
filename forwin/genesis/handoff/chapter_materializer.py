@@ -23,11 +23,11 @@ def _arc_payload_from_row(arc_row: ArcPlanVersion) -> dict[str, Any]:
     chapter_count = chapter_end - chapter_start + 1
     return {
         "arc_number": int(arc_row.arc_number or 0),
-        "title": "",
+        "title": str(arc_row.title or ""),
         "arc_synopsis": str(arc_row.arc_synopsis or ""),
-        "goal": "",
-        "stakes": "",
-        "payoff_direction": "",
+        "goal": str(arc_row.goal or ""),
+        "stakes": str(arc_row.stakes or ""),
+        "payoff_direction": str(arc_row.payoff_direction or ""),
         "chapter_start": chapter_start,
         "chapter_end": chapter_end,
         "chapter_count": chapter_count,

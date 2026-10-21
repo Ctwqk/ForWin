@@ -1517,8 +1517,8 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertNotIn("character_id", roster_metadata)
         self.assertNotIn("book_state_node_id", roster_metadata)
 
-    def test_genesis_subworld_core_character_materializes_at_chapter_zero(self) -> None:
-        engine = get_engine(postgres_test_url("subworld-core-genesis-seed"))
+    def test_chapter_zero_subworld_core_character_waits_for_entity_admission(self) -> None:
+        engine = get_engine(postgres_test_url("subworld-core-chapter-zero"))
         init_db(engine)
         session = get_session_factory(engine)()
         try:
@@ -1554,7 +1554,7 @@ class SubWorldControlTests(unittest.TestCase):
                     }
                 ),
             )
-            node = BookStateRepository(session).list_world_nodes(project.id)[0]
+            nodes = BookStateRepository(session).list_world_nodes(project.id)
             roster = session.execute(
                 select(SubWorldRosterItem).where(
                     SubWorldRosterItem.display_name == "沈临川"
@@ -1565,13 +1565,11 @@ class SubWorldControlTests(unittest.TestCase):
             session.close()
             engine.dispose()
 
-        self.assertEqual(node.created_at_chapter, 0)
+        self.assertEqual(nodes, [])
         self.assertEqual(
-            node.profile["personality_loadout"]["dominant"]["skill"],
-            "trait-loyal-protector",
+            roster_metadata,
+            {"pending_entity_admission": True, "planned_at_chapter": 0},
         )
-        self.assertEqual(roster_metadata["character_id"], node.id)
-        self.assertEqual(roster_metadata["canon_source"], "book_state")
 
     def test_runtime_subworld_core_character_roster_dedupes_by_planned_name(self) -> None:
         engine = get_engine(postgres_test_url("subworld-core-roster-planned-dedupe"))

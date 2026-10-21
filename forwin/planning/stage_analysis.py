@@ -502,7 +502,6 @@ class ReplanGovernor:
                 arc_id=new_arc.id,
                 delta=SubWorldPlanDelta.model_validate(delta_payload),
                 chapter_number=chapter_number + 1,
-                entity_map={},
             )
         for plan in future_plans:
             plan.arc_plan_id = new_arc.id

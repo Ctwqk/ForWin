@@ -255,10 +255,6 @@ class ArcEnvelopeManager:
             return None
 
         self.subworld_manager.ensure_registry(session, project_id)
-        self.subworld_manager.ensure_initial_registry_for_active_arc(
-            session=session,
-            project_id=project_id,
-        )
 
         chapter_plans = self.planning.query.arc_chapters(session, active_arc.id)
         project = session.get(Project, project_id)

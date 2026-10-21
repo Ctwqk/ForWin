@@ -43,19 +43,20 @@ def validate_evidence(
                 ))
         setattr(result, field, kept)
 
-    time_evidence = normalize_for_evidence(result.time.evidence)
-    if not time_evidence:
-        result.time.elapsed = None
-        issues.append(ExtractionIssue(
-            severity="warning", code="elapsed_without_evidence", path="time",
-            message="Elapsed time has no supporting evidence.",
-        ))
-    elif time_evidence not in normalized_body:
-        result.time.elapsed = None
-        issues.append(ExtractionIssue(
-            severity="warning", code="evidence_not_in_body", path="time",
-            message="Time evidence is not a passage from the chapter body.",
-        ))
+    if result.time.elapsed is not None:
+        time_evidence = normalize_for_evidence(result.time.evidence)
+        if not time_evidence:
+            result.time.elapsed = None
+            issues.append(ExtractionIssue(
+                severity="warning", code="elapsed_without_evidence", path="time",
+                message="Elapsed time has no supporting evidence.",
+            ))
+        elif time_evidence not in normalized_body:
+            result.time.elapsed = None
+            issues.append(ExtractionIssue(
+                severity="warning", code="evidence_not_in_body", path="time",
+                message="Time evidence is not a passage from the chapter body.",
+            ))
     return result, issues
 
 

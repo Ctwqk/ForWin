@@ -125,6 +125,37 @@ def test_validate_evidence_clears_unsupported_elapsed(evidence, code) -> None:
     assert dropped_ratio(issues, before) == 0.0
 
 
+@pytest.mark.parametrize("evidence", ["", " \n", "unsupported"])
+def test_validate_evidence_skips_time_warning_without_elapsed(evidence) -> None:
+    before = _extraction()
+    before.time = ChapterTime(elapsed=None, evidence=evidence)
+
+    after, issues = validate_evidence(before, BODY)
+
+    assert after.time == before.time
+    assert issues == []
+
+
+def test_writer_output_without_chapter_delta_preserves_legacy_fingerprint() -> None:
+    output = WriterOutput(chapter_number=1, title="title", body=BODY, end_of_chapter_summary="summary")
+    legacy_payload = output.model_dump(
+        mode="json",
+        exclude={
+            "generation_meta": True,
+            "draft_blob_path": True,
+            "scene_outputs": {"__all__": {"text_blob_path"}},
+        },
+    )
+    legacy_payload.pop("chapter_delta")
+    legacy_json = json.dumps(legacy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    legacy_fingerprint = hashlib.sha256(legacy_json.encode("utf-8")).hexdigest()
+    restored = WriterOutput.model_validate_json(legacy_json)
+
+    assert restored.chapter_delta is None
+    assert writer_output_admission_fingerprint(restored) == legacy_fingerprint
+    assert writer_output_admission_fingerprint(output) == legacy_fingerprint
+
+
 def test_writer_output_chapter_delta_round_trips_and_changes_fingerprint() -> None:
     output = WriterOutput(chapter_number=1, title="title", body=BODY, end_of_chapter_summary="summary")
     assert output.chapter_delta is None

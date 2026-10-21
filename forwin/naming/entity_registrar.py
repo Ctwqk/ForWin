@@ -952,6 +952,9 @@ def writer_output_admission_fingerprint(writer_output: WriterOutput) -> str:
             "scene_outputs": {"__all__": {"text_blob_path"}},
         },
     )
+    if writer_output.chapter_delta is None:
+        # Preserve fingerprints of artifacts created before chapter_delta was added.
+        payload.pop("chapter_delta")
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

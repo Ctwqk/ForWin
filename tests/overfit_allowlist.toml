@@ -751,69 +751,6 @@ justification = "解析“围绕‘X’展开”句式"
 max_literals = 3
 
 [[entry]]
-path = "forwin/map/generator.py"
-symbol = "_danger_for_role"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "仙侠地形关键词（禁/魔/遗迹/荒）；P1 改由 map_atlas / lexicon 提供"
-max_literals = 5
-
-[[entry]]
-path = "forwin/map/generator.py"
-symbol = "_region_type_for_role"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "仙侠区域关键词（宗门/山门/帝/国）；P1 改由 map_atlas / lexicon 提供"
-max_literals = 9
-
-[[entry]]
-path = "forwin/map/generator.py"
-symbol = "_terrain_for_role"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "地形关键词（山/海/荒/林）；P1 改由 map_atlas / lexicon 提供"
-max_literals = 4
-
-[[entry]]
-path = "forwin/map/genesis_adapter.py"
-symbol = "_DEFAULT_REGION_ROLES"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "默认区域角色（主舞台核心区/权力中心区/危险边缘区）；P1 改为题材中立默认值或 lexicon"
-max_literals = 3
-
-[[entry]]
-path = "forwin/map/genesis_adapter.py"
-symbol = "_connection_roles"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "仙侠路线词（传送/门/山/水）；P1 改由 map_atlas / lexicon 提供"
-max_literals = 7
-
-[[entry]]
-path = "forwin/map/genesis_adapter.py"
-symbol = "_danger_base"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "仙侠地形危险词；P1 改由 map_atlas / lexicon 提供"
-max_literals = 6
-
-[[entry]]
-path = "forwin/map/genesis_adapter.py"
-symbol = "_subworld_type"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "仙侠小世界类型词（界/秘境/地下）；P1 改由 map_atlas / lexicon 提供"
-max_literals = 3
-
-[[entry]]
 path = "forwin/naming/culture_name_generator.py"
 symbol = "<file>"
 checks = ["fixture_term"]

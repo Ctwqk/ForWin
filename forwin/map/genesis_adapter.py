@@ -6,11 +6,11 @@ import re
 from typing import Any
 
 from forwin.models.subworld import project_scoped_subworld_id
+from forwin.protocol.book_state import MapEdgeType
 
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
 
 
-_DEFAULT_REGION_ROLES = ["主舞台核心区", "权力中心区", "危险边缘区"]
 _SAFE_NODE_TYPES = {
     "world_area",
     "region",
@@ -80,6 +80,11 @@ def build_subworld_map_specs_from_genesis(
                 target_node_count=target_node_count,
                 target_edge_density=1.6,
                 required_region_roles=region_roles,
+                region_kinds={
+                    str(item.get("name", "") or "").strip() or f"地区{index}": str(item["kind"]).strip()
+                    for index, item in enumerate(region_rows, start=1)
+                    if item.get("kind") and str(item["kind"]).strip()
+                },
                 required_anchor_nodes=anchors,
                 required_connection_roles=_connection_roles(atlas, submap),
                 danger_profile={"base": _danger_base(submap, region_rows, node_rows)},
@@ -164,7 +169,7 @@ def _region_roles(region_rows: list[dict[str, Any]]) -> tuple[list[str], dict[st
         roles.append(name)
     roles = _unique(roles)
     if not roles:
-        roles = list(_DEFAULT_REGION_ROLES)
+        roles = [f"区域{i}" for i in range(1, 4)]
     return roles, names_by_id
 
 
@@ -213,14 +218,7 @@ def _anchor_specs(
 
 def _subworld_type(submap: dict[str, Any]) -> str:
     scope = str(submap.get("scope", "") or "").lower()
-    name = str(submap.get("name", "") or "")
-    if "realm" in scope or "界" in name or "秘境" in name:
-        return "realm"
-    if "plane" in scope:
-        return "plane"
-    if "underground" in scope or "地下" in name:
-        return "underground"
-    return "continent"
+    return scope if scope in {"realm", "plane", "underground"} else "continent"
 
 
 def _node_type(kind: str) -> str:
@@ -241,21 +239,38 @@ def _node_type(kind: str) -> str:
 
 
 def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str]:
-    values = [
-        *[str(item or "") for item in (atlas.get("topology_rules") or [])],
-        *[str(item or "") for item in (submap.get("travel_rules") or [])],
-    ]
+    single_subworld = len(_normalized_submaps(atlas)) == 1
+    node_rows = _rows_for_subworld(
+        [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)],
+        str(submap["id"]),
+        str(submap["name"]),
+        single_subworld=single_subworld,
+        ref_key="parent_subworld",
+    )
+    related_refs = {str(submap["id"]), str(submap["name"])}
+    related_refs.update(
+        str(item[key]).strip()
+        for item in node_rows
+        for key in ("id", "name")
+        if item.get(key)
+    )
+    edge_types = {edge_type.value for edge_type in MapEdgeType}
     roles: list[str] = []
-    for value in values:
-        if "传送" in value or "门" in value:
-            roles.append("传送阵")
-        if "山" in value:
-            roles.append("山路")
-        if "水" in value or "河" in value:
-            roles.append("水路")
-        if "路" in value or "移动" in value:
-            roles.append("官道")
-    return _unique(roles) or ["官道", "山路", "传送阵"]
+    for edge in (atlas.get("edges") or []):
+        if not isinstance(edge, dict):
+            continue
+        refs = {
+            str(edge[key]).strip()
+            for prefix in ("from", "source", "to", "target")
+            for suffix in ("_node_id", "_node", "", "_subworld_id", "_subworld")
+            if edge.get(key := f"{prefix}{suffix}")
+        }
+        if not (refs & related_refs or (single_subworld and not refs)):
+            continue
+        edge_type = str(edge.get("edge_type") or edge.get("kind") or "")
+        if edge_type in edge_types:
+            roles.append(edge_type)
+    return _unique(roles) or ["road"]
 
 
 def _danger_base(
@@ -263,17 +278,8 @@ def _danger_base(
     region_rows: list[dict[str, Any]],
     node_rows: list[dict[str, Any]],
 ) -> float:
-    text = " ".join(
-        [
-            str(submap.get("summary", "") or ""),
-            str(submap.get("name", "") or ""),
-            *[str(item.get("summary", "") or "") for item in region_rows],
-            *[str(item.get("danger", "") or "") for item in node_rows],
-        ]
-    )
-    if any(token in text for token in ("禁", "危险", "荒", "遗迹", "战", "魔")):
-        return 3.0
-    return 2.0
+    value = submap.get("danger_level")
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 2.0
 
 
 def _stable_seed(project_id: str, genesis_revision_id: str, subworld_id: str, atlas: dict[str, Any]) -> int:

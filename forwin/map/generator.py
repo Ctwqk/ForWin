@@ -12,7 +12,7 @@ import random
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
-from forwin.protocol.book_state import MapEdge, MapNode
+from forwin.protocol.book_state import MapEdge, MapEdgeType, MapNode
 
 from .protocol import SCHEME_C_NAME, MapGenerationResult, RegionEdge, RegionNode, SubWorldMapSpec
 from .validator import validate_subworld_map
@@ -83,25 +83,29 @@ def _generate_region_graph(
     rng: random.Random,
 ) -> tuple[list[RegionNode], list[RegionEdge]]:
     roles = list(dict.fromkeys(role.strip() for role in spec.required_region_roles if role.strip()))
+    generated_index = len(roles)
     while len(roles) < spec.target_region_count:
-        roles.append(_generated_region_role(len(roles), spec, rng))
+        role = _generated_region_role(generated_index)
+        generated_index += 1
+        if role not in roles:
+            roles.append(role)
 
     regions: list[RegionNode] = []
     for index, role in enumerate(roles[: spec.target_region_count]):
         region_id = _stable_id("region", spec, role, str(index))
-        terrain = _pick(spec.terrain_tags, rng, fallback=_terrain_for_role(role))
+        terrain = _pick(spec.terrain_tags, rng, fallback="mixed")
         culture = _pick(spec.culture_tags, rng, fallback="")
         regions.append(
             RegionNode(
                 id=region_id,
                 project_id=spec.project_id,
                 subworld_id=spec.subworld_id,
-                region_type=_region_type_for_role(role),
+                region_type=spec.region_kinds.get(role, "region"),
                 name=role,
                 description=f"{spec.name}内的{role}",
                 terrain=terrain,
                 culture_tag=culture,
-                danger_level=_danger_for_role(role, spec, rng),
+                danger_level=_danger_for_role(spec, rng),
                 metadata={"role": role, "generation_index": index},
             )
         )
@@ -434,43 +438,12 @@ def _pick(values: list[str], rng: random.Random, *, fallback: str) -> str:
     return str(rng.choice(cleaned)) if cleaned else fallback
 
 
-def _generated_region_role(index: int, spec: SubWorldMapSpec, rng: random.Random) -> str:
-    base = ["边境", "山脉", "荒原", "旧城圈", "资源带", "海岸", "禁区", "林地", "战线"]
-    return f"{spec.name}{rng.choice(base)}{index + 1}"
+def _generated_region_role(index: int) -> str:
+    return f"区域{index}"
 
 
-def _region_type_for_role(role: str) -> str:
-    if "宗门" in role or "山门" in role:
-        return "sect_domain"
-    if "山" in role:
-        return "mountain"
-    if "海" in role:
-        return "sea"
-    if "遗迹" in role:
-        return "ruin_zone"
-    if "战" in role or "边境" in role:
-        return "battlefront"
-    if "帝" in role or "国" in role:
-        return "kingdom"
-    return "province"
-
-
-def _terrain_for_role(role: str) -> str:
-    if "山" in role:
-        return "mountain"
-    if "海" in role:
-        return "sea"
-    if "荒" in role:
-        return "wasteland"
-    if "林" in role:
-        return "forest"
-    return "mixed"
-
-
-def _danger_for_role(role: str, spec: SubWorldMapSpec, rng: random.Random) -> float:
-    base = float(spec.danger_profile.get("base", 2.0) or 2.0)
-    if any(token in role for token in ("禁", "魔", "战", "遗迹", "荒")):
-        base += 2.0
+def _danger_for_role(spec: SubWorldMapSpec, rng: random.Random) -> float:
+    base = float(spec.danger_profile.get("base", 2.0))
     return round(max(0.0, base + rng.uniform(-0.5, 1.5)), 2)
 
 
@@ -489,12 +462,12 @@ def _closest_region(role: str, regions: list[RegionNode]) -> RegionNode:
 def _node_type_label(node_type: str) -> str:
     return {
         "settlement": "聚落",
-        "site": "遗址",
-        "building": "楼",
+        "site": "地点",
+        "building": "建筑",
         "zone": "地带",
         "landmark": "地标",
         "camp": "营地",
-        "waypoint": "驿站",
+        "waypoint": "路点",
     }.get(node_type, "地点")
 
 
@@ -511,16 +484,7 @@ def _edge_type_for_nodes(left: MapNode, right: MapNode, rng: random.Random) -> s
 
 
 def _connection_role_to_edge_type(role: str) -> str:
-    mapping = {
-        "官道": "road",
-        "山路": "mountain_pass",
-        "传送阵": "portal",
-        "边境关隘": "border_crossing",
-        "水路": "river",
-        "航线": "flight_route",
-        "世界门": "world_gate",
-    }
-    return mapping.get(role, "road")
+    return role if role in {edge_type.value for edge_type in MapEdgeType} else "road"
 
 
 def _coordinate_distance(left: MapNode, right: MapNode) -> float:

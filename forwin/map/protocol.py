@@ -68,6 +68,7 @@ class SubWorldMapSpec(_MapProtocolModel):
     target_node_count: int = Field(default=36, ge=1)
     target_edge_density: float = Field(default=1.6, ge=1.0)
     required_region_roles: list[str] = Field(default_factory=list)
+    region_kinds: dict[str, str] = Field(default_factory=dict)
     required_anchor_nodes: list[MapAnchorNodeSpec] = Field(default_factory=list)
     required_connection_roles: list[str] = Field(default_factory=list)
     danger_profile: dict[str, Any] = Field(default_factory=dict)

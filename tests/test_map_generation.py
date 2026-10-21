@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.map.generator import generate_subworld_map
 from forwin.book_state.map_graph import MapGraph
 from forwin.map.protocol import SCHEME_C_NAME, MapAnchorNodeSpec, SubWorldMapSpec
@@ -31,7 +33,7 @@ def _spec(seed: int = 123456) -> SubWorldMapSpec:
                 narrative_function="主角成长地",
             ),
         ],
-        required_connection_roles=["官道", "山路", "传送阵"],
+        required_connection_roles=["road", "mountain_pass", "portal"],
         danger_profile={"base": 2},
         generation_seed=seed,
     )
@@ -66,3 +68,60 @@ def test_generation_creates_reachable_required_anchors_and_density() -> None:
         anchor_id = next(node.id for node in result.map_nodes if node.name == anchor_name)
         assert graph.shortest_path(entry_id, anchor_id).reachable is True
     assert all(edge.distance >= 0 and edge.travel_time >= 0 for edge in result.map_edges)
+
+
+@pytest.mark.parametrize("region_name", ["宗门山门", "禁魔战遗迹荒"])
+def test_generator_has_no_genre_keyword_branches(region_name: str) -> None:
+    spec = SubWorldMapSpec(
+        project_id="p1",
+        subworld_id="sw1",
+        name="World",
+        subworld_type="continent",
+        target_region_count=1,
+        target_node_count=3,
+        required_region_roles=[region_name],
+        danger_profile={"base": 2.0},
+        generation_seed=17,
+    )
+    first = generate_subworld_map(spec)
+    second = generate_subworld_map(spec.model_copy(update={"required_region_roles": ["港口"]}))
+
+    assert first.regions[0].region_type == second.regions[0].region_type == "region"
+    assert first.regions[0].terrain == second.regions[0].terrain == "mixed"
+    assert [node.default_danger_level for node in first.map_nodes] == [
+        node.default_danger_level for node in second.map_nodes
+    ]
+
+
+def test_generator_uses_neutral_region_names_and_zero_danger_base() -> None:
+    spec = SubWorldMapSpec(
+        project_id="p1",
+        subworld_id="sw1",
+        name="World",
+        subworld_type="continent",
+        target_region_count=3,
+        target_node_count=9,
+        danger_profile={"base": 0},
+        generation_seed=17,
+    )
+
+    result = generate_subworld_map(spec)
+
+    assert [region.name for region in result.regions] == ["区域0", "区域1", "区域2"]
+    assert all(0 <= node.default_danger_level <= 1.5 for node in result.map_nodes)
+
+
+def test_generated_region_names_do_not_duplicate_genesis_regions() -> None:
+    spec = SubWorldMapSpec(
+        project_id="p1",
+        subworld_id="sw1",
+        name="World",
+        subworld_type="continent",
+        target_region_count=3,
+        target_node_count=9,
+        required_region_roles=["区域1"],
+    )
+
+    result = generate_subworld_map(spec)
+
+    assert [region.name for region in result.regions] == ["区域1", "区域2", "区域3"]

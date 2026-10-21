@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.map.generator import generate_subworld_map
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.models.subworld import project_scoped_subworld_id
@@ -89,3 +91,97 @@ def test_genesis_adapter_preserves_source_ids_and_seed_stability() -> None:
     city_anchor = next(node for node in result.map_nodes if node.name == "雨夜站台")
     assert city_anchor.metadata["source_node_id"] == "node-city"
     assert city_anchor.metadata["source_region_id"] == "region-city"
+
+
+@pytest.mark.parametrize("edge_type", ["portal", "mountain_pass", "rail", None])
+def test_connection_roles_come_from_atlas_edge_types(edge_type: str | None) -> None:
+    atlas = {
+        "topology_rules": ["传送门、山路与水路"],
+        "submaps": [{"id": "main", "name": "World", "travel_rules": ["传送门"]}],
+        "nodes": [
+            {"id": "a", "name": "A", "parent_subworld": "main"},
+            {"id": "b", "name": "B", "parent_subworld": "main"},
+        ],
+        "edges": [{"from_node_id": "a", "to_node_id": "b", "kind": edge_type}] if edge_type else [],
+    }
+
+    spec = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)[0]
+
+    assert spec.required_connection_roles == [edge_type or "road"]
+    # Include the optional anchor connection alongside the baseline routes.
+    result = generate_subworld_map(spec.model_copy(update={"target_edge_density": 3.0}))
+    assert result.validation_report.valid is True
+    anchor_ids = {node.id for node in result.map_nodes if node.metadata.get("node_role") == "anchor"}
+    connections = [edge for edge in result.map_edges if edge.metadata.get("required_connection") and edge.status == "open"]
+    assert connections
+    assert all(edge.edge_type == (edge_type or "road") for edge in connections)
+    assert all({edge.from_node_id, edge.to_node_id} == anchor_ids for edge in connections)
+
+
+def test_connection_roles_are_scoped_ordered_and_deduplicated() -> None:
+    atlas = {
+        "submaps": [{"id": "main", "name": "Main"}, {"id": "other", "name": "Other"}],
+        "nodes": [
+            {"id": "a", "name": "A", "parent_subworld": "main"},
+            {"id": "b", "name": "B", "parent_subworld": "other"},
+            {"id": "c", "name": "C", "parent_subworld": "other"},
+        ],
+        "edges": [
+            {"source": "b", "target": "c", "kind": "rail"},
+            {"from": "a", "to": "b", "edge_type": "portal"},
+            {"source_node_id": "a", "target_node_id": "a", "edge_type": "mountain_pass"},
+            {"from_node_id": "a", "to_node_id": "a", "kind": "portal"},
+            {"from_node_id": "a", "to_node_id": "a", "kind": "传送阵"},
+        ],
+    }
+
+    main, other = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
+
+    assert main.required_connection_roles == ["portal", "mountain_pass"]
+    assert other.required_connection_roles == ["rail", "portal"]
+
+
+def test_region_kind_flows_into_region_type() -> None:
+    atlas = {
+        "regions": [
+            {"id": "r1", "name": "宗门山门", "kind": "district", "terrain": "plain"},
+            {"id": "r2", "name": "港口"},
+            {"id": "r3", "kind": "city_cluster"},
+        ],
+    }
+
+    spec = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)[0]
+    result = generate_subworld_map(spec)
+
+    assert spec.region_kinds == {"宗门山门": "district", "地区3": "city_cluster"}
+    assert [region.region_type for region in result.regions] == ["district", "region", "city_cluster"]
+    assert all(region.terrain == "plain" for region in result.regions)
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [("macro_region", "continent"), ("", "continent"), ("realm", "realm"),
+     ("plane", "plane"), ("underground", "underground"), ("dream_realm", "continent")],
+)
+def test_subworld_type_comes_only_from_scope(scope: str, expected: str) -> None:
+    spec = build_subworld_map_specs_from_genesis(
+        project_id="p1",
+        map_atlas={"submaps": [{"id": "main", "name": "上古秘境界地下", "scope": scope}]},
+    )[0]
+
+    assert spec.subworld_type == expected
+    assert spec.required_region_roles == ["区域1", "区域2", "区域3"]
+
+
+@pytest.mark.parametrize("danger_level, expected", [(0, 0.0), (4, 4.0), (1.25, 1.25), ("4", 2.0), (None, 2.0), (True, 2.0)])
+def test_danger_base_comes_only_from_numeric_danger_level(danger_level, expected: float) -> None:
+    spec = build_subworld_map_specs_from_genesis(
+        project_id="p1",
+        map_atlas={
+            "submaps": [{"id": "main", "name": "禁魔战荒遗迹", "danger_level": danger_level}],
+            "regions": [{"name": "危险", "summary": "禁区"}],
+            "nodes": [{"id": "a", "name": "A", "danger": "危险"}],
+        },
+    )[0]
+
+    assert spec.danger_profile["base"] == expected

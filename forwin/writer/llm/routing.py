@@ -20,6 +20,7 @@ class RoutingMixin:
                 "api_key": self.api_key,
                 "base_url": self.base_url,
                 "model": self.model,
+                "max_output_tokens": getattr(self, "max_output_tokens", ""),
             }
         ]
         candidates.extend(self.fallback_profiles)
@@ -33,6 +34,9 @@ class RoutingMixin:
                 "base_url": str(item.get("base_url", "")).strip().rstrip("/"),
                 "model": str(item.get("model", "")).strip(),
             }
+            raw_max_output_tokens = item.get("max_output_tokens")
+            if raw_max_output_tokens is not None:
+                profile["max_output_tokens"] = str(raw_max_output_tokens).strip()
             if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
                 continue
             key = (profile["api_key"], profile["base_url"], profile["model"])
@@ -42,6 +46,11 @@ class RoutingMixin:
                     existing["id"] = profile["id"]
                 if not existing.get("name") and profile.get("name"):
                     existing["name"] = profile["name"]
+                if (
+                    not existing.get("max_output_tokens")
+                    and profile.get("max_output_tokens")
+                ):
+                    existing["max_output_tokens"] = profile["max_output_tokens"]
                 continue
             seen[key] = len(profiles)
             profiles.append(profile)

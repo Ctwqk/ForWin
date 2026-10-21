@@ -56,6 +56,8 @@ class ModelProfileConfig(BaseModel):
     api_key: str
     base_url: str
     model: str
+    # Optional MiniMax output-token cap. Empty means "use the default cap".
+    max_output_tokens: str = ""
 
 
 try:
@@ -268,6 +270,9 @@ def _infrastructure_env_values() -> dict[str, object]:
             env, "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
         ),
         "minimax_model": _env_str(env, "MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
+        "minimax_max_output_tokens": _env_str(
+            env, "MINIMAX_MAX_OUTPUT_TOKENS"
+        ),
         "llm_env_profiles": _env_llm_profiles(env),
         "llm_timeout_seconds": _env_float(env, "LLM_TIMEOUT_SECONDS", 90.0),
         "llm_retry_attempts": _env_int(env, "LLM_RETRY_ATTEMPTS", 2),
@@ -365,6 +370,7 @@ class _InfrastructureFields:
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
+    minimax_max_output_tokens: str = ""
     llm_env_profiles: list[dict[str, str]] = Field(default_factory=list)
     llm_timeout_seconds: float = 90.0
     llm_retry_attempts: int = 2
@@ -484,6 +490,7 @@ class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ig
             api_key=self.minimax_api_key,
             base_url=self.minimax_base_url,
             model=self.minimax_model,
+            max_output_tokens=self.minimax_max_output_tokens,
         )
         profiles = [
             ModelProfileConfig.model_validate(item) for item in self.llm_env_profiles

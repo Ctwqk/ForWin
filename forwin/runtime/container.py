@@ -651,6 +651,7 @@ class RuntimeContainer:
             ),
             retry_max_delay_seconds=infrastructure.llm_retry_max_delay_seconds,
             fallback_profiles=infrastructure.llm_env_profiles,
+            max_output_tokens=profile.max_output_tokens,
         )
         llm_client.profile_id = profile.id
         llm_client.profile_name = profile.name

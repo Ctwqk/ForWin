@@ -15,6 +15,8 @@ class EvalProfile(BaseModel):
     provider: str = "openai_compatible"
     base_url: str
     model: str
+    # Optional MiniMax output-token cap. Empty means "use the default cap".
+    max_output_tokens: str = ""
     api_key: str = Field(default="", repr=False)
     api_key_env: str = ""
     rate_limit_per_minute: int = 10

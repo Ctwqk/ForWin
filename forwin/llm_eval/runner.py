@@ -276,6 +276,7 @@ class LLMReliabilityRunner:
             timeout_seconds=profile.timeout_seconds,
             retry_attempts=1,
             fallback_profiles=[],
+            max_output_tokens=profile.max_output_tokens,
         )
         adapter.profile_id = profile.id
         adapter.profile_name = profile.name

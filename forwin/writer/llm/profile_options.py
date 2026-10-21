@@ -11,6 +11,11 @@ _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 _LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
+# No repo/docs evidence of a larger MiniMax output limit was found; keep 2048
+# as the default so existing behaviour only changes when a MiniMax profile
+# explicitly opts in via the ``max_output_tokens`` profile key.
+_DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS = 2048
+
 
 class ProfileOptionsMixin:
     @classmethod
@@ -74,7 +79,27 @@ class ProfileOptionsMixin:
         if cls._is_kimi_k25_profile(profile):
             return max(int(requested_max_tokens), 1800)
         if cls._is_minimax_profile(profile):
-            return max(1, min(int(requested_max_tokens), 2048))
+            raw_cap = profile.get("max_output_tokens")
+            try:
+                if raw_cap is None or str(raw_cap).strip() == "":
+                    minimax_cap = _DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS
+                else:
+                    minimax_cap = int(str(raw_cap).strip())
+                    if minimax_cap <= 0:
+                        logger.warning(
+                            "Invalid MiniMax max_output_tokens %r; falling back to %s",
+                            raw_cap,
+                            _DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS,
+                        )
+                        minimax_cap = _DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid MiniMax max_output_tokens %r; falling back to %s",
+                    raw_cap,
+                    _DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS,
+                )
+                minimax_cap = _DEFAULT_MINIMAX_MAX_OUTPUT_TOKENS
+            return max(1, min(int(requested_max_tokens), minimax_cap))
         return int(requested_max_tokens)
 
     @classmethod

@@ -57,6 +57,7 @@ def _profile_from_raw(raw: dict[str, Any], fallback_id: str) -> EvalProfile | No
         provider=str(raw.get("provider", "") or _provider_from_base_url(base_url)).strip(),
         base_url=base_url,
         model=model,
+        max_output_tokens=str(raw.get("max_output_tokens") or "").strip(),
         api_key=api_key,
         api_key_env=api_key_env,
         rate_limit_per_minute=max(1, int(raw.get("rate_limit_per_minute", 10) or 10)),
@@ -128,6 +129,7 @@ def load_eval_profiles(
                         provider="minimax",
                         base_url=os.environ.get("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL),
                         model=os.environ.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
+                        max_output_tokens=os.environ.get("MINIMAX_MAX_OUTPUT_TOKENS", ""),
                         api_key=os.environ.get("MINIMAX_API_KEY", ""),
                         api_key_env="MINIMAX_API_KEY",
                     )

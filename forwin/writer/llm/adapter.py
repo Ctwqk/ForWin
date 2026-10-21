@@ -80,6 +80,7 @@ class OpenAICompatibleAdapter(
         retry_initial_delay_seconds: float = 2.0,
         retry_max_delay_seconds: float = 15.0,
         fallback_profiles: list[dict[str, str]] | None = None,
+        max_output_tokens: str = "",
     ) -> None:
         self.provider = "openai_compatible"
         self.api_key = api_key
@@ -87,6 +88,7 @@ class OpenAICompatibleAdapter(
         self.model = model
         self.profile_id = ""
         self.profile_name = ""
+        self.max_output_tokens = str(max_output_tokens or "").strip()
         self.capabilities = ModelCapabilities(
             supports_json_schema=False,
             supports_response_format=True,

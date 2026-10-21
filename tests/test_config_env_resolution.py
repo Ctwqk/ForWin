@@ -61,6 +61,7 @@ CONFIG_ENV_KEYS = {
     "MAX_TOKENS",
     "MINIMAX_API_KEY",
     "MINIMAX_BASE_URL",
+    "MINIMAX_MAX_OUTPUT_TOKENS",
     "MINIMAX_MODEL",
     "MOONSHOT_API_KEY",
     "MOONSHOT_BASE_URL",
@@ -95,6 +96,7 @@ def test_env_file_populates_infrastructure(
             "FORWIN_PUBLISHER_SESSION_SECRET=file-session-secret",
             "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true",
             "LLM_RETRY_ATTEMPTS=5",
+            "MINIMAX_MAX_OUTPUT_TOKENS=16384",
         ],
     )
 
@@ -108,6 +110,7 @@ def test_env_file_populates_infrastructure(
     assert config.publisher_session_secret == "file-session-secret"
     assert config.publisher_session_encryption_required is True
     assert config.llm_retry_attempts == 5
+    assert config.minimax_max_output_tokens == "16384"
 
 
 def test_real_environment_overrides_env_file(
@@ -127,6 +130,7 @@ def test_infrastructure_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert config.database_url == DEFAULT_DATABASE_URL
     assert config.qdrant_url == "http://127.0.0.1:6335"
     assert config.minimax_base_url == DEFAULT_MINIMAX_BASE_URL
+    assert config.minimax_max_output_tokens == ""
     assert config.embedding_backend == "gateway"
     assert config.embedding_base_url == DEFAULT_EMBEDDING_GATEWAY_URL
     assert config.embedding_model == DEFAULT_EMBEDDING_MODEL

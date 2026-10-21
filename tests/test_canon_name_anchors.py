@@ -132,6 +132,99 @@ def test_checker_uses_cached_as_of_character_names_and_aliases_without_database(
     assert reads == [("p", 3)]
 
 
+def _kin_book_query():
+    """A fixture-style book: three-character names plus a two-character one, each anchored by kinship."""
+    names = {"son": "应潮生", "father": "应怀远", "pupil": "蒲念平", "master": "祁长烬", "mother": "林若"}
+    nodes = [WorldNode(id=node_id, project_id="p", node_type="character", name=name) for node_id, name in names.items()]
+    edges = [
+        WorldEdge(id=f"e{i}", project_id="p", source_id=source, target_id=target, edge_type=kind,
+                  edge_family="kinship_training", metadata={"appellation": appellation})
+        for i, (source, target, kind, appellation) in enumerate((
+            ("son", "father", "kin_of", "父亲"),
+            ("pupil", "master", "master_of", "师尊"),
+            ("master", "pupil", "master_of", "弟子"),
+            ("son", "mother", "kin_of", "母亲"),
+        ))
+    ]
+    query = BookStateQuery(None)
+    query.projection.load_runtime_as_of = lambda project_id, *, as_of_chapter: SimpleNamespace(
+        world=ObjectiveWorldGraph(nodes=nodes, edges=edges),
+    )
+    return query
+
+
+def _chapter(text):
+    return WriterOutput(
+        chapter_number=1, title="t", body=text + "风过长街，灯火渐稀。" * 12, end_of_chapter_summary="",
+    )
+
+
+DIALOGUE_TAG_LINES = [
+    "祁长烬道：“师尊。”",
+    "应怀远笑。",
+    "蒲念平问：“几时动身？”",
+    "林若点头。",
+    "林若皱眉，",
+    "林若微笑。",
+]
+
+
+@pytest.mark.parametrize("line", DIALOGUE_TAG_LINES)
+def test_dialogue_tag_after_anchored_name_never_fails_continuity(line):
+    verdict = ContinuityChecker(SimpleNamespace(), min_chars=1, book_state_query=_kin_book_query()).check(
+        "p", _chapter(line),
+    )
+    drift = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
+    assert all(issue.severity == "warning" for issue in drift)
+    assert [issue for issue in verdict.issues if issue.severity == "error"] == []
+    assert verdict.verdict in {"pass", "warn"}
+    assert verdict.recommended_action == "continue"
+
+
+def test_genuine_drift_is_reported_as_warning_without_failing():
+    verdict = ContinuityChecker(SimpleNamespace(), min_chars=1, book_state_query=_kin_book_query()).check(
+        "p", _chapter("应潮生的父亲应怀远山。"),
+    )
+    drift = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
+    assert [(issue.entity_names[:2], issue.severity) for issue in drift] == [(["应怀远山", "应怀远"], "warning")]
+    assert verdict.verdict == "warn"
+    assert verdict.recommended_action == "continue"
+
+
+@pytest.mark.parametrize("line", DIALOGUE_TAG_LINES[:2])
+def test_draft_review_does_not_fail_or_rewrite_on_anchor_drift(line):
+    from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
+    from forwin.protocol.review import ReviewVerdict
+    from forwin.review.draft_service import DraftReviewService
+
+    output = _chapter(line)
+    plan = EntityAdmissionPlan(
+        project_id="p", chapter_number=1, candidate_fingerprint=writer_output_admission_fingerprint(output),
+    )
+    output = output.model_copy(update={"generation_meta": {"entity_admission_plan": plan.model_dump(mode="json")}})
+    passing = ReviewVerdict(verdict="pass", issues=[])
+    verdict = DraftReviewService(
+        experience_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
+        plan_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
+        lint_collector=SimpleNamespace(collect=lambda _writer_output: []),
+        map_movement_review_enabled=False,
+        personality_review_enabled=False,
+        canon_quality_review_in_hub_enabled=False,
+    ).review(
+        project_id="p",
+        context=ChapterContextPack(
+            project_id="p", project_title="t", premise="p", genre="g", setting_summary="",
+            chapter_number=1, chapter_plan_title="t", chapter_plan_one_line="p", chapter_goals=[],
+        ),
+        writer_output=output,
+        continuity_checker=ContinuityChecker(SimpleNamespace(), min_chars=1, book_state_query=_kin_book_query()),
+    )
+    assert [issue.rule_name for issue in verdict.issues] == ["canon_name_drift"]
+    assert verdict.verdict != "fail"
+    assert verdict.recommended_action != "rewrite"
+    assert verdict.repair_instruction is None
+
+
 @pytest.fixture
 def compiled_book(request):
     engine = get_engine(postgres_test_url("canon-name-anchors"))

@@ -756,7 +756,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("陈伯伦", content)
         self.assertLess(content.index("母亲线索"), content.index("合作与危机"))
 
-    def test_continuity_checker_rejects_canon_name_drift_for_explicit_anchors(self) -> None:
+    def test_continuity_checker_warns_on_canon_name_drift_for_explicit_anchors(self) -> None:
         checker = _AnchoredContinuityChecker(
             [CanonNameAnchor(role_label="师父", canonical_name="甲乙")]
         )
@@ -772,14 +772,16 @@ class SubWorldControlTests(unittest.TestCase):
 
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
         observed = {issue.entity_names[0] for issue in issues}
-        self.assertEqual(verdict.verdict, "fail")
+        self.assertEqual(verdict.verdict, "warn")
+        self.assertEqual(verdict.recommended_action, "continue")
+        self.assertTrue(all(issue.severity == "warning" for issue in issues))
         self.assertEqual(observed, {"甲乙丙", "甲乙丁"})
         self.assertTrue(all(issue.entity_names[1] == "甲乙" for issue in issues))
         self.assertTrue(all("师父" in issue.description for issue in issues))
         self.assertTrue(all("甲乙" in issue.suggested_fix for issue in issues))
         self.assertEqual(checker.anchor_reads, [("p1", 2)])
 
-    def test_continuity_checker_rejects_canon_name_drift_in_state_metadata(self) -> None:
+    def test_continuity_checker_warns_on_canon_name_drift_in_state_metadata(self) -> None:
         checker = _AnchoredContinuityChecker(
             [CanonNameAnchor(role_label="师父", canonical_name="甲乙")]
         )
@@ -804,8 +806,8 @@ class SubWorldControlTests(unittest.TestCase):
         )
 
         issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
-        self.assertEqual(verdict.verdict, "fail")
-        self.assertEqual([issue.entity_names[0] for issue in issues], ["甲乙丁"])
+        self.assertEqual(verdict.verdict, "warn")
+        self.assertEqual([(issue.entity_names[0], issue.severity) for issue in issues], [("甲乙丁", "warning")])
         self.assertEqual(checker.anchor_reads, [("p1", 6)])
 
     def test_continuity_checker_has_no_canon_name_anchors_without_kinship_edges(self) -> None:

@@ -137,12 +137,16 @@ class ContinuityChecker:
             self._canon_name_scan_text(output),
             known_names=known_names,
         )
+        # A canonical name followed by one or two characters reads the same whether the
+        # characters extend the name or start the next word, and runtime code may not list
+        # which words can follow a name. Drift is therefore advisory: it is surfaced for
+        # review but never fails continuity or forces a rewrite.
         issues: list[ContinuityIssue] = []
         for violation in violations:
             issues.append(
                 ContinuityIssue(
                     rule_name="canon_name_drift",
-                    severity="error",
+                    severity="warning",
                     description=(
                         f"{violation.role_label}的 canon 姓名是「{violation.canonical_name}」，"
                         f"本章写成了「{violation.observed_name}」。"

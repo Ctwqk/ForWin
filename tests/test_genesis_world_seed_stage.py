@@ -18,6 +18,7 @@ from forwin.genesis.messages import (
     _build_stage_refine_messages,
     _world_seed_output_requirement,
 )
+from forwin.genesis.names_paths import GenesisStageInvalidError
 from forwin.genesis.world_seed import WORLD_SEED_KEYS, fallback_world_seed
 from forwin.mcp.models import STAGE_KEY_ORDER, StageKey
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -319,6 +320,121 @@ class WorldSeedServiceTests(unittest.TestCase):
         state = pack["stage_states"]["world_seed"]
         self.assertEqual(state["status"], "edited")
         self.assertEqual(state["validation_issues"], [])
+
+    def _locked_world_seed(self, session, service: BookGenesisService) -> tuple[Project, BookGenesisRevision]:
+        project, revision = self._ready_upstream(session, service)
+        updater = StateUpdater(session)
+        revision = service.patch_pack(
+            session=session, updater=updater, project=project, revision=revision, patch={"world_seed": valid_seed()},
+        )
+        revision = service.lock_stage(
+            session=session, updater=updater, project=project, revision=revision, stage_key="world_seed",
+        )
+        self.assertEqual(project.creation_status, "genesis_ready")
+        return project, revision
+
+    def _assert_world_seed_stale(self, service: BookGenesisService, revision: BookGenesisRevision) -> dict:
+        state = service.load_pack(revision)["stage_states"]["world_seed"]
+        self.assertFalse(state["locked"])
+        self.assertEqual(state["status"], "stale")
+        return state
+
+    def test_story_engine_patch_unlocks_locked_world_seed_until_relocked(self) -> None:
+        service = BookGenesisService(llm_client=_StubLLM())
+        story_engine = deepcopy(STORY_ENGINE)
+        story_engine["core_cast"] = [item for item in story_engine["core_cast"] if item["id"] != "cast-2"]
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project, revision = self._locked_world_seed(session, service)
+            revision = service.patch_pack(
+                session=session, updater=updater, project=project, revision=revision,
+                patch={"world": {"story_engine": story_engine}},
+            )
+            state = self._assert_world_seed_stale(service, revision)
+            self.assertIn("unknown_actor_ref", _codes(state["validation_issues"]))
+
+            revision = service.lock_stage(
+                session=session, updater=updater, project=project, revision=revision, stage_key="story_engine",
+            )
+            self.assertEqual(project.creation_status, "creating")
+            with self.assertRaises(GenesisStageInvalidError):
+                service.lock_stage(
+                    session=session, updater=updater, project=project, revision=revision, stage_key="world_seed",
+                )
+
+    def test_relocking_world_seed_after_compatible_upstream_change_makes_project_ready(self) -> None:
+        service = BookGenesisService(llm_client=_StubLLM())
+        story_engine = deepcopy(STORY_ENGINE)
+        story_engine["core_cast"][0]["name"] = "甲改"
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project, revision = self._locked_world_seed(session, service)
+            revision = service.patch_pack(
+                session=session, updater=updater, project=project, revision=revision,
+                patch={"world": {"story_engine": story_engine}},
+            )
+            self.assertEqual(self._assert_world_seed_stale(service, revision)["validation_issues"], [])
+            revision = service.lock_stage(
+                session=session, updater=updater, project=project, revision=revision, stage_key="story_engine",
+            )
+            self.assertEqual(project.creation_status, "creating")
+            revision = service.lock_stage(
+                session=session, updater=updater, project=project, revision=revision, stage_key="world_seed",
+            )
+            self.assertEqual(project.creation_status, "genesis_ready")
+
+    def test_generating_or_refining_an_upstream_stage_marks_world_seed_stale(self) -> None:
+        story_engine = deepcopy(STORY_ENGINE)
+        story_engine["core_cast"][1]["name"] = "乙改"
+        blueprint = deepcopy(BLUEPRINT)
+        blueprint["summary"] = "两卷蓝图（改）"
+        map_atlas = deepcopy(MAP_ATLAS)
+        map_atlas["overview"] = "一城一渡口，外加新码头。"
+        for stage_key, operation, reply in (
+            ("story_engine", "generate", story_engine),
+            ("map", "generate", map_atlas),
+            ("book_blueprint", "refine", blueprint),
+        ):
+            with self.subTest(stage_key=stage_key), self.session_factory() as session:
+                service = BookGenesisService(llm_client=_StubLLM(json.dumps(reply, ensure_ascii=False)))
+                project, revision = self._locked_world_seed(session, service)
+                if operation == "generate":
+                    revision, _trace = service.generate_stage(
+                        session=session, updater=StateUpdater(session), project=project, revision=revision,
+                        stage_key=stage_key,
+                    )
+                else:
+                    revision, _trace = service.refine_stage(
+                        session=session, updater=StateUpdater(session), project=project, revision=revision,
+                        stage_key=stage_key, instruction="改一处",
+                    )
+                self._assert_world_seed_stale(service, revision)
+                session.rollback()
+
+    def test_world_seed_lock_survives_unrelated_or_identical_patches(self) -> None:
+        service = BookGenesisService(llm_client=_StubLLM())
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project, revision = self._locked_world_seed(session, service)
+            for patch in ({"book_brief": {"title": "新书名"}}, {"world": {"story_engine": deepcopy(STORY_ENGINE)}}):
+                revision = service.patch_pack(
+                    session=session, updater=updater, project=project, revision=revision, patch=patch,
+                )
+                state = service.load_pack(revision)["stage_states"]["world_seed"]
+                self.assertTrue(state["locked"], patch)
+                self.assertEqual(state["status"], "locked")
+
+    def test_empty_world_seed_is_not_marked_stale(self) -> None:
+        service = BookGenesisService(llm_client=_StubLLM())
+        story_engine = deepcopy(STORY_ENGINE)
+        story_engine["core_cast"][0]["name"] = "甲改"
+        with self.session_factory() as session:
+            project, revision = self._ready_upstream(session, service)
+            revision = service.patch_pack(
+                session=session, updater=StateUpdater(session), project=project, revision=revision,
+                patch={"world": {"story_engine": story_engine}},
+            )
+            self.assertEqual(service.load_pack(revision)["stage_states"]["world_seed"]["status"], "todo")
 
     def test_world_seed_refine_support_context_is_scoped(self) -> None:
         service = BookGenesisService(llm_client=_StubLLM())

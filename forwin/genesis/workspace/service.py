@@ -58,6 +58,42 @@ def _world_seed_issue_payloads(pack: dict[str, Any]) -> list[dict[str, Any]]:
     return [asdict(issue) for issue in _world_seed_validation_issues(pack)]
 
 
+_WORLD_SEED_UPSTREAM_STAGES = ("map", "story_engine", "book_blueprint")
+
+
+def _world_seed_upstream(pack: dict[str, Any]) -> dict[str, Any]:
+    """The sections a world seed's refs and arc numbers point into."""
+    return {
+        stage_key: _json_clone(_pack_stage_payload(pack, stage_key))
+        for stage_key in _WORLD_SEED_UPSTREAM_STAGES
+    }
+
+
+def _mark_world_seed_stale(
+    pack: dict[str, Any], previous_upstream: dict[str, Any], *, now: str
+) -> None:
+    """Unlock and revalidate a written world seed once a section it references changes.
+
+    The seed was checked against the old story engine, map and arcs, and positional ids
+    can silently point at different entities now, so it must be locked again.
+    """
+    if not _pack_stage_payload(pack, "world_seed"):
+        return
+    if _deep_equal(previous_upstream, _world_seed_upstream(pack)):
+        return
+    stage_states = pack["stage_states"]
+    state = (
+        stage_states.get("world_seed")
+        if isinstance(stage_states.get("world_seed"), dict)
+        else {}
+    )
+    state.update(
+        {"stage_key": "world_seed", "status": "stale", "locked": False, "updated_at": now}
+    )
+    state["validation_issues"] = _world_seed_issue_payloads(pack)
+    stage_states["world_seed"] = state
+
+
 def _trace_fell_back(trace_payload: dict[str, Any]) -> bool:
     """Whether the stage payload came from the deterministic fallback, not the model."""
     summary = trace_payload.get("output_summary")
@@ -133,6 +169,7 @@ class GenesisWorkspaceService:
         _ensure_genesis_mutable(project, revision)
         _ensure_revision_is_current(session, project, revision)
         current = self.load_pack(revision)
+        previous_upstream = _world_seed_upstream(current)
         previous_stage_payloads = {
             stage_key: _json_clone(_pack_stage_payload(current, stage_key))
             for stage_key in GENESIS_STAGE_ORDER
@@ -205,9 +242,11 @@ class GenesisWorkspaceService:
                 }
             )
             stage_states[stage_key] = state
+        next_pack["stage_states"] = stage_states
         if "world_seed" in patch:
             stage_states["world_seed"]["validation_issues"] = _world_seed_issue_payloads(next_pack)
-        next_pack["stage_states"] = stage_states
+        else:
+            _mark_world_seed_stale(next_pack, previous_upstream, now=now)
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=int(getattr(revision, "revision", 0) or 0) + 1,
@@ -249,6 +288,7 @@ class GenesisWorkspaceService:
         if stage_key not in GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         pack = self.load_pack(revision)
+        previous_upstream = _world_seed_upstream(pack)
         generated, trace_payload = self.owner._generate_stage_payload(
             project=project, pack=pack, stage_key=stage_key
         )
@@ -266,19 +306,21 @@ class GenesisWorkspaceService:
             else {}
         )
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
+        now = _utc_iso()
         stage_state.update(
             {
                 "stage_key": stage_key,
                 "status": "generated",
                 "locked": False,
                 "degraded": _trace_fell_back(trace_payload),
-                "updated_at": _utc_iso(),
+                "updated_at": now,
             }
         )
         if stage_key == "world_seed":
             stage_state["validation_issues"] = _world_seed_issue_payloads(next_pack)
         stage_states[stage_key] = stage_state
         next_pack["stage_states"] = stage_states
+        _mark_world_seed_stale(next_pack, previous_upstream, now=now)
         decision = updater.save_decision_event(
             DecisionEventInfo(
                 project_id=project.id,
@@ -358,6 +400,7 @@ class GenesisWorkspaceService:
         if not normalized_instruction:
             raise ValueError("refine instruction 不能为空")
         pack = self.load_pack(revision)
+        previous_upstream = _world_seed_upstream(pack)
         refined_payload, trace_payload = self.owner._refine_stage_payload(
             project=project,
             pack=pack,
@@ -379,19 +422,21 @@ class GenesisWorkspaceService:
             else {}
         )
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
+        now = _utc_iso()
         stage_state.update(
             {
                 "stage_key": stage_key,
                 "status": "edited",
                 "locked": False,
                 "degraded": _trace_fell_back(trace_payload),
-                "updated_at": _utc_iso(),
+                "updated_at": now,
             }
         )
         if stage_key == "world_seed":
             stage_state["validation_issues"] = _world_seed_issue_payloads(next_pack)
         stage_states[stage_key] = stage_state
         next_pack["stage_states"] = stage_states
+        _mark_world_seed_stale(next_pack, previous_upstream, now=now)
         decision = updater.save_decision_event(
             DecisionEventInfo(
                 project_id=project.id,

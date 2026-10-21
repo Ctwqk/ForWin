@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-10-20
+更新时间：2026-10-21
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -21,7 +21,7 @@
 | `../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md` | active-current | 外部评审阶段一：逐合同三态验证、trace outbox补传、同日阻断恢复及一次批次原子预留；不扩展V5主架构。 |
 | `CURRENT_ARCHITECTURE.md` | active-current | 精简架构边界，固定 RuntimePolicy v2 / report-only Generation Audit / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
-| `../docs/designs/2026-10-20-world-engine-overhaul.md` | active-current | 世界引擎大修设计（破坏性）。P0（护栏与纯删除）与 P1（world_seed / BookState v6）已落地；P2–P4 为目标设计，推迟事项见下文。 |
+| `../docs/designs/2026-10-20-world-engine-overhaul.md` | active-current | 世界引擎大修设计（破坏性）。P0–P2（护栏、world_seed / BookState v6、统一章节 delta 与世界审查）已落地；P3/P4 为目标设计，推迟事项见下文。 |
 | `../docs/superpowers/specs/2026-09-04-v5-closure-design.md` | active-current | 最新收口复评：以 fdaeaa6 领先候选为基线，冻结已完成 Track A/B0，修正重复验收与 tag-only 附加门；保留真实恢复及最终全新 L200 no-hotfix。 |
 | `../forwin_architecture_consolidation_audit.md` | historical-plan | 2026-07-09 架构收敛审计（历史论证记录）。其 Phase A-D 已由 v5 hard-cut 完成并替代，Phase A-F 不再作为待办；source-of-truth 思维与测试/风险框架由后续计划继承。 |
 | `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；RuntimePolicy v2，旧项目和旧设置不迁移。 |
@@ -55,23 +55,46 @@
 | `provisional_mechanism_check.md` | legacy-compatibility | Provisional Band Preview 物理删除的历史证据；仅供追溯，不是当前 runtime、策略字段或目标架构。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
-## 2026-10 世界引擎大修 P1
+## 2026-10 世界引擎大修 P2（2026-10-21）
 
-状态：P1 代码收口；生产清库、部署与真实运行验收单独执行，不由本节宣称完成。`tests/overfit_allowlist.toml` 的 `meta.completed_phase = "P1"`，`pending_removal` 不再允许 `remove_in = "P0"` / `"P1"`。
+状态：P2 代码收口。
+
+- **单次抽取与翻译**：每个候选正文由 `ChapterDeltaExtractor` 在 `chapter_delta_extraction` stage 完成一次统一抽取（校验失败可重试）；`ensure_chapter_delta` 按 `body_sha256` 复用结果，正文改变才重抽。输入是 BookState as-of N−1 的最小实体表、地点表、计划目标和义务，不是 ChapterWorldView。`ChapterDeltaTranslator` 将 `WriterOutput.chapter_delta` 翻译为 `source_type="chapter_extraction"` 的 GraphDelta，再经 `BookStateReviewGate` v6；draft review 和 canon preparation 共用这份抽取，最终仍由 `CanonAdmissionService.commit_plan` 原子提交。
+- **世界审查**：`WorldConsistencyReviewer` 的 `world_consistency` draft-review 信号运行相同 translator 与 gate，把错误送进 repair；它替代已删除的 `MapMovementReviewer` / `forwin/review/map_movement.py`。v6 检查时间跨度、移动偏移、已知路径可达性、`review.travel_tolerance` 下的速度、受限角色移动、章前已死亡实体行动、物品持有者、告知来源和读者揭示时间表。地图边 `travel_time` 为小时，乘 60 换成整数分钟；本书时间单位统一经 `duration_to_minutes` 换算。
+- **结构合同**：移动存于 delta `metadata["movements"]`；物品只认 item 的 `state.holder_id`。条目级 `flashback: bool` 加 `time.evidence` 表示闪回；闪回只产生事实与知识事件，不改变当前 state。非 create 结构补丁带 `old_value` 与 `field_path`。计划 goals 与 narrative obligations 由有正文证据的结构化 `plan_fulfillment` 判定，已删除关键词子串检查。
+- **删除与 schema**：`WriterContractDeltaBuilder`、`BookStateGraphDeltaExtractor`、`pulp_light` 正则兜底、旧分阶段 extraction、倒计时/羁押 future-plan audits 和 canon_quality 的 countdown / character-state ledgers 已删除。当前 Alembic head 为 `0004_drop_parallel_ledgers`（父为 `0003_book_state_v6`），删除 `countdown_ledgers` / `character_state_transitions`。chapter review form 继续作为 LLM 信号，其行来自 BookState，回答只产出 quality signals，不再写任何平行账本。
+- **Genesis 与原子开写**：Genesis map 提供结构化 submaps / regions / nodes / edges；`forwin.map.genesis_adapter` 将其转换为 BookMap。handoff 依次物化 arcs → map → chapter-0 world_seed → arc-1 ChapterPlan，service / seed commit 只 flush，由调用方提交；`HandoffStageError` 回滚交接写入后只保留失败事件。成功时才锁定 Genesis revision 并设为 writing。
+- **护栏收口**：`tests/overfit_allowlist.toml` 的 `meta.completed_phase = "P2"`，`pending_removal` 只能指向未来阶段；canary 的时间单位 ignore 及过时注释已删除。
+
+### 与设计的取舍 / P3–P4 延后项
+
+- **P3，确定性地图物化**：每次 build 重新生成地图；seed 包含随机 Genesis revision id。atlas edges 目前只贡献放在连续 anchors 之间的 kind，没有按声明端点物化，所以 movement checks 仍针对随机生成地图；subworld 内的 atlas `hidden` 边虽被携带，但尚未消费。
+- **P3，clock producers**：逾期而仍为 running 的 clocks 在 review form 中仍是 active，不裁剪且无数量上限；secret-scope clock node ids 可能经 open-signal descriptions 到达 writer。
+- **P3，地图规则**：旧 map_movement reviewer 的 access rules、team speed、edge multipliers、false routes 从未在生产运行，也不在 gate v6 中；不能把旧设计描述为已实现。
+- **P4，writer 世界视图**：平行账本删除后，writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`。writer 的 `<<FORWIN_LOCATION>>` 标记暂时保留。
+- **P3/P4，未闭环信号与补丁**：关键词检查删除后 `director_setup_without_delivery` 无 producer；`form_invariant_drift` 无 producer；`ledger_state_drift_pre_write` patches 虽持久化但从未应用。
+- **P3/P4，protection 与规划**：未来约束的角色可用性、秘密保留、关系保持、地点存在及规则保持关键词判定直接删除，P2 不提供替代；protection / `review_constraint` 等 P4 卷节拍表生产约束、P3 冲突审查。`task_contract_json` 存储与 ArcDirector / band 规划保留到 P4；`launch_arc_N`、`finalization._seed_state`、`RunControlStage.run`、`SubWorldManager.apply_initial_arc_plan`、`sub_world_roster_items` / `plan_band_activation` 同期替换。
+- **当前揭示约定**：world_seed 的 `location_ref` 在提交时换成数据库地图节点 id；`reveal_candidates` 保留在冻结 Genesis pack，P2 的 `reveal_schedule.earliest_reveal_chapters` 取对应卷的 `chapter_start`；无时间表时向读者推进记 warning。`reveal_directives` 留到 P4。
+
+生产 rollout 项目统一见 P2 deploy runbook；本文只记录代码现状与后续设计，不宣称生产验收完成。
+
+## 2026-10 世界引擎大修 P1（历史记录）
+
+P1 代码收口时的记录；当前 P2 状态以上节为准。
 
 - Genesis 顺序为 `brief → world → map → story_engine → book_blueprint → world_seed`，旧 `bootstrap` / `execution_bootstrap` 已删除。`world_seed` 由 LLM 生成，经 `forwin/genesis/world_seed.py` 确定性校验；有 error 时拒绝锁定，fallback 为 degraded 结构壳。story_engine 实体有 id（缺省 `cast-n` / `opp-n` / `faction-n`）、结构化 `relationship_axes` / `long_arcs` 与 core_cast `secrets` 列表；种子为每个 core_cast / opposition / faction 提供 actor，fallback 只按 id 建壳。
 - 开写顺序为 arcs → map bootstrap → `WorldSeedCommitter` → arc-1 ChapterPlan；`arc_plan_versions` 保存 `title` / `goal` / `stakes` / `payoff_direction`。种子经 `BookStateReviewGate` 与 `CanonAdmissionService.commit_world_seed` 成为第 0 章、`source_type="genesis_seed"` 的 GraphDelta；提交入口使用项目 `FOR NO KEY UPDATE` 锁。地图 / 种子失败由 `HandoffStageError` 的 `GenesisMapBootstrapError` / `WorldSeedCommitError` 表达，记录 `MAP_GENERATION_FAILED` / `WORLD_SEED_COMMIT_FAILED`。第 0 章 subworld 角色生成路径已删除。
-- Alembic 当前 head 为 `0003_book_state_v6`（父为 `0002_drop_dead_tables`）。故事时间为自纪元起的整数分钟，使用 `graph_deltas.story_time_start/end`、`story_calendars` 和 `format_story_time`；`book_lexicons` 保存单位别名、等级阶梯、货币、称谓、人物泛称、交通模式及消息速度。
+- Alembic 在 P1 的 head 为 `0003_book_state_v6`（父为 `0002_drop_dead_tables`）。故事时间为自纪元起的整数分钟，使用 `graph_deltas.story_time_start/end`、`story_calendars` 和 `format_story_time`；`book_lexicons` 保存单位别名、等级阶梯、货币、称谓、人物泛称、交通模式及消息速度。
 - `world_node_states` 按章版本化 name / aliases / profile / is_active，`world_nodes` 是最新投影；narrative 层进入 world snapshot。已有章节的追加编译以该章为基底；世界编辑钳位至最新 canon 章并在项目锁内复核。`canon.book_state_layers` 已删除，四层始终启用。
 - 新节点为 `agenda` / `intent` / `clock`，有 v6 值校验；character 规范字段包括 `alive_status` / `restraint` / `travel_mode_ids`，位置保留 `state.location_id`；actor 使用 `actor_tier` / `next_turn_at` / `resources`；rule 使用 `hardness` / `statement` / `checkable`；社交边支持 `rival_of`。知识事件经 `knowledge_by_ref` 写认知，默认可见性按事实敏感度决定。读者承诺统一为 narrative `promise` 节点；`book_reader_promises` 表和 `metadata.reader_promise_patches` 已删除。
 - 人物泛称来自本书 lexicon；canon name anchors 来自 BookState kinship 边 `metadata.appellation`，方向为“source 的 appellation → target”。地图从 Genesis 结构推导区域、地形与路线，不再嗅探题材关键词；P1 的地图角色词表、题材人物 token 和关系 personality 映射已清理。
-- 与设计的取舍：world_seed 的 `location_ref` 是 Genesis 地图 id，由提交器换成 `state.location_id` 的数据库节点 id；`reveal_candidates` 只保存在冻结 Genesis pack，供 P4 使用。
-- P2：章节级时间跨度、时间单调性 / 闪回规则、地图 `travel_time` 分钟换算尚未实现；`pulp_light`、倒计时/羁押 future-plan audit、约束关键词表及 `map_movement` 时长词表仍待清理。canary 的 小时 / 时辰 ignore 可在 P2 删除 `forwin/review/map_movement.py` 与 future_plan_audit 时长正则后移除。
+- 与设计的取舍：world_seed 的 `location_ref` 是 Genesis 地图 id，由提交器换成 `state.location_id` 的数据库节点 id；`reveal_candidates` 保存在冻结 Genesis pack，P2 已用于 reader reveal schedule。
+- P1 当时延后的章节时间、世界审查和旧账本清理已在 P2 完成，见上节。
 - P4：`finalization._seed_state`、`RunControlStage.run`、`SubWorldManager.apply_initial_arc_plan` 与 ArcDirector 一起删除；`sub_world_roster_items` / `plan_band_activation` 留待 band `onstage_refs` 替换；章节规划仍调用 `launch_arc_N`。世界引擎与节拍表仍属后续阶段。
 
 ## 2026-10 世界引擎大修 P0（历史记录）
 
-设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；当时 `meta.completed_phase` 推进到 `P0`，当前已推进至 P1（见上节）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
+设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；当时 `meta.completed_phase` 推进到 `P0`，当前已推进至 P2（见上节）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
 
 - 新增防过拟合 AST 护栏：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py`，带按阶段门控的 `pending_removal` 区段。
 - 新增 `scripts/purge_all_projects.py`（默认 dry-run，`--yes-delete-all-projects` 才执行；dry-run 回滚式试删以暴露外键阻塞，任一项目删除失败时不清理外部存储并以退出码 4 结束）；`_delete_project` 现在删除 publisher 子表行与项目 outbox 事件。
@@ -83,7 +106,7 @@
 - 删除 writer prompt 的故事示例、ArcDirector 默认世界、SubWorldManager 名字池与 WorldSimulator 的 `chapter>=3` 规则；未命名 planned 槽位不再被激活。
 - 清除 canon_quality、checker（pulp profile 只按显式 genre 选择）、canon_names（锚点不分角色，P1 已补入 BookState 来源）与 future-plan audit 中泄漏的第二套剧本词汇。
 - 创建项目必须提供 genre；llm_eval fixture 移至 `tests/fixtures/llm_eval`，CLI 必须传 `--context-file` / `--cases-file`。
-- 当时延后至 P1 的地图角色词表、题材人物 token、锚点来源与账本 v6 已完成；P2 / P4 剩余事项见上节及 allowlist 的 `pending_removal`。以下各节中的 2026-07/09 记录是当时历史，不代表 P1 之后的现状。
+- 当时延后至 P1 的地图角色词表、题材人物 token、锚点来源与账本 v6 已完成；P3/P4 剩余事项见上节及 allowlist 的 `pending_removal`。以下各节中的 2026-07/09 记录是当时历史，不代表 P2 之后的现状。
 
 ## 2026-09 外部评审后的修复
 
@@ -138,7 +161,7 @@
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
 | `forwin.reviewer_v4` | removed | `forwin.book_state.extraction` | 已删除 | 旧导入 alias 包已物理删除。 |
 | `forwin.world_v4_review_gate` + `forwin.extractor` | removed | `forwin.book_state.extraction` | 已删除 | extraction contract 与 GraphDelta converter 归同一 owner；`V4Review*` / `WorldDeltaExtractor` 旧类型无 alias。 |
-| `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。P0 后只保留 `contract.py` 与 `graph_delta.py`（`pulp_light` 正则兜底待 P2 删除）；v4 抽取/gate/reviewers 与 `forwin.protocol.world_v4` 已删除。 |
+| `forwin.book_state.extraction` | active-internal | 无 | 无 | 当前 BookState candidate extraction owner，不是主 chapter reviewer。P2 统一使用 `ChapterDeltaExtractor` / `ChapterDeltaTranslator`；`contract.py` / `graph_delta.py` 与 `pulp_light` 已删除；v4 抽取/gate/reviewers 与 `forwin.protocol.world_v4` 已删除。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | 项目运行设置只由版本化 RuntimePolicy 持有。 |
 | `forwin.governance*` / `models.governance` / `review.governance` | removed | `forwin.audit` + `forwin.planning` + `forwin.review` | 已删除 | 决策事件、计划控制和草稿规则分别归真实 owner，不保留兼容 facade。 |
@@ -204,7 +227,7 @@
 
 ## 已知限制
 
-- `canon_quality` 仍以 countdown/state-kind 为主要组织形态，短期内通过 project-level rule profile 降低故事硬编码；完整 schema 化 state projection 是后续大改。
+- `canon_quality` 的 form 从 BookState 读结构，倒计时与角色状态平行账本已在 P2 删除；writer ChapterWorldView 留到 P4。
 - 中文否定识别目前使用轻量前缀窗口和规则 registry，能挡住明显的“不要/避免/禁止 X”误判，但不是完整句法 scope 分析。
 - 质量闭环已开始从 review-time 反应式扫描前移到 plan-time patch；遗留 reviewer signal 仍会保留兜底提示，但必须避免重复注入同一约束。
 - Prompt 回归测试固定 deterministic fixture 和 revision hash，不替代真实 LLM A/B 评估。
@@ -224,7 +247,7 @@
 - `CanonCommitPlan` 在事务外冻结；Canon 事务锁项目/章节/候选并原子提交 BookState、实体、义务、accepted 状态、审计、outbox 与 `CanonCommitRecord`。
 - 五阶段故障注入、stale revalidation、幂等 replay 和 projection retry 已有聚焦测试；world edit proposal 也已归入 Canon 单写者。
 
-Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，当时基线文件为 `0001_v5_baseline.py`（revision id 为 `0001_v5_recovery`；现 head 为 `0003_book_state_v6`，见“2026-10 世界引擎大修 P1”）；生产启动拒绝不匹配的 schema，不迁移旧项目。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
+Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，当时基线文件为 `0001_v5_baseline.py`（revision id 为 `0001_v5_recovery`；现 head 为 `0004_drop_parallel_ledgers`，见“2026-10 世界引擎大修 P2”）；生产启动拒绝不匹配的 schema，不迁移旧项目。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
 
 ## 2026-07 V5 Slice 5 Status
 
@@ -262,7 +285,7 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 `docs/superpowers/specs/2026-07-06-forwin-integrated-roadmap-full-design.md` and `docs/superpowers/plans/2026-07-06-forwin-integrated-roadmap-full.md` track the integrated runtime work now reflected in code:
 
 - Retrieval: LAN embedding gateway defaults plus accepted-chapter memory re-embedding script.
-- Pulp runtime: lightweight BookState fallback deltas for degraded world extraction.
+- Pulp runtime: P2 已以统一章节 delta 抽取替换旧 lightweight fallback。
 - Arc planning: `ArcActivationReviewPack` and decision-event audit before continuation materialization.
 - Canon / repair: `pulp_fatal` gate mode, expanded fatal signals, P0 hard obligation blocking, hard blocker detection for auto-review retry.
 - Experience layer: runtime-expanded 50+ pulp trope registry, template repetition cooldown, and prompt-visible execution constraints.

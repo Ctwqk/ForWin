@@ -15,7 +15,7 @@
 # residual content under its real category (ledger rulings R2, R6).
 
 [meta]
-completed_phase = "P1"
+completed_phase = "P2"
 
 [story_id_literal]
 allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
@@ -45,9 +45,6 @@ seed_terms = [
   "系统日志原本还有",
 ]
 harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
-# Generic time-unit words that book calendars legitimately name (tests/fixtures/world_seed)
-# and that existing runtime vocabulary already contains.
-ignore = ["小时", "时辰"]
 
 [[entry]]
 path = "forwin/audience/feedback.py"

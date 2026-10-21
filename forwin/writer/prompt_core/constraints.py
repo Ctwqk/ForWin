@@ -185,20 +185,7 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
         label = str(item.get("label") or item.get("subject_key") or invariant_key).strip()
         latest_chapter = int(item.get("latest_chapter") or item.get("last_updated_chapter") or 0)
         current_value = item.get("current_value")
-        value_unit = str(item.get("value_unit") or "").strip()
         if not invariant_key:
-            continue
-        if kind == "monotonic_numeric" and value_unit == "minutes":
-            latest = _optional_int(current_value)
-            if latest is None:
-                lines.append(
-                    f"    · {label}：当前是分钟级单调强状态；本章继续同一状态时不得增大，除非正文明确 reset、reopen 或分支窗口。"
-                )
-                continue
-            lines.append(
-                f"    · {label}：第{latest_chapter}章 ledger 当前值为 {latest} 分钟；"
-                f"本章继续同一状态时必须小于等于 {latest} 分钟，除非正文明确 reset、reopen 或分支窗口。"
-            )
             continue
         if kind == "deadline":
             lines.append(
@@ -383,15 +370,6 @@ def _record_prompt_constraint_counts(
 
 def _constraint_identity(kind: str, value: str) -> str:
     return f"{kind}:{str(value or '').strip()}"
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _compact_value(value: object) -> str:

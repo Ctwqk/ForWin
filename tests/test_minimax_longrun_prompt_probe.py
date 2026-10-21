@@ -41,3 +41,11 @@ def test_summarize_attempts_counts_success_rate_by_case_and_model() -> None:
     assert summary["by_case"]["noncode:summary"]["success_rate"] == 1.0
     assert summary["by_model"]["MiniMax-M2.7"]["failures"] == 1
     assert summary["error_categories"]["bad_request"] == 1
+
+
+def test_history_filters_include_current_chapter_delta_stage() -> None:
+    from scripts.minimax_longrun_prompt_probe import DEFAULT_STAGES, _history_path_allowed
+
+    assert _history_path_allowed("/llm_traces/project/chapter_delta_extraction/trace.json", DEFAULT_STAGES)
+    for stage in ("state_event_extraction", "thread_time_extraction", "lore_timeline_notes_extraction"):
+        assert not _history_path_allowed(f"/llm_traces/project/{stage}/trace.json", DEFAULT_STAGES)

@@ -113,7 +113,7 @@ def test_story_basics_section_has_no_example_roles_or_countdowns() -> None:
     section = _story_basics_section(context)
 
     assert "主角姓名：陆明" in section
-    assert "倒计时约束：不同倒计时各自独立，不得混用、合并或互相替换。" in section
+    assert "倒计时约束" not in section
     assert "系统巡检员" not in section
     assert "剩余4小时" not in section
     assert "剩余7天" not in section
@@ -213,15 +213,6 @@ def test_writer_prompt_includes_generic_invariant_constraints() -> None:
         canon_quality_context={
             "invariant_constraints": [
                 {
-                    "invariant_key": "countdown:audit_window",
-                    "kind": "monotonic_numeric",
-                    "subject_key": "audit_window",
-                    "label": "审计窗口",
-                    "current_value": 12,
-                    "value_unit": "minutes",
-                    "latest_chapter": 13,
-                },
-                {
                     "invariant_key": "deadline:public_hearing",
                     "kind": "deadline",
                     "subject_key": "public_hearing",
@@ -237,8 +228,8 @@ def test_writer_prompt_includes_generic_invariant_constraints() -> None:
     content = "\n".join(message["content"] for message in prompt)
 
     assert "强状态 invariant ledger" in content
-    assert "审计窗口" in content
-    assert "小于等于 12 分钟" in content
+    assert "倒计时 ledger" not in content
+    assert "不同倒计时各自独立" not in content
     assert "公开听证期限" in content
     assert "截止" in content
     assert "桥接" in content

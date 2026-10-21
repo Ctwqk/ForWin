@@ -33,7 +33,7 @@ class ChapterMetric:
     hard_floor_fail_reasons: list[str] | None = None
     visible_payoff_present: bool | None = None
     pulp_missing_fields: list[str] | None = None
-    structured_extraction_status: str | None = None
+    chapter_delta_extraction_status: str | None = None
     reward_beats_in_plan: int | None = None
     reward_gap_since_last: int | None = None
     selected_trope_ids: list[str] | None = None
@@ -70,7 +70,7 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
         .order_by(ChapterPlan.chapter_number.asc())
         .all()
     }
-    drafts = _latest_drafts_by_chapter(session, project_id)
+    candidates = _latest_candidates_by_chapter(session, project_id)
     task_statuses = _task_status_by_chapter(session, project_id)
     decision_events = _decision_events_by_chapter(session, project_id)
     spans = _spans_by_chapter(session, project_id)
@@ -81,7 +81,7 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
     rows: list[ChapterMetric] = []
     for chapter_number in range(1, chapters + 1):
         plan = plans.get(chapter_number)
-        draft = drafts.get(chapter_number)
+        record, draft = candidates.get(chapter_number, (None, None))
         events = decision_events.get(chapter_number, [])
         row_spans = spans.get(chapter_number, [])
         metric = ChapterMetric(
@@ -98,7 +98,7 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
             hard_floor_fail_reasons=_hard_floor_fail_reasons(events),
             visible_payoff_present=_visible_payoff_present(events),
             pulp_missing_fields=_pulp_missing_fields(events),
-            structured_extraction_status=_structured_extraction_status(events),
+            chapter_delta_extraction_status=_chapter_delta_extraction_status(record),
             ending_hook_detected=_ending_hook_detected(events),
             bookstate_compile_succeeded=_bookstate_compile_succeeded(events),
             wall_time_seconds=_wall_time_seconds(row_spans),
@@ -279,7 +279,7 @@ def _database_url() -> str:
     )
 
 
-def _latest_drafts_by_chapter(session, project_id: str) -> dict[int, ChapterDraft]:  # noqa: ANN001
+def _latest_candidates_by_chapter(session, project_id: str) -> dict[int, tuple[CandidateDraftRecord, ChapterDraft]]:  # noqa: ANN001
     rows = (
         session.query(CandidateDraftRecord, ChapterDraft)
         .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
@@ -291,12 +291,12 @@ def _latest_drafts_by_chapter(session, project_id: str) -> dict[int, ChapterDraf
         )
         .all()
     )
-    drafts: dict[int, ChapterDraft] = {}
+    candidates: dict[int, tuple[CandidateDraftRecord, ChapterDraft]] = {}
     for record, draft in rows:
         chapter_number = int(record.chapter_number or 0)
-        if chapter_number and chapter_number not in drafts:
-            drafts[chapter_number] = draft
-    return drafts
+        if chapter_number and chapter_number not in candidates:
+            candidates[chapter_number] = (record, draft)
+    return candidates
 
 
 def _task_status_by_chapter(session, project_id: str) -> dict[int, str]:  # noqa: ANN001
@@ -504,17 +504,18 @@ def _pulp_beat_payload(events: list[DecisionEvent]) -> dict[str, Any]:
     return {}
 
 
-def _structured_extraction_status(events: list[DecisionEvent]) -> str | None:
-    for event in events:
-        payload = _json_loads(event.payload_json, {})
-        if not isinstance(payload, dict):
-            continue
-        if (
-            event.event_type == DecisionEventType.DEFERRED_MAINTENANCE_RECORDED
-            and payload.get("task_type") == "structured_extraction"
-        ):
-            return str(payload.get("structured_extraction") or "deferred")
-    return None
+def _chapter_delta_extraction_status(record: CandidateDraftRecord | None) -> str | None:
+    if record is None:
+        return None
+    metadata = _json_loads(record.metadata_json, {})
+    if not isinstance(metadata, dict) or "chapter_delta_issues" not in metadata:
+        return None
+    issues = metadata["chapter_delta_issues"]
+    if not isinstance(issues, list):
+        return None
+    if any(isinstance(issue, dict) and issue.get("severity") == "error" for issue in issues):
+        return "failed"
+    return "warning" if issues else "ok"
 
 
 def _ending_hook_detected(events: list[DecisionEvent]) -> bool | None:
@@ -625,13 +626,13 @@ def _missing_rate(values: Iterable[bool | None]) -> float | None:
 
 def _extraction_failure_rate(rows: list[ChapterMetric]) -> float | None:
     statuses = [
-        row.structured_extraction_status
+        row.chapter_delta_extraction_status
         for row in rows
-        if row.structured_extraction_status is not None
+        if row.chapter_delta_extraction_status is not None
     ]
     if not statuses:
         return None
-    failures = {"degraded", "partial_degraded", "deferred"}
+    failures = {"failed"}
     return round(sum(1 for status in statuses if status in failures) / len(statuses), 3)
 
 

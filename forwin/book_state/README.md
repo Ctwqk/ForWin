@@ -2,7 +2,7 @@
 
 Status: CANON runtime.
 
-`book_state` owns the BookState v6 runtime: GraphDelta ledger, extraction contract, deterministic review gate, compiler, snapshot/replay, and projection. P1 adds the story clock, per-book lexicon, versioned node identity, knowledge events, and narrative snapshots. The schema head is `0003_book_state_v6`.
+`book_state` owns the BookState v6 runtime: GraphDelta ledger, extraction contract, deterministic review gate, compiler, snapshot/replay, and projection. P1 adds the story clock, per-book lexicon, versioned node identity, knowledge events, and narrative snapshots. P2 adds unified chapter-delta extraction, translation and world review. The schema head is `0004_drop_parallel_ledgers` (parent `0003_book_state_v6`); it drops `countdown_ledgers` and `character_state_transitions`.
 
 Rules:
 
@@ -13,7 +13,7 @@ Rules:
 - World, map, cognition, and narrative are always enabled; `canon.book_state_layers` has been removed.
 - Obsidian, LLM KB, wiki/export, and debug APIs must be rebuildable projections from BookState or declared integration rows.
 
-P1 Genesis handoff:
+Genesis handoff:
 
 - Genesis runs `brief → world → map → story_engine → book_blueprint → world_seed`; the old bootstrap stage was removed. The LLM generates `world_seed`, `forwin/genesis/world_seed.py` validates it deterministically, and validation errors prevent locking. Fallback produces a degraded structural shell with actor entries for every story_engine core_cast / opposition / faction id, without inventing story content.
 - story_engine entities have ids (generated defaults `cast-n` / `opp-n` / `faction-n`), structured `relationship_axes` / `long_arcs`, and core_cast `secrets` lists.
@@ -32,5 +32,13 @@ P1 state contracts:
 Deferred scope and design choices:
 
 - The seed's `location_ref` is a Genesis map id, translated at commit to a database map-node id in `state.location_id`. `reveal_candidates` stays in the frozen Genesis pack; `reveal_schedule.earliest_reveal_chapters` reads it as each secret's earliest reveal chapter (its arc's `chapter_start`).
-- P2 owns chapter-level story-time spans, time monotonicity / flashback rules, and map `travel_time` conversion to minutes.
+- P2 implements chapter-level story-time spans, time monotonicity / flashback rules, and map `travel_time` conversion to minutes.
 - P4 owns removal of `finalization._seed_state`, `RunControlStage.run`, and `SubWorldManager.apply_initial_arc_plan` with ArcDirector, plus replacement of `sub_world_roster_items` / `plan_band_activation` by band `onstage_refs`. The world engine and beat-table planner remain later-phase work.
+
+P2 chapter pipeline:
+
+- `ensure_chapter_delta` runs `ChapterDeltaExtractor` at stage `chapter_delta_extraction` once per candidate body (validation retries allowed), reusing matching `body_sha256` results in draft review and canon preparation. Its input is the minimal BookState as-of N−1 entity/location table plus fulfillment targets.
+- `ChapterDeltaTranslator` turns `WriterOutput.chapter_delta` into graph deltas with `old_value` / `field_path` on non-create patches, `metadata["movements"]` and item `state.holder_id`. `BookStateReviewGate` v6 checks the translated delta; `WorldConsistencyReviewer` exposes the same checks as the `world_consistency` draft signal and routes errors to repair.
+- Structured `plan_fulfillment` evidence judges goals and narrative obligations. Keyword checks, `MapMovementReviewer`, writer-contract / regex fallback extraction, countdown/custody audits and canon_quality's parallel ledgers are deleted. The chapter review form reads BookState and persists quality signals only.
+- Start-writing flushes arcs, map, chapter-0 seed and arc-1 plans in one caller-owned transaction. On `HandoffStageError` it rolls back all handoff writes, then flushes only the failure event; successful handoff locks the revision and enters writing.
+- P3 still owns deterministic map materialization, clock expiry/privacy producers and map access/speed rules. P4 supplies clock/restraint context via `ChapterWorldView` (§5.1). Full deferrals and unproduced signals are in `Design-docs/CURRENT_ARCHITECTURE.md`; production rollout is in the P2 deploy runbook.

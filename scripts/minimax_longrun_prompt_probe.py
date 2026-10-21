@@ -31,9 +31,7 @@ DEFAULT_STAGES = (
     "scene_stitch",
     "subworld_delta",
     "world_pressure",
-    "state_event_extraction",
-    "thread_time_extraction",
-    "lore_timeline_notes_extraction",
+    "chapter_delta_extraction",
 )
 
 

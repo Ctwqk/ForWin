@@ -40,7 +40,7 @@ def test_writing_flow_state_machine_names_current_review_and_canon_nodes() -> No
     text = (DOC_ROOT / "writing_flow_state_machine.md").read_text(encoding="utf-8")
 
     for node_name in [
-        "MapMovementReview",
+        "world_consistency",
         "CanonPreparation",
         "GateDelegation",
         "CanonAdmission",

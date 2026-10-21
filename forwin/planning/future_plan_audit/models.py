@@ -17,7 +17,7 @@ class FuturePlanAuditIssue(BaseModel):
     target_plan_id: str = ""
     description: str
     evidence_refs: list[str] = Field(default_factory=list)
-    patch_type: str = "future_plan_audit"
+    patch_type: str = ""
     blocking: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 

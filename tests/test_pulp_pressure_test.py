@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from forwin.audit.events import DecisionEventType
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.audit import DecisionEvent
 from forwin.models.observability import PerformanceSpan
@@ -144,18 +147,6 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                     DecisionEvent(
                         project_id=project.id,
                         chapter_number=2,
-                        event_type=DecisionEventType.DEFERRED_MAINTENANCE_RECORDED,
-                        payload_json=json.dumps(
-                            {
-                                "task_type": "structured_extraction",
-                                "structured_extraction": "partial_degraded",
-                            },
-                            ensure_ascii=False,
-                        ),
-                    ),
-                    DecisionEvent(
-                        project_id=project.id,
-                        chapter_number=2,
                         event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
                         payload_json=json.dumps(
                             {
@@ -235,6 +226,17 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                 ]
             )
 
+            session.flush()
+            session.add(ChapterDraft(id="draft-2", chapter_plan_id="plan-2", body_text="body"))
+            session.flush()
+            session.add(ChapterReview(id="review-2", draft_id="draft-2", verdict="fail"))
+            session.flush()
+            session.add(CandidateDraftRecord(
+                id="candidate-2", project_id=project.id, chapter_plan_id="plan-2",
+                chapter_number=2, candidate_draft_id="draft-2", review_id="review-2",
+                metadata_json=json.dumps({"chapter_delta_issues": [{"severity": "error", "code": "extraction_failed"}]}),
+            ))
+
         monkeypatch.setenv("DATABASE_URL", database_url)
         output = tmp_path / "report"
 
@@ -278,3 +280,15 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
         )
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize(("metadata", "expected"), [
+    ({}, None),
+    ({"chapter_delta_issues": []}, "ok"),
+    ({"chapter_delta_issues": [{"severity": "warning", "code": "elapsed_unknown"}]}, "warning"),
+    ({"chapter_delta_issues": [{"severity": "error", "code": "extraction_failed"}]}, "failed"),
+])
+def test_extraction_status_uses_candidate_generation_meta(metadata, expected) -> None:
+    record = CandidateDraftRecord(metadata_json=json.dumps(metadata))
+    assert pulp_pressure_test._chapter_delta_extraction_status(record) == expected
+    assert pulp_pressure_test._chapter_delta_extraction_status(None) is None

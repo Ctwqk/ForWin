@@ -11,7 +11,10 @@
       "chapter_number": 1,
       "chapter_plan_title": "失联信号",
       "chapter_plan_one_line": "陈星收到来自废弃空间站的异常信号。",
-      "chapter_goals": ["建立主角目标", "发现第一条异常证据"]
+      "chapter_goals": [
+        "建立主角目标",
+        "发现第一条异常证据"
+      ]
     }
   },
   {
@@ -26,17 +29,10 @@
       "chapter_number": 6,
       "chapter_plan_title": "氧舱倒计时",
       "chapter_plan_one_line": "陈星必须在氧舱失压前拿到日志。",
-      "chapter_goals": ["推进氧舱风险", "拿到失联前日志"],
-      "canon_quality_context": {
-        "countdown_constraints": [
-          {
-            "countdown_key": "oxygen_lock",
-            "label": "氧舱倒计时",
-            "latest_remaining_minutes": 42,
-            "latest_chapter": 5
-          }
-        ]
-      }
+      "chapter_goals": [
+        "推进氧舱风险",
+        "拿到失联前日志"
+      ]
     }
   },
   {
@@ -51,17 +47,9 @@
       "chapter_number": 9,
       "chapter_plan_title": "闸门关闭后",
       "chapter_plan_one_line": "陈星确认旧闸门已经关闭。",
-      "chapter_goals": ["承接闸门关闭状态"],
-      "canon_quality_context": {
-        "countdown_constraints": [
-          {
-            "countdown_key": "airlock_window",
-            "label": "旧闸门窗口",
-            "latest_remaining_minutes": 0,
-            "latest_chapter": 8
-          }
-        ]
-      }
+      "chapter_goals": [
+        "承接闸门关闭状态"
+      ]
     }
   },
   {
@@ -76,17 +64,9 @@
       "chapter_number": 12,
       "chapter_plan_title": "脱困之后",
       "chapter_plan_one_line": "陈星与韩遥会合。",
-      "chapter_goals": ["承接韩遥脱困状态"],
-      "canon_quality_context": {
-        "character_state_constraints": [
-          {
-            "character_name": "韩遥",
-            "transition_type": "custody_state",
-            "latest_state": "free",
-            "latest_chapter": 11
-          }
-        ]
-      }
+      "chapter_goals": [
+        "承接韩遥脱困状态"
+      ]
     }
   },
   {
@@ -101,9 +81,14 @@
       "chapter_number": 14,
       "chapter_plan_title": "债务偿还",
       "chapter_plan_one_line": "陈星兑现前文承诺。",
-      "chapter_goals": ["执行已应用计划补丁"],
+      "chapter_goals": [
+        "执行已应用计划补丁"
+      ],
       "canon_quality_context": {
-        "suppressed_prompt_constraint_keys": ["obligation:obl-1", "signal:sig-1"],
+        "suppressed_prompt_constraint_keys": [
+          "obligation:obl-1",
+          "signal:sig-1"
+        ],
         "active_narrative_obligations": [
           {
             "id": "obl-1",
@@ -140,7 +125,9 @@
       "chapter_number": 18,
       "chapter_plan_title": "计划修正",
       "chapter_plan_one_line": "陈星按最新计划修正路线。",
-      "chapter_goals": ["承接计划审计补丁"],
+      "chapter_goals": [
+        "承接计划审计补丁"
+      ],
       "canon_quality_context": {
         "future_plan_audit_summary": {
           "status": "fail",
@@ -151,7 +138,9 @@
               "description": "第19章计划使用旧倒计时。"
             }
           ],
-          "applied_plan_patch_ids": ["patch-19"]
+          "applied_plan_patch_ids": [
+            "patch-19"
+          ]
         }
       }
     }
@@ -168,7 +157,9 @@
       "chapter_number": 3,
       "chapter_plan_title": "预演信标",
       "chapter_plan_one_line": "陈星预演进入空间站的第一条路线。",
-      "chapter_goals": ["给出可读预演稿"]
+      "chapter_goals": [
+        "给出可读预演稿"
+      ]
     }
   },
   {
@@ -183,7 +174,11 @@
       "chapter_number": 4,
       "chapter_plan_title": "进入空间站",
       "chapter_plan_one_line": "陈星分三段完成入口侦查。",
-      "chapter_goals": ["进入外环", "避开自动安保", "发现人为改写痕迹"]
+      "chapter_goals": [
+        "进入外环",
+        "避开自动安保",
+        "发现人为改写痕迹"
+      ]
     }
   },
   {
@@ -199,7 +194,10 @@
       "chapter_number": 24,
       "chapter_plan_title": "最终日志",
       "chapter_plan_one_line": "陈星完成最终真相收束。",
-      "chapter_goals": ["解决主线危机", "兑现主要承诺"],
+      "chapter_goals": [
+        "解决主线危机",
+        "兑现主要承诺"
+      ],
       "canon_quality_context": {
         "is_final_chapter": true,
         "final_chapter_requirements": {
@@ -221,7 +219,9 @@
       "chapter_number": 16,
       "chapter_plan_title": "承诺未偿",
       "chapter_plan_one_line": "陈星靠近隐藏控制室。",
-      "chapter_goals": ["推进隐藏控制室"],
+      "chapter_goals": [
+        "推进隐藏控制室"
+      ],
       "canon_quality_context": {
         "active_narrative_obligations": [
           {

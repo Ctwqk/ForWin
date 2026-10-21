@@ -1,6 +1,6 @@
 # 写作流程状态机
 
-更新时间：2026-07-10
+更新时间：2026-10-21
 
 本文档描述当前代码里的**写作任务**状态机。范围包括 HTTP 入队、durable worker、`start-writing` 后的章节主流程、五层 review、暂停/终止，以及 LLM retry/fallback。
 
@@ -81,9 +81,9 @@ stateDiagram-v2
     writing_chapter --> failed: writer failed after retry/fallback
     writing_chapter --> paused: safe pause after output
 
-    continuity_review --> MapMovementReview: reviewer map graph available
-    MapMovementReview --> drafted: no hard movement issue
-    MapMovementReview --> paused_for_review: map movement issue
+    continuity_review --> world_consistency: shared chapter delta translation and gate v6
+    world_consistency --> drafted: no hard world issue
+    world_consistency --> paused_for_review: world consistency issue
     continuity_review --> drafted: no map graph
     drafted --> paused_for_review: operation_mode=checkpoint
     drafted --> paused_for_review: copilot verdict != pass
@@ -181,7 +181,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 2. `assembling_context` 组装章节上下文。
 3. `writing_chapter` 调 writer。writer 内部会按单模型 retry，必要时由 LLMClient 做跨 profile fallback。
 4. writer 失败后尝试 preview fallback；仍失败则章节标为 failed。
-5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；若 reviewer map graph 可用，进入 `MapMovementReview`，检查 objective path、observer-known path、hidden/blocked/false route、access rule 和 speed policy。
+5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；`world_consistency` 信号复用候选的 chapter delta，经 `ChapterDeltaTranslator` 与 `BookStateReviewGate` v6 检查时间、已知路径、移动速度、角色状态、物品与揭示。旧 `MapMovementReviewer` 已删除；access rules、team speed、edge multipliers 与 false routes 留到 P3。
 6. 根据 operation mode 和 verdict 判断：
    - `checkpoint`：总是 `needs_review`。
    - `copilot`：`pass` 才继续，`warn/fail` 进入 `needs_review`。

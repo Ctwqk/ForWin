@@ -157,3 +157,13 @@ def test_design_guard_does_not_reintroduce_local_subworld_semantics() -> None:
     ]
 
     assert offenders == []
+
+
+def test_p2_docs_describe_current_extraction_and_schema() -> None:
+    for name in ("CURRENT_ARCHITECTURE.md", "CURRENT_DESIGN.md", "DESIGN_STATUS.md"):
+        text = _read(DOC_ROOT / name)
+        for marker in (
+            "ChapterDeltaExtractor", "ChapterDeltaTranslator", "world_consistency",
+            "plan_fulfillment", "0004_drop_parallel_ledgers", "ChapterWorldView",
+        ):
+            assert marker in text, (name, marker)

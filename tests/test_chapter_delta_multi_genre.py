@@ -8,9 +8,9 @@ the canon commit; only the LLM is stubbed.
 
 The extraction answer names BookState nodes ``@node:<name>`` and book map sites ``@site:<name>``.
 Start-writing gives them project-scoped ids and generates the book map from the Genesis atlas,
-so the test puts in the ids the committed BookState holds under those names. The generated
-routes differ from run to run; each chapter spans two days, far more than its move needs on a
-generated map, and the too-fast test measures the shortest time on the map at hand.
+so the test puts in the ids the committed BookState holds under those names. The test fixes the map
+seed; each chapter spans two days, far more than its move needs on the generated map, and
+the too-fast test derives its claim from the configured travel tolerance.
 """
 
 from __future__ import annotations
@@ -188,7 +188,10 @@ def _start_book(pipeline, genre: str) -> _Book:
         # A project from project_create carries a runtime policy, which chapter context reads.
         ProjectPolicyStore(session).initialize(project, pipeline.policy)
         session.refresh(project)
-        with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_planning_with(chapter["plan"])):
+        with (
+            patch("forwin.map.genesis_adapter._stable_seed", return_value=15),
+            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_planning_with(chapter["plan"])),
+        ):
             service.handoff.start_writing(
                 session=session, updater=StateUpdater(session),
                 command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
@@ -361,9 +364,11 @@ def test_too_fast_travel_is_caught_per_genre(pipeline, genre: str) -> None:
     with pipeline._SessionFactory() as session:  # noqa: SLF001
         shortest = _shortest_minutes(session, book.project_id, movement)
         unit = min(StoryCalendarRepository(session).get(book.project_id).units, key=lambda item: item.minutes)
-        # The move takes half its shortest time, in whole minutes, measured in the book's own unit.
+        # Stay clearly below the shortest allowed time, in whole minutes and the book's own unit.
+        allowed_minimum = shortest * (1 - pipeline.policy.review.travel_tolerance)
+        claimed_minutes = max(0, math.floor(allowed_minimum / 2))
         movement["depart_offset"] = {"amount": 0, "unit": unit.name}
-        movement["arrive_offset"] = {"amount": math.floor(shortest / 2) / unit.minutes, "unit": unit.name}
+        movement["arrive_offset"] = {"amount": claimed_minutes / unit.minutes, "unit": unit.name}
         pipeline.llm_client = _ExtractionClient(extraction)
         _output, review = _review(pipeline, session, book)
 

@@ -127,6 +127,8 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
         },
         "state": {
             *ACTOR_STATE_FIELDS,
+            "location_id",
+            "goal",
             "status",
             "headquarters_location_id",
             "controlled_site_ids",

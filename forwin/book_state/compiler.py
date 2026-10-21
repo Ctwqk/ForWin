@@ -258,6 +258,7 @@ class BookStateCompiler:
                     from forwin.characters.creation import CharacterCreationHelper
                     from forwin.characters.models import CharacterCreationRequest
 
+                    genesis_ref = str(node.metadata.get("genesis_ref") or "")
                     result = CharacterCreationHelper(self.session).apply_book_state_character_patch(
                         CharacterCreationRequest(
                             project_id=delta.project_id,
@@ -272,13 +273,16 @@ class BookStateCompiler:
                             created_at_chapter=delta.chapter_number,
                             profile=profile,
                             state=runtime.world.get_state(patch.node_id),
+                            creation_context={"genesis_ref_id": genesis_ref} if genesis_ref else {},
                             existing_resolution="create_new",
                             audit_reason=patch.reason or "BookState GraphDelta create character",
                         )
                     )
                     if result.world_node:
-                        runtime.world.nodes_by_id[patch.node_id] = WorldNode.model_validate(
-                            result.world_node
+                        created = WorldNode.model_validate(result.world_node)
+                        # The helper writes its own metadata; keep the patch's metadata under it.
+                        runtime.world.nodes_by_id[patch.node_id] = created.model_copy(
+                            update={"metadata": {**node.metadata, **created.metadata}}
                         )
         for node_id in versioned_node_ids:
             self.repo.create_world_node(

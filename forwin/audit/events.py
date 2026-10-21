@@ -31,6 +31,8 @@ class DecisionEventType:
     GENESIS_STAGE_RERUN = "genesis_stage_rerun"
     GENESIS_STAGE_REFINED = "genesis_stage_refined"
     START_WRITING_REQUESTED = "start_writing_requested"
+    WORLD_SEED_COMMITTED = "world_seed_committed"
+    WORLD_SEED_COMMIT_FAILED = "world_seed_commit_failed"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
     RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
@@ -184,6 +186,8 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.GENESIS_STAGE_RERUN,
     DecisionEventType.GENESIS_STAGE_REFINED,
     DecisionEventType.START_WRITING_REQUESTED,
+    DecisionEventType.WORLD_SEED_COMMITTED,
+    DecisionEventType.WORLD_SEED_COMMIT_FAILED,
     DecisionEventType.PROMPT_TRACE_RECORDED,
     DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,

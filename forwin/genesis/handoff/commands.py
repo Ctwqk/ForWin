@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class HandoffStageError(ValueError):
+    """A typed failure of one start-writing handoff stage."""
+
+
 @dataclass(slots=True)
 class StartWritingCommand:
     project_id: str

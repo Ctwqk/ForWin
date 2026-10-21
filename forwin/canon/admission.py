@@ -39,6 +39,8 @@ from .types import CanonAdmissionOutcome, CanonWorldEditOutcome
 
 logger = logging.getLogger(__name__)
 
+GENESIS_SEED_SOURCE_TYPE = "genesis_seed"
+
 
 class CanonStaleVersion(RuntimeError):
     """The prepared plan no longer matches locked authoritative state."""
@@ -518,6 +520,70 @@ class CanonAdmissionService:
             outbox_event_id=event_id,
         )
 
+    def commit_world_seed(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        revision_id: str,
+        approved_changes: ApprovedGraphDeltaSet,
+    ) -> BookStateCompileResult:
+        """Compile a Genesis world seed as chapter 0; the caller owns the transaction."""
+        project = session.execute(
+            select(Project).where(Project.id == project_id).with_for_update()
+        ).scalar_one_or_none()
+        if project is None:
+            raise CanonStaleVersion("project no longer exists")
+        if approved_changes.project_id != project_id:
+            raise CanonStaleVersion("world seed project changed")
+        if approved_changes.chapter_number != 0:
+            raise ValueError("world seed must compile into chapter 0")
+        if any(
+            delta.source_type != GENESIS_SEED_SOURCE_TYPE
+            for delta in approved_changes.graph_deltas
+        ):
+            raise ValueError(f"world seed deltas must have source_type {GENESIS_SEED_SOURCE_TYPE!r}")
+        non_seed_delta_id = session.scalar(
+            select(GraphDeltaRow.id)
+            .where(
+                GraphDeltaRow.project_id == project_id,
+                GraphDeltaRow.source_type != GENESIS_SEED_SOURCE_TYPE,
+            )
+            .limit(1)
+        )
+        latest_chapter = BookStateRepository(session).latest_canon_chapter(project_id)
+        if non_seed_delta_id is not None or (latest_chapter or 0) > 0:
+            raise CanonStaleVersion("BookState already holds canon beyond the world seed")
+
+        compile_result = BookStateCompiler(session).compile(
+            approved_changes,
+            compiler_run_id=f"genesis-seed-{revision_id}",
+        )
+        if not compile_result.committed:
+            raise CanonWriteFailure(
+                "; ".join(compile_result.blocked_reasons)
+                or "BookState compiler rejected the world seed"
+            )
+        if compile_result.metadata.get("idempotent"):
+            return compile_result
+
+        enqueue_outbox_event(
+            session,
+            aggregate_type="project",
+            aggregate_id=project_id,
+            event_type="knowledge.projection.refresh_requested",
+            event_id=f"genesis-seed:{project_id}:projection",
+            payload={
+                "project_id": project_id,
+                "projection_kind": "all",
+                "as_of_chapter": compile_result.chapter_number,
+                "trigger": GENESIS_SEED_SOURCE_TYPE,
+                "revision_id": revision_id,
+            },
+        )
+        session.flush()
+        return compile_result
+
     def _return_candidate_to_ready(self, candidate_id: str) -> None:
         if self.session_factory is None:
             return
@@ -587,4 +653,5 @@ __all__ = [
     "CanonAdmissionService",
     "CanonStaleVersion",
     "CanonWriteFailure",
+    "GENESIS_SEED_SOURCE_TYPE",
 ]

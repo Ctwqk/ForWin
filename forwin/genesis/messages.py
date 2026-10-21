@@ -52,6 +52,8 @@ def _world_seed_output_requirement() -> str:
         f"action_type 取 {' / '.join(INTENT_ACTION_TYPES)}，impact_level 取 {' / '.join(IMPACT_LEVELS)}。"
         "relations 每项为 {source, target, edge_type, note, visibility, appellation}，"
         f"edge_type 取 {' / '.join(sorted(WORLD_EDGE_TYPES))}，visibility 取 {' / '.join(RELATION_VISIBILITIES)}。"
+        "appellation 是 source 对 target 的称谓，即 target 相对于 source 的角色；"
+        "关系边从 source 指向 target，称谓锚点读作 source 的 appellation → target。"
         "facts 每项为 {id, proposition, truth_value, sensitivity, related_refs, nobody_knows}，"
         f"sensitivity 取 {' / '.join(FACT_SENSITIVITIES)}；"
         "knowledge 每项为 {observer_ref, fact_id, state, channel}，"

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
 from forwin.genesis import GENESIS_STAGE_ORDER, BookGenesisService
+from forwin.genesis.messages import _build_stage_generation_messages
 from forwin.genesis.world_seed import WORLD_SEED_KEYS, fallback_world_seed
 from forwin.mcp.models import STAGE_KEY_ORDER, StageKey
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -112,6 +113,17 @@ class _StubLLM:
 
 def _codes(issues) -> set[str]:
     return {issue["code"] if isinstance(issue, dict) else issue.code for issue in issues}
+
+
+def test_world_seed_generation_messages_define_appellation_direction():
+    messages = _build_stage_generation_messages(
+        None, project=Project(id="p", title="t", premise="p", genre="g"),
+        pack=deepcopy(UPSTREAM_PATCH), stage_key="world_seed", fallback={},
+    )
+    content = messages[-1]["content"]
+    assert "appellation 是 source 对 target 的称谓，即 target 相对于 source 的角色" in content
+    assert "关系边从 source 指向 target" in content
+    assert "source 的 appellation → target" in content
 
 
 class WorldSeedStageOrderTests(unittest.TestCase):

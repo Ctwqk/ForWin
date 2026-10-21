@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable
+from typing import Collection, Iterable
 
 
 _CJK_NAME = r"[\u4e00-\u9fff]{2,4}"
@@ -89,15 +89,19 @@ class CanonNameViolation:
 def find_canon_name_violations(
     anchors: Iterable[CanonNameAnchor],
     text: str,
+    *,
+    known_names: Collection[str] = (),
 ) -> list[CanonNameViolation]:
     """Report names in ``text`` that extend an anchored canonical name (``甲乙`` -> ``甲乙丙``).
 
     Every anchor is treated alike whatever its ``role_label``; the anchors themselves come
     from the caller (book state), never from patterns over prose.
+    Exact matches to known character names or aliases are not drift.
     """
     body = str(text or "")
     if not body:
         return []
+    known_name_set = set(known_names)
     violations: list[CanonNameViolation] = []
     seen: set[tuple[str, str, str]] = set()
     for anchor in anchors:
@@ -110,7 +114,11 @@ def find_canon_name_violations(
         )
         for match in expanded_pattern.finditer(body):
             observed = _clean_name(match.group(0))
-            if observed == canonical or not _looks_like_expanded_name(canonical, observed):
+            if (
+                observed == canonical
+                or observed in known_name_set
+                or not _looks_like_expanded_name(canonical, observed)
+            ):
                 continue
             _append_violation(
                 violations,

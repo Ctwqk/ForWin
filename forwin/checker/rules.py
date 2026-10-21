@@ -118,15 +118,24 @@ class ContinuityChecker:
     def _check_canon_name_anchors(
         self, project_id: str, output: WriterOutput
     ) -> list[ContinuityIssue]:
+        as_of_chapter = max(int(output.chapter_number) - 1, 0)
         anchors = self._canon_name_anchors(
             project_id,
-            as_of_chapter=max(int(output.chapter_number) - 1, 0),
+            as_of_chapter=as_of_chapter,
         )
         if not anchors:
             return []
+        known_names: set[str] = set()
+        if self.book_state is not None:
+            for entity in self.book_state.active_entities(
+                project_id, as_of_chapter=as_of_chapter, kinds={"character"},
+            ):
+                known_names.add(entity.name)
+                known_names.update(entity.aliases)
         violations = find_canon_name_violations(
             anchors,
             self._canon_name_scan_text(output),
+            known_names=known_names,
         )
         issues: list[ContinuityIssue] = []
         for violation in violations:

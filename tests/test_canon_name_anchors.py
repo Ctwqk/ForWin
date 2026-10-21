@@ -5,6 +5,7 @@ import pytest
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.canon.admission import CanonAdmissionService
+from forwin.canon_names import CanonNameAnchor, find_canon_name_violations
 from forwin.checker.rules import ContinuityChecker
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -53,8 +54,58 @@ def test_anchor_filtering_deduplication_and_sorting_without_database():
     assert reads == [("p", 3)]
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("林若曦。", []),
+    ("林若曦。林若晴。", ["林若晴"]),
+])
+def test_canon_name_violations_skip_exact_known_names(text, expected):
+    violations = find_canon_name_violations(
+        [CanonNameAnchor("丙的母亲", "林若")],
+        text,
+        known_names={"林若曦"},
+    )
+    assert [violation.observed_name for violation in violations] == expected
+
+
+def test_canon_name_violations_still_flag_unknown_expansions():
+    violations = find_canon_name_violations(
+        [CanonNameAnchor("丙的母亲", "林若")], "林若曦。",
+    )
+    assert [violation.observed_name for violation in violations] == ["林若曦"]
+
+
+@pytest.mark.parametrize(("name", "aliases", "kind", "active", "expected"), [
+    ("林若曦", [], "character", True, []),
+    ("乙", ["林若曦"], "character", True, []),
+    ("林若曦", [], "location", True, ["林若曦"]),
+    ("林若曦", [], "character", False, ["林若曦"]),
+])
+def test_checker_uses_cached_as_of_character_names_and_aliases_without_database(
+    name, aliases, kind, active, expected,
+):
+    query = BookStateQuery(None)
+    graph = _graph("p")
+    graph.nodes_by_id["b"].name = "林若"
+    other = graph.nodes_by_id["c"]
+    other.name, other.aliases = name, aliases
+    other.node_type, other.is_active = kind, active
+    reads = []
+
+    def load(project_id, *, as_of_chapter):
+        reads.append((project_id, as_of_chapter))
+        return SimpleNamespace(world=graph)
+
+    query.projection.load_runtime_as_of = load
+    checker = ContinuityChecker(SimpleNamespace(), book_state_query=query)
+    issues = checker._check_canon_name_anchors(
+        "p", WriterOutput(chapter_number=4, title="t", body="林若曦。", end_of_chapter_summary=""),
+    )
+    assert [issue.entity_names[0] for issue in issues] == expected
+    assert reads == [("p", 3)]
+
+
 @pytest.fixture
-def compiled_book():
+def compiled_book(request):
     engine = get_engine(postgres_test_url("canon-name-anchors"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -63,6 +114,9 @@ def compiled_book():
         session.add(project)
         session.flush()
         graph = _graph(project.id)
+        graph.nodes_by_id["b"].name, graph.nodes_by_id["c"].name = getattr(
+            request, "param", ("丁", "乙"),
+        )
         world = ObjectiveWorldGraph(
             nodes=[graph.nodes_by_id[key] for key in ("a", "b", "c")],
             edges=[graph.edges_by_id[key] for key in ("0", "5")],
@@ -99,6 +153,18 @@ def test_continuity_checker_flags_drift_from_book_state_anchor(compiled_book):
     )
     issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
     assert any(issue.entity_names[:2] == ["丁戊", "丁"] for issue in issues)
+
+
+@pytest.mark.parametrize("compiled_book", [("林若", "林若曦")], indirect=True, ids=["known-character"])
+def test_continuity_checker_allows_known_character_with_anchored_prefix(compiled_book):
+    session, project_id = compiled_book
+    checker = ContinuityChecker(SimpleNamespace(session=session))
+    anchors = checker.book_state.canon_name_anchors(project_id, as_of_chapter=0)
+    assert [(anchor.role_label, anchor.canonical_name) for anchor in anchors] == [("丙的母亲", "林若")]
+    verdict = checker.check(
+        project_id, WriterOutput(chapter_number=1, title="t", body="林若曦。", end_of_chapter_summary=""),
+    )
+    assert not [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
 
 
 def test_writer_builders_receive_context_anchors():

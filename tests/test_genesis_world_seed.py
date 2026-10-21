@@ -214,6 +214,47 @@ def test_seed_ids_are_scoped_to_collection(seed, story_engine, map_atlas):
     assert validate(seed, story_engine, map_atlas) == []
 
 
+@pytest.mark.parametrize("collection,path", [
+    ("facts", "facts[0].id"),
+    ("rules", "rules[0].id"),
+    ("clocks", "clocks[0].id"),
+    ("reader_promises", "reader_promises[0].id"),
+    ("agendas", "actors[0].agendas[0].id"),
+    ("intents", "actors[0].intents[0].id"),
+])
+@pytest.mark.parametrize("missing", ["", None, "absent"])
+def test_missing_seed_ids(seed, story_engine, map_atlas, collection, path, missing):
+    item = (seed["actors"][0] if collection in ("agendas", "intents") else seed)[collection][0]
+    if missing == "absent":
+        item.pop("id")
+    else:
+        item["id"] = missing
+    issues = validate(seed, story_engine, map_atlas)
+    assert [(i.code, i.path, i.severity) for i in issues if i.code in ("missing_id", "duplicate_ref")] == [
+        ("missing_id", path, "error")
+    ]
+
+
+def test_repeated_missing_ids_are_not_duplicates(seed, story_engine, map_atlas):
+    seed["rules"].append(deepcopy(seed["rules"][0]))
+    for rule in seed["rules"]:
+        rule["id"] = ""
+    assert [(i.code, i.path) for i in validate(seed, story_engine, map_atlas)] == [
+        ("missing_id", "rules[0].id"), ("missing_id", "rules[1].id"),
+    ]
+
+
+def test_duplicate_relation_triple(seed, story_engine, map_atlas):
+    seed["relations"].append(dict(seed["relations"][0], note="other", visibility="secret", appellation="other"))
+    assert [(i.code, i.path, i.severity) for i in validate(seed, story_engine, map_atlas)] == [
+        ("duplicate_ref", "relations[1]", "error")
+    ]
+    seed["relations"][1]["edge_type"] = "ally_of"
+    assert validate(seed, story_engine, map_atlas) == []
+    seed["relations"][1].update(source="faction-1", target="cast-1", edge_type="member_of")
+    assert validate(seed, story_engine, map_atlas) == []
+
+
 def test_major_actor_rules(seed, story_engine, map_atlas):
     actor = seed["actors"][0]
     actor.update(agendas=[], intents=[], location_ref="")

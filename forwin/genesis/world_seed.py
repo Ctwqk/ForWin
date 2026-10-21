@@ -238,6 +238,9 @@ def validate_world_seed(
 
     def unique_id(item: Mapping, seen_ids: set[str], path: str) -> None:
         ref = _text(item.get("id"))
+        if not ref:
+            issue("missing_id", f"{path}.id", "Item must have an id")
+            return
         if ref in seen_ids:
             issue("duplicate_ref", f"{path}.id", f"Duplicate id: {ref}")
         seen_ids.add(ref)
@@ -303,8 +306,13 @@ def validate_world_seed(
         if ref not in seen:
             issue("missing_actor", "actors", f"Missing actor: {ref}")
 
+    seen_relations: set[tuple[str, str, str]] = set()
     for index, relation in enumerate(_objects(seed.get("relations"))):
         path = f"relations[{index}]"
+        triple = (_text(relation.get("source")), _text(relation.get("edge_type")), _text(relation.get("target")))
+        if triple in seen_relations:
+            issue("duplicate_ref", path, f"Duplicate relation: {'/'.join(triple)}")
+        seen_relations.add(triple)
         enum(relation, "edge_type", WORLD_EDGE_TYPES, "invalid_edge_type", path)
         enum(relation, "visibility", RELATION_VISIBILITIES, "invalid_visibility", path)
         for key in ("source", "target"):

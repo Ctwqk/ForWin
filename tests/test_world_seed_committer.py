@@ -320,7 +320,7 @@ def _session_factory():
     return get_session_factory(engine)
 
 
-def _setup_project(session, pack) -> tuple[str, str]:
+def _setup_project(session, pack, *, map_node_ids=MAP_NODE_IDS) -> tuple[str, str]:
     project = StateUpdater(session).create_project(
         title="world seed", premise="world seed", genre="test",
         runtime_policy=RuntimePolicy.for_profile("standard"),
@@ -328,7 +328,7 @@ def _setup_project(session, pack) -> tuple[str, str]:
     )
     revision = BookGenesisRevision(project_id=project.id, pack_json=json.dumps(pack, ensure_ascii=False))
     session.add(revision)
-    for genesis_ref, db_id in MAP_NODE_IDS.items():
+    for genesis_ref, db_id in map_node_ids.items():
         session.add(MapNodeRow(
             id=f"{db_id}-{project.id}", project_id=project.id, node_type="site",
             metadata_json=json.dumps({"source_node_id": genesis_ref}),
@@ -471,8 +471,35 @@ def test_commit_world_seed_refuses_when_book_already_has_canon(pack) -> None:
         BookStateRepository(session).append_graph_delta(
             GraphDelta(id=f"writer-{project_id}", project_id=project_id, source_type="writer_output")
         )
-        with pytest.raises(CanonStaleVersion):
+    with pytest.raises(WorldSeedCommitError) as raised:
+        with Session.begin() as session:
             _commit(session, project_id, revision_id, pack)
+    assert isinstance(raised.value.__cause__, CanonStaleVersion)
+    assert [issue.split(" ", 1)[0] for issue in raised.value.issues] == ["canon_conflict"]
+    with Session() as session:
+        counts = _row_counts(session, project_id)
+        assert (counts["story_calendars"], counts["book_lexicons"]) == (0, 0)
+        assert session.scalars(
+            select(GraphDeltaRow.id).where(GraphDeltaRow.project_id == project_id)
+        ).all() == [f"writer-{project_id}"]
+
+
+def test_commit_failure_after_calendar_save_leaves_nothing_after_rollback(pack) -> None:
+    Session = _session_factory()
+    with Session.begin() as session:
+        project_id, revision_id = _setup_project(session, pack, map_node_ids={"node-1": "loc-db-1"})
+    with Session() as session:
+        with pytest.raises(WorldSeedCommitError) as raised:
+            _commit(session, project_id, revision_id, pack)
+        assert {issue.split(" ", 1)[0] for issue in raised.value.issues} == {"unresolved_location_ref"}
+        # The calendar and lexicon were flushed before map resolution failed.
+        assert _row_counts(session, project_id)["story_calendars"] == 1
+        session.rollback()
+    with Session() as session:
+        counts = _row_counts(session, project_id)
+        assert {name: counts[name] for name in (
+            "story_calendars", "book_lexicons", "graph_deltas", "world_nodes", "character_identity_map",
+        )} == {"story_calendars": 0, "book_lexicons": 0, "graph_deltas": 0, "world_nodes": 0, "character_identity_map": 0}
 
 
 def test_commit_world_seed_requires_chapter_zero_seed_deltas(pack, seed, story_engine) -> None:

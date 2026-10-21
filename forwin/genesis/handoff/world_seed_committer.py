@@ -23,7 +23,12 @@ from forwin.book_state.story_clock import (
     duration_to_minutes,
     format_story_time,
 )
-from forwin.canon.admission import GENESIS_SEED_SOURCE_TYPE, CanonAdmissionService
+from forwin.canon.admission import (
+    GENESIS_SEED_SOURCE_TYPE,
+    CanonAdmissionService,
+    CanonStaleVersion,
+    CanonWriteFailure,
+)
 from forwin.genesis.helpers import _pack_stage_payload, _world_seed_validation_issues
 from forwin.genesis.world_seed import normalize_world_seed, story_engine_actor_refs
 from forwin.map.models import MapNodeRow
@@ -197,12 +202,15 @@ class WorldSeedCommitter:
                 for issue in verdict.issues
                 if issue.severity == "error"
             )
-        result = self.admission.commit_world_seed(
-            session=session,
-            project_id=project.id,
-            revision_id=revision.id,
-            approved_changes=changes,
-        )
+        try:
+            result = self.admission.commit_world_seed(
+                session=session,
+                project_id=project.id,
+                revision_id=revision.id,
+                approved_changes=changes,
+            )
+        except (CanonStaleVersion, CanonWriteFailure) as exc:
+            raise WorldSeedCommitError([f"canon_conflict world_seed: {exc}"]) from exc
         StateUpdater(session).save_decision_event(
             DecisionEventInfo(
                 project_id=project.id,

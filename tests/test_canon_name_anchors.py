@@ -67,6 +67,34 @@ def test_canon_name_violations_skip_exact_known_names(text, expected):
     assert [violation.observed_name for violation in violations] == expected
 
 
+@pytest.mark.parametrize("text", [
+    "林若曦说：好。",
+    "林若曦道，走吧。",
+    "林若曦笑，点头。",
+])
+def test_canon_name_violations_skip_known_names_before_dialogue_tags(text):
+    violations = find_canon_name_violations(
+        [CanonNameAnchor("丙的母亲", "林若")],
+        text,
+        known_names={"林若曦"},
+    )
+    assert violations == []
+
+
+@pytest.mark.parametrize("known_names", [
+    {"林若曦"},
+    {"林若"},
+    {"林"},
+])
+def test_canon_name_violations_flag_unknown_names_before_dialogue_tags(known_names):
+    violations = find_canon_name_violations(
+        [CanonNameAnchor("丙的母亲", "林若")],
+        "林若晴说：",
+        known_names=known_names,
+    )
+    assert [violation.observed_name for violation in violations] == ["林若晴说"]
+
+
 def test_canon_name_violations_still_flag_unknown_expansions():
     violations = find_canon_name_violations(
         [CanonNameAnchor("丙的母亲", "林若")], "林若曦。",

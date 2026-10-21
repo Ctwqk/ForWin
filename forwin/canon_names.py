@@ -96,7 +96,8 @@ def find_canon_name_violations(
 
     Every anchor is treated alike whatever its ``role_label``; the anchors themselves come
     from the caller (book state), never from patterns over prose.
-    Exact matches to known character names or aliases are not drift.
+    Captures starting with known character names or aliases that strictly extend the
+    canonical name are not drift, even when the regex includes trailing prose.
     """
     body = str(text or "")
     if not body:
@@ -116,7 +117,12 @@ def find_canon_name_violations(
             observed = _clean_name(match.group(0))
             if (
                 observed == canonical
-                or observed in known_name_set
+                or any(
+                    len(name) > len(canonical)
+                    and name.startswith(canonical)
+                    and observed.startswith(name)
+                    for name in known_name_set
+                )
                 or not _looks_like_expanded_name(canonical, observed)
             ):
                 continue

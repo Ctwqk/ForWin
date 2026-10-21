@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any
 
@@ -81,6 +82,8 @@ _INTENT_STATUS_BY_EFFECT = {"disrupted": "disrupted", "fulfilled": "resolved"}
 class TranslationResult:
     delta: GraphDelta | None
     issues: tuple[ExtractionIssue, ...]
+    # Display name of every node, site and fact ref the delta and its review can name.
+    names: Mapping[str, str] = field(default_factory=dict)
 
 
 class ChapterDeltaTranslator:
@@ -196,7 +199,7 @@ class _DeltaBuilder:
             self._intent_interaction(interaction, f"intent_interactions[{index}]")
         issues = tuple(self.issues)
         if any(issue.severity == "error" for issue in issues):
-            return TranslationResult(None, issues)
+            return TranslationResult(None, issues, self._display_names())
         delta = GraphDelta(
             id=f"chapter-delta:{self.project_id}:{self.chapter}:{extraction.body_sha256[:16]}",
             project_id=self.project_id,
@@ -231,7 +234,27 @@ class _DeltaBuilder:
                 "time_elapsed_minutes": elapsed,
             },
         )
-        return TranslationResult(delta, issues)
+        return TranslationResult(delta, issues, self._display_names())
+
+    def _display_names(self) -> dict[str, str]:
+        """Names of the world nodes, map nodes and facts before the chapter plus the ones it creates."""
+        names = {node_id: node.name for node_id, node in self.world.nodes_by_id.items()}
+        names.update((node_id, node.name) for node_id, node in self.map.nodes_by_id.items())
+        names.update((node.id, node.name) for node in self.new_sites.values())
+        names.update(
+            (node_id, str(patch.new_value.get("name") or ""))
+            for node_id, patch in self.created_nodes.items()
+            if isinstance(patch.new_value, dict)
+        )
+        names.update(
+            (f"{FACT_REF_PREFIX}{fact_id}", fact.proposition) for fact_id, fact in self.world.facts_by_id.items()
+        )
+        names.update(
+            (f"{FACT_REF_PREFIX}{patch.fact_id}", str(patch.proposition or ""))
+            for patch in self.fact_patches
+            if str(patch.op) == "create"
+        )
+        return {ref: text for ref, name in names.items() if (text := str(name or "").strip())}
 
     # issues and time
 

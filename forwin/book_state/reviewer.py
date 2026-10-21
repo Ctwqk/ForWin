@@ -309,6 +309,8 @@ class _ChapterExtractionChecks:
         modes = {mode.id: mode for mode in lexicon.travel_modes}
         start, end = self.delta.story_time_start, self._chapter_end()
         chapter_minutes = end - start if start is not None and end is not None else None
+        # Each mover's shortest travel time per measured movement.
+        required: dict[str, list[float]] = defaultdict(list)
         for movement in self.movements:
             mover = str(movement.get("entity_id") or "")
             target = f"node:{mover}"
@@ -321,6 +323,8 @@ class _ChapterExtractionChecks:
             path = self._route(mover, from_id, to_id)
             if path is None:
                 continue
+            shortest = self._shortest_minutes(modes, mover, path)
+            required[mover].append(shortest)
             if depart is not None and arrive is not None and arrive >= depart:
                 claimed = arrive - depart
             else:
@@ -332,7 +336,9 @@ class _ChapterExtractionChecks:
                     "and the movement has no valid depart and arrive offsets",
                 )
                 continue
-            self._speed_issues(modes, mover, path, claimed)
+            self._speed_issues(mover, path, shortest, claimed)
+        if chapter_minutes is not None:
+            self._total_time_issues(required, chapter_minutes)
 
     def _chapter_end(self) -> int | None:
         """The chapter's last minute; unknown when the extraction gave no elapsed time."""
@@ -399,7 +405,7 @@ class _ChapterExtractionChecks:
             return None
         return known
 
-    def _speed_issues(self, modes: dict[str, TravelMode], mover: str, path: PathResult, claimed: int) -> None:
+    def _shortest_minutes(self, modes: dict[str, TravelMode], mover: str, path: PathResult) -> float:
         # Speed 1.0 over the mover's route, or one of its travel modes over the fastest route that
         # mode may use; both follow the same known-route rule.
         observer = self._overlay_key(mover)
@@ -414,7 +420,9 @@ class _ChapterExtractionChecks:
             )
             if by_mode.reachable:
                 candidates.append(by_mode.total_travel_time * 60 / mode.speed_multiplier)
-        shortest = min(candidates)
+        return min(candidates)
+
+    def _speed_issues(self, mover: str, path: PathResult, shortest: float, claimed: int) -> None:
         if shortest <= 0:
             return
         detail = (
@@ -426,6 +434,22 @@ class _ChapterExtractionChecks:
             self._issue("error", "movement_too_fast", f"node:{mover}", detail)
         elif claimed < shortest - _MINUTE_EPSILON:
             self._issue("warning", "movement_fast_within_tolerance", f"node:{mover}", detail)
+
+    def _total_time_issues(self, required: dict[str, list[float]], chapter_minutes: int) -> None:
+        """A mover's movements together must fit the chapter's span, give or take the tolerance."""
+        for mover, minutes in required.items():
+            # A single movement is the per-movement check's alone.
+            if len(minutes) < 2:
+                continue
+            total = sum(minutes)
+            detail = (
+                f"{mover} makes {len(minutes)} moves needing {total:g} min on the shortest routes; "
+                f"the chapter spans {chapter_minutes} min"
+            )
+            if total > chapter_minutes * (1 + self.tolerance) + _MINUTE_EPSILON:
+                self._issue("error", "movement_total_too_fast", f"node:{mover}", detail)
+            elif total > chapter_minutes + _MINUTE_EPSILON:
+                self._issue("warning", "movement_total_fast_within_tolerance", f"node:{mover}", detail)
 
     # entities and items
 

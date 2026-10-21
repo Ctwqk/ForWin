@@ -358,6 +358,26 @@ def test_movement_speed_against_shortest_time_and_tolerance() -> None:
     engine.dispose()
 
 
+def test_movement_total_against_chapter_span() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    # loc 1 <-> loc 2 is a 2 h road; the rival, who has no overlay, takes the 1 h route loc 2 <-> loc 3.
+    hero_there_and_back = [_move(world.hero, world.loc(1), world.loc(2)), _move(world.hero, world.loc(2), world.loc(1))]
+    rival_there_and_back = [_move(world.rival, world.loc(2), world.loc(3)), _move(world.rival, world.loc(3), world.loc(2))]
+
+    def check(time: dict[str, Any], movements: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        return _check(Session, world, 1, {**time, "movements": movements})
+
+    # 240 min of travel: each move fits the 180 min chapter, together they exceed 180 * 1.2.
+    assert check(_time(3, "时"), hero_there_and_back) == [("error", "movement_total_too_fast")]
+    # 240 min within 210 min * 1.2 is only a warning.
+    assert check(_time(3.5, "时"), hero_there_and_back) == [("warning", "movement_total_fast_within_tolerance")]
+    assert check(_time(3, "时"), rival_there_and_back) == []
+    # An unknown span has no total to compare; each move warns on its own.
+    assert check({}, hero_there_and_back) == [("warning", "movement_duration_unknown")] * 2
+    engine.dispose()
+
+
 def test_unknown_chapter_duration_checks_speed_only_on_both_offsets() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)

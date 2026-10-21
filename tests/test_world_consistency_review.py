@@ -17,6 +17,7 @@ from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.world_consistency import WorldConsistencyReviewer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
+from forwin.writer.prompt_core.world_repair import DEFAULT_WORLD_REPAIR_FIX, WORLD_REPAIR_FIXES
 from tests.chapter_delta_helpers import chapter_delta
 from tests.test_world_gate_v6 import _move, _seed_world, _session_factory, _time, _World
 
@@ -108,6 +109,28 @@ def test_world_gate_error_fails_draft_with_must_fix() -> None:
     # The repair loop routes it to a local draft repair, not a chapter-plan patch.
     decision = _repair_decision(verdict)
     assert (decision.outcome, decision.sub_action["scope"]) == ("local_repair", "draft")
+    engine.dispose()
+
+
+def test_world_error_names_entities_and_gives_a_code_specific_fix() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    verdict = _draft_review(Session, world, _output(world, _hero_walks(world, 6, "刻")))
+
+    issue = verdict.issues[0]
+    # The writer sees the names its prompt uses, never BookState or map node ids.
+    for name in ("甲", "site-1", "site-2"):
+        assert name in issue.description
+    for node_id in (world.hero, world.loc(1), world.loc(2)):
+        assert node_id not in issue.description
+        assert not any(node_id in item for item in verdict.repair_instruction.must_fix)
+    assert issue.entity_names == ["甲", "site-1", "site-2"]
+    assert issue.suggested_fix == WORLD_REPAIR_FIXES["movement_too_fast"]
+    assert issue.suggested_fix != DEFAULT_WORLD_REPAIR_FIX
+    # The raw gate message keeps the ids for audit.
+    assert world.hero in str(issue.original_result["message"])
+    assert issue.evidence_refs == [f"node:{world.hero}"]
     engine.dispose()
 
 
@@ -204,13 +227,10 @@ def test_draft_review_passes_policy_tolerance_to_world_reviewer() -> None:
 
 
 def test_world_issue_type_is_registered_for_routing() -> None:
-    missing = WorldConsistencyReviewer().review(
-        session=None, project_id="project-1", chapter_number=1,
-        writer_output=WriterOutput(
-            project_id="project-1", chapter_number=1, title="t", body=BODY, end_of_chapter_summary="s",
-        ),
-        travel_tolerance=0.2,
-    )
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    missing = _world_review(Session, world, _output(world, extracted=False))
+    engine.dispose()
     review = ReviewVerdict(verdict="fail", issues=missing.issues)
     decision = _repair_decision(review)
 

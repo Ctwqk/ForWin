@@ -1162,3 +1162,11 @@ category = "prompt_text"
 justification = "writer prompt 构造模块（拼接 LLM 说明文字与解析 premise 中的主角标注）"
 max_literals = 20
 
+[[entry]]
+path = "forwin/writer/prompt_core/world_repair.py"
+symbol = "WORLD_REPAIR_FIXES"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "世界审查门 error 写给 writer 的修复说明（按 issue code 取用），不参与判定"
+max_literals = 14
+

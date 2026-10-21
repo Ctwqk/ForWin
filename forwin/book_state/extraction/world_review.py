@@ -6,6 +6,7 @@ review meets the same gate at canon.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,11 @@ class ChapterWorldReview:
     translation: TranslationResult
     # None exactly when translation failed: there is no delta to gate.
     gate: BookStateReviewVerdict | None
+
+    @property
+    def names(self) -> Mapping[str, str]:
+        """Display names of the node, site and fact refs in translation and gate messages."""
+        return self.translation.names
 
 
 def review_chapter_extraction(

@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-import logging
-
 from forwin.book_state.query import BookStateQuery
-from forwin.book_state.repository import BookStateRepository
-from forwin.map.repository import MapRepository
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.review.query import ReviewQuery
-
-logger = logging.getLogger(__name__)
 
 
 def build_review_context_pack(
@@ -78,7 +72,6 @@ def build_review_context_pack(
             before_chapter=context.chapter_number,
         )
     map_context = dict(context.map_context)
-    map_context.update(_build_reviewer_only_map_context(repo=repo, context=context))
     canon_quality_context = getattr(context, "canon_quality_context", {}) or {}
     active_narrative_obligations = getattr(context, "active_narrative_obligations", []) or []
     if not active_narrative_obligations and isinstance(canon_quality_context, dict):
@@ -137,36 +130,3 @@ def build_review_context_pack(
         future_plan_audit_summary=dict(future_plan_audit_summary) if isinstance(future_plan_audit_summary, dict) else {},
     )
 
-
-def _build_reviewer_only_map_context(*, repo, context: ChapterContextPack) -> dict:
-    session = getattr(repo, "session", None) if repo is not None else None
-    if session is None:
-        return {}
-    payload: dict = {}
-    try:
-        map_repo = MapRepository(session)
-        nodes = map_repo.list_map_nodes(context.project_id)
-        edges = map_repo.list_map_edges(context.project_id)
-        if nodes or edges:
-            payload["objective_review_graph"] = {
-                "available": True,
-                "node_count": len(nodes),
-                "edge_count": len(edges),
-                "map_nodes": [node.model_dump(mode="json") for node in nodes],
-                "map_edges": [edge.model_dump(mode="json") for edge in edges],
-            }
-    except Exception:
-        logger.warning("Failed to build reviewer objective map context.", exc_info=True)
-    try:
-        views = BookStateRepository(session).load_cognition_views(
-            context.project_id,
-            as_of_chapter=max(0, int(context.chapter_number or 0)),
-        )
-        if views:
-            payload["observer_cognition"] = {
-                f"{observer_type}:{observer_id}": view.overlay.model_dump(mode="json")
-                for (observer_type, observer_id), view in views.items()
-            }
-    except Exception:
-        logger.warning("Failed to build reviewer cognition context.", exc_info=True)
-    return payload

@@ -169,7 +169,7 @@ def _has_explicit_rule_bridge(delta: GraphDelta) -> bool:
 def _is_immutable_rule_definition_path(field_path: str) -> bool:
     return (
         field_path in {"name", "aliases", "summary", "description", "profile"}
-        or field_path.startswith(("profile.", "metadata.writer_state."))
+        or field_path.startswith("profile.")
     )
 
 

@@ -1001,7 +1001,8 @@ def _dedupe(items: list[str]) -> list[str]:
 
 def _structured_character_reference_names(writer_output: WriterOutput) -> list[str]:
     """Character names the chapter delta introduces: named on-stage mentions, new character
-    entities and the ``new:`` refs of event participants, movers and knowledge observers."""
+    entities and every ``new:`` ref in a field that can name a character (item and intent
+    refs cannot)."""
     delta = writer_output.chapter_delta
     if delta is None:
         return []
@@ -1020,20 +1021,23 @@ def _structured_character_reference_names(writer_output: WriterOutput) -> list[s
     refs = [
         *(ref for event in delta.events for ref in event.participant_refs),
         *(movement.entity_ref for movement in delta.movements),
-        *(item.observer_ref for item in delta.knowledge_events),
+        *(ref for item in delta.knowledge_events for ref in (item.observer_ref, item.source_ref)),
+        *(ref for change in delta.relation_changes for ref in (change.source_ref, change.target_ref)),
+        *(change.ref for change in delta.entity_changes),
+        *(
+            change.new_value
+            for change in delta.entity_changes
+            if change.field.strip() == "holder_id" and isinstance(change.new_value, str)
+        ),
+        *(ref for transfer in delta.item_transfers for ref in (transfer.from_ref, transfer.to_ref)),
     ]
     character_candidates.extend(
         ref.strip().removeprefix(NEW_REF_PREFIX).strip()
         for ref in refs
         if ref.strip().startswith(NEW_REF_PREFIX)
     )
-    # A name the delta itself declares as a non-character entity or site is never a character.
+    # Names the delta declares as a non-character entity, an item or a new site are never characters.
     non_character_names = {
-        *(
-            mention.name.strip()
-            for mention in delta.entity_mentions
-            if mention.kind.strip().lower() not in _CHARACTER_KINDS
-        ),
         *(
             entity.name.strip()
             for entity in (

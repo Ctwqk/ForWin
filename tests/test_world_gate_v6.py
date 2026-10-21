@@ -785,5 +785,7 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
     )
 
     assert outcome.blocked is False
-    assert outcome.approved_changes.graph_deltas == [delta]
+    assert [(item.id, item.metadata) for item in outcome.approved_changes.graph_deltas] == [
+        ("delta-3", {"translation_warnings": []}),
+    ]
     assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35}]

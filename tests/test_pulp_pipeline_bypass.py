@@ -443,10 +443,10 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         }
 
 
-def test_empty_extraction_blocks_canon() -> None:
-    """A deferred single-pass writer gets no regex fallback: an empty extraction blocks canon."""
+def test_deferred_single_writer_extraction_failure_blocks_canon() -> None:
+    """A deferred single-pass writer gets no regex fallback: an unusable extraction blocks canon."""
 
-    class EmptyExtractionClient:
+    class EmptyResponseClient:
         def __init__(self) -> None:
             self.calls = 0
 
@@ -454,7 +454,7 @@ def test_empty_extraction_blocks_canon() -> None:
             self.calls += 1
             return ""
 
-    client = EmptyExtractionClient()
+    client = EmptyResponseClient()
     recorded: list[dict[str, object]] = []
     engine = get_engine(postgres_test_url("pulp_empty_extraction_blocks"))
     init_db(engine)

@@ -144,10 +144,17 @@ class BookStateCanonPreparer:
                 blocked_path="chapter-delta-translation-blocked",
                 extraction=extraction,
             )
+        # Translation warnings never block; the committed delta keeps them for audit.
+        delta = translation.delta.model_copy(update={"metadata": {
+            **translation.delta.metadata,
+            "translation_warnings": [
+                {"code": issue.code, "message": issue.message} for issue in translation.issues
+            ],
+        }})
         changes = ApprovedGraphDeltaSet(
             project_id=project_id,
             chapter_number=chapter_number,
-            graph_deltas=[translation.delta],
+            graph_deltas=[delta],
             approved_by=["chapter_extraction"],
             review_verdict_id=review_verdict_id,
         )

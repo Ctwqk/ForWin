@@ -19,11 +19,12 @@ from forwin.checker.rules import ContinuityChecker
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent
 from forwin.models.base import Base
-from forwin.models.book_state import GraphDeltaRow
+from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.project import ChapterPlan, Project
 from forwin.naming import EntityRegistrar
+from forwin.protocol.book_state import WorldNode
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
@@ -321,6 +322,75 @@ def test_canon_commits_translated_delta(runtime) -> None:
     assert rows[0].source_id == f"chapter:1:{_sha(BODY)}"
     names = {node.name for node in BookStateRepository(session).list_world_nodes(chapter.project_id, as_of_chapter=1)}
     assert "陈七" in names
+
+
+def _commit(pipeline, session, chapter: ChapterPlan, output: WriterOutput):
+    planned, candidate_id = _persist_candidate(session, chapter, output)
+    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=ExtractionClient())
+    assert preparation.plan is not None, preparation.blocked_path
+    session.commit()
+    outcome = pipeline.canon_admission.commit_plan(preparation.plan)
+    assert not outcome.blocked, outcome.blocked_path
+    session.expire_all()
+    return planned, session.scalars(select(GraphDeltaRow).where(GraphDeltaRow.project_id == chapter.project_id)).all()
+
+
+def test_off_stage_new_characters_in_relations_and_knowledge_are_admitted_and_committed(runtime) -> None:
+    pipeline, session, chapter = runtime
+    hero = f"char-lin-{chapter.project_id}"
+    BookStateRepository(session).create_world_node(
+        WorldNode(id=hero, project_id=chapter.project_id, node_type="character", name="林夜", state={"status": "active"}),
+        version_chapter=0,
+    )
+    session.commit()
+    body = "林夜读完王五的信，才知道赵六是他失散多年的兄长。"
+    output = _output(chapter, body=body, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(
+        body_sha256=_sha(body),
+        relation_changes=[{
+            "source_ref": hero, "target_ref": "new:赵六", "edge_type": "family_of", "op": "create",
+            "evidence": "赵六是他失散多年的兄长",
+        }],
+        knowledge_events=[{
+            "observer_ref": hero, "new_fact": {"proposition": "赵六是林夜的兄长", "truth_value": True, "sensitivity": "public"},
+            "state": "knows", "channel": "document", "source_ref": "new:王五", "evidence": "林夜读完王五的信",
+        }],
+    )))
+
+    planned, rows = _commit(pipeline, session, chapter, output)
+
+    plan = planned.generation_meta["entity_admission_plan"]
+    assert sorted((item["mention_name"], item["action"]) for item in plan["decisions"]) == [
+        ("王五", "register_character"), ("赵六", "register_character"),
+    ]
+    assert [row.source_type for row in rows] == ["chapter_extraction"]
+    names = {node.name for node in BookStateRepository(session).list_world_nodes(chapter.project_id, as_of_chapter=1)}
+    assert {"王五", "赵六"} <= names
+
+
+def test_valid_empty_extraction_commits_patchless_delta(runtime) -> None:
+    pipeline, session, chapter = runtime
+    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))))
+
+    _planned, rows = _commit(pipeline, session, chapter, output)
+
+    assert [(row.source_type, row.story_time_start, row.story_time_end) for row in rows] == [
+        ("chapter_extraction", OPENING, OPENING),
+    ]
+    patches = session.scalars(select(GraphDeltaPatchRow).where(GraphDeltaPatchRow.delta_id == rows[0].id)).all()
+    assert patches == []
+
+
+def test_canon_records_translation_warnings_on_the_delta(runtime) -> None:
+    pipeline, session, chapter = runtime
+    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(
+        body_sha256=_sha(BODY), time={"elapsed": {"amount": 1, "unit": "年"}, "evidence": "两日后才赶到渡口"},
+    )))
+
+    _planned, rows = _commit(pipeline, session, chapter, output)
+
+    warnings = json.loads(rows[0].metadata_json)["translation_warnings"]
+    assert [item["code"] for item in warnings] == ["elapsed_unknown"]
+    assert set(warnings[0]) == {"code", "message"}
 
 
 def test_extraction_failure_blocks_canon_without_regex_fallback(runtime) -> None:

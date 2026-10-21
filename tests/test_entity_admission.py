@@ -221,6 +221,96 @@ def test_admission_discovers_character_references_outside_entity_mentions() -> N
         engine.dispose()
 
 
+class _CapturingAdmitAll:
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def classify(self, **kwargs):
+        self.names = list(kwargs["names"])
+        return [
+            {"name": name, "decision": "register_character", "canonical_name": name}
+            for name in self.names
+        ]
+
+
+def test_admission_collects_new_refs_from_every_entity_ref_field() -> None:
+    classifier = _CapturingAdmitAll()
+    engine, session = _session()
+    try:
+        project = Project(title="引用全集", premise="p", genre="g")
+        session.add(project)
+        session.flush()
+        body = "甲一与乙二结盟，丁四告诉丙三真相，戊五把铜令交给己六，庚七受伤，玉牌落到辛八手里，众人抵达渡口。"
+        result = EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=_output(
+                project.id, 1, body, "众人抵达渡口。",
+                relation_changes=[{
+                    "source_ref": "new:甲一", "target_ref": "new:乙二", "edge_type": "ally_of",
+                    "op": "create", "evidence": "甲一与乙二结盟",
+                }],
+                knowledge_events=[{
+                    "observer_ref": "new:丙三", "new_fact": {
+                        "proposition": "真相", "truth_value": True, "sensitivity": "public",
+                    }, "state": "knows", "channel": "told", "source_ref": "new:丁四",
+                    "evidence": "丁四告诉丙三真相",
+                }],
+                item_transfers=[
+                    {
+                        "new_item": {"name": "铜令", "kind": "item"}, "from_ref": "new:戊五",
+                        "to_ref": "new:己六", "evidence": "戊五把铜令交给己六",
+                    },
+                    {
+                        "item_ref": "item-ledger", "from_ref": "new:己六", "to_ref": "new:渡口",
+                        "evidence": "众人抵达渡口",
+                    },
+                ],
+                entity_changes=[
+                    {"ref": "new:庚七", "field": "status", "new_value": "受伤", "evidence": "庚七受伤"},
+                    {
+                        "new_entity": {"name": "玉牌", "kind": "item"}, "field": "holder_id",
+                        "new_value": "new:辛八", "evidence": "玉牌落到辛八手里",
+                    },
+                ],
+                new_sites=[{"name": "渡口", "near_ref": "loc-1", "evidence": "众人抵达渡口"}],
+            ),
+        )
+
+        assert sorted(classifier.names) == sorted(["甲一", "乙二", "丙三", "丁四", "戊五", "己六", "庚七", "辛八"])
+        assert len(classifier.names) == len(set(classifier.names))
+        assert result.plan_conflicts == []
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_untyped_mention_kind_does_not_hide_a_new_character_ref() -> None:
+    classifier = _CapturingAdmitAll()
+    engine, session = _session()
+    try:
+        project = Project(title="自由类别", premise="p", genre="g")
+        session.add(project)
+        session.flush()
+        EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
+            project_id=project.id,
+            chapter_number=1,
+            writer_output=_output(
+                project.id, 1, "陈七递来铜令。", "陈七出现。",
+                entity_mentions=[mention("陈七", kind="npc")],
+                events=[{
+                    "summary": "陈七递来铜令", "participant_refs": ["new:陈七"], "significance": "minor",
+                    "visibility": "public", "evidence": "陈七递来铜令",
+                }],
+            ),
+        )
+
+        assert classifier.names == ["陈七"]
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_admission_does_not_reclassify_typed_non_character_participants() -> None:
     class Classifier:
         def __init__(self) -> None:

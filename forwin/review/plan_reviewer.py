@@ -26,24 +26,12 @@ class PlanContractReviewer:
     @staticmethod
     def issues(*, context, writer_output: WriterOutput) -> list[ContinuityIssue]:
         delta = writer_output.chapter_delta
+        if delta is None:
+            # The world consistency signal reports the missing chapter delta.
+            return []
         issue_type = "plan_task_fulfillment"
         issue_group = issue_group_for_issue(issue_type=issue_type)
         goal_targets = plan_goal_targets(context.chapter_goals)
-        if delta is None:
-            if not goal_targets:
-                return []
-            return [
-                ContinuityIssue(
-                    rule_name="plan_fulfillment_unavailable",
-                    severity="error",
-                    description="缺少章节抽取，无法核验计划目标。",
-                    reviewer="plan_contract",
-                    issue_type=issue_type,
-                    target_scope="chapter",
-                    issue_group=issue_group,
-                    suggested_fix="完成章节 delta 抽取后重新核验计划目标。",
-                )
-            ]
         status_rank = {"missing": 0, "partial": 1, "done": 2}
         fulfillment = {}
         for item in delta.plan_fulfillment:

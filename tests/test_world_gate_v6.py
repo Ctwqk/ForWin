@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from forwin.book_state import BookStateCompiler, BookStateRepository
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
+from forwin.book_state.extraction import world_review
 from forwin.book_state.extraction.translator import ChapterDeltaTranslator, TranslationResult
 from forwin.book_state import reveal_schedule
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -757,8 +758,8 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
                 approved_changes=reviewed,
             )
 
-    monkeypatch.setattr(preparation, "ChapterDeltaTranslator", Translator)
-    monkeypatch.setattr(preparation, "BookStateReviewGate", Gate)
+    monkeypatch.setattr(world_review, "ChapterDeltaTranslator", Translator)
+    monkeypatch.setattr(world_review, "BookStateReviewGate", Gate)
     policy = RuntimePolicy.for_profile("standard")
     policy = policy.model_copy(update={"review": policy.review.model_copy(update={"travel_tolerance": 0.35})})
 

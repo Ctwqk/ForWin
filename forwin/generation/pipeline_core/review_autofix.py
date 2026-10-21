@@ -8,7 +8,6 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.review.issue_groups import issue_group_for_issue
 import json
 from forwin.protocol.review import ReviewVerdict
-from forwin.observability.payloads import audit_payload
 from forwin.protocol.experience import (
     BandDelightSchedule,
     ChapterExperiencePlan,
@@ -374,51 +373,6 @@ class ReviewWorkflowStage:
             writer_output=writer_output,
         )
         return result.writer_output
-
-    def _record_map_movement_review_issues(
-        self,
-        *,
-        updater: StateUpdater,
-        project_id: str,
-        chapter_number: int,
-        review: ReviewVerdict,
-        parent_event_id: str = "",
-    ) -> None:
-        issues = [
-            issue
-            for issue in review.issues
-            if str(getattr(issue, "rule_name", "") or "").startswith("map_")
-        ]
-        if not issues:
-            return
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="runtime_observation",
-            event_type=DecisionEventType.MAP_MOVEMENT_REVIEW_ISSUE,
-            scope="chapter",
-            summary=f"第{chapter_number}章 map movement reviewer 发现 {len(issues)} 个问题。",
-            payload=audit_payload(
-                stage="map_movement_review",
-                status="issue",
-                operation_id=self._audit_operation_id(),
-                issue_count=len(issues),
-                issues=[
-                    {
-                        "rule_name": str(issue.rule_name or ""),
-                        "issue_type": str(issue.issue_type or ""),
-                        "severity": str(issue.severity or ""),
-                        "issue_group": str(issue.issue_group or ""),
-                        "target_scope": str(issue.target_scope or ""),
-                        "entity_names": list(issue.entity_names or []),
-                        "evidence_refs": list(issue.evidence_refs or []),
-                    }
-                    for issue in issues
-                ],
-            ),
-            parent_event_id=parent_event_id,
-        )
 
     def _chapter_plan_snapshot(
         self,

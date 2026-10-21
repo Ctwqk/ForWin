@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 QualityProfile = Literal["standard", "pulp"]
 GateDelegate = Literal["human", "spark"]
@@ -40,6 +40,16 @@ class ReviewPolicy(FrozenPolicyModel):
     repair_models: tuple[str, ...]
     # Share of the shortest travel time a claimed movement may undercut before it is an error.
     travel_tolerance: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    @field_validator("signals", mode="before")
+    @classmethod
+    def _rename_map_movement(cls, value: object) -> object:
+        # Policies stored before world gate v6 name its predecessor signal.
+        if not isinstance(value, (list, tuple)) or "map_movement" not in value:
+            return value
+        return tuple(dict.fromkeys(
+            "world_consistency" if item == "map_movement" else item for item in value
+        ))
 
     def allows_signal(self, name: str) -> bool:
         return name in self.signals
@@ -85,7 +95,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 chapter_length=ChapterLengthPolicy(min_chars=1800, target_chars=2400, max_chars=3000),
                 pause=PausePolicy(manual_checkpoints=False, band_checkpoint_action="continue"),
                 review=ReviewPolicy(
-                    signals=("lint", "publisher"),
+                    signals=("lint", "world_consistency", "publisher"),
                     repair_scopes=(),
                     max_rewrites=0,
                     blocking_rewrites=1,
@@ -101,7 +111,7 @@ class RuntimePolicy(FrozenPolicyModel):
             chapter_length=ChapterLengthPolicy(min_chars=2500, target_chars=2800, max_chars=3200),
             pause=PausePolicy(),
             review=ReviewPolicy(
-                signals=("experience", "lint", "map_movement", "personality", "canon_quality", "publisher"),
+                signals=("experience", "lint", "world_consistency", "personality", "canon_quality", "publisher"),
                 repair_scopes=("local", "chapter", "band", "arc", "book", "obligation"),
                 max_rewrites=3,
                 repair_models=("deepseek-reasoner", "deepseek-reasoner", "gpt-5.3-codex-spark"),

@@ -21,7 +21,6 @@ class ExperienceReviewer:
             enabled=enabled,
             llm_client=llm_client,
             llm_enabled=llm_enabled,
-            include_map_movement=False,
         )
 
     def review(

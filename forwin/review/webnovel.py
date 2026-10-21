@@ -15,7 +15,6 @@ from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVer
 from forwin.protocol.writer import WriterOutput
 from forwin.writer.llm import LLMClient
 from .llm_webnovel import LLMWebNovelReviewer
-from .map_movement import MapMovementReviewer
 
 
 _TAG_KEYWORDS = {
@@ -89,14 +88,10 @@ class WebNovelExperienceReviewer:
         enabled: bool = True,
         llm_client: LLMClient | None = None,
         llm_enabled: bool | None = None,
-        include_map_movement: bool = True,
-        map_movement_reviewer: MapMovementReviewer | None = None,
     ) -> None:
         self.enabled = enabled
         self.llm_client = llm_client
         self.llm_enabled = bool(llm_client) if llm_enabled is None else llm_enabled
-        self.include_map_movement = include_map_movement
-        self.map_movement_reviewer = map_movement_reviewer or MapMovementReviewer()
         self.llm_webnovel_reviewer = LLMWebNovelReviewer(
             llm_client=llm_client,
             heuristic_reviewer=self,
@@ -119,19 +114,6 @@ class WebNovelExperienceReviewer:
         if not self.enabled:
             return ReviewVerdict(verdict="pass", issues=[])
         if review_context.chapter_experience_plan is None:
-            movement_issue = (
-                self.map_movement_reviewer.first_issue(review_context, writer_output)
-                if self.include_map_movement
-                else None
-            )
-            if movement_issue is not None:
-                return ReviewVerdict(
-                    verdict="fail" if movement_issue.severity == "error" else "warn",
-                    issues=[movement_issue],
-                    recommended_action="rewrite" if movement_issue.severity == "error" else "pause_for_review",
-                    reviewer_mode="heuristic_fallback",
-                    evidence_refs=list(movement_issue.evidence_refs),
-                )
             return ReviewVerdict(verdict="pass", issues=[])
 
         if self.llm_enabled and self.llm_client is not None:
@@ -298,15 +280,6 @@ class WebNovelExperienceReviewer:
         if rule_issue is not None:
             verdict = "fail"
             issues.append(rule_issue)
-
-        movement_issue = (
-            self.map_movement_reviewer.first_issue(context, writer_output)
-            if self.include_map_movement
-            else None
-        )
-        if movement_issue is not None:
-            verdict = "fail" if movement_issue.severity == "error" else ("warn" if verdict == "pass" else verdict)
-            issues.append(movement_issue)
 
         if immersion_score < 0.4 and writer_output.scene_outputs:
             verdict = "fail"

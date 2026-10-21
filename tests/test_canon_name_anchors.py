@@ -225,7 +225,7 @@ def test_draft_review_does_not_fail_or_rewrite_on_anchor_drift(line):
         experience_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
         plan_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
         lint_collector=SimpleNamespace(collect=lambda _writer_output: []),
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
     ).review(

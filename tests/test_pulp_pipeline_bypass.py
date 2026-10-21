@@ -86,14 +86,14 @@ def writer() -> WriterOutput:
 
 def test_disabled_reviewers_are_not_called() -> None:
     experience = RecordingReviewer()
-    map_movement = RecordingReviewer()
+    world_consistency = RecordingReviewer()
     personality = RecordingReviewer()
     hub = DraftReviewService(
         experience_reviewer=experience,
-        map_movement_reviewer=map_movement,
+        world_consistency_reviewer=world_consistency,
         personality_reviewer=personality,
         experience_review_enabled=False,
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
     )
@@ -111,7 +111,7 @@ def test_disabled_reviewers_are_not_called() -> None:
         "entity_admission_plan_invalid"
     ]
     assert experience.calls == 0
-    assert map_movement.calls == 0
+    assert world_consistency.calls == 0
     assert personality.calls == 0
 
 
@@ -120,7 +120,7 @@ def test_disabled_personality_reviewer_does_not_collect_or_review() -> None:
     hub = DraftReviewService(
         personality_reviewer=personality,
         experience_review_enabled=False,
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
     )

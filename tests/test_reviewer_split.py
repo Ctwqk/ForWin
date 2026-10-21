@@ -168,7 +168,7 @@ def test_draft_review_keeps_warnings_out_of_merged_must_fix() -> None:
         ),
         plan_reviewer=SimpleNamespace(review=lambda *_args, **_kwargs: passing),
         lint_collector=SimpleNamespace(collect=lambda _writer_output: []),
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
     )
@@ -200,31 +200,15 @@ def test_draft_review_keeps_warnings_out_of_merged_must_fix() -> None:
     ]
 
 
-def test_map_movement_reviewer_owns_deterministic_movement_issue() -> None:
-    from forwin.review.map_movement import MapMovementReviewer
-
-    verdict = MapMovementReviewer().review(_movement_context(), _movement_output())
-
-    assert verdict.verdict == "fail"
-    assert [issue.rule_name for issue in verdict.issues] == [
-        "map_travel_time_exceeds_chapter_time"
-    ]
-    assert verdict.issues[0].reviewer == "map_movement"
-
-
-def test_webnovel_reviewer_facade_keeps_legacy_movement_behavior_without_owning_method() -> (
-    None
-):
+def test_webnovel_reviewer_leaves_movement_to_world_consistency() -> None:
     from forwin.review.webnovel import WebNovelExperienceReviewer
 
     reviewer = WebNovelExperienceReviewer(llm_enabled=False)
     verdict = reviewer.review(_movement_context(), _movement_output())
 
-    assert not hasattr(WebNovelExperienceReviewer, "_map_movement_issue")
-    assert any(
-        issue.rule_name == "map_travel_time_exceeds_chapter_time"
-        for issue in verdict.issues
-    )
+    assert not hasattr(reviewer, "map_movement_reviewer")
+    assert verdict.verdict == "pass"
+    assert verdict.issues == []
 
 
 def test_llm_webnovel_reviewer_owns_llm_prompt_and_json_repair() -> None:
@@ -274,12 +258,10 @@ def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
             return []
 
     experience = StubReviewer()
-    map_movement = StubReviewer("pass")
     plan_review = StubReviewer("pass")
     personality = StubReviewer("pass")
     hub = DraftReviewService(
         experience_reviewer=experience,
-        map_movement_reviewer=map_movement,
         plan_reviewer=plan_review,
         personality_reviewer=personality,
         lint_collector=StubLintCollector(),
@@ -294,7 +276,6 @@ def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
 
     assert verdict.verdict == "pass"
     assert experience.calls == 1
-    assert map_movement.calls == 1
     assert plan_review.calls == 1
     assert personality.calls == 1
 

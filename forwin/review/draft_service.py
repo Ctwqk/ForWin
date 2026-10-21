@@ -4,6 +4,7 @@ import inspect
 
 from pydantic import ValidationError
 
+from forwin.book_state.reviewer import DEFAULT_TRAVEL_TOLERANCE
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.invariant_contract import (
     immutable_rule_invariants,
@@ -30,10 +31,10 @@ from .infrastructure_errors import (
     infrastructure_issue_types,
 )
 from .lint import LintSignalCollector
-from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
 from .plan_reviewer import PlanContractReviewer
 from .publisher_compliance import PublisherComplianceReviewer
+from .world_consistency import WorldConsistencyReviewer
 
 
 class DraftReviewService:
@@ -42,7 +43,7 @@ class DraftReviewService:
         *,
         experience_review_enabled: bool = True,
         lint_review_enabled: bool = True,
-        map_movement_review_enabled: bool = True,
+        world_consistency_review_enabled: bool = True,
         personality_review_enabled: bool = True,
         canon_quality_review_in_hub_enabled: bool = True,
         publisher_compliance_review_enabled: bool = False,
@@ -51,15 +52,16 @@ class DraftReviewService:
         continuity_reviewer=None,
         plan_reviewer=None,
         experience_reviewer=None,
-        map_movement_reviewer=None,
+        world_consistency_reviewer=None,
         personality_reviewer=None,
         publisher_compliance_reviewer=None,
         lint_collector=None,
         llm_webnovel_reviewer=None,
         observability=None,
+        travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
     ) -> None:
         self.experience_review_enabled = bool(experience_review_enabled)
-        self.map_movement_review_enabled = bool(map_movement_review_enabled)
+        self.world_consistency_review_enabled = bool(world_consistency_review_enabled)
         self.personality_review_enabled = bool(personality_review_enabled)
         self.canon_quality_review_in_hub_enabled = bool(
             canon_quality_review_in_hub_enabled
@@ -74,7 +76,10 @@ class DraftReviewService:
             llm_client=llm_client,
             llm_enabled=llm_enabled,
         )
-        self.map_movement_reviewer = map_movement_reviewer or MapMovementReviewer()
+        self.world_consistency_reviewer = (
+            world_consistency_reviewer or WorldConsistencyReviewer()
+        )
+        self.travel_tolerance = float(travel_tolerance)
         self.personality_reviewer = (
             personality_reviewer or PersonalityConsistencyReviewer()
         )
@@ -212,21 +217,25 @@ class DraftReviewService:
                 writer_output,
             )
             span.metric("issue_count", len(getattr(plan_review, "issues", []) or []))
-        map_movement = ReviewVerdict(verdict="pass", issues=[])
-        if self.map_movement_review_enabled:
+        world_consistency = ReviewVerdict(verdict="pass", issues=[])
+        # Like canon quality, world review reads BookState and needs the session.
+        if self.world_consistency_review_enabled and session is not None:
             with self.observability.span(
                 obs_context,
-                "review.map_movement",
+                "review.world_consistency",
                 span_kind="reviewer",
                 component="reviewer",
             ) as span:
-                map_movement = self._call_with_compatible_kwargs(
-                    self.map_movement_reviewer.review,
-                    review_context,
-                    writer_output,
+                world_consistency = self.world_consistency_reviewer.review(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+                    writer_output=writer_output,
+                    travel_tolerance=self.travel_tolerance,
                 )
                 span.metric(
-                    "issue_count", len(getattr(map_movement, "issues", []) or [])
+                    "issue_count",
+                    len(getattr(world_consistency, "issues", []) or []),
                 )
         personality_review = ReviewVerdict(verdict="pass", issues=[])
         personality_review_call = getattr(self.personality_reviewer, "review", None)
@@ -272,7 +281,9 @@ class DraftReviewService:
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
             *self._normalize_issues(plan_review.issues, reviewer="plan_contract"),
             *self._normalize_issues(webnovel.issues, reviewer="webnovel_experience"),
-            *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
+            *self._normalize_issues(
+                world_consistency.issues, reviewer="world_consistency"
+            ),
             *self._normalize_issues(personality_review.issues, reviewer="personality"),
             *self._normalize_issues(
                 publisher_compliance.issues, reviewer="publisher_compliance"
@@ -284,7 +295,7 @@ class DraftReviewService:
             continuity.verdict,
             plan_review.verdict,
             webnovel.verdict,
-            map_movement.verdict,
+            world_consistency.verdict,
             personality_review.verdict,
             publisher_compliance.verdict,
             entity_admission_verdict,
@@ -298,12 +309,15 @@ class DraftReviewService:
                         continuity_issues=[
                             issue
                             for issue in issues
-                            if issue.reviewer in {"continuity", "canon_quality"}
+                            if issue.reviewer
+                            in {"continuity", "canon_quality", "world_consistency"}
                             and issue.severity == "error"
                         ],
                         context=context,
                     )
-                    if continuity.verdict == "fail" or quality_verdict == "fail"
+                    if continuity.verdict == "fail"
+                    or quality_verdict == "fail"
+                    or world_consistency.verdict == "fail"
                     else None
                 ),
                 plan_instruction=(

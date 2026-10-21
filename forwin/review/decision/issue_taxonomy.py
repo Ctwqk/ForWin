@@ -36,6 +36,7 @@ ISSUE_TO_SCOPE: dict[str, IssueScope] = {
     "director_imbalance": "draft",
     "lint": "draft",
     "personality_drift": "draft",
+    "world_consistency": "draft",
     "entity_admission_plan_conflict": "operator",
     "entity_admission_plan_invalid": "operator",
     "single_chapter_pacing": "chapter_plan",

@@ -17,6 +17,7 @@ _HARD_ISSUE_TYPES = {
     "future_resource_preservation",
     "intra_band_consistency",
     "next_band_compatibility",
+    "world_consistency",
 }
 _SOFT_ISSUE_TYPES = {
     "stall",

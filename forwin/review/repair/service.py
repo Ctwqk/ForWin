@@ -58,7 +58,6 @@ class RepairExecution:
     ]
     _record_decision_event: Callable[..., DecisionEvent]
     _review_event_payload: Callable[..., dict[str, object]]
-    _record_map_movement_review_issues: Callable[..., None]
     _pause_requested: Callable[[], bool]
     _record_rule_decision_event: Callable[..., DecisionEvent | None]
     _chapter_plan_snapshot: Callable[..., dict[str, object]]
@@ -451,13 +450,6 @@ def _review_candidate(
         related_object_type="chapter_review",
         related_object_id=current_review_row.id,
         payload=self._review_event_payload(current_review),
-    )
-    self._record_map_movement_review_issues(
-        updater=updater,
-        project_id=project_id,
-        chapter_number=chapter_plan.chapter_number,
-        review=current_review,
-        parent_event_id=str(current_review_event.id or ""),
     )
     current_review_trace_id = self._save_prompt_trace_payload(
         session=session,
@@ -1130,13 +1122,6 @@ def _run_repair_loop_for_phase(
             related_object_id=rewritten_review_row.id,
             payload=self._review_event_payload(rewritten_review),
             parent_event_id=str(repair_result_event.id or ""),
-        )
-        self._record_map_movement_review_issues(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_plan.chapter_number,
-            review=rewritten_review,
-            parent_event_id=str(current_review_event.id or ""),
         )
         current_review_trace_id = self._save_prompt_trace_payload(
             session=session,

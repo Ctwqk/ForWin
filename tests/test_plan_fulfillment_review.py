@@ -72,20 +72,12 @@ def test_goal_absent_from_extraction_counts_as_missing() -> None:
     assert "Identify the sender" in review.issues[0].suggested_fix
 
 
-def test_no_extraction_is_error() -> None:
-    review = PlanContractReviewer().review(
-        _context(["Find the ledger"]), _output(extracted=False),
-    )
+@pytest.mark.parametrize("goals", [["Find the ledger"], []])
+def test_no_extraction_leaves_the_missing_delta_to_world_consistency(goals) -> None:
+    # world_consistency reports chapter_delta_missing; the plan reviewer has nothing to judge.
+    review = PlanContractReviewer().review(_context(goals), _output(extracted=False))
 
-    assert review.verdict == "fail"
-    assert [(issue.rule_name, issue.severity) for issue in review.issues] == [
-        ("plan_fulfillment_unavailable", "error"),
-    ]
-
-
-def test_no_extraction_without_goals_has_nothing_to_judge() -> None:
-    review = PlanContractReviewer().review(_context([]), _output(extracted=False))
-
+    assert review.verdict == "pass"
     assert review.issues == []
 
 

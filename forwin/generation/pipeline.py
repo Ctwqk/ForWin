@@ -166,9 +166,6 @@ class ChapterPipeline(
             _persist_draft_and_review=self._persist_draft_and_review,
             _record_decision_event=self._record_decision_event,
             _review_event_payload=self._review_event_payload,
-            _record_map_movement_review_issues=(
-                self._record_map_movement_review_issues
-            ),
             _pause_requested=self._pause_requested,
             _record_rule_decision_event=self._record_rule_decision_event,
             _chapter_plan_snapshot=self._chapter_plan_snapshot,

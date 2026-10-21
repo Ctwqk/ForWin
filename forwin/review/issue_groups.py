@@ -14,6 +14,7 @@ _FACT_CONFLICT_HINTS = {
     "relationship",
     "relation",
     "intra_band_consistency",
+    "world_consistency",
 }
 
 

@@ -47,8 +47,7 @@ seed_terms = [
 harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
 # Generic time-unit words that book calendars legitimately name (tests/fixtures/world_seed)
 # and that existing runtime vocabulary already contains.
-# Drop these ignores after P2 removes forwin/review/map_movement.py and the
-# future_plan_audit duration regexes.
+# Drop these ignores after P2 removes the future_plan_audit duration regexes.
 ignore = ["小时", "时辰"]
 
 [[entry]]
@@ -1014,15 +1013,6 @@ checks = ["cjk_collection"]
 category = "catalog"
 justification = "支持的发布平台目录"
 max_literals = 2
-
-[[entry]]
-path = "forwin/review/map_movement.py"
-symbol = "_duration_to_travel_time_budget"
-checks = ["cjk_membership", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "古风时长词表（一炷香/时辰…）；P2 改用 lexicon"
-max_literals = 15
 
 [[entry]]
 path = "forwin/review/personality.py"

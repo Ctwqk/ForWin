@@ -1,7 +1,9 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import CanonPolicy, RuntimePolicy
+from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy
 
 
 def test_canon_policy_has_no_layer_switch() -> None:
@@ -57,3 +59,17 @@ def test_runtime_policy_rejects_removed_values_and_invalid_lengths() -> None:
             target_chars=2800,
             max_chars=3000,
         )
+
+
+def test_stored_map_movement_signal_loads_as_world_consistency() -> None:
+    # Policies stored before world gate v6 list its predecessor signal.
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    stored["review"]["signals"] = [
+        "experience", "lint", "map_movement", "personality", "canon_quality", "publisher",
+    ]
+    policy = RuntimePolicy.model_validate_json(json.dumps(stored))
+
+    assert policy.review.signals == RuntimePolicy.for_profile("standard").review.signals
+    assert not policy.review.allows_signal("map_movement")
+    both = {**stored["review"], "signals": ["map_movement", "lint", "world_consistency"]}
+    assert ReviewPolicy.model_validate(both).signals == ("world_consistency", "lint")

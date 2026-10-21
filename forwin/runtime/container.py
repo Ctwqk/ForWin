@@ -386,7 +386,9 @@ class RuntimeContainer:
             draft_review = DraftReviewService(
                 experience_review_enabled=policy.review.allows_signal("experience"),
                 lint_review_enabled=policy.review.allows_signal("lint"),
-                map_movement_review_enabled=policy.review.allows_signal("map_movement"),
+                world_consistency_review_enabled=policy.review.allows_signal(
+                    "world_consistency"
+                ),
                 personality_review_enabled=policy.review.allows_signal("personality"),
                 canon_quality_review_in_hub_enabled=policy.review.allows_signal(
                     "canon_quality"
@@ -397,6 +399,7 @@ class RuntimeContainer:
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,
                 observability=core.observability,
+                travel_tolerance=policy.review.travel_tolerance,
             )
             return GenerationRuntimeServices(
                 llm_client=llm_client,

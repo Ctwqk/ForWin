@@ -11,8 +11,8 @@ from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
-from forwin.book_state.extraction.translator import ChapterDeltaTranslator
-from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
+from forwin.book_state.extraction.world_review import review_chapter_extraction
+from forwin.book_state.reviewer import BookStateReviewVerdict
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_body_hash,
@@ -118,16 +118,16 @@ class BookStateCanonPreparer:
             return BookStatePreparationOutcome(
                 blocked_path="chapter-delta-extraction-blocked",
             )
-        review_verdict_id = f"book_state_direct_review_{project_id}_{chapter_number}"
-        translation = ChapterDeltaTranslator(session).translate(
+        world = review_chapter_extraction(
+            session,
             project_id=project_id,
             chapter_number=chapter_number,
             extraction=extraction,
             admission_plan=entity_admission_plan,
             chapter_summary=writer_output.end_of_chapter_summary,
-            review_verdict_id=review_verdict_id,
+            travel_tolerance=context.policy.review.travel_tolerance,
         )
-        if translation.delta is None:
+        if world.gate is None:
             _record_book_state_block(
                 context=context,
                 session=session,
@@ -136,7 +136,7 @@ class BookStateCanonPreparer:
                 chapter_number=chapter_number,
                 gate_id="chapter_delta_translation",
                 blocked_path="chapter-delta-translation-blocked",
-                issues=list(translation.issues),
+                issues=list(world.translation.issues),
                 related_object_type="candidate_draft",
                 related_object_id=candidate_id,
             )
@@ -144,27 +144,7 @@ class BookStateCanonPreparer:
                 blocked_path="chapter-delta-translation-blocked",
                 extraction=extraction,
             )
-        # Translation warnings never block; the committed delta keeps them for audit.
-        delta = translation.delta.model_copy(update={"metadata": {
-            **translation.delta.metadata,
-            "translation_warnings": [
-                {"code": issue.code, "message": issue.message} for issue in translation.issues
-            ],
-        }})
-        changes = ApprovedGraphDeltaSet(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            graph_deltas=[delta],
-            approved_by=["chapter_extraction"],
-            review_verdict_id=review_verdict_id,
-        )
-        # Chapter canon is reviewed against the canon before the chapter, even
-        # when a historical rewrite still holds the chapter's old deltas.
-        review = BookStateReviewGate(session).review(
-            changes,
-            base_chapter=max(chapter_number - 1, 0),
-            travel_tolerance=context.policy.review.travel_tolerance,
-        )
+        review = world.gate
         if not review.accepted or review.approved_changes is None:
             _record_book_state_block(
                 context=context,

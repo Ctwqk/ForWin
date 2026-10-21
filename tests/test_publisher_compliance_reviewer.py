@@ -96,7 +96,7 @@ def test_historical_draft_review_merges_publisher_compliance_when_enabled() -> N
     hub = DraftReviewService(
         experience_review_enabled=False,
         lint_review_enabled=False,
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
         plan_reviewer=_PassReviewer(),
@@ -118,7 +118,7 @@ def test_historical_draft_review_unchanged_when_publisher_compliance_disabled() 
     hub = DraftReviewService(
         experience_review_enabled=False,
         lint_review_enabled=False,
-        map_movement_review_enabled=False,
+        world_consistency_review_enabled=False,
         personality_review_enabled=False,
         canon_quality_review_in_hub_enabled=False,
         plan_reviewer=_PassReviewer(),

@@ -44,7 +44,12 @@ class PlanContractReviewer:
                     suggested_fix="完成章节 delta 抽取后重新核验计划目标。",
                 )
             ]
-        fulfillment = {item.target_id: item for item in delta.plan_fulfillment}
+        status_rank = {"missing": 0, "partial": 1, "done": 2}
+        fulfillment = {}
+        for item in delta.plan_fulfillment:
+            current = fulfillment.get(item.target_id)
+            if current is None or status_rank[item.status] >= status_rank[current.status]:
+                fulfillment[item.target_id] = item
         issues: list[ContinuityIssue] = []
         for target_id, goal in goal_targets:
             item = fulfillment.get(target_id)

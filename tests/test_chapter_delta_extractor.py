@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -38,6 +39,7 @@ def payload(*, unit="日", evidence=BODY):
         "body_sha256": "untrusted-model-hash",
         "time": {"elapsed": {"amount": 1, "unit": unit}, "evidence": evidence},
         "entity_mentions": [{"name": "Ari", "kind": "character", "evidence": BODY}],
+        "plan_fulfillment": [{"target_id": "goal:1", "status": "done", "evidence": "Ari opened the gate."}],
     }
 
 
@@ -62,10 +64,10 @@ class StubLLM:
         return events
 
 
-def extract(client, *, max_attempts=3, max_tokens=None, calendar=CALENDAR):
+def extract(client, *, max_attempts=3, max_tokens=None, calendar=CALENDAR, extraction_input=INPUT):
     options = {} if max_tokens is None else {"max_tokens": max_tokens}
     return ChapterDeltaExtractor(client, max_attempts=max_attempts, **options).extract(
-        extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY,
+        extraction_input=extraction_input, chapter_title="Gate", chapter_body=BODY,
         chapter_summary="Ari enters", calendar=calendar, lexicon=LEXICON,
     )
 
@@ -151,6 +153,93 @@ def test_unknown_elapsed_unit_can_be_corrected():
     assert elapsed_minutes(result.extraction, CALENDAR, LEXICON) == 30
 
 
+@pytest.mark.parametrize("target_id", ["goal:1", "obligation:open"])
+def test_dropped_required_fulfillment_retries_with_verbatim_evidence(target_id):
+    extraction_input = replace(INPUT, fulfillment_targets=(FulfillmentTarget(target_id, "Open the gate"),))
+    first = payload()
+    first["plan_fulfillment"] = [
+        {"target_id": target_id, "status": "done", "evidence": "Ari unlocked the gate."},
+    ]
+    second = payload()
+    second["plan_fulfillment"] = [
+        {"target_id": target_id, "status": "done", "evidence": "Ari opened the gate."},
+    ]
+    client = StubLLM(first, second)
+
+    result = extract(client, extraction_input=extraction_input)
+
+    assert [(item.target_id, item.status, item.evidence) for item in result.extraction.plan_fulfillment] == [
+        (target_id, "done", "Ari opened the gate."),
+    ]
+    assert result.attempts == len(client.calls) == 2
+    assert result.issues == ()
+    feedback = client.calls[1][0][-1]["content"].split("上一轮错误反馈：\n")[1]
+    assert target_id in feedback
+    assert all(value in feedback for value in ("verbatim", "done", "partial", "missing"))
+
+
+@pytest.mark.parametrize("better_first", [True, False])
+def test_required_fulfillment_retry_is_bounded_and_keeps_best_candidate(better_first):
+    extraction_input = replace(INPUT, fulfillment_targets=(
+        FulfillmentTarget("goal:1", "Open the gate"),
+        FulfillmentTarget("obligation:open", "Enter"),
+    ))
+    better = payload()
+    worse = payload()
+    worse["plan_fulfillment"] = []
+    responses = (better, worse) if better_first else (worse, better)
+    client = StubLLM(*responses)
+
+    result = extract(client, extraction_input=extraction_input)
+
+    assert result.attempts == len(client.calls) == 2
+    assert [(item.target_id, item.status) for item in result.extraction.plan_fulfillment] == [
+        ("goal:1", "done"),
+    ]
+    feedback = client.calls[1][0][-1]["content"].split("上一轮错误反馈：\n")[1]
+    assert "obligation:open" in feedback
+    assert ("goal:1" in feedback) is not better_first
+    assert len(result.prompt_trace["output_summary"]["business_retry_events"]) == 1
+
+
+def test_absent_reward_targets_do_not_retry():
+    extraction_input = replace(INPUT, fulfillment_targets=INPUT.fulfillment_targets + (
+        FulfillmentTarget("reward:power", "power (optional)"),
+    ))
+    client = StubLLM(payload())
+
+    result = extract(client, extraction_input=extraction_input)
+
+    assert result.attempts == len(client.calls) == 1
+    assert result.issues == ()
+    assert [(item.target_id, item.status) for item in result.extraction.plan_fulfillment] == [
+        ("goal:1", "done"),
+    ]
+
+
+def test_explicit_missing_required_fulfillment_does_not_retry():
+    response = payload()
+    response["plan_fulfillment"] = [{"target_id": "goal:1", "status": "missing"}]
+    client = StubLLM(response)
+
+    result = extract(client)
+
+    assert result.attempts == len(client.calls) == 1
+    assert result.issues == ()
+    assert result.extraction.plan_fulfillment[0].status == "missing"
+
+
+def test_required_fulfillment_retry_respects_attempt_budget():
+    response = payload()
+    response["plan_fulfillment"] = []
+    client = StubLLM(response)
+
+    result = extract(client, max_attempts=1)
+
+    assert result.attempts == len(client.calls) == 1
+    assert result.extraction.plan_fulfillment == []
+
+
 @pytest.mark.parametrize("failure", ["not JSON", {}, RuntimeError("provider unavailable")])
 def test_evidence_candidate_survives_failed_retries(failure):
     first = payload()
@@ -191,6 +280,7 @@ def test_unknown_elapsed_candidate_survives_failed_retries(failure):
 def test_last_valid_candidate_replaces_earlier_candidate():
     first = payload()
     first["entity_mentions"][0]["evidence"] = "invented"
+    first["entity_mentions"] *= 2
     result = extract(StubLLM(first, payload(unit="unknown"), "not JSON"))
     assert result.attempts == 3
     assert result.extraction is not None
@@ -305,6 +395,7 @@ def test_retry_budget_degrades_unknown_time_on_last_attempt():
 def test_evidence_retry_is_bounded_even_if_second_result_is_bad():
     bad = payload()
     bad["entity_mentions"][0]["evidence"] = "invented"
+    bad["entity_mentions"] *= 2
     result = extract(StubLLM(bad, bad))
     assert result.attempts == 2
     assert result.extraction.entity_mentions == []

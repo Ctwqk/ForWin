@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 
+import pytest
+
 from forwin.book_state.extraction.chapter_delta_schema import (
     ChapterDeltaExtraction,
     ChapterTime,
@@ -119,6 +121,24 @@ def test_partial_goal_warns_without_failing() -> None:
 
     assert review.verdict == "warn"
     assert review.issues[0].rule_name == "plan_goal_partial"
+
+
+@pytest.mark.parametrize(("statuses", "verdict", "expected_issues"), [
+    (("done", "partial", "missing"), "pass", []),
+    (("missing", "partial", "done"), "pass", []),
+    (("partial", "done", "missing"), "pass", []),
+    (("partial", "missing"), "warn", [("plan_goal_partial", "warning")]),
+    (("missing", "partial"), "warn", [("plan_goal_partial", "warning")]),
+    (("missing", "missing"), "fail", [("plan_goal_missing", "error")]),
+])
+def test_duplicate_fulfillment_uses_best_status(statuses, verdict, expected_issues) -> None:
+    review = PlanContractReviewer().review(
+        _context(["Deliver the packet"]),
+        _output(*(("goal:1", status) for status in statuses)),
+    )
+
+    assert review.verdict == verdict
+    assert [(issue.rule_name, issue.severity) for issue in review.issues] == expected_issues
 
 
 def test_structured_thread_keep_open_constraint_remains_enforced() -> None:

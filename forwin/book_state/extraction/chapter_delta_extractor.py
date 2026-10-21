@@ -16,7 +16,9 @@ from forwin.observability.llm_trace import (
 )
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
-from forwin.writer.prompt_core.chapter_delta import build_chapter_delta_messages
+from forwin.writer.prompt_core.chapter_delta import (
+    build_chapter_delta_messages, build_plan_fulfillment_feedback,
+)
 
 from .chapter_delta_schema import ChapterDeltaExtraction, ExtractionIssue
 from .chapter_input import ChapterExtractionInput, build_chapter_extraction_input
@@ -125,7 +127,13 @@ class ChapterDeltaExtractor:
         business_retries: list[dict[str, Any]] = []
         evidence_retried = False
         elapsed_retried = False
-        # Keep the last validated candidate if a later retry fails.
+        fulfillment_retried = False
+        required_targets = {
+            target.target_id for target in extraction_input.fulfillment_targets
+            if target.target_id.startswith(("goal:", "obligation:"))
+        }
+        best_absent_count = len(required_targets) + 1
+        # Keep the best validated candidate if a later retry fails or omits more targets.
         extraction = None
         issues: list[ExtractionIssue] = []
         body_hash = _sha256(chapter_body)
@@ -177,20 +185,27 @@ class ChapterDeltaExtractor:
 
             if call_error is None:
                 parsed.body_sha256 = body_hash
-                extraction, issues = validate_evidence(parsed, chapter_body)
-                if dropped_ratio(issues, parsed) > 0.5 and not evidence_retried and attempt_no < self.max_attempts:
+                candidate, candidate_issues = validate_evidence(parsed, chapter_body)
+                absent_targets = required_targets - {item.target_id for item in candidate.plan_fulfillment}
+                if absent_targets and not fulfillment_retried and attempt_no < self.max_attempts:
+                    fulfillment_retried = True
+                    feedback.append(build_plan_fulfillment_feedback(sorted(absent_targets)))
+                if dropped_ratio(candidate_issues, parsed) > 0.5 and not evidence_retried and attempt_no < self.max_attempts:
                     evidence_retried = True
-                    feedback.extend(f"{issue.code} at {issue.path}: {issue.message}" for issue in issues)
+                    feedback.extend(f"{issue.code} at {issue.path}: {issue.message}" for issue in candidate_issues)
                 try:
-                    elapsed_minutes(extraction, calendar, lexicon)
+                    elapsed_minutes(candidate, calendar, lexicon)
                 except (UnknownTimeUnit, StoryClockError) as exc:
                     if not elapsed_retried and attempt_no < self.max_attempts:
                         elapsed_retried = True
                         feedback.append(f"elapsed_unknown at time.elapsed: {exc}")
-                    extraction.time.elapsed = None
-                    issues.append(ExtractionIssue(
+                    candidate.time.elapsed = None
+                    candidate_issues.append(ExtractionIssue(
                         severity="warning", code="elapsed_unknown", path="time.elapsed", message=str(exc),
                     ))
+                if len(absent_targets) <= best_absent_count:
+                    extraction, issues = candidate, candidate_issues
+                    best_absent_count = len(absent_targets)
 
             if (feedback or call_error is not None) and attempt_no < self.max_attempts:
                 business_retries.append({

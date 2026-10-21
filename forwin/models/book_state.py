@@ -164,33 +164,6 @@ class FactNodeRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
-class BookReaderPromiseRow(Base):
-    __tablename__ = "book_reader_promises"
-    __table_args__ = (
-        Index("ux_book_reader_promises_project_promise", "project_id", "promise_id", unique=True),
-        Index("ix_book_reader_promises_project_status", "project_id", "status"),
-        Index("ix_book_reader_promises_project_chapter", "project_id", "created_at_chapter"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    promise_id: Mapped[str] = mapped_column(String, nullable=False)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    promise_type: Mapped[str] = mapped_column(String, default="")
-    summary: Mapped[str] = mapped_column(Text, default="")
-    created_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    expected_payoff_window: Mapped[str] = mapped_column(Text, default="")
-    maximum_safe_delay: Mapped[int] = mapped_column(Integer, default=0)
-    current_debt_level: Mapped[int] = mapped_column(Integer, default=0)
-    reward_tags_json: Mapped[str] = mapped_column(Text, default="[]")
-    linked_threads_json: Mapped[str] = mapped_column(Text, default="[]")
-    linked_knowledge_gaps_json: Mapped[str] = mapped_column(Text, default="[]")
-    status: Mapped[str] = mapped_column(String, default="open")
-    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-
-
 class GraphDeltaRow(Base):
     __tablename__ = "graph_deltas"
     __table_args__ = (

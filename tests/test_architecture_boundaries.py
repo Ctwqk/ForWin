@@ -299,6 +299,34 @@ def test_dead_tables_are_dropped_by_0002() -> None:
         assert f'op.drop_table("{table}")' in upgrade_source
 
 
+def test_reader_promise_table_is_dropped_by_0003() -> None:
+    from forwin.models import Base
+
+    assert "book_reader_promises" not in Base.metadata.tables
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        if "migrations/versions" not in path.as_posix()
+    )
+    assert "BookReaderPromiseRow" not in production_source
+    assert "reader_promise_patches" not in production_source
+
+    migration = importlib.import_module("forwin.migrations.versions.0003_book_state_v6")
+    upgrade_source = inspect.getsource(migration.upgrade)
+    assert 'op.drop_table("book_reader_promises")' in upgrade_source
+    for index in (
+        "ux_book_reader_promises_project_promise",
+        "ix_book_reader_promises_project_status",
+        "ix_book_reader_promises_project_chapter",
+    ):
+        assert upgrade_source.index(f'"{index}"') < upgrade_source.index(
+            'op.drop_table("book_reader_promises")'
+        )
+    assert 'op.create_table(\n        "book_reader_promises"' in inspect.getsource(
+        migration.downgrade
+    )
+
+
 def test_production_legacy_tables_are_dropped_by_0002_without_cascade() -> None:
     from forwin.models import Base
 

@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.narrative import reader_promises_from_graph
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.protocol.book_state import FactNode, GraphDelta, WorldNode
@@ -98,7 +99,7 @@ class LLMKnowledgeBaseCompiler:
             "CHARACTER_MEMORY.md": self._character_memory(as_of, source_digest, common_refs, safe_nodes),
             "FACTION_MEMORY.md": self._faction_memory(as_of, source_digest, common_refs, safe_nodes),
             "MAP_CONTEXT.md": self._map_context(as_of, source_digest, common_refs, runtime),
-            "READER_PROMISES.md": self._reader_promises(project_id, as_of, source_digest, common_refs, safe_nodes),
+            "READER_PROMISES.md": self._reader_promises(as_of, source_digest, common_refs, runtime),
             "KNOWLEDGE_GAPS.md": self._knowledge_gaps(as_of, source_digest, common_refs, safe_nodes, safe_facts),
             "REVEAL_LADDER.md": self._reveal_ladder(as_of, source_digest, common_refs, safe_nodes),
             "MUST_NOT_REVEAL.md": self._must_not_reveal(as_of, source_digest, common_refs, nodes, facts),
@@ -223,21 +224,20 @@ class LLMKnowledgeBaseCompiler:
             lines.append(f"- {edge.from_node_id} -> {edge.to_node_id}: {edge.edge_type} time={edge.travel_time} risk={edge.risk_level}")
         return "\n".join(lines).rstrip() + "\n"
 
-    def _reader_promises(self, project_id: str, as_of: int, digest: str, refs: list[str], nodes: list[WorldNode]) -> str:
-        native_promises = self.repo.list_reader_promises_native(project_id, as_of_chapter=as_of)
+    def _reader_promises(self, as_of: int, digest: str, refs: list[str], runtime) -> str:
         lines = [self._header("Reader Promises", as_of, digest, refs)]
-        if native_promises:
-            for promise in native_promises:
-                lines.append(f"## {promise.summary or promise.promise_id}")
-                lines.append(f"- id: {promise.promise_id}")
-                lines.append(f"- type: {promise.promise_type}")
-                lines.append(f"- status: {promise.status}")
-                lines.append(f"- debt: {promise.current_debt_level}")
-                lines.append(f"- reward_tags: {', '.join(promise.reward_tags)}")
-                lines.append(f"- source_refs: {', '.join(promise.source_refs)}")
-                lines.append("")
-            return "\n".join(lines).rstrip() + "\n"
-        return self._node_section_file("Reader Promises", as_of, digest, refs, [node for node in nodes if node.node_type == "reader_promise"])
+        for promise in reader_promises_from_graph(runtime.narrative):
+            lines.append(f"## {promise.summary or promise.promise_id}")
+            lines.append(f"- id: {promise.promise_id}")
+            lines.append(f"- type: {promise.promise_type}")
+            lines.append(f"- status: {promise.status}")
+            lines.append(f"- debt: {promise.current_debt_level}")
+            lines.append(f"- reward_tags: {', '.join(promise.reward_tags)}")
+            lines.append(f"- source_refs: {', '.join(promise.source_refs)}")
+            lines.append("")
+        if len(lines) == 1:
+            lines.append("_empty_")
+        return "\n".join(lines).rstrip() + "\n"
 
     def _knowledge_gaps(self, as_of: int, digest: str, refs: list[str], nodes: list[WorldNode], facts: list[FactNode]) -> str:
         gaps = [node for node in nodes if node.node_type == "knowledge_gap"]

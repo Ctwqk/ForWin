@@ -367,10 +367,6 @@ def test_active_promise_ids_count_narrative_promise_nodes() -> None:
     with Session.begin() as session:
         project_id = _create_project(session)
         repo = BookStateRepository(session)
-        repo.create_world_node(
-            WorldNode(id="world_promise", project_id=project_id, node_type="reader_promise"),
-            version_chapter=0,
-        )
         _compile(
             session,
             project_id,

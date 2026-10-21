@@ -11,7 +11,7 @@ from forwin.api_schema import (
     CharacterPersonalityReassignRequest,
     PersonalityLoadoutUpdateRequest,
 )
-from forwin.book_state import BookStateProjection, BookStateRepository
+from forwin.book_state import BookStateProjection, BookStateQuery, BookStateRepository
 from forwin.http.request_support import require_project
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
@@ -196,19 +196,12 @@ def build_handlers(
         with get_session() as session:
             require_project(session, project_id)
             as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
-            repo = BookStateRepository(session)
             return {
                 "project_id": project_id,
                 "as_of_chapter": as_of,
                 "reader_promises": [
                     promise.model_dump(mode="json")
-                    for promise in repo.list_reader_promises_native(
-                        project_id, as_of_chapter=as_of
-                    )
-                ],
-                "reader_promise_nodes": [
-                    node.model_dump(mode="json")
-                    for node in repo.list_reader_promises(
+                    for promise in BookStateQuery(session).reader_promises(
                         project_id, as_of_chapter=as_of
                     )
                 ],

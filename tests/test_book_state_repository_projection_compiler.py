@@ -665,31 +665,40 @@ def test_objective_digest_preserves_existing_snapshot_encoding() -> None:
     )
 
 
-def test_historical_invalidation_rejects_unversioned_base_promise_metadata() -> None:
+def test_historical_invalidation_rewinds_narrative_promise_status() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session.begin() as session:
         project_id = _create_project(session)
-        for chapter, patch in (
+        for chapter, patches in (
             (
                 0,
-                {
-                    "promise_id": "base-promise",
-                    "op": "create",
-                    "new_value": {"status": "open"},
-                },
+                [
+                    NarrativePatch(
+                        target_ref="promise:base-promise",
+                        op="create",
+                        new_value={"title": "base", "status": "open"},
+                    )
+                ],
             ),
             (
                 1,
-                {
-                    "promise_id": "base-promise",
-                    "op": "set",
-                    "field_path": "status",
-                    "old_value": "open",
-                    "new_value": "resolved",
-                    "evidence_refs": ["obsolete-event"],
-                },
+                [
+                    NarrativePatch(
+                        target_ref="promise:base-promise",
+                        op="set",
+                        field_path="status",
+                        old_value="open",
+                        new_value="resolved",
+                        evidence_refs=["obsolete-event"],
+                    ),
+                    NarrativePatch(
+                        target_ref="promise:range-promise",
+                        op="create",
+                        new_value={"title": "range", "status": "open"},
+                    ),
+                ],
             ),
         ):
             result = BookStateCompiler(session).compile(
@@ -701,25 +710,32 @@ def test_historical_invalidation_rejects_unversioned_base_promise_metadata() -> 
                             id=f"promise-delta-{chapter}",
                             project_id=project_id,
                             chapter_number=chapter,
-                            metadata={"reader_promise_patches": [patch]},
+                            narrative_patches=patches,
                         )
                     ],
                 )
             )
             assert result.committed
-    with pytest.raises(ValueError, match="cannot restore historical base"):
-        with Session.begin() as session:
-            BookStateRepository(session).invalidate_project_range(
-                project_id,
-                from_chapter=1,
-                through_chapter=1,
-            )
+        assert {
+            promise.promise_id: promise.status
+            for promise in BookStateQuery(session).reader_promises(project_id, as_of_chapter=1)
+        } == {"base-promise": "resolved", "range-promise": "open"}
+
+    # Narrative edits are versioned by snapshot, so unlike the old unversioned
+    # promise table the range can be discarded and the base state read back.
+    with Session.begin() as session:
+        BookStateRepository(session).invalidate_project_range(
+            project_id,
+            from_chapter=1,
+            through_chapter=1,
+        )
     with Session() as session:
-        promise = BookStateRepository(session).list_reader_promises_native(project_id)[
-            0
+        graph = BookStateRepository(session).load_narrative_graph(project_id)
+        assert set(graph.nodes_by_id) == {"base-promise"}
+        promises = BookStateQuery(session).reader_promises(project_id, as_of_chapter=0)
+        assert [(promise.promise_id, promise.status) for promise in promises] == [
+            ("base-promise", "open")
         ]
-        assert promise.status == "resolved"
-        assert "obsolete-event" in promise.source_refs
     engine.dispose()
 
 

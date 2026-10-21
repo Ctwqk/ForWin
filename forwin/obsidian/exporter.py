@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.narrative import reader_promises_from_graph
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
@@ -572,7 +573,6 @@ class ObsidianExporter:
             "event": "05_Plot/Chapter_Status",
             "secret": "06_Secrets",
             "knowledge_gap": "06_Secrets/Knowledge_Gaps",
-            "reader_promise": "07_Reader",
             "conflict": "08_Conflicts",
             "contract": "05_Plot",
         }
@@ -621,20 +621,16 @@ class ObsidianExporter:
     def _ledger_sections(
         self, project_id: str, as_of_chapter: int, runtime
     ) -> dict[str, str]:
-        promises = [
-            node
-            for node in runtime.world.nodes_by_id.values()
-            if node.node_type == "reader_promise"
-        ]
+        promises = reader_promises_from_graph(runtime.narrative)
         return {
-            "Canon Summary": "Reader promise ledger derived from BookState nodes.",
+            "Canon Summary": "Reader promise ledger derived from BookState narrative promise nodes.",
             "Current State": "\n".join(
-                f"- {node.name or node.id}: {node.summary or node.description}"
-                for node in promises
+                f"- {promise.summary or promise.promise_id} ({promise.status})"
+                for promise in promises
             )
             or "_none_",
-            "Relationships": "_promise links are on each node page_",
-            "Reader Visibility": "writer-safe unless a promise node is marked hidden in canon metadata.",
+            "Relationships": "_promise links are in the BookState narrative graph_",
+            "Reader Visibility": "writer-safe",
             "Open Questions": "_none_",
             "Evidence": f"- book_state:reader_promises:{project_id}:{as_of_chapter}",
             "Manual Notes": "",

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.book_state import GraphDeltaRow
+from forwin.protocol.book_state import ReaderPromise
 from forwin.protocol.context import (
     CanonEventEvidence,
     EntitySnapshot,
@@ -12,6 +13,7 @@ from forwin.protocol.context import (
     TimelineSnapshot,
 )
 
+from .narrative import reader_promises_from_graph
 from .projection import BookStateProjection
 from .repository import BookStateRepository
 from .runtime import BookStateRuntime
@@ -205,6 +207,18 @@ class BookStateQuery:
                 )
             )
         return sorted(threads, key=lambda item: (-item.priority, item.name))
+
+    def reader_promises(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int | None = None,
+    ) -> list[ReaderPromise]:
+        """Narrative ``promise`` nodes as of a chapter (latest by default)."""
+        if as_of_chapter is None:
+            as_of_chapter = self.repository.latest_available_chapter(project_id)
+        runtime = self.runtime(project_id, as_of_chapter=as_of_chapter)
+        return reader_promises_from_graph(runtime.narrative)
 
     def thread_by_name(
         self,

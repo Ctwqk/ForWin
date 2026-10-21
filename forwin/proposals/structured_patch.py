@@ -4,8 +4,12 @@ import json
 import re
 from typing import Any
 
+from forwin.book_state.narrative import (
+    PROMISE_PAYLOAD_FIELDS,
+    promise_node_payload,
+    reader_promise_from_node,
+)
 from forwin.book_state.projection import BookStateProjection
-from forwin.book_state.repository import BookStateRepository
 from forwin.models.base import new_id
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.protocol.book_state import (
@@ -15,6 +19,7 @@ from forwin.protocol.book_state import (
     GraphDelta,
     GraphDeltaType,
     MapPatch,
+    NarrativePatch,
     NodePatch,
     ReaderPromise,
     WORLD_EDGE_TYPES_BY_FAMILY,
@@ -45,7 +50,7 @@ def proposal_to_graph_delta(
     fact_patches: list[FactPatch] = []
     map_patches: list[MapPatch] = []
     cognition_patches: list[CognitionPatch] = []
-    reader_promise_patches: list[dict[str, Any]] = []
+    narrative_patches: list[NarrativePatch] = []
 
     for operation in operations:
         op = str(operation.get("op") or "").strip()
@@ -100,9 +105,9 @@ def proposal_to_graph_delta(
             "set_reader_promise_field",
             "resolve_reader_promise",
         }:
-            reader_promise_patches.extend(
-                _reader_promise_patches(
-                    session, operation, row, reason=reason, source_refs=source_refs
+            narrative_patches.extend(
+                _promise_narrative_patches(
+                    runtime, operation, row, reason=reason, source_refs=source_refs
                 )
             )
         else:
@@ -124,6 +129,7 @@ def proposal_to_graph_delta(
         fact_patches=fact_patches,
         map_patches=map_patches,
         cognition_patches=cognition_patches,
+        narrative_patches=narrative_patches,
         evidence_refs=source_refs,
         review_verdict_id=f"proposal_review_{row.id}",
         allowed_for_canon=True,
@@ -134,7 +140,6 @@ def proposal_to_graph_delta(
             "target_page_key": row.target_page_key,
             "target_node_id": getattr(row, "target_node_id", "") or "",
             "structured_patch_count": len(operations),
-            "reader_promise_patches": reader_promise_patches,
         },
     )
 
@@ -619,28 +624,22 @@ def _cognition_patch(
     )
 
 
-def _reader_promise_patches(
-    session,
+def _promise_narrative_patches(
+    runtime,
     operation: dict[str, Any],
     row: KnowledgeEditProposalRow,
     *,
     reason: str,
     source_refs: list[str],
-) -> list[dict[str, Any]]:
+) -> list[NarrativePatch]:
     op = str(operation.get("op") or "")
     promise_id = str(operation.get("promise_id") or operation.get("target_id") or "")
     if not promise_id:
         raise ValueError(f"{op} requires promise_id")
-    repo = BookStateRepository(session)
+    target_ref = f"promise:{promise_id}"
     as_of_chapter = _proposal_chapter(row)
-    promises = {
-        promise.promise_id: promise
-        for promise in repo.list_reader_promises_native(
-            row.project_id, as_of_chapter=as_of_chapter
-        )
-    }
-    current = promises.get(promise_id)
     patch_reason = reason or str(operation.get("reason") or row.reason or "")
+    evidence_refs = list(operation.get("evidence_refs", source_refs))
     if op == "create_reader_promise":
         payload = operation.get("new_value", operation.get("promise", {}))
         if not isinstance(payload, dict):
@@ -656,54 +655,66 @@ def _reader_promise_patches(
             }
         )
         return [
-            {
-                "op": "create",
-                "promise_id": promise_id,
-                "field_path": "",
-                "old_value": operation.get("old_value"),
-                "new_value": promise.model_dump(mode="json"),
-                "reason": patch_reason,
-                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
-            }
+            NarrativePatch(
+                target_ref=target_ref,
+                op="create",
+                old_value=operation.get("old_value"),
+                new_value=promise_node_payload(promise),
+                reason=patch_reason,
+                evidence_refs=evidence_refs,
+            )
         ]
-    if current is None:
+    node = runtime.narrative.get_node(promise_id)
+    if node is None or node.node_type != "promise":
         raise ValueError(f"unknown reader promise: {promise_id}")
-    payload = current.model_dump(mode="json")
+    current = reader_promise_from_node(node).model_dump(mode="json")
+
+    def set_field(field: str, old_value: Any, new_value: Any) -> NarrativePatch:
+        field_path = _promise_field_path(field)
+        return NarrativePatch(
+            target_ref=target_ref,
+            op="set",
+            field_path=field_path,
+            old_value=old_value,
+            new_value=new_value,
+            reason=patch_reason,
+            evidence_refs=evidence_refs,
+        )
+
     if op == "resolve_reader_promise":
         return [
-            {
-                "op": "set",
-                "promise_id": promise_id,
-                "field_path": "status",
-                "old_value": operation.get("old_value", payload.get("status")),
-                "new_value": operation.get("new_value", "resolved"),
-                "reason": patch_reason,
-                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
-            },
-            {
-                "op": "set",
-                "promise_id": promise_id,
-                "field_path": "current_debt_level",
-                "old_value": payload.get("current_debt_level"),
-                "new_value": operation.get("current_debt_level", 0),
-                "reason": patch_reason,
-                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
-            },
+            set_field(
+                "status",
+                operation.get("old_value", current["status"]),
+                operation.get("new_value", "resolved"),
+            ),
+            set_field(
+                "current_debt_level",
+                current["current_debt_level"],
+                operation.get("current_debt_level", 0),
+            ),
         ]
     field_path = str(operation.get("field_path") or "")
     if not field_path:
         raise ValueError("set_reader_promise_field requires field_path")
     return [
-        {
-            "op": "set",
-            "promise_id": promise_id,
-            "field_path": field_path,
-            "old_value": operation.get("old_value", _get_path(payload, field_path)),
-            "new_value": operation.get("new_value"),
-            "reason": patch_reason,
-            "evidence_refs": list(operation.get("evidence_refs", source_refs)),
-        }
+        set_field(
+            field_path,
+            operation.get("old_value", _get_path(current, field_path)),
+            operation.get("new_value"),
+        )
     ]
+
+
+def _promise_field_path(field_path: str) -> str:
+    """Narrative node path of a ``ReaderPromise`` field path."""
+    if field_path == "summary":
+        return "title"
+    if field_path == "status":
+        return "status"
+    if field_path.partition(".")[0] in PROMISE_PAYLOAD_FIELDS:
+        return f"payload.{field_path}"
+    raise ValueError(f"unsupported reader promise field: {field_path}")
 
 
 def _proposal_chapter(row: KnowledgeEditProposalRow) -> int:

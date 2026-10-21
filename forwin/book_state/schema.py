@@ -475,7 +475,6 @@ for _node_type in (
     "thread",
     "secret",
     "knowledge_gap",
-    "reader_promise",
     "conflict",
     "contract",
 ):

@@ -15,6 +15,10 @@ Adds the schema the world engine's first phase builds on:
 * narrative_node_index_json / narrative_edge_index_json on world_snapshots;
 * title, goal, stakes and payoff_direction on arc_plan_versions.
 
+Drops book_reader_promises: reader promises are narrative ``promise`` nodes
+now, versioned with the rest of the narrative layer. downgrade() recreates the
+table empty, exactly as 0001 defined it.
+
 Every new NOT NULL column carries a server default so add_column works on
 populated tables. downgrade() removes everything in reverse order.
 """
@@ -138,9 +142,64 @@ def upgrade() -> None:
         sa.Column("payoff_direction", sa.Text(), server_default="", nullable=False),
     )
 
+    op.drop_index(
+        "ux_book_reader_promises_project_promise", table_name="book_reader_promises"
+    )
+    op.drop_index(
+        "ix_book_reader_promises_project_status", table_name="book_reader_promises"
+    )
+    op.drop_index(
+        "ix_book_reader_promises_project_chapter", table_name="book_reader_promises"
+    )
+    op.drop_table("book_reader_promises")
+
 
 def downgrade() -> None:
     """Downgrade schema."""
+    op.create_table(
+        "book_reader_promises",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("promise_id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("promise_type", sa.String(), nullable=False),
+        sa.Column("summary", sa.Text(), nullable=False),
+        sa.Column("created_at_chapter", sa.Integer(), nullable=False),
+        sa.Column("expected_payoff_window", sa.Text(), nullable=False),
+        sa.Column("maximum_safe_delay", sa.Integer(), nullable=False),
+        sa.Column("current_debt_level", sa.Integer(), nullable=False),
+        sa.Column("reward_tags_json", sa.Text(), nullable=False),
+        sa.Column("linked_threads_json", sa.Text(), nullable=False),
+        sa.Column("linked_knowledge_gaps_json", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("source_refs_json", sa.Text(), nullable=False),
+        sa.Column("metadata_json", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_book_reader_promises_project_chapter",
+        "book_reader_promises",
+        ["project_id", "created_at_chapter"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_book_reader_promises_project_status",
+        "book_reader_promises",
+        ["project_id", "status"],
+        unique=False,
+    )
+    op.create_index(
+        "ux_book_reader_promises_project_promise",
+        "book_reader_promises",
+        ["project_id", "promise_id"],
+        unique=True,
+    )
+
     op.drop_column("arc_plan_versions", "payoff_direction")
     op.drop_column("arc_plan_versions", "stakes")
     op.drop_column("arc_plan_versions", "goal")

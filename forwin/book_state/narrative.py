@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from forwin.protocol.book_state import NarrativeEdge, NarrativeNode, NarrativePatch
+from forwin.protocol.book_state import NarrativeEdge, NarrativeNode, NarrativePatch, ReaderPromise
 
 
 NARRATIVE_NODE_TYPES: set[str] = {
@@ -31,6 +31,20 @@ NARRATIVE_EDGE_TYPES: set[str] = {
     "protects_until",
     "contradicts_plan",
 }
+
+# ReaderPromise fields that live in a promise node's ``payload``; ``promise_id``
+# is the node id, ``summary`` its title and ``status`` its status.
+PROMISE_PAYLOAD_FIELDS: tuple[str, ...] = (
+    "promise_type",
+    "expected_payoff_window",
+    "maximum_safe_delay",
+    "current_debt_level",
+    "reward_tags",
+    "linked_threads",
+    "linked_knowledge_gaps",
+    "source_refs",
+    "created_at_chapter",
+)
 
 
 class NarrativeControlGraph:
@@ -155,6 +169,42 @@ class NarrativeControlGraph:
         }
 
 
+def promise_node_payload(promise: ReaderPromise) -> dict[str, Any]:
+    """``new_value`` of the narrative ``create`` patch that stores a reader promise."""
+    fields = promise.model_dump(mode="json")
+    return {
+        "node_type": "promise",
+        "title": promise.summary,
+        "status": promise.status,
+        "payload": {name: fields[name] for name in PROMISE_PAYLOAD_FIELDS},
+    }
+
+
+def reader_promise_from_node(node: NarrativeNode) -> ReaderPromise:
+    """View a narrative ``promise`` node as a ``ReaderPromise``."""
+    payload = node.payload if isinstance(node.payload, dict) else {}
+    fields = {name: payload[name] for name in PROMISE_PAYLOAD_FIELDS if name in payload}
+    fields.setdefault("created_at_chapter", node.metadata.get("created_at_chapter", 0))
+    return ReaderPromise(
+        promise_id=node.id,
+        project_id=node.project_id,
+        summary=node.title,
+        status=node.status,
+        metadata=dict(node.metadata),
+        **fields,
+    )
+
+
+def reader_promises_from_graph(graph: NarrativeControlGraph) -> list[ReaderPromise]:
+    """Every promise node of ``graph``, oldest first."""
+    promises = [
+        reader_promise_from_node(node)
+        for node in graph.nodes_by_id.values()
+        if node.node_type == "promise"
+    ]
+    return sorted(promises, key=lambda promise: (promise.created_at_chapter, promise.promise_id))
+
+
 def _split_target_ref(target_ref: str) -> tuple[str, str]:
     if ":" not in target_ref:
         return "narrative_node", target_ref
@@ -214,4 +264,8 @@ __all__ = [
     "NARRATIVE_EDGE_TYPES",
     "NARRATIVE_NODE_TYPES",
     "NarrativeControlGraph",
+    "PROMISE_PAYLOAD_FIELDS",
+    "promise_node_payload",
+    "reader_promise_from_node",
+    "reader_promises_from_graph",
 ]

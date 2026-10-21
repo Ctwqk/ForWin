@@ -33,7 +33,8 @@ from forwin.protocol.book_state import (
     GraphDelta,
     MapEdge,
     MapNode,
-    ReaderPromise,
+    NarrativeNode,
+    NarrativePatch,
     WorldEdge,
     WorldNode,
 )
@@ -79,20 +80,30 @@ def test_book_state_v46_fields_api_and_gate() -> None:
             )
             repo.create_world_node(
                 WorldNode(
-                    id="promise_truth",
+                    id="truth_gap",
                     project_id=project_id,
-                    node_type="reader_promise",
+                    node_type="knowledge_gap",
                     name="灵矿真相",
                     summary="读者承诺：灵矿真相会被逐层兑现。",
                 ),
                 version_chapter=0,
+            )
+            repo.create_narrative_node(
+                NarrativeNode(
+                    id="promise_truth",
+                    project_id=project_id,
+                    node_type="promise",
+                    title="灵矿真相会被逐层兑现。",
+                    payload={"promise_type": "mystery", "linked_knowledge_gaps": ["truth_gap"]},
+                    metadata={"created_at_chapter": 1},
+                )
             )
             repo.create_world_edge(
                 WorldEdge(
                     id="edge_alliance",
                     project_id=project_id,
                     source_id="org_archive",
-                    target_id="promise_truth",
+                    target_id="truth_gap",
                     edge_type="promises",
                     edge_family="reader_experience",
                     status="active",
@@ -144,7 +155,9 @@ def test_book_state_v46_fields_api_and_gate() -> None:
         assert edges["edges"][0]["truth_relation"] == "true"
         assert deltas["deltas"][0]["operation"] == "create_reader_promise"
         assert cognition["overlays"][0]["false_facts"]["fact_false_mine"]["truth_value"] == "false"
-        assert promises["reader_promise_nodes"][0]["id"] == "promise_truth"
+        assert [item["promise_id"] for item in promises["reader_promises"]] == ["promise_truth"]
+        assert promises["reader_promises"][0]["summary"] == "灵矿真相会被逐层兑现。"
+        assert promises["reader_promises"][0]["linked_knowledge_gaps"] == ["truth_gap"]
 
         with Session.begin() as session:
             blocked = BookStateReviewGate(session).review(
@@ -368,6 +381,32 @@ def test_obsidian_export_human_index_and_generic_proposal_review(tmp_path: Path)
             node = nodes["char_lin"]
             assert node.summary == "旧城线主角，开始怀疑旧档案室。"
             assert session.query(GraphDeltaRow).filter_by(project_id=project_id).count() == 2
+    finally:
+        engine.dispose()
+
+
+def test_obsidian_reader_promise_ledger_lists_narrative_promise_nodes(tmp_path: Path) -> None:
+    Session, engine = _session_factory()
+    try:
+        with Session.begin() as session:
+            project_id = _create_project(session)
+            BookStateRepository(session).create_narrative_node(
+                NarrativeNode(
+                    id="promise_gate",
+                    project_id=project_id,
+                    node_type="promise",
+                    title="矿门之后的秘密会兑现。",
+                    status="open",
+                    metadata={"created_at_chapter": 1},
+                )
+            )
+
+        vault_root = tmp_path / "vault"
+        with Session.begin() as session:
+            ObsidianExporter(session).export_project(project_id, vault_root=vault_root, as_of_chapter=1)
+
+        ledger = (vault_root / "01_Book" / "Reader_Promise_Ledger.md").read_text(encoding="utf-8")
+        assert "- 矿门之后的秘密会兑现。 (open)" in ledger
     finally:
         engine.dispose()
 
@@ -806,7 +845,7 @@ def test_structured_patch_cognition_ops_commit_through_proposal(tmp_path: Path) 
         engine.dispose()
 
 
-def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Path) -> None:
+def test_structured_patch_reader_promise_ops_commit_promise_nodes(tmp_path: Path) -> None:
     Session, engine = _session_factory()
     try:
         with Session.begin() as session:
@@ -925,14 +964,15 @@ def test_reader_promise_old_value_mismatch_requires_forced_accept(tmp_path: Path
         with Session.begin() as session:
             project_id = _create_project(session)
             repo = BookStateRepository(session)
-            repo.upsert_reader_promise(
-                ReaderPromise(
-                    promise_id="promise_truth",
+            repo.create_narrative_node(
+                NarrativeNode(
+                    id="promise_truth",
                     project_id=project_id,
-                    promise_type="mystery",
-                    summary="矿难真相会兑现。",
-                    created_at_chapter=0,
+                    node_type="promise",
+                    title="矿难真相会兑现。",
                     status="open",
+                    payload={"promise_type": "mystery"},
+                    metadata={"created_at_chapter": 0},
                 )
             )
             blocked = BookStateCompiler(session).compile(
@@ -946,17 +986,15 @@ def test_reader_promise_old_value_mismatch_requires_forced_accept(tmp_path: Path
                             chapter_number=1,
                             delta_type="repair",
                             operation="structured_proposal_patch",
-                            metadata={
-                                "reader_promise_patches": [
-                                    {
-                                        "op": "set",
-                                        "promise_id": "promise_truth",
-                                        "field_path": "summary",
-                                        "old_value": "错误旧值",
-                                        "new_value": "强制修正后的兑现口径。",
-                                    }
-                                ]
-                            },
+                            narrative_patches=[
+                                NarrativePatch(
+                                    target_ref="promise:promise_truth",
+                                    op="set",
+                                    field_path="title",
+                                    old_value="错误旧值",
+                                    new_value="强制修正后的兑现口径。",
+                                )
+                            ],
                         )
                     ],
                 )
@@ -975,17 +1013,15 @@ def test_reader_promise_old_value_mismatch_requires_forced_accept(tmp_path: Path
                             chapter_number=1,
                             delta_type="repair",
                             operation="structured_proposal_patch",
-                            metadata={
-                                "reader_promise_patches": [
-                                    {
-                                        "op": "set",
-                                        "promise_id": "promise_truth",
-                                        "field_path": "summary",
-                                        "old_value": "错误旧值",
-                                        "new_value": "强制修正后的兑现口径。",
-                                    }
-                                ]
-                            },
+                            narrative_patches=[
+                                NarrativePatch(
+                                    target_ref="promise:promise_truth",
+                                    op="set",
+                                    field_path="title",
+                                    old_value="错误旧值",
+                                    new_value="强制修正后的兑现口径。",
+                                )
+                            ],
                         )
                     ],
                 )
@@ -1150,6 +1186,16 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
                     sensitivity_level="hidden",
                 )
             )
+            repo.create_narrative_node(
+                NarrativeNode(
+                    id="promise_gate",
+                    project_id=project_id,
+                    node_type="promise",
+                    title="矿门之后的秘密会兑现。",
+                    payload={"promise_type": "mystery", "current_debt_level": 3, "reward_tags": ["reveal"]},
+                    metadata={"created_at_chapter": 1},
+                )
+            )
 
             result = LLMKnowledgeBaseCompiler(
                 session,
@@ -1168,6 +1214,10 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
         assert "林烬抵达矿门" in current_state
         assert "矿难由王都密令导致" not in current_state
         assert "fact:fact_hidden_truth" in must_not_reveal
+        reader_promises = (root / "READER_PROMISES.md").read_text(encoding="utf-8")
+        assert "## 矿门之后的秘密会兑现。" in reader_promises
+        assert "- id: promise_gate" in reader_promises
+        assert "- debt: 3" in reader_promises
         assert "矿难由王都密令导致" not in must_not_reveal
         assert '"source_refs"' in facts
         assert '"source_digest"' in facts

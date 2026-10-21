@@ -80,7 +80,6 @@ from .world_contract import (
 from .book_state import (
     BookCognitionSnapshotRow,
     CharacterIdentityMapRow,
-    BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
     FactNodeRow,
@@ -188,7 +187,6 @@ __all__ = [
     "WorldSnapshotRow",
     "MapSnapshotRow",
     "BookCognitionSnapshotRow",
-    "BookReaderPromiseRow",
     "NarrativeNodeRow",
     "NarrativeEdgeRow",
     # book frame

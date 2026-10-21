@@ -33,7 +33,6 @@ class WorldNodeType(_StrEnum):
     THREAD = "thread"
     SECRET = "secret"
     KNOWLEDGE_GAP = "knowledge_gap"
-    READER_PROMISE = "reader_promise"
     CONFLICT = "conflict"
     CONTRACT = "contract"
     FACT = "fact"

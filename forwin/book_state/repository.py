@@ -17,7 +17,6 @@ from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.map.models import MapEdgeRow, MapNodeRow
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
-    BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
     FactNodeRow,
@@ -47,7 +46,6 @@ from forwin.protocol.book_state import (
     NarrativeNode,
     NarrativePatch,
     NodePatch,
-    ReaderPromise,
     WorldEdge,
     WorldNode,
     WorldSnapshot,
@@ -340,59 +338,6 @@ class BookStateRepository:
             if key not in latest:
                 latest[key] = _cognition_overlay_from_row(row)
         return list(latest.values())
-
-    def list_reader_promises(self, project_id: str, *, as_of_chapter: int | None = None) -> list[WorldNode]:
-        return [
-            node
-            for node in self.list_world_nodes(project_id, as_of_chapter=as_of_chapter)
-            if node.node_type == "reader_promise"
-        ]
-
-    def upsert_reader_promise(self, promise: ReaderPromise) -> BookReaderPromiseRow:
-        row = self.session.execute(
-            select(BookReaderPromiseRow).where(
-                BookReaderPromiseRow.project_id == promise.project_id,
-                BookReaderPromiseRow.promise_id == promise.promise_id,
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            row = BookReaderPromiseRow(
-                promise_id=promise.promise_id,
-                project_id=promise.project_id,
-            )
-            self.session.add(row)
-        row.promise_type = promise.promise_type
-        row.summary = promise.summary
-        row.created_at_chapter = int(promise.created_at_chapter or 0)
-        row.expected_payoff_window = promise.expected_payoff_window
-        row.maximum_safe_delay = int(promise.maximum_safe_delay or 0)
-        row.current_debt_level = int(promise.current_debt_level or 0)
-        row.reward_tags_json = _dump(promise.reward_tags)
-        row.linked_threads_json = _dump(promise.linked_threads)
-        row.linked_knowledge_gaps_json = _dump(promise.linked_knowledge_gaps)
-        row.status = promise.status
-        row.source_refs_json = _dump(promise.source_refs)
-        row.metadata_json = _dump(promise.metadata)
-        self.session.flush()
-        return row
-
-    def list_reader_promises_native(
-        self,
-        project_id: str,
-        *,
-        as_of_chapter: int | None = None,
-    ) -> list[ReaderPromise]:
-        stmt = select(BookReaderPromiseRow).where(BookReaderPromiseRow.project_id == project_id)
-        if as_of_chapter is not None:
-            stmt = stmt.where(BookReaderPromiseRow.created_at_chapter <= int(as_of_chapter))
-        return [
-            _reader_promise_from_row(row)
-            for row in self.session.execute(
-                stmt.order_by(BookReaderPromiseRow.created_at_chapter.asc(), BookReaderPromiseRow.promise_id.asc())
-            )
-            .scalars()
-            .all()
-        ]
 
     def graph_delta_ids_exist(self, delta_ids: list[str]) -> set[str]:
         return set(self.graph_delta_projects(delta_ids))
@@ -892,11 +837,6 @@ class BookStateRepository:
                 _narrative_edge_from_row,
                 self.create_narrative_edge,
             ),
-            "reader_promise": (
-                BookReaderPromiseRow,
-                _reader_promise_from_row,
-                self.upsert_reader_promise,
-            ),
         }
         patches: list[tuple[str, str, dict]] = []
         for delta in deltas:
@@ -930,10 +870,6 @@ class BookStateRepository:
                             patch.model_dump(mode="json"),
                         )
                     )
-            for patch in delta.metadata.get("reader_promise_patches", []):
-                patches.append(
-                    ("reader_promise", str(patch.get("promise_id") or ""), patch)
-                )
         created = {
             (kind, target)
             for kind, target, patch in patches
@@ -969,9 +905,6 @@ class BookStateRepository:
         prior_deltas = self.list_graph_deltas(
             project_id, through_chapter=from_chapter - 1
         )
-        for delta in prior_deltas:
-            for patch in delta.metadata.get("reader_promise_patches", []):
-                prior_refs.add(f"reader_promise:{patch.get('promise_id')}")
         if collisions := sorted(
             f"{kind}:{target}"
             for kind, target in created
@@ -986,13 +919,6 @@ class BookStateRepository:
         for kind, target, patch in reversed(patches):
             if (kind, target) in created:
                 continue
-            if kind == "reader_promise":
-                # Promise compilation also appends evidence and overwrites source
-                # metadata, for which field-level old_value is not a before-image.
-                raise ValueError(
-                    f"cannot restore historical base reader_promise:{target}: "
-                    "unversioned evidence and metadata"
-                )
             field_path = str(patch.get("field_path") or "")
             if kind == "node" and (
                 field_path == "state" or field_path.startswith("state.")
@@ -1017,11 +943,10 @@ class BookStateRepository:
                     f"cannot restore historical base {kind}:{target}:{field_path}"
                 )
             model, decode, persist = bindings[kind]
-            key_column = model.promise_id if kind == "reader_promise" else model.id
             row = self.session.scalar(
                 select(model).where(
                     model.project_id == project_id,
-                    key_column == target,
+                    model.id == target,
                 )
             )
             if row is None:
@@ -1038,11 +963,10 @@ class BookStateRepository:
             if kind not in bindings:
                 raise ValueError(f"cannot restore historical base {kind}:{target}")
             model = bindings[kind][0]
-            key_column = model.promise_id if kind == "reader_promise" else model.id
             self.session.execute(
                 delete(model).where(
                     model.project_id == project_id,
-                    key_column == target,
+                    model.id == target,
                 )
             )
         if missing_metadata:
@@ -1641,25 +1565,6 @@ def _fact_node_from_row(row: FactNodeRow) -> FactNode:
         sensitivity_level=row.sensitivity_level,
         narrative_function=row.narrative_function,
         state=_loads(row.state_json, {}),
-        metadata=_loads(row.metadata_json, {}),
-    )
-
-
-def _reader_promise_from_row(row: BookReaderPromiseRow) -> ReaderPromise:
-    return ReaderPromise(
-        promise_id=row.promise_id,
-        project_id=row.project_id,
-        promise_type=row.promise_type,
-        summary=row.summary,
-        created_at_chapter=row.created_at_chapter,
-        expected_payoff_window=row.expected_payoff_window,
-        maximum_safe_delay=row.maximum_safe_delay,
-        current_debt_level=row.current_debt_level,
-        reward_tags=_loads(row.reward_tags_json, []),
-        linked_threads=_loads(row.linked_threads_json, []),
-        linked_knowledge_gaps=_loads(row.linked_knowledge_gaps_json, []),
-        status=row.status,
-        source_refs=_loads(row.source_refs_json, []),
         metadata=_loads(row.metadata_json, {}),
     )
 

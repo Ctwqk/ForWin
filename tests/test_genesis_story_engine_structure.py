@@ -98,6 +98,46 @@ def test_long_arcs_are_structured():
     assert normalize(result) == result
 
 
+def test_long_arc_ids_are_unique_after_deletion_and_creation():
+    result = normalize({"long_arcs": [
+        {"id": "long-arc-2", "summary": "Second arc"},
+        {"id": "long-arc-3", "summary": "Third arc"},
+        {"id": "long-arc-3", "summary": "New arc"},
+    ]})
+    assert [item["id"] for item in result["long_arcs"]] == [
+        "long-arc-2", "long-arc-3", "long-arc-3-2",
+    ]
+    assert normalize(result) == result
+
+
+@pytest.mark.parametrize("arc", [{"summary": "New arc"}, "New arc"])
+def test_long_arc_default_ids_do_not_collide_with_explicit_ids(arc):
+    result = normalize({"long_arcs": [
+        {"id": "long-arc-2", "summary": "Existing arc"},
+        arc,
+    ]})
+    assert [item["id"] for item in result["long_arcs"]] == [
+        "long-arc-2", "long-arc-2-2",
+    ]
+    assert normalize(result) == result
+
+
+def test_long_arc_ids_use_a_separate_namespace_from_actor_ids():
+    result = normalize({
+        "core_cast": [{"id": "long-arc-1", "name": "A"}],
+        "long_arcs": [
+            {"summary": "First arc", "owner_refs": ["long-arc-1"]},
+            {"summary": "Second arc", "owner_refs": ["long-arc-2"]},
+        ],
+    })
+    assert result["core_cast"][0]["id"] == "long-arc-1"
+    assert result["long_arcs"] == [
+        {"id": "long-arc-1", "summary": "First arc", "owner_refs": ["long-arc-1"]},
+        {"id": "long-arc-2", "summary": "Second arc", "owner_refs": []},
+    ]
+    assert normalize(result) == result
+
+
 def test_genesis_story_summary_joins_long_arc_summaries():
     revision = SimpleNamespace(id="revision-1", revision=1, pack_json=json.dumps({
         "world": {"story_engine": {"long_arcs": [

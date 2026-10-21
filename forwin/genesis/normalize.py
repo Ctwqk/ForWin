@@ -456,14 +456,14 @@ def _normalize_story_engine_payload(
 
     entity_ids: set[str] = set()
 
-    def _entity_id(value: Any, default: str) -> str:
+    def _unique_id(value: Any, default: str, used_ids: set[str]) -> str:
         base = str(value or "").strip() or default
         candidate = base
         suffix = 2
-        while candidate in entity_ids:
+        while candidate in used_ids:
             candidate = f"{base}-{suffix}"
             suffix += 1
-        entity_ids.add(candidate)
+        used_ids.add(candidate)
         return candidate
 
     core_cast = []
@@ -480,7 +480,7 @@ def _normalize_story_engine_payload(
             secrets = [secret] if isinstance(secret, str) and secret.strip() else []
         core_cast.append(
             {
-                "id": _entity_id(item.get("id"), f"cast-{len(core_cast) + 1}"),
+                "id": _unique_id(item.get("id"), f"cast-{len(core_cast) + 1}", entity_ids),
                 "name": str(item.get("name", "")).strip() or "未命名角色",
                 "role": str(item.get("role", "")).strip(),
                 "desire": str(item.get("desire", "")).strip(),
@@ -501,7 +501,7 @@ def _normalize_story_engine_payload(
     for item in (normalized.get("factions") or fallback.get("factions") or []):
         if not isinstance(item, dict):
             continue
-        faction_id = _entity_id(item.get("id"), f"faction-{len(factions) + 1}")
+        faction_id = _unique_id(item.get("id"), f"faction-{len(factions) + 1}", entity_ids)
         footprints = _normalize_footprints(
             item.get("footprint"),
             fallback_subworld=_normalize_subworld_ref(item.get("base_subworld", "")),
@@ -562,7 +562,7 @@ def _normalize_story_engine_payload(
             culture_profile_id = ""
         opposition.append(
             {
-                "id": _entity_id(item.get("id"), f"opp-{len(opposition) + 1}"),
+                "id": _unique_id(item.get("id"), f"opp-{len(opposition) + 1}", entity_ids),
                 "name": str(item.get("name", "")).strip() or "未命名对手",
                 "role": str(item.get("role", "")).strip(),
                 "desire": str(item.get("desire", "")).strip(),
@@ -603,13 +603,14 @@ def _normalize_story_engine_payload(
         })
 
     long_arcs = []
+    arc_ids: set[str] = set()
     for item in (normalized.get("long_arcs") or fallback.get("long_arcs") or []):
         if isinstance(item, str) and item.strip():
             item = {"summary": item}
         if not isinstance(item, dict):
             continue
         long_arcs.append({
-            "id": str(item.get("id") or "").strip() or f"long-arc-{len(long_arcs) + 1}",
+            "id": _unique_id(item.get("id"), f"long-arc-{len(long_arcs) + 1}", arc_ids),
             "summary": str(item.get("summary") or "").strip(),
             "owner_refs": [
                 ref for value in (item.get("owner_refs") or [])

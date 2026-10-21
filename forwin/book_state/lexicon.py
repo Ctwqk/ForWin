@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -65,6 +66,8 @@ def _text(payload: Mapping[str, Any], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str):
         raise LexiconError(f"{key} must be a string")
+    if key == "id" and not value.strip():
+        raise LexiconError(f"{key} must be a nonempty string")
     return value
 
 
@@ -77,6 +80,8 @@ def _strings(value: Any, key: str) -> tuple[str, ...]:
 def _positive_number(value: Any, key: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
         raise LexiconError(f"{key} must be positive")
+    if not math.isfinite(value):
+        raise LexiconError(f"{key} must be finite and positive")
     return float(value)
 
 

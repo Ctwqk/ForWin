@@ -58,6 +58,24 @@ def test_calendar_round_trip(cal: StoryCalendar) -> None:
     assert calendar_from_payload(payload) == cal
 
 
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), -float("inf"), -1, 2**53, 1e308])
+def test_duration_rejects_non_finite_and_overflow(cal: StoryCalendar, amount: float) -> None:
+    with pytest.raises(StoryClockError):
+        duration_to_minutes(cal, BookLexicon(), amount=amount, unit_name="日")
+
+
+def test_duration_accepts_exact_safe_limit() -> None:
+    calendar = StoryCalendar("", 0, (CalendarUnit("tick", 1),))
+    assert duration_to_minutes(calendar, BookLexicon(), amount=2**53, unit_name="tick") == 2**53
+    with pytest.raises(StoryClockError):
+        duration_to_minutes(calendar, BookLexicon(), amount=2**53 + 1, unit_name="tick")
+
+
+def test_format_story_time_rejects_negative_minutes(cal: StoryCalendar) -> None:
+    with pytest.raises(StoryClockError):
+        format_story_time(cal, -1)
+
+
 @pytest.mark.parametrize(
     "change",
     [

@@ -224,7 +224,7 @@ class RoutingMixin:
         family = str(task_family or "").strip().lower()
         stage = str(stage_key or "").strip().lower()
         wants_json = bool(response_format or output_schema)
-        if any(token in stage for token in ("state_event", "thread_time", "lore_timeline")):
+        if any(token in stage for token in ("state_event", "thread_time", "lore_timeline", "chapter_delta")):
             return "canon_extraction"
         if stage in {"writer_preview", "writer_preview_fallback", "chapter_preview_fallback"}:
             return "writer_preview"

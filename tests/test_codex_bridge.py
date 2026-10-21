@@ -20,7 +20,7 @@ from forwin.codex_bridge.runner import (
     _run_process,
 )
 from forwin.llm.codex_client import CodexBridgeClient
-from forwin.llm.router import LLMCallIntent
+from forwin.llm.router import LLMCallIntent, LLMCallRouter
 from forwin.writer.chapter_writer import ChapterWriter
 
 
@@ -518,6 +518,13 @@ class CodexBridgeTests(unittest.TestCase):
         )
 
         self.assertNotIn("output_schema", llm.calls[0])
+
+
+def test_chapter_delta_extraction_uses_codex_primary():
+    router = LLMCallRouter(ordinary_adapter=object(), codex_client=object(), codex_enabled=True)
+    assert router._codex_policy(LLMCallIntent(
+        task_family="writer", stage_key="chapter_delta_extraction",
+    )) == "codex_primary"
 
 
 if __name__ == "__main__":

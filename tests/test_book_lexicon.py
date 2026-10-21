@@ -108,3 +108,31 @@ def test_repositories_upsert_per_project() -> None:
                 select(func.count()).select_from(row_type).where(row_type.project_id == project_id)
             ) == 1
     engine.dispose()
+
+
+@pytest.mark.parametrize("payload", [
+    {"news_speed_multiplier": float("inf")},
+    {"travel_modes": [{"id": "m", "name": "mode", "speed_multiplier": float("inf"), "allowed_edge_types": ["road"]}]},
+    {"rank_ladders": [{"id": "", "name": "rank"}]},
+    {"rank_ladders": [{"id": " \t", "name": "rank"}]},
+    {"currencies": [{"id": "", "name": "coin"}]},
+    {"currencies": [{"id": " ", "name": "coin"}]},
+    {"travel_modes": [{"id": "", "name": "mode", "speed_multiplier": 1, "allowed_edge_types": ["road"]}]},
+    {"travel_modes": [{"id": "\n", "name": "mode", "speed_multiplier": 1, "allowed_edge_types": ["road"]}]},
+])
+def test_lexicon_rejects_inf_and_blank_ids(payload: dict) -> None:
+    with pytest.raises(LexiconError):
+        lexicon_from_payload(payload)
+
+
+@pytest.mark.parametrize("name", ["", " \t\n"])
+@pytest.mark.parametrize("collection,item", [
+    ("time_unit_aliases", {"minutes": 1}),
+    ("rank_ladders", {"id": "r"}),
+    ("currencies", {"id": "c"}),
+    ("travel_modes", {"id": "m", "speed_multiplier": 1, "allowed_edge_types": ["road"]}),
+])
+def test_lexicon_accepts_blank_names(collection: str, item: dict, name: str) -> None:
+    lexicon = lexicon_from_payload({collection: [{**item, "name": name}]})
+    assert getattr(lexicon, collection)[0].name == name
+    assert lexicon_to_payload(lexicon)[collection][0]["name"] == name

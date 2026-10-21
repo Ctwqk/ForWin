@@ -1106,6 +1106,7 @@ def test_book_state_extraction_has_one_current_owner() -> None:
     owner = ROOT / "forwin/book_state/extraction"
     assert sorted(path.name for path in owner.glob("*.py")) == [
         "__init__.py",
+        "chapter_delta_extractor.py",
         "chapter_delta_schema.py",
         "chapter_input.py",
         "contract.py",

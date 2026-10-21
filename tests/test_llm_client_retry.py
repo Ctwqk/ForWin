@@ -13,6 +13,12 @@ from forwin.writer.llm import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
+    def test_chapter_delta_extraction_routes_to_canon_extraction(self) -> None:
+        self.assertEqual(LLMClient._llm_task_route(
+            task_family="writer", stage_key="chapter_delta_extraction",
+            response_format={"type": "json_object"},
+        ), "canon_extraction")
+
     def test_wall_timeout_closes_hung_custom_http_client(self) -> None:
         class HangingHTTPClient:
             def __init__(self) -> None:

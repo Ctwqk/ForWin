@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -65,6 +66,8 @@ def calendar_to_payload(calendar: StoryCalendar) -> dict[str, Any]:
 
 
 def format_story_time(calendar: StoryCalendar, minutes: int) -> str:
+    if minutes < 0:
+        raise StoryClockError("Story time must be nonnegative")
     units = sorted(calendar.units, key=lambda unit: unit.minutes, reverse=True)
     remainder = minutes
     parts: list[str] = []
@@ -96,6 +99,12 @@ def duration_to_minutes(
     amount: float,
     unit_name: str,
 ) -> int:
-    if amount < 0:
-        raise StoryClockError("Duration amount must be nonnegative")
-    return round(amount * unit_minutes(calendar, lexicon, unit_name))
+    try:
+        if not math.isfinite(amount) or amount < 0:
+            raise StoryClockError("Duration amount must be finite and nonnegative")
+        minutes = amount * unit_minutes(calendar, lexicon, unit_name)
+        if not math.isfinite(minutes) or minutes > 2**53:
+            raise StoryClockError("Duration minutes exceed the safe numeric range")
+    except OverflowError as exc:
+        raise StoryClockError("Duration minutes exceed the safe numeric range") from exc
+    return round(minutes)

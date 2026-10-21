@@ -43,6 +43,7 @@ CODEX_PRIMARY_FAMILIES = {
 }
 WRITER_FAMILIES = {"writer", "write_chapter"}
 CODEX_PRIMARY_WRITER_STAGES = {
+    "chapter_delta_extraction",
     "state_event_extraction",
     "thread_time_extraction",
     "lore_timeline_extraction",

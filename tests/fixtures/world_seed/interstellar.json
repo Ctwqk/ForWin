@@ -1,0 +1,675 @@
+{
+  "project": {
+    "title": "灰烬环带的回声",
+    "genre": "星际科幻",
+    "premise": "被开除的领航员发现，官方宣布全员殉职的旗舰其实是被舰队自己的超载指令击沉，而他的父亲还活在沉船墓场。",
+    "target_total_chapters": 6
+  },
+  "pack": {
+    "book_brief": {
+      "title": "灰烬环带的回声",
+      "premise": "被开除的领航员发现，官方宣布全员殉职的旗舰其实是被舰队自己的超载指令击沉，而他的父亲还活在沉船墓场。",
+      "genre": "星际科幻",
+      "target_total_chapters": 6,
+      "setting_seed": "联邦边境星区，舰队、矿业公会与沉船墓场互相牵制。",
+      "audience_hint": "喜欢硬质感太空军政悬疑的读者",
+      "core_emotion": "对官方叙事的不信任与对父亲的追寻",
+      "core_delight": "在通讯延迟和跃迁冷却的限制下拼出真相",
+      "narrative_promise": "每一卷都要让一条官方说法崩塌。",
+      "content_guardrails": [
+        "不写超光速通讯"
+      ]
+    },
+    "world": {
+      "world_bible": {
+        "overview": "人类沿跃迁航线殖民了边境星区，航线之间只有信号延迟与舰队法令。",
+        "axioms": [
+          "没有超光速通讯",
+          "跃迁艇每次跃迁后都需要冷却"
+        ],
+        "history_slice": "联邦在环带战争后建立第七舰队，军政合一。",
+        "naming_style": "联邦标准语音译的三字人名，舰船以气象与地名命名。",
+        "forbidden_zones": [
+          "避免魔法化的能量设定"
+        ]
+      },
+      "map_atlas": {
+        "overview": "边境星区以曙光轨道站为枢纽，向外是北冕前哨，环带深处是沉船墓场。",
+        "topology_rules": [
+          "星际移动只能沿既有航线",
+          "跃迁艇需要在泊位港补给"
+        ],
+        "submaps": [
+          {
+            "id": "sw-frontier",
+            "name": "边境星区",
+            "scope": "macro_region",
+            "summary": "舰队与矿业公会共同占据的星区。",
+            "terrain": [
+              "asteroid_belt",
+              "orbital"
+            ],
+            "travel_rules": [
+              "航线之间靠跃迁，站内靠穿梭舱"
+            ],
+            "resident_factions": [
+              "第七舰队",
+              "灰烬矿盟"
+            ]
+          }
+        ],
+        "regions": [
+          {
+            "id": "region-hub",
+            "name": "曙光枢纽",
+            "subworld_name": "边境星区",
+            "level": 1,
+            "kind": "orbital_hub",
+            "summary": "舰队司令部与军事法庭所在。",
+            "terrain": [
+              "orbital"
+            ]
+          },
+          {
+            "id": "region-belt",
+            "name": "灰烬环带",
+            "subworld_name": "边境星区",
+            "level": 1,
+            "kind": "asteroid_field",
+            "summary": "矿业公会的作业区与沉船墓场。",
+            "terrain": [
+              "asteroid_belt"
+            ]
+          },
+          {
+            "id": "region-rim",
+            "name": "北冕外环",
+            "subworld_name": "边境星区",
+            "level": 1,
+            "kind": "frontier_lane",
+            "summary": "舰队前哨所在的外环航道。",
+            "terrain": [
+              "void"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "id": "node-station",
+            "name": "曙光轨道站",
+            "kind": "city",
+            "parent_subworld": "sw-frontier",
+            "parent_region_id": "region-hub",
+            "description": "边境星区的行政与补给枢纽。"
+          },
+          {
+            "id": "node-court",
+            "name": "舰队军事法庭",
+            "kind": "location",
+            "parent_subworld": "sw-frontier",
+            "parent_region_id": "region-hub",
+            "description": "云梯号事故听证的举行地。"
+          },
+          {
+            "id": "node-dock",
+            "name": "矿盟泊位港",
+            "kind": "town",
+            "parent_subworld": "sw-frontier",
+            "parent_region_id": "region-belt",
+            "description": "矿业公会的船坞与黑市。"
+          },
+          {
+            "id": "node-wreck",
+            "name": "沉船墓场",
+            "kind": "ruin",
+            "parent_subworld": "sw-frontier",
+            "parent_region_id": "region-belt",
+            "description": "战争遗留的舰船残骸群。"
+          },
+          {
+            "id": "node-outpost",
+            "name": "北冕前哨",
+            "kind": "camp",
+            "parent_subworld": "sw-frontier",
+            "parent_region_id": "region-rim",
+            "description": "舰队设在外环的监听站。"
+          }
+        ],
+        "edges": [
+          {
+            "id": "edge-station-dock",
+            "from_node_id": "node-station",
+            "to_node_id": "node-dock",
+            "kind": "space_route"
+          },
+          {
+            "id": "edge-dock-wreck",
+            "from_node_id": "node-dock",
+            "to_node_id": "node-wreck",
+            "kind": "space_route"
+          },
+          {
+            "id": "edge-station-outpost",
+            "from_node_id": "node-station",
+            "to_node_id": "node-outpost",
+            "kind": "space_route"
+          },
+          {
+            "id": "edge-station-court",
+            "from_node_id": "node-station",
+            "to_node_id": "node-court",
+            "kind": "tunnel"
+          }
+        ]
+      },
+      "story_engine": {
+        "core_cast": [
+          {
+            "id": "cast-tide",
+            "name": "应潮生",
+            "role": "被开除的舰队领航员",
+            "desire": "弄清云梯号沉没的真相",
+            "fear": "父亲真的早已死去",
+            "secrets": [],
+            "current_base": "node-station",
+            "affiliated_faction": ""
+          },
+          {
+            "id": "cast-father",
+            "name": "应怀远",
+            "role": "云梯号舰长，官方认定殉职",
+            "desire": "把证据送到法庭",
+            "fear": "信标在证据送出前耗尽",
+            "secrets": [
+              "他其实活着，藏在沉船墓场"
+            ],
+            "current_base": "node-wreck",
+            "affiliated_faction": "faction-fleet"
+          }
+        ],
+        "opposition": [
+          {
+            "id": "opp-marshal",
+            "name": "钟离曜",
+            "role": "第七舰队监察官",
+            "desire": "压下沉船调查",
+            "pressure": "听证会即将开庭",
+            "base_location": "node-court",
+            "backing_faction": "faction-fleet"
+          }
+        ],
+        "factions": [
+          {
+            "id": "faction-fleet",
+            "name": "第七舰队",
+            "role": "边境星区的军政机构",
+            "goal": "守住旗舰事故的官方说法",
+            "base_location": "node-station"
+          },
+          {
+            "id": "faction-guild",
+            "name": "灰烬矿盟",
+            "role": "环带矿业公会",
+            "goal": "从混乱中争取航线自主权",
+            "base_location": "node-dock"
+          }
+        ],
+        "relationship_axes": [
+          {
+            "source": "cast-tide",
+            "target": "cast-father",
+            "edge_type": "kin_of",
+            "note": "父子，多年未见",
+            "visibility": "public"
+          }
+        ],
+        "reader_promises": [
+          "旗舰沉没的真相会在第一卷末被推上法庭"
+        ],
+        "long_arcs": [
+          {
+            "id": "long-arc-wreck",
+            "summary": "旗舰沉没的真相与父亲的归来",
+            "owner_refs": [
+              "cast-tide",
+              "cast-father"
+            ]
+          }
+        ]
+      }
+    },
+    "book_arc_blueprint": {
+      "summary": "两卷：先找活人，再上法庭。",
+      "arcs": [
+        {
+          "arc_number": 1,
+          "title": "沉船",
+          "arc_synopsis": "领航员循着一条残缺的求救信号进入环带深处。",
+          "goal": "确认父亲仍然活着",
+          "stakes": "信标耗尽，线索断绝",
+          "payoff_direction": "局部揭秘",
+          "chapter_start": 1,
+          "chapter_end": 3,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        },
+        {
+          "arc_number": 2,
+          "title": "听证",
+          "arc_synopsis": "证据送到曙光轨道站，舰队的说法在法庭上受审。",
+          "goal": "让证据在法庭上生效",
+          "stakes": "舰队倒逼矿盟交出证人",
+          "payoff_direction": "官方叙事崩塌",
+          "chapter_start": 4,
+          "chapter_end": 6,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        }
+      ]
+    },
+    "world_seed": {
+      "calendar": {
+        "epoch_label": "联邦星历",
+        "opening_minute": 45888900,
+        "units": [
+          {
+            "name": "标准年",
+            "minutes": 525600
+          },
+          {
+            "name": "标准日",
+            "minutes": 1440
+          },
+          {
+            "name": "标准时",
+            "minutes": 60
+          }
+        ]
+      },
+      "lexicon": {
+        "time_unit_aliases": [
+          {
+            "name": "值班轮次",
+            "minutes": 480
+          }
+        ],
+        "rank_ladders": [
+          {
+            "id": "ladder-fleet",
+            "name": "舰队军衔",
+            "ranks": [
+              "少尉",
+              "上尉",
+              "少校",
+              "上校",
+              "准将"
+            ]
+          }
+        ],
+        "currencies": [
+          {
+            "id": "currency-credit",
+            "name": "联邦信用点"
+          }
+        ],
+        "appellations": [
+          "舰长",
+          "父亲",
+          "教官"
+        ],
+        "generic_character_refs": [
+          "值班军官",
+          "领航员"
+        ],
+        "travel_modes": [
+          {
+            "id": "mode-jump",
+            "name": "跃迁艇",
+            "speed_multiplier": 40.0,
+            "allowed_edge_types": [
+              "space_route"
+            ]
+          },
+          {
+            "id": "mode-shuttle",
+            "name": "穿梭舱",
+            "speed_multiplier": 4.0,
+            "allowed_edge_types": [
+              "space_route",
+              "tunnel"
+            ]
+          }
+        ],
+        "news_speed_multiplier": 4.0
+      },
+      "actors": [
+        {
+          "ref": "cast-tide",
+          "actor_tier": "major",
+          "location_ref": "node-station",
+          "travel_mode_ids": [
+            "mode-shuttle",
+            "mode-jump"
+          ],
+          "resources": [
+            "借来的半价航票"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-wreck",
+              "goal": "弄清云梯号沉没的真相",
+              "motivation": "不信全员殉职的通告",
+              "priority": 5,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-guild"
+              ],
+              "constraints": [
+                "没有舰队授权的跃迁会被追缉"
+              ],
+              "secrecy_refs": [
+                "fact-father-alive"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-wreckfield",
+              "agenda_id": "agenda-wreck",
+              "action_type": "move",
+              "summary": "借矿盟的跃迁艇前往沉船墓场",
+              "target_refs": [
+                "fact-father-alive"
+              ],
+              "location_ref": "node-wreck",
+              "scheduled_in": {
+                "amount": 18,
+                "unit": "标准时"
+              },
+              "requires_onstage": true,
+              "impact_level": "major"
+            },
+            {
+              "id": "intent-question",
+              "agenda_id": "agenda-wreck",
+              "action_type": "confront",
+              "summary": "在听证会上当庭质询监察官",
+              "target_refs": [
+                "opp-marshal"
+              ],
+              "location_ref": "node-court",
+              "scheduled_in": {
+                "amount": 5,
+                "unit": "标准日"
+              },
+              "requires_onstage": true,
+              "impact_level": "critical"
+            }
+          ]
+        },
+        {
+          "ref": "cast-father",
+          "actor_tier": "minor",
+          "location_ref": "node-wreck",
+          "travel_mode_ids": [],
+          "resources": [
+            "残存的备用信标"
+          ],
+          "agendas": [],
+          "intents": []
+        },
+        {
+          "ref": "opp-marshal",
+          "actor_tier": "major",
+          "location_ref": "node-court",
+          "travel_mode_ids": [
+            "mode-shuttle"
+          ],
+          "resources": [
+            "监察官印信"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-bury",
+              "goal": "在听证会前压下沉船调查",
+              "motivation": "自己下达过超载指令",
+              "priority": 5,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-fleet"
+              ],
+              "constraints": [
+                "不能留下可追溯的命令记录"
+              ],
+              "secrecy_refs": [
+                "fact-sabotage"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-sweep",
+              "agenda_id": "agenda-bury",
+              "action_type": "hide",
+              "summary": "清扫曙光轨道站里与云梯号相关的航行日志",
+              "target_refs": [
+                "fact-sabotage"
+              ],
+              "location_ref": "node-station",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "值班轮次"
+              },
+              "requires_onstage": false,
+              "impact_level": "major"
+            }
+          ]
+        },
+        {
+          "ref": "faction-fleet",
+          "actor_tier": "minor",
+          "location_ref": "node-station",
+          "travel_mode_ids": [],
+          "resources": [
+            "监听站网络"
+          ],
+          "agendas": [],
+          "intents": []
+        },
+        {
+          "ref": "faction-guild",
+          "actor_tier": "minor",
+          "location_ref": "node-dock",
+          "travel_mode_ids": [
+            "mode-jump"
+          ],
+          "resources": [
+            "跃迁艇船队",
+            "矿石期货"
+          ],
+          "agendas": [],
+          "intents": []
+        }
+      ],
+      "relations": [
+        {
+          "source": "cast-tide",
+          "target": "cast-father",
+          "edge_type": "kin_of",
+          "note": "多年未见的父子",
+          "visibility": "public",
+          "appellation": "父亲"
+        },
+        {
+          "source": "cast-father",
+          "target": "faction-fleet",
+          "edge_type": "member_of",
+          "note": "名义上仍在编",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "opp-marshal",
+          "target": "faction-fleet",
+          "edge_type": "subordinate_to",
+          "note": "",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "faction-guild",
+          "target": "faction-fleet",
+          "edge_type": "distrusts",
+          "note": "航线自主权之争",
+          "visibility": "secret",
+          "appellation": ""
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact-wreck-official",
+          "proposition": "云梯号因陨石带事故沉没，全员殉职。",
+          "truth_value": false,
+          "sensitivity": "public",
+          "related_refs": [
+            "cast-father",
+            "faction-fleet"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-sabotage",
+          "proposition": "云梯号是被舰队内部的超载指令击沉的。",
+          "truth_value": true,
+          "sensitivity": "secret",
+          "related_refs": [
+            "faction-fleet",
+            "opp-marshal"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-father-alive",
+          "proposition": "应怀远活着，藏身在沉船墓场的残骸里。",
+          "truth_value": true,
+          "sensitivity": "hidden",
+          "related_refs": [
+            "cast-father"
+          ],
+          "nobody_knows": false
+        }
+      ],
+      "knowledge": [
+        {
+          "observer_ref": "cast-tide",
+          "fact_id": "fact-wreck-official",
+          "state": "believes",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "faction-guild",
+          "fact_id": "fact-wreck-official",
+          "state": "believes",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "opp-marshal",
+          "fact_id": "fact-wreck-official",
+          "state": "disbelieves",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "opp-marshal",
+          "fact_id": "fact-sabotage",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-father",
+          "fact_id": "fact-sabotage",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-father",
+          "fact_id": "fact-father-alive",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "faction-guild",
+          "fact_id": "fact-father-alive",
+          "state": "suspects",
+          "channel": "seeded"
+        }
+      ],
+      "rules": [
+        {
+          "id": "rule-cooldown",
+          "statement": "跃迁艇每次跃迁后必须冷却六个标准时才能再次跃迁。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "cooldown",
+            "travel_mode_id": "mode-jump",
+            "amount": 6,
+            "unit": "标准时"
+          }
+        },
+        {
+          "id": "rule-lag",
+          "statement": "星区之间的通讯延迟随距离增加，没有即时对话。",
+          "hardness": "soft",
+          "checkable": null
+        }
+      ],
+      "clocks": [
+        {
+          "id": "clock-hearing",
+          "label": "云梯号事故听证开庭",
+          "due_in": {
+            "amount": 5,
+            "unit": "标准日"
+          },
+          "owner_ref": "faction-fleet",
+          "scope": "public",
+          "on_expire": "监察官在法庭上宣读结案陈词"
+        },
+        {
+          "id": "clock-beacon",
+          "label": "备用信标耗尽",
+          "due_in": {
+            "amount": 30,
+            "unit": "标准时"
+          },
+          "owner_ref": "cast-father",
+          "scope": "secret",
+          "on_expire": "沉船墓场的求救信号彻底沉默"
+        }
+      ],
+      "reader_promises": [
+        {
+          "id": "promise-wreck",
+          "summary": "云梯号沉没的真相会在第一卷末被推上法庭",
+          "promise_type": "mystery",
+          "expected_payoff_window": "arc-1"
+        }
+      ],
+      "reveal_candidates": [
+        {
+          "fact_id": "fact-sabotage",
+          "arc_number": 2,
+          "note": "在听证会上揭示"
+        },
+        {
+          "fact_id": "fact-father-alive",
+          "arc_number": 1,
+          "note": "第一卷末与主角重逢"
+        }
+      ]
+    }
+  }
+}

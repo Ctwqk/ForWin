@@ -1,0 +1,704 @@
+{
+  "project": {
+    "title": "夜班档案员",
+    "genre": "都市悬疑",
+    "premise": "市立档案馆的夜班档案员在旧港区的失踪案卷里，发现三年前离家出走的姐姐被人从名单上抹掉了。",
+    "target_total_chapters": 6
+  },
+  "pack": {
+    "book_brief": {
+      "title": "夜班档案员",
+      "premise": "市立档案馆的夜班档案员在旧港区的失踪案卷里，发现三年前离家出走的姐姐被人从名单上抹掉了。",
+      "genre": "都市悬疑",
+      "target_total_chapters": 6,
+      "setting_seed": "滨河市旧港区的档案馆、诊所与末班地铁。",
+      "audience_hint": "喜欢现实质感的都市悬疑读者",
+      "core_emotion": "对至亲下落的不安与愧疚",
+      "core_delight": "从一份份档案的缝隙里拼出真相",
+      "narrative_promise": "每一卷都要让一份被抹掉的记录重新出现。",
+      "content_guardrails": [
+        "不写超自然解释"
+      ]
+    },
+    "world": {
+      "world_bible": {
+        "overview": "滨河市的旧港区在改建中被半遗忘，档案馆、诊所与末班地铁是仅存的公共纽带。",
+        "axioms": [
+          "所有记录都有经手人",
+          "地铁末班之后只能步行或打车"
+        ],
+        "history_slice": "旧港区三年前整体改建，大量人口登记被合并重编。",
+        "naming_style": "现代汉语的日常人名，机构名朴素直白。",
+        "forbidden_zones": [
+          "避免玄学与超能力设定"
+        ]
+      },
+      "map_atlas": {
+        "overview": "旧港区的地铁站连通档案馆、诊所、酒吧与分局，夜间只剩末班车与步行。",
+        "topology_rules": [
+          "夜间只有地铁与步行可达",
+          "末班车之后跨区要付出时间成本"
+        ],
+        "submaps": [
+          {
+            "id": "sw-city",
+            "name": "滨河市区",
+            "scope": "macro_region",
+            "summary": "旧港区与新城区组成的主舞台。",
+            "terrain": [
+              "urban",
+              "riverside"
+            ],
+            "travel_rules": [
+              "夜间靠地铁，末班后靠步行"
+            ],
+            "resident_factions": [
+              "三分局",
+              "回春医疗"
+            ]
+          }
+        ],
+        "regions": [
+          {
+            "id": "region-old",
+            "name": "旧港片区",
+            "subworld_name": "滨河市区",
+            "level": 1,
+            "kind": "old_district",
+            "summary": "正在被改建吞没的老街区。",
+            "terrain": [
+              "riverside"
+            ]
+          },
+          {
+            "id": "region-new",
+            "name": "新城片区",
+            "subworld_name": "滨河市区",
+            "level": 1,
+            "kind": "business_district",
+            "summary": "写字楼与新建公寓。",
+            "terrain": [
+              "urban"
+            ]
+          },
+          {
+            "id": "region-line",
+            "name": "地铁沿线",
+            "subworld_name": "滨河市区",
+            "level": 1,
+            "kind": "transit_corridor",
+            "summary": "串起两个片区的地铁线。",
+            "terrain": [
+              "underground"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "id": "node-station",
+            "name": "旧港站",
+            "kind": "location",
+            "parent_subworld": "sw-city",
+            "parent_region_id": "region-line",
+            "description": "末班地铁的终点。"
+          },
+          {
+            "id": "node-archive",
+            "name": "市立档案馆",
+            "kind": "location",
+            "parent_subworld": "sw-city",
+            "parent_region_id": "region-new",
+            "description": "主角值夜班的地方。"
+          },
+          {
+            "id": "node-clinic",
+            "name": "回春诊所",
+            "kind": "location",
+            "parent_subworld": "sw-city",
+            "parent_region_id": "region-old",
+            "description": "夜间病历的存放处。"
+          },
+          {
+            "id": "node-bar",
+            "name": "夜航酒吧",
+            "kind": "location",
+            "parent_subworld": "sw-city",
+            "parent_region_id": "region-old",
+            "description": "线人出没的酒吧。"
+          },
+          {
+            "id": "node-precinct",
+            "name": "第三分局",
+            "kind": "location",
+            "parent_subworld": "sw-city",
+            "parent_region_id": "region-new",
+            "description": "办理旧案的刑侦部门。"
+          }
+        ],
+        "edges": [
+          {
+            "id": "edge-station-archive",
+            "from_node_id": "node-station",
+            "to_node_id": "node-archive",
+            "kind": "rail"
+          },
+          {
+            "id": "edge-station-bar",
+            "from_node_id": "node-station",
+            "to_node_id": "node-bar",
+            "kind": "rail"
+          },
+          {
+            "id": "edge-bar-clinic",
+            "from_node_id": "node-bar",
+            "to_node_id": "node-clinic",
+            "kind": "road"
+          },
+          {
+            "id": "edge-archive-precinct",
+            "from_node_id": "node-archive",
+            "to_node_id": "node-precinct",
+            "kind": "road"
+          }
+        ]
+      },
+      "story_engine": {
+        "core_cast": [
+          {
+            "id": "cast-archivist",
+            "name": "蒲念安",
+            "role": "市立档案馆夜班档案员",
+            "desire": "找回失踪的姐姐",
+            "fear": "姐姐的失踪是自己当年疏忽的后果",
+            "secrets": [],
+            "current_base": "node-archive",
+            "affiliated_faction": ""
+          },
+          {
+            "id": "cast-sister",
+            "name": "蒲念平",
+            "role": "三年前失踪的护士",
+            "desire": "把证据送出去",
+            "fear": "被转移出诊所",
+            "secrets": [
+              "她抄下了夜间病历的原件"
+            ],
+            "current_base": "node-clinic",
+            "affiliated_faction": ""
+          },
+          {
+            "id": "cast-inspector",
+            "name": "韦清和",
+            "role": "第三分局刑侦队长",
+            "desire": "在评审前结掉旧案",
+            "fear": "旧案翻出自己当年签字的结论",
+            "secrets": [],
+            "current_base": "node-precinct",
+            "affiliated_faction": "faction-precinct"
+          }
+        ],
+        "opposition": [
+          {
+            "id": "opp-director",
+            "name": "殷鹤年",
+            "role": "回春诊所院长",
+            "desire": "销毁夜间病历",
+            "pressure": "分局即将重启旧案评审",
+            "base_location": "node-clinic",
+            "backing_faction": "faction-group"
+          }
+        ],
+        "factions": [
+          {
+            "id": "faction-precinct",
+            "name": "三分局",
+            "role": "办理旧案的刑侦部门",
+            "goal": "在评审前维持既定结论",
+            "base_location": "node-precinct"
+          },
+          {
+            "id": "faction-group",
+            "name": "回春医疗集团",
+            "role": "旧港区的私立医疗机构",
+            "goal": "保住诊所的运营许可",
+            "base_location": "node-clinic"
+          }
+        ],
+        "relationship_axes": [
+          {
+            "source": "cast-archivist",
+            "target": "cast-sister",
+            "edge_type": "family_of",
+            "note": "姐妹，三年未联系",
+            "visibility": "public"
+          }
+        ],
+        "reader_promises": [
+          "失踪名单里被抹掉的名字会重新出现"
+        ],
+        "long_arcs": [
+          {
+            "id": "long-arc-ledger",
+            "summary": "被抹掉的失踪者名单与姐姐的下落",
+            "owner_refs": [
+              "cast-archivist",
+              "cast-sister"
+            ]
+          }
+        ]
+      }
+    },
+    "book_arc_blueprint": {
+      "summary": "两卷：先查名单，再进诊所。",
+      "arcs": [
+        {
+          "arc_number": 1,
+          "title": "缺页",
+          "arc_synopsis": "档案员在旧案卷里发现一页被撕掉的名单。",
+          "goal": "确认名单被人为抹去",
+          "stakes": "姐姐的下落继续成谜",
+          "payoff_direction": "局部揭秘",
+          "chapter_start": 1,
+          "chapter_end": 3,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        },
+        {
+          "arc_number": 2,
+          "title": "夜诊",
+          "arc_synopsis": "名单指向诊所的夜间病历，销毁的期限逼近。",
+          "goal": "在病历销毁前拿到原件",
+          "stakes": "证据与证人一同失去",
+          "payoff_direction": "真相与代价同时落地",
+          "chapter_start": 4,
+          "chapter_end": 6,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        }
+      ]
+    },
+    "world_seed": {
+      "calendar": {
+        "epoch_label": "",
+        "opening_minute": 14260,
+        "units": [
+          {
+            "name": "天",
+            "minutes": 1440
+          },
+          {
+            "name": "小时",
+            "minutes": 60
+          }
+        ]
+      },
+      "lexicon": {
+        "time_unit_aliases": [
+          {
+            "name": "一刻钟",
+            "minutes": 15
+          }
+        ],
+        "rank_ladders": [
+          {
+            "id": "ladder-police",
+            "name": "警衔序列",
+            "ranks": [
+              "辅警",
+              "警员",
+              "警长",
+              "督察",
+              "总督察"
+            ]
+          }
+        ],
+        "currencies": [
+          {
+            "id": "currency-yuan",
+            "name": "元"
+          }
+        ],
+        "appellations": [
+          "姐姐",
+          "队长",
+          "院长"
+        ],
+        "generic_character_refs": [
+          "值班护士",
+          "夜班保安"
+        ],
+        "travel_modes": [
+          {
+            "id": "mode-subway",
+            "name": "地铁",
+            "speed_multiplier": 2.0,
+            "allowed_edge_types": [
+              "rail"
+            ]
+          },
+          {
+            "id": "mode-walk",
+            "name": "步行",
+            "speed_multiplier": 1.0,
+            "allowed_edge_types": [
+              "road",
+              "path"
+            ]
+          }
+        ],
+        "news_speed_multiplier": 1.0
+      },
+      "actors": [
+        {
+          "ref": "cast-archivist",
+          "actor_tier": "major",
+          "location_ref": "node-archive",
+          "travel_mode_ids": [
+            "mode-subway",
+            "mode-walk"
+          ],
+          "resources": [
+            "夜班门禁卡"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-find",
+              "goal": "找到失踪三年的姐姐",
+              "motivation": "愧疚与不信官方说法",
+              "priority": 5,
+              "horizon": "arc",
+              "means_refs": [
+                "fact-ledger"
+              ],
+              "constraints": [
+                "夜班之外没有调阅权限"
+              ],
+              "secrecy_refs": [
+                "fact-sister-alive"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-copy",
+              "agenda_id": "agenda-find",
+              "action_type": "investigate",
+              "summary": "夜班时调取旧港区失踪案卷并复印缺页",
+              "target_refs": [
+                "fact-ledger"
+              ],
+              "location_ref": "node-archive",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "小时"
+              },
+              "requires_onstage": true,
+              "impact_level": "moderate"
+            },
+            {
+              "id": "intent-ride",
+              "agenda_id": "agenda-find",
+              "action_type": "move",
+              "summary": "赶末班地铁到旧港站见线人",
+              "target_refs": [],
+              "location_ref": "node-station",
+              "scheduled_in": {
+                "amount": 3,
+                "unit": "一刻钟"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor"
+            }
+          ]
+        },
+        {
+          "ref": "cast-sister",
+          "actor_tier": "minor",
+          "location_ref": "node-clinic",
+          "travel_mode_ids": [],
+          "resources": [
+            "抄录的病历原件"
+          ],
+          "agendas": [],
+          "intents": []
+        },
+        {
+          "ref": "cast-inspector",
+          "actor_tier": "major",
+          "location_ref": "node-precinct",
+          "travel_mode_ids": [
+            "mode-walk"
+          ],
+          "resources": [
+            "刑侦队公章"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-close",
+              "goal": "在旧案评审前结案",
+              "motivation": "怕当年的结论被推翻",
+              "priority": 3,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-precinct"
+              ],
+              "constraints": [
+                "评审会有外部委员旁听"
+              ],
+              "secrecy_refs": []
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-interview",
+              "agenda_id": "agenda-close",
+              "action_type": "negotiate",
+              "summary": "约谈诊所院长核对当年的口供",
+              "target_refs": [
+                "opp-director"
+              ],
+              "location_ref": "node-clinic",
+              "scheduled_in": {
+                "amount": 1,
+                "unit": "天"
+              },
+              "requires_onstage": false,
+              "impact_level": "moderate"
+            }
+          ]
+        },
+        {
+          "ref": "opp-director",
+          "actor_tier": "major",
+          "location_ref": "node-clinic",
+          "travel_mode_ids": [
+            "mode-walk"
+          ],
+          "resources": [
+            "诊所钥匙串"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-purge",
+              "goal": "销毁夜间病历并转移病人",
+              "motivation": "保住运营许可",
+              "priority": 5,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-group"
+              ],
+              "constraints": [
+                "病历在分局有备案副本"
+              ],
+              "secrecy_refs": [
+                "fact-ledger",
+                "fact-sister-alive"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-purge",
+              "agenda_id": "agenda-purge",
+              "action_type": "hide",
+              "summary": "趁夜把病历搬出诊所并粉碎",
+              "target_refs": [
+                "fact-ledger"
+              ],
+              "location_ref": "node-clinic",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "天"
+              },
+              "requires_onstage": false,
+              "impact_level": "critical"
+            }
+          ]
+        },
+        {
+          "ref": "faction-precinct",
+          "actor_tier": "minor",
+          "location_ref": "node-precinct",
+          "travel_mode_ids": [],
+          "resources": [
+            "旧案备案室"
+          ],
+          "agendas": [],
+          "intents": []
+        },
+        {
+          "ref": "faction-group",
+          "actor_tier": "minor",
+          "location_ref": "node-clinic",
+          "travel_mode_ids": [],
+          "resources": [
+            "私立诊所网络"
+          ],
+          "agendas": [],
+          "intents": []
+        }
+      ],
+      "relations": [
+        {
+          "source": "cast-archivist",
+          "target": "cast-sister",
+          "edge_type": "family_of",
+          "note": "三年未联系的姐妹",
+          "visibility": "public",
+          "appellation": "姐姐"
+        },
+        {
+          "source": "cast-inspector",
+          "target": "faction-precinct",
+          "edge_type": "member_of",
+          "note": "",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "opp-director",
+          "target": "faction-group",
+          "edge_type": "leader_of",
+          "note": "",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "cast-sister",
+          "target": "opp-director",
+          "edge_type": "distrusts",
+          "note": "知道他在抹记录",
+          "visibility": "secret",
+          "appellation": ""
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact-alibi",
+          "proposition": "蒲念平三年前是自愿离开滨河市的。",
+          "truth_value": false,
+          "sensitivity": "public",
+          "related_refs": [
+            "cast-sister",
+            "faction-precinct"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-ledger",
+          "proposition": "回春诊所的夜间病历里有七名失踪者的名字被人为抹去。",
+          "truth_value": true,
+          "sensitivity": "secret",
+          "related_refs": [
+            "faction-group"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-sister-alive",
+          "proposition": "蒲念平仍被关在旧港片区的地下病房里。",
+          "truth_value": true,
+          "sensitivity": "hidden",
+          "related_refs": [
+            "cast-sister"
+          ],
+          "nobody_knows": false
+        }
+      ],
+      "knowledge": [
+        {
+          "observer_ref": "cast-inspector",
+          "fact_id": "fact-alibi",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "faction-precinct",
+          "fact_id": "fact-alibi",
+          "state": "believes",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-archivist",
+          "fact_id": "fact-alibi",
+          "state": "disbelieves",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "opp-director",
+          "fact_id": "fact-ledger",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-sister",
+          "fact_id": "fact-ledger",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "opp-director",
+          "fact_id": "fact-sister-alive",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-archivist",
+          "fact_id": "fact-sister-alive",
+          "state": "suspects",
+          "channel": "seeded"
+        }
+      ],
+      "rules": [
+        {
+          "id": "rule-lastride",
+          "statement": "地铁末班车二十三点三十分发出，之后跨片区只能步行或打车。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "service_window",
+            "travel_mode_id": "mode-subway",
+            "last_departure_minute": 1410
+          }
+        }
+      ],
+      "clocks": [
+        {
+          "id": "clock-purge",
+          "label": "诊所计划销毁夜间病历",
+          "due_in": {
+            "amount": 3,
+            "unit": "天"
+          },
+          "owner_ref": "faction-group",
+          "scope": "secret",
+          "on_expire": "病历被粉碎，原件只剩一份抄本"
+        }
+      ],
+      "reader_promises": [
+        {
+          "id": "promise-names",
+          "summary": "被抹掉的七个名字会在第一卷里重新出现",
+          "promise_type": "mystery",
+          "expected_payoff_window": "arc-1"
+        },
+        {
+          "id": "promise-sister",
+          "summary": "姐妹会在第二卷里重逢",
+          "promise_type": "payoff",
+          "expected_payoff_window": "arc-2"
+        }
+      ],
+      "reveal_candidates": [
+        {
+          "fact_id": "fact-ledger",
+          "arc_number": 1,
+          "note": "第一卷末公开名单"
+        }
+      ]
+    }
+  }
+}

@@ -43,7 +43,9 @@ seed_terms = [
   "系统日志原本还有",
 ]
 harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
-ignore = []
+# Generic time-unit words that book calendars legitimately name (tests/fixtures/world_seed)
+# and that existing runtime vocabulary already contains.
+ignore = ["小时", "时辰"]
 
 [[entry]]
 path = "forwin/audience/feedback.py"

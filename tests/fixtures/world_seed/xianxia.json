@@ -1,0 +1,718 @@
+{
+  "project": {
+    "title": "栖云问剑录",
+    "genre": "仙侠",
+    "premise": "栖云剑阁的废脉弟子发现，传闻中死于仇敌截杀的母亲，其实被写进了镇压魔脉的封印里，而封印撑不过今年冬至。",
+    "target_total_chapters": 6
+  },
+  "pack": {
+    "book_brief": {
+      "title": "栖云问剑录",
+      "premise": "栖云剑阁的废脉弟子发现，传闻中死于仇敌截杀的母亲，其实被写进了镇压魔脉的封印里，而封印撑不过今年冬至。",
+      "genre": "仙侠",
+      "target_total_chapters": 6,
+      "setting_seed": "山门、坊市与山腹禁地三层叠起的修仙宗门。",
+      "audience_hint": "喜欢宗门权谋与师徒羁绊的仙侠读者",
+      "core_emotion": "被至亲隐瞒后的愤怒与不舍",
+      "core_delight": "层层揭开封印背后的代价",
+      "narrative_promise": "每一卷都要拆掉一块关于母亲之死的谎言。",
+      "content_guardrails": [
+        "不写无代价的越级飞升"
+      ]
+    },
+    "world": {
+      "world_bible": {
+        "overview": "灵气沿山脉流动，宗门依山势分层而居，山腹之下压着一条未死的魔脉。",
+        "axioms": [
+          "修为每进一境都要付出寿元",
+          "封印以人的性命为薪"
+        ],
+        "history_slice": "九曜盟与栖云剑阁在百年前的山门之战后维持着脆弱的休战。",
+        "naming_style": "古雅简练的三字人名，宗门以山水命名。",
+        "forbidden_zones": [
+          "避免现代科技词汇"
+        ]
+      },
+      "map_atlas": {
+        "overview": "栖云山脉自山脚坊区向上依次是主峰山门与山腹禁地，飞剑航线连通山门与坊区。",
+        "topology_rules": [
+          "山门与坊区之间以飞剑航线往来",
+          "山腹禁地只能由石阶徒步进入"
+        ],
+        "submaps": [
+          {
+            "id": "sw-ridge",
+            "name": "栖云山脉",
+            "scope": "macro_region",
+            "summary": "宗门、坊区与禁地所在的整座山脉。",
+            "terrain": [
+              "mountain",
+              "cavern"
+            ],
+            "travel_rules": [
+              "高处飞剑，深处徒步"
+            ],
+            "resident_factions": [
+              "栖云剑阁",
+              "九曜盟"
+            ]
+          }
+        ],
+        "regions": [
+          {
+            "id": "region-peak",
+            "name": "栖云主峰",
+            "subworld_name": "栖云山脉",
+            "level": 1,
+            "kind": "sect_domain",
+            "summary": "剑阁山门与断剑崖所在。",
+            "terrain": [
+              "mountain"
+            ]
+          },
+          {
+            "id": "region-foot",
+            "name": "山脚坊区",
+            "subworld_name": "栖云山脉",
+            "level": 1,
+            "kind": "market_district",
+            "summary": "散修与外来客聚集的坊市。",
+            "terrain": [
+              "plain"
+            ]
+          },
+          {
+            "id": "region-deep",
+            "name": "山腹禁地",
+            "subworld_name": "栖云山脉",
+            "level": 1,
+            "kind": "restricted_zone",
+            "summary": "镇脉石殿所在的山腹洞天。",
+            "terrain": [
+              "cavern"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "id": "node-gate",
+            "name": "栖云山门",
+            "kind": "city",
+            "parent_subworld": "sw-ridge",
+            "parent_region_id": "region-peak",
+            "description": "剑阁正门，弟子出入的必经之地。"
+          },
+          {
+            "id": "node-cliff",
+            "name": "断剑崖",
+            "kind": "landmark",
+            "parent_subworld": "sw-ridge",
+            "parent_region_id": "region-peak",
+            "description": "历代剑修折剑立碑之处。"
+          },
+          {
+            "id": "node-market",
+            "name": "半山坊市",
+            "kind": "town",
+            "parent_subworld": "sw-ridge",
+            "parent_region_id": "region-foot",
+            "description": "买卖丹药与消息的坊市。"
+          },
+          {
+            "id": "node-camp",
+            "name": "九曜别院",
+            "kind": "camp",
+            "parent_subworld": "sw-ridge",
+            "parent_region_id": "region-foot",
+            "description": "九曜盟在山下设的落脚院落。"
+          },
+          {
+            "id": "node-sealhall",
+            "name": "镇脉石殿",
+            "kind": "ruin",
+            "parent_subworld": "sw-ridge",
+            "parent_region_id": "region-deep",
+            "description": "魔脉封印的核心殿堂。"
+          }
+        ],
+        "edges": [
+          {
+            "id": "edge-gate-market",
+            "from_node_id": "node-gate",
+            "to_node_id": "node-market",
+            "kind": "flight_route"
+          },
+          {
+            "id": "edge-gate-cliff",
+            "from_node_id": "node-gate",
+            "to_node_id": "node-cliff",
+            "kind": "path"
+          },
+          {
+            "id": "edge-market-camp",
+            "from_node_id": "node-market",
+            "to_node_id": "node-camp",
+            "kind": "road"
+          },
+          {
+            "id": "edge-gate-sealhall",
+            "from_node_id": "node-gate",
+            "to_node_id": "node-sealhall",
+            "kind": "tunnel"
+          }
+        ]
+      },
+      "story_engine": {
+        "core_cast": [
+          {
+            "id": "cast-qi",
+            "name": "祁长烬",
+            "role": "栖云剑阁废脉弟子",
+            "desire": "查明母亲真正的死因",
+            "fear": "自己残缺的灵脉终究救不了任何人",
+            "secrets": [],
+            "current_base": "node-gate",
+            "affiliated_faction": "faction-pavilion"
+          },
+          {
+            "id": "cast-jing",
+            "name": "景沧澜",
+            "role": "栖云剑阁执掌长老",
+            "desire": "守住封印直到最后一刻",
+            "fear": "弟子发现封印的代价",
+            "secrets": [
+              "封印是用祁长烬的母亲炼成的"
+            ],
+            "current_base": "node-sealhall",
+            "affiliated_faction": "faction-pavilion"
+          }
+        ],
+        "opposition": [
+          {
+            "id": "opp-xue",
+            "name": "薛应棠",
+            "role": "九曜盟的山下使者",
+            "desire": "夺取魔脉之力",
+            "pressure": "盟主限期交差",
+            "base_location": "node-camp",
+            "backing_faction": "faction-nine"
+          }
+        ],
+        "factions": [
+          {
+            "id": "faction-pavilion",
+            "name": "栖云剑阁",
+            "role": "镇守魔脉的剑修宗门",
+            "goal": "守住封印并隐瞒其代价",
+            "base_location": "node-gate"
+          },
+          {
+            "id": "faction-nine",
+            "name": "九曜盟",
+            "role": "觊觎魔脉的散修联盟",
+            "goal": "借谣言撬开剑阁山门",
+            "base_location": "node-camp"
+          }
+        ],
+        "relationship_axes": [
+          {
+            "source": "cast-jing",
+            "target": "cast-qi",
+            "edge_type": "master_of",
+            "note": "师徒之名下藏着亏欠",
+            "visibility": "public"
+          }
+        ],
+        "reader_promises": [
+          "母亲之死的真相会在卷末揭晓"
+        ],
+        "long_arcs": [
+          {
+            "id": "long-arc-seal",
+            "summary": "封印衰败与母亲之死的真相",
+            "owner_refs": [
+              "cast-qi",
+              "cast-jing"
+            ]
+          }
+        ]
+      }
+    },
+    "book_arc_blueprint": {
+      "summary": "两卷：先追谣言，再破封印。",
+      "arcs": [
+        {
+          "arc_number": 1,
+          "title": "谣言",
+          "arc_synopsis": "祁长烬循着母亲被截杀的谣言查到山腹禁地的外围。",
+          "goal": "戳穿九曜盟的谣言",
+          "stakes": "失去师门庇护",
+          "payoff_direction": "局部揭秘",
+          "chapter_start": 1,
+          "chapter_end": 3,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        },
+        {
+          "arc_number": 2,
+          "title": "破印",
+          "arc_synopsis": "封印松动在即，师徒必须在大比之前摊牌。",
+          "goal": "决定封印的去留",
+          "stakes": "魔脉冲破第一重封印",
+          "payoff_direction": "真相与代价同时落地",
+          "chapter_start": 4,
+          "chapter_end": 6,
+          "chapter_count": 3,
+          "target_size": 3,
+          "soft_min": 2,
+          "soft_max": 4
+        }
+      ]
+    },
+    "world_seed": {
+      "calendar": {
+        "epoch_label": "栖云纪",
+        "opening_minute": 1614870,
+        "units": [
+          {
+            "name": "年",
+            "minutes": 518400
+          },
+          {
+            "name": "日",
+            "minutes": 1440
+          },
+          {
+            "name": "时辰",
+            "minutes": 120
+          },
+          {
+            "name": "刻",
+            "minutes": 15
+          }
+        ]
+      },
+      "lexicon": {
+        "time_unit_aliases": [
+          {
+            "name": "一盏茶",
+            "minutes": 30
+          }
+        ],
+        "rank_ladders": [
+          {
+            "id": "ladder-realm",
+            "name": "修为境界",
+            "ranks": [
+              "炼气",
+              "筑基",
+              "金丹",
+              "元婴",
+              "化神"
+            ]
+          },
+          {
+            "id": "ladder-pavilion",
+            "name": "剑阁职阶",
+            "ranks": [
+              "外门弟子",
+              "内门弟子",
+              "亲传弟子",
+              "执掌长老"
+            ]
+          }
+        ],
+        "currencies": [
+          {
+            "id": "currency-cloud",
+            "name": "云纹钱"
+          }
+        ],
+        "appellations": [
+          "师尊",
+          "师兄",
+          "师姐",
+          "道友"
+        ],
+        "generic_character_refs": [
+          "守山弟子",
+          "坊市掌柜"
+        ],
+        "travel_modes": [
+          {
+            "id": "mode-sword",
+            "name": "御剑飞行",
+            "speed_multiplier": 8.0,
+            "allowed_edge_types": [
+              "flight_route"
+            ]
+          },
+          {
+            "id": "mode-foot",
+            "name": "徒步",
+            "speed_multiplier": 1.0,
+            "allowed_edge_types": [
+              "path",
+              "road",
+              "mountain_pass",
+              "tunnel"
+            ]
+          }
+        ],
+        "news_speed_multiplier": 0.5
+      },
+      "actors": [
+        {
+          "ref": "cast-qi",
+          "actor_tier": "major",
+          "location_ref": "node-gate",
+          "travel_mode_ids": [
+            "mode-foot"
+          ],
+          "resources": [
+            "半块断剑令"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-truth",
+              "goal": "查明母亲真正的死因",
+              "motivation": "不信谣言里的仇人",
+              "priority": 4,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-pavilion"
+              ],
+              "constraints": [
+                "灵脉残缺，无法长途御剑"
+              ],
+              "secrecy_refs": [
+                "fact-mother-truth"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-inscription",
+              "agenda_id": "agenda-truth",
+              "action_type": "investigate",
+              "summary": "趁夜潜入镇脉石殿抄录封印碑文",
+              "target_refs": [
+                "fact-vein"
+              ],
+              "location_ref": "node-sealhall",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "时辰"
+              },
+              "requires_onstage": true,
+              "impact_level": "moderate"
+            },
+            {
+              "id": "intent-market",
+              "agenda_id": "agenda-truth",
+              "action_type": "move",
+              "summary": "赶往半山坊市打听母亲的旧事",
+              "target_refs": [],
+              "location_ref": "node-market",
+              "scheduled_in": {
+                "amount": 3,
+                "unit": "一盏茶"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor"
+            }
+          ]
+        },
+        {
+          "ref": "cast-jing",
+          "actor_tier": "major",
+          "location_ref": "node-sealhall",
+          "travel_mode_ids": [
+            "mode-sword",
+            "mode-foot"
+          ],
+          "resources": [
+            "镇脉令"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-hold",
+              "goal": "守住封印并瞒住它的代价",
+              "motivation": "亏欠与责任",
+              "priority": 5,
+              "horizon": "volume",
+              "means_refs": [
+                "faction-pavilion"
+              ],
+              "constraints": [
+                "加固封印需要血脉相符的祭品"
+              ],
+              "secrecy_refs": [
+                "fact-vein",
+                "fact-mother-truth"
+              ]
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-reinforce",
+              "agenda_id": "agenda-hold",
+              "action_type": "build",
+              "summary": "召集三位长老加固封印",
+              "target_refs": [
+                "faction-pavilion"
+              ],
+              "location_ref": "node-sealhall",
+              "scheduled_in": {
+                "amount": 1,
+                "unit": "日"
+              },
+              "requires_onstage": false,
+              "impact_level": "major"
+            }
+          ]
+        },
+        {
+          "ref": "opp-xue",
+          "actor_tier": "major",
+          "location_ref": "node-camp",
+          "travel_mode_ids": [
+            "mode-sword"
+          ],
+          "resources": [
+            "盟主手令"
+          ],
+          "agendas": [
+            {
+              "id": "agenda-claim",
+              "goal": "夺取魔脉之力向盟主交差",
+              "motivation": "限期压身",
+              "priority": 3,
+              "horizon": "arc",
+              "means_refs": [
+                "faction-nine"
+              ],
+              "constraints": [
+                "不能公开与剑阁撕破脸"
+              ],
+              "secrecy_refs": []
+            }
+          ],
+          "intents": [
+            {
+              "id": "intent-rumor",
+              "agenda_id": "agenda-claim",
+              "action_type": "deceive",
+              "summary": "在坊市散布母亲死于九曜盟的谣言",
+              "target_refs": [
+                "cast-qi",
+                "fact-mother-rumor"
+              ],
+              "location_ref": "node-market",
+              "scheduled_in": {
+                "amount": 3,
+                "unit": "日"
+              },
+              "requires_onstage": true,
+              "impact_level": "moderate"
+            }
+          ]
+        },
+        {
+          "ref": "faction-pavilion",
+          "actor_tier": "minor",
+          "location_ref": "node-gate",
+          "travel_mode_ids": [],
+          "resources": [
+            "镇派飞舟",
+            "云纹矿脉"
+          ],
+          "agendas": [],
+          "intents": []
+        },
+        {
+          "ref": "faction-nine",
+          "actor_tier": "background",
+          "location_ref": "node-camp",
+          "travel_mode_ids": [],
+          "resources": [],
+          "agendas": [],
+          "intents": []
+        }
+      ],
+      "relations": [
+        {
+          "source": "cast-jing",
+          "target": "cast-qi",
+          "edge_type": "master_of",
+          "note": "名义上的授业恩师",
+          "visibility": "public",
+          "appellation": "弟子"
+        },
+        {
+          "source": "cast-qi",
+          "target": "faction-pavilion",
+          "edge_type": "member_of",
+          "note": "",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "opp-xue",
+          "target": "faction-nine",
+          "edge_type": "member_of",
+          "note": "",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "faction-pavilion",
+          "target": "faction-nine",
+          "edge_type": "enemy_of",
+          "note": "百年休战",
+          "visibility": "public",
+          "appellation": ""
+        },
+        {
+          "source": "opp-xue",
+          "target": "cast-jing",
+          "edge_type": "rival_of",
+          "note": "暗中角力",
+          "visibility": "secret",
+          "appellation": ""
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact-vein",
+          "proposition": "栖云剑阁的山腹之下压着一条未死的魔脉，封印每逢甲子衰弱一分。",
+          "truth_value": true,
+          "sensitivity": "secret",
+          "related_refs": [
+            "faction-pavilion"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-mother-truth",
+          "proposition": "祁长烬的母亲自愿入阵，把性命炼进了镇脉封印。",
+          "truth_value": true,
+          "sensitivity": "secret",
+          "related_refs": [
+            "cast-qi"
+          ],
+          "nobody_knows": false
+        },
+        {
+          "id": "fact-mother-rumor",
+          "proposition": "祁长烬的母亲死于九曜盟的截杀。",
+          "truth_value": false,
+          "sensitivity": "public",
+          "related_refs": [
+            "cast-qi",
+            "faction-nine"
+          ],
+          "nobody_knows": false
+        }
+      ],
+      "knowledge": [
+        {
+          "observer_ref": "cast-jing",
+          "fact_id": "fact-vein",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "opp-xue",
+          "fact_id": "fact-vein",
+          "state": "suspects",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-jing",
+          "fact_id": "fact-mother-truth",
+          "state": "knows",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "cast-qi",
+          "fact_id": "fact-mother-rumor",
+          "state": "believes",
+          "channel": "seeded"
+        },
+        {
+          "observer_ref": "faction-nine",
+          "fact_id": "fact-mother-rumor",
+          "state": "disbelieves",
+          "channel": "seeded"
+        }
+      ],
+      "rules": [
+        {
+          "id": "rule-flight",
+          "statement": "炼气期弟子不得长途御剑，只能徒步或搭乘宗门飞舟。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "rank_gate",
+            "ladder_id": "ladder-realm",
+            "min_rank": "筑基",
+            "travel_mode_id": "mode-sword"
+          }
+        },
+        {
+          "id": "rule-cost",
+          "statement": "每次启用封印类法术都要折损施术者的寿元。",
+          "hardness": "soft",
+          "checkable": null
+        }
+      ],
+      "clocks": [
+        {
+          "id": "clock-seal",
+          "label": "魔脉封印松动",
+          "due_in": {
+            "amount": 36,
+            "unit": "日"
+          },
+          "owner_ref": "faction-pavilion",
+          "scope": "secret",
+          "on_expire": "魔脉冲破第一重封印"
+        },
+        {
+          "id": "clock-trial",
+          "label": "宗门问剑大比",
+          "due_in": {
+            "amount": 12,
+            "unit": "日"
+          },
+          "owner_ref": "faction-pavilion",
+          "scope": "public",
+          "on_expire": "大比开场，各路来客齐聚山门"
+        }
+      ],
+      "reader_promises": [
+        {
+          "id": "promise-mother",
+          "summary": "母亲之死的真相会在第一卷末浮出水面",
+          "promise_type": "mystery",
+          "expected_payoff_window": "arc-1"
+        },
+        {
+          "id": "promise-sword",
+          "summary": "祁长烬会亲手续上断剑崖上那柄折断的剑",
+          "promise_type": "payoff",
+          "expected_payoff_window": "arc-2"
+        }
+      ],
+      "reveal_candidates": [
+        {
+          "fact_id": "fact-mother-truth",
+          "arc_number": 2,
+          "note": "与封印去留同时揭示"
+        }
+      ]
+    }
+  }
+}

@@ -22,6 +22,7 @@ class CharacterReviewAsk(BaseModel):
     descriptive_aliases: list[str] = Field(default_factory=list)
     prior_life_state: Literal["alive", "wounded", "dead", "unknown"]
     prior_custody_state: Literal["free", "captured", "unknown"]
+    prior_location_id: str = ""
     last_seen_chapter: int
     must_track: bool = False
 

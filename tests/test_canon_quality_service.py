@@ -6,39 +6,33 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import (
-    CanonQualitySignalRow,
-    CharacterStateTransitionRow,
-    QualityAnalysisRunRow,
-)
+from forwin.models.canon_quality import CanonQualitySignalRow, QualityAnalysisRunRow
 from forwin.protocol.writer import WriterOutput
+from tests.helpers.book_state_seed import character_node, commit_chapter
 from tests.postgres import postgres_test_url
 
 
 class FakeFormClient:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.calls: list[dict] = []
 
     def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append(kwargs)
         return self.payload
 
 
 def _seed_character_prior(session: Session, project_id: str) -> None:
-    session.add(
-        CharacterStateTransitionRow(
-            project_id=project_id,
-            character_name="林青",
-            chapter_number=0,
-            transition_type="life_state",
-            from_state="unknown",
-            to_state="alive",
-            payload_json='{"source":"test_fixture"}',
-        )
+    commit_chapter(
+        session,
+        project_id,
+        0,
+        [character_node(project_id, f"char-{project_id}", "林青", state={"alive_status": "alive"})],
+        story_minute=0,
     )
-    session.flush()
 
 
-def test_service_persists_validated_form_projection() -> None:
+def test_service_asks_book_state_characters_and_persists_no_state() -> None:
     engine = get_engine(postgres_test_url("canon_quality_service_form_projection"))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -57,6 +51,7 @@ def test_service_persists_validated_form_projection() -> None:
                 end_of_chapter_summary="林青死亡。",
             )
 
+            client = FakeFormClient(_payload(project.id, 1, character_quote=quote))
             result = analyze_writer_output_quality(
                 session=session,
                 project_id=project.id,
@@ -65,27 +60,25 @@ def test_service_persists_validated_form_projection() -> None:
                 draft_id="draft-1",
                 persist=True,
                 mode="primary",
-                llm_client=FakeFormClient(_payload(project.id, 1, character_quote=quote)),
+                llm_client=client,
                 return_raw_analyzer_results=True,
             )
             session.commit()
 
         with session_factory() as session:
-            rows = (
-                session.query(CharacterStateTransitionRow)
-                .filter_by(project_id=project.id, chapter_number=1)
-                .all()
-            )
-            assert result.mode == "chapter_review_form"
-            assert result.blocking is False
-            assert result.raw_analyzer_results[0]["metadata"]["source_mode"] == "chapter_review_form"
-            assert rows[0].character_name == "林青"
-            assert "chapter_review_form" in rows[0].payload_json
+            signal_rows = session.query(CanonQualitySignalRow).filter_by(project_id=project.id).all()
+        prompt = "\n".join(str(message.get("content", "")) for message in client.calls[0]["messages"])
+        assert result.mode == "chapter_review_form"
+        assert result.blocking is False
+        assert result.raw_analyzer_results[0]["metadata"]["source_mode"] == "chapter_review_form"
+        assert "character_transitions" not in result.raw_analyzer_results[0]
+        assert '"prior_life_state": "alive"' in prompt
+        assert signal_rows == []
     finally:
         engine.dispose()
 
 
-def test_service_blocks_unasked_character_answer_without_state_write() -> None:
+def test_service_blocks_unasked_character_answer() -> None:
     engine = get_engine(postgres_test_url("canon_quality_service_form_rejects_unasked_character"))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -114,21 +107,14 @@ def test_service_blocks_unasked_character_answer_without_state_write() -> None:
             )
             session.commit()
 
-        with session_factory() as session:
-            rows = (
-                session.query(CharacterStateTransitionRow)
-                .filter_by(project_id=project.id, chapter_number=1)
-                .all()
-            )
-            assert result.blocking is True
-            assert result.signals[0].signal_type == "form_schema_invalid"
-            assert result.summary == "Unasked characters answers: 林青"
-            assert rows == []
+        assert result.blocking is True
+        assert result.signals[0].signal_type == "form_schema_invalid"
+        assert result.summary == "Unasked characters answers: 林青"
     finally:
         engine.dispose()
 
 
-def test_service_rejects_subject_misattribution_without_state_write() -> None:
+def test_service_rejects_subject_misattribution() -> None:
     engine = get_engine(postgres_test_url("canon_quality_service_form_rejects_subject"))
     init_db(engine)
     session_factory = get_session_factory(engine)
@@ -165,15 +151,8 @@ def test_service_rejects_subject_misattribution_without_state_write() -> None:
             )
             session.commit()
 
-        with session_factory() as session:
-            rows = (
-                session.query(CharacterStateTransitionRow)
-                .filter_by(project_id=project.id, chapter_number=1)
-                .all()
-            )
-            assert result.blocking is True
-            assert result.signals[0].signal_type == "form_answer_rejected"
-            assert rows == []
+        assert result.blocking is True
+        assert result.signals[0].signal_type == "form_answer_rejected"
     finally:
         engine.dispose()
 

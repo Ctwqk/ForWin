@@ -101,8 +101,6 @@ def rebind_cache_payload(
         "blocking_signals",
         "warning_signals",
         "open_obligations",
-        "ledger_conflicts",
-        "full_body_metrics",
         "chapter_review_form_results",
     ):
         if key in report:
@@ -123,21 +121,7 @@ def rebind_cache_payload(
             ),
         }
     )
-    return QualityAnalysisCachePayload(
-        analysis=analysis,
-        character_transitions=[
-            item.model_copy(
-                update={"payload": {**item.payload, "draft_id": draft_id}}
-            )
-            for item in payload.character_transitions
-        ],
-        countdown_entries=[
-            item.model_copy(
-                update={"payload": {**item.payload, "draft_id": draft_id}}
-            )
-            for item in payload.countdown_entries
-        ],
-    )
+    return QualityAnalysisCachePayload(analysis=analysis)
 
 
 def persist_quality_projection(
@@ -149,8 +133,6 @@ def persist_quality_projection(
 ) -> None:
     repo.supersede_chapter_signals(project_id, chapter_number)
     repo.save_signals(payload.analysis.signals)
-    repo.save_character_transitions(payload.character_transitions)
-    repo.save_countdown_entries(payload.countdown_entries)
 
 
 def result_for_caller(

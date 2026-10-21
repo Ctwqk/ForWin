@@ -7,8 +7,6 @@ from .canon_quality import (
     CanonAdmissionRunRow,
     CanonQualitySignalRow,
     ChapterBodyMetricRow,
-    CharacterStateTransitionRow,
-    CountdownLedgerRow,
     QualityAnalysisRunRow,
 )
 from .entity import Entity, EntityAlias
@@ -140,8 +138,6 @@ __all__ = [
     "CanonAdmissionRunRow",
     "CanonQualitySignalRow",
     "ChapterBodyMetricRow",
-    "CharacterStateTransitionRow",
-    "CountdownLedgerRow",
     "QualityAnalysisRunRow",
     "KnowledgeProjectionPageRow",
     "KnowledgeEditProposalRow",

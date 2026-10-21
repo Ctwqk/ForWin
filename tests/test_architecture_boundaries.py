@@ -376,6 +376,7 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         "0001_v5_baseline.py",
         "0002_drop_dead_tables.py",
         "0003_book_state_v6.py",
+        "0004_drop_parallel_ledgers.py",
     ]
 
     base_source = _read("forwin/models/base.py")
@@ -786,10 +787,8 @@ def test_removed_repair_dead_code_stays_removed() -> None:
     assert not hasattr(scope_router, "RepairScopeDispatch")
     assert not hasattr(scope_router, "route_review_repair_scopes")
 
-    rule_profile = importlib.import_module("forwin.canon_quality.rule_profile")
-    signature = inspect.signature(rule_profile.countdown_profiles_from_quality_context)
-    assert "use_legacy_fallback" not in signature.parameters
-    assert "use_legacy_fallback" not in _read("forwin/canon_quality/rule_profile.py")
+    assert not (ROOT / "forwin/canon_quality/rule_profile.py").exists()
+    assert not (ROOT / "forwin/canon_quality/chapter_review_form/replay_diff.py").exists()
 
 
 def test_quality_analysis_cache_is_shared_and_versioned() -> None:

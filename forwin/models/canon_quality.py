@@ -69,54 +69,6 @@ class CanonQualitySignalRow(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-class CharacterStateTransitionRow(Base):
-    __tablename__ = "character_state_transitions"
-    __table_args__ = (
-        Index("ix_character_state_transitions_project_character", "project_id", "character_name", "chapter_number"),
-        Index("ix_character_state_transitions_project_terminal", "project_id", "terminality", "chapter_number"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    character_id: Mapped[str] = mapped_column(String, default="")
-    character_name: Mapped[str] = mapped_column(String, default="")
-    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
-    transition_type: Mapped[str] = mapped_column(String, default="")
-    from_state: Mapped[str] = mapped_column(String, default="")
-    to_state: Mapped[str] = mapped_column(String, default="")
-    terminality: Mapped[str] = mapped_column(String, default="none")
-    can_participate: Mapped[str] = mapped_column(String, default="true")
-    requires_bridge_from_transition_id: Mapped[str] = mapped_column(String, default="")
-    bridge_event_id: Mapped[str] = mapped_column(String, default="")
-    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class CountdownLedgerRow(Base):
-    __tablename__ = "countdown_ledgers"
-    __table_args__ = (
-        Index("ix_countdown_ledgers_project_key", "project_id", "countdown_key", "chapter_number"),
-        Index("ix_countdown_ledgers_project_status", "project_id", "status", "chapter_number"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
-    countdown_key: Mapped[str] = mapped_column(String, default="main")
-    label: Mapped[str] = mapped_column(String, default="main")
-    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
-    normalized_remaining_minutes: Mapped[int] = mapped_column(Integer, default=0)
-    raw_mention: Mapped[str] = mapped_column(String, default="")
-    is_reset_event: Mapped[str] = mapped_column(String, default="false")
-    is_branch_clock: Mapped[str] = mapped_column(String, default="false")
-    is_resolution_event: Mapped[str] = mapped_column(String, default="false")
-    previous_remaining_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="consistent")
-    evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
-    payload_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
 class ChapterBodyMetricRow(Base):
     __tablename__ = "chapter_body_metrics"
     __table_args__ = (

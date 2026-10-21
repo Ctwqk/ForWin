@@ -5,28 +5,20 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from forwin.config import FormBlockingPolicy
-from forwin.canon_quality.signals import (
-    CanonQualitySignal,
-    CharacterStateTransition,
-    CountdownLedgerEntry,
-    make_signal_id,
-)
+from forwin.canon_quality.signals import CanonQualitySignal, make_signal_id
 
-from .form_schema import ChapterReviewAnswers, ChapterReviewForm, CountdownReviewAnswer, CountdownReviewAsk, FormAnswer
+from .form_schema import ChapterReviewAnswers, FormAnswer
 from .evidence_validator import RejectedAnswer, ValidationReport
 
 
 class ProjectionResult(BaseModel):
     signals: list[CanonQualitySignal] = Field(default_factory=list)
-    character_transitions: list[CharacterStateTransition] = Field(default_factory=list)
-    countdown_entries: list[CountdownLedgerEntry] = Field(default_factory=list)
     review_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def project_validated_answers(
     *,
     answers: ChapterReviewAnswers,
-    form: ChapterReviewForm | None = None,
     validation_report: ValidationReport,
     draft_id: str = "",
     min_blocking_confidence: float = 0.8,
@@ -34,63 +26,13 @@ def project_validated_answers(
 ) -> ProjectionResult:
     result = ProjectionResult()
     policy = blocking_policy or FormBlockingPolicy()
-    validated = set(validation_report.validated)
     blocking_paths = set(validation_report.blocking_paths)
     for index, rejected in enumerate(validation_report.rejected, start=1):
         result.signals.append(_rejection_signal(answers, rejected, draft_id=draft_id, index=index))
 
-    for index, character in enumerate(answers.characters):
-        life_path = f"characters[{index}].life_state"
-        if life_path in validated and character.life_state.value in {"alive", "wounded", "dead"} and _evidence_quote(character.life_state):
-            result.character_transitions.append(
-                _character_transition(
-                    answers=answers,
-                    name=character.name,
-                    answer=character.life_state,
-                    transition_type="life_state",
-                    draft_id=draft_id,
-                )
-            )
-        custody_path = f"characters[{index}].custody_state"
-        if custody_path in validated and character.custody_state.value in {"free", "captured"} and _evidence_quote(character.custody_state):
-            result.character_transitions.append(
-                _character_transition(
-                    answers=answers,
-                    name=character.name,
-                    answer=character.custody_state,
-                    transition_type="custody_state",
-                    draft_id=draft_id,
-                )
-            )
-
     for index, countdown in enumerate(answers.countdowns):
         status_path = f"countdowns[{index}].status_in_this_chapter"
-        value_path = f"countdowns[{index}].new_value_evidence"
         consistency_path = f"countdowns[{index}].consistent_with_prior"
-        if countdown.new_value_minutes is not None and (status_path in validated or value_path in validated) and (
-            _evidence_quote(countdown.new_value_evidence) or _evidence_quote(countdown.status_in_this_chapter)
-        ):
-            result.countdown_entries.append(
-                CountdownLedgerEntry(
-                    project_id=answers.project_id,
-                    countdown_key=countdown.key,
-                    label=countdown.key,
-                    chapter_number=answers.chapter_number,
-                    normalized_remaining_minutes=int(countdown.new_value_minutes),
-                    raw_mention=_evidence_quote(countdown.new_value_evidence) or _evidence_quote(countdown.status_in_this_chapter),
-                    is_reset_event=countdown.status_in_this_chapter.value in {"reset", "reopened"},
-                    is_resolution_event=countdown.status_in_this_chapter.value in {"fulfilled", "closed"},
-                    status="conflict" if countdown.consistent_with_prior.value == "false" else "consistent",
-                    evidence_refs=[_evidence_quote(countdown.new_value_evidence) or _evidence_quote(countdown.status_in_this_chapter)],
-                    payload={
-                        "source": "chapter_review_form",
-                        "form_schema_version": answers.form_schema_version,
-                        "draft_id": draft_id,
-                        "answer_path": status_path,
-                        "inconsistency_kind": countdown.inconsistency_kind,
-                    },
-                )
-            )
         if consistency_path in blocking_paths or status_path in blocking_paths:
             answer = countdown.consistent_with_prior if consistency_path in blocking_paths else countdown.status_in_this_chapter
             answer_path = consistency_path if consistency_path in blocking_paths else status_path
@@ -103,9 +45,6 @@ def project_validated_answers(
                 description=f"Countdown {countdown.key} is inconsistent with prior canon.",
                 draft_id=draft_id,
                 index=index + 1,
-                patch_kind="countdown_drift",
-                suppression_key=f"countdown:{countdown.key}",
-                extra_payload=_countdown_prior_payload(form=form, answer=countdown, index=index),
                 severity=_severity_for_answer(
                     policy=policy,
                     signal_type="form_countdown_inconsistency",
@@ -123,37 +62,6 @@ def project_validated_answers(
         policy=policy,
     )
     return result
-
-
-def _character_transition(
-    *,
-    answers: ChapterReviewAnswers,
-    name: str,
-    answer: FormAnswer,
-    transition_type: str,
-    draft_id: str,
-) -> CharacterStateTransition:
-    to_state = str(answer.value or "unknown")
-    terminality = "hard_terminal" if to_state == "dead" else "none"
-    return CharacterStateTransition(
-        project_id=answers.project_id,
-        character_name=name,
-        chapter_number=answers.chapter_number,
-        transition_type=transition_type,
-        to_state=to_state,
-        terminality=terminality,
-        can_participate=to_state != "dead",
-        evidence_refs=[answer.evidence_quote] if answer.evidence_quote else [],
-        payload={
-            "source": "chapter_review_form",
-            "form_schema_version": answers.form_schema_version,
-            "draft_id": draft_id,
-            "confidence": answer.confidence,
-            "evidence_quote": answer.evidence_quote,
-            "subject_of_quote": answer.subject_of_quote,
-            "explanation": answer.explanation,
-        },
-    )
 
 
 def _rejection_signal(
@@ -199,7 +107,6 @@ def _blocking_signal(
     severity: str,
     patch_kind: str = "",
     suppression_key: str = "",
-    extra_payload: dict[str, Any] | None = None,
 ) -> CanonQualitySignal:
     plan_patchable = bool(patch_kind and suppression_key)
     payload = {
@@ -219,8 +126,6 @@ def _blocking_signal(
         "patch_kind": patch_kind,
         "suppression_key": suppression_key,
     }
-    if extra_payload:
-        payload.update(extra_payload)
     return CanonQualitySignal(
         signal_id=make_signal_id(answers.project_id, answers.chapter_number, signal_type, subject_key, index),
         project_id=answers.project_id,
@@ -233,58 +138,6 @@ def _blocking_signal(
         evidence_refs=[answer.evidence_quote] if answer.evidence_quote else [],
         payload=payload,
     )
-
-
-def _countdown_prior_payload(
-    *,
-    form: ChapterReviewForm | None,
-    answer: CountdownReviewAnswer,
-    index: int,
-) -> dict[str, Any]:
-    ask = _matching_countdown_ask(form=form, answer=answer, index=index)
-    label = ask.label if ask is not None else answer.key
-    expected: dict[str, Any] = {"value_unit": "minutes"}
-    observed: dict[str, Any] = {
-        "status": answer.status_in_this_chapter.value,
-        "value_unit": "minutes",
-    }
-    if answer.new_value_minutes is not None:
-        observed["current_value"] = int(answer.new_value_minutes)
-    payload: dict[str, Any] = {
-        "countdown_label": label,
-        "invariant_key": f"countdown:{answer.key}",
-        "invariant_kind": "monotonic_numeric",
-        "expected": expected,
-        "observed": observed,
-        "allowed_bridges": ["reset", "reopened", "branch_clock"],
-        "generic_patch_kind": "ledger_state_drift",
-        "generic_suppression_key": f"invariant:countdown:{answer.key}",
-    }
-    if ask is None:
-        return payload
-    payload["prior_status"] = ask.prior_status
-    payload["prior_chapter"] = ask.last_updated_chapter
-    expected["status"] = ask.prior_status
-    if ask.prior_value_minutes is not None:
-        payload["prior_value_minutes"] = int(ask.prior_value_minutes)
-        expected["current_value"] = int(ask.prior_value_minutes)
-    return payload
-
-
-def _matching_countdown_ask(
-    *,
-    form: ChapterReviewForm | None,
-    answer: CountdownReviewAnswer,
-    index: int,
-) -> CountdownReviewAsk | None:
-    if form is None:
-        return None
-    if 0 <= index < len(form.countdowns) and form.countdowns[index].key == answer.key:
-        return form.countdowns[index]
-    for ask in form.countdowns:
-        if ask.key == answer.key:
-            return ask
-    return None
 
 
 def _project_blocking_section_answers(
@@ -401,7 +254,3 @@ def _severity_for_answer(*, policy: FormBlockingPolicy, signal_type: str, answer
     if value == "captured":
         return policy.character_captured
     return policy.character_dead
-
-
-def _evidence_quote(answer: FormAnswer | None) -> str:
-    return str(getattr(answer, "evidence_quote", "") or "")

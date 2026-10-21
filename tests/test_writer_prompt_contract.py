@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
-from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from forwin.writer.prompt_core import _canon_quality_context_section, build_single_chapter_draft_prompt
 from forwin.writer.prompt_core.sections import _story_basics_section
 
 
@@ -29,34 +29,31 @@ def test_writer_prompt_includes_protagonist_naming_contract() -> None:
     assert "不要把多个备选版本的同一场景拼接进正文" in content
 
 
-def test_writer_prompt_does_not_inject_current_book_countdown_labels_without_profile() -> None:
+def test_writer_prompt_ignores_retired_countdown_and_character_state_constraints() -> None:
     context = ChapterContextPack(
         project_id="p1",
         project_title="通用项目",
         premise="主角：陈星，调查一座失联空间站。",
         genre="科幻",
         setting_summary="空间站事故调查。",
-        chapter_number=1,
+        chapter_number=12,
         chapter_plan_title="失联信号",
         chapter_plan_one_line="陈星收到异常信号。",
         chapter_goals=["进入空间站"],
         canon_quality_context={
             "countdown_constraints": [
-                {
-                    "countdown_key": "memory_reset",
-                    "latest_remaining_minutes": 30,
-                    "latest_chapter": 0,
-                }
+                {"countdown_key": "oxygen_lock", "label": "氧舱倒计时", "latest_remaining_minutes": 30, "latest_chapter": 11}
+            ],
+            "character_state_constraints": [
+                {"character_name": "韩遥", "latest_state": "free", "latest_chapter": 11}
             ],
         },
     )
 
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "memory_reset 倒计时" in content
-    assert "记忆重置周期" not in content
-    assert "终端审计窗口" not in content
+    assert _canon_quality_context_section(context) is None
+    content = "\n".join(message["content"] for message in build_single_chapter_draft_prompt(context))
+    assert "氧舱倒计时" not in content
+    assert "韩遥" not in content
 
 
 def test_writer_prompt_preserves_existing_character_identity_and_gender() -> None:
@@ -79,7 +76,7 @@ def test_writer_prompt_preserves_existing_character_identity_and_gender() -> Non
     assert "不要把前文女性角色改写成叔叔、父亲、祖父、男人" in content
 
 
-def test_writer_prompt_includes_canon_quality_countdown_constraints() -> None:
+def test_canon_quality_constraints_precede_the_chapter_plan() -> None:
     context = ChapterContextPack(
         project_id="p1",
         project_title="灰城遗档",
@@ -87,173 +84,17 @@ def test_writer_prompt_includes_canon_quality_countdown_constraints() -> None:
         genre="悬疑科幻",
         setting_summary="核心系统记忆系统维持公共档案秩序。",
         chapter_number=12,
-        chapter_plan_title="倒计时：最后一日",
-        chapter_plan_one_line="陆明必须关闭核心系统。",
-        chapter_goals=["关闭核心系统"],
-        canon_quality_context={
-            "countdown_constraints": [
-                {
-                    "countdown_key": "archive_cleanup",
-                    "label": "终端审计窗口",
-                    "latest_remaining_minutes": 180,
-                    "latest_chapter": 11,
-                    "raw_mention": "三小时",
-                }
-            ]
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "Canon 质量连续性约束" in content
-    assert "终端审计窗口：第11章已剩余 180 分钟" in content
-    assert "archive_cleanup" not in content
-    assert "第11章已剩余 180 分钟" in content
-    assert "必须小于等于 180 分钟" in content
-    assert "终端审计窗口硬性规则" in content
-    assert "不得写成任何大于最新 ledger 的旧尺度" in content
-
-
-def test_writer_prompt_marks_closed_countdown_windows_as_not_reopenable() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统记忆系统维持公共档案秩序。",
-        chapter_number=33,
-        chapter_plan_title="陆氏守门人的真相",
-        chapter_plan_one_line="陆明进入底层档案库。",
-        chapter_goals=["进入底层档案库"],
-        canon_quality_context={
-            "countdown_constraints": [
-                {
-                    "countdown_key": "terminal_audit_window",
-                    "label": "终端审计窗口",
-                    "latest_remaining_minutes": 0,
-                    "latest_chapter": 32,
-                    "raw_mention": "窗口已关闭",
-                    "status": "resolved",
-                }
-            ],
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "终端审计窗口：第32章已剩余 0 分钟" in content
-    assert "已经归零、关闭或解决" in content
-    assert "不得再写成正数剩余时间" in content
-
-
-def test_memory_reset_countdown_constraint_overrides_older_summaries() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统记忆系统维持公共档案秩序。",
-        chapter_number=12,
-        chapter_plan_title="倒计时：最后一日",
+        chapter_plan_title="最后一日",
         chapter_plan_one_line="陆明必须关闭核心系统。",
         chapter_goals=["关闭核心系统", "公开真相"],
-        previous_chapter_summaries=[
-            "第7章曾提到记忆重置周期还剩七天。",
-            "第11章确认记忆重置周期只剩不到二十四小时。",
-        ],
-        canon_quality_context={
-            "is_final_chapter": True,
-            "countdown_constraints": [
-                {
-                    "countdown_key": "memory_reset",
-                    "label": "记忆重置周期",
-                    "latest_remaining_minutes": 1440,
-                    "latest_chapter": 11,
-                    "raw_mention": "不到二十四小时",
-                }
-            ],
-        },
+        canon_quality_context={"is_final_chapter": True},
     )
 
     prompt = build_single_chapter_draft_prompt(context)
     content = "\n".join(message["content"] for message in prompt)
 
-    assert "ledger 上限优先于前情摘要、章节计划和旧设定" in content
     assert content.index("Canon 质量连续性约束") < content.index("本章计划")
     assert "若【Canon 质量连续性约束】与本章计划、前情摘要或旧设定冲突，必须以 Canon 约束为准" in content
-    assert "记忆重置周期硬性规则" in content
-    assert "不得写成任何大于最新 ledger 的旧尺度" in content
-    assert "只能写小于等于 1440 分钟" in content
-
-
-def test_minute_level_memory_reset_constraint_marks_day_scale_plan_as_stale() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统记忆系统维持公共档案秩序。",
-        chapter_number=23,
-        chapter_plan_title="倒计时加速",
-        chapter_plan_one_line="陆明发现记忆重置周期只剩不到十天。",
-        chapter_goals=["发现倒计时加速"],
-        canon_quality_context={
-            "countdown_constraints": [
-                {
-                    "countdown_key": "memory_reset",
-                    "label": "记忆重置周期",
-                    "latest_remaining_minutes": 90,
-                    "latest_chapter": 22,
-                    "raw_mention": "九十分钟",
-                }
-            ],
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "计划覆盖：当前记忆重置周期已进入 90 分钟级危机" in content
-    assert "必须改写为小于等于 90 分钟的连续倒计时" in content
-    assert "章内单调规则：本章如果多次写记忆重置周期剩余时间，必须按出现顺序严格不增加" in content
-    assert "局部时长必须明确命名为局部时长" in content
-    assert "memory_reset" not in content
-
-
-def test_writer_prompt_includes_character_state_constraints() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统记忆系统维持公共档案秩序。",
-        chapter_number=32,
-        chapter_plan_title="会合窗口",
-        chapter_plan_one_line="陆明与韩青会合。",
-        chapter_goals=["与韩青会合"],
-        canon_quality_context={
-            "character_state_constraints": [
-                {
-                    "character_name": "韩青",
-                    "latest_state": "free",
-                    "latest_chapter": 31,
-                    "evidence_refs": ["recent_canon:31"],
-                }
-            ],
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "已进入 canon 的角色状态约束" in content
-    assert "韩青：第31章已脱困/自由" in content
-    assert "不得把TA写回被捕、被关押、被羁押、被固定、仍在羁押室或等待救援" in content
-    assert "可以写TA仍受伤势、行动范围等限制。" in content
-    assert "追踪器" not in content
-    assert "系统权限" not in content
 
 
 def test_story_basics_section_has_no_example_roles_or_countdowns() -> None:
@@ -356,77 +197,6 @@ def test_writer_prompt_suppresses_constraints_already_promoted_to_plan_patches()
     assert "sig-1" not in content
     assert "第11章残留占位符" not in content
     assert "第14章必须给出门禁来源证据" not in content
-
-
-def test_writer_prompt_suppresses_countdown_constraint_promoted_to_plan_patch() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统维持公共档案秩序。",
-        chapter_number=14,
-        chapter_plan_title="倒计时修正",
-        chapter_plan_one_line="陆明确认局部窗口。",
-        chapter_goals=["兑现计划补丁"],
-        canon_quality_context={
-            "suppressed_prompt_constraint_keys": ["countdown:倒计时甲"],
-            "countdown_constraints": [
-                {
-                    "countdown_key": "倒计时甲",
-                    "label": "倒计时甲",
-                    "latest_remaining_minutes": 10,
-                    "latest_chapter": 13,
-                    "raw_mention": "倒计时甲剩余十分钟。",
-                },
-                {
-                    "countdown_key": "倒计时乙",
-                    "label": "倒计时乙",
-                    "latest_remaining_minutes": 5,
-                    "latest_chapter": 13,
-                    "raw_mention": "倒计时乙剩余五分钟。",
-                },
-            ],
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "倒计时甲" not in content
-    assert "倒计时乙" in content
-    assert "剩余 5 分钟" in content
-
-
-def test_writer_prompt_suppresses_countdown_constraint_with_generic_invariant_key() -> None:
-    context = ChapterContextPack(
-        project_id="p1",
-        project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
-        genre="悬疑科幻",
-        setting_summary="核心系统维持公共档案秩序。",
-        chapter_number=14,
-        chapter_plan_title="倒计时修正",
-        chapter_plan_one_line="陆明确认局部窗口。",
-        chapter_goals=["兑现计划补丁"],
-        canon_quality_context={
-            "suppressed_prompt_constraint_keys": ["invariant:countdown:倒计时甲"],
-            "countdown_constraints": [
-                {
-                    "countdown_key": "倒计时甲",
-                    "label": "倒计时甲",
-                    "latest_remaining_minutes": 10,
-                    "latest_chapter": 13,
-                    "raw_mention": "倒计时甲剩余十分钟。",
-                }
-            ],
-        },
-    )
-
-    prompt = build_single_chapter_draft_prompt(context)
-    content = "\n".join(message["content"] for message in prompt)
-
-    assert "倒计时甲" not in content
 
 
 def test_writer_prompt_includes_generic_invariant_constraints() -> None:

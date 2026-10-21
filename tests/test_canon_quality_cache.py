@@ -6,8 +6,9 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import CharacterStateTransitionRow, QualityAnalysisRunRow
+from forwin.models.canon_quality import CanonQualitySignalRow, QualityAnalysisRunRow
 from forwin.protocol.writer import WriterOutput
+from tests.helpers.book_state_seed import character_node, clock_node, commit_chapter
 from tests.postgres import postgres_test_url
 
 
@@ -35,18 +36,16 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
             )
             session.add(project)
             session.flush()
-            session.add(
-                CharacterStateTransitionRow(
-                    project_id=project.id,
-                    character_name="林青",
-                    chapter_number=0,
-                    transition_type="life_state",
-                    from_state="unknown",
-                    to_state="alive",
-                    payload_json='{"source":"test_fixture"}',
-                )
+            commit_chapter(
+                session,
+                project.id,
+                0,
+                [
+                    character_node(project.id, f"char-{project.id}", "林青", state={"alive_status": "alive"}),
+                    clock_node(project.id, f"clock-{project.id}", "倒计时", due_at=60),
+                ],
+                story_minute=0,
             )
-            session.flush()
             arc = ArcPlanVersion(
                 project_id=project.id,
                 arc_synopsis="第一卷",
@@ -72,7 +71,7 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
                 body=quote,
                 end_of_chapter_summary="林青死亡。",
             )
-            client = CountingFormClient(_payload(project.id, quote))
+            client = CountingFormClient(_payload(project.id, quote, clock_key=f"clock-{project.id}"))
 
             draft_review = analyze_writer_output_quality(
                 session=session,
@@ -117,30 +116,23 @@ def test_quality_cache_reuses_exact_input_and_invalidates_content_or_plan_change
             )
             session.commit()
 
-            transitions = (
-                session.query(CharacterStateTransitionRow)
-                .filter_by(project_id=project.id, chapter_number=1)
-                .all()
-            )
+            signal_rows = session.query(CanonQualitySignalRow).filter_by(project_id=project.id).all()
             runs = session.query(QualityAnalysisRunRow).all()
             assert client.calls == 3
             assert draft_review.summary == canon_gate.summary
             assert canon_gate.draft_id == "draft-1"
-            assert (
-                canon_gate.raw_analyzer_results[0]["character_transitions"][0]["payload"][
-                    "draft_id"
-                ]
-                == "draft-1"
-            )
-            assert len(transitions) == 1
-            assert json.loads(transitions[0].payload_json)["draft_id"] == "draft-1"
+            assert [signal.signal_type for signal in canon_gate.signals] == ["form_countdown_inconsistency"]
+            assert canon_gate.signals[0].payload["draft_id"] == "draft-1"
+            assert [(row.signal_type, row.draft_id) for row in signal_rows] == [
+                ("form_countdown_inconsistency", "draft-1")
+            ]
             assert len(runs) == 3
             assert all(json.loads(row.result_json)["analysis"]["draft_id"] == "" for row in runs)
     finally:
         engine.dispose()
 
 
-def _payload(project_id: str, quote: str) -> dict[str, object]:
+def _payload(project_id: str, quote: str, *, clock_key: str) -> dict[str, object]:
     return {
         "project_id": project_id,
         "chapter_number": 1,
@@ -159,7 +151,14 @@ def _payload(project_id: str, quote: str) -> dict[str, object]:
                 "participation": {"value": "mentioned_only"},
             }
         ],
-        "countdowns": [],
+        "countdowns": [
+            {
+                "key": clock_key,
+                "mentioned_in_chapter": True,
+                "status_in_this_chapter": {"value": "active", "evidence_quote": quote, "confidence": 0.95},
+                "consistent_with_prior": {"value": "false", "evidence_quote": quote, "confidence": 0.95},
+            }
+        ],
         "obligations": [],
         "open_signals": [],
         "new_observations": {},

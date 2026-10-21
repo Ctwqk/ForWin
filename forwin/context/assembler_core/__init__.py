@@ -29,12 +29,6 @@ from .personality_integrity import (
 
 from .canon_quality_context import (
     _build_canon_quality_context,
-    _truthy,
-    _recent_canon_custody_constraints,
-    _candidate_recent_canon_character_names,
-    _custody_state_from_recent_text,
-    _last_clause_fragment,
-    _first_clause_fragment,
     _is_final_chapter_for_context,
     _looks_like_final_chapter_label,
 )
@@ -64,12 +58,6 @@ __all__ = [
     '_personality_integrity_issues',
     '_save_personality_integrity_failure',
     '_build_canon_quality_context',
-    '_truthy',
-    '_recent_canon_custody_constraints',
-    '_candidate_recent_canon_character_names',
-    '_custody_state_from_recent_text',
-    '_last_clause_fragment',
-    '_first_clause_fragment',
     '_is_final_chapter_for_context',
     '_looks_like_final_chapter_label',
     'ChapterContextAssembler',

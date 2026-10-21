@@ -60,40 +60,6 @@ class InvariantDriftTarget(BaseModel):
     source_mode: str = "chapter_review_form"
 
 
-def invariant_from_countdown_state(
-    *,
-    key: str,
-    label: str = "",
-    remaining_minutes: int | None,
-    status: str = "active",
-    chapter_number: int = 0,
-    raw_mention: str = "",
-    evidence_refs: list[str] | None = None,
-    payload: dict[str, Any] | None = None,
-) -> CanonInvariant:
-    normalized_key = str(key or "").strip() or "main"
-    return CanonInvariant(
-        invariant_key=f"countdown:{normalized_key}",
-        kind="monotonic_numeric",
-        subject_key=normalized_key,
-        label=str(label or normalized_key),
-        current_value=remaining_minutes,
-        value_unit="minutes",
-        status=_normalize_status(status),
-        valid_from_chapter=0,
-        last_updated_chapter=int(chapter_number or 0),
-        constraints={
-            "monotonic": True,
-            "cannot_increase_without_bridge": True,
-            "raw_mention": raw_mention,
-        },
-        allowed_bridges=["reset", "reopened", "branch_clock"],
-        evidence_refs=list(evidence_refs or []),
-        source="countdown_ledger",
-        payload=dict(payload or {}),
-    )
-
-
 def invariant_from_active_rule(rule: Any) -> CanonInvariant:
     payload = dict(getattr(rule, "payload", {}) or {})
     raw_invariant = payload.get("invariant") if isinstance(payload, dict) else {}
@@ -153,5 +119,4 @@ __all__ = [
     "InvariantKind",
     "InvariantStatus",
     "invariant_from_active_rule",
-    "invariant_from_countdown_state",
 ]

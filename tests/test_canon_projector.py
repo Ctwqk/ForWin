@@ -14,7 +14,7 @@ from forwin.canon_quality.chapter_review_form.form_schema import (
 )
 
 
-def test_projector_writes_only_validated_character_death() -> None:
+def test_projector_validated_character_answer_emits_nothing() -> None:
     answer = CharacterReviewAnswer(
         name="林青",
         appears_in_chapter=True,
@@ -36,13 +36,12 @@ def test_projector_writes_only_validated_character_death() -> None:
         min_blocking_confidence=0.8,
     )
 
-    assert projection.character_transitions[0].character_name == "林青"
-    assert projection.character_transitions[0].terminality == "hard_terminal"
-    assert projection.character_transitions[0].payload["source"] == "chapter_review_form"
-    assert not projection.signals
+    assert projection.signals == []
+    assert projection.review_issues == []
+    assert set(projection.model_dump()) == {"signals", "review_issues"}
 
 
-def test_projector_rejected_answer_does_not_write_state() -> None:
+def test_projector_rejected_answer_emits_rejection_signal() -> None:
     answer = CharacterReviewAnswer(
         name="林青",
         appears_in_chapter=True,
@@ -65,28 +64,8 @@ def test_projector_rejected_answer_does_not_write_state() -> None:
         min_blocking_confidence=0.8,
     )
 
-    assert projection.character_transitions == []
     assert projection.signals[0].signal_type == "form_answer_rejected"
     assert projection.signals[0].severity == "error"
-
-
-def test_projector_does_not_write_state_without_evidence() -> None:
-    answer = CharacterReviewAnswer(
-        name="林青",
-        appears_in_chapter=True,
-        life_state=FormAnswer(value="dead", confidence=0.95),
-        custody_state=FormAnswer(value="unknown"),
-        participation=FormAnswer(value="mentioned_only"),
-    )
-
-    projection = project_validated_answers(
-        answers=_answers(characters=[answer]),
-        validation_report=ValidationReport(validated=["characters[0].life_state"], rejected=[]),
-        draft_id="d1",
-        min_blocking_confidence=0.8,
-    )
-
-    assert projection.character_transitions == []
 
 
 def test_projector_blocks_closed_countdown_regression_without_bridge() -> None:
@@ -130,9 +109,11 @@ def test_projector_blocks_closed_countdown_regression_without_bridge() -> None:
         min_blocking_confidence=0.8,
     )
 
-    assert projection.countdown_entries[0].normalized_remaining_minutes == 50
-    assert projection.signals[0].signal_type == "form_countdown_inconsistency"
+    assert [signal.signal_type for signal in projection.signals] == ["form_countdown_inconsistency"]
     assert projection.signals[0].severity == "error"
+    payload = projection.signals[0].payload
+    assert (payload["plan_patchable"], payload["patch_kind"], payload["suppression_key"]) == (False, "", "")
+    assert not {"generic_patch_kind", "generic_suppression_key", "invariant_key", "countdown_label"} & set(payload)
 
 
 def test_projector_uses_form_blocking_policy_for_warning_category() -> None:

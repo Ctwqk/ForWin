@@ -11,6 +11,7 @@ from forwin.canon_quality.placeholder import analyze_placeholder_leakage, extrac
 from forwin.canon_quality.readability import analyze_writer_output_readability
 from forwin.protocol.writer import WriterOutput
 
+from .chapter_review_form.form_builder import book_state_review_rows
 from .chapter_review_form.service import DRY_RUN_RESULT_MODE, persist_form_artifact, review_chapter_with_form
 from .cache import (
     build_quality_analysis_cache_key,
@@ -42,14 +43,10 @@ def analyze_writer_output_quality(
     repo = CanonQualityRepository(session)
     protagonist_names = _load_protagonist_names(session=session, project_id=project_id)
     project = session.get(Project, project_id)
-    character_rows = repo.list_character_transitions(
-        project_id,
-        before_chapter=chapter_number,
-    )
-    countdown_rows = repo.list_countdown_entries(
-        project_id,
-        before_chapter=chapter_number,
-        include_details=True,
+    character_rows, countdown_rows = book_state_review_rows(
+        session,
+        project_id=project_id,
+        chapter_number=chapter_number,
     )
     open_signal_rows = repo.list_open_signals(
         project_id,
@@ -124,7 +121,6 @@ def analyze_writer_output_quality(
     if resolved_mode == "off":
         report = _quality_report(
             signals=deterministic_signals,
-            countdown_entries=[],
             review_issues=[],
             raw_results=[],
             summary="chapter review form disabled; deterministic canon quality enabled",
@@ -192,7 +188,6 @@ def analyze_writer_output_quality(
     )
     report = _quality_report(
         signals=result_signals,
-        countdown_entries=form_result.countdown_entries,
         review_issues=form_result.review_issues,
         raw_results=form_result.raw_analyzer_results,
         summary=form_result.summary,
@@ -226,11 +221,7 @@ def analyze_writer_output_quality(
             0.0 if resolved_mode == DRY_RUN_RESULT_MODE else 1.0 if deterministic_signals else 0.0,
         ),
     )
-    payload = QualityAnalysisCachePayload(
-        analysis=result,
-        character_transitions=form_result.character_transitions,
-        countdown_entries=form_result.countdown_entries,
-    )
+    payload = QualityAnalysisCachePayload(analysis=result)
     if persist and resolved_mode != DRY_RUN_RESULT_MODE:
         persist_quality_projection(
             repo,
@@ -261,7 +252,6 @@ def _normalize_form_mode(value: str | None) -> str:
 def _quality_report(
     *,
     signals: list[CanonQualitySignal],
-    countdown_entries: list[Any],
     review_issues: list[dict[str, Any]],
     raw_results: list[dict[str, Any]],
     summary: str,
@@ -288,17 +278,6 @@ def _quality_report(
             for signal in signals
             if "obligation" in signal.signal_type and signal.status == "open"
         ],
-        "ledger_conflicts": [
-            signal.model_dump(mode="json")
-            for signal in signals
-            if "countdown" in signal.signal_type and signal.status == "open"
-        ],
-        "full_body_metrics": {
-            "countdown_mentions": [
-                getattr(item, "model_dump", lambda **_: {})(mode="json")
-                for item in countdown_entries
-            ],
-        },
         "review_issues": list(review_issues),
         "chapter_review_form_results": list(raw_results),
     }

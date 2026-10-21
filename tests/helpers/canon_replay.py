@@ -62,9 +62,11 @@ def seed_accepted_chapter(session, *, project: Project, arc: ArcPlanVersion, cha
 
 
 class FakeCountdownClient:
-    def __init__(self, project_id: str, chapter_number: int) -> None:
+    def __init__(self, project_id: str, chapter_number: int, *, key: str = "main", consistent: bool = True) -> None:
         self.project_id = project_id
         self.chapter_number = chapter_number
+        self.key = key
+        self.consistent = consistent
         self.llm_attempt_events = [
             {
                 "status": "succeeded",
@@ -83,7 +85,7 @@ class FakeCountdownClient:
             "characters": [],
             "countdowns": [
                 {
-                    "key": "main",
+                    "key": self.key,
                     "mentioned_in_chapter": True,
                     "status_in_this_chapter": {
                         "value": "active",
@@ -98,7 +100,11 @@ class FakeCountdownClient:
                         "subject_of_quote": "主倒计时",
                         "confidence": 0.95,
                     },
-                    "consistent_with_prior": {"value": "true", "confidence": 0.95},
+                    "consistent_with_prior": (
+                        {"value": "true", "confidence": 0.95}
+                        if self.consistent
+                        else {"value": "false", "evidence_quote": quote, "subject_of_quote": "主倒计时", "confidence": 0.95}
+                    ),
                     "inconsistency_kind": "",
                 }
             ],

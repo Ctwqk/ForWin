@@ -9,18 +9,10 @@ from sqlalchemy.orm import Session
 from forwin.models.canon_quality import (
     CanonAdmissionRunRow,
     CanonQualitySignalRow,
-    CharacterStateTransitionRow,
-    CountdownLedgerRow,
     QualityAnalysisRunRow,
 )
-from forwin.models.draft import CandidateDraftRecord
 
-from .signals import (
-    CanonAdmissionGateResult,
-    CanonQualitySignal,
-    CharacterStateTransition,
-    CountdownLedgerEntry,
-)
+from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
 
 class CanonQualityRepository:
@@ -170,182 +162,6 @@ class CanonQualityRepository:
         self.session.flush()
         return row
 
-    def save_character_transitions(self, transitions: list[CharacterStateTransition]) -> list[CharacterStateTransitionRow]:
-        rows: list[CharacterStateTransitionRow] = []
-        for item in transitions:
-            row = CharacterStateTransitionRow(
-                project_id=item.project_id,
-                character_id=item.character_id,
-                character_name=item.character_name,
-                chapter_number=item.chapter_number,
-                transition_type=item.transition_type,
-                from_state=item.from_state,
-                to_state=item.to_state,
-                terminality=item.terminality,
-                can_participate="true" if item.can_participate else "false",
-                requires_bridge_from_transition_id=item.requires_bridge_from_transition_id,
-                bridge_event_id=item.bridge_event_id,
-                evidence_refs_json=_json(item.evidence_refs),
-                payload_json=_json(item.payload),
-            )
-            self.session.add(row)
-            rows.append(row)
-        self.session.flush()
-        return rows
-
-    def list_character_transitions(
-        self,
-        project_id: str,
-        *,
-        before_chapter: int | None = None,
-        include_superseded: bool = False,
-    ) -> list[dict[str, Any]]:
-        query = select(CharacterStateTransitionRow).where(CharacterStateTransitionRow.project_id == project_id)
-        if before_chapter is not None:
-            query = query.where(CharacterStateTransitionRow.chapter_number < int(before_chapter))
-        rows = self.session.execute(query.order_by(CharacterStateTransitionRow.chapter_number.asc())).scalars().all()
-        rows = self._filter_rows_to_committed_drafts(
-            rows,
-            project_id=project_id,
-            before_chapter=before_chapter,
-        )
-        if not include_superseded:
-            rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
-        return [
-            {
-                "id": row.id,
-                "project_id": row.project_id,
-                "character_id": row.character_id,
-                "character_name": row.character_name,
-                "chapter_number": row.chapter_number,
-                "transition_type": row.transition_type,
-                "from_state": row.from_state,
-                "to_state": row.to_state,
-                "terminality": row.terminality,
-                "can_participate": row.can_participate == "true",
-                "requires_bridge_from_transition_id": row.requires_bridge_from_transition_id,
-                "bridge_event_id": row.bridge_event_id,
-                "evidence_refs": _loads(row.evidence_refs_json, []),
-                "payload": _loads(row.payload_json, {}),
-            }
-            for row in rows
-        ]
-
-    def save_countdown_entries(self, entries: list[CountdownLedgerEntry]) -> list[CountdownLedgerRow]:
-        rows: list[CountdownLedgerRow] = []
-        for item in entries:
-            row = CountdownLedgerRow(
-                project_id=item.project_id,
-                countdown_key=item.countdown_key,
-                label=item.label,
-                chapter_number=item.chapter_number,
-                normalized_remaining_minutes=item.normalized_remaining_minutes,
-                raw_mention=item.raw_mention,
-                is_reset_event="true" if item.is_reset_event else "false",
-                is_branch_clock="true" if item.is_branch_clock else "false",
-                is_resolution_event="true" if item.is_resolution_event else "false",
-                previous_remaining_minutes=item.previous_remaining_minutes,
-                status=item.status,
-                evidence_refs_json=_json(item.evidence_refs),
-                payload_json=_json(item.payload),
-            )
-            self.session.add(row)
-            rows.append(row)
-        self.session.flush()
-        return rows
-
-    def list_countdown_entries(
-        self,
-        project_id: str,
-        *,
-        before_chapter: int | None = None,
-        include_details: bool = False,
-        include_superseded: bool = False,
-    ) -> list[dict[str, Any]]:
-        query = select(CountdownLedgerRow).where(CountdownLedgerRow.project_id == project_id)
-        if before_chapter is not None:
-            query = query.where(CountdownLedgerRow.chapter_number < int(before_chapter))
-        rows = self.session.execute(query.order_by(CountdownLedgerRow.chapter_number.asc())).scalars().all()
-        rows = self._filter_rows_to_committed_drafts(
-            rows,
-            project_id=project_id,
-            before_chapter=before_chapter,
-        )
-        if not include_superseded:
-            rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item: dict[str, Any] = {
-                "countdown_key": row.countdown_key,
-                "chapter_number": row.chapter_number,
-                "normalized_remaining_minutes": row.normalized_remaining_minutes,
-                "status": row.status,
-            }
-            if include_details:
-                item.update(
-                    {
-                        "label": row.label,
-                        "raw_mention": row.raw_mention,
-                        "is_reset_event": row.is_reset_event == "true",
-                        "is_branch_clock": row.is_branch_clock == "true",
-                        "is_resolution_event": row.is_resolution_event == "true",
-                        "previous_remaining_minutes": row.previous_remaining_minutes,
-                        "payload": _loads(row.payload_json, {}),
-                    }
-                )
-            result.append(item)
-        return result
-
-    def _filter_rows_to_committed_drafts(
-        self,
-        rows: list[Any],
-        *,
-        project_id: str,
-        before_chapter: int | None = None,
-    ) -> list[Any]:
-        accepted_draft_ids = self._committed_draft_ids_by_chapter(
-            project_id,
-            before_chapter=before_chapter,
-        )
-        if not accepted_draft_ids:
-            return [
-                row
-                for row in rows
-                if not str(_loads(getattr(row, "payload_json", "{}") or "{}", {}).get("draft_id") or "")
-            ]
-        filtered: list[Any] = []
-        for row in rows:
-            chapter_number = int(getattr(row, "chapter_number", 0) or 0)
-            accepted_draft_id = accepted_draft_ids.get(chapter_number)
-            if not accepted_draft_id:
-                continue
-            payload = _loads(getattr(row, "payload_json", "{}") or "{}", {})
-            if str(payload.get("draft_id") or "") == accepted_draft_id:
-                filtered.append(row)
-        return filtered
-
-    def _committed_draft_ids_by_chapter(
-        self,
-        project_id: str,
-        *,
-        before_chapter: int | None = None,
-    ) -> dict[int, str]:
-        query = select(CandidateDraftRecord).where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-            CandidateDraftRecord.candidate_draft_id != "",
-        )
-        if before_chapter is not None:
-            query = query.where(CandidateDraftRecord.chapter_number < int(before_chapter))
-        rows = self.session.execute(
-            query.order_by(CandidateDraftRecord.chapter_number.asc(), CandidateDraftRecord.updated_at.asc())
-        ).scalars().all()
-        result: dict[int, str] = {}
-        for row in rows:
-            result[int(row.chapter_number or 0)] = str(row.candidate_draft_id or "")
-        return result
-
 
 def _signal_from_row(row: CanonQualitySignalRow) -> CanonQualitySignal:
     return CanonQualitySignal(
@@ -375,8 +191,3 @@ def _loads(raw: str, default: Any) -> Any:
     except (TypeError, json.JSONDecodeError):
         return default
     return value
-
-
-def _is_superseded_payload(raw: str) -> bool:
-    payload = _loads(raw, {})
-    return isinstance(payload, dict) and bool(payload.get("superseded_by"))

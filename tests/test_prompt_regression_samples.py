@@ -6,16 +6,6 @@ from forwin.writer.prompt_core import _canon_quality_context_section
 
 def test_prompt_constraints_shrink_when_plan_patches_cover_form_signals() -> None:
     base_quality = {
-        "countdown_constraints": [
-            {
-                "countdown_key": f"倒计时{i}",
-                "label": f"倒计时{i}",
-                "latest_remaining_minutes": 10 + i,
-                "latest_chapter": 12,
-                "raw_mention": f"倒计时{i}剩余{10 + i}分钟。",
-            }
-            for i in range(1, 6)
-        ],
         "active_narrative_obligations": [
             {
                 "id": f"义务-{i}",
@@ -26,7 +16,7 @@ def test_prompt_constraints_shrink_when_plan_patches_cover_form_signals() -> Non
                 "payoff_test": f"第13章必须写出事件-{i}如何公开。",
                 "must_resolve_now": True,
             }
-            for i in range(1, 4)
+            for i in range(1, 5)
         ],
         "open_signals": [
             {
@@ -37,17 +27,17 @@ def test_prompt_constraints_shrink_when_plan_patches_cover_form_signals() -> Non
                 "subject_key": f"信号-{i}",
                 "description": f"信号-{i}仍未解决。",
             }
-            for i in range(1, 3)
+            for i in range(1, 5)
         ],
     }
     before = _canon_quality_context_section(_context(base_quality)) or ""
     after_quality = {
         **base_quality,
         "suppressed_prompt_constraint_keys": [
-            "countdown:倒计时1",
-            "countdown:倒计时2",
             "obligation:义务-1",
+            "obligation:义务-2",
             "signal:信号-1",
+            "signal:信号-2",
         ],
     }
     after_context = _context(after_quality)
@@ -55,15 +45,14 @@ def test_prompt_constraints_shrink_when_plan_patches_cover_form_signals() -> Non
     actual_reduction = 1 - (len(after) / len(before))
 
     assert actual_reduction >= 0.30
-    assert "倒计时1" not in after
-    assert "倒计时2" not in after
-    assert "倒计时3" in after
     assert "义务-1" not in after
-    assert "义务-2" in after
+    assert "义务-2" not in after
+    assert "义务-3" in after
     assert "信号-1" not in after
-    assert "信号-2" in after
+    assert "信号-2" not in after
+    assert "信号-3" in after
     assert after_context.canon_quality_context["form_prompt_constraints_suppressed"] == 4
-    assert after_context.canon_quality_context["form_prompt_constraints_remaining"] == 6
+    assert after_context.canon_quality_context["form_prompt_constraints_remaining"] == 4
 
 
 def _context(canon_quality_context: dict) -> ChapterContextPack:

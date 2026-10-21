@@ -91,38 +91,6 @@ class CanonAdmissionGateResult(BaseModel):
     gate_summary: str = ""
 
 
-class CharacterStateTransition(BaseModel):
-    project_id: str
-    character_id: str = ""
-    character_name: str
-    chapter_number: int
-    transition_type: str
-    from_state: str = ""
-    to_state: str = ""
-    terminality: Literal["none", "soft_terminal", "hard_terminal"] = "none"
-    can_participate: bool = True
-    requires_bridge_from_transition_id: str = ""
-    bridge_event_id: str = ""
-    evidence_refs: list[str] = Field(default_factory=list)
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class CountdownLedgerEntry(BaseModel):
-    project_id: str
-    countdown_key: str = "main"
-    label: str = "main"
-    chapter_number: int
-    normalized_remaining_minutes: int
-    raw_mention: str = ""
-    is_reset_event: bool = False
-    is_branch_clock: bool = False
-    is_resolution_event: bool = False
-    previous_remaining_minutes: int | None = None
-    status: Literal["consistent", "warning", "conflict", "resolved"] = "consistent"
-    evidence_refs: list[str] = Field(default_factory=list)
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 def make_signal_id(
     project_id: str,
     chapter_number: int,

@@ -9,12 +9,7 @@ from sqlalchemy.orm import Session
 
 from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.repository import CanonQualityRepository
-from forwin.canon_quality.signals import (
-    CanonQualitySignal,
-    CharacterStateTransition,
-    CountdownLedgerEntry,
-    make_signal_id,
-)
+from forwin.canon_quality.signals import CanonQualitySignal, make_signal_id
 from forwin.models.project import Project
 from forwin.protocol.writer import WriterOutput
 
@@ -23,7 +18,7 @@ from .canon_projector import ProjectionResult, project_validated_answers
 from .comparison_report import summarize_form_run
 from .errors import ChapterReviewFormSchemaInvalid, ChapterReviewFormUnavailable
 from .evidence_validator import ValidationReport, validate_answers
-from .form_builder import build_form
+from .form_builder import book_state_review_rows, build_form
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
 from .llm_caller import call_form
 from .pruning import FormBudgetExceeded
@@ -42,8 +37,6 @@ class ChapterReviewFormResult(BaseModel):
     answers: ChapterReviewAnswers | None = None
     validation_report: ValidationReport = Field(default_factory=ValidationReport)
     signals: list[CanonQualitySignal] = Field(default_factory=list)
-    character_transitions: list[CharacterStateTransition] = Field(default_factory=list)
-    countdown_entries: list[CountdownLedgerEntry] = Field(default_factory=list)
     projection_summary: dict[str, Any] = Field(default_factory=dict)
     review_issues: list[dict[str, Any]] = Field(default_factory=list)
     raw_analyzer_results: list[dict[str, Any]] = Field(default_factory=list)
@@ -78,6 +71,14 @@ def review_chapter_with_form(
     project = session.get(Project, project_id) if session is not None else None
     resolved_target_total = int(target_total_chapters or getattr(project, "target_total_chapters", 0) or 0)
     body = str(writer_output.body or "")
+    if session is not None and (character_rows is None or countdown_rows is None):
+        book_state_characters, book_state_countdowns = book_state_review_rows(
+            session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        character_rows = book_state_characters if character_rows is None else character_rows
+        countdown_rows = book_state_countdowns if countdown_rows is None else countdown_rows
     budget_warning_signals: list[CanonQualitySignal] = []
     budget_warning_issues: list[dict[str, Any]] = []
     try:
@@ -85,8 +86,8 @@ def review_chapter_with_form(
             project_id=project_id,
             chapter_number=chapter_number,
             chapter_text=body,
-            character_rows=character_rows if character_rows is not None else _safe_list(repo, "list_character_transitions", project_id, before_chapter=chapter_number),
-            countdown_rows=countdown_rows if countdown_rows is not None else _safe_list(repo, "list_countdown_entries", project_id, before_chapter=chapter_number, include_details=True),
+            character_rows=character_rows,
+            countdown_rows=countdown_rows,
             open_signal_rows=open_signal_rows if open_signal_rows is not None else _safe_list(repo, "list_open_signals", project_id, before_chapter=chapter_number, limit=20),
             obligations=obligations or [],
             target_total_chapters=resolved_target_total,
@@ -166,7 +167,6 @@ def review_chapter_with_form(
     )
     projection: ProjectionResult = project_validated_answers(
         answers=answers,
-        form=form,
         validation_report=validation_report,
         draft_id=draft_id,
         min_blocking_confidence=min_blocking_confidence,
@@ -193,8 +193,6 @@ def review_chapter_with_form(
         answers=answers,
         validation_report=validation_report,
         signals=signals,
-        character_transitions=projection.character_transitions,
-        countdown_entries=projection.countdown_entries,
         projection_summary=projection_summary,
         review_issues=review_issues,
         raw_analyzer_results=[
@@ -463,12 +461,6 @@ def _raw_result(
         "issues": effective_issues,
         "accepted_facts": [],
         "uncertainties": [],
-        "character_transitions": [
-            item.model_dump(mode="json") for item in projection.character_transitions
-        ],
-        "countdown_entries": [
-            item.model_dump(mode="json") for item in projection.countdown_entries
-        ],
         "metadata": {
             "source_layer": "canon_quality",
             "source_mode": source_mode,

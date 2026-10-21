@@ -3,18 +3,19 @@ from __future__ import annotations
 import json
 
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
-from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import CanonQualitySignalRow, CountdownLedgerRow
+from forwin.models.canon_quality import CanonQualitySignalRow
 from forwin.protocol.writer import WriterOutput
+from tests.helpers.book_state_seed import clock_node, commit_chapter
 from tests.postgres import postgres_test_url
 
 
 class FakeCountdownConflictClient:
-    def __init__(self, project_id: str) -> None:
+    def __init__(self, project_id: str, clock_key: str) -> None:
         self.project_id = project_id
+        self.clock_key = clock_key
 
     def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
         quote = "主倒计时只剩十分钟。"
@@ -25,7 +26,7 @@ class FakeCountdownConflictClient:
             "characters": [],
             "countdowns": [
                 {
-                    "key": "main",
+                    "key": self.clock_key,
                     "mentioned_in_chapter": True,
                     "status_in_this_chapter": {
                         "value": "advanced",
@@ -56,43 +57,20 @@ class FakeCountdownConflictClient:
         }
 
 
-def test_dry_run_downgrades_blocking_signals_and_does_not_write_canon_rows(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+def test_dry_run_downgrades_blocking_signals_and_does_not_write_signals(monkeypatch, tmp_path) -> None:  # noqa: ANN001
     monkeypatch.setenv("FORWIN_ARTIFACT_ROOT", str(tmp_path))
     engine = get_engine(postgres_test_url("chapter_review_form_dry_run"))
     init_db(engine)
     session_factory = get_session_factory(engine)
-    write_calls: list[str] = []
-
-    def reject_character_writes(self, transitions):  # noqa: ANN001, ANN202
-        write_calls.append(f"characters:{len(transitions)}")
-        raise AssertionError("dry-run attempted character canon row write")
-
-    def reject_countdown_writes(self, entries):  # noqa: ANN001, ANN202
-        write_calls.append(f"countdowns:{len(entries)}")
-        raise AssertionError("dry-run attempted countdown canon row write")
-
-    monkeypatch.setattr(CanonQualityRepository, "save_character_transitions", reject_character_writes)
-    monkeypatch.setattr(CanonQualityRepository, "save_countdown_entries", reject_countdown_writes)
 
     try:
         with session_factory() as session:
             project = Project(title="Dry Run", premise="测试", genre="悬疑", target_total_chapters=3)
             session.add(project)
             session.flush()
-            session.add(
-                CountdownLedgerRow(
-                    project_id=project.id,
-                    countdown_key="main",
-                    label="主倒计时",
-                    chapter_number=1,
-                    normalized_remaining_minutes=40,
-                    raw_mention="主倒计时还有四十分钟。",
-                    status="active",
-                    evidence_refs_json=json.dumps(["主倒计时还有四十分钟。"], ensure_ascii=False),
-                    payload_json=json.dumps({"source": "chapter_review_form"}, ensure_ascii=False),
-                )
-            )
-            session.flush()
+            clock_key = f"clock-{project.id}"
+            commit_chapter(session, project.id, 0, [clock_node(project.id, clock_key, "主倒计时", due_at=60)], story_minute=0)
+            commit_chapter(session, project.id, 1, [], story_minute=20)
             output = WriterOutput(
                 project_id=project.id,
                 chapter_number=2,
@@ -109,7 +87,7 @@ def test_dry_run_downgrades_blocking_signals_and_does_not_write_canon_rows(monke
                 draft_id="draft-2",
                 persist=True,
                 mode="dry_run",
-                llm_client=FakeCountdownConflictClient(project.id),
+                llm_client=FakeCountdownConflictClient(project.id, clock_key),
                 return_raw_analyzer_results=True,
             )
             session.commit()
@@ -118,7 +96,6 @@ def test_dry_run_downgrades_blocking_signals_and_does_not_write_canon_rows(monke
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
             persisted_signals = session.query(CanonQualitySignalRow).filter_by(project_id=project.id).all()
 
-        assert write_calls == []
         assert persisted_signals == []
         assert result.mode == "dry_run"
         assert result.blocking is False

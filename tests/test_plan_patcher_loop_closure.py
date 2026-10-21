@@ -5,7 +5,6 @@ from forwin.canon_quality.chapter_review_form.canon_projector import project_val
 from forwin.canon_quality.chapter_review_form.evidence_validator import ValidationReport
 from forwin.canon_quality.chapter_review_form.form_schema import (
     ChapterReviewAnswers,
-    ChapterReviewForm,
     FinalChapterAnswer,
     FormAnswer,
     NewObservations,
@@ -46,14 +45,6 @@ def test_form_signals_are_plan_patchable() -> None:
 
     projection = project_validated_answers(
         answers=answers,
-        form=ChapterReviewForm(
-            project_id="p1",
-            chapter_number=12,
-            form_schema_version=FORM_SCHEMA_VERSION,
-            characters=[],
-            obligations=[],
-            open_signals=[],
-        ),
         validation_report=ValidationReport(
             validated=[
                 "obligations[0].addressed",

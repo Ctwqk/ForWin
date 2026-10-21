@@ -6,23 +6,15 @@ from typing import Any
 from forwin.canon_quality.invariants import InvariantDriftTarget, InvariantKind
 
 
-def select_ledger_state_drift_targets(
-    signals: list[Any],
-    *,
-    project_id: str = "",
-    as_of_chapter: int = 0,
-    book_state_query: Any | None = None,
-) -> list[InvariantDriftTarget]:
+def select_ledger_state_drift_targets(signals: list[Any]) -> list[InvariantDriftTarget]:
     targets: list[InvariantDriftTarget] = []
     for signal in signals:
-        signal_type = str(_row_value(signal, "signal_type") or "").strip()
+        if str(_row_value(signal, "signal_type") or "").strip() != "form_invariant_drift":
+            continue
         payload = _payload(signal)
         if payload.get("plan_patchable") is not True:
             continue
-        if signal_type == "form_invariant_drift":
-            target = _invariant_target(signal=signal, payload=payload)
-        else:
-            target = None
+        target = _invariant_target(signal=signal, payload=payload)
         if target is not None:
             targets.append(target)
     return targets

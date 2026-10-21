@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .signals import CanonQualitySignal, CharacterStateTransition, CountdownLedgerEntry
+from .signals import CanonQualitySignal
 
 
 class CanonQualityAnalysisResult(BaseModel):
@@ -23,8 +23,6 @@ class CanonQualityAnalysisResult(BaseModel):
 
 class QualityAnalysisCachePayload(BaseModel):
     analysis: CanonQualityAnalysisResult
-    character_transitions: list[CharacterStateTransition] = Field(default_factory=list)
-    countdown_entries: list[CountdownLedgerEntry] = Field(default_factory=list)
 
 
 __all__ = ["CanonQualityAnalysisResult", "QualityAnalysisCachePayload"]

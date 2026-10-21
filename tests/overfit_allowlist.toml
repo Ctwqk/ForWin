@@ -138,15 +138,6 @@ justification = "人名切分停用词：封闭类功能词（代词/否定系�
 max_literals = 7
 
 [[entry]]
-path = "forwin/canon_names.py"
-symbol = "extract_candidate_character_names"
-checks = ["cjk_regex"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "候选人名正则，含羁押/营救模式；P2 删除"
-max_literals = 7
-
-[[entry]]
 path = "forwin/canon_quality/chapter_review_form/evidence_validator.py"
 symbol = "PRONOUN_SUBJECTS"
 checks = ["cjk_collection"]
@@ -604,33 +595,6 @@ max_literals = 1
 
 [[entry]]
 path = "forwin/context/assembler_core/canon_quality_context.py"
-symbol = "_RECENT_CANON_CUSTODY_CAPTURE_MARKERS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "羁押平行账本标记词；P2 删除"
-max_literals = 12
-
-[[entry]]
-path = "forwin/context/assembler_core/canon_quality_context.py"
-symbol = "_RECENT_CANON_CUSTODY_RELEASE_MARKERS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "羁押平行账本标记词；P2 删除"
-max_literals = 7
-
-[[entry]]
-path = "forwin/context/assembler_core/canon_quality_context.py"
-symbol = "_RECENT_CANON_POST_NAME_RELEASE_MARKERS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "羁押平行账本标记词；P2 删除"
-max_literals = 7
-
-[[entry]]
-path = "forwin/context/assembler_core/canon_quality_context.py"
 symbol = "_looks_like_final_chapter_label"
 checks = ["cjk_inline_iteration"]
 category = "language_lexicon"
@@ -1010,16 +974,6 @@ justification = "解析 writer prompt 约定的输出标签（标题/正文/摘�
 max_literals = 6
 
 [[entry]]
-path = "forwin/writer/prompt_core/constraints.py"
-symbol = "<file>"
-checks = ["fixture_term"]
-literals = ["羁押室"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "羁押提示文本中的“羁押室”（:254）；P2 随羁押平行账本删除"
-max_literals = 1
-
-[[entry]]
 path = "forwin/writer/prompt_core/sections.py"
 checks = ["cjk_regex", "cjk_membership", "cjk_inline_iteration"]
 category = "prompt_text"
@@ -1033,4 +987,3 @@ checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "世界审查门 error 写给 writer 的修复说明（按 issue code 取用），不参与判定"
 max_literals = 14
-

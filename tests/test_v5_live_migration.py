@@ -17,7 +17,8 @@ from tests.postgres import postgres_empty_test_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_REVISION = "0003_book_state_v6"
+EXPECTED_REVISION = "0004_drop_parallel_ledgers"
+PARALLEL_LEDGER_TABLES = {"character_state_transitions", "countdown_ledgers"}
 
 # Tables that exist only in the production database (left over from v4 and
 # the scenario rehearsal work, never part of 0001). Each maps to the foreign
@@ -255,5 +256,46 @@ def test_populated_0002_upgrade_keeps_node_identity_and_loadable_policies() -> N
 
         command.downgrade(config, "0002_drop_dead_tables")
         assert _database_state(database_url)[1] == "0002_drop_dead_tables"
+    finally:
+        engine.dispose()
+
+
+def test_parallel_ledger_tables_are_gone() -> None:
+    assert PARALLEL_LEDGER_TABLES.isdisjoint(Base.metadata.tables)
+
+    database_url = postgres_empty_test_url("v5-parallel-ledgers")
+    config = _alembic_config(database_url)
+    command.upgrade(config, "0003_book_state_v6")
+    engine = create_engine(database_url, future=True)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO projects (id, title, premise, genre, setting_summary, creation_status, "
+                    "active_genesis_revision_id, automation_json, runtime_policy_json, runtime_policy_version, "
+                    "created_at, updated_at) VALUES ('p-ledgers', 't', 'p', 'g', '', 'writing', '', '{}', '{}', 1, "
+                    "now(), now())"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO countdown_ledgers (id, project_id, countdown_key, label, chapter_number, "
+                    "normalized_remaining_minutes, raw_mention, is_reset_event, is_branch_clock, is_resolution_event, "
+                    "status, evidence_refs_json, payload_json, created_at) VALUES ('row-1', 'p-ledgers', 'k', 'k', 1, "
+                    "30, '', 'false', 'false', 'false', 'consistent', '[]', '{}', now())"
+                )
+            )
+
+        command.upgrade(config, "head")
+        tables, revision = _database_state(database_url)
+        assert revision == EXPECTED_REVISION
+        assert PARALLEL_LEDGER_TABLES.isdisjoint(tables)
+
+        command.downgrade(config, "0003_book_state_v6")
+        tables, revision = _database_state(database_url)
+        assert revision == "0003_book_state_v6"
+        assert PARALLEL_LEDGER_TABLES <= tables
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT count(*) FROM countdown_ledgers")) == 0
     finally:
         engine.dispose()

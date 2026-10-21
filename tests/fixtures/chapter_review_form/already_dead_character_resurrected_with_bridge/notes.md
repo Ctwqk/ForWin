@@ -1,1 +1,1 @@
-Dead-to-alive fixture with explicit bridge evidence; this should write a nonterminal life-state transition.
+Dead-to-alive fixture with explicit bridge evidence; the answer validates without a rejection signal.

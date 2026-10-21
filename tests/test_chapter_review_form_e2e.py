@@ -125,7 +125,7 @@ class DecreasedCountdownKindClient:
         }
 
 
-def test_form_service_projects_validated_answer() -> None:
+def test_form_service_validates_answer_without_signals() -> None:
     result = review_chapter_with_form(
         session=None,
         project_id="p1",
@@ -139,11 +139,14 @@ def test_form_service_projects_validated_answer() -> None:
         ),
         draft_id="d1",
         llm_client=FakeClient(),
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 1}],
     )
 
     assert result.mode == "chapter_review_form"
-    assert result.character_transitions[0].character_name == "林青"
+    assert result.form.characters[0].prior_life_state == "alive"
+    assert result.answers.characters[0].life_state.value == "dead"
+    assert "characters[0].life_state" in result.validation_report.validated
+    assert result.signals == []
     assert result.blocking is False
 
 
@@ -162,12 +165,12 @@ def test_form_service_retries_schema_invalid_answer() -> None:
         ),
         draft_id="d1",
         llm_client=client,
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 1}],
     )
 
     assert client.calls == 2
     assert result.summary == "林青死亡。"
-    assert result.character_transitions[0].to_state == "dead"
+    assert result.answers.characters[0].life_state.value == "dead"
 
 
 def test_form_service_accepts_flat_answer_shapes() -> None:
@@ -184,11 +187,11 @@ def test_form_service_accepts_flat_answer_shapes() -> None:
         ),
         draft_id="d1",
         llm_client=FlatClient(),
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 1}],
     )
 
     assert result.summary == "flat but usable"
-    assert result.character_transitions[0].to_state == "dead"
+    assert result.answers.characters[0].life_state.value == "dead"
     assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
 
 
@@ -206,7 +209,7 @@ def test_form_service_drops_unrequested_final_chapter_payload() -> None:
         ),
         draft_id="d1",
         llm_client=NonFinalChapterClient(),
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 1}],
     )
 
     assert result.summary == "林青死亡。"
@@ -231,7 +234,7 @@ def test_form_service_normalizes_decreased_countdown_kind() -> None:
             {
                 "countdown_key": "main",
                 "label": "main",
-                "normalized_remaining_minutes": 79,
+                "remaining_minutes": 79,
                 "status": "active",
                 "chapter_number": 6,
             }
@@ -239,12 +242,13 @@ def test_form_service_normalizes_decreased_countdown_kind() -> None:
     )
 
     assert result.blocking is False
-    assert result.countdown_entries[0].normalized_remaining_minutes == 74
-    assert result.countdown_entries[0].payload["inconsistency_kind"] == "none"
+    assert result.form.countdowns[0].prior_value_minutes == 79
+    assert result.answers.countdowns[0].new_value_minutes == 74
+    assert result.answers.countdowns[0].inconsistency_kind == "none"
     assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
 
 
-def test_form_service_llm_unavailable_blocks_without_writes() -> None:
+def test_form_service_llm_unavailable_blocks() -> None:
     result = review_chapter_with_form(
         session=None,
         project_id="p1",
@@ -258,10 +262,9 @@ def test_form_service_llm_unavailable_blocks_without_writes() -> None:
         ),
         draft_id="d1",
         llm_client=object(),
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 1}],
     )
 
     assert result.blocking is True
-    assert result.character_transitions == []
     assert result.signals[0].signal_type == "form_llm_unavailable"
     assert result.review_issues[0]["blocking"] is True

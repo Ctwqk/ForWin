@@ -16,14 +16,21 @@ def test_builder_includes_active_countdowns_and_mentioned_characters() -> None:
         chapter_number=7,
         chapter_text="林青再次提到主倒计时。",
         character_rows=[
-            {"character_name": "林青", "to_state": "alive", "chapter_number": 3},
-            {"character_name": "未出现", "to_state": "alive", "chapter_number": 4},
+            {
+                "character_name": "林青",
+                "aliases": ["阿青"],
+                "life_state": "dead",
+                "custody_state": "captured",
+                "location_id": "site-1",
+                "chapter_number": 3,
+            },
+            {"character_name": "未出现", "life_state": "alive", "chapter_number": 4},
         ],
         countdown_rows=[
             {
                 "countdown_key": "main",
                 "label": "主倒计时",
-                "normalized_remaining_minutes": 50,
+                "remaining_minutes": 50,
                 "status": "consistent",
                 "chapter_number": 6,
             }
@@ -34,8 +41,11 @@ def test_builder_includes_active_countdowns_and_mentioned_characters() -> None:
         token_budget_chars=4000,
     )
 
-    assert [item.name for item in form.characters] == ["林青"]
-    assert [item.key for item in form.countdowns] == ["main"]
+    assert [
+        (item.name, item.aliases, item.prior_life_state, item.prior_custody_state, item.prior_location_id)
+        for item in form.characters
+    ] == [("林青", ["阿青"], "dead", "captured", "site-1")]
+    assert [(item.key, item.label, item.prior_value_minutes) for item in form.countdowns] == [("main", "主倒计时", 50)]
 
 
 def test_builder_does_not_infer_dead_state_from_chapter_text() -> None:
@@ -43,7 +53,7 @@ def test_builder_does_not_infer_dead_state_from_chapter_text() -> None:
         project_id="p1",
         chapter_number=7,
         chapter_text="林青和委员会高层的合谋导致家族成员死亡。",
-        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 3}],
+        character_rows=[{"character_name": "林青", "life_state": "alive", "chapter_number": 3}],
         countdown_rows=[],
         open_signal_rows=[],
         obligations=[],
@@ -68,41 +78,6 @@ def test_builder_marks_final_chapter_ask() -> None:
     )
 
     assert form.final_chapter is not None
-
-
-def test_builder_treats_superseded_character_prior_as_unknown() -> None:
-    form = build_form(
-        project_id="p1",
-        chapter_number=7,
-        chapter_text="林青回到档案室。",
-        character_rows=[
-            {
-                "character_name": "林青",
-                "to_state": "dead",
-                "chapter_number": 3,
-                "payload": {"must_track": True, "superseded_by": "chapter_review_form_migration"},
-            }
-        ],
-        countdown_rows=[
-            {
-                "countdown_key": "main",
-                "label": "主倒计时",
-                "normalized_remaining_minutes": 50,
-                "status": "consistent",
-                "chapter_number": 6,
-                "payload": {"superseded_by": "chapter_review_form_migration"},
-            }
-        ],
-        open_signal_rows=[],
-        obligations=[],
-        target_total_chapters=12,
-        token_budget_chars=4000,
-    )
-
-    assert len(form.characters) == 1
-    assert form.characters[0].prior_life_state == "unknown"
-    assert form.characters[0].prior_custody_state == "unknown"
-    assert form.countdowns == []
 
 
 def test_builder_includes_open_low_severity_signals_when_budget_allows() -> None:
@@ -215,14 +190,14 @@ def test_builder_keeps_active_countdown_before_consistent_under_pressure() -> No
             {
                 "countdown_key": "a-consistent",
                 "label": "低优先级倒计时" + "x" * 700,
-                "normalized_remaining_minutes": 90,
+                "remaining_minutes": 90,
                 "status": "consistent",
                 "chapter_number": 6,
             },
             {
                 "countdown_key": "z-active",
                 "label": "主倒计时" + "x" * 700,
-                "normalized_remaining_minutes": 12,
+                "remaining_minutes": 12,
                 "status": "active",
                 "chapter_number": 6,
             },
@@ -257,7 +232,7 @@ def test_review_form_emits_budget_warning_and_blocks_when_required_answer_missin
             {
                 "countdown_key": "main",
                 "label": "主倒计时" + "x" * 1800,
-                "normalized_remaining_minutes": 12,
+                "remaining_minutes": 12,
                 "status": "active",
                 "chapter_number": 6,
             }

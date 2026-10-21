@@ -21,9 +21,9 @@ SNAPSHOT_DIR = ROOT / "tests" / "fixtures" / "prompt_regression" / "snapshots"
 
 EXPECTED_PROMPT_REVISIONS = {
     "single_minimal_opening": "1d7572918f7cbbb8",
-    "single_countdown_generic_profile": "7a823958ea28282c",
-    "single_closed_countdown": "f4666718b57ab8cf",
-    "single_character_state": "21962c48d42f6063",
+    "single_countdown_generic_profile": "1c2edd3b4583cd19",
+    "single_closed_countdown": "142b8ac32d850135",
+    "single_character_state": "01a9eed48f9542fb",
     "single_pre_audit_suppression": "49227d88da75ec42",
     "single_future_plan_audit": "2c1767d1cbdd91dd",
     "preview_arc_rehearsal": "d2a7ea5ffa3d2dd1",

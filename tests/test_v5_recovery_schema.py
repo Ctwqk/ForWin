@@ -151,6 +151,38 @@ def baseline_operations(
     )
 
 
+def _created_schema(
+    monkeypatch: pytest.MonkeyPatch, run: Any
+) -> tuple[dict[str, sa.Table], dict[str, set[tuple[str, tuple[str, ...], bool]]]]:
+    """Tables and indexes that ``run()`` creates through alembic ``op``."""
+    tables: dict[str, sa.Table] = {}
+    indexes: dict[str, set[tuple[str, tuple[str, ...], bool]]] = defaultdict(set)
+
+    def create_table(name: str, *elements: Any, **_: Any) -> sa.Table:
+        tables[name] = sa.Table(name, sa.MetaData(), *elements)
+        return tables[name]
+
+    def create_index(name: str, table_name: str, columns: list[str], *, unique: bool = False, **_: Any) -> None:
+        indexes[table_name].add((name, tuple(columns), unique))
+
+    op = import_module("alembic.op")
+    monkeypatch.setattr(op, "f", lambda name: name)
+    monkeypatch.setattr(op, "create_table", create_table)
+    monkeypatch.setattr(op, "create_index", create_index)
+    monkeypatch.setattr(op, "drop_index", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(op, "drop_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(op, "execute", lambda *_args, **_kwargs: None)
+    run()
+    return tables, indexes
+
+
+def _column_shape(table: sa.Table) -> list[tuple[str, type, bool, bool]]:
+    return [
+        (column.name, type(column.type), column.nullable, column.primary_key)
+        for column in table.columns
+    ]
+
+
 def test_recovery_models_are_registered_and_exported() -> None:
     assert RECOVERY_TABLES <= set(Base.metadata.tables)
     for name in (
@@ -560,6 +592,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0001_v5_baseline.py",
         "0002_drop_dead_tables.py",
         "0003_book_state_v6.py",
+        "0004_drop_parallel_ledgers.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None
@@ -605,3 +638,17 @@ def test_require_v5_schema_rejects_old_baseline_stamp(
     assert raised.value.code == "FORWIN_SCHEMA_REVISION_MISMATCH"
     assert raised.value.current_revision == "0001_v5_baseline"
     assert raised.value.expected_revision == "0001_v5_recovery"
+
+
+def test_parallel_ledger_downgrade_recreates_the_0001_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    drop_ledgers = import_module("forwin.migrations.versions.0004_drop_parallel_ledgers")
+    baseline_tables, baseline_indexes = _created_schema(monkeypatch, import_module(BASELINE_MODULE).upgrade)
+    recreated_tables, recreated_indexes = _created_schema(monkeypatch, drop_ledgers.downgrade)
+
+    assert drop_ledgers.revision == "0004_drop_parallel_ledgers"
+    assert drop_ledgers.down_revision == "0003_book_state_v6"
+    assert set(recreated_tables) == {"character_state_transitions", "countdown_ledgers"}
+    for name, table in recreated_tables.items():
+        assert _column_shape(table) == _column_shape(baseline_tables[name])
+        assert _foreign_keys(table) == _foreign_keys(baseline_tables[name])
+        assert recreated_indexes[name] == baseline_indexes[name]

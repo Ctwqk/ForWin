@@ -81,8 +81,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--from-chapter", type=int, required=True)
     parser.add_argument("--to-chapter", type=int, default=None)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", default=True, help="Run LLM and produce candidate rows without DB writes.")
-    mode.add_argument("--persist", action="store_true", help="Write replayed form-sourced canon rows.")
+    mode.add_argument("--dry-run", action="store_true", default=True, help="Run LLM and produce candidate signals without DB writes.")
+    mode.add_argument("--persist", action="store_true", help="Write the replayed form signals.")
     parser.add_argument("--llm-profile", default="", help="InfrastructureConfig LLM profile id or name. Empty means current default routing.")
     parser.add_argument("--estimate-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
@@ -91,7 +91,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--abort-on-error", action="store_true")
     parser.add_argument("--cost-cap-usd", type=float, default=None)
     parser.add_argument("--no-cost-cap", action="store_true")
-    parser.add_argument("--diff-mode", action="store_true")
     parser.add_argument("--schema-version", default="")
     parser.add_argument("--clear-state", action="store_true")
     parser.add_argument("--confirm-clear", action="store_true")
@@ -150,7 +149,6 @@ def main(argv: list[str] | None = None) -> int:
     from forwin.canon_quality.chapter_review_form.replay import (
         latest_accepted_chapter,
         replay_chapter_range,
-        replay_single_chapter_diff,
         summarize_replay_results,
     )
     from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions, state_file_path
@@ -214,27 +212,6 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(schema_warning, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
         llm_client = build_llm_client_for_replay(config, args.llm_profile)
-        if args.diff_mode:
-            for chapter_number in range(int(args.from_chapter), int(resolved_to_chapter) + 1):
-                with session_factory() as session:
-                    differences = replay_single_chapter_diff(
-                        session=session,
-                        project_id=args.project_id,
-                        chapter_number=chapter_number,
-                        llm_client=llm_client,
-                    )
-                    session.rollback()
-                emit_json_line(
-                    {
-                        "chapter_number": chapter_number,
-                        "status": "diff_completed",
-                        "differences": differences,
-                    }
-                )
-            if schema_warning:
-                emit_json_line({"status": "summary", "schema_warning": schema_warning})
-            return 0
-
         options = ReplayRangeOptions(
             persist=args.persist,
             mode="primary" if args.persist else "dry_run",

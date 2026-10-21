@@ -35,7 +35,6 @@ REQUIRED_FILES = [
     "chapter.txt",
     "expected_answers.json",
     "expected_signals.json",
-    "expected_transitions.json",
     "notes.md",
 ]
 
@@ -61,7 +60,6 @@ def test_chapter_review_form_fixture_case(case_name: str) -> None:
     projection = project_validated_answers(answers=answers, validation_report=validation_report, draft_id=case_name)
 
     assert _signal_summary(projection.signals) == _load_json(case_dir / "expected_signals.json")
-    assert _transition_summary(projection.character_transitions) == _load_json(case_dir / "expected_transitions.json")
 
 
 def _load_json(path: Path) -> object:
@@ -76,16 +74,4 @@ def _signal_summary(signals: object) -> list[dict[str, str]]:
             "subject_key": signal.subject_key,
         }
         for signal in signals
-    ]
-
-
-def _transition_summary(transitions: object) -> list[dict[str, str]]:
-    return [
-        {
-            "character_name": transition.character_name,
-            "transition_type": transition.transition_type,
-            "to_state": transition.to_state,
-            "terminality": transition.terminality,
-        }
-        for transition in transitions
     ]

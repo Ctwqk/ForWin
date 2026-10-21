@@ -5,7 +5,6 @@ from typing import Any
 
 
 OPEN_COUNTDOWN_STATUSES = {"active", "paused", "reopened", "consistent", "warning", "conflict"}
-TERMINAL_COUNTDOWN_STATUSES = {"closed", "fulfilled", "resolved"}
 BLOCKING_SIGNAL_SEVERITIES = {"error", "critical", "blocker"}
 SIGNAL_SEVERITY_ORDER = {"blocker": 0, "critical": 1, "error": 2, "warning": 3, "info": 4}
 COUNTDOWN_STATUS_PRIORITY = {
@@ -48,6 +47,7 @@ def row_value(row: Any, key: str, default: Any = "") -> Any:
 
 
 def select_characters_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]:
+    """The characters the chapter names; answers are keyed by name, so a shared name is asked once."""
     latest_by_name: dict[str, Any] = {}
     for row in rows:
         name = str(row_value(row, "character_name") or row_value(row, "name") or "").strip()
@@ -56,30 +56,18 @@ def select_characters_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]
         previous = latest_by_name.get(name)
         if previous is None or int(row_value(row, "chapter_number", 0) or 0) >= int(row_value(previous, "chapter_number", 0) or 0):
             latest_by_name[name] = row
-    selected: list[Any] = []
-    for name, row in sorted(latest_by_name.items()):
-        payload = row_value(row, "payload", {}) or {}
-        must_track = bool(payload.get("must_track") if isinstance(payload, dict) else False)
-        if must_track or name in chapter_text:
-            selected.append(row)
-    return selected
+    return [row for name, row in sorted(latest_by_name.items()) if name in chapter_text]
 
 
 def select_countdowns_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]:
-    latest_by_key: dict[str, Any] = {}
-    for row in rows:
-        key = str(row_value(row, "countdown_key") or row_value(row, "key") or "main").strip() or "main"
-        previous = latest_by_key.get(key)
-        if previous is None or int(row_value(row, "chapter_number", 0) or 0) >= int(row_value(previous, "chapter_number", 0) or 0):
-            latest_by_key[key] = row
+    """Open countdowns, and closed ones the chapter names again."""
     selected: list[Any] = []
-    for key, row in sorted(latest_by_key.items()):
+    for row in rows:
+        key = str(row_value(row, "countdown_key") or row_value(row, "key") or "").strip()
         label = str(row_value(row, "label") or key).strip()
         status = str(row_value(row, "status") or "active").strip()
-        mentioned = key in chapter_text or bool(label and label in chapter_text)
+        mentioned = bool(key and key in chapter_text) or bool(label and label in chapter_text)
         if status in OPEN_COUNTDOWN_STATUSES or mentioned:
-            selected.append(row)
-        elif status in TERMINAL_COUNTDOWN_STATUSES and mentioned:
             selected.append(row)
     return selected
 

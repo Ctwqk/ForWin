@@ -156,6 +156,7 @@ class _DeltaBuilder:
         self.resolved_threads: set[str] = set()
         self.locations: dict[str, str] = {}
         self.holders: dict[str, str] = {}
+        self.movers: set[str] = set()
         self.movements: list[dict[str, Any]] = []
         self.knowledge_tags: list[dict[str, Any]] = []
         self.flashback_refs: list[dict[str, Any]] = []
@@ -173,6 +174,7 @@ class _DeltaBuilder:
         ]:
             if entity is not None:
                 self.declared.setdefault(entity.name.strip(), entity)
+        self.movers = {movement.entity_ref.strip() for movement in extraction.movements}
         self._apply_admission_plan()
         for index, site in enumerate(extraction.new_sites):
             self._new_site(site, f"new_sites[{index}]")
@@ -544,6 +546,9 @@ class _DeltaBuilder:
         # Location and holder changes are moves and transfers, which the review gate checks.
         node_type = self._node_type(node_id)
         if field_path == "state.location_id" and node_type == "character":
+            if {node_id, ref} & self.movers:
+                # The extraction's own movement for this entity carries the move.
+                return
             to_id = self._location(str(change.new_value or ""), f"{path}.new_value")
             if to_id is not None:
                 self._record_movement(node_id, "", to_id, path=path, evidence=change.evidence)
@@ -573,9 +578,21 @@ class _DeltaBuilder:
         matching = forward + backward if symmetric else forward
         active = next((edge for edge in matching if edge.is_active), None)
         if change.op == "create":
-            if active is not None:
-                self._issue("warning", "relation_exists", path, f"relation {active.id} is already active")
-            elif not symmetric and not forward and backward:
+            # A create earlier in this chapter counts as existing too.
+            pairs = {(source_id, target_id), (target_id, source_id)} if symmetric else {(source_id, target_id)}
+            pending = next(
+                (
+                    patch for patch in self.edge_patches
+                    if str(patch.op) == "create" and patch.edge_type == change.edge_type
+                    and (patch.source_id, patch.target_id) in pairs
+                ),
+                None,
+            )
+            existing_id = active.id if active is not None else pending.edge_id if pending is not None else ""
+            if existing_id:
+                self._issue("warning", "relation_exists", path, f"relation {existing_id} already exists")
+            elif not symmetric and not forward and any(edge.is_active for edge in backward):
+                # An ended reverse edge is a past role; only a live one blocks the flip.
                 self._direction_mismatch(change, path)
             else:
                 self._create_relation(change, matching, source_id, target_id, families[0])
@@ -615,10 +632,13 @@ class _DeltaBuilder:
     ) -> None:
         ended = [edge for edge in matching if edge.ended_at_chapter is not None]
         # A create on an ended relation reactivates that same edge.
+        symmetric = change.edge_type in _SYMMETRIC_EDGE_TYPES
+        # A symmetric relation has one id whichever endpoint the prose names first.
+        first, second = sorted((source_id, target_id)) if symmetric else (source_id, target_id)
         edge_id = (
             max(ended, key=lambda edge: (edge.ended_at_chapter, edge.id)).id
             if ended
-            else _stable_id(self.project_id, "edge", f"{source_id}/{change.edge_type}/{target_id}")
+            else _stable_id(self.project_id, "edge", f"{first}/{change.edge_type}/{second}")
         )
         if any(patch.edge_id == edge_id for patch in self.edge_patches):
             return
@@ -626,9 +646,7 @@ class _DeltaBuilder:
             "source_id": source_id, "target_id": target_id,
             "edge_type": change.edge_type, "edge_family": edge_family,
         }
-        directionality = (
-            Directionality.UNDIRECTED if change.edge_type in _SYMMETRIC_EDGE_TYPES else Directionality.DIRECTED
-        )
+        directionality = Directionality.UNDIRECTED if symmetric else Directionality.DIRECTED
         self.edge_patches.append(EdgePatch(
             edge_id=edge_id,
             op="create",

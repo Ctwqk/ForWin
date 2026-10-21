@@ -36,6 +36,19 @@ _ENTITY_NODE_TYPES = {
     "technology",
     "magic_system",
 }
+_ANCHOR_EDGE_TYPES = {"kin_of", "family_of", "master_of", "mentor_of"}
+_HIDDEN_MARKERS = {"hidden", "secret", "must_not_reveal"}
+
+
+def _edge_hidden(edge) -> bool:
+    """Mirrors the retrieval broker's hidden-edge test; book_state does not import retrieval."""
+    metadata = edge.metadata if isinstance(edge.metadata, dict) else {}
+    return (
+        str(edge.status or "").lower() in _HIDDEN_MARKERS
+        or str(edge.visibility or "").lower() in _HIDDEN_MARKERS
+        or str(edge.visibility_default or "").lower() == "hidden"
+        or str(metadata.get("visibility") or "").lower() in _HIDDEN_MARKERS
+    )
 
 
 class BookStateQuery:
@@ -64,9 +77,12 @@ class BookStateQuery:
         runtime = self.runtime(project_id, as_of_chapter=as_of_chapter)
         anchors: set[tuple[str, str]] = set()
         for edge in runtime.world.edges_by_id.values():
-            if not edge.is_active or edge.edge_type not in {
-                "kin_of", "family_of", "master_of", "mentor_of"
-            }:
+            # A secret relation must not reach the writer prompt as a name anchor.
+            if (
+                not edge.is_active
+                or edge.edge_type not in _ANCHOR_EDGE_TYPES
+                or _edge_hidden(edge)
+            ):
                 continue
             appellation = str(edge.metadata.get("appellation") or "").strip()
             if not appellation:

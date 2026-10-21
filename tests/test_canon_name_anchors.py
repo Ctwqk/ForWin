@@ -132,6 +132,24 @@ def test_checker_uses_cached_as_of_character_names_and_aliases_without_database(
     assert reads == [("p", 3)]
 
 
+@pytest.mark.parametrize(("marker", "anchored"), [
+    ({}, True),
+    ({"visibility_default": "hidden"}, False),
+    ({"visibility": "secret"}, False),
+    ({"status": "hidden"}, False),
+    ({"metadata": {"appellation": "母亲", "visibility": "secret"}}, False),
+], ids=["visible", "visibility_default", "visibility", "status", "metadata"])
+def test_hidden_kinship_edges_produce_no_anchor(marker, anchored):
+    graph = _graph("p")
+    extra = graph.edges_by_id["0"].model_copy(update={"id": "extra", "source_id": "c", **marker})
+    graph = ObjectiveWorldGraph(nodes=list(graph.nodes_by_id.values()), edges=[*graph.edges_by_id.values(), extra])
+    query = BookStateQuery(None)
+    query.projection.load_runtime_as_of = lambda project_id, *, as_of_chapter: SimpleNamespace(world=graph)
+    anchors = [(a.role_label, a.canonical_name) for a in query.canon_name_anchors("p", as_of_chapter=3)]
+    assert (("乙的母亲", "丁") in anchors) is anchored
+    assert ("丙的母亲", "丁") in anchors
+
+
 def _kin_book_query():
     """A fixture-style book: three-character names plus a two-character one, each anchored by kinship."""
     names = {"son": "应潮生", "father": "应怀远", "pupil": "蒲念平", "master": "祁长烬", "mother": "林若"}

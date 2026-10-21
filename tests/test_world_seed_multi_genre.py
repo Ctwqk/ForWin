@@ -286,6 +286,7 @@ def test_fixture_flows_from_genesis_to_chapter_zero_book_state(genre: str, sessi
             (f"{names[relation['source']]}的{relation['appellation']}", names[relation["target"]])
             for relation in seed["relations"]
             if relation["edge_type"] in KINSHIP_EDGE_TYPES and relation["appellation"]
+            and relation["visibility"] != "secret"
         )
         anchors = query.canon_name_anchors(project_id, as_of_chapter=0)
         assert anchors
@@ -339,3 +340,21 @@ def test_three_genres_share_one_code_path(session_factory) -> None:
 
     assert sequences["xianxia"] == SHARED_PIPELINE
     assert sequences == {genre: SHARED_PIPELINE for genre in GENRES}
+
+
+def test_secret_kinship_relation_never_becomes_a_name_anchor(session_factory) -> None:
+    fixture = load_fixture("interstellar")
+    relations = fixture["pack"]["world_seed"]["relations"]
+    kin = next(relation for relation in relations if relation["edge_type"] in KINSHIP_EDGE_TYPES and relation["appellation"])
+    kin["visibility"] = "secret"
+    names = entity_names(fixture["pack"]["world"]["story_engine"])
+    project_id = "proj-secret-kin"
+    service = BookGenesisService(llm_client=_NoApiKeyClient())
+
+    with session_factory() as session:
+        create_ready_project(session, service, fixture, project_id)
+        start_writing(session, service, project_id)
+        anchors = BookStateQuery(session).canon_name_anchors(project_id, as_of_chapter=0)
+
+    secret_anchor = (f"{names[kin['source']]}的{kin['appellation']}", names[kin["target"]])
+    assert secret_anchor not in [(anchor.role_label, anchor.canonical_name) for anchor in anchors]

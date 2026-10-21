@@ -38,6 +38,8 @@ class ReviewPolicy(FrozenPolicyModel):
     max_rewrites: int = Field(ge=0, le=12)
     blocking_rewrites: int = Field(default=0, ge=0, le=12)
     repair_models: tuple[str, ...]
+    # Share of the shortest travel time a claimed movement may undercut before it is an error.
+    travel_tolerance: float = Field(default=0.2, ge=0.0, le=1.0)
 
     def allows_signal(self, name: str) -> bool:
         return name in self.signals

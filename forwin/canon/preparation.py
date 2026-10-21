@@ -119,7 +119,9 @@ class BookStateCanonPreparer:
         # Chapter canon is reviewed against the canon before the chapter, even
         # when a historical rewrite still holds the chapter's old deltas.
         review = BookStateReviewGate(session).review(
-            extraction.changes, base_chapter=max(chapter_number - 1, 0)
+            extraction.changes,
+            base_chapter=max(chapter_number - 1, 0),
+            travel_tolerance=context.policy.review.travel_tolerance,
         )
         if not review.accepted or review.approved_changes is None:
             _record_book_state_block(

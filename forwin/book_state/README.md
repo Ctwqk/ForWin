@@ -8,6 +8,7 @@ Rules:
 
 - `BookStateCompiler` is the final GraphDelta canon writer and is constructed only by `CanonAdmissionService`.
 - `BookStateReviewGate` must run before new changes enter canon, including the Genesis seed.
+- For `source_type="chapter_extraction"` deltas the gate also runs the v6 world checks on the delta's `movements`, `knowledge_tags` and `item_transfers` metadata: time offsets, reachability over the mover's known routes, travel speed within `review.travel_tolerance`, restrained movers, entities dead before the chapter acting (flashbacks exempt), item holders, told sources, and reader reveals against the reveal schedule. Other deltas keep the patch-based reachability check.
 - Accepted chapters enter through `CanonAdmissionService.commit_plan`; world edits use `commit_world_edit`, clamp to the latest canon chapter, and recheck under the project lock. The removed `BookStateDirectCommitService` is not an entry point.
 - World, map, cognition, and narrative are always enabled; `canon.book_state_layers` has been removed.
 - Obsidian, LLM KB, wiki/export, and debug APIs must be rebuildable projections from BookState or declared integration rows.
@@ -30,6 +31,6 @@ P1 state contracts:
 
 Deferred scope and design choices:
 
-- The seed's `location_ref` is a Genesis map id, translated at commit to a database map-node id in `state.location_id`. `reveal_candidates` remains only in the frozen Genesis pack for P4.
+- The seed's `location_ref` is a Genesis map id, translated at commit to a database map-node id in `state.location_id`. `reveal_candidates` stays in the frozen Genesis pack; `reveal_schedule.earliest_reveal_chapters` reads it as each secret's earliest reveal chapter (its arc's `chapter_start`).
 - P2 owns chapter-level story-time spans, time monotonicity / flashback rules, and map `travel_time` conversion to minutes.
 - P4 owns removal of `finalization._seed_state`, `RunControlStage.run`, and `SubWorldManager.apply_initial_arc_plan` with ArcDirector, plus replacement of `sub_world_roster_items` / `plan_band_activation` by band `onstage_refs`. The world engine and beat-table planner remain later-phase work.

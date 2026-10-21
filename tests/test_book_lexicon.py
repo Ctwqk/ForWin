@@ -127,7 +127,6 @@ def test_lexicon_rejects_inf_and_blank_ids(payload: dict) -> None:
 
 @pytest.mark.parametrize("name", ["", " \t\n"])
 @pytest.mark.parametrize("collection,item", [
-    ("time_unit_aliases", {"minutes": 1}),
     ("rank_ladders", {"id": "r"}),
     ("currencies", {"id": "c"}),
     ("travel_modes", {"id": "m", "speed_multiplier": 1, "allowed_edge_types": ["road"]}),
@@ -136,3 +135,9 @@ def test_lexicon_accepts_blank_names(collection: str, item: dict, name: str) -> 
     lexicon = lexicon_from_payload({collection: [{**item, "name": name}]})
     assert getattr(lexicon, collection)[0].name == name
     assert lexicon_to_payload(lexicon)[collection][0]["name"] == name
+
+
+@pytest.mark.parametrize("name", ["", " \t\n"])
+def test_lexicon_rejects_blank_time_alias_names(name: str) -> None:
+    with pytest.raises(LexiconError, match="name"):
+        lexicon_from_payload({"time_unit_aliases": [{"name": name, "minutes": 1}]})

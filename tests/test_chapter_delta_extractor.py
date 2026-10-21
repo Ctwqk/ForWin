@@ -62,8 +62,9 @@ class StubLLM:
         return events
 
 
-def extract(client, *, max_attempts=3, calendar=CALENDAR):
-    return ChapterDeltaExtractor(client, max_attempts=max_attempts).extract(
+def extract(client, *, max_attempts=3, max_tokens=None, calendar=CALENDAR):
+    options = {} if max_tokens is None else {"max_tokens": max_tokens}
+    return ChapterDeltaExtractor(client, max_attempts=max_attempts, **options).extract(
         extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY,
         chapter_summary="Ari enters", calendar=calendar, lexicon=LEXICON,
     )
@@ -81,6 +82,7 @@ def test_valid_extraction_passes_through_with_body_hash():
     assert kwargs["stage_key"] == "chapter_delta_extraction"
     assert kwargs["task_family"] == "writer"
     assert kwargs["response_format"] == {"type": "json_object"}
+    assert kwargs["max_tokens"] == 8000
     assert kwargs["output_schema"] == ChapterDeltaExtraction.model_json_schema()
     trace = result.prompt_trace
     assert trace["template_id"] == "extraction:chapter_delta"
@@ -89,6 +91,14 @@ def test_valid_extraction_passes_through_with_body_hash():
     assert trace["prompt_layers"] and trace["effective_system_prompt"]
     assert trace["attempts"][0]["provider_request_id"] == "1"
     assert client.llm_attempt_events == []
+
+
+def test_configured_max_tokens_is_used_on_every_attempt():
+    client = StubLLM("not JSON", payload())
+    result = extract(client, max_tokens=12000)
+    assert result.extraction is not None
+    assert result.attempts == 2
+    assert [kwargs["max_tokens"] for _, kwargs in client.calls] == [12000, 12000]
 
 
 @pytest.mark.parametrize("invalid", [{}, "not JSON"])
@@ -141,6 +151,84 @@ def test_unknown_elapsed_unit_can_be_corrected():
     assert elapsed_minutes(result.extraction, CALENDAR, LEXICON) == 30
 
 
+@pytest.mark.parametrize("failure", ["not JSON", {}, RuntimeError("provider unavailable")])
+def test_evidence_candidate_survives_failed_retries(failure):
+    first = payload()
+    first["entity_mentions"].extend(
+        {"name": f"Ghost {i}", "kind": "character", "evidence": f"invented {i}"}
+        for i in range(3)
+    )
+    result = extract(StubLLM(first, failure, failure))
+    assert result.attempts == 3
+    assert result.extraction is not None
+    assert result.extraction.body_sha256 == hashlib.sha256(BODY.encode()).hexdigest()
+    assert [item.name for item in result.extraction.entity_mentions] == ["Ari"]
+    assert elapsed_minutes(result.extraction, CALENDAR, LEXICON) == 1440
+    assert [(issue.severity, issue.code, issue.path) for issue in result.issues] == [
+        ("warning", "evidence_not_in_body", f"entity_mentions[{i}]") for i in range(1, 4)
+    ]
+    assert len(result.prompt_trace["attempts"]) == 3
+    assert result.prompt_trace["output_summary"]["extraction_ok"] is True
+
+
+@pytest.mark.parametrize("failure", ["not JSON", {}, TimeoutError("provider timed out")])
+def test_unknown_elapsed_candidate_survives_failed_retries(failure):
+    result = extract(StubLLM(payload(unit="unknown"), failure, failure))
+    assert result.attempts == 3
+    assert result.extraction is not None
+    assert result.extraction.body_sha256 == hashlib.sha256(BODY.encode()).hexdigest()
+    assert [item.name for item in result.extraction.entity_mentions] == ["Ari"]
+    assert result.extraction.time.elapsed is None
+    assert elapsed_minutes(result.extraction, CALENDAR, LEXICON) is None
+    assert [(issue.severity, issue.code, issue.path) for issue in result.issues] == [
+        ("warning", "elapsed_unknown", "time.elapsed"),
+    ]
+    assert "unknown" in result.issues[0].message
+    assert len(result.prompt_trace["attempts"]) == 3
+    assert result.prompt_trace["output_summary"]["extraction_ok"] is True
+
+
+def test_last_valid_candidate_replaces_earlier_candidate():
+    first = payload()
+    first["entity_mentions"][0]["evidence"] = "invented"
+    result = extract(StubLLM(first, payload(unit="unknown"), "not JSON"))
+    assert result.attempts == 3
+    assert result.extraction is not None
+    assert [item.name for item in result.extraction.entity_mentions] == ["Ari"]
+    assert result.extraction.time.elapsed is None
+    assert [issue.code for issue in result.issues] == ["elapsed_unknown"]
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
+@pytest.mark.parametrize("recovers", [True, False])
+def test_provider_errors_are_traced_without_becoming_model_feedback(error_type, recovers):
+    error = error_type("provider unavailable at https://provider.invalid/v1?token=test-token")
+    client = StubLLM(error, error, payload() if recovers else error)
+    result = extract(client)
+    assert result.attempts == 3
+    assert len(client.calls) == 3
+    assert all(messages == client.calls[0][0] for messages, _ in client.calls[1:])
+    failed_attempts = result.prompt_trace["attempts"][:2 if recovers else 3]
+    assert all(attempt["error_class"] == error_type.__name__ for attempt in failed_attempts)
+    assert all(attempt["error_message"] == error_type.__name__ for attempt in failed_attempts)
+    retries = result.prompt_trace["output_summary"]["business_retry_events"]
+    assert len(retries) == 2
+    assert all(event["reason_class"] == error_type.__name__ for event in retries)
+    assert all(event["reason"] == error_type.__name__ for event in retries)
+    if recovers:
+        assert result.extraction is not None
+        assert result.issues == ()
+    else:
+        assert result.extraction is None
+        assert len(result.issues) == 1
+        issue = result.issues[0]
+        assert issue.code == "extraction_failed"
+        assert error_type.__name__ in issue.message
+        assert "https://" not in issue.message
+        assert "provider.invalid" not in issue.message
+        assert "test-token" not in issue.message
+
+
 @pytest.mark.parametrize("response", ["not JSON", {}, RuntimeError("provider unavailable")])
 def test_all_attempts_fail_returns_extraction_failed(response):
     client = StubLLM(response, response, response)
@@ -164,6 +252,17 @@ def test_prompt_carries_tables_and_secret_list_but_marks_it_label_only():
     assert all(value in user for value in values)
     assert [user.index(value) for value in values] == sorted(user.index(value) for value in values)
     assert all(name in messages[0]["content"] for name in ChapterDeltaExtraction.model_fields)
+
+
+@pytest.mark.parametrize("feedback", [(), ("fix evidence",)])
+def test_prompt_feedback_header_is_conditional(feedback):
+    messages = build_chapter_delta_messages(
+        extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY,
+        chapter_summary="Summary only", feedback=feedback,
+    )
+    assert ("上一轮错误反馈：" in messages[1]["content"]) is bool(feedback)
+    if feedback:
+        assert messages[1]["content"].endswith("上一轮错误反馈：\nfix evidence")
 
 
 def test_elapsed_minutes_without_calendar_uses_only_lexicon_aliases():

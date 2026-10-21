@@ -96,7 +96,10 @@ def lexicon_from_payload(payload: Mapping[str, Any]) -> BookLexicon:
         minutes = item.get("minutes")
         if type(minutes) is not int or minutes <= 0:
             raise LexiconError("Alias minutes must be a positive integer")
-        aliases.append(TimeUnitAlias(_text(item, "name"), minutes))
+        name = _text(item, "name")
+        if not name.strip():
+            raise LexiconError("Alias name must be a nonempty string")
+        aliases.append(TimeUnitAlias(name, minutes))
     ladders = tuple(
         RankLadder(
             _text(item, "id"), _text(item, "name"),

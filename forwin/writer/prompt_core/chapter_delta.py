@@ -65,6 +65,7 @@ def build_chapter_delta_messages(
         + "\n\n相关意图：\n" + json.dumps(tables["intents"], ensure_ascii=False)
         + "\n\n秘密清单（只用于打标签）：\n" + json.dumps(tables["secrets"], ensure_ascii=False)
         + f"\n\n本章正文：\n{chapter_body}\n\n本章摘要：\n{chapter_summary}"
-        + "\n\n上一轮错误反馈：\n" + "\n".join(feedback)
     )
+    if feedback:
+        user += "\n\n上一轮错误反馈：\n" + "\n".join(feedback)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

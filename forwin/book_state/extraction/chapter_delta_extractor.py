@@ -48,9 +48,10 @@ def elapsed_minutes(
 
 
 class ChapterDeltaExtractor:
-    def __init__(self, llm_client, *, max_attempts: int = 3):
+    def __init__(self, llm_client, *, max_attempts: int = 3, max_tokens: int = 8000):
         self.llm_client = llm_client
         self.max_attempts = max(1, int(max_attempts))
+        self.max_tokens = max_tokens
         self._chat_parameters = inspect.signature(llm_client.chat).parameters
 
     def extract(
@@ -68,6 +69,7 @@ class ChapterDeltaExtractor:
         business_retries: list[dict[str, Any]] = []
         evidence_retried = False
         elapsed_retried = False
+        # Keep the last validated candidate if a later retry fails.
         extraction = None
         issues: list[ExtractionIssue] = []
         body_hash = hashlib.sha256(chapter_body.encode("utf-8")).hexdigest()
@@ -79,6 +81,7 @@ class ChapterDeltaExtractor:
             feedback = []
             raw = ""
             call_error: Exception | None = None
+            failure_reason = ""
             try:
                 raw = self._call_chat(messages)
                 try:
@@ -86,6 +89,7 @@ class ChapterDeltaExtractor:
                         raw, error_prefix="ChapterDeltaExtractor JSON parser",
                     ))
                 except Exception as exc:  # noqa: BLE001
+                    feedback = [str(exc)]
                     mark_latest_attempt_parse_failure(
                         self.llm_client, parser_name="ChapterDeltaExtractor JSON parser",
                         stage_key=_STAGE_KEY, schema_name="ChapterDeltaExtraction",
@@ -94,9 +98,7 @@ class ChapterDeltaExtractor:
                     raise
             except Exception as exc:  # noqa: BLE001
                 call_error = exc
-                extraction = None
-                issues = []
-                feedback = [str(exc)]
+                failure_reason = "\n".join(feedback) if feedback else type(exc).__name__
             finally:
                 mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=_STAGE_KEY)
                 drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
@@ -111,7 +113,10 @@ class ChapterDeltaExtractor:
                     event.setdefault(RAW_RESPONSE_KEY, raw)
                     if call_error is not None:
                         event.setdefault("error_class", type(call_error).__name__)
-                        event.setdefault("error_message", str(call_error))
+                        if feedback:
+                            event.setdefault("error_message", failure_reason)
+                        else:
+                            event["error_message"] = failure_reason
                 attempts.extend(current_attempts)
 
             if call_error is None:
@@ -126,17 +131,16 @@ class ChapterDeltaExtractor:
                     if not elapsed_retried and attempt_no < self.max_attempts:
                         elapsed_retried = True
                         feedback.append(f"elapsed_unknown at time.elapsed: {exc}")
-                    else:
-                        extraction.time.elapsed = None
-                        issues.append(ExtractionIssue(
-                            severity="warning", code="elapsed_unknown", path="time.elapsed", message=str(exc),
-                        ))
+                    extraction.time.elapsed = None
+                    issues.append(ExtractionIssue(
+                        severity="warning", code="elapsed_unknown", path="time.elapsed", message=str(exc),
+                    ))
 
-            if feedback and attempt_no < self.max_attempts:
+            if (feedback or call_error is not None) and attempt_no < self.max_attempts:
                 business_retries.append({
                     "stage": _STAGE_KEY, "attempt_no": attempt_no, "max_attempts": self.max_attempts,
                     "reason_class": type(call_error).__name__ if call_error else "ExtractionValidation",
-                    "reason": "\n".join(feedback)[:500], "retry_kind": "business_validation",
+                    "reason": ("\n".join(feedback) or failure_reason)[:500], "retry_kind": "business_validation",
                 })
                 continue
             break
@@ -144,7 +148,7 @@ class ChapterDeltaExtractor:
         if extraction is None:
             issues.append(ExtractionIssue(
                 severity="error", code="extraction_failed", path="",
-                message=f"Chapter delta extraction failed after {attempt_no} attempts: {'; '.join(feedback)}",
+                message=f"Chapter delta extraction failed after {attempt_no} attempts: {failure_reason}",
             ))
         prompt_trace = self._build_prompt_trace(
             messages=messages, extraction_input=extraction_input, chapter_title=chapter_title,
@@ -155,7 +159,7 @@ class ChapterDeltaExtractor:
 
     def _call_chat(self, messages: list[dict]) -> str:
         kwargs: dict[str, Any] = {
-            "temperature": 0.2, "max_tokens": 8000,
+            "temperature": 0.2, "max_tokens": self.max_tokens,
             "response_format": {"type": "json_object"}, "task_family": "writer",
             "stage_key": _STAGE_KEY, "output_schema": ChapterDeltaExtraction.model_json_schema(),
         }

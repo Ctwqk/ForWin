@@ -714,5 +714,97 @@
         }
       ]
     }
+  },
+  "chapter_1": {
+    "plan": {
+      "title": "断剑崖",
+      "one_line": "祁长烬徒步登上断剑崖，在残碑上找到母亲留下的痕迹。",
+      "goals": [
+        "祁长烬在断剑崖找到母亲留下的线索"
+      ]
+    },
+    "body": "入夜后落了一场冷雨。祁长烬灵脉残缺，御不得剑，只能背起行囊出了栖云山门，沿着湿滑的石阶徒步往断剑崖去。\n\n山路比他记忆里长得多，石阶被雨水泡得发软，他走走停停，夜里就缩在岩缝里打坐。两日后，他才攀上断剑崖。崖顶立着一排历代剑修折剑留下的残碑，碑前插着锈蚀的断剑。\n\n他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字。刻痕下压着一截褪色的剑穗，穗尾还缠着半根红绳。祁长烬把剑穗收进怀里，指尖冻得发麻。\n\n碑文写得分明：母亲当年曾在断剑崖守过三年剑冢。这件事，师门上下从未对他提过一个字。\n\n他想起景沧澜每次提到母亲时闪躲的眼神，想起那句“你母亲死于九曜盟之手”说得太快，第一次对这位师尊生出了疑心。\n\n风把残碑上的积雨吹落。祁长烬在碑前跪了很久，才起身往崖边的石屋走去。",
+    "summary": "祁长烬徒步登上断剑崖，在残碑上找到母亲的名字和一截剑穗，开始怀疑师尊景沧澜。",
+    "chapter_delta_extraction": {
+      "time": {
+        "elapsed": {
+          "amount": 2,
+          "unit": "日"
+        },
+        "evidence": "两日后，他才攀上断剑崖"
+      },
+      "movements": [
+        {
+          "entity_ref": "@node:祁长烬",
+          "from_ref": "@site:栖云山门",
+          "to_ref": "@site:断剑崖",
+          "travel_mode_id": "mode-foot",
+          "evidence": "沿着湿滑的石阶徒步往断剑崖去"
+        }
+      ],
+      "relation_changes": [
+        {
+          "source_ref": "@node:祁长烬",
+          "target_ref": "@node:景沧澜",
+          "edge_type": "distrusts",
+          "op": "create",
+          "evidence": "第一次对这位师尊生出了疑心"
+        }
+      ],
+      "knowledge_events": [
+        {
+          "observer_ref": "@node:祁长烬",
+          "new_fact": {
+            "proposition": "祁长烬的母亲曾在断剑崖守过三年剑冢",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "document",
+          "evidence": "碑文写得分明：母亲当年曾在断剑崖守过三年剑冢"
+        },
+        {
+          "observer_ref": "reader",
+          "new_fact": {
+            "proposition": "祁长烬的母亲曾在断剑崖守过三年剑冢",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "document",
+          "evidence": "碑文写得分明：母亲当年曾在断剑崖守过三年剑冢"
+        }
+      ],
+      "item_transfers": [
+        {
+          "new_item": {
+            "name": "褪色剑穗",
+            "kind": "item"
+          },
+          "from_ref": "@site:断剑崖",
+          "to_ref": "@node:祁长烬",
+          "evidence": "祁长烬把剑穗收进怀里"
+        }
+      ],
+      "events": [
+        {
+          "summary": "祁长烬在断剑崖的残碑上找到母亲的名字",
+          "participant_refs": [
+            "@node:祁长烬"
+          ],
+          "location_ref": "@site:断剑崖",
+          "significance": "moderate",
+          "visibility": "public",
+          "evidence": "他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字"
+        }
+      ],
+      "plan_fulfillment": [
+        {
+          "target_id": "goal:1",
+          "status": "done",
+          "evidence": "他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字"
+        }
+      ]
+    }
   }
 }

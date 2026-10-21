@@ -671,5 +671,99 @@
         }
       ]
     }
+  },
+  "chapter_1": {
+    "plan": {
+      "title": "听证席",
+      "one_line": "应潮生搭穿梭舱赶到舰队军事法庭，见到监察官钟离曜。",
+      "goals": [
+        "应潮生在听证会前见到监察官钟离曜"
+      ]
+    },
+    "body": "曙光轨道站的广播又一次念起云梯号全员殉职的通告。应潮生把那张借来的半价航票塞回口袋，搭上了开往舰队军事法庭的穿梭舱。\n\n穿梭舱在站内隧道里走走停停。到了法庭，他在候审区的长椅上熬了两个标准日，才等到监察官钟离曜的接见。\n\n钟离曜没有看他递上去的申请，只把一枚旧领航员徽章推过桌面：“你的东西，开除那天落在舰桥上。”应潮生接过徽章，金属边缘还留着舰桥上的灼痕。\n\n“云梯号的航行日志已经全部封存，”钟离曜合上终端，“听证会上不会再有人提它。”\n\n应潮生攥紧徽章走出法庭。他已经认定，这个监察官在隐瞒什么。",
+    "summary": "应潮生在舰队军事法庭见到钟离曜，拿回旧领航员徽章，得知云梯号的航行日志已被封存。",
+    "chapter_delta_extraction": {
+      "time": {
+        "elapsed": {
+          "amount": 2,
+          "unit": "标准日"
+        },
+        "evidence": "熬了两个标准日"
+      },
+      "movements": [
+        {
+          "entity_ref": "@node:应潮生",
+          "from_ref": "@site:曙光轨道站",
+          "to_ref": "@site:舰队军事法庭",
+          "travel_mode_id": "mode-shuttle",
+          "evidence": "搭上了开往舰队军事法庭的穿梭舱"
+        }
+      ],
+      "relation_changes": [
+        {
+          "source_ref": "@node:应潮生",
+          "target_ref": "@node:钟离曜",
+          "edge_type": "distrusts",
+          "op": "create",
+          "evidence": "这个监察官在隐瞒什么"
+        }
+      ],
+      "knowledge_events": [
+        {
+          "observer_ref": "@node:应潮生",
+          "new_fact": {
+            "proposition": "云梯号的航行日志已被舰队全部封存",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "told",
+          "source_ref": "@node:钟离曜",
+          "evidence": "云梯号的航行日志已经全部封存"
+        },
+        {
+          "observer_ref": "reader",
+          "new_fact": {
+            "proposition": "云梯号的航行日志已被舰队全部封存",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "witnessed",
+          "evidence": "云梯号的航行日志已经全部封存"
+        }
+      ],
+      "item_transfers": [
+        {
+          "new_item": {
+            "name": "旧领航员徽章",
+            "kind": "item"
+          },
+          "from_ref": "@node:钟离曜",
+          "to_ref": "@node:应潮生",
+          "evidence": "应潮生接过徽章"
+        }
+      ],
+      "events": [
+        {
+          "summary": "钟离曜把旧领航员徽章还给应潮生",
+          "participant_refs": [
+            "@node:钟离曜",
+            "@node:应潮生"
+          ],
+          "location_ref": "@site:舰队军事法庭",
+          "significance": "minor",
+          "visibility": "public",
+          "evidence": "只把一枚旧领航员徽章推过桌面"
+        }
+      ],
+      "plan_fulfillment": [
+        {
+          "target_id": "goal:1",
+          "status": "done",
+          "evidence": "才等到监察官钟离曜的接见"
+        }
+      ]
+    }
   }
 }

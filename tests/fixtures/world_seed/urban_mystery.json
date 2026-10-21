@@ -700,5 +700,98 @@
         }
       ]
     }
+  },
+  "chapter_1": {
+    "plan": {
+      "title": "缺页",
+      "one_line": "蒲念安带着缺页的复印件步行去第三分局，找刑侦队长韦清和。",
+      "goals": [
+        "蒲念安向韦清和追问失踪名单的缺页"
+      ]
+    },
+    "body": "夜班交接后，蒲念安把旧港区失踪案卷里那页被撕掉的目录复印下来，揣着复印件走出市立档案馆，沿着河堤步行去第三分局。\n\n分局的接待员说韦队长在开评审会。她在走廊的塑料椅上等了整整两天，韦清和才抽身出来见她。\n\n韦清和翻了翻复印件，从抽屉里取出一份旧案卷宗副本递给她：“这是当年的结案报告，你自己看。”蒲念安把卷宗副本收进包里。\n\n报告最后一页写着，三年前的失踪名单是由韦清和亲自签字归档的。她看着那个签名，指节一点点发白。\n\n走出分局时，她已经不再把韦清和当成可以求助的人。",
+    "summary": "蒲念安在第三分局见到韦清和，拿到旧案卷宗副本，发现失踪名单是他签字归档的。",
+    "chapter_delta_extraction": {
+      "time": {
+        "elapsed": {
+          "amount": 2,
+          "unit": "天"
+        },
+        "evidence": "等了整整两天"
+      },
+      "movements": [
+        {
+          "entity_ref": "@node:蒲念安",
+          "from_ref": "@site:市立档案馆",
+          "to_ref": "@site:第三分局",
+          "travel_mode_id": "mode-walk",
+          "evidence": "沿着河堤步行去第三分局"
+        }
+      ],
+      "relation_changes": [
+        {
+          "source_ref": "@node:蒲念安",
+          "target_ref": "@node:韦清和",
+          "edge_type": "distrusts",
+          "op": "create",
+          "evidence": "她已经不再把韦清和当成可以求助的人"
+        }
+      ],
+      "knowledge_events": [
+        {
+          "observer_ref": "@node:蒲念安",
+          "new_fact": {
+            "proposition": "三年前的失踪名单由韦清和签字归档",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "document",
+          "evidence": "三年前的失踪名单是由韦清和亲自签字归档的"
+        },
+        {
+          "observer_ref": "reader",
+          "new_fact": {
+            "proposition": "三年前的失踪名单由韦清和签字归档",
+            "truth_value": true,
+            "sensitivity": "public"
+          },
+          "state": "knows",
+          "channel": "document",
+          "evidence": "三年前的失踪名单是由韦清和亲自签字归档的"
+        }
+      ],
+      "item_transfers": [
+        {
+          "new_item": {
+            "name": "旧案卷宗副本",
+            "kind": "item"
+          },
+          "from_ref": "@node:韦清和",
+          "to_ref": "@node:蒲念安",
+          "evidence": "蒲念安把卷宗副本收进包里"
+        }
+      ],
+      "events": [
+        {
+          "summary": "韦清和在第三分局把旧案卷宗副本交给蒲念安",
+          "participant_refs": [
+            "@node:韦清和",
+            "@node:蒲念安"
+          ],
+          "location_ref": "@site:第三分局",
+          "significance": "moderate",
+          "visibility": "public",
+          "evidence": "从抽屉里取出一份旧案卷宗副本递给她"
+        }
+      ],
+      "plan_fulfillment": [
+        {
+          "target_id": "goal:1",
+          "status": "done",
+          "evidence": "韦清和翻了翻复印件"
+        }
+      ]
+    }
   }
 }

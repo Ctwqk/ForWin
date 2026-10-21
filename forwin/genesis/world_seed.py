@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
-from forwin.book_state.knowledge import KNOWLEDGE_STATES
+from forwin.book_state.knowledge import HIDDEN_SENSITIVITY, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import (
     EMPTY_LEXICON,
     LexiconError,
@@ -35,6 +35,10 @@ WORLD_SEED_KEYS: tuple[str, ...] = (
     "calendar", "lexicon", "actors", "relations", "facts", "knowledge",
     "rules", "clocks", "reader_promises", "reveal_candidates",
 )
+FACT_SENSITIVITIES = ("public", "hidden", "secret")
+RELATION_VISIBILITIES = ("public", "secret")
+KNOWER_STATES = ("knows", "believes", "suspects")
+HIDDEN_FACT_SENSITIVITIES = HIDDEN_SENSITIVITY.intersection(FACT_SENSITIVITIES)
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,7 @@ def _integer(value: Any, default: int = 0) -> int:
         return default
 
 
-def _number(value: Any, default: float = 0.0) -> float:
+def _number(value: Any, default: float | None = 0.0) -> float | None:
     try:
         number = float(value)
         return number if isfinite(number) else default
@@ -96,7 +100,7 @@ def _boolean(value: Any) -> bool:
 
 def _duration(value: Any) -> dict[str, Any]:
     item = _object(value)
-    return {"amount": _number(item.get("amount")), "unit": _text(item.get("unit"))}
+    return {"amount": _number(item.get("amount"), None), "unit": _text(item.get("unit"))}
 
 
 def _normalize_actor(item: Mapping) -> dict[str, Any]:
@@ -232,11 +236,20 @@ def validate_world_seed(
         if not isinstance(value, str) or value not in values:
             issue(code, f"{path}.{key}", f"Invalid {key}: {value}")
 
+    def unique_id(item: Mapping, seen_ids: set[str], path: str) -> None:
+        ref = _text(item.get("id"))
+        if ref in seen_ids:
+            issue("duplicate_ref", f"{path}.id", f"Duplicate id: {ref}")
+        seen_ids.add(ref)
+
     def location(item: Mapping, path: str) -> None:
         if item.get("location_ref"):
             reference(item["location_ref"], location_refs, "unknown_location_ref", f"{path}.location_ref")
 
     def duration(value: Any, path: str) -> None:
+        amount = _number(_object(value).get("amount"), None)
+        if amount is None or amount < 0:
+            issue("invalid_duration_amount", f"{path}.amount", "Duration amount must be a finite nonnegative number")
         # An invalid dependency already has one diagnostic; avoid cascading unit errors.
         if calendar is None or lexicon is None:
             return
@@ -267,15 +280,19 @@ def validate_world_seed(
         for mode_index, mode in enumerate(_list(actor.get("travel_mode_ids"))):
             reference(mode, travel_modes, "unknown_travel_mode", f"{path}.travel_mode_ids[{mode_index}]")
         agenda_ids = {_text(agenda.get("id")) for agenda in agendas if agenda.get("id")}
+        seen_agenda_ids: set[str] = set()
         for agenda_index, agenda in enumerate(agendas):
             agenda_path = f"{path}.agendas[{agenda_index}]"
+            unique_id(agenda, seen_agenda_ids, agenda_path)
             priority = agenda.get("priority")
             if type(priority) is not int or not 1 <= priority <= 5:
                 issue("invalid_priority", f"{agenda_path}.priority", "Priority must be an integer from 1 to 5")
             references(agenda, "means_refs", agenda_path)
             references(agenda, "secrecy_refs", agenda_path)
+        seen_intent_ids: set[str] = set()
         for intent_index, intent in enumerate(_objects(actor.get("intents"))):
             intent_path = f"{path}.intents[{intent_index}]"
+            unique_id(intent, seen_intent_ids, intent_path)
             enum(intent, "action_type", INTENT_ACTION_TYPES, "invalid_action_type", intent_path)
             enum(intent, "impact_level", IMPACT_LEVELS, "invalid_impact_level", intent_path)
             reference(intent.get("agenda_id"), agenda_ids, "unknown_agenda_ref", f"{intent_path}.agenda_id")
@@ -289,18 +306,23 @@ def validate_world_seed(
     for index, relation in enumerate(_objects(seed.get("relations"))):
         path = f"relations[{index}]"
         enum(relation, "edge_type", WORLD_EDGE_TYPES, "invalid_edge_type", path)
+        enum(relation, "visibility", RELATION_VISIBILITIES, "invalid_visibility", path)
         for key in ("source", "target"):
             reference(relation.get(key), actor_refs, "unknown_relation_ref", f"{path}.{key}")
 
     knowledge = _objects(seed.get("knowledge"))
     known_facts = {
         _text(item.get("fact_id")) for item in knowledge
-        if item.get("state") in ("knows", "believes", "suspects")
+        if item.get("state") in KNOWER_STATES
     }
+    seen_fact_ids: set[str] = set()
     for index, fact in enumerate(facts):
         path = f"facts[{index}]"
+        unique_id(fact, seen_fact_ids, path)
+        enum(fact, "sensitivity", FACT_SENSITIVITIES, "invalid_sensitivity", path)
         references(fact, "related_refs", path)
-        if (fact.get("sensitivity") in ("hidden", "secret")
+        sensitivity = fact.get("sensitivity")
+        if (isinstance(sensitivity, str) and sensitivity in HIDDEN_FACT_SENSITIVITIES
                 and not fact.get("nobody_knows") and fact.get("id") not in known_facts):
             issue("secret_without_knower", path, "Hidden or secret fact must have a knower or nobody_knows")
     for index, item in enumerate(knowledge):
@@ -310,8 +332,10 @@ def validate_world_seed(
         enum(item, "state", KNOWLEDGE_STATES, "invalid_knowledge_state", path)
         enum(item, "channel", ("seeded",), "invalid_channel", path)
 
+    seen_rule_ids: set[str] = set()
     for index, rule in enumerate(_objects(seed.get("rules"))):
         path = f"rules[{index}]"
+        unique_id(rule, seen_rule_ids, path)
         enum(rule, "hardness", RULE_HARDNESS, "invalid_hardness", path)
         checkable = rule.get("checkable")
         if checkable is not None and (
@@ -319,12 +343,17 @@ def validate_world_seed(
             or not isinstance(checkable.get("kind"), str) or not checkable["kind"].strip()
         ):
             issue("invalid_checkable", f"{path}.checkable", "checkable must be null or an object with a nonempty string kind")
+    seen_clock_ids: set[str] = set()
     for index, clock in enumerate(_objects(seed.get("clocks"))):
         path = f"clocks[{index}]"
+        unique_id(clock, seen_clock_ids, path)
         enum(clock, "scope", CLOCK_SCOPES, "invalid_clock_scope", path)
         if clock.get("owner_ref"):
             reference(clock["owner_ref"], actor_refs, "unknown_ref", f"{path}.owner_ref")
         duration(clock.get("due_in"), f"{path}.due_in")
+    seen_promise_ids: set[str] = set()
+    for index, promise in enumerate(_objects(seed.get("reader_promises"))):
+        unique_id(promise, seen_promise_ids, f"reader_promises[{index}]")
     for index, candidate in enumerate(_objects(seed.get("reveal_candidates"))):
         path = f"reveal_candidates[{index}]"
         reference(candidate.get("fact_id"), fact_refs, "unknown_fact_ref", f"{path}.fact_id")

@@ -92,6 +92,76 @@ def test_duration_aliases_and_clock_units(seed, story_engine, map_atlas):
     assert validate(seed, story_engine, map_atlas) == []
 
 
+@pytest.mark.parametrize("field,path", [
+    ("scheduled_in", "actors[0].intents[0].scheduled_in.amount"),
+    ("due_in", "clocks[0].due_in.amount"),
+])
+@pytest.mark.parametrize("amount", [-1, "-1", float("nan"), float("inf"), "nan", "inf", "garbage", None])
+def test_invalid_duration_amount(seed, story_engine, map_atlas, field, path, amount):
+    item = seed["actors"][0]["intents"][0] if field == "scheduled_in" else seed["clocks"][0]
+    item[field]["amount"] = amount
+    normalized = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    for candidate in (seed, normalized):
+        assert [(i.code, i.path, i.severity) for i in validate(candidate, story_engine, map_atlas)] == [
+            ("invalid_duration_amount", path, "error")
+        ]
+
+
+@pytest.mark.parametrize("field,path", [
+    ("scheduled_in", "actors[0].intents[0].scheduled_in.amount"),
+    ("due_in", "clocks[0].due_in.amount"),
+])
+def test_missing_duration_amount(seed, story_engine, map_atlas, field, path):
+    item = seed["actors"][0]["intents"][0] if field == "scheduled_in" else seed["clocks"][0]
+    item[field].pop("amount")
+    normalized = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    for candidate in (seed, normalized):
+        assert [(i.code, i.path, i.severity) for i in validate(candidate, story_engine, map_atlas)] == [
+            ("invalid_duration_amount", path, "error")
+        ]
+
+
+@pytest.mark.parametrize("amount", [None, "garbage", "nan", "inf"])
+def test_normalize_invalid_duration_amount_to_none(seed, story_engine, map_atlas, amount):
+    seed["actors"][0]["intents"][0]["scheduled_in"]["amount"] = amount
+    seed["clocks"][0]["due_in"]["amount"] = amount
+    result = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    assert result["actors"][0]["intents"][0]["scheduled_in"]["amount"] is None
+    assert result["clocks"][0]["due_in"]["amount"] is None
+    assert normalize_world_seed(result, story_engine=story_engine, map_atlas=map_atlas) == result
+
+
+def test_normalize_missing_duration_amount_to_none(seed, story_engine, map_atlas):
+    seed["actors"][0]["intents"][0]["scheduled_in"].pop("amount")
+    seed["clocks"][0]["due_in"].pop("amount")
+    result = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    assert result["actors"][0]["intents"][0]["scheduled_in"]["amount"] is None
+    assert result["clocks"][0]["due_in"]["amount"] is None
+
+
+@pytest.mark.parametrize("amount", [0, 0.5, "1.5"])
+def test_valid_duration_amount(seed, story_engine, map_atlas, amount):
+    seed["actors"][0]["intents"][0]["scheduled_in"]["amount"] = amount
+    seed["clocks"][0]["due_in"]["amount"] = amount
+    result = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    assert validate(result, story_engine, map_atlas) == []
+    assert result["actors"][0]["intents"][0]["scheduled_in"]["amount"] == float(amount)
+    assert result["clocks"][0]["due_in"]["amount"] == float(amount)
+
+
+def test_invalid_duration_amount_is_independent_of_time_dependencies(seed, story_engine, map_atlas):
+    seed["calendar"]["opening_minute"] = -1
+    seed["lexicon"]["news_speed_multiplier"] = 0
+    seed["actors"][0]["intents"][0]["scheduled_in"] = {"amount": -1, "unit": "unknown"}
+    seed["clocks"][0]["due_in"] = {"amount": "garbage", "unit": "unknown"}
+    assert [(i.code, i.path) for i in validate(seed, story_engine, map_atlas)] == [
+        ("invalid_calendar", "calendar"),
+        ("invalid_lexicon", "lexicon"),
+        ("invalid_duration_amount", "actors[0].intents[0].scheduled_in.amount"),
+        ("invalid_duration_amount", "clocks[0].due_in.amount"),
+    ]
+
+
 def test_missing_and_unknown_actor_refs(seed, story_engine, map_atlas):
     seed["actors"][1]["ref"] = "cast-9"
     issues = validate(seed, story_engine, map_atlas)
@@ -99,6 +169,49 @@ def test_missing_and_unknown_actor_refs(seed, story_engine, map_atlas):
         ("missing_actor", "actors"), ("unknown_actor_ref", "actors[1].ref")
     }
     assert "opp-1" in next(i.message for i in issues if i.code == "missing_actor")
+
+
+@pytest.mark.parametrize("collection,path", [
+    ("facts", "facts[1].id"),
+    ("rules", "rules[1].id"),
+    ("clocks", "clocks[1].id"),
+    ("reader_promises", "reader_promises[1].id"),
+])
+def test_duplicate_seed_ids(seed, story_engine, map_atlas, collection, path):
+    seed["facts"][0]["nobody_knows"] = True
+    seed[collection].append(deepcopy(seed[collection][0]))
+    assert [(i.code, i.path, i.severity) for i in validate(seed, story_engine, map_atlas)] == [
+        ("duplicate_ref", path, "error")
+    ]
+    seed[collection][1]["id"] += "-other"
+    assert validate(seed, story_engine, map_atlas) == []
+
+
+@pytest.mark.parametrize("collection,path", [
+    ("agendas", "actors[0].agendas[1].id"),
+    ("intents", "actors[0].intents[1].id"),
+])
+def test_duplicate_actor_ids(seed, story_engine, map_atlas, collection, path):
+    items = seed["actors"][0][collection]
+    items.append(deepcopy(items[0]))
+    assert [(i.code, i.path, i.severity) for i in validate(seed, story_engine, map_atlas)] == [
+        ("duplicate_ref", path, "error")
+    ]
+    items[1]["id"] += "-other"
+    assert validate(seed, story_engine, map_atlas) == []
+
+
+def test_agenda_and_intent_ids_are_scoped_to_actor(seed, story_engine, map_atlas):
+    seed["actors"][1]["agendas"] = deepcopy(seed["actors"][0]["agendas"])
+    seed["actors"][1]["intents"] = deepcopy(seed["actors"][0]["intents"])
+    assert validate(seed, story_engine, map_atlas) == []
+
+
+def test_seed_ids_are_scoped_to_collection(seed, story_engine, map_atlas):
+    for collection in ("rules", "clocks", "reader_promises"):
+        seed[collection][0]["id"] = "fact-1"
+    seed["actors"][0]["intents"][0]["id"] = "agenda-1"
+    assert validate(seed, story_engine, map_atlas) == []
 
 
 def test_major_actor_rules(seed, story_engine, map_atlas):
@@ -131,6 +244,31 @@ def test_hidden_fact_requires_awareness(seed, story_engine, map_atlas, state, ex
     seed["facts"][0]["sensitivity"] = "hidden"
     seed["knowledge"][0]["state"] = state
     assert [i.code for i in validate(seed, story_engine, map_atlas)] == expected
+
+
+@pytest.mark.parametrize("sensitivity", ["Secret", "must_not_reveal", "", None, []])
+def test_invalid_sensitivity(seed, story_engine, map_atlas, sensitivity):
+    seed["facts"][0]["sensitivity"] = sensitivity
+    seed["knowledge"] = []
+    assert [(i.code, i.path, i.severity) for i in validate(seed, story_engine, map_atlas)] == [
+        ("invalid_sensitivity", "facts[0].sensitivity", "error")
+    ]
+
+
+@pytest.mark.parametrize("visibility", ["Secret", "hidden", "", None, []])
+def test_invalid_visibility(seed, story_engine, map_atlas, visibility):
+    seed["relations"][0]["visibility"] = visibility
+    assert [(i.code, i.path, i.severity) for i in validate(seed, story_engine, map_atlas)] == [
+        ("invalid_visibility", "relations[0].visibility", "error")
+    ]
+
+
+@pytest.mark.parametrize("sensitivity", ["public", "hidden", "secret"])
+@pytest.mark.parametrize("visibility", ["public", "secret"])
+def test_valid_sensitivity_and_visibility(seed, story_engine, map_atlas, sensitivity, visibility):
+    seed["facts"][0]["sensitivity"] = sensitivity
+    seed["relations"][0]["visibility"] = visibility
+    assert validate(seed, story_engine, map_atlas) == []
 
 
 def test_enum_and_reference_errors(seed, story_engine, map_atlas):

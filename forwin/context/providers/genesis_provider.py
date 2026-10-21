@@ -36,7 +36,11 @@ class GenesisContextProvider:
                     genesis_story_engine = story_engine
                     genesis_world_overview = str(world_bible.get("overview", "") or "")
                     long_arcs = story_engine.get("long_arcs") if isinstance(story_engine.get("long_arcs"), list) else []
-                    genesis_story_engine_summary = "；".join(str(item).strip() for item in long_arcs if str(item).strip())
+                    summaries = [
+                        str(item.get("summary") or "").strip() if isinstance(item, dict) else str(item).strip()
+                        for item in long_arcs
+                    ]
+                    genesis_story_engine_summary = "；".join(summary for summary in summaries if summary)
                     genesis_refs = {
                         "genesis_revision_id": str(getattr(genesis_revision, "id", "") or ""),
                         "genesis_revision_number": str(getattr(genesis_revision, "revision", "") or ""),

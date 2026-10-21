@@ -9,12 +9,78 @@ import unittest
 from pathlib import Path
 
 from forwin.api_pages import render_home_page, render_publishers_page
+from forwin.api_pages_shared import PAGE_DOM_HELPERS_JS, join_page_assets
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ApiPagesRenderingTests(unittest.TestCase):
+    def test_story_engine_editor_uses_structured_items_and_actor_ids(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required for Genesis editor checks")
+        script = join_page_assets("home/app_state.js", "home/app_genesis.js")
+        script = script.replace("@@EXTENSION_READY@@", "false").replace(
+            "@@EXTENSION_INSTALL_PATH@@", '""'
+        ).replace("@@PAGE_DOM_HELPERS_JS@@", PAGE_DOM_HELPERS_JS)
+        checks = """
+const assert = require('node:assert/strict');
+currentGenesisStage = 'story_engine';
+currentGenesisDrafts.story_engine = {
+  core_cast: [{id: 'cast-1', name: 'A'}],
+  opposition: [{id: 'opp-1', name: 'B'}],
+  factions: [{id: 'faction-1', name: 'C'}],
+};
+const relationship = genesisItemDefinition('story_engine', 'relationship_axes');
+const arc = genesisItemDefinition('story_engine', 'long_arcs');
+assert.ok(relationship, 'relationships must be editable item collections');
+assert.ok(arc, 'long arcs must be editable item collections');
+assert.deepEqual(relationship.template, {source: '', target: '', edge_type: '', note: '', visibility: 'public'});
+assert.deepEqual(arc.template, {id: 'long-arc-new', summary: '', owner_refs: []});
+assert.deepEqual(GENESIS_STAGE_FORM_FIELDS.story_engine.map(field => field.path), ['reader_promises']);
+for (const path of ['source', 'target']) {
+  const field = relationship.fields.find(field => field.path === path);
+  assert.equal(field.kind, 'reference');
+  assert.deepEqual(genesisReferenceOptions(field).map(option => option.value), ['cast-1', 'opp-1', 'faction-1']);
+}
+assert.equal(genesisReferenceOptions('core_cast')[0].value, 'cast-1');
+assert.equal(genesisReferenceOptions('opposition')[0].value, 'opp-1');
+const cast = genesisItemDefinition('story_engine', 'core_cast');
+const secrets = cast.fields.find(field => field.path === 'secrets');
+assert.equal(secrets.kind, 'list');
+assert.deepEqual(genesisReadFieldValue(secrets, {value: 'A hidden debt'}), ['A hidden debt']);
+assert.deepEqual(cast.template.secrets, []);
+assert.equal('secret' in cast.template, false);
+const owners = arc.fields.find(field => field.path === 'owner_refs');
+assert.deepEqual(genesisReadFieldValue(owners, {value: 'cast-1'}), ['cast-1']);
+currentGenesisProjectId = 'project-1';
+runGenesisAction = async action => action();
+renderGenesisWorkspace = () => {};
+setGlobalStatus = () => {};
+globalThis.loadBooks = async () => {};
+const writes = [];
+globalThis.requestJson = async (url, options) => {
+  const payload = JSON.parse(options.body);
+  writes.push(payload.world.story_engine);
+  return {pack: {world: payload.world}};
+};
+(async () => {
+  for (const [collection, expectedId] of [['core_cast', 'cast-1'], ['opposition', 'opp-1'], ['long_arcs', 'long-arc-1']]) {
+    currentGenesisDrafts.story_engine = {};
+    currentGenesisItemCollection = collection;
+    await createGenesisItem();
+    assert.equal(writes.at(-1)[collection][0].id, expectedId);
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(
+            [node, "-"],
+            input="const window = {addEventListener() {}};\n" + script + checks,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def _assert_rendered_inline_scripts_parse(self, html: str) -> None:
         node = shutil.which("node")
         if node is None:

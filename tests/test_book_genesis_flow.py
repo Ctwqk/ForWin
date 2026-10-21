@@ -794,6 +794,48 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(envelope.base_soft_min, 7)
         self.assertEqual(envelope.base_soft_max, 11)
 
+    def test_patch_story_engine_persists_structured_entities_and_relations(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate({
+                "title": "Structured Genesis",
+                "premise": "A courier must recover missing evidence.",
+                "genre": "mystery",
+            })
+        )
+        detail = api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate({
+                "world": {"story_engine": {
+                    "core_cast": [{"name": "Courier", "secret": "An unpaid debt"}],
+                    "factions": [{"name": "Council"}],
+                    "opposition": [{"name": "Inspector"}],
+                    "relationship_axes": [{
+                        "source": "Courier", "target": "Inspector",
+                        "edge_type": "rival_of", "visibility": "secret",
+                    }],
+                    "long_arcs": [{"summary": "Recover the evidence", "owner_refs": ["Courier", "Council", "missing"]}],
+                    "reader_promises": ["An earned resolution"],
+                }},
+            }),
+        )
+        story_engine = detail.pack.world["story_engine"]
+        self.assertEqual(story_engine["core_cast"][0]["id"], "cast-1")
+        self.assertEqual(story_engine["core_cast"][0]["secrets"], ["An unpaid debt"])
+        self.assertNotIn("secret", story_engine["core_cast"][0])
+        self.assertEqual(story_engine["factions"][0]["id"], "faction-1")
+        self.assertEqual(story_engine["opposition"][0]["id"], "opp-1")
+        self.assertEqual(story_engine["relationship_axes"], [{
+            "source": "cast-1", "target": "opp-1", "edge_type": "rival_of",
+            "note": "", "visibility": "secret",
+        }])
+        self.assertEqual(story_engine["long_arcs"], [{
+            "id": "long-arc-1", "summary": "Recover the evidence",
+            "owner_refs": ["cast-1", "faction-1"],
+        }])
+        self.assertEqual(story_engine["reader_promises"], ["An earned resolution"])
+        reloaded = api_module.get_project_genesis(created.project_id)
+        self.assertEqual(reloaded.pack.world["story_engine"], story_engine)
+
     def test_refine_stage_updates_stage_json_and_records_instruction_trace(
         self,
     ) -> None:
@@ -908,8 +950,8 @@ class BookGenesisFlowTests(unittest.TestCase):
             "更阴郁地害怕拖累家人",
         )
         self.assertEqual(
-            detail.pack.world["story_engine"]["core_cast"][0]["secret"],
-            "对旧秩序有复杂阴影",
+            detail.pack.world["story_engine"]["core_cast"][0]["secrets"],
+            ["对旧秩序有复杂阴影"],
         )
         self.assertEqual(
             detail.pack.world["story_engine"]["factions"][0]["name"], "城防司"

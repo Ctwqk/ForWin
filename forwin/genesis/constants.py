@@ -130,9 +130,10 @@ _GENESIS_STAGE_HARD_RULES = {
         "如果已有 culture_profiles，优先把文化 id 绑定到 submaps、regions、nodes。",
     ],
     "story_engine": [
-        "core_cast 不是人名清单；每个核心角色都要有欲望、恐惧、秘密或长期矛盾来源。",
-        "factions 与 opposition 要和地图/地区/据点形成对应关系，不能悬空。",
-        "reader_promises 与 long_arcs 要能解释全书为什么值得追更，而不是重复世界观说明。",
+        "core_cast 不是人名清单；每个核心角色都要有欲望、恐惧、secrets 字符串列表或长期矛盾来源，不输出 secret。",
+        "core_cast、factions、opposition 的 id 必须稳定且全局唯一，分别使用 cast-{n}、faction-{n}、opp-{n} 默认值；factions 与 opposition 要和地图/地区/据点形成对应关系，不能悬空。",
+        "relationship_axes 必须是含 source、target、edge_type、note、visibility 的对象列表；source/target 引用实体 id，edge_type 使用允许的世界关系类型，visibility 只能为 public 或 secret，默认 public。",
+        "reader_promises 保持字符串列表；long_arcs 使用含 id、summary、owner_refs 的对象列表，默认 id 为 long-arc-{n}，owner_refs 引用实体 id；两者要能解释全书为什么值得追更，而不是重复世界观说明。",
         "优先保留并复用已有 culture_profile_id、home_subworld、home_region、base_region 等锚点。",
     ],
     "book_blueprint": [

@@ -351,6 +351,9 @@
     function genesisReferenceOptions(field) {
       const source = typeof field === 'string' ? field : field?.source;
       if (!source) return [];
+      if (source === 'story_entities') {
+        return ['core_cast', 'opposition', 'factions'].flatMap((collection) => genesisReferenceOptions(collection));
+      }
       const sourceMap = {
         culture_profiles: { stage: 'world', path: 'world_bible.culture_profiles' },
         submaps: { stage: 'map', path: 'submaps' },
@@ -1050,7 +1053,9 @@
           }
           if (nextItem && typeof nextItem === 'object' && typeof nextItem.id === 'string' && /(^|-)new$/.test(nextItem.id)) {
             const collectionTail = String(definition.collection || '').split('.').pop() || 'item';
-            const normalizedPrefix = collectionTail.replace(/_profiles$|_codex$|_interfaces$|_conflicts$|s$/g, '') || 'item';
+            const normalizedPrefix = currentGenesisStage === 'story_engine'
+              ? nextItem.id.replace(/-?new$/, '')
+              : (collectionTail.replace(/_profiles$|_codex$|_interfaces$|_conflicts$|s$/g, '') || 'item');
             nextItem.id = `${normalizedPrefix}-${items.length + 1}`;
           }
           items.push(nextItem);

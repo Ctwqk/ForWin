@@ -51,9 +51,7 @@
         { path: 'topology_rules', label: '空间拓扑规则', kind: 'list', help: '每行一条移动、边界或空间成本规则。' },
       ],
       story_engine: [
-        { path: 'relationship_axes', label: '关系轴', kind: 'list', help: '每行一条长期关系轴。' },
         { path: 'reader_promises', label: '读者承诺', kind: 'list', help: '每行一条要持续兑现的读者承诺。' },
-        { path: 'long_arcs', label: '长期叙事引擎', kind: 'list', help: '每行一条长期推动线。' },
       ],
       book_blueprint: [
         { path: 'summary', label: '蓝图总览', kind: 'textarea' },
@@ -616,11 +614,12 @@
           collection: 'core_cast',
           label: '角色',
           template: {
+            id: 'cast-new',
             name: '新角色',
             role: '',
             desire: '',
             fear: '',
-            secret: '',
+            secrets: [],
             culture_profile_id: '',
             home_subworld: '',
             home_region: '',
@@ -632,11 +631,12 @@
             faction_memberships: [],
           },
           fields: [
+            { path: 'id', label: '角色 ID' },
             { path: 'name', label: '角色名', name_generation_kind: 'person', name_generation_count: 1 },
             { path: 'role', label: '角色定位' },
             { path: 'desire', label: '欲望 / 目标', kind: 'textarea' },
             { path: 'fear', label: '恐惧 / 风险', kind: 'textarea' },
-            { path: 'secret', label: '秘密', kind: 'textarea' },
+            { path: 'secrets', label: '秘密', kind: 'list', help: '每行一条秘密。' },
             { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
             { path: 'home_subworld', label: '家乡所在子世界', kind: 'reference', source: 'submaps' },
             { path: 'home_region', label: '家乡所在地区', kind: 'reference', source: 'regions' },
@@ -708,6 +708,7 @@
           collection: 'opposition',
           label: '对手盘',
           template: {
+            id: 'opp-new',
             name: '新对手',
             role: '',
             desire: '',
@@ -721,6 +722,7 @@
             backing_factions: [],
           },
           fields: [
+            { path: 'id', label: '对手 ID' },
             { path: 'name', label: '对手名', name_generation_kind: 'person', name_generation_count: 1 },
             { path: 'role', label: '对手定位' },
             { path: 'desire', label: '欲望 / 主张', kind: 'textarea' },
@@ -732,6 +734,34 @@
             { path: 'base_location', label: '主要地点', kind: 'reference', source: 'nodes' },
             { path: 'backing_faction', label: '背后势力', kind: 'reference', source: 'factions' },
             { path: 'backing_factions', label: '背后势力列表', kind: 'list', help: '每行一个势力名。' },
+          ],
+        },
+        {
+          collection: 'relationship_axes',
+          label: '关系轴',
+          template: {source: '', target: '', edge_type: '', note: '', visibility: 'public'},
+          fields: [
+            { path: 'source', label: '关系来源', kind: 'reference', source: 'story_entities' },
+            { path: 'target', label: '关系目标', kind: 'reference', source: 'story_entities' },
+            { path: 'edge_type', label: '关系类型' },
+            { path: 'note', label: '关系说明', kind: 'textarea' },
+            {
+              path: 'visibility', label: '可见性', kind: 'select',
+              options: [
+                { value: 'public', label: '公开' },
+                { value: 'secret', label: '秘密' },
+              ],
+            },
+          ],
+        },
+        {
+          collection: 'long_arcs',
+          label: '长期叙事引擎',
+          template: {id: 'long-arc-new', summary: '', owner_refs: []},
+          fields: [
+            { path: 'id', label: '长期叙事 ID' },
+            { path: 'summary', label: '长期推动线', kind: 'textarea' },
+            { path: 'owner_refs', label: '关联角色 / 势力', kind: 'list', help: '每行一个角色、对手或势力 ID。' },
           ],
         },
       ],

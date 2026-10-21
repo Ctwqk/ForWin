@@ -13,6 +13,7 @@ from forwin.world_templates import (
     default_world_extensions,
 )
 from forwin.models.project import Project
+from forwin.protocol.book_state import WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _deep_merge,
     _empty_stage_world,
@@ -453,6 +454,18 @@ def _normalize_story_engine_payload(
             )
         return footprints
 
+    entity_ids: set[str] = set()
+
+    def _entity_id(value: Any, default: str) -> str:
+        base = str(value or "").strip() or default
+        candidate = base
+        suffix = 2
+        while candidate in entity_ids:
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        entity_ids.add(candidate)
+        return candidate
+
     core_cast = []
     for item in (normalized.get("core_cast") or fallback.get("core_cast") or []):
         if not isinstance(item, dict):
@@ -461,13 +474,18 @@ def _normalize_story_engine_payload(
         culture_profile_id = str(item.get("culture_profile_id", "")).strip()
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
+        secrets = item.get("secrets")
+        if not isinstance(secrets, list):
+            secret = item.get("secret")
+            secrets = [secret] if isinstance(secret, str) and secret.strip() else []
         core_cast.append(
             {
+                "id": _entity_id(item.get("id"), f"cast-{len(core_cast) + 1}"),
                 "name": str(item.get("name", "")).strip() or "未命名角色",
                 "role": str(item.get("role", "")).strip(),
                 "desire": str(item.get("desire", "")).strip(),
                 "fear": str(item.get("fear", "")).strip(),
-                "secret": str(item.get("secret", "")).strip(),
+                "secrets": [str(value).strip() for value in secrets if str(value).strip()],
                 "culture_profile_id": culture_profile_id,
                 "home_subworld": _normalize_subworld_ref(item.get("home_subworld", "")),
                 "home_region": str(item.get("home_region", "")).strip(),
@@ -480,13 +498,10 @@ def _normalize_story_engine_payload(
             }
         )
     factions = []
-    faction_ids: set[str] = set()
     for item in (normalized.get("factions") or fallback.get("factions") or []):
         if not isinstance(item, dict):
             continue
-        faction_id = str(item.get("id", "")).strip() or f"faction-{len(factions) + 1}"
-        if faction_id in faction_ids:
-            faction_id = f"{faction_id}-{len(factions) + 1}"
+        faction_id = _entity_id(item.get("id"), f"faction-{len(factions) + 1}")
         footprints = _normalize_footprints(
             item.get("footprint"),
             fallback_subworld=_normalize_subworld_ref(item.get("base_subworld", "")),
@@ -512,7 +527,6 @@ def _normalize_story_engine_payload(
                 "footprint": footprints,
             }
         )
-        faction_ids.add(faction_id)
     faction_name_to_id = {
         str(item.get("name", "")).strip(): str(item.get("id", "")).strip()
         for item in factions
@@ -548,6 +562,7 @@ def _normalize_story_engine_payload(
             culture_profile_id = ""
         opposition.append(
             {
+                "id": _entity_id(item.get("id"), f"opp-{len(opposition) + 1}"),
                 "name": str(item.get("name", "")).strip() or "未命名对手",
                 "role": str(item.get("role", "")).strip(),
                 "desire": str(item.get("desire", "")).strip(),
@@ -561,13 +576,53 @@ def _normalize_story_engine_payload(
                 "backing_factions": backing_factions,
             }
         )
+    entity_name_to_id = {}
+    for item in core_cast + opposition + factions:
+        entity_name_to_id.setdefault(item["name"], item["id"])
+
+    def _normalize_entity_ref(value: Any) -> str:
+        text = str(value or "").strip()
+        if text in entity_ids:
+            return text
+        return entity_name_to_id.get(text, "")
+
+    relationship_axes = []
+    for item in (normalized.get("relationship_axes") or fallback.get("relationship_axes") or []):
+        if isinstance(item, str) and item.strip():
+            item = {"note": item}
+        if not isinstance(item, dict):
+            continue
+        edge_type = str(item.get("edge_type") or "").strip()
+        visibility = str(item.get("visibility") or "").strip()
+        relationship_axes.append({
+            "source": _normalize_entity_ref(item.get("source")),
+            "target": _normalize_entity_ref(item.get("target")),
+            "edge_type": edge_type if edge_type in WORLD_EDGE_TYPES else "",
+            "note": str(item.get("note") or "").strip(),
+            "visibility": visibility if visibility in {"public", "secret"} else "public",
+        })
+
+    long_arcs = []
+    for item in (normalized.get("long_arcs") or fallback.get("long_arcs") or []):
+        if isinstance(item, str) and item.strip():
+            item = {"summary": item}
+        if not isinstance(item, dict):
+            continue
+        long_arcs.append({
+            "id": str(item.get("id") or "").strip() or f"long-arc-{len(long_arcs) + 1}",
+            "summary": str(item.get("summary") or "").strip(),
+            "owner_refs": [
+                ref for value in (item.get("owner_refs") or [])
+                if (ref := _normalize_entity_ref(value))
+            ],
+        })
     return {
         "core_cast": core_cast,
         "factions": factions,
         "opposition": opposition,
-        "relationship_axes": [str(item).strip() for item in (normalized.get("relationship_axes") or fallback.get("relationship_axes") or []) if str(item).strip()],
+        "relationship_axes": relationship_axes,
         "reader_promises": [str(item).strip() for item in (normalized.get("reader_promises") or fallback.get("reader_promises") or []) if str(item).strip()],
-        "long_arcs": [str(item).strip() for item in (normalized.get("long_arcs") or fallback.get("long_arcs") or []) if str(item).strip()],
+        "long_arcs": long_arcs,
     }
 
 

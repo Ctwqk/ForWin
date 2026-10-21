@@ -9,6 +9,7 @@ from forwin.genesis.constants import (
 )
 from typing import Any
 from forwin.models.project import Project
+from forwin.protocol.book_state import WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _locked_stage_context,
     _pack_stage_payload,
@@ -78,8 +79,13 @@ def _build_stage_generation_messages(
             (
                 "输出要求",
                 "返回 StoryEngine JSON，至少包含 core_cast、factions、opposition、relationship_axes、reader_promises、long_arcs。"
+                "core_cast、factions、opposition 每项必须有稳定且全局唯一的 id，默认分别为 cast-{n}、faction-{n}、opp-{n}。"
+                "core_cast 使用 secrets 字符串列表，不使用 secret。"
+                "relationship_axes 每项为 {source, target, edge_type, note, visibility}，source/target 引用上述实体 id，visibility 为 public 或 secret（默认 public）。"
+                "long_arcs 每项为 {id, summary, owner_refs}，默认 id 为 long-arc-{n}，owner_refs 为上述实体 id 列表；reader_promises 保持字符串列表。"
                 "角色、势力、对手要尽量复用已有 map/world 锚点。"
             ),
+            ("relationship_axes.edge_type", sorted(WORLD_EDGE_TYPES)),
             ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
             ("已锁定阶段上下文（视为当前真值）", locked_context),
             ("BookBrief", book_brief),

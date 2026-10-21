@@ -322,7 +322,7 @@ def test_new_site_creates_map_node_edge_and_site_state() -> None:
     assert delta is not None and result.issues == ()
     tower = world.stable("map_node", "watchtower")
     ferry = world.stable("map_node", "ferry")
-    tower_node, tower_edge, ferry_node = delta.map_patches
+    tower_node, tower_edge, ferry_node, ferry_edge = delta.map_patches
     assert (tower_node.target_type, tower_node.target_id, str(tower_node.op)) == ("map_node", tower, "create")
     assert {key: tower_node.new_value[key] for key in ("id", "subworld_id", "region_id", "node_type", "name")} == {
         "id": tower, "subworld_id": SUBWORLD, "region_id": REGION, "node_type": "landmark", "name": "watchtower",
@@ -335,6 +335,8 @@ def test_new_site_creates_map_node_edge_and_site_state() -> None:
         ferry, REGION, SUBWORLD,
     )
     assert ferry_node.new_value["node_type"] == "site"
+    # A region-only site is joined to the region anchor node (the region's first map node).
+    assert (ferry_edge.new_value["from_node_id"], ferry_edge.new_value["to_node_id"]) == (ferry, world.loc(1))
     site_states = [patch for patch in delta.node_patches if str(patch.node_type) == "site_state"]
     assert [(str(patch.op), patch.new_value["profile"]["map_node_id"]) for patch in site_states] == [
         ("create", tower), ("create", ferry),
@@ -347,6 +349,7 @@ def test_new_site_creates_map_node_edge_and_site_state() -> None:
     runtime = _runtime(Session, world, 1)
     assert set(runtime.map.nodes_by_id) >= {tower, ferry}
     assert runtime.map.shortest_path(world.loc(2), tower).reachable
+    assert runtime.map.shortest_path(world.loc(1), ferry).reachable
     assert resolve_world_node_location_id(runtime.world, site_states[0].node_id) == tower
     assert runtime.world.get_state(world.hero)["location_id"] == tower
 
@@ -583,12 +586,13 @@ def test_unknown_field_and_missing_old_value_block_translation() -> None:
     result = _translate(Session, world, 1, {
         "entity_changes": [
             {"ref": world.hero, "field": "not_a_field", "new_value": "x", "evidence": "e1"},
-            {"ref": world.hero, "field": "public_identity", "new_value": "a clerk", "evidence": "e2"},
+            # Only a missing parent dict blocks: a missing leaf merges into its parent.
+            {"ref": world.hero, "field": "talent_profile.rank", "new_value": "a", "evidence": "e2"},
         ],
         "relation_changes": [
             {
                 "source_ref": world.rival, "target_ref": world.hero, "edge_type": "rival_of",
-                "op": "set", "field": "state.intensity", "new_value": 3, "evidence": "e3",
+                "op": "set", "field": "metadata.notes.tone", "new_value": "cold", "evidence": "e3",
             },
             # The schema rejects unknown edge types; an unvalidated item still cannot pass.
             RelationChange.model_construct(
@@ -690,7 +694,8 @@ def test_every_non_create_patch_has_field_path_and_old_value() -> None:
             ],
             "knowledge_events": [{"observer_ref": world.hero, "fact_ref": world.fact("fact-2"), "state": "knows",
                                   "channel": "witnessed", "evidence": "e"}],
-            "movements": [{"entity_ref": world.hero, "from_ref": world.loc(1), "to_ref": world.loc(3), "evidence": "e"}],
+            "movements": [{"entity_ref": world.hero, "from_ref": world.loc(1), "to_ref": world.loc(3),
+                           "discovers_route": True, "evidence": "e"}],
             "item_transfers": [{"item_ref": item, "from_ref": world.hero, "to_ref": world.rival, "evidence": "e"}],
             "thread_beats": [{"thread_ref": thread, "beat_type": "resolution", "evidence": "e"}],
             "intent_interactions": [{"intent_ref": world.node("intent", "cast-1/intent-1"), "effect": "disrupted", "evidence": "e"}],
@@ -716,8 +721,9 @@ def test_route_discovery_appends_visible_refs() -> None:
     world = _seed_world(Session)
 
     result = _translate(Session, world, 1, {"movements": [
-        {"entity_ref": world.hero, "from_ref": world.loc(1), "to_ref": world.loc(3), "evidence": "e1"},
-        {"entity_ref": world.rival, "from_ref": world.loc(2), "to_ref": world.loc(3), "evidence": "e2"},
+        {"entity_ref": world.hero, "from_ref": world.loc(1), "to_ref": world.loc(3), "discovers_route": True, "evidence": "e1"},
+        # The rival has no cognition overlay, so every route is already open to it.
+        {"entity_ref": world.rival, "from_ref": world.loc(2), "to_ref": world.loc(3), "discovers_route": True, "evidence": "e2"},
     ]})
 
     delta = result.delta
@@ -734,7 +740,201 @@ def test_route_discovery_appends_visible_refs() -> None:
     assert runtime.map.shortest_path(world.loc(1), world.loc(3), observer=("character", world.hero)).reachable
 
     known = _translate(Session, world, 2, {"movements": [
-        {"entity_ref": world.hero, "from_ref": world.loc(3), "to_ref": world.loc(1), "evidence": "e3"},
+        {"entity_ref": world.hero, "from_ref": world.loc(3), "to_ref": world.loc(1), "discovers_route": True, "evidence": "e3"},
     ]})
     assert known.delta.cognition_patches == []
+    engine.dispose()
+
+
+def test_route_unknown_to_mover_is_not_discovered_without_the_flag() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    result = _translate(Session, world, 1, {"movements": [
+        {"entity_ref": world.hero, "from_ref": world.loc(1), "to_ref": world.loc(3), "evidence": "e1"},
+    ]})
+
+    # The review gate, not the translator, decides whether the move was possible.
+    assert result.delta is not None and result.issues == ()
+    assert result.delta.cognition_patches == []
+    assert result.delta.metadata["movements"][0]["to_id"] == world.loc(3)
+    engine.dispose()
+
+
+def test_first_time_field_sets_merge_into_their_parent_and_rewind() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    rival_edge = world.node("edge", "opp-1/rival_of/cast-1")
+    profile_before = _runtime(Session, world, 0).world.get_node(world.hero).profile
+
+    result = _translate(Session, world, 1, {
+        "entity_changes": [{"ref": world.hero, "field": "public_identity", "new_value": "a clerk", "evidence": "e1"}],
+        "relation_changes": [{
+            "source_ref": world.rival, "target_ref": world.hero, "edge_type": "rival_of",
+            "op": "set", "field": "state.intensity", "new_value": 3, "evidence": "e2",
+        }],
+    })
+
+    delta = result.delta
+    assert delta is not None and result.issues == ()
+    (profile,) = delta.node_patches
+    assert (str(profile.op), profile.field_path, profile.new_value, profile.old_value) == (
+        "merge", "profile", {"public_identity": "a clerk"}, profile_before,
+    )
+    (edge,) = delta.edge_patches
+    assert (edge.edge_id, str(edge.op), edge.field_path, edge.new_value, edge.old_value) == (
+        rival_edge, "merge", "state", {"intensity": 3}, {},
+    )
+    _commit(Session, world, 1, result)
+    after = _runtime(Session, world, 1)
+    assert after.world.get_node(world.hero).profile == {**profile_before, "public_identity": "a clerk"}
+    assert after.world.edges_by_id[rival_edge].state == {"intensity": 3}
+    assert "public_identity" not in _runtime(Session, world, 0).world.get_node(world.hero).profile
+
+    with Session.begin() as session:
+        repo = BookStateRepository(session)
+        repo.invalidate_project_range(world.project_id, from_chapter=1, through_chapter=1)
+        assert repo.get_world_node(world.hero).profile == profile_before
+        assert repo.get_world_edge(rival_edge).state == {}
+    engine.dispose()
+
+
+def test_symmetric_relations_match_either_direction() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    seeded = world.node("edge", "opp-1/rival_of/cast-1")
+    reversed_rival = {"source_ref": world.hero, "target_ref": world.rival, "edge_type": "rival_of", "evidence": "e"}
+
+    first = _translate(Session, world, 1, {"relation_changes": [
+        {**reversed_rival, "op": "create"},
+        {**reversed_rival, "op": "set", "field": "weight", "new_value": 0.5},
+        {"source_ref": world.hero, "target_ref": world.rival, "edge_type": "ally_of", "op": "create", "evidence": "e"},
+    ]})
+
+    assert _issues(first) == [("warning", "relation_exists", "relation_changes[0]")]
+    weight, ally = first.delta.edge_patches
+    assert (weight.edge_id, str(weight.op), weight.field_path, weight.old_value) == (seeded, "set", "weight", 1.0)
+    assert (weight.source_id, weight.target_id) == (world.rival, world.hero)
+    assert ally.new_value["directionality"] == "undirected"
+    _commit(Session, world, 1, first)
+
+    second = _translate(Session, world, 2, {"relation_changes": [
+        {**reversed_rival, "op": "end"},
+        {"source_ref": world.rival, "target_ref": world.hero, "edge_type": "ally_of", "op": "end", "evidence": "e"},
+    ]})
+    assert [(patch.edge_id, str(patch.op)) for patch in second.delta.edge_patches] == [
+        (seeded, "deactivate"), (ally.edge_id, "deactivate"),
+    ]
+    _commit(Session, world, 2, second)
+    edges = _runtime(Session, world, 2).world.edges_by_id
+    assert (edges[seeded].is_active, edges[ally.edge_id].is_active) == (False, False)
+    engine.dispose()
+
+
+def test_directed_relation_with_only_the_reverse_edge_is_a_direction_mismatch() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    created = _commit(Session, world, 1, _translate(Session, world, 1, {"relation_changes": [{
+        "source_ref": world.hero, "target_ref": world.rival, "edge_type": "mentor_of", "op": "create", "evidence": "e",
+    }]}))
+    assert created.edge_patches[0].new_value["directionality"] == "directed"
+
+    reverse = {"source_ref": world.rival, "target_ref": world.hero, "edge_type": "mentor_of", "evidence": "e"}
+    result = _translate(Session, world, 2, {"relation_changes": [
+        {**reverse, "op": "create"},
+        {**reverse, "op": "end"},
+        {**reverse, "op": "set", "field": "weight", "new_value": 0.5},
+    ]})
+
+    assert result.delta is not None and result.delta.edge_patches == []
+    assert _issues(result) == [
+        ("warning", "relation_direction_mismatch", f"relation_changes[{index}]") for index in range(3)
+    ]
+    engine.dispose()
+
+
+def test_location_and_holder_entity_changes_become_movement_and_transfer() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    item = world.stable("item", "bronze key")
+    _commit(Session, world, 1, _translate(Session, world, 1, {"item_transfers": [{
+        "new_item": {"name": "bronze key", "kind": "item"}, "from_ref": "", "to_ref": world.hero, "evidence": "e",
+    }]}))
+
+    result = _translate(Session, world, 2, {"entity_changes": [
+        {"ref": world.hero, "field": "location_id", "new_value": world.loc(2), "evidence": "e1"},
+        {"ref": item, "field": "holder_id", "new_value": world.rival, "evidence": "e2"},
+    ]})
+
+    delta = result.delta
+    assert delta is not None and result.issues == ()
+    assert [(patch.node_id, patch.field_path, patch.old_value, patch.new_value) for patch in delta.node_patches] == [
+        (world.hero, "state.location_id", world.loc(1), world.loc(2)),
+        (item, "state.holder_id", world.hero, world.rival),
+    ]
+    assert delta.metadata["movements"] == [{
+        "entity_id": world.hero, "from_id": world.loc(1), "to_id": world.loc(2),
+        "depart_minute": None, "arrive_minute": None, "travel_mode_id": "", "evidence": "e1",
+    }]
+    assert delta.metadata["item_transfers"] == [
+        {"item_id": item, "from_id": world.hero, "to_id": world.rival, "evidence": "e2"},
+    ]
+    _commit(Session, world, 2, result)
+
+    dropped = _translate(
+        Session, world, 3,
+        {"item_transfers": [{"item_ref": item, "from_ref": world.rival, "to_ref": "new:passer-by", "evidence": "e3"}]},
+        decisions=[{"mention_name": "passer-by", "action": "background_generic"}],
+    )
+    assert _issues(dropped) == [("warning", "item_transfer_dropped", "item_transfers[0]")]
+    assert (dropped.delta.node_patches, dropped.delta.metadata["item_transfers"]) == ([], [])
+    engine.dispose()
+
+
+def test_relation_endpoint_map_node_resolves_to_its_site_state() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    tower = world.stable("map_node", "watchtower")
+    faction = world.node("faction", "faction-1")
+    _commit(Session, world, 1, _translate(Session, world, 1, {"new_sites": [
+        {"name": "watchtower", "near_ref": world.loc(2), "evidence": "e"},
+    ]}))
+    controls = {"source_ref": faction, "edge_type": "controls", "op": "create", "evidence": "e"}
+
+    result = _translate(Session, world, 2, {"relation_changes": [{**controls, "target_ref": tower}]})
+
+    (edge,) = result.delta.edge_patches
+    assert (edge.source_id, edge.target_id, edge.edge_family) == (
+        faction, world.stable("site_state", tower), "control_conflict",
+    )
+    _commit(Session, world, 2, result)
+    missing = _translate(Session, world, 3, {"relation_changes": [{**controls, "target_ref": world.loc(3)}]})
+    assert missing.delta is None
+    assert _issues(missing) == [("error", "unresolved_ref", "relation_changes[0].target_ref")]
+    engine.dispose()
+
+
+def test_new_entity_ref_reuses_existing_node_with_matching_name() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    faction = world.node("faction", "faction-1")
+    item = world.stable("item", "Bronze Key")
+    _commit(Session, world, 1, _translate(Session, world, 1, {"item_transfers": [{
+        "new_item": {"name": "Bronze Key", "kind": "item"}, "from_ref": "", "to_ref": world.hero, "evidence": "e",
+    }]}))
+
+    result = _translate(Session, world, 2, {
+        "entity_changes": [{
+            "new_entity": {"name": " 丙 ", "kind": "faction"}, "field": "goal", "new_value": "a new goal", "evidence": "e1",
+        }],
+        "item_transfers": [{
+            "new_item": {"name": "bronze  key", "kind": "item"}, "from_ref": world.hero, "to_ref": world.rival, "evidence": "e2",
+        }],
+    })
+
+    delta = result.delta
+    assert delta is not None and result.issues == ()
+    assert [(str(patch.op), patch.node_id, patch.field_path) for patch in delta.node_patches] == [
+        ("set", faction, "state.goal"), ("set", item, "state.holder_id"),
+    ]
     engine.dispose()

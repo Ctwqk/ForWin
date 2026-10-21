@@ -38,6 +38,7 @@ def build_chapter_delta_messages(
         "knowledge_events 记录 observer_ref、fact_ref 或 new_fact(proposition/truth_value/sensitivity)、"
         "state、channel、source_ref 和秘密标签；记录认知变化而非直接把传闻当真。\n"
         "movements 记录 entity_ref、from_ref、to_ref、时间偏移和 travel_mode_id（只能用给出的出行方式 id）；"
+        "只有正文写明移动者找到或得知所走的路线时，discovers_route 才设为 true，否则保持 false；"
         "new_sites 记录新地点 name、near_ref、region_ref、kind；item_transfers 记录 item_ref 或 new_item、from_ref、to_ref。\n"
         "events 记录 summary、participant_refs、location_ref、significance、visibility；"
         "thread_beats 记录 thread_ref 或 new_thread_title、beat_type；"

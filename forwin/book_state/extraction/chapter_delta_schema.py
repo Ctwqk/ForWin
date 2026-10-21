@@ -101,6 +101,8 @@ class Movement(_ExtractionModel):
     depart_offset: Duration | None = None
     arrive_offset: Duration | None = None
     travel_mode_id: str = ""
+    # True only when the prose shows the mover finding or learning the route it took.
+    discovers_route: bool = False
     evidence: str
 
 

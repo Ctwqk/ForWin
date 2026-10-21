@@ -309,11 +309,8 @@ def _call_json_with_trace_impl(
         if str(item.get("role", "")).strip() == "system"
     )
     attempts_payload: list[dict[str, Any]] = []
-    token_cap = (
-        self.world_seed_max_tokens
-        if str(stage_key or "").split(":")[0] == "world_seed"
-        else self.max_tokens
-    )
+    is_world_seed = str(stage_key or "").split(":")[0] == "world_seed"
+    token_cap = self.world_seed_max_tokens if is_world_seed else self.max_tokens
     max_tokens = min(token_cap, int(max_tokens or token_cap))
     if (
         hasattr(self.llm_client, "api_key")
@@ -334,7 +331,8 @@ def _call_json_with_trace_impl(
         {"temperature": temperature, "max_tokens": max_tokens},
         {
             "temperature": max(0.2, temperature - 0.15),
-            "max_tokens": max(480, min(max_tokens, 900)),
+            # A shrunken retry cannot hold a whole world seed, so it keeps the first budget.
+            "max_tokens": max_tokens if is_world_seed else max(480, min(max_tokens, 900)),
         },
     ]
     for attempt_no, attempt in enumerate(retry_plan, start=1):

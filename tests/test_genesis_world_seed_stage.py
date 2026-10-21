@@ -224,7 +224,8 @@ class WorldSeedServiceTests(unittest.TestCase):
         self.assertEqual(client.calls[0]["max_tokens"], 1600)
 
     def test_world_seed_fallback_marks_degraded(self) -> None:
-        service = BookGenesisService(llm_client=_StubLLM("this is not json"))
+        client = _StubLLM("this is not json")
+        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
 
         pack = self._generate_world_seed(service)
 
@@ -232,6 +233,28 @@ class WorldSeedServiceTests(unittest.TestCase):
         self.assertEqual(pack["world_seed"], fallback_world_seed(story_engine))
         self.assertEqual([actor["ref"] for actor in pack["world_seed"]["actors"]], ["cast-1", "cast-2", "opp-1", "faction-1"])
         self.assertTrue(pack["stage_states"]["world_seed"]["degraded"])
+        self.assertEqual([call["max_tokens"] for call in client.calls], [6000, 6000])
+
+    def test_retry_keeps_world_seed_cap_while_other_stages_shrink(self) -> None:
+        client = _StubLLM("this is not json")
+        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
+        with self.session_factory() as session:
+            project, revision = self._ready_upstream(session, service)
+            revision, _trace = service.refine_stage(
+                session=session, updater=StateUpdater(session), project=project, revision=revision,
+                stage_key="world_seed", instruction="补全初始世界",
+            )
+            session.commit()
+            pack = service.load_pack(revision)
+
+        self.assertEqual([call["max_tokens"] for call in client.calls], [6000, 6000])
+        self.assertTrue(pack["stage_states"]["world_seed"]["degraded"])
+
+        client.calls.clear()
+        service._call_json_with_trace(
+            messages=[{"role": "user", "content": "brief"}], fallback={}, stage_key="brief",
+        )
+        self.assertEqual([call["max_tokens"] for call in client.calls], [1600, 900])
 
     def test_world_seed_whole_stage_refine_normalizes_with_world_seed_budget(self) -> None:
         client = _StubLLM(json.dumps(valid_seed(), ensure_ascii=False))

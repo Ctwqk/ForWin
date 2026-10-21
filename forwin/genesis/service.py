@@ -58,12 +58,14 @@ class BookGenesisService:
         *,
         llm_client: ModelAdapter,
         max_tokens: int = 1600,
+        world_seed_max_tokens: int = 6000,
         skill_router: SkillRouter | None = None,
         skill_prompt_layer_builder: SkillPromptLayerBuilder | None = None,
         artifact_store: object | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.max_tokens = max_tokens
+        self.world_seed_max_tokens = world_seed_max_tokens
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
         self.artifact_store = artifact_store

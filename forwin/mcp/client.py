@@ -899,6 +899,9 @@ class ForWinAPIClient:
             degraded=bool(raw.get("degraded", False)),
             updated_at=str(raw.get("updated_at", "")),
             last_trace_id=str(raw.get("last_trace_id", "")),
+            validation_issues=[
+                item for item in raw.get("validation_issues") or [] if isinstance(item, dict)
+            ],
         )
 
     @staticmethod

@@ -10,7 +10,7 @@ StageKey = Literal[
     "map",
     "story_engine",
     "book_blueprint",
-    "bootstrap",
+    "world_seed",
 ]
 
 STAGE_KEY_ORDER: tuple[str, ...] = (
@@ -19,7 +19,7 @@ STAGE_KEY_ORDER: tuple[str, ...] = (
     "map",
     "story_engine",
     "book_blueprint",
-    "bootstrap",
+    "world_seed",
 )
 
 
@@ -30,6 +30,7 @@ class StageStateView(BaseModel):
     degraded: bool = False
     updated_at: str = ""
     last_trace_id: str = ""
+    validation_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BlockingReasonView(BaseModel):

@@ -344,9 +344,12 @@ class BookGenesisFlowTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "execution_bootstrap": {
-                        "pipeline": "strict_blackbox",
-                        "root_ready": True,
+                    "world_seed": {
+                        "calendar": {
+                            "epoch_label": "旧历",
+                            "opening_minute": 0,
+                            "units": [{"name": "日", "minutes": 1440}],
+                        },
                     },
                 }
             ),
@@ -358,7 +361,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
@@ -557,9 +560,12 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {
-                        "pipeline": "strict_blackbox",
-                        "root_ready": True,
+                    "world_seed": {
+                        "calendar": {
+                            "epoch_label": "旧历",
+                            "opening_minute": 0,
+                            "units": [{"name": "日", "minutes": 1440}],
+                        },
                     },
                 }
             ),
@@ -570,7 +576,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
@@ -707,9 +713,12 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {
-                        "pipeline": "strict_blackbox",
-                        "root_ready": True,
+                    "world_seed": {
+                        "calendar": {
+                            "epoch_label": "旧历",
+                            "opening_minute": 0,
+                            "units": [{"name": "日", "minutes": 1440}],
+                        },
                     },
                 }
             ),
@@ -721,7 +730,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
@@ -1827,7 +1836,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                     "story_engine": {"long_arcs": ["旧格式引擎"]},
                     "book_arc_blueprint": {},
                     "subworld_policy": {},
-                    "execution_bootstrap": {},
+                    "world_seed": {},
                     "stage_states": {},
                 },
                 ensure_ascii=False,

@@ -144,6 +144,17 @@ class SkillRuntimeTests(unittest.TestCase):
         self.assertTrue(layers[0].skill_hash.startswith("sha256:"))
         self.assertIn("Skill: genesis.world-bible", layers[0].content)
 
+        for task_family in ("generate_stage_payload", "refine_stage_payload"):
+            world_seed = router.select(
+                scope="genesis",
+                stage_key="world_seed",
+                task_family=task_family,
+            )
+            self.assertEqual(
+                [item.manifest.name for item in world_seed], ["genesis.world_seed"]
+            )
+        self.assertFalse(any(item.name == "genesis.bootstrap" for item in manifests))
+
     def test_enabled_skill_groups_filter_by_scope_directory(self) -> None:
         _registry, router, _builder = build_skill_runtime_components(
             root=self.skill_root,

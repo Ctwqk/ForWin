@@ -255,7 +255,7 @@ class RoutingMixin:
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
             "band_plan",
             "chapter_plan",
         } or family in {

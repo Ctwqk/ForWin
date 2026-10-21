@@ -20,14 +20,14 @@
       'terminating',
       'cancelled',
     ];
-    const GENESIS_STAGE_ORDER = ['brief', 'world', 'map', 'story_engine', 'book_blueprint', 'bootstrap'];
+    const GENESIS_STAGE_ORDER = ['brief', 'world', 'map', 'story_engine', 'book_blueprint', 'world_seed'];
     const GENESIS_STAGE_FIELD_MAP = {
       brief: 'book_brief',
       world: 'world',
       map: 'world.map_atlas',
       story_engine: 'world.story_engine',
       book_blueprint: 'book_arc_blueprint',
-      bootstrap: 'execution_bootstrap',
+      world_seed: 'world_seed',
     };
     const GENESIS_STAGE_FORM_FIELDS = {
       brief: [
@@ -56,19 +56,17 @@
       book_blueprint: [
         { path: 'summary', label: '蓝图总览', kind: 'textarea' },
       ],
-      bootstrap: [
-        {
-          path: 'start_policy',
-          label: '启动策略',
-          kind: 'select',
-          options: [
-            { value: 'explicit_start_writing_only', label: '显式点击“启动写作”后才开始' },
-            { value: 'manual_handoff', label: '人工交接后再启动' },
-          ],
-        },
-        { path: 'root_ready', label: '根层已准备就绪', kind: 'checkbox' },
-      ],
     };
+    const GENESIS_WORLD_SEED_LISTS = [
+      'actors',
+      'relations',
+      'facts',
+      'knowledge',
+      'rules',
+      'clocks',
+      'reader_promises',
+      'reveal_candidates',
+    ];
     const GENESIS_STAGE_ITEM_TARGETS = {
       world: [
         {

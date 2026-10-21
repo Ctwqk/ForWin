@@ -19,7 +19,7 @@ STAGE_LABELS = {
     "map": "地图与空间拓扑",
     "story_engine": "角色势力与叙事引擎",
     "book_blueprint": "整本书多 Arc 路线图",
-    "bootstrap": "执行契约与启动交接",
+    "world_seed": "初始世界",
 }
 
 

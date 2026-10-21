@@ -681,6 +681,7 @@ class RuntimeContainer:
         service = BookGenesisService(
             llm_client=llm_client,
             max_tokens=min(config.max_tokens, 1600),
+            world_seed_max_tokens=min(config.max_tokens, 6000),
             skill_router=skill_runtime.router,
             skill_prompt_layer_builder=skill_runtime.prompt_layer_builder,
         )

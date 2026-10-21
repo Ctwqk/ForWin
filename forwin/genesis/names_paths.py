@@ -204,6 +204,10 @@ def _set_value_at_path(payload: dict[str, Any], path: str, value: Any) -> None:
     current[final_token] = value
 
 
+class GenesisStageInvalidError(ValueError):
+    """A stage payload fails deterministic validation and cannot be locked."""
+
+
 def _ensure_revision_is_current(session: Session, project: Project, revision: BookGenesisRevision) -> None:
     session.refresh(project)
     current_revision_id = str(getattr(project, "active_genesis_revision_id", "") or "")
@@ -218,7 +222,7 @@ def _initial_pack_dummy_merge(payload: dict[str, Any]) -> dict[str, Any]:
         "world": _empty_stage_world(),
         "book_arc_blueprint": {},
         "subworld_policy": _default_subworld_policy(),
-        "execution_bootstrap": {},
+        "world_seed": {},
         "stage_states": _empty_stage_states(),
     }
     upgraded_payload = dict(payload or {})

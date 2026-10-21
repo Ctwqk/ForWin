@@ -105,9 +105,12 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                         },
                     ],
                 },
-                "execution_bootstrap": {
-                    "pipeline": "strict_blackbox",
-                    "root_ready": True,
+                "world_seed": {
+                    "calendar": {
+                        "epoch_label": "旧历",
+                        "opening_minute": 0,
+                        "units": [{"name": "日", "minutes": 1440}],
+                    },
                 },
             },
         )
@@ -117,7 +120,7 @@ class GenesisHandoffServiceTests(unittest.TestCase):
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
         ):
             revision = service.lock_stage(
                 session=session,

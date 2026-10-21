@@ -13,6 +13,7 @@ class BookGenesisStageState(BaseModel):
     updated_at: str = ""
     last_trace_id: str = ""
     degraded: bool = False
+    validation_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BookGenesisPack(BaseModel):
@@ -20,7 +21,7 @@ class BookGenesisPack(BaseModel):
     world: dict[str, Any] = Field(default_factory=dict)
     book_arc_blueprint: dict[str, Any] = Field(default_factory=dict)
     subworld_policy: dict[str, Any] = Field(default_factory=dict)
-    execution_bootstrap: dict[str, Any] = Field(default_factory=dict)
+    world_seed: dict[str, Any] = Field(default_factory=dict)
     stage_states: dict[str, BookGenesisStageState] = Field(default_factory=dict)
 
 
@@ -60,7 +61,7 @@ class BookGenesisPatchRequest(BaseModel):
     world: dict[str, Any] | None = None
     book_arc_blueprint: dict[str, Any] | None = None
     subworld_policy: dict[str, Any] | None = None
-    execution_bootstrap: dict[str, Any] | None = None
+    world_seed: dict[str, Any] | None = None
     stage_states: dict[str, Any] | None = None
     reason: str = ""
 

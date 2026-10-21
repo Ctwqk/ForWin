@@ -7,6 +7,7 @@ from forwin.genesis import BookGenesisService
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from forwin.writer.llm import LLMClient
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 
@@ -409,6 +410,17 @@ class LLMRouterTests(unittest.TestCase):
         self.assertTrue(client.calls[0]["kwargs"]["codex_allowed"])
         self.assertEqual(client.calls[1]["kwargs"]["task_family"], "chapter_plan_materialization")
         self.assertFalse(client.calls[1]["kwargs"]["codex_allowed"])
+
+    def test_world_seed_stage_routes_as_general_planning_json(self) -> None:
+        for task_family in ("genesis", ""):
+            self.assertEqual(
+                LLMClient._llm_task_route(
+                    task_family=task_family,
+                    stage_key="world_seed",
+                    response_format={"type": "json_object"},
+                ),
+                "planning_json_general",
+            )
 
 
 if __name__ == "__main__":

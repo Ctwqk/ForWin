@@ -13,7 +13,11 @@ from forwin.api_schema import (
     StartWritingRequest,
     StartWritingResponse,
 )
-from forwin.genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.genesis import (
+    GENESIS_STAGE_ORDER,
+    GenesisStageInvalidError,
+    StaleGenesisRevisionError,
+)
 from forwin.genesis.handoff import StartWritingCommand
 from forwin.generation.run_target import resolve_generation_run_target
 from forwin.audit.events import DecisionEventType
@@ -199,7 +203,7 @@ def lock_project_genesis_stage(
                 revision=revision,
                 stage_key=normalized_stage,
             )
-        except StaleGenesisRevisionError as exc:
+        except (GenesisStageInvalidError, StaleGenesisRevisionError) as exc:
             raise HTTPException(409, str(exc)) from exc
         session.commit()
         session.refresh(project)

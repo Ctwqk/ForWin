@@ -726,7 +726,7 @@ symbol = "_GENESIS_STAGE_HARD_RULES"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
-max_literals = 21
+max_literals = 27
 
 [[entry]]
 path = "forwin/genesis/constants.py"

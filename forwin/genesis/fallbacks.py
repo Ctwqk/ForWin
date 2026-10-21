@@ -151,12 +151,4 @@ def _fallback_blueprint(project: Project, pack: dict[str, Any]) -> dict[str, Any
     return {"summary": "", "arcs": arcs}
 
 
-def _fallback_bootstrap(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "pipeline": "strict_blackbox",
-        "root_ready": bool(pack.get("book_arc_blueprint")),
-        "start_policy": "explicit_start_writing_only",
-    }
-
-
 __all__ = [name for name in globals() if not name.startswith("__")]

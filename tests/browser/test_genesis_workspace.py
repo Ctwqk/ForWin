@@ -13,7 +13,7 @@ STAGE_LABELS = [
     "地图与空间拓扑",
     "角色势力与叙事引擎",
     "整本书多 Arc 路线图",
-    "执行契约与启动交接",
+    "初始世界",
 ]
 
 
@@ -37,6 +37,12 @@ def test_genesis_workspace_stage_actions_json_and_items(page, browser_test_base_
         expect(page.locator("#global_status")).to_contain_text("已生成")
         page.locator("#genesis_rerun_stage_btn").click()
         expect(page.locator("#global_status")).to_contain_text("已重生")
+
+    page.get_by_role("button", name=re.compile("初始世界")).click()
+    world_seed_form = page.locator("#genesis_stage_form")
+    expect(world_seed_form).to_contain_text("actors：2")
+    expect(world_seed_form).to_contain_text("[warning] minor_actor_without_location")
+    expect(world_seed_form.locator("input, textarea, select")).to_have_count(0)
 
     page.get_by_role("button", name=re.compile("世界观与背景")).click()
     page.locator("#genesis_item_collection_select").select_option("world_bible.culture_profiles")

@@ -13,7 +13,7 @@ GENESIS_STAGE_ORDER = (
     "map",
     "story_engine",
     "book_blueprint",
-    "bootstrap",
+    "world_seed",
 )
 _STAGE_TO_SECTION = {
     "brief": "book_brief",
@@ -21,7 +21,7 @@ _STAGE_TO_SECTION = {
     "map": "world.map_atlas",
     "story_engine": "world.story_engine",
     "book_blueprint": "book_arc_blueprint",
-    "bootstrap": "execution_bootstrap",
+    "world_seed": "world_seed",
 }
 _PATH_TOKEN_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
 _WORLD_ROOT_KEYS = {
@@ -68,7 +68,7 @@ _GENESIS_STAGE_LABELS = {
     "map": "地图与空间拓扑",
     "story_engine": "角色势力与叙事引擎",
     "book_blueprint": "整本书多 Arc 路线图",
-    "bootstrap": "执行契约与启动交接",
+    "world_seed": "初始世界",
 }
 _WORLD_STAGE_STATE_KEYS = (
     "minimum_world_system",
@@ -107,8 +107,9 @@ _GENESIS_STAGE_SYSTEM_PROMPTS = {
     "book_blueprint": (
         "当前阶段负责搭建整本书多 Arc 蓝图。重点是每段 arc 都有清晰目标、风险、兑现方向，并且全书章节区间连续、逐级升级。"
     ),
-    "bootstrap": (
-        "当前阶段负责把 Genesis 根蓝图转成写作执行契约。不要扩写新设定，只把已有 Genesis 成果整理成明确的启动条件与运行规则。"
+    "world_seed": (
+        "当前阶段负责把已锁定的 Genesis 蓝图展开成开篇时刻的初始世界：本书自己的日历与词表，每个角色与势力的位置、资源、议程和初始意图，"
+        "关系边，事实与秘密的知情分布，规则、时限、读者承诺与揭示候选。只引用上游已有的实体与地点 id，不新增角色、势力或地点。"
     ),
 }
 _GENESIS_STAGE_HARD_RULES = {
@@ -141,9 +142,15 @@ _GENESIS_STAGE_HARD_RULES = {
         "每个 arc 都要有新的目标、风险升级和 payoff_direction，不能只是把 premise 重写一遍。",
         "target_size、soft_min、soft_max 要贴近建议尺寸，不要极端失衡。",
     ],
-    "bootstrap": [
-        "只整理已有 Genesis 结果，不发明新的运行策略字段。",
-        "root_ready 必须反映当前 Genesis 根层是否足以启动写作；start_policy 要简洁、可执行。",
+    "world_seed": [
+        "actors 必须为 story_engine 中每个 core_cast、opposition、factions 条目各给出一项，ref 等于该实体 id；不得新增、遗漏或重复实体，所有引用只使用上游已有的 id。",
+        "major 行动者必须有 1–3 个 agenda；角色为 major 时必须给出 location_ref，为 minor 时也应给出；location_ref 只能取地图节点表中的 id。",
+        "所有时长（intents.scheduled_in、clocks.due_in）都写成 {amount, unit}：amount 为非负数，unit 只能是本书 calendar.units 或 lexicon.time_unit_aliases 中的名称；单位名称按本书题材自拟。",
+        "facts 每项都必须显式给出 sensitivity；hidden 或 secret 的事实必须在 knowledge 中至少有一个 state 为 knows、believes 或 suspects 的知情者，否则标记 nobody_knows: true。",
+        "relations 每项都必须显式给出 visibility，source 与 target 只引用行动者 ref；优先承接 story_engine.relationship_axes，不凭空制造关系。",
+        "knowledge 的 channel 一律为 seeded；可以包含误信或怀疑，但 fact_id 必须引用 facts 中的 id。",
+        "core_cast 的 secrets 要展开为 facts 并配置知情分布；reveal_candidates 的 arc_number 只能取卷列表中的编号，只作揭示参考，不做硬绑定。",
+        "clocks 只记录开篇时已经存在的时限；rules 区分 hard 与 soft，只有能被程序判定的规则才填写 checkable。",
     ],
 }
 _GENESIS_REFINE_SYSTEM_PROMPT = (

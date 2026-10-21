@@ -4,6 +4,12 @@ from forwin.genesis.constants import (
     GENESIS_STAGE_ORDER,
     StaleGenesisRevisionError,
 )
+from forwin.genesis.names_paths import GenesisStageInvalidError
 from forwin.genesis.service import BookGenesisService
 
-__all__ = ["BookGenesisService", "GENESIS_STAGE_ORDER", "StaleGenesisRevisionError"]
+__all__ = [
+    "BookGenesisService",
+    "GENESIS_STAGE_ORDER",
+    "GenesisStageInvalidError",
+    "StaleGenesisRevisionError",
+]

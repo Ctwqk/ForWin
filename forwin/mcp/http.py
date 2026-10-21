@@ -216,7 +216,8 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "genesis_stage_lock",
-        "Lock one Genesis stage as current truth. Use this when a stage is accepted and should become the stable handoff state for later stages and writing.",
+        "Lock one Genesis stage as current truth. Use this when a stage is accepted and should become the stable handoff state for later stages and writing. "
+        "Locking world_seed is refused while its validation_issues contain errors.",
     )
     async def genesis_stage_lock(project_id: str, stage_key: StageKey) -> MutationResult:
         return await client.genesis_stage_lock(project_id=project_id, stage_key=stage_key)

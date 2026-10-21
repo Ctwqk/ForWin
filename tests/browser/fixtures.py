@@ -17,7 +17,7 @@ GENESIS_STAGES = [
     "map",
     "story_engine",
     "book_blueprint",
-    "bootstrap",
+    "world_seed",
 ]
 
 
@@ -1446,6 +1446,14 @@ def sample_genesis_detail(project_id: str) -> dict[str, Any]:
         }
         for stage in GENESIS_STAGES
     }
+    stage_states["world_seed"]["validation_issues"] = [
+        {
+            "severity": "warning",
+            "code": "minor_actor_without_location",
+            "path": "actors[1].location_ref",
+            "message": "Minor character has no location",
+        }
+    ]
     return {
         "project_id": project_id,
         "creation_status": "creating",
@@ -1521,10 +1529,24 @@ def sample_genesis_detail(project_id: str) -> dict[str, Any]:
                     }
                 ],
             },
-            "execution_bootstrap": {
-                "pipeline": "strict_blackbox",
-                "start_policy": "explicit_start_writing_only",
-                "root_ready": False,
+            "world_seed": {
+                "calendar": {
+                    "epoch_label": "潮历",
+                    "opening_minute": 0,
+                    "units": [{"name": "潮", "minutes": 720}],
+                },
+                "lexicon": {},
+                "actors": [
+                    {"ref": "faction-1", "actor_tier": "minor", "location_ref": "node-1"},
+                    {"ref": "char-1", "actor_tier": "minor", "location_ref": ""},
+                ],
+                "relations": [],
+                "facts": [],
+                "knowledge": [],
+                "rules": [],
+                "clocks": [],
+                "reader_promises": [],
+                "reveal_candidates": [],
             },
         },
         "prompt_traces": [],
@@ -1539,8 +1561,8 @@ def apply_genesis_patch(detail: dict[str, Any], payload: dict[str, Any]) -> None
         pack["world"] = payload["world"]
     if "book_arc_blueprint" in payload:
         pack["book_arc_blueprint"] = payload["book_arc_blueprint"]
-    if "execution_bootstrap" in payload:
-        pack["execution_bootstrap"] = payload["execution_bootstrap"]
+    if "world_seed" in payload:
+        pack["world_seed"] = payload["world_seed"]
 
 
 def ensure_stage_payload(detail: dict[str, Any], stage: str, action: str) -> None:
@@ -1555,8 +1577,8 @@ def ensure_stage_payload(detail: dict[str, Any], stage: str, action: str) -> Non
         pack["world"]["story_engine"]["reader_promises"] = [f"{action} 后的读者承诺"]
     if stage == "book_blueprint":
         pack["book_arc_blueprint"]["summary"] = f"{action} 后的蓝图"
-    if stage == "bootstrap":
-        pack["execution_bootstrap"]["root_ready"] = action != "generate"
+    if stage == "world_seed":
+        pack["world_seed"]["calendar"]["epoch_label"] = f"{action} 后的纪元"
 
 
 def sample_world_snapshots(project_id: str) -> list[dict[str, Any]]:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 from forwin.models.project import Project
 from forwin.genesis.helpers import (
+    _book_arc_list,
     _json_dump,
+    _map_node_table,
     _pack_stage_payload,
 )
 from forwin.genesis.names_paths import (
@@ -44,6 +46,12 @@ def _refine_support_context(self, *, pack: dict[str, Any], stage_key: str) -> di
             "world_bible": world_root.get("world_bible") or {},
             "map_atlas": world_root.get("map_atlas") or {},
             "story_engine": world_root.get("story_engine") or {},
+        }
+    if stage_key == "world_seed":
+        return {
+            "story_engine": _pack_stage_payload(pack, "story_engine"),
+            "map_nodes": _map_node_table(_pack_stage_payload(pack, "map")),
+            "arcs": _book_arc_list(pack),
         }
     return pack
 

@@ -12,6 +12,7 @@ from forwin.api_schema import (
     BookGenesisStageState,
     PromptTraceInfo,
 )
+from forwin.genesis.constants import GENESIS_STAGE_ORDER
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import Project
 from forwin.world_templates import empty_world_root
@@ -24,14 +25,6 @@ from .common import (
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = (
-    "brief",
-    "world",
-    "map",
-    "story_engine",
-    "book_blueprint",
-    "bootstrap",
-)
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
 
@@ -71,7 +64,7 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
     if not isinstance(raw_stage_states, dict):
         raw_stage_states = {}
     stage_states: dict[str, BookGenesisStageState] = {}
-    for stage_key in _GENESIS_STAGE_ORDER:
+    for stage_key in GENESIS_STAGE_ORDER:
         stage_raw = raw_stage_states.get(stage_key)
         if not isinstance(stage_raw, dict):
             stage_raw = {}
@@ -82,6 +75,11 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
             updated_at=str(stage_raw.get("updated_at", "") or ""),
             last_trace_id=str(stage_raw.get("last_trace_id", "") or ""),
             degraded=bool(stage_raw.get("degraded", False)),
+            validation_issues=[
+                item
+                for item in stage_raw.get("validation_issues") or []
+                if isinstance(item, dict)
+            ],
         )
     return BookGenesisPack(
         book_brief=payload.get("book_brief")
@@ -98,9 +96,9 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
             if isinstance(payload.get("subworld_policy"), dict)
             else {}
         ),
-        execution_bootstrap=(
-            payload.get("execution_bootstrap")
-            if isinstance(payload.get("execution_bootstrap"), dict)
+        world_seed=(
+            payload.get("world_seed")
+            if isinstance(payload.get("world_seed"), dict)
             else {}
         ),
         stage_states=stage_states,
@@ -130,7 +128,7 @@ def _stage_overview_from_revision(
     if revision is None:
         return []
     pack = _normalize_genesis_pack(revision.pack_json)
-    return [pack.stage_states[stage_key] for stage_key in _GENESIS_STAGE_ORDER]
+    return [pack.stage_states[stage_key] for stage_key in GENESIS_STAGE_ORDER]
 
 
 def _can_start_writing(project: Project, revision: BookGenesisRevision | None) -> bool:
@@ -140,7 +138,7 @@ def _can_start_writing(project: Project, revision: BookGenesisRevision | None) -
         return False
     pack = _normalize_genesis_pack(revision.pack_json)
     return all(
-        pack.stage_states[stage_key].locked for stage_key in _GENESIS_STAGE_ORDER
+        pack.stage_states[stage_key].locked for stage_key in GENESIS_STAGE_ORDER
     )
 
 

@@ -163,7 +163,7 @@ def _genesis_patch_payload(req: BookGenesisPatchRequest) -> dict[str, Any]:
         "world",
         "book_arc_blueprint",
         "subworld_policy",
-        "execution_bootstrap",
+        "world_seed",
         "stage_states",
     ):
         value = getattr(req, key)

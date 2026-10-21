@@ -514,9 +514,12 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "execution_bootstrap": {
-                        "pipeline": "strict_blackbox",
-                        "root_ready": True,
+                    "world_seed": {
+                        "calendar": {
+                            "epoch_label": "旧历",
+                            "opening_minute": 0,
+                            "units": [{"name": "日", "minutes": 1440}],
+                        },
                     },
                 }
             ),
@@ -527,7 +530,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             "map",
             "story_engine",
             "book_blueprint",
-            "bootstrap",
+            "world_seed",
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
         return created.project_id
@@ -1092,6 +1095,37 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         ]
         self.assertTrue(world_state.locked)
         self.assertEqual(world_state.status, "locked")
+
+    def test_world_seed_validation_issues_and_lock_refusal_pass_through_mcp(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {"title": "MCP World Seed", "premise": "初始世界校验。", "genre": "玄幻"}
+            )
+        )
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {"story_engine": {"core_cast": [{"id": "cast-1", "name": "甲"}]}},
+                    "world_seed": {"actors": []},
+                }
+            ),
+        )
+
+        genesis = self._load_model(
+            GenesisView,
+            self._call_tool("genesis_get", {"project_id": created.project_id}),
+        )
+        world_seed_state = {item.stage_key: item for item in genesis.stage_states}["world_seed"]
+        self.assertIn(
+            "missing_actor",
+            {issue["code"] for issue in world_seed_state.validation_issues},
+        )
+        with self.assertRaisesRegex(ToolError, "409.*missing_actor"):
+            self._call_tool(
+                "genesis_stage_lock",
+                {"project_id": created.project_id, "stage_key": "world_seed"},
+            )
 
     def test_start_writing_continue_conflict_and_pause_via_mcp(self) -> None:
         project_id = self._create_ready_project()

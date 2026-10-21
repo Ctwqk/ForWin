@@ -24,6 +24,7 @@ from forwin.world_templates import (
     empty_world_root,
 )
 import json
+from forwin.genesis.world_seed import WorldSeedIssue, validate_world_seed
 from forwin.models.project import Project
 
 def _utc_iso() -> str:
@@ -186,6 +187,45 @@ def _set_pack_stage_payload(pack: dict[str, Any], stage_key: str, value: dict[st
     current[tokens[-1]] = value
 
 
+def _world_seed_references(pack: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The upstream sections whose ids a world seed may reference."""
+    return {
+        "story_engine": _pack_stage_payload(pack, "story_engine"),
+        "map_atlas": _pack_stage_payload(pack, "map"),
+    }
+
+
+def _map_node_table(map_atlas: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "id": str(node.get("id", "") or ""),
+            "name": str(node.get("name", "") or ""),
+            "kind": str(node.get("kind", "") or ""),
+            "submap": str(node.get("parent_subworld", "") or ""),
+        }
+        for node in (map_atlas.get("nodes") or [])
+        if isinstance(node, dict)
+    ]
+
+
+def _book_arc_list(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    blueprint = pack.get("book_arc_blueprint") if isinstance(pack.get("book_arc_blueprint"), dict) else {}
+    return [
+        {"arc_number": arc.get("arc_number"), "synopsis": str(arc.get("arc_synopsis", "") or "")}
+        for arc in (blueprint.get("arcs") or [])
+        if isinstance(arc, dict)
+    ]
+
+
+def _world_seed_validation_issues(pack: dict[str, Any]) -> list[WorldSeedIssue]:
+    """Validate the pack's world seed against its current story engine, map and arcs."""
+    return validate_world_seed(
+        _pack_stage_payload(pack, "world_seed"),
+        **_world_seed_references(pack),
+        arc_numbers={arc["arc_number"] for arc in _book_arc_list(pack) if type(arc["arc_number"]) is int},
+    )
+
+
 def _world_stage_target_path(path: str) -> str:
     normalized = str(path or "").strip()
     if not normalized:
@@ -232,10 +272,7 @@ def _initial_pack(project: Project, brief_seed: dict[str, Any] | None = None) ->
         "world": _empty_stage_world(),
         "book_arc_blueprint": {},
         "subworld_policy": _default_subworld_policy(),
-        "execution_bootstrap": {
-            "pipeline": "strict_blackbox",
-            "status": "draft",
-        },
+        "world_seed": {},
         "stage_states": _empty_stage_states(),
     }
 

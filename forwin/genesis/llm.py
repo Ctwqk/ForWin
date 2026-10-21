@@ -33,14 +33,15 @@ from forwin.genesis.helpers import (
     _json_clone,
     _normalize_stage_target_path,
     _pack_stage_payload,
+    _world_seed_references,
 )
 from forwin.genesis.fallbacks import (
     _fallback_blueprint,
-    _fallback_bootstrap,
     _fallback_map,
     _fallback_story_engine,
     _fallback_world,
 )
+from forwin.genesis.world_seed import fallback_world_seed, normalize_world_seed
 from forwin.genesis.names_paths import (
     _get_value_at_path,
     _set_value_at_path,
@@ -67,8 +68,8 @@ def _generate_stage_payload(
         fallback = _fallback_story_engine(pack)
     elif stage_key == "book_blueprint":
         fallback = _fallback_blueprint(project, pack)
-    elif stage_key == "bootstrap":
-        fallback = _fallback_bootstrap(project, pack)
+    elif stage_key == "world_seed":
+        fallback = fallback_world_seed(_pack_stage_payload(pack, "story_engine"))
     else:
         raise ValueError(f"未知 Genesis stage: {stage_key}")
     messages = self._build_stage_generation_messages(
@@ -107,6 +108,11 @@ def _generate_stage_payload(
             if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict)
             else {},
         )
+    elif stage_key == "world_seed":
+        payload = normalize_world_seed(
+            payload if isinstance(payload, dict) else {},
+            **_world_seed_references(pack),
+        )
     return payload, trace
 
 
@@ -136,7 +142,7 @@ def _refine_stage_payload(
         if stage_key == "brief"
         else _fallback_blueprint(project, pack)
         if stage_key == "book_blueprint"
-        else _fallback_bootstrap(project, pack)
+        else fallback_world_seed(_pack_stage_payload(pack, "story_engine"))
     )
     if normalized_target_path:
         source_payload = current_payload if current_payload else fallback_stage_payload
@@ -199,7 +205,8 @@ def _refine_stage_payload(
             messages=messages,
             fallback=fallback_stage_payload,
             stage_key=f"{stage_key}:refine",
-            max_tokens=1800,
+            # A whole world seed outgrows the generic refine budget; None selects its own cap.
+            max_tokens=None if stage_key == "world_seed" else 1800,
         )
         next_payload = payload
 
@@ -233,6 +240,11 @@ def _refine_stage_payload(
             map_atlas=_pack_stage_payload(pack, "world").get("map_atlas")
             if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict)
             else {},
+        )
+    elif stage_key == "world_seed":
+        next_payload = normalize_world_seed(
+            next_payload if isinstance(next_payload, dict) else {},
+            **_world_seed_references(pack),
         )
     elif not isinstance(next_payload, dict):
         next_payload = fallback_stage_payload
@@ -297,7 +309,12 @@ def _call_json_with_trace_impl(
         if str(item.get("role", "")).strip() == "system"
     )
     attempts_payload: list[dict[str, Any]] = []
-    max_tokens = min(self.max_tokens, int(max_tokens or self.max_tokens))
+    token_cap = (
+        self.world_seed_max_tokens
+        if str(stage_key or "").split(":")[0] == "world_seed"
+        else self.max_tokens
+    )
+    max_tokens = min(token_cap, int(max_tokens or token_cap))
     if (
         hasattr(self.llm_client, "api_key")
         and not str(getattr(self.llm_client, "api_key", "") or "").strip()

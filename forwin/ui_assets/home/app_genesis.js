@@ -5,7 +5,7 @@
         map: '地图与空间拓扑',
         story_engine: '角色势力与叙事引擎',
         book_blueprint: '整本书多 Arc 路线图',
-        bootstrap: '执行契约与启动交接',
+        world_seed: '初始世界',
       };
       return map[stageKey] || stageKey || 'Genesis Stage';
     }
@@ -596,8 +596,28 @@
       }
     }
 
+    function genesisWorldSeedOverviewLines(detail = currentGenesisDetail) {
+      const payload = currentGenesisPayload(detail, 'world_seed') || {};
+      const units = payload.calendar?.units;
+      const issues = genesisStageState(detail, 'world_seed').validation_issues || [];
+      return [
+        `calendar.units：${Array.isArray(units) ? units.length : 0}`,
+        ...GENESIS_WORLD_SEED_LISTS.map((key) => `${key}：${Array.isArray(payload[key]) ? payload[key].length : 0}`),
+        `校验问题：${issues.length || '无'}`,
+        ...issues.map((issue) => `[${issue.severity}] ${issue.code} · ${issue.path} · ${issue.message}`),
+        '初始世界不提供逐字段表单，请用“AI 对话改写”修改。',
+      ];
+    }
+
     function renderGenesisStageForm(detail = currentGenesisDetail) {
       const container = document.getElementById('genesis_stage_form');
+      if (currentGenesisStage === 'world_seed') {
+        clearNode(container);
+        genesisWorldSeedOverviewLines(detail).forEach((line) => {
+          container.appendChild(createNode('div', line, 'meta-line'));
+        });
+        return;
+      }
       renderGenesisStructuredFields(
         container,
         GENESIS_STAGE_FORM_FIELDS[currentGenesisStage] || [],

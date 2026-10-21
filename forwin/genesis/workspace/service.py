@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy import select
@@ -19,12 +20,16 @@ from forwin.genesis.helpers import (
     _ready_for_start,
     _set_pack_stage_payload,
     _utc_iso,
+    _world_seed_references,
+    _world_seed_validation_issues,
     _world_stage_state_view,
 )
 from forwin.genesis.names_paths import (
+    GenesisStageInvalidError,
     _ensure_revision_is_current,
     _json_load_list_dicts,
 )
+from forwin.genesis.world_seed import normalize_world_seed
 from forwin.audit.events import (
     DecisionEventInfo,
     DecisionEventType,
@@ -47,6 +52,10 @@ def _ensure_genesis_mutable(
         or str(getattr(revision, "status", "") or "") == "locked"
     ):
         raise ValueError("Genesis 已冻结；写作启动后不能直接修改 Genesis revision。")
+
+
+def _world_seed_issue_payloads(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    return [asdict(issue) for issue in _world_seed_validation_issues(pack)]
 
 
 def _trace_fell_back(trace_payload: dict[str, Any]) -> bool:
@@ -143,6 +152,11 @@ class GenesisWorkspaceService:
                 payload=next_pack.get("book_arc_blueprint") or {},
                 fallback=_fallback_blueprint(project, current),
             )
+        if "world_seed" in patch:
+            next_pack["world_seed"] = normalize_world_seed(
+                _pack_stage_payload(next_pack, "world_seed"),
+                **_world_seed_references(next_pack),
+            )
         now = _utc_iso()
         stage_states = (
             next_pack.get("stage_states")
@@ -191,6 +205,8 @@ class GenesisWorkspaceService:
                 }
             )
             stage_states[stage_key] = state
+        if "world_seed" in patch:
+            stage_states["world_seed"]["validation_issues"] = _world_seed_issue_payloads(next_pack)
         next_pack["stage_states"] = stage_states
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
@@ -259,6 +275,8 @@ class GenesisWorkspaceService:
                 "updated_at": _utc_iso(),
             }
         )
+        if stage_key == "world_seed":
+            stage_state["validation_issues"] = _world_seed_issue_payloads(next_pack)
         stage_states[stage_key] = stage_state
         next_pack["stage_states"] = stage_states
         decision = updater.save_decision_event(
@@ -370,6 +388,8 @@ class GenesisWorkspaceService:
                 "updated_at": _utc_iso(),
             }
         )
+        if stage_key == "world_seed":
+            stage_state["validation_issues"] = _world_seed_issue_payloads(next_pack)
         stage_states[stage_key] = stage_state
         next_pack["stage_states"] = stage_states
         decision = updater.save_decision_event(
@@ -460,6 +480,17 @@ class GenesisWorkspaceService:
             if isinstance(stage_states.get(stage_key), dict)
             else {}
         )
+        if stage_key == "world_seed":
+            issues = _world_seed_validation_issues(pack)
+            errors = [issue for issue in issues if issue.severity == "error"]
+            if errors:
+                details = "；".join(
+                    f"{issue.code}（{issue.path}）：{issue.message}" for issue in errors[:5]
+                )
+                raise GenesisStageInvalidError(
+                    f"world_seed 有 {len(errors)} 个校验错误，不能锁定：{details}"
+                )
+            stage_state["validation_issues"] = [asdict(issue) for issue in issues]
         stage_state.update(
             {
                 "stage_key": stage_key,

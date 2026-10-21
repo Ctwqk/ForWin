@@ -15,7 +15,7 @@
 # residual content under its real category (ledger rulings R2, R6).
 
 [meta]
-completed_phase = "P0"
+completed_phase = "P1"
 
 [story_id_literal]
 allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
@@ -45,6 +45,8 @@ seed_terms = [
 harvest_keys = ["name", "display_name", "entity_name", "canonical_name"]
 # Generic time-unit words that book calendars legitimately name (tests/fixtures/world_seed)
 # and that existing runtime vocabulary already contains.
+# Drop these ignores after P2 removes forwin/review/map_movement.py and the
+# future_plan_audit duration regexes.
 ignore = ["小时", "时辰"]
 
 [[entry]]

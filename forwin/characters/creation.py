@@ -50,7 +50,11 @@ class CharacterCreationHelper:
     def create_character(
         self, request: CharacterCreationRequest, *, record_version: bool = True
     ) -> CharacterCreationResult:
-        """Create the character node; ``record_version=False`` leaves its version to the caller."""
+        """Create the character node.
+
+        With ``record_version=False`` only the latest-value row is written; the
+        caller must append the node's version row in the same transaction.
+        """
         if (
             is_generic_character_name(
                 request.name,

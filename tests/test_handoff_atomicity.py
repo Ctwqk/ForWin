@@ -209,7 +209,7 @@ def test_concurrent_start_writing_second_gets_409(db) -> None:
         release.set()
         thread.join(timeout=_GATE_TIMEOUT_SECONDS * 2)
 
-    assert second.value.status_code == 409
+    assert (second.value.status_code, second.value.detail) == (409, "项目正被其他操作占用，请稍后重试。")
     assert not thread.is_alive()
     assert not isinstance(first["result"], BaseException), first["result"]
     with db.session_factory() as session:

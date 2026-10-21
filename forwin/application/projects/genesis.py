@@ -374,10 +374,10 @@ def generate_project_genesis_name(
 
 
 def _lock_project_for_handoff(session, project_id: str) -> Project:
-    """Hold the project row for the whole handoff; a concurrent start-writing gets 409 at once.
+    """Hold the project row for the whole handoff; a concurrent holder means 409 at once.
 
-    FOR NO KEY UPDATE, like the world seed commit, still lets other sessions insert
-    rows that reference the project while the handoff runs.
+    The holder is usually a second start-writing. FOR NO KEY UPDATE, like the world
+    seed commit, still lets other sessions insert rows that reference the project.
     """
     try:
         project = session.execute(
@@ -389,7 +389,7 @@ def _lock_project_for_handoff(session, project_id: str) -> Project:
         if not is_lock_not_available_error(exc):
             raise
         session.rollback()
-        raise HTTPException(409, "该项目正在启动写作，请稍后刷新。") from exc
+        raise HTTPException(409, "项目正被其他操作占用，请稍后重试。") from exc
     if project is None:
         raise HTTPException(404, "项目不存在")
     return project

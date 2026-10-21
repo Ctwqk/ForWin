@@ -33,14 +33,17 @@ def approve_world_edit_proposal(
     trigger: str = "proposal_approve",
 ) -> ProposalReviewResult:
     row = _load_pending_proposal(session, project_id, proposal_id)
+    chapter = _world_edit_chapter(session, project_id, row)
     try:
-        delta = proposal_to_graph_delta(session, row, reason=reason)
+        delta = proposal_to_graph_delta(
+            session, row, reason=reason, chapter_number=chapter
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     changes = ApprovedGraphDeltaSet(
         project_id=project_id,
-        chapter_number=_world_edit_chapter(session, project_id, row),
+        chapter_number=chapter,
         graph_deltas=[delta],
         approved_by=[f"{trigger}_approval"],
         review_verdict_id=f"proposal_review_{proposal_id}",

@@ -163,7 +163,11 @@ class BookStateRepository:
         return row
 
     def upsert_world_node_row(self, node: WorldNode) -> WorldNodeRow:
-        """Write only the latest-value projection row, without a version."""
+        """Write only the latest-value projection row, without a version.
+
+        As-of reads come from versions, so the caller must append the node's
+        version row in the same transaction (the compiler does, under its delta).
+        """
         row = self.session.get(WorldNodeRow, node.id)
         if row is None:
             row = WorldNodeRow(id=node.id, project_id=node.project_id, node_type=str(node.node_type))
@@ -1281,13 +1285,16 @@ class BookStateRepository:
         ]
         return max([int(value or 0) for value in values] or [0])
 
-    def direct_write_chapter(self, node: WorldNode) -> int:
+    def direct_write_chapter(self, node: WorldNode, *, latest_chapter: int | None = None) -> int:
         """Chapter a write outside the compiler versions ``node`` at.
 
         The latest chapter makes the write visible from now on, but never before
-        the node exists: the character API creates nodes ahead of canon.
+        the node exists: the character API creates nodes ahead of canon. A caller
+        writing many nodes passes ``latest_available_chapter`` once as ``latest_chapter``.
         """
-        return max(self.latest_available_chapter(node.project_id), int(node.created_at_chapter or 0))
+        if latest_chapter is None:
+            latest_chapter = self.latest_available_chapter(node.project_id)
+        return max(int(latest_chapter), int(node.created_at_chapter or 0))
 
     def persist_world_snapshot(self, snapshot: WorldSnapshot) -> WorldSnapshotRow:
         row = WorldSnapshotRow(

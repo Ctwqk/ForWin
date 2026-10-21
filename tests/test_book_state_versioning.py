@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from forwin.api_schema import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
+from forwin.book_state.query import BookStateQuery
 from forwin.canon import CanonAdmissionService, CanonStaleVersion
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
@@ -731,6 +732,67 @@ def test_future_chapter_world_edit_clamps_down() -> None:
 
     assert (delta_chapter, approved.projection_refresh["as_of_chapter"]) == (1, 1)
     assert states == [{"status": "idle"}, {"status": "awake"}, {"status": "awake"}]
+    engine.dispose()
+
+
+def test_clamped_world_edit_creates_exist_from_the_compile_chapter() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(
+            session,
+            project_id,
+            0,
+            node_patches=[_create_character(project_id, "char_a"), _create_character(project_id, "char_b")],
+        )
+    with Session.begin() as session:
+        _compile_without_deltas(session, project_id, 1)
+    edge_and_fact = {
+        "forwin_patch": [
+            {"op": "create_edge", "edge_id": "edge_ab", "edge_type": "ally_of", "source_id": "char_a", "target_id": "char_b"},
+            {"op": "create_fact", "fact_id": "fact_pact", "proposition": "a and b swore a pact"},
+        ],
+        "frontmatter": {"as_of_chapter": 5},
+    }
+    promise = {
+        "forwin_patch": [{"op": "create_reader_promise", "promise_id": "promise_debt", "new_value": {"summary": "a debt"}}],
+        "frontmatter": {"as_of_chapter": 5},
+    }
+    # No structured patch: approval records an audit fact instead.
+    note = {"new_value": "b owes a a debt", "frontmatter": {"as_of_chapter": 5}}
+    proposal_ids = []
+    with Session.begin() as session:
+        for patch in (edge_and_fact, promise, note):
+            row = KnowledgeEditProposalRow(
+                project_id=project_id, source="world_studio", proposed_patch_json=json.dumps(patch), status="pending"
+            )
+            session.add(row)
+            session.flush()
+            proposal_ids.append(row.id)
+    for proposal_id in proposal_ids:
+        with Session.begin() as session:
+            approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+
+    with Session() as session:
+        world = _load(session, project_id, 1).world
+        promises = BookStateQuery(session).reader_promises(project_id, as_of_chapter=1)
+    assert "edge_ab" in world.edges_by_id
+    assert {"fact_pact", f"proposal_fact_{proposal_ids[2]}"} <= set(world.facts_by_id)
+    assert [(item.promise_id, item.created_at_chapter) for item in promises] == [("promise_debt", 1)]
+
+    # What the edit created can be edited once canon moves on.
+    with Session.begin() as session:
+        _compile_without_deltas(session, project_id, 2)
+    reweigh = _propose(
+        Session,
+        project_id,
+        {"op": "set_edge_field", "edge_id": "edge_ab", "field_path": "weight", "new_value": 0.5},
+        chapter=2,
+    )
+    with Session.begin() as session:
+        approve_world_edit_proposal(session, project_id=project_id, proposal_id=reweigh)
+    with Session() as session:
+        assert _load(session, project_id, 2).world.edges_by_id["edge_ab"].weight == 0.5
     engine.dispose()
 
 

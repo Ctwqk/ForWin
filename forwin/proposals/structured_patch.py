@@ -38,12 +38,23 @@ _PATCH_BLOCK_RE = re.compile(
 
 
 def proposal_to_graph_delta(
-    session, row: KnowledgeEditProposalRow, *, reason: str = ""
+    session,
+    row: KnowledgeEditProposalRow,
+    *,
+    reason: str = "",
+    chapter_number: int | None = None,
 ) -> GraphDelta:
+    """Build the proposal's delta for ``chapter_number`` (default: the proposal's chapter).
+
+    Creates are stamped with that chapter, so they exist from where the delta
+    compiles. Old values are read as of the proposal's own chapter: a value
+    changed since the proposal was written then fails the compiler check.
+    """
+    chapter = proposal_chapter(row) if chapter_number is None else int(chapter_number)
     payload = load_json(row.proposed_patch_json, {})
     operations = _extract_patch_operations(payload)
     if not operations:
-        return audit_delta_from_proposal(row, reason=reason)
+        return audit_delta_from_proposal(row, reason=reason, chapter_number=chapter)
     runtime = BookStateProjection(session).load_runtime_as_of(
         row.project_id,
         as_of_chapter=max(proposal_chapter(row), 0),
@@ -73,7 +84,12 @@ def proposal_to_graph_delta(
         elif op in {"create_edge", "set_edge_field", "deactivate_edge"}:
             edge_patches.append(
                 _edge_patch(
-                    operation, row, runtime, reason=reason, source_refs=source_refs
+                    operation,
+                    row,
+                    runtime,
+                    reason=reason,
+                    source_refs=source_refs,
+                    chapter=chapter,
                 )
             )
         elif op in {
@@ -91,7 +107,12 @@ def proposal_to_graph_delta(
         elif op in {"create_fact", "set_fact_field"}:
             fact_patches.append(
                 _fact_patch(
-                    operation, row, runtime, reason=reason, source_refs=source_refs
+                    operation,
+                    row,
+                    runtime,
+                    reason=reason,
+                    source_refs=source_refs,
+                    chapter=chapter,
                 )
             )
         elif op in {
@@ -111,7 +132,12 @@ def proposal_to_graph_delta(
         }:
             narrative_patches.extend(
                 _promise_narrative_patches(
-                    runtime, operation, row, reason=reason, source_refs=source_refs
+                    runtime,
+                    operation,
+                    row,
+                    reason=reason,
+                    source_refs=source_refs,
+                    chapter=chapter,
                 )
             )
         else:
@@ -120,7 +146,7 @@ def proposal_to_graph_delta(
     return GraphDelta(
         id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
-        chapter_number=proposal_chapter(row),
+        chapter_number=chapter,
         delta_type=GraphDeltaType.REPAIR,
         operation="structured_proposal_patch",
         target_type="proposal",
@@ -149,8 +175,12 @@ def proposal_to_graph_delta(
 
 
 def audit_delta_from_proposal(
-    row: KnowledgeEditProposalRow, *, reason: str = ""
+    row: KnowledgeEditProposalRow,
+    *,
+    reason: str = "",
+    chapter_number: int | None = None,
 ) -> GraphDelta:
+    chapter = proposal_chapter(row) if chapter_number is None else int(chapter_number)
     payload = load_json(row.proposed_patch_json, {})
     new_value = payload.get("new_value", "")
     target_node_id = getattr(row, "target_node_id", "") or ""
@@ -164,7 +194,7 @@ def audit_delta_from_proposal(
     return GraphDelta(
         id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
-        chapter_number=proposal_chapter(row),
+        chapter_number=chapter,
         delta_type=GraphDeltaType.REPAIR,
         operation="create_fact",
         target_type="proposal",
@@ -192,7 +222,7 @@ def audit_delta_from_proposal(
                     "confidence": 1.0,
                     "related_node_refs": [target_node_id] if target_node_id else [],
                     "source_refs": source_refs,
-                    "created_at_chapter": proposal_chapter(row),
+                    "created_at_chapter": chapter,
                     "narrative_function": proposal_type,
                     "state": {
                         "target_page_key": row.target_page_key,
@@ -334,6 +364,7 @@ def _edge_patch(
     *,
     reason: str,
     source_refs: list[str],
+    chapter: int,
 ) -> EdgePatch:
     op = str(operation.get("op") or "")
     if op == "create_edge":
@@ -360,8 +391,8 @@ def _edge_patch(
                 "directionality": operation.get("directionality", "directed"),
                 "weight": operation.get("weight", 1.0),
                 "confidence": operation.get("confidence", 1.0),
-                "established_at_chapter": proposal_chapter(row),
-                "valid_from_chapter": proposal_chapter(row),
+                "established_at_chapter": chapter,
+                "valid_from_chapter": chapter,
                 "status": operation.get("status", "active"),
                 "visibility": operation.get("visibility", ""),
                 "truth_relation": operation.get("truth_relation", "true"),
@@ -529,6 +560,7 @@ def _fact_patch(
     *,
     reason: str,
     source_refs: list[str],
+    chapter: int,
 ) -> FactPatch:
     op = str(operation.get("op") or "")
     if op == "create_fact":
@@ -555,7 +587,7 @@ def _fact_patch(
                 "related_node_refs": operation.get("related_node_refs", []),
                 "related_edge_refs": operation.get("related_edge_refs", []),
                 "source_refs": source_refs,
-                "created_at_chapter": proposal_chapter(row),
+                "created_at_chapter": chapter,
                 "sensitivity_level": operation.get("sensitivity_level", ""),
                 "narrative_function": operation.get("narrative_function", ""),
                 "state": operation.get("state", {}),
@@ -635,13 +667,13 @@ def _promise_narrative_patches(
     *,
     reason: str,
     source_refs: list[str],
+    chapter: int,
 ) -> list[NarrativePatch]:
     op = str(operation.get("op") or "")
     promise_id = str(operation.get("promise_id") or operation.get("target_id") or "")
     if not promise_id:
         raise ValueError(f"{op} requires promise_id")
     target_ref = f"promise:{promise_id}"
-    as_of_chapter = proposal_chapter(row)
     patch_reason = reason or str(operation.get("reason") or row.reason or "")
     evidence_refs = list(operation.get("evidence_refs", source_refs))
     if op == "create_reader_promise":
@@ -652,7 +684,7 @@ def _promise_narrative_patches(
             {
                 "promise_id": promise_id,
                 "project_id": row.project_id,
-                "created_at_chapter": as_of_chapter,
+                "created_at_chapter": chapter,
                 "status": "open",
                 "source_refs": source_refs,
                 **payload,

@@ -473,6 +473,7 @@ def build_handlers(
                 for node in repo.list_world_nodes(project_id)
                 if str(node.node_type) == "character"
             ]
+            latest_chapter = repo.latest_available_chapter(project_id)
             for node in nodes:
                 existing = (
                     node.profile.get("personality_loadout")
@@ -547,7 +548,9 @@ def build_handlers(
                             node.model_copy(
                                 update={"profile": profile, "metadata": metadata}
                             ),
-                            version_chapter=repo.direct_write_chapter(node),
+                            version_chapter=repo.direct_write_chapter(
+                                node, latest_chapter=latest_chapter
+                            ),
                         )
                 items.append(
                     {

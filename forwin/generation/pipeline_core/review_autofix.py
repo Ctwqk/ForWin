@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
 from forwin.protocol.writer import WriterOutput
 from typing import Any
@@ -346,6 +347,22 @@ class ReviewWorkflowStage:
         writer_output: WriterOutput,
     ) -> WriterOutput:
         llm_client = getattr(self, "llm_client", None)
+        # Every candidate body gets its chapter delta before admission reads names
+        # from it; a failed extraction leaves chapter_delta None for review and canon.
+        writer_output, extraction = ensure_chapter_delta(
+            session,
+            llm_client=llm_client,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+        )
+        if extraction is not None:
+            self._save_prompt_trace_payload(
+                session=session,
+                updater=StateUpdater(session),
+                project_id=project_id,
+                prompt_trace=extraction.prompt_trace,
+            )
         classifier = (
             LLMEntityAdmissionClassifier(llm_client) if llm_client is not None else None
         )

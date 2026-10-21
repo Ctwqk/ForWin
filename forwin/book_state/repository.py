@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -906,9 +905,6 @@ class BookStateRepository:
             prior_refs.update(
                 f"map_edge:{target}" for target in prior_map.map_edge_index
             )
-        prior_deltas = self.list_graph_deltas(
-            project_id, through_chapter=from_chapter - 1
-        )
         # A create on an edge that existed before the range reactivated it.
         reactivated = {
             (kind, target)
@@ -926,7 +922,6 @@ class BookStateRepository:
             )
         # Structural base rows are overwritten in place; snapshots only retain
         # world state. Undo their field changes before compiling against the base.
-        missing_metadata: set[tuple[str, str]] = set()
         for kind, target, patch in reversed(patches):
             if (kind, target) in created:
                 continue
@@ -942,16 +937,6 @@ class BookStateRepository:
                 field_path = "is_active"
             if kind == "fact" and not field_path:
                 field_path = "state"
-            if (
-                kind == "node"
-                and (
-                    field_path.startswith("metadata.writer_state.")
-                    or field_path == "metadata.writer_location"
-                )
-                and patch.get("old_value") is None
-            ):
-                missing_metadata.add((target, field_path))
-                continue
             if kind not in bindings or not field_path or patch.get("old_value") is None:
                 raise ValueError(
                     f"cannot restore historical base {kind}:{target}:{field_path}"
@@ -983,10 +968,6 @@ class BookStateRepository:
                     model.id == target,
                 )
             )
-        if missing_metadata:
-            self._restore_verified_node_metadata(
-                project_id, from_chapter, missing_metadata, prior_world, prior_deltas
-            )
 
     def _restore_reactivated_edge(self, project_id: str, edge_id: str, *, from_chapter: int) -> None:
         """Undo a reactivation: the edge ends again at its latest recorded inactive span."""
@@ -1009,158 +990,6 @@ class BookStateRepository:
         self.create_world_edge(
             edge.model_copy(update={"is_active": False, "ended_at_chapter": ended, "metadata": metadata})
         )
-
-    def _restore_verified_node_metadata(
-        self,
-        project_id: str,
-        from_chapter: int,
-        missing: set[tuple[str, str]],
-        snapshot: WorldSnapshot | None,
-        prior_deltas: list[GraphDelta],
-    ) -> None:
-        target, field_path = sorted(missing)[0]
-        failure = f"cannot restore historical base node:{target}:{field_path}: unverified pre-range snapshot"
-        if (
-            snapshot is None
-            or snapshot.as_of_chapter != from_chapter - 1
-            or not snapshot.objective_graph_digest
-        ):
-            raise ValueError(failure)
-        world = self.load_base_world_graph(
-            project_id, as_of_chapter=snapshot.as_of_chapter
-        )
-        world.states_by_node_id = deepcopy(snapshot.world_node_state_index)
-        candidates: dict[str, WorldNode] = {}
-        for node_id in sorted({node_id for node_id, _ in missing}):
-            node = world.nodes_by_id.get(node_id)
-            if node is None:
-                raise ValueError(failure)
-            relevant = [
-                delta
-                for delta in prior_deltas
-                if any(
-                    patch.node_id == node_id
-                    and (
-                        patch.op == "create"
-                        or patch.field_path == "metadata"
-                        or patch.field_path.startswith("metadata.")
-                    )
-                    for patch in delta.node_patches
-                )
-            ]
-            ordered: list[GraphDelta] = []
-            for chapter in sorted({delta.chapter_number for delta in relevant}):
-                chapter_deltas = [
-                    delta for delta in relevant if delta.chapter_number == chapter
-                ]
-                if len(chapter_deltas) > 1:
-                    checkpoint = self.latest_world_snapshot(project_id, chapter)
-                    ids = (
-                        checkpoint.source_delta_ids
-                        if checkpoint and checkpoint.as_of_chapter == chapter
-                        else []
-                    )
-                    if (
-                        any(not isinstance(delta_id, str) for delta_id in ids)
-                        or len(ids) != len(set(ids))
-                        or not {delta.id for delta in chapter_deltas}.issubset(ids)
-                    ):
-                        raise ValueError(failure)
-                    chapter_deltas.sort(key=lambda delta: ids.index(delta.id))
-                ordered.extend(chapter_deltas)
-            before: dict[str, Any] = {}
-            known: set[str] = set()
-            for delta in ordered:
-                if not delta.allowed_for_canon:
-                    raise ValueError(failure)
-                for patch in delta.node_patches:
-                    if patch.node_id != node_id:
-                        continue
-                    path = patch.field_path
-                    if patch.op == "create":
-                        if not isinstance(patch.new_value, dict):
-                            raise ValueError(failure)
-                        before = WorldNode.model_validate(
-                            {
-                                "id": patch.node_id,
-                                "node_type": patch.node_type,
-                                **patch.new_value,
-                            }
-                        ).model_dump(mode="json")
-                        known = {"metadata"}
-                    elif path == "metadata" or path.startswith("metadata."):
-                        if patch.op == "set":
-                            known = {
-                                prefix
-                                for prefix in known
-                                if not prefix.startswith(path + ".")
-                            }
-                            known.add(path)
-                        elif not any(
-                            path == prefix or path.startswith(prefix + ".")
-                            for prefix in known
-                        ):
-                            continue
-                        apply_path_patch(
-                            before, path, deepcopy(patch.new_value), op=str(patch.op)
-                        )
-            payload = node.model_dump(mode="json")
-            for _, path in sorted(item for item in missing if item[0] == node_id):
-                if not any(
-                    path == prefix or path.startswith(prefix + ".") for prefix in known
-                ):
-                    # This audit-only field is emitted by WriterContractDeltaBuilder
-                    # from the pre-chapter runtime; a null old_value therefore
-                    # proves that it was absent at the rewind boundary. Snapshots
-                    # do not retain node metadata, so there may be no prior graph
-                    # patch to replay for a Genesis-seeded node. Later materialized
-                    # values are outside that proof and must not become base state.
-                    metadata = payload.get("metadata")
-                    if (
-                        path == "metadata.writer_location"
-                        and (metadata is None or isinstance(metadata, dict))
-                    ):
-                        if metadata is None:
-                            payload["metadata"] = {}
-                        else:
-                            metadata.pop("writer_location")
-                        continue
-                    raise ValueError(failure)
-                parts = path.split(".")
-                previous = before
-                current = payload
-                for index, part in enumerate(parts):
-                    if not isinstance(previous, dict):
-                        raise ValueError(failure)
-                    if part not in previous:
-                        # Only remove the affected path. Never replace a whole
-                        # parent if it would discard unrelated materialization.
-                        branch = current
-                        parents = []
-                        for descendant in parts[index:-1]:
-                            if not isinstance(branch.get(descendant), dict):
-                                raise ValueError(failure)
-                            parents.append((branch, descendant))
-                            branch = branch[descendant]
-                        branch.pop(parts[-1], None)
-                        for parent, key in reversed(parents):
-                            if parent[key]:
-                                break
-                            del parent[key]
-                        break
-                    if index == len(parts) - 1:
-                        current[part] = deepcopy(previous[part])
-                    else:
-                        previous = previous[part]
-                        if not isinstance(current.get(part), dict):
-                            current[part] = {}
-                        current = current[part]
-            candidates[node_id] = WorldNode.model_validate(payload)
-            world.nodes_by_id[node_id] = candidates[node_id]
-        if world.objective_digest() != snapshot.objective_graph_digest:
-            raise ValueError(failure)
-        for node in candidates.values():
-            self._upsert_world_node_row(node)
 
     # ------------------------------------------------------------------
     # Runtime loading

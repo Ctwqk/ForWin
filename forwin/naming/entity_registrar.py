@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.book_frame_repository import BookLexiconRepository
+from forwin.book_state.extraction.chapter_delta_schema import NEW_REF_PREFIX
 from forwin.checker.reference_classifier import (
     classify_reference,
     looks_like_generic_character_reference,
@@ -999,39 +1000,50 @@ def _dedupe(items: list[str]) -> list[str]:
 
 
 def _structured_character_reference_names(writer_output: WriterOutput) -> list[str]:
-    character_candidates: list[str] = []
-    non_character_names: set[str] = set()
-
-    for mention in writer_output.entity_mentions:
-        if not bool(getattr(mention, "is_named", False)):
-            continue
-        if not bool(getattr(mention, "is_on_stage", True)):
-            continue
-        name = str(getattr(mention, "entity_name", "") or "").strip()
-        kind = str(getattr(mention, "entity_kind", "") or "").strip().lower()
-        if not name:
-            continue
-        if kind in _CHARACTER_KINDS:
-            character_candidates.append(name)
-        else:
-            non_character_names.add(name)
-
-    for change in writer_output.state_changes:
-        name = str(getattr(change, "entity_name", "") or "").strip()
-        kind = str(getattr(change, "entity_kind", "") or "").strip().lower()
-        if not name:
-            continue
-        if kind in _CHARACTER_KINDS:
-            character_candidates.append(name)
-        else:
-            non_character_names.add(name)
-
-    for event in writer_output.new_events:
-        for raw_name in event.involved_entity_names:
-            name = str(raw_name or "").strip()
-            if name and name not in non_character_names:
-                character_candidates.append(name)
-
+    """Character names the chapter delta introduces: named on-stage mentions, new character
+    entities and the ``new:`` refs of event participants, movers and knowledge observers."""
+    delta = writer_output.chapter_delta
+    if delta is None:
+        return []
+    character_candidates = [
+        mention.name.strip()
+        for mention in delta.entity_mentions
+        if mention.is_named
+        and mention.is_on_stage
+        and mention.kind.strip().lower() in _CHARACTER_KINDS
+    ]
+    character_candidates.extend(
+        change.new_entity.name.strip()
+        for change in delta.entity_changes
+        if change.new_entity is not None and change.new_entity.kind == "character"
+    )
+    refs = [
+        *(ref for event in delta.events for ref in event.participant_refs),
+        *(movement.entity_ref for movement in delta.movements),
+        *(item.observer_ref for item in delta.knowledge_events),
+    ]
+    character_candidates.extend(
+        ref.strip().removeprefix(NEW_REF_PREFIX).strip()
+        for ref in refs
+        if ref.strip().startswith(NEW_REF_PREFIX)
+    )
+    # A name the delta itself declares as a non-character entity or site is never a character.
+    non_character_names = {
+        *(
+            mention.name.strip()
+            for mention in delta.entity_mentions
+            if mention.kind.strip().lower() not in _CHARACTER_KINDS
+        ),
+        *(
+            entity.name.strip()
+            for entity in (
+                *(change.new_entity for change in delta.entity_changes),
+                *(transfer.new_item for transfer in delta.item_transfers),
+            )
+            if entity is not None and entity.kind != "character"
+        ),
+        *(site.name.strip() for site in delta.new_sites),
+    }
     return _dedupe(
         [
             name

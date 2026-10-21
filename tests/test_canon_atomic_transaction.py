@@ -2011,51 +2011,32 @@ def test_historical_rewrite_applies_retained_first_cognition_patch_once(
 @pytest.mark.parametrize(
     "historical_rewrite_scenario", ["missing_old_metadata"], indirect=True
 )
-@pytest.mark.parametrize("inject_failure", [False, True])
-def test_historical_rewrite_restores_verified_node_metadata_and_replays_atomically(
+def test_historical_rewrite_fails_closed_on_metadata_patch_without_old_value(
     historical_rewrite_scenario: HistoricalRewriteScenario,
-    inject_failure: bool,
 ) -> None:
     scenario = historical_rewrite_scenario
     before_snapshot = _world_snapshot(scenario.Session, scenario.project_id, 3)
 
-    def after_replay(stage: str) -> None:
-        if inject_failure and stage == "book_state":
-            raise RuntimeError("after verified metadata replay")
-
     outcome = CanonAdmissionService(session_factory=scenario.Session).commit_plan(
-        scenario.rewritten_plan, failure_injector=after_replay
+        scenario.rewritten_plan
     )
 
-    if inject_failure:
-        assert outcome.blocked
-        assert "after verified metadata replay" in outcome.failure_reason
-        assert (
-            _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
-        )
-    else:
-        assert not outcome.blocked, outcome.failure_reason
-        assert not outcome.idempotent
+    assert outcome.blocked
+    assert "cannot restore historical base" in outcome.failure_reason
+    assert _world_snapshot(scenario.Session, scenario.project_id, 3) == before_snapshot
     with scenario.Session() as session:
         metadata = (
             BookStateRepository(session)
             .get_world_node("site_state_node-ninth-workshop")
             .metadata
         )
-        expected = {"access": "open", "usage": "retained-successor"}
-        if inject_failure:
-            expected["controlled_by"] = "obsolete-owner"
-        assert metadata["writer_state"] == expected
+        assert metadata["writer_state"] == {
+            "access": "open",
+            "controlled_by": "obsolete-owner",
+            "usage": "retained-successor",
+        }
         old_commit = session.get(CanonCommitRecord, scenario.old_commit_id)
-        assert old_commit.status == ("committed" if inject_failure else "superseded")
-        marker = _rewrite_marker(session, scenario.project_id, 2)
-        assert ("replacement_commit_id" in marker) is not inject_failure
-        successor = session.get(CandidateDraftRecord, scenario.successor_candidate_id)
-        assert successor.status == "accepted"
-        assert (
-            session.get(ChapterDraft, scenario.successor_draft_id).body_text
-            == "The later accepted consequence follows the first event."
-        )
+        assert old_commit.status == "committed"
 
 
 def _commit_same_chapter_world_edit(

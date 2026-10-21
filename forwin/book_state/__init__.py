@@ -13,14 +13,6 @@ from .reviewer import BookStateReviewGate, BookStateReviewIssue, BookStateReview
 from .runtime import BookStateRuntime, ObjectiveWorldGraph, distance_between_world_nodes
 
 
-def __getattr__(name: str):
-    if name == "WriterContractDeltaBuilder":
-        from .writer_contract import WriterContractDeltaBuilder
-
-        globals()[name] = WriterContractDeltaBuilder
-        return WriterContractDeltaBuilder
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 __all__ = [
     "BookStateRuntime",
     "BookStateCompiler",
@@ -34,6 +26,5 @@ __all__ = [
     "MapGraph",
     "NarrativeControlGraph",
     "ObjectiveWorldGraph",
-    "WriterContractDeltaBuilder",
     "distance_between_world_nodes",
 ]

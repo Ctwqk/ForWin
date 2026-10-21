@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import pytest
 
-from forwin.book_state.extraction.contract import BookStateExtractionRequest
-from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.canon.preparation import CanonPreparationContext
+from forwin.canon.preparation import BookStateCanonPreparer, CanonPreparationContext
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
-from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
 from forwin.generation.pipeline_core import quality_gates
+from forwin.naming import EntityAdmissionPlan
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
+from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models import Project
@@ -445,107 +443,61 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         }
 
 
-def test_deferred_single_writer_empty_extraction_creates_light_state_delta() -> None:
-    extraction = BookStateGraphDeltaExtractor().extract(
-        BookStateExtractionRequest(
-            project_id="project-1",
-            chapter_number=1,
-            writer_output=WriterOutput(
-                project_id="project-1",
-                chapter_number=1,
-                title="第一章",
-                body="林夜收下玄铁令，决定进入问心阁。",
-                char_count=18,
-                end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
-                generation_meta={"structured_extraction": "deferred", "mode": "single"},
-            ),
-        )
-    )
+def test_empty_extraction_blocks_canon() -> None:
+    """A deferred single-pass writer gets no regex fallback: an empty extraction blocks canon."""
 
-    assert extraction.accepted is True
-    assert extraction.changes is not None
-    assert len(extraction.changes.graph_deltas) == 1
-    delta = extraction.changes.graph_deltas[0]
-    assert delta.operation == "pulp_light_state_extraction"
-    assert delta.target_type == "chapter_state"
-    assert delta.fact_patches[0].op == "create"
-    assert delta.fact_patches[0].new_value["fact_type"] == "key_event"
-    assert "林夜获得玄铁令" in delta.fact_patches[0].proposition
-    node_types = {patch.node_type for patch in delta.node_patches}
-    node_names = {patch.new_value["name"] for patch in delta.node_patches}
-    assert node_types == {"character", "item", "faction"}
-    assert {"林夜", "玄铁令", "问心阁"}.issubset(node_names)
-    assert delta.metadata["extraction_path"] == "pulp_light_state_extraction"
-    assert delta.metadata["characters"] == ["林夜"]
-    assert delta.metadata["possessions"] == ["玄铁令"]
-    assert delta.metadata["factions"] == ["问心阁"]
-    assert "pulp_light_structured_fallback" not in str(delta.model_dump(mode="json"))
+    class EmptyExtractionClient:
+        def __init__(self) -> None:
+            self.calls = 0
 
+        def chat(self, messages, **_kwargs):  # noqa: ANN001, ANN003
+            self.calls += 1
+            return ""
 
-def test_deferred_single_writer_empty_light_extraction_blocks_summary_only() -> None:
-    extraction = BookStateGraphDeltaExtractor().extract(
-        BookStateExtractionRequest(
-            project_id="project-1",
-            chapter_number=1,
-            writer_output=WriterOutput(
-                project_id="project-1",
-                chapter_number=1,
-                title="第一章",
-                body="这一章主要承接前文氛围，没有命名角色、物品或势力。",
-                char_count=24,
-                end_of_chapter_summary="氛围继续延展。",
-                generation_meta={"structured_extraction": "deferred", "mode": "single"},
-            ),
-        )
-    )
-
-    assert extraction.accepted is False
-    assert extraction.changes is None
-    assert [issue.code for issue in extraction.issues] == ["light_state_extraction_empty"]
-    assert extraction.metadata["extraction_path"] == "pulp_light_state_extraction"
-
-
-def test_light_state_delta_commits_to_book_state() -> None:
-    engine = get_engine(postgres_test_url("pulp_light_world_fact_commit"))
+    client = EmptyExtractionClient()
+    recorded: list[dict[str, object]] = []
+    engine = get_engine(postgres_test_url("pulp_empty_extraction_blocks"))
     init_db(engine)
     Session = get_session_factory(engine)
     try:
         with Session.begin() as session:
-            project = Project(title="Pulp light", premise="前提", genre="玄幻")
+            project = Project(title="Pulp empty", premise="前提", genre="玄幻")
             session.add(project)
             session.flush()
-            project_id = project.id
-            changes = BookStateGraphDeltaExtractor().extract(
-                BookStateExtractionRequest(
-                    project_id=project_id,
+            outcome = BookStateCanonPreparer().prepare(
+                context=CanonPreparationContext(
+                    policy=RuntimePolicy.for_profile("pulp"),
+                    llm_client=client,  # type: ignore[arg-type]
+                    artifact_store=object(),  # type: ignore[arg-type]
+                    _record_decision_event=lambda **payload: recorded.append(payload),  # type: ignore[arg-type]
+                    _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+                ),
+                session=session,
+                candidate_id="candidate-1",
+                project_id=project.id,
+                chapter_number=1,
+                writer_output=WriterOutput(
+                    project_id=project.id,
                     chapter_number=1,
-                    writer_output=WriterOutput(
-                        project_id=project_id,
-                        chapter_number=1,
-                        title="第一章",
-                        body="林夜收下玄铁令，决定进入问心阁。",
-                        char_count=18,
-                        end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
-                        generation_meta={"structured_extraction": "deferred", "mode": "single"},
-                    ),
-                )
-            ).changes
-            assert changes is not None
-            review = BookStateReviewGate(session).review(changes)
-            assert review.approved_changes is not None
-            result = BookStateCompiler(session).compile(
-                review.approved_changes
+                    title="第一章",
+                    body="林夜收下玄铁令，决定进入问心阁。",
+                    char_count=18,
+                    end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
+                    generation_meta={"structured_extraction": "deferred", "mode": "single"},
+                ),
+                verdict=ReviewVerdict(verdict="pass", issues=[]),
+                entity_admission_plan=EntityAdmissionPlan(
+                    project_id=project.id, chapter_number=1, candidate_fingerprint="",
+                ),
             )
-            assert result.committed is True
+            nodes = BookStateRepository(session).list_world_nodes(project.id, as_of_chapter=1)
 
-            repo = BookStateRepository(session)
-            nodes = repo.list_world_nodes(project_id, as_of_chapter=1)
-            facts = repo.list_fact_nodes(project_id, as_of_chapter=1)
-
-        node_names_by_type = {(str(node.node_type), node.name) for node in nodes}
-        assert ("character", "林夜") in node_names_by_type
-        assert ("item", "玄铁令") in node_names_by_type
-        assert ("faction", "问心阁") in node_names_by_type
-        assert any("林夜获得玄铁令" in fact.proposition for fact in facts)
+        assert outcome.blocked is True
+        assert outcome.blocked_path == "chapter-delta-extraction-blocked"
+        assert client.calls == 3
+        assert nodes == []
+        payload = recorded[-1]["payload"]
+        assert isinstance(payload, dict)
+        assert [issue["code"] for issue in payload["issues"]] == ["extraction_failed"]
     finally:
         engine.dispose()

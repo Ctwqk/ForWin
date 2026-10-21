@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from forwin.protocol.book_state import WORLD_EDGE_TYPES
 
 
+# A ref to an entity the chapter introduces: ``new:<name>``.
+NEW_REF_PREFIX = "new:"
+
 EntityKind = Literal["character", "faction", "organization", "group", "item", "location", "other"]
 
 

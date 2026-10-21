@@ -1109,14 +1109,13 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "chapter_delta_extractor.py",
         "chapter_delta_schema.py",
         "chapter_input.py",
-        "contract.py",
         "evidence.py",
-        "graph_delta.py",
         "translator.py",
     ]
     assert not (ROOT / "forwin/book_state/adapter.py").exists()
     assert not (ROOT / "forwin/protocol/world_v4.py").exists()
-    assert "BookStateGraphDeltaExtractor" in (owner / "graph_delta.py").read_text(
+    assert not (ROOT / "forwin/book_state/writer_contract.py").exists()
+    assert "ChapterDeltaTranslator" in (owner / "translator.py").read_text(
         encoding="utf-8"
     )
 
@@ -1132,6 +1131,9 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "BookStateExtractionGate",
         "BookStateExtractionDeltaExtractor",
         "BookStateDeltaAdapter",
+        "BookStateGraphDeltaExtractor",
+        "WriterContractDeltaBuilder",
+        "BookStateExtractionRequest",
     ):
         assert removed_type not in production
 

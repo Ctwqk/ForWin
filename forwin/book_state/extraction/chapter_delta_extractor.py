@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import inspect
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.story_clock import (
     StoryCalendar, StoryClockError, UnknownTimeUnit, duration_to_minutes,
@@ -18,8 +19,13 @@ from forwin.utils import parse_llm_json
 from forwin.writer.prompt_core.chapter_delta import build_chapter_delta_messages
 
 from .chapter_delta_schema import ChapterDeltaExtraction, ExtractionIssue
-from .chapter_input import ChapterExtractionInput
+from .chapter_input import ChapterExtractionInput, build_chapter_extraction_input
 from .evidence import dropped_ratio, validate_evidence
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from forwin.protocol.writer import WriterOutput
 
 
 _STAGE_KEY = "chapter_delta_extraction"
@@ -47,6 +53,56 @@ def elapsed_minutes(
     )
 
 
+def ensure_chapter_delta(
+    session: Session,
+    *,
+    llm_client,
+    project_id: str,
+    chapter_number: int,
+    writer_output: WriterOutput,
+) -> tuple[WriterOutput, ChapterDeltaExtractionResult | None]:
+    """The output with an extraction of its current body; None when the attached one still matches.
+
+    A changed body is re-extracted. Without a usable LLM client the output comes back with no
+    chapter_delta and an error issue, so a stale extraction never survives a body change.
+    """
+    current = writer_output.chapter_delta
+    if current is not None and current.body_sha256 == _sha256(writer_output.body):
+        return writer_output, None
+    if not callable(getattr(llm_client, "chat", None)):
+        result = ChapterDeltaExtractionResult(
+            extraction=None,
+            issues=(ExtractionIssue(
+                severity="error", code="extraction_unavailable", path="",
+                message="No LLM client is available to extract the chapter delta.",
+            ),),
+            attempts=0,
+            prompt_trace={},
+        )
+    else:
+        result = ChapterDeltaExtractor(llm_client).extract(
+            extraction_input=build_chapter_extraction_input(
+                session, project_id=project_id, chapter_number=chapter_number,
+            ),
+            chapter_title=writer_output.title,
+            chapter_body=writer_output.body,
+            chapter_summary=writer_output.end_of_chapter_summary,
+            calendar=StoryCalendarRepository(session).get(project_id),
+            lexicon=BookLexiconRepository(session).get(project_id),
+        )
+    generation_meta = {
+        **(writer_output.generation_meta or {}),
+        "chapter_delta_issues": [issue.model_dump(mode="json") for issue in result.issues],
+    }
+    return writer_output.model_copy(
+        update={"chapter_delta": result.extraction, "generation_meta": generation_meta}
+    ), result
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 class ChapterDeltaExtractor:
     def __init__(self, llm_client, *, max_attempts: int = 3, max_tokens: int = 8000):
         self.llm_client = llm_client
@@ -72,7 +128,7 @@ class ChapterDeltaExtractor:
         # Keep the last validated candidate if a later retry fails.
         extraction = None
         issues: list[ExtractionIssue] = []
-        body_hash = hashlib.sha256(chapter_body.encode("utf-8")).hexdigest()
+        body_hash = _sha256(chapter_body)
         for attempt_no in range(1, self.max_attempts + 1):
             messages = build_chapter_delta_messages(
                 extraction_input=extraction_input, chapter_title=chapter_title,

@@ -155,11 +155,9 @@ def _immutable_rule_definition_issues(
 
 
 def _is_writer_delta(delta: GraphDelta) -> bool:
-    return (
-        str(delta.source_type or "") in {"writer", "writer_output", "writing"}
-        or str(delta.operation or "") == "apply_writer_contract"
-        or str(delta.metadata.get("extraction_path") or "") == "writer_contract"
-    )
+    return str(delta.source_type or "") in {
+        "writer", "writer_output", "writing", CHAPTER_EXTRACTION_SOURCE_TYPE,
+    }
 
 
 def _has_explicit_rule_bridge(delta: GraphDelta) -> bool:

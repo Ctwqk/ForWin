@@ -10,8 +10,7 @@ from sqlalchemy import select
 
 from forwin.book_state import BookStateCompiler, BookStateRepository
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
-from forwin.book_state.extraction.contract import BookStateExtractionResult
-from forwin.book_state.extraction.translator import ChapterDeltaTranslator
+from forwin.book_state.extraction.translator import ChapterDeltaTranslator, TranslationResult
 from forwin.book_state import reveal_schedule
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
@@ -25,6 +24,7 @@ from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
 
 
@@ -736,28 +736,28 @@ def test_review_policy_travel_tolerance() -> None:
 
 
 def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
-    changes = ApprovedGraphDeltaSet(project_id="project-1", chapter_number=3, graph_deltas=[])
+    delta = GraphDelta(id="delta-3", project_id="project-1", chapter_number=3, source_type="chapter_extraction")
     calls: list[dict[str, Any]] = []
 
-    class Extractor:
-        def __init__(self, **_kwargs: Any) -> None:
+    class Translator:
+        def __init__(self, _session: Any) -> None:
             pass
 
-        def extract(self, _request: Any) -> BookStateExtractionResult:
-            return BookStateExtractionResult(project_id="project-1", chapter_number=3, accepted=True, changes=changes)
+        def translate(self, **_kwargs: Any) -> TranslationResult:
+            return TranslationResult(delta, ())
 
     class Gate:
         def __init__(self, _session: Any) -> None:
             pass
 
         def review(self, reviewed: ApprovedGraphDeltaSet, **kwargs: Any) -> BookStateReviewVerdict:
-            calls.append(kwargs)
+            calls.append({"approved_by": reviewed.approved_by, **kwargs})
             return BookStateReviewVerdict(
                 project_id="project-1", chapter_number=3, verdict_id="verdict", accepted=True,
                 approved_changes=reviewed,
             )
 
-    monkeypatch.setattr(preparation, "BookStateGraphDeltaExtractor", Extractor)
+    monkeypatch.setattr(preparation, "ChapterDeltaTranslator", Translator)
     monkeypatch.setattr(preparation, "BookStateReviewGate", Gate)
     policy = RuntimePolicy.for_profile("standard")
     policy = policy.model_copy(update={"review": policy.review.model_copy(update={"travel_tolerance": 0.35})})
@@ -776,9 +776,14 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
         chapter_number=3,
         writer_output=WriterOutput(
             project_id="project-1", chapter_number=3, title="t", body="b", end_of_chapter_summary="s",
+            chapter_delta=chapter_delta("b"),
         ),
         verdict=ReviewVerdict(verdict="pass"),
+        entity_admission_plan=EntityAdmissionPlan(
+            project_id="project-1", chapter_number=3, candidate_fingerprint="",
+        ),
     )
 
     assert outcome.blocked is False
-    assert calls == [{"base_chapter": 2, "travel_tolerance": 0.35}]
+    assert outcome.approved_changes.graph_deltas == [delta]
+    assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35}]

@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from forwin.book_state.writer_contract import WriterContractDeltaBuilder
+from forwin.book_state.extraction.translator import ChapterDeltaTranslator
 from forwin.checker.reference_classifier import (
     LANGUAGE_GENERIC_CHARACTER_REFERENCES,
     classify_reference,
@@ -19,8 +19,9 @@ from forwin.models import Project
 from forwin.models.base import Base
 from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
-from forwin.protocol import EntityMention, WriterOutput
-from forwin.protocol.state_change import EventCandidate
+from forwin.naming.types import EntityAdmissionPlan
+from forwin.protocol import WriterOutput
+from tests.chapter_delta_helpers import chapter_delta, mention
 
 
 def _session():
@@ -116,14 +117,10 @@ def test_genre_and_story_candidates_reach_project_entity_classifier() -> None:
                 title="第一章",
                 body="馆员与基金会代理人检查 AI-7 和锚点037。",
                 end_of_chapter_summary="馆员完成检查。",
-                entity_mentions=[
-                    EntityMention(
-                        entity_name=name,
-                        entity_kind="character",
-                        is_named=True,
-                    )
-                    for name in names
-                ],
+                chapter_delta=chapter_delta(
+                    "馆员与基金会代理人检查 AI-7 和锚点037。",
+                    entity_mentions=[mention(name) for name in names],
+                ),
             ),
         )
 
@@ -199,13 +196,9 @@ def test_story_candidate_without_classifier_fails_closed() -> None:
                 title="第一章",
                 body="基金会代理人进入现场。",
                 end_of_chapter_summary="基金会代理人出现。",
-                entity_mentions=[
-                    EntityMention(
-                        entity_name="基金会代理人",
-                        entity_kind="character",
-                        is_named=True,
-                    )
-                ],
+                chapter_delta=chapter_delta(
+                    "基金会代理人进入现场。", entity_mentions=[mention("基金会代理人")],
+                ),
             ),
         )
 
@@ -216,38 +209,27 @@ def test_story_candidate_without_classifier_fails_closed() -> None:
         engine.dispose()
 
 
-def test_writer_contract_rejects_unadmitted_genre_candidate() -> None:
+def test_translator_rejects_unadmitted_genre_candidate() -> None:
     engine, session = _session()
     try:
         project = Project(title="事件候选", premise="p", genre="g")
         session.add(project)
         session.flush()
-        output = WriterOutput(
+        extraction = chapter_delta("AI-7 覆盖记录。", events=[{
+            "summary": "AI-7 覆盖记录", "participant_refs": ["new:AI-7"], "significance": "major",
+            "visibility": "public", "evidence": "AI-7 覆盖记录",
+        }])
+
+        result = ChapterDeltaTranslator(session).translate(
             project_id=project.id,
             chapter_number=1,
-            title="第一章",
-            body="AI-7 覆盖记录。",
-            end_of_chapter_summary="记录被覆盖。",
-            new_events=[
-                EventCandidate(
-                    summary="AI-7 覆盖记录",
-                    significance="major",
-                    involved_entity_names=["AI-7"],
-                )
-            ],
+            extraction=extraction,
+            admission_plan=EntityAdmissionPlan(project_id=project.id, chapter_number=1, candidate_fingerprint=""),
+            chapter_summary="记录被覆盖。",
         )
 
-        result = WriterContractDeltaBuilder(session).build(
-            project_id=project.id,
-            chapter_number=1,
-            writer_output=output,
-            review_verdict_id="review-1",
-        )
-
-        assert result.graph_deltas == []
-        assert [issue.code for issue in result.issues] == [
-            "unresolved_event_entity"
-        ]
+        assert result.delta is None
+        assert [issue.code for issue in result.issues] == ["unresolved_ref"]
     finally:
         session.close()
         engine.dispose()
@@ -265,7 +247,7 @@ def test_reference_classifier_uses_book_generic_refs() -> None:
         assert is_generic_character_name(name, extra_refs=(name,))
 
 
-def test_registrar_and_writer_contract_use_project_generic_refs() -> None:
+def test_registrar_and_translator_use_project_generic_refs() -> None:
     from forwin.book_state.book_frame_repository import BookLexiconRepository
     from forwin.book_state.lexicon import BookLexicon
 
@@ -284,8 +266,14 @@ def test_registrar_and_writer_contract_use_project_generic_refs() -> None:
         output = WriterOutput(
             project_id=project.id, chapter_number=1, title="t", body="店小二遇见甲乙。",
             end_of_chapter_summary="店小二出现。",
-            entity_mentions=[EntityMention(entity_name=name, entity_kind="character", is_named=True) for name in ("店小二", "甲乙")],
-            new_events=[EventCandidate(summary="店小二出现", significance="major", involved_entity_names=["店小二"])],
+            chapter_delta=chapter_delta(
+                "店小二遇见甲乙。",
+                entity_mentions=[mention(name) for name in ("店小二", "甲乙")],
+                events=[{
+                    "summary": "店小二出现", "participant_refs": ["new:店小二"], "significance": "major",
+                    "visibility": "public", "evidence": "店小二遇见甲乙",
+                }],
+            ),
         )
         classifier = CapturingClassifier()
         result = EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
@@ -295,10 +283,11 @@ def test_registrar_and_writer_contract_use_project_generic_refs() -> None:
         assert set(result.background_generic_names) == {"店小二", "甲乙"}
         assert classifier.names == ["甲乙"]
         assert classifier.refs == frozenset({"店小二"})
-        contract = WriterContractDeltaBuilder(session).build(
-            project_id=project.id, chapter_number=1, writer_output=output, review_verdict_id="review-1",
+        translation = ChapterDeltaTranslator(session).translate(
+            project_id=project.id, chapter_number=1, extraction=output.chapter_delta,
+            admission_plan=result.plan, chapter_summary=output.end_of_chapter_summary,
         )
-        assert not any(issue.code == "unresolved_event_entity" for issue in contract.issues)
+        assert translation.issues == ()
     finally:
         session.close()
         engine.dispose()

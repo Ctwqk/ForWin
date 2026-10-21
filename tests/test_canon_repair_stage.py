@@ -35,6 +35,7 @@ from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from tests.chapter_delta_helpers import stub_chapter_delta_extraction
 
 
 def _session_factory():
@@ -54,6 +55,12 @@ def _isolate_canon_repair_from_hard_floor(monkeypatch):
         "run_hard_floor",
         lambda **_kwargs: HardFloorResult(passed=True),
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_chapter_delta(monkeypatch):
+    # The pipelines here keep the unconfigured LLM client; their candidates still need an extraction.
+    stub_chapter_delta_extraction(monkeypatch)
 
 
 def _build_pipeline(

@@ -11,8 +11,9 @@ from forwin.models.draft import ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.book_state import BookStateQuery, BookStateRepository
 from forwin.generation.pipeline import ChapterPipeline
-from forwin.protocol import EntityMention, WriterOutput
+from forwin.protocol import WriterOutput
 from forwin.protocol.book_state import WorldNode
+from tests.chapter_delta_helpers import chapter_delta, mention
 
 
 def _session():
@@ -86,18 +87,16 @@ def test_entity_registrar_builds_four_outcome_plan_without_mutating_entities() -
         )
         session.flush()
         _seed_book_state_character(session, project.id)
+        body = "猎锚者X提醒陆明，灰鹞截断了宁网的链路，突兀主角却突然出现。"
         output = WriterOutput(
             project_id=project.id,
             chapter_number=6,
             title="第6章",
-            body="猎锚者X提醒陆明，灰鹞截断了宁网的链路，突兀主角却突然出现。",
+            body=body,
             end_of_chapter_summary="陆明听见猎锚者X的远程声音。",
-            entity_mentions=[
-                EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character"),
-                EntityMention(entity_name="灰鹞", entity_kind="character"),
-                EntityMention(entity_name="宁网", entity_kind="character"),
-                EntityMention(entity_name="突兀主角", entity_kind="character"),
-            ],
+            chapter_delta=chapter_delta(body, entity_mentions=[
+                mention(name) for name in ("猎锚者X（远程声音）", "灰鹞", "宁网", "突兀主角")
+            ]),
         )
 
         result = EntityRegistrar(
@@ -174,10 +173,9 @@ def test_entity_admission_plan_applies_only_at_canon_boundary() -> None:
                 title="第6章",
                 body="猎锚者X提醒灰鹞切断链路。",
                 end_of_chapter_summary="远程协作建立。",
-                entity_mentions=[
-                    EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character"),
-                    EntityMention(entity_name="灰鹞", entity_kind="character"),
-                ],
+                chapter_delta=chapter_delta("猎锚者X提醒灰鹞切断链路。", entity_mentions=[
+                    mention("猎锚者X（远程声音）"), mention("灰鹞"),
+                ]),
             ),
         )
 
@@ -248,13 +246,7 @@ def test_entity_registrar_classifier_failure_is_recorded_as_plan_conflict() -> N
             title="第2章",
             body="突兀角色进入现场。",
             end_of_chapter_summary="突兀角色出现。",
-            entity_mentions=[
-                EntityMention(
-                    entity_name="突兀角色",
-                    entity_kind="character",
-                    is_named=True,
-                )
-            ],
+            chapter_delta=chapter_delta("突兀角色进入现场。", entity_mentions=[mention("突兀角色")]),
         )
 
         result = EntityRegistrar(

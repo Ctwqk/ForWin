@@ -47,10 +47,10 @@ def test_scanner_detects_story_id_fstring_prefix() -> None:
     hits = _scan(
         """
         def build(n):
-            return f"fact_pulp_light_ch{n}"
+            return f"fact_sample_ch{n}"
         """
     )
-    assert _literals(hits, "story_id_literal") == ["f'fact_pulp_light_ch{n}'"]
+    assert _literals(hits, "story_id_literal") == ["f'fact_sample_ch{n}'"]
 
 
 def test_scanner_exempts_story_id_keys_and_accessors() -> None:

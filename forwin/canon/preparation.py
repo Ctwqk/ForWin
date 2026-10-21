@@ -9,11 +9,9 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
-from forwin.book_state.extraction.contract import (
-    BookStateExtractionRequest,
-    BookStateExtractionResult,
-)
-from forwin.book_state.extraction.graph_delta import BookStateGraphDeltaExtractor
+from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
+from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
+from forwin.book_state.extraction.translator import ChapterDeltaTranslator
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
@@ -43,7 +41,7 @@ from .types import CanonPreparationOutcome
 class BookStatePreparationOutcome:
     approved_changes: ApprovedGraphDeltaSet | None = None
     blocked_path: str = ""
-    extraction: BookStateExtractionResult | None = None
+    extraction: ChapterDeltaExtraction | None = None
     review_verdict: BookStateReviewVerdict | None = None
 
     @property
@@ -83,43 +81,80 @@ class BookStateCanonPreparer:
         chapter_number: int,
         writer_output: WriterOutput,
         verdict: ReviewVerdict,
+        entity_admission_plan: EntityAdmissionPlan,
     ) -> BookStatePreparationOutcome:
         del verdict
-        extraction = BookStateGraphDeltaExtractor(
-            session=session,
-        ).extract(
-            BookStateExtractionRequest(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                writer_output=writer_output.model_copy(
-                    update={"project_id": project_id}
-                ),
-                review_verdict_id=(
-                    f"book_state_direct_review_{project_id}_{chapter_number}"
-                ),
-            )
+        # The review path attached an extraction of this body. Re-extraction only
+        # happens for a missing or stale one; it keeps the verified admission plan,
+        # so a new character ref the plan does not cover fails translation.
+        writer_output, extraction_result = ensure_chapter_delta(
+            session,
+            llm_client=context.llm_client,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
         )
-        if not extraction.accepted or extraction.changes is None:
+        if extraction_result is not None and context.save_prompt_trace is not None:
+            context.save_prompt_trace(
+                session=session,
+                updater=StateUpdater(session),
+                project_id=project_id,
+                prompt_trace=extraction_result.prompt_trace,
+            )
+        extraction = writer_output.chapter_delta
+        if extraction is None:
             _record_book_state_block(
                 context=context,
                 session=session,
                 candidate_id=candidate_id,
                 project_id=project_id,
                 chapter_number=chapter_number,
-                gate_id="book_state_extraction",
-                blocked_path="book-state-direct-extraction-blocked",
-                issues=extraction.issues,
+                gate_id="chapter_delta_extraction",
+                blocked_path="chapter-delta-extraction-blocked",
+                issues=list(extraction_result.issues) if extraction_result else [],
                 related_object_type="candidate_draft",
                 related_object_id=candidate_id,
             )
             return BookStatePreparationOutcome(
-                blocked_path="book-state-direct-extraction-blocked",
+                blocked_path="chapter-delta-extraction-blocked",
+            )
+        review_verdict_id = f"book_state_direct_review_{project_id}_{chapter_number}"
+        translation = ChapterDeltaTranslator(session).translate(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            extraction=extraction,
+            admission_plan=entity_admission_plan,
+            chapter_summary=writer_output.end_of_chapter_summary,
+            review_verdict_id=review_verdict_id,
+        )
+        if translation.delta is None:
+            _record_book_state_block(
+                context=context,
+                session=session,
+                candidate_id=candidate_id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                gate_id="chapter_delta_translation",
+                blocked_path="chapter-delta-translation-blocked",
+                issues=list(translation.issues),
+                related_object_type="candidate_draft",
+                related_object_id=candidate_id,
+            )
+            return BookStatePreparationOutcome(
+                blocked_path="chapter-delta-translation-blocked",
                 extraction=extraction,
             )
+        changes = ApprovedGraphDeltaSet(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            graph_deltas=[translation.delta],
+            approved_by=["chapter_extraction"],
+            review_verdict_id=review_verdict_id,
+        )
         # Chapter canon is reviewed against the canon before the chapter, even
         # when a historical rewrite still holds the chapter's old deltas.
         review = BookStateReviewGate(session).review(
-            extraction.changes,
+            changes,
             base_chapter=max(chapter_number - 1, 0),
             travel_tolerance=context.policy.review.travel_tolerance,
         )
@@ -369,6 +404,7 @@ class CanonPreparationService:
                 chapter_number=chapter_number,
                 writer_output=writer_output,
                 verdict=verdict,
+                entity_admission_plan=entity_admission_plan,
             )
         except Exception as exc:  # noqa: BLE001
             _mark_candidate_failed(

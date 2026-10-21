@@ -4,10 +4,6 @@ from importlib import import_module
 
 
 _EXPORT_MODULES = {
-    "BookStateExtractionIssue": ".contract",
-    "BookStateExtractionRequest": ".contract",
-    "BookStateExtractionResult": ".contract",
-    "BookStateGraphDeltaExtractor": ".graph_delta",
     "ChapterDeltaExtraction": ".chapter_delta_schema",
     "ExtractionIssue": ".chapter_delta_schema",
     "ChapterDeltaTranslator": ".translator",
@@ -30,10 +26,6 @@ def __getattr__(name: str):
     return value
 
 __all__ = [
-    "BookStateExtractionIssue",
-    "BookStateExtractionRequest",
-    "BookStateExtractionResult",
-    "BookStateGraphDeltaExtractor",
     "ChapterDeltaExtraction",
     "ExtractionIssue",
     "ChapterDeltaTranslator",

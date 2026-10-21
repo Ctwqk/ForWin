@@ -92,24 +92,6 @@ justification = "给运营的建议说明文字（design §7.2 豁免的说明�
 max_literals = 2
 
 [[entry]]
-path = "forwin/book_state/extraction/graph_delta.py"
-symbol = "_light_state_extraction_delta"
-checks = ["story_id_literal", "cjk_regex"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "pulp_light 正则造节点兜底（含 fact_pulp_light_ch 前缀）；P2 删除"
-max_literals = 4
-
-[[entry]]
-path = "forwin/book_state/extraction/graph_delta.py"
-symbol = "_unique_light_names"
-checks = ["cjk_membership"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "正则兜底的动词停用表；P2 随兜底一起删除"
-max_literals = 9
-
-[[entry]]
 path = "forwin/canon_names.py"
 symbol = "_COMMON_COMPOUND_SURNAMES"
 checks = ["cjk_collection"]

@@ -41,6 +41,7 @@ from forwin.protocol.book_state import (
 
 from .chapter_delta_extractor import elapsed_minutes
 from .chapter_delta_schema import (
+    NEW_REF_PREFIX,
     ChapterDeltaExtraction,
     Duration,
     EntityChange,
@@ -59,7 +60,6 @@ from .chapter_delta_schema import (
 
 
 SOURCE_TYPE = "chapter_extraction"
-NEW_REF_PREFIX = "new:"
 READER_REF = "reader"
 _THREAD_REF_PREFIX = "plot_thread:"
 # MapGraph adds a runtime copy of every bidirectional edge under this suffix.

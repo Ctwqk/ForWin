@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
+from forwin.protocol.experience import RewardTag
 
 
 @dataclass(frozen=True)
@@ -103,11 +104,17 @@ def _fulfillment_targets(session: Session, project_id: str, plan: ChapterPlan | 
                 (obligation.payoff_test or obligation.summary or ref) if obligation else ref,
             ))
     rewards = experience.get("planned_reward_tags", []) if isinstance(experience, dict) else []
-    if isinstance(rewards, list):
-        targets.extend(
-            FulfillmentTarget(f"reward:{tag}", tag)
-            for tag in dict.fromkeys(tag for tag in rewards if isinstance(tag, str) and tag)
-        )
+    planned = list(dict.fromkeys(
+        tag for tag in (rewards if isinstance(rewards, list) else []) if isinstance(tag, str) and tag
+    ))
+    # Every reward tag is a target so an unplanned payoff the chapter delivers still counts;
+    # the planned ones come first.
+    targets.extend(FulfillmentTarget(f"reward:{tag}", f"{tag} (planned)") for tag in planned)
+    targets.extend(
+        FulfillmentTarget(f"reward:{tag}", f"{tag} (optional)")
+        for tag in get_args(RewardTag)
+        if tag not in planned
+    )
     return tuple(targets)
 
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 import httpx
+from pydantic import ValidationError
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import ScenePlan, SceneOutput
@@ -10,6 +12,33 @@ from forwin.writer.chapter_writer import ChapterWriter
 
 
 class SplitWriterPipelineTests(unittest.TestCase):
+    def test_writer_output_rebases_generic_numeric_title_to_context_chapter(self) -> None:
+        writer = ChapterWriter(
+            llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}")
+        )
+
+        output = writer._writer_output_from_dict(
+            SimpleNamespace(project_id="project-1", chapter_number=29),
+            {
+                "title": "第11章",
+                "body": "林夜继续追踪潮门。",
+                "end_of_chapter_summary": "林夜抵达潮门。",
+            },
+        )
+
+        self.assertEqual(output.title, "第29章")
+
+    def test_writer_output_rejects_non_string_body(self) -> None:
+        writer = ChapterWriter(
+            llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}")
+        )
+
+        with self.assertRaises(ValidationError):
+            writer._writer_output_from_dict(
+                SimpleNamespace(project_id="project-1", chapter_number=1),
+                {"title": "第一章", "body": {"text": "正文"}},
+            )
+
     def test_preview_generation_rejects_removed_json_preview_fallback(self) -> None:
         class FakeClient:
             def chat(

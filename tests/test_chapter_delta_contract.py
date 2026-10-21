@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -230,8 +231,14 @@ def test_build_input_collects_entities_locations_targets_secrets() -> None:
             assert {row.id for row in result.locations} == {"node-old-city", "node-ruins"}
             assert {row.target_id: row.description for row in result.fulfillment_targets} == {
                 "goal:1": "Reach the site", "obligation:owed": "Debt is paid",
-                "obligation:legacy": "Legacy obligation", "reward:mystery": "mystery",
+                "obligation:legacy": "Legacy obligation", "reward:mystery": "mystery (planned)",
+                "reward:power": "power (optional)", "reward:social": "social (optional)",
+                "reward:justice": "justice (optional)", "reward:emotion": "emotion (optional)",
             }
+            # Planned rewards come first, then every other reward tag.
+            assert [row.target_id for row in result.fulfillment_targets if row.target_id.startswith("reward:")] == [
+                "reward:mystery", "reward:power", "reward:social", "reward:justice", "reward:emotion",
+            ]
             assert [(row.fact_ref, row.proposition, row.sensitivity) for row in result.secrets] == [
                 (f"fact:{seed_ref_id(project.id, 'fact', 'fact-seal')}", "遗迹封印正在松动", "secret"),
             ]
@@ -240,6 +247,43 @@ def test_build_input_collects_entities_locations_targets_secrets() -> None:
             assert result.travel_modes == ("walk",)
             assert [(row.owner_id, row.summary, row.status) for row in result.intents] == [(hero_id, "潜入地下遗迹", "planned")]
     finally:
+        engine.dispose()
+
+
+def test_input_without_planned_rewards_still_offers_every_reward_target() -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from forwin.models.base import Base
+    from forwin.models.project import ArcPlanVersion, ChapterPlan
+    from forwin.protocol.experience import RewardTag
+    from forwin.runtime.policy import RuntimePolicy
+    from forwin.state.updater import StateUpdater
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        project = StateUpdater(session).create_project(
+            title="rewards", premise="p", genre="g", runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
+        arc = ArcPlanVersion(project_id=project.id, arc_synopsis="arc")
+        session.add(arc)
+        session.flush()
+        session.add(ChapterPlan(
+            project_id=project.id, arc_plan_id=arc.id, chapter_number=1,
+            goals_json=json.dumps(["Reach the site"]), experience_plan_json="{}",
+        ))
+        session.flush()
+
+        result = build_chapter_extraction_input(session, project_id=project.id, chapter_number=1)
+
+        assert [(row.target_id, row.description) for row in result.fulfillment_targets] == [
+            ("goal:1", "Reach the site"),
+            *((f"reward:{tag}", f"{tag} (optional)") for tag in get_args(RewardTag)),
+        ]
+    finally:
+        session.close()
         engine.dispose()
 
 

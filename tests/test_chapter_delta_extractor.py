@@ -254,6 +254,21 @@ def test_prompt_carries_tables_and_secret_list_but_marks_it_label_only():
     assert all(name in messages[0]["content"] for name in ChapterDeltaExtraction.model_fields)
 
 
+def test_prompt_limits_participants_and_movers_to_entities_acting_by_themselves():
+    system = build_chapter_delta_messages(
+        extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY, chapter_summary="Summary only",
+    )[0]["content"]
+    assert "participant_refs 与 movements 的 entity_ref 只填自己行动或自己移动的实体" in system
+    assert "被哀悼、埋葬、发现或搬运的死者写进事件 summary" in system
+
+
+def test_prompt_explains_planned_and_optional_reward_targets():
+    system = build_chapter_delta_messages(
+        extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY, chapter_summary="Summary only",
+    )[0]["content"]
+    assert "optional 的 reward 目标只在正文确实兑现时记录" in system
+
+
 @pytest.mark.parametrize("feedback", [(), ("fix evidence",)])
 def test_prompt_feedback_header_is_conditional(feedback):
     messages = build_chapter_delta_messages(

@@ -13,8 +13,9 @@ from forwin.checker.pulp_beat import delivered_payoffs_from_fulfillment, verify_
 from forwin.checker.rules import ContinuityChecker
 from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.protocol.context import ChapterContextPack, EntitySnapshot
+from forwin.protocol.context import ChapterContextPack, EntitySnapshot, PlotThreadSnapshot, ReviewContextPack
 from forwin.protocol.writer import WriterOutput
+from forwin.review.webnovel import WebNovelExperienceReviewer
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
@@ -60,37 +61,62 @@ def _event(*refs: str, flashback: bool = False) -> dict[str, Any]:
 
 
 class _FakeBookState:
-    def __init__(self, entities: list[EntitySnapshot]) -> None:
+    """BookState as of a chapter: a character is dead from the chapter of its death on."""
+
+    def __init__(
+        self,
+        entities: list[EntitySnapshot],
+        *,
+        deaths: dict[str, int] | None = None,
+        threads: list[PlotThreadSnapshot] | None = None,
+    ) -> None:
         self.entities = entities
+        self.deaths = deaths or {}
+        self.threads = threads or []
 
     def active_entities(self, project_id, *, as_of_chapter, kinds=None):  # noqa: ANN001, ANN201
-        return [entity for entity in self.entities if kinds is None or entity.kind in kinds]
+        return [
+            entity.model_copy(update={"current_state": {
+                **entity.current_state,
+                "alive_status": "dead" if self.deaths.get(entity.entity_id, 10**9) <= as_of_chapter else "alive",
+            }})
+            for entity in self.entities
+            if kinds is None or entity.kind in kinds
+        ]
 
     def canon_name_anchors(self, project_id, *, as_of_chapter):  # noqa: ANN001, ANN201
         return []
 
     def active_threads(self, project_id, *, as_of_chapter):  # noqa: ANN001, ANN201
-        return []
+        return list(self.threads)
 
 
-def _dead_issues(output: WriterOutput) -> list:
-    checker = ContinuityChecker(
+def _checker(**book_state: Any) -> ContinuityChecker:
+    return ContinuityChecker(
         SimpleNamespace(),
         min_chars=10,
         max_chars=1000,
         book_state_query=_FakeBookState([
             EntitySnapshot(
                 entity_id="char-a", kind="character", name="甲", description="",
-                current_state={"status": "已死", "alive_status": "alive"},
+                current_state={"status": "已死"},
             ),
             EntitySnapshot(
                 entity_id="char-b", kind="character", name="乙", aliases=["老乙"], description="",
-                current_state={"status": "在场", "alive_status": "dead"},
+                current_state={"status": "在场"},
             ),
-        ]),
+        ], **book_state),
     )
-    verdict = checker.check("p1", output)
-    return [issue for issue in verdict.issues if issue.rule_name == "dead_character_active"]
+
+
+def _issues(output: WriterOutput, rule_name: str, **book_state: Any) -> list:
+    verdict = _checker(**book_state).check("p1", output)
+    return [issue for issue in verdict.issues if issue.rule_name == rule_name]
+
+
+def _dead_issues(output: WriterOutput) -> list:
+    # 乙 died in chapter 4; the chapter under review is chapter 5.
+    return _issues(output, "dead_character_active", deaths={"char-b": 4})
 
 
 def test_dead_character_check_reads_alive_status_not_status_text() -> None:
@@ -112,6 +138,58 @@ def test_dead_character_check_reads_alive_status_not_status_text() -> None:
     assert len(_dead_issues(_output(events=[_event("new:老乙")]))) == 1
     # No extraction degrades to no extracted facts.
     assert _dead_issues(_output().model_copy(update={"chapter_delta": None})) == []
+
+
+def test_dead_character_check_counts_deaths_as_of_the_previous_chapter() -> None:
+    output = _output(events=[_event("char-b")])
+
+    # A character who dies in this chapter (5) is not dead as of chapter 4.
+    assert _issues(output, "dead_character_active", deaths={"char-b": 5}) == []
+    assert len(_issues(output, "dead_character_active", deaths={"char-b": 4})) == 1
+
+
+def test_thread_beat_on_a_closed_thread_warns() -> None:
+    threads = [
+        PlotThreadSnapshot(thread_id="thread-old", name="旧案", description="", status="resolved", priority=5),
+        PlotThreadSnapshot(thread_id="thread-ledger", name="账本", description="", status="active", priority=5),
+    ]
+    output = _output(thread_beats=[
+        {"thread_ref": "plot_thread:thread-old", "beat_type": "advance", "evidence": "乙把账本交给甲"},
+        {"new_thread_title": "旧案", "beat_type": "advance", "evidence": "乙把账本交给甲"},
+        {"thread_ref": "thread-ledger", "beat_type": "advance", "evidence": "乙把账本交给甲"},
+    ])
+
+    issues = _issues(output, "thread_already_closed", threads=threads)
+
+    assert [(issue.severity, issue.description.count("旧案")) for issue in issues] == [
+        ("warning", 1), ("warning", 1),
+    ]
+
+
+def test_entity_change_and_event_structure_warnings() -> None:
+    output = _output(
+        entity_changes=[
+            {"ref": " ", "field": "mood", "new_value": "警觉", "evidence": "乙把账本交给甲"},
+            {"ref": "char-a", "field": " ", "new_value": "警觉", "evidence": "乙把账本交给甲"},
+        ],
+        events=[{**_event("char-a"), "summary": " "}],
+    )
+    verdict = _checker().check("p1", output)
+
+    assert {
+        (issue.rule_name, issue.severity)
+        for issue in verdict.issues
+        if issue.rule_name in {"empty_entity_name", "empty_field_name", "event_summary_empty"}
+    } == {
+        ("empty_entity_name", "warning"), ("empty_field_name", "warning"), ("event_summary_empty", "warning"),
+    }
+    clean = _checker().check("p1", _output(
+        entity_changes=[{"ref": "char-a", "field": "mood", "new_value": "警觉", "evidence": "乙把账本交给甲"}],
+        events=[_event("char-a")],
+    ))
+    assert not {"empty_entity_name", "empty_field_name", "event_summary_empty"} & {
+        issue.rule_name for issue in clean.issues
+    }
 
 
 def _policy() -> RuntimePolicy:
@@ -136,6 +214,11 @@ def _hard_floor(output: WriterOutput):
 
 def test_hard_floor_counts_events_from_chapter_delta() -> None:
     assert _hard_floor(_output(events=[_event("char-a")])).checks["at_least_one_event"] is True
+    # Every fact-bearing list counts, e.g. a chapter whose only fact is a movement.
+    movement_only = _output(movements=[{
+        "entity_ref": "char-a", "from_ref": "site-1", "to_ref": "site-2", "evidence": "两人一起走向码头",
+    }])
+    assert _hard_floor(movement_only).checks["at_least_one_event"] is True
     assert _hard_floor(_output()).checks["at_least_one_event"] is False
     missing = _hard_floor(_output().model_copy(update={"chapter_delta": None}))
     assert missing.checks["at_least_one_event"] is False
@@ -161,6 +244,21 @@ def test_pulp_payoff_from_plan_fulfillment_reward_targets() -> None:
     # A quote the body does not contain is no evidence.
     elsewhere = verify_pulp_beats("甲什么也没看见。", track=None, delivered_payoffs=payoffs)
     assert elsewhere.visible_payoff_present is False
+
+
+def test_payoff_evidence_quote_is_four_to_240_characters() -> None:
+    body = "甲" + "乙看见了账本上的暗记。" * 30
+
+    def payoffs(evidence: str) -> list[str]:
+        delta = chapter_delta(body, plan_fulfillment=[
+            {"target_id": "reward:mystery", "status": "done", "evidence": evidence},
+        ])
+        return [payoff.target_id for payoff in delivered_payoffs_from_fulfillment(delta)]
+
+    assert payoffs("甲") == []
+    assert payoffs("乙看 见了") == ["reward:mystery"]
+    assert payoffs(body[1:241]) == ["reward:mystery"]
+    assert payoffs(body[1:242]) == []
 
 
 def test_candidate_columns_filled_from_chapter_delta() -> None:
@@ -233,6 +331,24 @@ def test_writer_no_longer_runs_structured_extraction() -> None:
     assert output.generation_meta["mode"] == "scene"
     assert output.generation_meta["call_count"] == 3
     assert not any("structured_extraction" in key for key in output.generation_meta)
+
+
+def test_webnovel_reviewer_counts_every_fact_list_as_progress() -> None:
+    reviewer = WebNovelExperienceReviewer(llm_enabled=False)
+    movement_only = _output(movements=[{
+        "entity_ref": "char-a", "from_ref": "site-1", "to_ref": "site-2", "evidence": "两人一起走向码头",
+    }])
+    context = ReviewContextPack(
+        project_id="p1", project_title="测试", chapter_number=5,
+        chapter_plan_title="第五章", chapter_plan_one_line="碰面",
+    )
+
+    score, refs = reviewer._progress_score(context, movement_only)
+
+    assert reviewer._is_assessable(movement_only) is True
+    assert score > 0
+    assert "movement:char-a:site-1->site-2" in refs
+    assert reviewer._is_assessable(_output()) is False
 
 
 def test_writer_output_has_no_legacy_structured_fields() -> None:

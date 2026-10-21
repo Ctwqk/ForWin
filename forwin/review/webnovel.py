@@ -56,6 +56,27 @@ def _thread_label(beat: ThreadBeat) -> str:
     return beat.thread_ref or beat.new_thread_title
 
 
+def _state_change_refs(delta: ChapterDeltaExtraction) -> list[str]:
+    """Every change the chapter makes to the world, the same lists the hard floor counts."""
+    return [
+        *(
+            f"state:{_entity_label(item)}.{item.field}:{_trim(item.new_value)}"
+            for item in delta.entity_changes
+        ),
+        *(
+            f"relation:{item.source_ref}->{item.target_ref}:{item.edge_type}:{item.op}"
+            for item in delta.relation_changes
+        ),
+        *(f"knowledge:{item.observer_ref}:{item.state}" for item in delta.knowledge_events),
+        *(f"movement:{item.entity_ref}:{item.from_ref}->{item.to_ref}" for item in delta.movements),
+        *(
+            f"item:{item.new_item.name if item.new_item is not None else item.item_ref}:"
+            f"{item.from_ref}->{item.to_ref}"
+            for item in delta.item_transfers
+        ),
+    ]
+
+
 def _elapsed_label(delta: ChapterDeltaExtraction) -> str:
     elapsed = delta.time.elapsed
     return f"{elapsed.amount:g}{elapsed.unit}" if elapsed is not None else ""
@@ -389,7 +410,7 @@ class WebNovelExperienceReviewer:
             writer_output.scene_outputs
             or delta.events
             or delta.thread_beats
-            or delta.entity_changes
+            or _state_change_refs(delta)
             or delta.time.elapsed is not None
         )
 
@@ -449,12 +470,10 @@ class WebNovelExperienceReviewer:
                 f"thread:{_thread_label(beat)}:{beat.beat_type}:{_trim(beat.evidence)}"
                 for beat in delta.thread_beats[:3]
             )
-        if delta.entity_changes:
+        state_refs = _state_change_refs(delta)
+        if state_refs:
             points += 0.2
-            refs.extend(
-                f"state:{_entity_label(item)}.{item.field}:{_trim(item.new_value)}"
-                for item in delta.entity_changes[:3]
-            )
+            refs.extend(state_refs[:3])
         if delta.time.elapsed is not None:
             points += 0.1
             refs.append(f"time:{_elapsed_label(delta)}:{_trim(delta.time.evidence)}")

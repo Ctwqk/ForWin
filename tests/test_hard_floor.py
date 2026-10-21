@@ -283,6 +283,8 @@ def test_pulp_hard_floor_uses_explicit_planned_power_delivery() -> None:
 
 
 def test_pulp_hard_floor_uses_declared_delivered_payoff() -> None:
+    # The chapter plans no reward, but the extraction input offers every reward tag as an
+    # optional target, so an unplanned payoff the extractor marks done still counts.
     body = "系统提示写明：陈默的临时追件视野已解锁，他立刻看见了目标的因果线。"
     result = run_hard_floor(
         writer_output=_writer(

@@ -7,11 +7,14 @@ from typing import get_args
 from pydantic import BaseModel, Field
 
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
-from forwin.book_state.extraction.evidence import evidence_in_body
+from forwin.book_state.extraction.evidence import evidence_in_body, normalize_for_evidence
 from forwin.protocol.experience import RewardTag
 
 
 _REWARD_TARGET_PREFIX = "reward:"
+# Bounds on a payoff quote's length, whitespace aside.
+_MIN_PAYOFF_QUOTE_CHARS = 4
+_MAX_PAYOFF_QUOTE_CHARS = 240
 
 
 class PulpBeatResult(BaseModel):
@@ -39,17 +42,18 @@ class DeliveredPayoffCandidate(BaseModel):
 def delivered_payoffs_from_fulfillment(
     chapter_delta: ChapterDeltaExtraction | None,
 ) -> tuple[DeliveredPayoffCandidate, ...]:
-    """Reward targets the chapter delta marks done with evidence."""
+    """Reward targets the chapter delta marks done with a 4–240 character quote."""
     if chapter_delta is None:
         return ()
     payoffs: list[DeliveredPayoffCandidate] = []
     for item in chapter_delta.plan_fulfillment:
         category = item.target_id.removeprefix(_REWARD_TARGET_PREFIX)
+        quote_chars = len(normalize_for_evidence(item.evidence))
         if (
             item.status != "done"
             or not item.target_id.startswith(_REWARD_TARGET_PREFIX)
             or category not in get_args(RewardTag)
-            or not item.evidence.strip()
+            or not _MIN_PAYOFF_QUOTE_CHARS <= quote_chars <= _MAX_PAYOFF_QUOTE_CHARS
         ):
             continue
         payoffs.append(

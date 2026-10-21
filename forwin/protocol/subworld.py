@@ -71,11 +71,3 @@ class ChapterEntryTarget(BaseModel):
     entity_name: str = ""
     subworld_id: str = ""
     role_hint: str = ""
-
-
-class EntityMention(BaseModel):
-    entity_name: str = ""
-    entity_kind: str = "character"
-    is_named: bool = True
-    is_on_stage: bool = True
-    evidence_refs: list[str] = Field(default_factory=list)

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import forwin.review.llm_webnovel as llm_webnovel
 from forwin.protocol.context import ReviewContextPack
-from forwin.protocol.state_change import StateChangeCandidate
-from forwin.protocol.writer import LoreCandidate, WriterOutput
+from forwin.protocol.writer import WriterOutput
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.llm_webnovel import LLMWebNovelReviewer
+from tests.chapter_delta_helpers import chapter_delta
 
 
 def test_llm_reviewer_payload_includes_deterministic_quality_report() -> None:
@@ -57,30 +57,31 @@ def test_llm_reviewer_compares_rule_claims_with_exact_canon_invariant() -> None:
         chapter_plan_one_line="再次验证通行协议",
         canon_invariants=[invariant],
     )
+    body = "众人宣称三印同亮后门会右移两格。"
     writer_output = WriterOutput(
         project_id="p1",
         chapter_number=6,
         title="第六章",
-        body="众人宣称三印同亮后门会右移两格。",
+        body=body,
         end_of_chapter_summary="通行协议再次触发。",
-        state_changes=[
-            StateChangeCandidate(
-                entity_name="通行协议",
-                entity_kind="rule",
-                field="public_version",
-                old_value="三印同亮，门右移一格。",
-                new_value="三印同亮，门右移两格。",
-                reason="正文宣称规则发生变化",
-            )
-        ],
-        lore_candidates=[
-            LoreCandidate(
-                subject_name="通行协议",
-                subject_type="rule",
-                description="三印同亮，门右移两格。",
-                evidence_refs=["body:门会右移两格"],
-            )
-        ],
+        chapter_delta=chapter_delta(
+            body,
+            entity_changes=[
+                {
+                    "ref": "rule-transit-protocol",
+                    "field": "definition",
+                    "new_value": "三印同亮，门右移两格。",
+                    "evidence": "三印同亮后门会右移两格",
+                },
+                # Only changes to known rule nodes are rule claims.
+                {
+                    "ref": "char-1",
+                    "field": "mood",
+                    "new_value": "惊疑",
+                    "evidence": "众人宣称",
+                },
+            ],
+        ),
     )
     reviewer = LLMWebNovelReviewer(enabled=False)
 
@@ -98,18 +99,14 @@ def test_llm_reviewer_compares_rule_claims_with_exact_canon_invariant() -> None:
         == "canon_invariant:book_state_rule:rule-transit-protocol"
     )
     assert "三印同亮，门右移一格。" in invariant_evidence["summary"]
-    assert {
-        "source": "state_change",
-        "subject_name": "通行协议",
-        "field": "public_version",
-        "claim": "三印同亮，门右移两格。",
-    } in payload["draft"]["rule_claims"]
-    assert {
-        "source": "lore_candidate",
-        "subject_name": "通行协议",
-        "field": "public_version",
-        "claim": "三印同亮，门右移两格。",
-    } in payload["draft"]["rule_claims"]
+    assert payload["draft"]["rule_claims"] == [
+        {
+            "source": "entity_change",
+            "subject_name": "通行协议",
+            "field": "public_version",
+            "claim": "三印同亮，门右移两格。",
+        }
+    ]
     prompt = "\n".join(item["content"] for item in messages)
     assert "canon invariant 优先于章节计划、摘要和本章声称" in prompt
     assert "静默改写规则定义必须 fail" in prompt

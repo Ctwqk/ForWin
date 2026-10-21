@@ -22,20 +22,6 @@ class _FakeWriterLLM:
         self.base_url = "http://fake.invalid/v1"
 
     def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        if kwargs.get("response_format"):
-            return json.dumps(
-                {
-                    "state_changes": [],
-                    "new_events": [],
-                    "thread_beats": [],
-                    "time_advance": None,
-                    "lore_candidates": [],
-                    "timeline_hints": [],
-                    "writer_notes": [],
-                    "entity_mentions": [],
-                },
-                ensure_ascii=False,
-            )
         body = "雨夜里，他第一次看见那面会说话的镜子。" * 150
         return (
             "<<FORWIN_TITLE>>\n"

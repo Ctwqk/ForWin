@@ -11,18 +11,6 @@ REQUIRED_JSON_KEYS: dict[str, list[str]] = {
     "genesis_brief": ["title", "one_line", "audience"],
     "arc_plan": ["chapters"],
     "scene_breakdown": ["scenes"],
-    "state_event_extraction": [
-        "state_changes",
-        "new_events",
-        "delivered_payoffs",
-    ],
-    "thread_time_extraction": ["thread_beats"],
-    "lore_timeline_notes": [
-        "lore_candidates",
-        "timeline_hints",
-        "writer_notes",
-        "entity_mentions",
-    ],
     "review_json": ["verdict", "issues"],
     "comment_analysis": ["signals"],
     "world_pressure": ["pressure_level", "pressure_summary"],

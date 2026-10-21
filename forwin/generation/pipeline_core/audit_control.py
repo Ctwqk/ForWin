@@ -928,9 +928,7 @@ class AuditControlStage:
             compatibility_issues = evaluate_constraint_issues(
                 future_constraints,
                 combined_text=combined_text,
-                state_changes=[],
-                events=[],
-                thread_beats=[],
+                chapter_delta=None,
                 reviewer="plan_control",
                 issue_type="next_band_compatibility",
                 target_scope="band",

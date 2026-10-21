@@ -145,16 +145,6 @@ class WriterExecutionStage:
                             or ""
                         ),
                         scene_count=len(getattr(output, "scene_outputs", []) or []),
-                        state_changes_count=len(
-                            getattr(output, "state_changes", []) or []
-                        ),
-                        events_count=len(getattr(output, "new_events", []) or []),
-                        delivered_payoffs_count=len(
-                            getattr(output, "delivered_payoffs", []) or []
-                        ),
-                        thread_beats_count=len(
-                            getattr(output, "thread_beats", []) or []
-                        ),
                     ),
                 )
                 return output

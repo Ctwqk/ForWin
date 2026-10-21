@@ -42,9 +42,7 @@ class PlanContractReviewer:
                 if str(constraint.level or "") in {"hard", "soft", "hint"}
             ],
             combined_text=combined_text,
-            state_changes=writer_output.state_changes,
-            events=writer_output.new_events,
-            thread_beats=writer_output.thread_beats,
+            chapter_delta=writer_output.chapter_delta,
             reviewer="plan_contract",
             issue_type="future_constraint",
             target_scope="chapter",

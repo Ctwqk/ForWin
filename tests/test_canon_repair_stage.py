@@ -188,10 +188,6 @@ def _writer_output(chapter_number: int, marker: str = "ok") -> WriterOutput:
         body=f"正文{marker}" * 900,
         char_count=1800,
         end_of_chapter_summary=marker,
-        state_changes=[],
-        new_events=[],
-        thread_beats=[],
-        time_advance=None,
     )
 
 
@@ -722,10 +718,6 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             body="正文" * 900,
             char_count=1800,
             end_of_chapter_summary="ok",
-            state_changes=[],
-            new_events=[],
-            thread_beats=[],
-            time_advance=None,
         )
         pipeline.draft_review = WarnThenPassReviewHub()
 
@@ -1018,10 +1010,6 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             body="正文" * 900,
             char_count=1800,
             end_of_chapter_summary="ok",
-            state_changes=[],
-            new_events=[],
-            thread_beats=[],
-            time_advance=None,
         )
 
         def force_accepted_review(**kwargs):

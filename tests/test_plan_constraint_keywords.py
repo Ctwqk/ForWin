@@ -23,9 +23,7 @@ def test_prefix_negated_death_keyword_does_not_hard_trigger() -> None:
     issues = evaluate_constraint_issues(
         [constraint],
         combined_text="本章计划明确要求韩青不要死亡，只写她撤离后继续提供支援。",
-        state_changes=[],
-        events=[],
-        thread_beats=[],
+        chapter_delta=None,
         reviewer="test",
         issue_type="test",
         target_scope="chapter",
@@ -45,9 +43,7 @@ def test_positive_death_keyword_still_triggers() -> None:
     issues = evaluate_constraint_issues(
         [constraint],
         combined_text="韩青在爆炸中死亡，通讯频道只剩静电。",
-        state_changes=[],
-        events=[],
-        thread_beats=[],
+        chapter_delta=None,
         reviewer="test",
         issue_type="test",
         target_scope="chapter",
@@ -67,9 +63,7 @@ def test_mixed_negated_and_positive_death_occurrences_still_trigger() -> None:
     issues = evaluate_constraint_issues(
         [constraint],
         combined_text="本章韩青死亡。要避免死亡披露过早。",
-        state_changes=[],
-        events=[],
-        thread_beats=[],
+        chapter_delta=None,
         reviewer="test",
         issue_type="test",
         target_scope="chapter",

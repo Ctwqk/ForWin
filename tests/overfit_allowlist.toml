@@ -639,15 +639,6 @@ justification = "结构助词“的”"
 max_literals = 1
 
 [[entry]]
-path = "forwin/checker/rules.py"
-symbol = "DEAD_STATUS_KEYWORDS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "死亡状态关键词判定；P2 改为 BookState 状态"
-max_literals = 6
-
-[[entry]]
 path = "forwin/context/assembler_core/canon_quality_context.py"
 symbol = "_RECENT_CANON_CUSTODY_CAPTURE_MARKERS"
 checks = ["cjk_collection"]

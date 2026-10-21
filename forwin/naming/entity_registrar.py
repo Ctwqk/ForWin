@@ -424,15 +424,13 @@ class EntityRegistrar:
                 )
             decisions.append(decision)
 
+        # The translator reads background_generic refs as background mentions, so the
+        # chapter delta stays as extracted.
         background_names = [
             decision.mention_name
             for decision in decisions
             if decision.action == "background_generic"
         ]
-        planned_output = self._drop_background_generic_references(
-            writer_output,
-            set(background_names),
-        )
         conflicts = [
             decision.mention_name
             for decision in decisions
@@ -441,11 +439,11 @@ class EntityRegistrar:
         plan = EntityAdmissionPlan(
             project_id=project_id,
             chapter_number=int(chapter_number),
-            candidate_fingerprint=writer_output_admission_fingerprint(planned_output),
+            candidate_fingerprint=writer_output_admission_fingerprint(writer_output),
             decisions=decisions,
             plan_conflicts=conflicts,
         )
-        planned_output = self._attach_admission_plan(planned_output, plan)
+        planned_output = self._attach_admission_plan(writer_output, plan)
         return EntityAdmissionResult(
             writer_output=planned_output,
             plan=plan,
@@ -889,50 +887,6 @@ class EntityRegistrar:
         if entity is None:
             raise ValueError(f"Entity admission alias target missing: {entity_id}")
         return entity
-
-    @staticmethod
-    def _drop_background_generic_references(
-        writer_output: WriterOutput,
-        names: set[str],
-    ) -> WriterOutput:
-        if not names:
-            return writer_output
-        mentions = [
-            mention
-            for mention in writer_output.entity_mentions
-            if str(getattr(mention, "entity_name", "") or "").strip() not in names
-        ]
-        state_changes = [
-            change
-            for change in writer_output.state_changes
-            if str(getattr(change, "entity_name", "") or "").strip() not in names
-        ]
-        events = []
-        for event in writer_output.new_events:
-            involved_entity_names: list[str] = []
-            roles: list[str] = []
-            for index, raw_name in enumerate(event.involved_entity_names):
-                name = str(raw_name or "").strip()
-                if name in names:
-                    continue
-                involved_entity_names.append(raw_name)
-                if index < len(event.roles):
-                    roles.append(event.roles[index])
-            events.append(
-                event.model_copy(
-                    update={
-                        "involved_entity_names": involved_entity_names,
-                        "roles": roles,
-                    }
-                )
-            )
-        return writer_output.model_copy(
-            update={
-                "entity_mentions": mentions,
-                "state_changes": state_changes,
-                "new_events": events,
-            }
-        )
 
     @staticmethod
     def _attach_admission_plan(

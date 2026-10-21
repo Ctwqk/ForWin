@@ -5,9 +5,9 @@ import json
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.scene import SceneOutput
-from forwin.protocol.state_change import TimeAdvance
 from forwin.protocol.writer import WriterOutput
 from forwin.review.llm_webnovel import LLMWebNovelReviewer
+from tests.chapter_delta_helpers import chapter_delta
 
 
 def _stitched_chapter() -> tuple[ReviewContextPack, WriterOutput]:
@@ -26,16 +26,17 @@ def _stitched_chapter() -> tuple[ReviewContextPack, WriterOutput]:
         ],
     )
     # The stitch fixes the scene's chronology in the middle of the final body.
+    body = (
+        "案房等候封档。" * 100
+        + "抄录完成：辰正二刻。离津：辰正三刻。送达：巳初一刻。"
+        + "收讫：巳初二刻。"
+        + "账册随即封存。" * 100
+    )
     output = WriterOutput(
         project_id=context.project_id,
         chapter_number=10,
         title="第10章",
-        body=(
-            "案房等候封档。" * 100
-            + "抄录完成：辰正二刻。离津：辰正三刻。送达：巳初一刻。"
-            + "收讫：巳初二刻。"
-            + "账册随即封存。" * 100
-        ),
+        body=body,
         end_of_chapter_summary="摘报在收讫前送达，账册封存。",
         scene_outputs=[
             SceneOutput(
@@ -45,9 +46,9 @@ def _stitched_chapter() -> tuple[ReviewContextPack, WriterOutput]:
                 micro_summary="巳初三刻离津。",
             )
         ],
-        time_advance=TimeAdvance(
-            new_time_label="巳初二刻",
-            duration_description="辰正二刻抄录，辰正三刻离津，巳初一刻送达后收讫。",
+        chapter_delta=chapter_delta(
+            body,
+            time={"elapsed": {"amount": 3, "unit": "刻"}, "evidence": "抄录完成：辰正二刻。"},
         ),
     )
     return context, output
@@ -69,7 +70,7 @@ def test_review_prompt_reads_final_body_instead_of_pre_stitch_scenes() -> None:
     assert "巳初三刻离津" not in prompt
     assert "scene:2" not in {item["evidence_id"] for item in payload["evidence_index"]}
     assert payload["world"]["canon_invariants"] == context.canon_invariants
-    assert payload["draft"]["time_advance"] == output.time_advance.model_dump(mode="json")
+    assert payload["draft"]["time"] == output.chapter_delta.time.model_dump(mode="json")
     assert output.scene_outputs[0].text == "抄录完成：巳初二刻。离津：巳初三刻。"
 
 

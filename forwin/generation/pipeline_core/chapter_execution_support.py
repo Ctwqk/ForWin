@@ -4,18 +4,8 @@ import json
 
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
-from forwin.maintenance.deferred import (
-    DeferredMaintenanceRecord,
-    record_deferred_maintenance,
-)
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.state.updater import StateUpdater
-
-_STRUCTURED_EXTRACTION_PARTS = (
-    "state_event_extraction",
-    "thread_time_extraction",
-    "lore_timeline_notes_extraction",
-)
 
 
 def hard_floor_gate_outcome(
@@ -147,43 +137,8 @@ def record_pulp_beat_evaluation(
     )
 
 
-def defer_structured_extraction_if_needed(
-    *,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-    writer_output,
-) -> None:
-    meta = dict(getattr(writer_output, "generation_meta", {}) or {})
-    status = str(meta.get("structured_extraction", "") or "").strip()
-    degraded_parts = [
-        part
-        for part in _STRUCTURED_EXTRACTION_PARTS
-        if str(meta.get(part, "") or "").strip() == "degraded"
-    ]
-    if (
-        status not in {"degraded", "partial_degraded", "deferred"}
-        and not degraded_parts
-    ):
-        return
-    record_deferred_maintenance(
-        updater,
-        DeferredMaintenanceRecord(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            task_type="structured_extraction",
-            reason=status or "structured_extraction_degraded",
-            payload={
-                "structured_extraction": status,
-                "degraded_parts": degraded_parts,
-            },
-        ),
-    )
-
-
 __all__ = [
     "checkpoint_event_gate_outcome",
-    "defer_structured_extraction_if_needed",
     "hard_floor_gate_outcome",
     "record_pulp_beat_evaluation",
 ]

@@ -10,7 +10,11 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 
 from .hard_floor_dict import ENDING_HOOK_MARKERS, MODEL_ARTIFACT_MARKERS
-from .pulp_beat import pulp_track_for_genre, verify_pulp_beats
+from .pulp_beat import (
+    delivered_payoffs_from_fulfillment,
+    pulp_track_for_genre,
+    verify_pulp_beats,
+)
 
 
 _GARBAGE_BLOCK_RE = re.compile(
@@ -61,10 +65,18 @@ def run_hard_floor(
     if not checks["no_garbage"]:
         fail_reasons.append("no_garbage")
 
-    checks["at_least_one_event"] = bool(
-        writer_output.new_events
-        or writer_output.state_changes
-        or writer_output.thread_beats
+    delta = writer_output.chapter_delta
+    # Without an extraction the chapter has no extracted facts.
+    checks["at_least_one_event"] = delta is not None and any(
+        (
+            delta.events,
+            delta.entity_changes,
+            delta.relation_changes,
+            delta.knowledge_events,
+            delta.movements,
+            delta.item_transfers,
+            delta.thread_beats,
+        )
     )
     if not checks["at_least_one_event"]:
         fail_reasons.append("at_least_one_event")
@@ -90,8 +102,7 @@ def run_hard_floor(
         body,
         track=pulp_beat_track,
         reward_tags=planned_reward_tags,
-        delivered_payoffs=writer_output.delivered_payoffs,
-        new_events=writer_output.new_events,
+        delivered_payoffs=delivered_payoffs_from_fulfillment(delta),
     )
     checks["pulp_visible_payoff"] = pulp_beats.visible_payoff_present
     if policy.quality_profile == "pulp" and not pulp_beats.visible_payoff_present:

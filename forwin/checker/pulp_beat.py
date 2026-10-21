@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import get_args
 
 from pydantic import BaseModel, Field
 
-from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
+from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
+from forwin.book_state.extraction.evidence import evidence_in_body
+from forwin.protocol.experience import RewardTag
+
+
+_REWARD_TARGET_PREFIX = "reward:"
 
 
 class PulpBeatResult(BaseModel):
@@ -20,6 +26,40 @@ class PulpBeatResult(BaseModel):
     payoff_delay_chapters: int | None = None
     visible_payoff_evidence: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
+
+
+class DeliveredPayoffCandidate(BaseModel):
+    """A planned reward the chapter delivers, backed by a verbatim body quote."""
+
+    target_id: str
+    category: RewardTag
+    evidence_quote: str
+
+
+def delivered_payoffs_from_fulfillment(
+    chapter_delta: ChapterDeltaExtraction | None,
+) -> tuple[DeliveredPayoffCandidate, ...]:
+    """Reward targets the chapter delta marks done with evidence."""
+    if chapter_delta is None:
+        return ()
+    payoffs: list[DeliveredPayoffCandidate] = []
+    for item in chapter_delta.plan_fulfillment:
+        category = item.target_id.removeprefix(_REWARD_TARGET_PREFIX)
+        if (
+            item.status != "done"
+            or not item.target_id.startswith(_REWARD_TARGET_PREFIX)
+            or category not in get_args(RewardTag)
+            or not item.evidence.strip()
+        ):
+            continue
+        payoffs.append(
+            DeliveredPayoffCandidate(
+                target_id=item.target_id,
+                category=category,
+                evidence_quote=item.evidence.strip(),
+            )
+        )
+    return tuple(payoffs)
 
 
 class PulpBeatProfile(BaseModel):
@@ -632,14 +672,12 @@ def verify_pulp_beats(
     track: str | None = None,
     reward_tags: tuple[str, ...] = (),
     delivered_payoffs: Sequence[DeliveredPayoffCandidate] = (),
-    new_events: Sequence[EventCandidate] = (),
 ) -> PulpBeatResult:
     text = str(body or "")
     profile = _profile_for(track)
     structured_payoff_evidence = _structured_payoff_evidence(
         text,
         delivered_payoffs=delivered_payoffs,
-        new_events=new_events,
     )
     result = PulpBeatResult(
         pressure_present=_has_any(text, profile.pressure_words),
@@ -664,34 +702,12 @@ def _structured_payoff_evidence(
     body: str,
     *,
     delivered_payoffs: Sequence[DeliveredPayoffCandidate],
-    new_events: Sequence[EventCandidate],
 ) -> list[str]:
-    protagonist_names = {
-        name
-        for event in new_events
-        for name, role in zip(event.involved_entity_names, event.roles)
-        if role == "protagonist" and name
-    }
-    evidence: list[str] = []
-    for payoff in delivered_payoffs:
-        entity_name = payoff.entity_name.strip()
-        before_state = payoff.before_state.strip()
-        after_state = payoff.after_state.strip()
-        quote = payoff.evidence_quote.strip()
-        if entity_name not in protagonist_names:
-            continue
-        if not entity_name or not before_state or not after_state or not quote:
-            continue
-        if before_state == after_state:
-            continue
-        if quote not in body:
-            continue
-        if entity_name not in quote or after_state not in quote:
-            continue
-        evidence.append(
-            f"delivered_payoff:{entity_name}:{payoff.category}:{after_state}"
-        )
-    return evidence
+    return [
+        f"delivered_payoff:{payoff.target_id}"
+        for payoff in delivered_payoffs
+        if evidence_in_body(payoff.evidence_quote, body)
+    ]
 
 
 def _profile_payoff_present(

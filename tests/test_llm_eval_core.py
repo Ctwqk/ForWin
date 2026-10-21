@@ -112,15 +112,6 @@ def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None
     assert missing.schema_ok is False
     assert missing.required_keys_missing == ["scenes"]
 
-    old_state_event_shape = validate_output(
-        '{"state_changes":[],"new_events":[]}',
-        expected_output_kind="json",
-        schema_name="state_event_extraction",
-    )
-    assert old_state_event_shape.parse_ok is True
-    assert old_state_event_shape.schema_ok is False
-    assert old_state_event_shape.required_keys_missing == ["delivered_payoffs"]
-
     prose = validate_output(
         "<<FORWIN_BODY>>\n潮声压过码头。\n<<FORWIN_SUMMARY>>\n主角抵达雾港。",
         expected_output_kind="tagged_prose",
@@ -172,7 +163,7 @@ def test_summary_aggregates_transport_format_duplicate_and_grade() -> None:
             run_id="run-1",
             profile_id="minimax",
             case_id="case-2",
-            stage_key="state_event_extraction",
+            stage_key="chapter_delta_extraction",
             task_family="writer",
             attempt_group_id="g2",
             http_status=529,
@@ -263,9 +254,6 @@ def test_load_eval_cases_builds_prompts_from_fixture_text() -> None:
     assert [case.case_id for case in medium] == [
         "writer_preview",
         "scene_breakdown",
-        "state_event_extraction",
-        "thread_time_extraction",
-        "lore_timeline_notes",
         "genesis_brief",
         "arc_plan",
         "review_json",
@@ -280,8 +268,8 @@ def test_load_eval_cases_builds_prompts_from_fixture_text() -> None:
     genesis = next(case for case in medium if case.case_id == "genesis_brief")
     assert genesis.response_format == {"type": "json_object"}
     assert genesis.messages[0]["role"] == "system"
-    extraction = next(case for case in medium if case.case_id == "state_event_extraction")
-    assert contexts[0].chapter_plan_title in json.dumps(extraction.messages, ensure_ascii=False)
+    breakdown = next(case for case in medium if case.case_id == "scene_breakdown")
+    assert contexts[0].chapter_plan_title in json.dumps(breakdown.messages, ensure_ascii=False)
 
 
 def test_load_eval_cases_rejects_unknown_prompt_builder(tmp_path: Path) -> None:

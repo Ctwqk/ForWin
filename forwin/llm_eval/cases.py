@@ -13,11 +13,8 @@ from typing import Any, Callable
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.writer.prompt_core import (
-    build_lore_timeline_notes_extraction_prompt,
     build_preview_chapter_prompt,
     build_scene_breakdown_prompt,
-    build_state_event_extraction_prompt,
-    build_thread_time_extraction_prompt,
 )
 
 from .schemas import EvalCase
@@ -55,24 +52,9 @@ def _scene_breakdown(context: ChapterContextPack, args: dict[str, Any]) -> list[
     )
 
 
-def _state_event_extraction(context: ChapterContextPack, args: dict[str, Any]) -> list[dict[str, Any]]:
-    return build_state_event_extraction_prompt(context, args["chapter_title"], args["chapter_body"])
-
-
-def _thread_time_extraction(context: ChapterContextPack, args: dict[str, Any]) -> list[dict[str, Any]]:
-    return build_thread_time_extraction_prompt(context, args["chapter_title"], args["chapter_body"])
-
-
-def _lore_timeline_notes(context: ChapterContextPack, args: dict[str, Any]) -> list[dict[str, Any]]:
-    return build_lore_timeline_notes_extraction_prompt(context, args["chapter_title"], args["chapter_body"])
-
-
 _PROMPT_BUILDERS: dict[str, Callable[[ChapterContextPack, dict[str, Any]], list[dict[str, Any]]]] = {
     "preview_chapter": _preview_chapter,
     "scene_breakdown": _scene_breakdown,
-    "state_event_extraction": _state_event_extraction,
-    "thread_time_extraction": _thread_time_extraction,
-    "lore_timeline_notes": _lore_timeline_notes,
 }
 
 
@@ -80,7 +62,6 @@ def _build_case(
     raw: dict[str, Any],
     *,
     context: ChapterContextPack,
-    shared_args: dict[str, Any],
 ) -> EvalCase:
     spec = {key: value for key, value in raw.items() if key not in {"suites", "prompt"}}
     case_id = str(spec.get("case_id", "") or "<unnamed>")
@@ -96,7 +77,7 @@ def _build_case(
                 f"known builders: {', '.join(sorted(_PROMPT_BUILDERS))}"
             )
         try:
-            spec["messages"] = builder(context, {**shared_args, **dict(prompt.get("args") or {})})
+            spec["messages"] = builder(context, dict(prompt.get("args") or {}))
         except KeyError as exc:
             raise ValueError(
                 f"case {case_id}: prompt builder {builder_name!r} is missing argument {exc.args[0]!r}"
@@ -122,13 +103,10 @@ def load_eval_cases(
     payload = _read_json(path)
     if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
         raise ValueError(f"{path}: expected a JSON object with a 'cases' list")
-    shared_args = {
-        key: payload[key] for key in ("chapter_title", "chapter_body") if key in payload
-    }
     cases: list[EvalCase] = []
     for raw in payload["cases"]:
         suites = raw.get("suites")
         if suites is not None and suite not in suites:
             continue
-        cases.append(_build_case(raw, context=contexts[0], shared_args=shared_args))
+        cases.append(_build_case(raw, context=contexts[0]))
     return cases

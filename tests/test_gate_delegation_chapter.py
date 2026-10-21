@@ -339,10 +339,6 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             "forwin.generation.pipeline_core.project_chapters.save_accepted_trope_usage_for_chapter",
             lambda *_args, **_kwargs: None,
         )
-        monkeypatch.setattr(
-            "forwin.generation.pipeline_core.chapter_execution_support.defer_structured_extraction_if_needed",
-            lambda **_kwargs: None,
-        )
 
         with Session() as session:
             result = ChapterExecutionStage._run_project_chapters(

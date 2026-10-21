@@ -9,20 +9,7 @@ from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
-from forwin.protocol.state_change import (
-    DeliveredPayoffCandidate,
-    EventCandidate,
-    StateChangeCandidate,
-    ThreadBeatCandidate,
-    TimeAdvance,
-)
-from forwin.protocol.writer import (
-    EntityMention,
-    LoreCandidate,
-    TimelineHint,
-    WriterNote,
-    WriterOutput,
-)
+from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.observability.context import OperationContext
@@ -31,13 +18,10 @@ from forwin.writer.prompt_budget import prompt_revision_hash
 from forwin.writer.profile import WriterProfile
 from .prompt_core import (
     build_preview_chapter_prompt,
-    build_lore_timeline_notes_extraction_prompt,
-    build_state_event_extraction_prompt,
     build_single_chapter_draft_prompt,
     build_scene_breakdown_prompt,
     build_scene_generation_prompt,
     build_scene_stitch_prompt,
-    build_thread_time_extraction_prompt,
 )
 from forwin.utils import parse_llm_json
 
@@ -45,11 +29,6 @@ logger = logging.getLogger(__name__)
 _VALID_REWARD_TAGS = {"power", "social", "justice", "mystery", "emotion"}
 _BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
 _BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
-_STRUCTURED_LIST_LIMITS = {
-    "state_changes": 8,
-    "new_events": 4,
-    "delivered_payoffs": 4,
-}
 
 
 class ChapterWriter:
@@ -184,9 +163,7 @@ class ChapterWriter:
         """Write a lightweight fallback preview chapter.
 
         Preview generation prioritizes producing a readable draft with a
-        single LLM call. It intentionally skips structured extraction so
-        writer fallback can retain real preview text without paying the
-        latency and failure cost of a second LLM pass.
+        single LLM call, so writer fallback can retain real preview text.
         """
         logger.info(
             "write_chapter(preview): chapter=%d title_plan=%r",
@@ -283,7 +260,6 @@ class ChapterWriter:
             generation_meta={
                 "mode": "writer_preview",
                 "call_count": 1,
-                "structured_extraction": "skipped",
                 "prompt_trace": self._build_prompt_trace(
                     base_messages=base_messages,
                     skill_layers=skill_layers,
@@ -361,15 +337,7 @@ class ChapterWriter:
             fallback_title=context.chapter_plan_title
             or f"第{context.chapter_number}章",
         )
-        merged = dict(draft_data)
-        merged["_generation_meta"] = {
-            "structured_extraction": "deferred",
-            "structured_extraction_calls": 0,
-            "state_event_extraction": "deferred",
-            "thread_time_extraction": "deferred",
-            "lore_timeline_notes_extraction": "deferred",
-        }
-        output = self._writer_output_from_dict(context, merged)
+        output = self._writer_output_from_dict(context, draft_data)
         output.generation_meta.update(
             {
                 "mode": "single",
@@ -421,29 +389,15 @@ class ChapterWriter:
             stitched = self._stitch_scenes(
                 context, scene_outputs, skill_layers=skill_layers
             )
-            chapter_title = rebase_generic_numeric_chapter_title(
-                stitched.get(
-                    "title",
-                    context.chapter_plan_title or f"第{context.chapter_number}章",
-                ),
-                context.chapter_number,
-            )
-            extracted = self._extract_structured(
-                context,
-                chapter_title,
-                stitched.get("body", ""),
-            )
-
-            merged = dict(stitched)
-            merged.update(extracted)
             output = self._writer_output_from_dict(
-                context, merged, scene_outputs=scene_outputs
+                context, stitched, scene_outputs=scene_outputs
             )
             output.generation_meta.update(
                 {
                     "mode": "scene",
                     "scene_count": len(scene_outputs),
-                    "call_count": len(scene_outputs) + 5,
+                    # Scene breakdown, one call per scene and the stitch.
+                    "call_count": len(scene_outputs) + 2,
                     "prompt_trace": self._build_prompt_trace(
                         base_messages=base_messages,
                         skill_layers=skill_layers,
@@ -478,9 +432,6 @@ class ChapterWriter:
                 max_attempts=2,
                 retry_on_timeout=True,
             )
-            output = self._complete_scene_fallback_structured_extraction(
-                context, output
-            )
             output.generation_meta.update(
                 {
                     "fallback_from_scene": True,
@@ -489,39 +440,6 @@ class ChapterWriter:
             )
             return output
 
-    def _complete_scene_fallback_structured_extraction(
-        self,
-        context: ChapterContextPack,
-        output: WriterOutput,
-    ) -> WriterOutput:
-        if output.generation_meta.get("structured_extraction") != "deferred":
-            return output
-
-        extracted = self._extract_structured(context, output.title, output.body)
-        enriched = self._writer_output_from_dict(
-            context,
-            {
-                "title": output.title,
-                "body": output.body,
-                "end_of_chapter_summary": output.end_of_chapter_summary,
-                **extracted,
-            },
-            scene_outputs=output.scene_outputs,
-        )
-        enriched.prompt_revision_hash = output.prompt_revision_hash
-
-        structured_meta = dict(extracted.get("_generation_meta") or {})
-        structured_meta.setdefault("structured_extraction", "completed")
-        merged_meta = dict(output.generation_meta)
-        base_call_count = int(merged_meta.get("call_count") or 0)
-        structured_calls = int(structured_meta.get("structured_extraction_calls") or 0)
-        merged_meta.update(structured_meta)
-        if base_call_count:
-            merged_meta["call_count"] = base_call_count + structured_calls
-        merged_meta["fallback_structured_extraction"] = "performed"
-        enriched.generation_meta = merged_meta
-        return enriched
-
     def _writer_output_from_dict(
         self,
         context: ChapterContextPack,
@@ -529,35 +447,6 @@ class ChapterWriter:
         scene_outputs: list[SceneOutput] | None = None,
     ) -> WriterOutput:
         body = data.get("body", "")
-        state_changes = self._build_list(data, "state_changes", StateChangeCandidate)
-        new_events = self._build_list(data, "new_events", EventCandidate)
-        payoff_data = (
-            self._restore_payoff_evidence_quotes(data, body)
-            if isinstance(body, str)
-            else data
-        )
-        delivered_payoffs = self._build_list(
-            payoff_data,
-            "delivered_payoffs",
-            DeliveredPayoffCandidate,
-        )
-        thread_beats = self._build_list(data, "thread_beats", ThreadBeatCandidate)
-        lore_candidates = self._build_list(data, "lore_candidates", LoreCandidate)
-        timeline_hints = self._build_list(data, "timeline_hints", TimelineHint)
-        writer_notes = self._build_list(data, "writer_notes", WriterNote)
-        entity_mentions = self._build_list(data, "entity_mentions", EntityMention)
-        time_advance: TimeAdvance | None = None
-        if data.get("time_advance"):
-            try:
-                time_advance = TimeAdvance(**data["time_advance"])
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "write_chapter: could not parse time_advance (%s) – skipping: %s",
-                    data["time_advance"],
-                    exc,
-                )
-
-        resolved_scene_outputs = scene_outputs or []
         output = WriterOutput(
             project_id=getattr(context, "project_id", ""),
             chapter_number=context.chapter_number,
@@ -568,33 +457,13 @@ class ChapterWriter:
             body=body,
             char_count=len(body) if isinstance(body, str) else 0,
             end_of_chapter_summary=data.get("end_of_chapter_summary", ""),
-            scene_outputs=resolved_scene_outputs,
-            state_changes=state_changes,
-            new_events=new_events,
-            delivered_payoffs=delivered_payoffs,
-            thread_beats=thread_beats,
-            time_advance=time_advance,
-            scene_continuation=[
-                scene.continuation
-                for scene in resolved_scene_outputs
-                if scene.continuation.scene_no or scene.continuation.continuity_anchor
-            ],
-            lore_candidates=lore_candidates,
-            timeline_hints=timeline_hints,
-            writer_notes=writer_notes,
-            entity_mentions=entity_mentions,
-            generation_meta=dict(data.get("_generation_meta") or {}),
+            scene_outputs=scene_outputs or [],
         )
         self._attach_llm_fallback_events(output)
         logger.info(
-            "write_chapter: done – chapter=%d char_count=%d "
-            "state_changes=%d new_events=%d delivered_payoffs=%d thread_beats=%d",
+            "write_chapter: done – chapter=%d char_count=%d",
             output.chapter_number,
             output.char_count,
-            len(output.state_changes),
-            len(output.new_events),
-            len(output.delivered_payoffs),
-            len(output.thread_beats),
         )
         return output
 
@@ -777,175 +646,6 @@ class ChapterWriter:
             or f"第{context.chapter_number}章",
         )
 
-    def _extract_structured(
-        self,
-        context: ChapterContextPack,
-        chapter_title: str,
-        chapter_body: str,
-    ) -> dict:
-        metadata: dict[str, object] = {
-            "new_events": [],
-            "state_changes": [],
-            "delivered_payoffs": [],
-            "thread_beats": [],
-            "time_advance": None,
-            "lore_candidates": [],
-            "timeline_hints": [],
-            "writer_notes": [],
-            "entity_mentions": [],
-        }
-        meta_notes: dict[str, object] = {
-            "structured_extraction_calls": 3,
-        }
-
-        state_event = self._extract_structured_part(
-            label="state_event_extraction",
-            prompt_builder=build_state_event_extraction_prompt,
-            context=context,
-            chapter_title=chapter_title,
-            chapter_body=chapter_body,
-            primary_temperature=0.25,
-            primary_max_tokens=min(self.max_tokens, 2200),
-            retry_temperature=0.2,
-            retry_max_tokens=min(self.max_tokens, 1400),
-            required_list_models={
-                "state_changes": StateChangeCandidate,
-                "new_events": EventCandidate,
-                "delivered_payoffs": DeliveredPayoffCandidate,
-            },
-        )
-        thread_time = self._extract_structured_part(
-            label="thread_time_extraction",
-            prompt_builder=build_thread_time_extraction_prompt,
-            context=context,
-            chapter_title=chapter_title,
-            chapter_body=chapter_body,
-            primary_temperature=0.2,
-            primary_max_tokens=min(self.max_tokens, 700),
-            retry_temperature=0.15,
-            retry_max_tokens=min(self.max_tokens, 520),
-        )
-        lore_timeline_notes = self._extract_structured_part(
-            label="lore_timeline_notes_extraction",
-            prompt_builder=build_lore_timeline_notes_extraction_prompt,
-            context=context,
-            chapter_title=chapter_title,
-            chapter_body=chapter_body,
-            primary_temperature=0.2,
-            primary_max_tokens=min(self.max_tokens, 2400),
-            retry_temperature=0.15,
-            retry_max_tokens=min(self.max_tokens, 1500),
-        )
-
-        metadata.update(state_event)
-        metadata.update(thread_time)
-        metadata.update(lore_timeline_notes)
-        for key, value in (state_event.get("_generation_meta") or {}).items():
-            meta_notes[key] = value
-        for key, value in (thread_time.get("_generation_meta") or {}).items():
-            meta_notes[key] = value
-        for key, value in (lore_timeline_notes.get("_generation_meta") or {}).items():
-            meta_notes[key] = value
-
-        degraded_parts = [
-            key
-            for key in (
-                "state_event_extraction",
-                "thread_time_extraction",
-                "lore_timeline_notes_extraction",
-            )
-            if meta_notes.get(key) == "degraded"
-        ]
-        if degraded_parts:
-            meta_notes["structured_extraction"] = (
-                "degraded" if len(degraded_parts) == 3 else "partial_degraded"
-            )
-            metadata["_generation_meta"] = meta_notes
-        else:
-            metadata["_generation_meta"] = meta_notes
-        return metadata
-
-    def _extract_structured_part(
-        self,
-        *,
-        label: str,
-        prompt_builder,
-        context: ChapterContextPack,
-        chapter_title: str,
-        chapter_body: str,
-        primary_temperature: float,
-        primary_max_tokens: int,
-        retry_temperature: float,
-        retry_max_tokens: int,
-        required_list_models: dict[str, type] | None = None,
-    ) -> dict[str, object]:
-        try:
-            return self._chat_json(
-                prompt_builder(context, chapter_title, chapter_body),
-                temperature=primary_temperature,
-                max_tokens=primary_max_tokens,
-                timeout_seconds=self.scene_call_timeout_seconds,
-                max_attempts=2,
-                retry_on_timeout=False,
-                stage_key=label,
-                required_list_models=required_list_models,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "%s primary pass failed, retrying with reduced body: %s", label, exc
-            )
-            last_error: Exception = exc
-            valid_windows: list[dict[str, object]] = []
-            for shortened_body in self._structured_fallback_windows(chapter_body):
-                try:
-                    window_result = self._chat_json(
-                        prompt_builder(context, chapter_title, shortened_body),
-                        temperature=retry_temperature,
-                        max_tokens=retry_max_tokens,
-                        timeout_seconds=self.scene_call_timeout_seconds,
-                        max_attempts=1,
-                        retry_on_timeout=False,
-                        stage_key=label,
-                        required_list_models=required_list_models,
-                    )
-                    if required_list_models:
-                        valid_windows.append(window_result)
-                    else:
-                        return window_result
-                except Exception as repair_exc:  # noqa: BLE001
-                    last_error = repair_exc
-            if valid_windows and required_list_models:
-                return self._merge_required_model_lists(
-                    valid_windows,
-                    required_list_models,
-                )
-            logger.warning(
-                "%s degraded to empty metadata after retry: %s", label, last_error
-            )
-            return {
-                "_generation_meta": {
-                    label: "degraded",
-                    f"{label}_error": str(last_error),
-                }
-            }
-
-    @staticmethod
-    def _structured_fallback_windows(chapter_body: str) -> list[str]:
-        body = str(chapter_body or "")
-        if len(body) <= 1800:
-            return [body]
-        midpoint = len(body) // 2
-        windows = [
-            body[:1200],
-            body[max(0, midpoint - 600) : min(len(body), midpoint + 600)],
-            body[-1600:],
-        ]
-        deduped: list[str] = []
-        for window in windows:
-            if window and window not in deduped:
-                deduped.append(window)
-        return deduped
-
     @staticmethod
     def _preview_summary(raw_summary: object, title: str, body: str) -> str:
         summary = str(raw_summary or "").strip()
@@ -1005,65 +705,6 @@ class ChapterWriter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @classmethod
-    def _restore_payoff_evidence_quotes(cls, data: dict, body: str) -> dict:
-        raw_payoffs = data.get("delivered_payoffs")
-        if not isinstance(raw_payoffs, list):
-            return data
-
-        restored_payoffs: list[object] = []
-        changed = False
-        for item in raw_payoffs:
-            if not isinstance(item, dict):
-                restored_payoffs.append(item)
-                continue
-            quote = item.get("evidence_quote")
-            if not isinstance(quote, str):
-                restored_payoffs.append(item)
-                continue
-            restored_quote = cls._unique_whitespace_equivalent_body_slice(body, quote)
-            if restored_quote == quote:
-                restored_payoffs.append(item)
-                continue
-            restored_item = dict(item)
-            restored_item["evidence_quote"] = restored_quote
-            restored_payoffs.append(restored_item)
-            changed = True
-
-        if not changed:
-            return data
-        restored_data = dict(data)
-        restored_data["delivered_payoffs"] = restored_payoffs
-        return restored_data
-
-    @staticmethod
-    def _unique_whitespace_equivalent_body_slice(body: str, quote: str) -> str:
-        stripped_quote = quote.strip()
-        if not stripped_quote or stripped_quote in body:
-            return stripped_quote
-
-        compact_quote = "".join(stripped_quote.split())
-        if not compact_quote:
-            return stripped_quote
-
-        compact_body_chars: list[str] = []
-        body_offsets: list[int] = []
-        for offset, character in enumerate(body):
-            if character.isspace():
-                continue
-            compact_body_chars.append(character)
-            body_offsets.append(offset)
-        compact_body = "".join(compact_body_chars)
-
-        match_start = compact_body.find(compact_quote)
-        if match_start < 0:
-            return stripped_quote
-        if compact_body.find(compact_quote, match_start + 1) >= 0:
-            return stripped_quote
-
-        match_end = match_start + len(compact_quote) - 1
-        return body[body_offsets[match_start] : body_offsets[match_end] + 1]
-
     @staticmethod
     def _build_list(data: dict, key: str, model_cls) -> list:  # type: ignore[type-arg]
         """Build a list of pydantic model instances from a raw list in *data*.
@@ -1092,126 +733,6 @@ class ChapterWriter:
                 )
         return result
 
-    @staticmethod
-    def _validate_required_model_lists(
-        data: object,
-        required_list_models: dict[str, type] | None,
-    ) -> None:
-        if not required_list_models:
-            return
-        if not isinstance(data, dict):
-            raise ValueError("structured extraction must return a JSON object")
-        for key, model_cls in required_list_models.items():
-            raw_list = data.get(key)
-            if not isinstance(raw_list, list):
-                raise ValueError(f"structured extraction requires list field {key!r}")
-            for index, item in enumerate(raw_list):
-                try:
-                    model_cls.model_validate(item)
-                except Exception as exc:  # noqa: BLE001
-                    raise ValueError(
-                        f"structured extraction field {key!r}[{index}] is invalid: {exc}"
-                    ) from exc
-
-    @staticmethod
-    def _merge_required_model_lists(
-        payloads: list[dict[str, object]],
-        required_list_models: dict[str, type],
-    ) -> dict[str, object]:
-        merged: dict[str, object] = {}
-        for key, model_cls in required_list_models.items():
-            items_by_identity: dict[tuple[object, ...], object] = {}
-            for payload in payloads:
-                raw_items = payload.get(key)
-                if not isinstance(raw_items, list):
-                    continue
-                for raw_item in raw_items:
-                    item = model_cls.model_validate(raw_item)
-                    identity = ChapterWriter._structured_list_identity(key, item)
-                    existing = items_by_identity.get(identity)
-                    if isinstance(existing, EventCandidate) and isinstance(
-                        item, EventCandidate
-                    ):
-                        item = ChapterWriter._merge_event_candidates(existing, item)
-                    items_by_identity[identity] = item
-            limit = _STRUCTURED_LIST_LIMITS.get(key, len(items_by_identity))
-            merged[key] = [
-                item.model_dump(mode="json")
-                for item in list(items_by_identity.values())[:limit]
-            ]
-        return merged
-
-    @staticmethod
-    def _structured_list_identity(key: str, item: object) -> tuple[object, ...]:
-        if isinstance(item, StateChangeCandidate):
-            return (
-                key,
-                item.entity_name.strip(),
-                item.entity_kind,
-                item.field.strip(),
-            )
-        if isinstance(item, EventCandidate):
-            proposition = re.sub(r"[\W_]+", "", item.summary).casefold()
-            if proposition:
-                return (key, "summary", proposition)
-            participants = tuple(
-                sorted(
-                    (
-                        str(name).strip(),
-                        str(item.roles[index]).strip()
-                        if index < len(item.roles)
-                        else "",
-                    )
-                    for index, name in enumerate(item.involved_entity_names)
-                    if str(name).strip()
-                )
-            )
-            if participants:
-                return (key, participants)
-            return (key, "empty")
-        if isinstance(item, DeliveredPayoffCandidate):
-            return (
-                key,
-                item.entity_name,
-                item.category,
-                item.after_state,
-            )
-        return (key, item.model_dump_json())  # type: ignore[attr-defined]
-
-    @staticmethod
-    def _merge_event_candidates(
-        earlier: EventCandidate,
-        later: EventCandidate,
-    ) -> EventCandidate:
-        names: list[str] = []
-        roles_by_name: dict[str, str] = {}
-        for event in (earlier, later):
-            for index, raw_name in enumerate(event.involved_entity_names):
-                name = str(raw_name).strip()
-                if not name:
-                    continue
-                role = (
-                    str(event.roles[index]).strip() if index < len(event.roles) else ""
-                )
-                if name not in roles_by_name:
-                    names.append(name)
-                    roles_by_name[name] = role
-                    continue
-                if role == "protagonist" or not roles_by_name[name]:
-                    roles_by_name[name] = role
-
-        significance_rank = {"background": 0, "minor": 1, "major": 2}
-        significance = max(
-            (earlier.significance, later.significance),
-            key=significance_rank.__getitem__,
-        )
-        return EventCandidate(
-            summary=later.summary or earlier.summary,
-            significance=significance,
-            involved_entity_names=names,
-            roles=[roles_by_name[name] for name in names],
-        )
-
     def _chat_json(
         self,
         messages: list[dict],
@@ -1222,7 +743,6 @@ class ChapterWriter:
         max_attempts: int = 3,
         retry_on_timeout: bool = True,
         stage_key: str = "writer_json",
-        required_list_models: dict[str, type] | None = None,
     ) -> dict:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -1246,12 +766,10 @@ class ChapterWriter:
                     stage_key=stage_key,
                 )
                 try:
-                    data = parse_llm_json(
+                    return parse_llm_json(
                         raw,
                         error_prefix="ChapterWriter JSON parser",
                     )
-                    self._validate_required_model_lists(data, required_list_models)
-                    return data
                 except Exception as exc:  # noqa: BLE001
                     mark_latest_attempt_parse_failure(
                         self.llm_client,

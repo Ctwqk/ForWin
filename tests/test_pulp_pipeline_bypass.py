@@ -483,7 +483,7 @@ def test_deferred_single_writer_extraction_failure_blocks_canon() -> None:
                     body="林夜收下玄铁令，决定进入问心阁。",
                     char_count=18,
                     end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
-                    generation_meta={"structured_extraction": "deferred", "mode": "single"},
+                    generation_meta={"mode": "single"},
                 ),
                 verdict=ReviewVerdict(verdict="pass", issues=[]),
                 entity_admission_plan=EntityAdmissionPlan(

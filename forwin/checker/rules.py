@@ -5,27 +5,21 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from forwin.book_state.extraction.chapter_delta_schema import NEW_REF_PREFIX
 from forwin.book_state.query import BookStateQuery
 
 if TYPE_CHECKING:
     from forwin.state.repo import StateRepository
 
+from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.canon_names import CanonNameAnchor, find_canon_name_violations
 
 logger = logging.getLogger(__name__)
-DEAD_STATUS_KEYWORDS = {
-    "dead",
-    "deceased",
-    "已死",
-    "死亡",
-    "死了",
-    "身亡",
-    "阵亡",
-    "已阵亡",
-}
+# Mirrors the chapter delta translator's thread refs.
+_THREAD_REF_PREFIX = "plot_thread:"
 BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
 BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 
@@ -260,78 +254,81 @@ class ContinuityChecker:
     def _check_dead_characters(
         self, project_id: str, output: WriterOutput
     ) -> list[ContinuityIssue]:
-        """Check if dead characters are being used as active participants."""
-        issues = []
-
-        # Get entities that are dead/inactive
-        if self.book_state is None:
-            return issues
-        entities = self.book_state.active_entities(
-            project_id,
-            as_of_chapter=max(int(output.chapter_number) - 1, 0),
+        """Characters dead as of the previous chapter must not act in this one."""
+        delta = output.chapter_delta
+        if self.book_state is None or delta is None:
+            return []
+        dead = [
+            entity
+            for entity in self.book_state.active_entities(
+                project_id,
+                as_of_chapter=max(int(output.chapter_number) - 1, 0),
+                kinds={"character"},
+            )
+            if isinstance(entity.current_state, dict)
+            and entity.current_state.get("alive_status") == "dead"
+        ]
+        if not dead:
+            return []
+        actors = [
+            (ref, f"event={event.summary[:60]}")
+            for event in delta.events
+            if not event.flashback
+            for ref in event.participant_refs
+        ]
+        actors.extend(
+            (movement.entity_ref, f"movement={movement.from_ref}->{movement.to_ref}")
+            for movement in delta.movements
         )
-        dead_names = set()
-        for e in entities:
-            state = e.current_state
-            if isinstance(state, dict):
-                status = state.get("status", "")
-                normalized_status = str(status).strip()
-                if (
-                    normalized_status in DEAD_STATUS_KEYWORDS
-                    or normalized_status.lower() in DEAD_STATUS_KEYWORDS
-                ):
-                    dead_names.add(e.name)
-                    dead_names.update(e.aliases)
-
-        if not dead_names:
-            return issues
-
-        # Check if dead characters appear in new events as active participants
-        for event in output.new_events:
-            for i, name in enumerate(event.involved_entity_names):
-                if name in dead_names:
-                    role = event.roles[i] if i < len(event.roles) else "unknown"
-                    if role in ("protagonist", "antagonist"):
-                        issues.append(
-                            ContinuityIssue(
-                                rule_name="dead_character_active",
-                                severity="error",
-                                description=f"已死亡角色「{name}」在事件中被标记为{role}",
-                                entity_names=[name],
-                                reviewer="continuity",
-                                issue_type="continuity",
-                                target_scope="scene",
-                                evidence_refs=[
-                                    f"event={event.summary[:60]}",
-                                    f"entity={name}",
-                                    f"role={role}",
-                                ],
-                            )
-                        )
-
+        issues: list[ContinuityIssue] = []
+        for ref, evidence in actors:
+            entity = next((item for item in dead if _ref_names_entity(ref, item)), None)
+            if entity is None:
+                continue
+            issues.append(
+                ContinuityIssue(
+                    rule_name="dead_character_active",
+                    severity="error",
+                    description=f"已死亡角色「{entity.name}」在本章仍有行动",
+                    entity_names=[entity.name],
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="scene",
+                    evidence_refs=[evidence, f"entity={entity.entity_id}"],
+                )
+            )
         return issues
 
     def _check_thread_status(
         self, project_id: str, output: WriterOutput
     ) -> list[ContinuityIssue]:
         """Check if beat candidates reference resolved/abandoned threads."""
+        delta = output.chapter_delta
+        if self.book_state is None or delta is None or not delta.thread_beats:
+            return []
+        threads = self.book_state.active_threads(
+            project_id,
+            as_of_chapter=max(int(output.chapter_number) - 1, 0),
+        )
         issues = []
-
-        if self.book_state is None:
-            return issues
-
-        for beat in output.thread_beats:
-            thread = self.book_state.thread_by_name(
-                project_id,
-                beat.thread_name,
-                as_of_chapter=max(int(output.chapter_number) - 1, 0),
+        for beat in delta.thread_beats:
+            thread_id = beat.thread_ref.strip().removeprefix(_THREAD_REF_PREFIX)
+            title = beat.new_thread_title.strip()
+            thread = next(
+                (
+                    item
+                    for item in threads
+                    if (thread_id and item.thread_id == thread_id)
+                    or (not thread_id and title and item.name == title)
+                ),
+                None,
             )
             if thread and thread.status in ("resolved", "abandoned"):
                 issues.append(
                     ContinuityIssue(
                         rule_name="thread_already_closed",
                         severity="warning",
-                        description=f"情节线「{beat.thread_name}」已{thread.status}，但本章仍有相关推进",
+                        description=f"情节线「{thread.name}」已{thread.status}，但本章仍有相关推进",
                         entity_names=[],
                         reviewer="continuity",
                         issue_type="continuity",
@@ -346,9 +343,12 @@ class ContinuityChecker:
     ) -> list[ContinuityIssue]:
         """Basic validation of state changes."""
         issues = []
-
-        for sc in output.state_changes:
-            if not sc.entity_name.strip():
+        delta = output.chapter_delta
+        for change in delta.entity_changes if delta is not None else []:
+            entity_name = (
+                change.new_entity.name if change.new_entity is not None else change.ref
+            ).strip()
+            if not entity_name:
                 issues.append(
                     ContinuityIssue(
                         rule_name="empty_entity_name",
@@ -359,13 +359,13 @@ class ContinuityChecker:
                         target_scope="chapter",
                     )
                 )
-            if not sc.field.strip():
+            if not change.field.strip():
                 issues.append(
                     ContinuityIssue(
                         rule_name="empty_field_name",
                         severity="warning",
-                        description=f"实体「{sc.entity_name}」的状态变更中字段名为空",
-                        entity_names=[sc.entity_name],
+                        description=f"实体「{entity_name}」的状态变更中字段名为空",
+                        entity_names=[entity_name],
                         reviewer="continuity",
                         issue_type="continuity",
                         target_scope="chapter",
@@ -377,18 +377,34 @@ class ContinuityChecker:
     def _check_event_completeness(self, output: WriterOutput) -> list[ContinuityIssue]:
         """Check if events have proper structure."""
         issues = []
-
-        for event in output.new_events:
-            if len(event.involved_entity_names) != len(event.roles):
+        delta = output.chapter_delta
+        for event in delta.events if delta is not None else []:
+            if not event.summary.strip():
                 issues.append(
                     ContinuityIssue(
-                        rule_name="event_role_mismatch",
+                        rule_name="event_summary_empty",
                         severity="warning",
-                        description=f"事件「{event.summary[:30]}」的参与者数量与角色数量不匹配",
+                        description="本章事件缺少摘要",
                         reviewer="continuity",
                         issue_type="continuity",
                         target_scope="chapter",
+                        evidence_refs=[f"event_evidence={event.evidence[:60]}"],
                     )
                 )
 
         return issues
+
+
+def _ref_names_entity(ref: str, entity: EntitySnapshot) -> bool:
+    """Whether an extraction ref is the entity's node id, or ``new:``/bare text naming it."""
+    text = ref.strip()
+    if text == entity.entity_id:
+        return True
+    label = _normalized_name(text.removeprefix(NEW_REF_PREFIX))
+    return bool(label) and label in {
+        _normalized_name(name) for name in (entity.name, *entity.aliases)
+    }
+
+
+def _normalized_name(text: str) -> str:
+    return "".join(str(text or "").split()).casefold()

@@ -13,12 +13,12 @@ from forwin.models.draft import ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.scene import SceneOutput
-from forwin.protocol.state_change import TimeAdvance
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
 
 
@@ -84,17 +84,19 @@ def _run_title_repair(
         body="巳初二刻完成交割。",
         end_of_chapter_summary="交割结束。",
     )
+    rewritten_body = "巳初二刻完成交割。" if keep_body_error else "辰正二刻完成交割。"
     rewritten = WriterOutput(
         project_id=chapter_plan.project_id,
         chapter_number=10,
         title="第10章 空税入泽",
-        body="巳初二刻完成交割。" if keep_body_error else "辰正二刻完成交割。",
+        body=rewritten_body,
         end_of_chapter_summary="交割结束，准备离津。",
         scene_outputs=[
             SceneOutput(scene_no=1, scene_objective="完成交割", text="场景记录原样保留。")
         ],
-        time_advance=TimeAdvance(
-            new_time_label="辰正三刻", duration_description="交割后一刻"
+        chapter_delta=chapter_delta(
+            rewritten_body,
+            time={"elapsed": {"amount": 1, "unit": "刻"}, "evidence": "完成交割"},
         ),
         generation_meta={"source": "repair-writer-fixture"},
     )

@@ -9,7 +9,7 @@ from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerpri
 from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.context import ChapterContextPack, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
-from forwin.protocol.writer import SceneOutput, TimeAdvance, WriterOutput
+from forwin.protocol.writer import SceneOutput, WriterOutput
 
 
 def _movement_context() -> ReviewContextPack:
@@ -64,9 +64,6 @@ def _movement_output() -> WriterOutput:
                 text="抵达。",
             ),
         ],
-        time_advance=TimeAdvance(
-            new_time_label="片刻后", duration_description="片刻后"
-        ),
     )
     plan = EntityAdmissionPlan(
         project_id=output.project_id,

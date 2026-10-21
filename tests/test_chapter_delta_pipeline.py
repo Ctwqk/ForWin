@@ -291,7 +291,7 @@ def test_admission_reads_new_refs_from_chapter_delta() -> None:
             project_id=project.id, chapter_number=1, writer_output=output,
         )
 
-        assert output.entity_mentions == [] and output.state_changes == [] and output.new_events == []
+        assert output.chapter_delta.entity_mentions == []
         assert [(item.mention_name, item.action) for item in result.plan.decisions] == [("陈七", "register_character")]
         assert result.registered_names == ["陈七"]
     finally:

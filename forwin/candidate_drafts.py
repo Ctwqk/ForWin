@@ -191,6 +191,7 @@ class CandidateDraftRepository:
         metadata[WRITER_OUTPUT_ADMISSION_FINGERPRINT_KEY] = (
             writer_output_admission_fingerprint(writer_output)
         )
+        delta = writer_output.chapter_delta
         row = CandidateDraftRecord(
             project_id=project_id,
             chapter_plan_id=chapter_plan.id,
@@ -211,14 +212,15 @@ class CandidateDraftRepository:
             scene_outputs_json=_dump_json(
                 _model_list(writer_output.scene_outputs), fallback=[]
             ),
+            # The candidate columns keep their names; the chapter delta fills them.
             state_change_candidates_json=_dump_json(
-                _model_list(writer_output.state_changes), fallback=[]
+                _model_list(delta.entity_changes if delta else []), fallback=[]
             ),
             event_candidates_json=_dump_json(
-                _model_list(writer_output.new_events), fallback=[]
+                _model_list(delta.events if delta else []), fallback=[]
             ),
             thread_beat_candidates_json=_dump_json(
-                _model_list(writer_output.thread_beats), fallback=[]
+                _model_list(delta.thread_beats if delta else []), fallback=[]
             ),
             repair_attempt_count=max(0, int(repair_attempt_count or 0)),
             metadata_json=_dump_json(metadata, fallback={}),

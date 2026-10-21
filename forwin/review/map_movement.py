@@ -507,6 +507,8 @@ class MapMovementReviewer:
                 return max(0.0, float(explicit_budget))
             except (TypeError, ValueError):
                 pass
-        if writer_output.time_advance is None:
+        delta = writer_output.chapter_delta
+        elapsed = delta.time.elapsed if delta is not None else None
+        if elapsed is None:
             return None
-        return _duration_to_travel_time_budget(writer_output.time_advance.duration_description)
+        return _duration_to_travel_time_budget(f"{elapsed.amount:g}{elapsed.unit}")

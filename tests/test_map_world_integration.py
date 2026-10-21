@@ -33,7 +33,6 @@ from forwin.models.subworld import project_scoped_subworld_id
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.scene import SceneOutput
-from forwin.protocol.state_change import TimeAdvance
 from forwin.protocol.book_state import MapEdge, MapNode, WorldNode
 from forwin.protocol.writer import WriterOutput
 from forwin.review.webnovel import WebNovelExperienceReviewer
@@ -41,7 +40,13 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
 from forwin.writer.prompt_core import build_single_chapter_draft_prompt
+from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
+
+
+def _moment_later(body: str):
+    """A chapter delta whose only fact is a quarter hour of elapsed story time."""
+    return chapter_delta(body, time={"elapsed": {"amount": 0.25, "unit": "小时"}, "evidence": body[:2]})
 
 
 def _spec() -> SubWorldMapSpec:
@@ -334,7 +339,7 @@ def test_reviewer_flags_scene_movement_that_exceeds_map_travel_time_budget() -> 
             SceneOutput(scene_no=1, scene_objective="出发", scene_location_id=city.id, text="出发。", immersion_anchor="城门"),
             SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id=ruin.id, text="抵达。", immersion_anchor="遗迹"),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        chapter_delta=_moment_later("主角出发。下一刻他已经抵达遗迹？"),
     )
 
     verdict = WebNovelExperienceReviewer(llm_enabled=False).review(context, output)
@@ -374,7 +379,7 @@ def test_reviewer_uses_capped_review_graph_payload_when_cap_exceeded() -> None:
             SceneOutput(scene_no=1, scene_objective="出发", scene_location_id=city.id, text="出发。", immersion_anchor="城门"),
             SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id=ruin.id, text="抵达。", immersion_anchor="遗迹"),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        chapter_delta=_moment_later("主角出发。下一刻他已经抵达遗迹？"),
     )
 
     verdict = WebNovelExperienceReviewer(llm_enabled=False).review(context, output)
@@ -435,7 +440,7 @@ def test_reviewer_flags_observer_known_hidden_route_detour() -> None:
             SceneOutput(scene_no=1, scene_objective="出发", scene_location_id="city", involved_entities=["char_mc"], text="出发。"),
             SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id="inner", involved_entities=["char_mc"], text="抵达。"),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        chapter_delta=_moment_later("陆沉从城中抵达内殿。"),
     )
 
     verdict = WebNovelExperienceReviewer(llm_enabled=False).review(context, output)
@@ -488,7 +493,7 @@ def test_reviewer_flags_unmet_movement_access_rule() -> None:
             SceneOutput(scene_no=1, scene_objective="出发", scene_location_id="city", text="出发。"),
             SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id="inner", text="抵达。"),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        chapter_delta=_moment_later("主角从城中进入内殿。"),
     )
 
     verdict = WebNovelExperienceReviewer(llm_enabled=False).review(context, output)
@@ -528,7 +533,7 @@ def test_reviewer_applies_movement_policy_speed_multiplier() -> None:
             SceneOutput(scene_no=1, scene_objective="出发", scene_location_id="city", text="出发。"),
             SceneOutput(scene_no=2, scene_objective="抵达", scene_location_id="inner", text="抵达。"),
         ],
-        time_advance=TimeAdvance(new_time_label="片刻后", duration_description="片刻后"),
+        chapter_delta=_moment_later("主角从城中抵达内殿。"),
     )
     blocked_context = ReviewContextPack(
         project_id="p1",

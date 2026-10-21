@@ -150,10 +150,10 @@ def test_direct_runner_records_http_529_failure_category() -> None:
         )
         case = EvalCase(
             case_id="state",
-            stage_key="state_event_extraction",
+            stage_key="chapter_delta_extraction",
             task_family="writer",
             expected_output_kind="json",
-            schema_name="state_event_extraction",
+            schema_name="chapter_delta_extraction",
             messages=[{"role": "user", "content": "只输出 JSON"}],
         )
         runner = LLMReliabilityRunner(

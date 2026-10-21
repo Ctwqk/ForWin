@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from forwin.book_state.extraction.chapter_delta_schema import (
+    NEW_REF_PREFIX,
+    ChapterDeltaExtraction,
+)
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.contracts import (
@@ -17,11 +21,6 @@ from forwin.review.constraint_keywords import (
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.review import ContinuityIssue
-from forwin.protocol.state_change import (
-    EventCandidate,
-    StateChangeCandidate,
-    ThreadBeatCandidate,
-)
 from forwin.protocol.writer import WriterOutput
 
 _KEYWORDS = constraint_keywords()
@@ -36,14 +35,14 @@ _GROWTH_COMPLETION_KEYWORDS = _KEYWORDS.growth_completion
 
 
 def chapter_combined_text(writer_output: WriterOutput) -> str:
+    delta = writer_output.chapter_delta
     parts = [
         str(writer_output.title or ""),
         str(writer_output.body or ""),
         str(writer_output.end_of_chapter_summary or ""),
-        *(str(event.summary or "") for event in writer_output.new_events),
-        *(str(beat.description or "") for beat in writer_output.thread_beats),
-        *(str(change.reason or "") for change in writer_output.state_changes),
-        *(str(change.new_value or "") for change in writer_output.state_changes),
+        *(str(event.summary or "") for event in (delta.events if delta else [])),
+        *(str(beat.new_thread_title or "") for beat in (delta.thread_beats if delta else [])),
+        *(str(change.new_value or "") for change in (delta.entity_changes if delta else [])),
     ]
     return "\n".join(part for part in parts if part.strip())
 
@@ -197,9 +196,7 @@ def evaluate_constraint_issues(
     constraints: list[NarrativeConstraintInfo],
     *,
     combined_text: str,
-    state_changes: list[StateChangeCandidate],
-    events: list[EventCandidate],
-    thread_beats: list[ThreadBeatCandidate],
+    chapter_delta: ChapterDeltaExtraction | None,
     reviewer: str,
     issue_type: str,
     target_scope: str,
@@ -217,9 +214,7 @@ def evaluate_constraint_issues(
             constraint,
             combined_text=combined_text,
             lower_text=lower_text,
-            state_changes=state_changes,
-            events=events,
-            thread_beats=thread_beats,
+            chapter_delta=chapter_delta,
         )
         if not matched:
             continue
@@ -631,16 +626,32 @@ def _constraint_severity(level: str) -> str:
     }.get(str(level or "soft"), "warning")
 
 
+def _ref_label(ref: str) -> str:
+    """A chapter delta ref as compared with constraint subjects: ``new:`` names lose the prefix."""
+    return ref.strip().removeprefix(NEW_REF_PREFIX).strip()
+
+
 def _constraint_triggered(
     constraint: NarrativeConstraintInfo,
     *,
     combined_text: str,
     lower_text: str,
-    state_changes: list[StateChangeCandidate],
-    events: list[EventCandidate],
-    thread_beats: list[ThreadBeatCandidate],
+    chapter_delta: ChapterDeltaExtraction | None,
 ) -> tuple[bool, str]:
     subject = str(constraint.subject_name or "").strip()
+    state_changes = [
+        (_ref_label(change.new_entity.name if change.new_entity else change.ref), change)
+        for change in (chapter_delta.entity_changes if chapter_delta else [])
+    ]
+    thread_beats = [
+        (_ref_label(beat.thread_ref or beat.new_thread_title), beat)
+        for beat in (chapter_delta.thread_beats if chapter_delta else [])
+    ]
+    event_refs = {
+        _ref_label(ref)
+        for event in (chapter_delta.events if chapter_delta else [])
+        for ref in event.participant_refs
+    }
     payload = dict(constraint.payload or {})
     payload_keywords = [
         str(item).strip()
@@ -648,14 +659,14 @@ def _constraint_triggered(
         if str(item).strip()
     ]
     if constraint.constraint_type == "character_availability":
-        for change in state_changes:
-            if subject and change.entity_name != subject:
+        for entity_name, change in state_changes:
+            if subject and entity_name != subject:
                 continue
             new_value = str(change.new_value or "")
             if any(keyword in new_value for keyword in _DEATH_KEYWORDS):
                 return (
                     True,
-                    f"state_change={change.entity_name}:{change.field}->{new_value}",
+                    f"state_change={entity_name}:{change.field}->{new_value}",
                 )
         if (
             subject
@@ -682,20 +693,20 @@ def _constraint_triggered(
         ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "thread_keep_open":
-        for beat in thread_beats:
-            if subject and beat.thread_name != subject:
+        for thread_name, beat in thread_beats:
+            if subject and thread_name != subject:
                 continue
             if beat.beat_type == "resolution":
-                return True, f"thread={beat.thread_name}"
+                return True, f"thread={thread_name}"
     elif constraint.constraint_type == "location_availability":
-        for change in state_changes:
-            if subject and change.entity_name != subject:
+        for entity_name, change in state_changes:
+            if subject and entity_name != subject:
                 continue
             if any(
                 keyword in str(change.new_value or "")
                 for keyword in _LOCATION_DESTROY_KEYWORDS
             ):
-                return True, f"state_change={change.entity_name}:{change.field}"
+                return True, f"state_change={entity_name}:{change.field}"
         if (
             subject
             and subject in combined_text
@@ -703,21 +714,19 @@ def _constraint_triggered(
         ):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "rule_preserve":
-        for change in state_changes:
-            if subject and change.entity_name != subject:
+        for entity_name, change in state_changes:
+            if subject and entity_name != subject:
                 continue
             if any(
                 keyword in str(change.new_value or "")
                 for keyword in _RULE_BREAK_KEYWORDS
             ):
-                return True, f"state_change={change.entity_name}:{change.field}"
+                return True, f"state_change={entity_name}:{change.field}"
     if payload_keywords:
         keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
         if keyword:
             return True, f"keyword={keyword}"
-    if subject and any(
-        subject == name for event in events for name in event.involved_entity_names
-    ):
+    if subject and subject in event_refs:
         if constraint.constraint_type in {
             "character_availability",
             "secret_withhold",

@@ -4,6 +4,12 @@ from collections import Counter
 import re
 from typing import Any
 
+from forwin.book_state.extraction.chapter_delta_schema import (
+    ChapterDeltaExtraction,
+    ChapterTime,
+    EntityChange,
+    ThreadBeat,
+)
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -33,6 +39,26 @@ def _trim(text: str, limit: int = 64) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 1)] + "…"
+
+
+def _delta(writer_output: WriterOutput) -> ChapterDeltaExtraction:
+    """The chapter delta; without one the chapter has no extracted facts."""
+    if writer_output.chapter_delta is not None:
+        return writer_output.chapter_delta
+    return ChapterDeltaExtraction(body_sha256="", time=ChapterTime(evidence=""))
+
+
+def _entity_label(change: EntityChange) -> str:
+    return change.new_entity.name if change.new_entity is not None else change.ref
+
+
+def _thread_label(beat: ThreadBeat) -> str:
+    return beat.thread_ref or beat.new_thread_title
+
+
+def _elapsed_label(delta: ChapterDeltaExtraction) -> str:
+    elapsed = delta.time.elapsed
+    return f"{elapsed.amount:g}{elapsed.unit}" if elapsed is not None else ""
 
 
 class WebNovelExperienceReviewer:
@@ -358,12 +384,13 @@ class WebNovelExperienceReviewer:
         return self.llm_webnovel_reviewer.anchor_verdict_evidence(verdict_model, context, writer_output)
 
     def _is_assessable(self, writer_output: WriterOutput) -> bool:
+        delta = _delta(writer_output)
         return bool(
             writer_output.scene_outputs
-            or writer_output.new_events
-            or writer_output.thread_beats
-            or writer_output.state_changes
-            or writer_output.time_advance is not None
+            or delta.events
+            or delta.thread_beats
+            or delta.entity_changes
+            or delta.time.elapsed is not None
         )
 
     def _has_reward_delivery_contract(self, writer_output: WriterOutput) -> bool:
@@ -381,25 +408,26 @@ class WebNovelExperienceReviewer:
                 evidence_refs.append(
                     f"scene:{scene.scene_no}:{scene.reward_beat_tag}:{_trim(scene.micro_summary or scene.scene_objective)}"
                 )
-        for beat in writer_output.thread_beats:
-            inferred = self._infer_tags_from_text(f"{beat.thread_name} {beat.description}")
+        delta = _delta(writer_output)
+        for beat in delta.thread_beats:
+            thread = _thread_label(beat)
+            inferred = self._infer_tags_from_text(f"{thread} {beat.evidence}")
             for tag in inferred:
                 delivered_tags.append(tag)
-                evidence_refs.append(f"thread:{beat.thread_name}:{beat.beat_type}:{_trim(beat.description)}")
-        for event in writer_output.new_events:
+                evidence_refs.append(f"thread:{thread}:{beat.beat_type}:{_trim(beat.evidence)}")
+        for event in delta.events:
             inferred = self._infer_tags_from_text(event.summary)
             for tag in inferred:
                 delivered_tags.append(tag)
                 evidence_refs.append(f"event:{event.significance}:{_trim(event.summary)}")
-        for change in writer_output.state_changes:
+        for change in delta.entity_changes:
+            entity = _entity_label(change)
             inferred = self._infer_tags_from_text(
-                f"{change.entity_name} {change.field} {change.new_value} {change.reason}"
+                f"{entity} {change.field} {change.new_value} {change.evidence}"
             )
             for tag in inferred:
                 delivered_tags.append(tag)
-                evidence_refs.append(
-                    f"state:{change.entity_name}.{change.field}:{_trim(change.old_value)}->{_trim(change.new_value)}"
-                )
+                evidence_refs.append(f"state:{entity}.{change.field}:{_trim(change.new_value)}")
         deduped_tags = list(dict.fromkeys(tag for tag in delivered_tags if tag))
         deduped_refs = list(dict.fromkeys(evidence_refs))
         return deduped_tags, deduped_refs
@@ -411,26 +439,25 @@ class WebNovelExperienceReviewer:
     ) -> tuple[float, list[str]]:
         refs: list[str] = []
         points = 0.0
-        if writer_output.new_events:
+        delta = _delta(writer_output)
+        if delta.events:
             points += 0.35
-            refs.extend(f"event:{event.significance}:{_trim(event.summary)}" for event in writer_output.new_events[:3])
-        if writer_output.thread_beats:
+            refs.extend(f"event:{event.significance}:{_trim(event.summary)}" for event in delta.events[:3])
+        if delta.thread_beats:
             points += 0.25
             refs.extend(
-                f"thread:{beat.thread_name}:{beat.beat_type}:{_trim(beat.description)}"
-                for beat in writer_output.thread_beats[:3]
+                f"thread:{_thread_label(beat)}:{beat.beat_type}:{_trim(beat.evidence)}"
+                for beat in delta.thread_beats[:3]
             )
-        if writer_output.state_changes:
+        if delta.entity_changes:
             points += 0.2
             refs.extend(
-                f"state:{item.entity_name}.{item.field}:{_trim(item.new_value)}"
-                for item in writer_output.state_changes[:3]
+                f"state:{_entity_label(item)}.{item.field}:{_trim(item.new_value)}"
+                for item in delta.entity_changes[:3]
             )
-        if writer_output.time_advance is not None:
+        if delta.time.elapsed is not None:
             points += 0.1
-            refs.append(
-                f"time:{_trim(writer_output.time_advance.duration_description)}->{_trim(writer_output.time_advance.new_time_label)}"
-            )
+            refs.append(f"time:{_elapsed_label(delta)}:{_trim(delta.time.evidence)}")
         if context.chapter_experience_plan is not None and context.chapter_experience_plan.progress_markers:
             refs.extend(
                 f"progress_marker:{_trim(item)}"
@@ -507,15 +534,21 @@ class WebNovelExperienceReviewer:
         if plan is not None and plan.relationship_or_status_shift:
             score += 0.15
             refs.append(f"relationship_or_status_shift:{_trim(plan.relationship_or_status_shift)}")
-        relation_changes = [
-            item for item in writer_output.state_changes if item.field in {"trust", "affection", "status", "standing", "relation"}
+        delta = _delta(writer_output)
+        relation_refs = [
+            *(
+                f"state:{_entity_label(item)}.{item.field}:{_trim(item.new_value)}"
+                for item in delta.entity_changes
+                if item.field in {"trust", "affection", "status", "standing", "relation"}
+            ),
+            *(
+                f"relation:{item.source_ref}->{item.target_ref}:{item.edge_type}:{item.op}"
+                for item in delta.relation_changes
+            ),
         ]
-        if relation_changes:
+        if relation_refs:
             score += 0.15
-            refs.extend(
-                f"state:{item.entity_name}.{item.field}:{_trim(item.new_value)}"
-                for item in relation_changes[:2]
-            )
+            refs.extend(relation_refs[:2])
         return _clamp_score(score), refs
 
     def _understanding_score(
@@ -528,12 +561,13 @@ class WebNovelExperienceReviewer:
         if context.chapter_goals:
             score += 0.1
             refs.extend(f"goal:{_trim(goal)}" for goal in context.chapter_goals[:2])
-        if writer_output.new_events:
+        delta = _delta(writer_output)
+        if delta.events:
             score += 0.2
-            refs.extend(f"event:{_trim(item.summary)}" for item in writer_output.new_events[:2])
-        if writer_output.thread_beats:
+            refs.extend(f"event:{_trim(item.summary)}" for item in delta.events[:2])
+        if delta.thread_beats:
             score += 0.15
-            refs.extend(f"thread:{item.thread_name}:{_trim(item.description)}" for item in writer_output.thread_beats[:2])
+            refs.extend(f"thread:{_thread_label(item)}:{_trim(item.evidence)}" for item in delta.thread_beats[:2])
         if context.chapter_experience_plan is not None and context.chapter_experience_plan.question_resolution:
             score += 0.1
             refs.append(f"question_resolution:{_trim(context.chapter_experience_plan.question_resolution)}")

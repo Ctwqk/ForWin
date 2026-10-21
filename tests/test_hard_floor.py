@@ -5,9 +5,17 @@ import pytest
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
-from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
+from tests.chapter_delta_helpers import chapter_delta
+
+
+_EVENT = {
+    "summary": "角色A完成行动",
+    "significance": "minor",
+    "visibility": "public",
+    "evidence": "角色A",
+}
 
 
 def _policy(profile: str = "standard") -> RuntimePolicy:
@@ -30,10 +38,15 @@ def _writer(body: str, **updates) -> WriterOutput:
         "body": body,
         "char_count": len(body),
         "end_of_chapter_summary": "本章发生了一件事。",
-        "new_events": [EventCandidate(summary="角色A完成行动")],
+        "chapter_delta": chapter_delta(body, events=[_EVENT]),
     }
     payload.update(updates)
     return WriterOutput(**payload)
+
+
+def _fulfilled(body: str, *fulfillment: dict[str, str]):
+    """A chapter delta with one event and the given plan fulfillment entries."""
+    return chapter_delta(body, events=[_EVENT], plan_fulfillment=list(fulfillment))
 
 
 def _context(**updates) -> ChapterContextPack:
@@ -115,12 +128,7 @@ def test_unsupported_symbol_run_still_fails_as_garbage() -> None:
 def test_must_not_reveal_and_missing_event_fail() -> None:
     body = "角色A终于发现父亲被围的真相，众人沉默片刻后继续行动。"
     result = run_hard_floor(
-        writer_output=_writer(
-            body,
-            new_events=[],
-            state_changes=[],
-            thread_beats=[],
-        ),
+        writer_output=_writer(body, chapter_delta=chapter_delta(body)),
         context_pack=_context(must_not_reveal=["父亲被围"]),
         repo=None,
         project_id="project-1",
@@ -279,24 +287,10 @@ def test_pulp_hard_floor_uses_declared_delivered_payoff() -> None:
     result = run_hard_floor(
         writer_output=_writer(
             body,
-            delivered_payoffs=[
-                {
-                    "entity_name": "陈默",
-                    "category": "power",
-                    "direction": "gain",
-                    "before_state": "只能感知货物余效",
-                    "after_state": "临时追件视野已解锁",
-                    "evidence_quote": "陈默的临时追件视野已解锁",
-                }
-            ],
-            new_events=[
-                EventCandidate(
-                    summary="陈默解锁追件视野。",
-                    significance="major",
-                    involved_entity_names=["陈默"],
-                    roles=["protagonist"],
-                )
-            ],
+            chapter_delta=_fulfilled(
+                body,
+                {"target_id": "reward:power", "status": "done", "evidence": "陈默的临时追件视野已解锁"},
+            ),
         ),
         context_pack=_context(genre="都市玄幻"),
         repo=None,
@@ -308,7 +302,7 @@ def test_pulp_hard_floor_uses_declared_delivered_payoff() -> None:
     assert result.metadata["planned_reward_tags"] == []
     assert result.metadata["pulp_beat"]["visible_payoff_present"] is True
     assert result.metadata["pulp_beat"]["visible_payoff_evidence"] == [
-        "delivered_payoff:陈默:power:临时追件视野已解锁"
+        "delivered_payoff:reward:power"
     ]
 
 
@@ -317,24 +311,15 @@ def test_pulp_hard_floor_uses_frozen_chapter_one_payoff_excerpt() -> None:
     result = run_hard_floor(
         writer_output=_writer(
             body,
-            delivered_payoffs=[
+            chapter_delta=_fulfilled(
+                body,
                 {
-                    "entity_name": "陈默",
-                    "category": "power",
-                    "direction": "gain",
-                    "before_state": "肩膝酸胀且虎口受伤",
-                    "after_state": "当前体力与轻度伤势已按签收单余效比例修复",
-                    "evidence_quote": "承运人陈默，当前体力与轻度伤势已按签收单余效比例修复",
-                }
-            ],
-            new_events=[
-                EventCandidate(
-                    summary="陈默获得货物余效修复。",
-                    significance="major",
-                    involved_entity_names=["陈默"],
-                    roles=["protagonist"],
-                )
-            ],
+                    "target_id": "reward:power",
+                    "status": "done",
+                    # Evidence matches the body up to whitespace.
+                    "evidence": "承运人陈默，当前体力与轻度伤势 已按签收单余效比例修复",
+                },
+            ),
         ),
         context_pack=_context(genre="都市玄幻"),
         repo=None,
@@ -347,116 +332,26 @@ def test_pulp_hard_floor_uses_frozen_chapter_one_payoff_excerpt() -> None:
 
 
 @pytest.mark.parametrize(
-    ("body", "payoff"),
+    "fulfillment",
     [
-        (
-            "反派的临时追件视野已解锁，陈默只能后退。",
-            {
-                "entity_name": "反派",
-                "category": "power",
-                "direction": "gain",
-                "before_state": "无追件视野",
-                "after_state": "临时追件视野已解锁",
-                "evidence_quote": "反派的临时追件视野已解锁",
-            },
-        ),
-        (
-            "陈默的临时追件视野已解锁。",
-            {
-                "entity_name": "陈默",
-                "category": "power",
-                "direction": "gain",
-                "before_state": "临时追件视野已解锁",
-                "after_state": "临时追件视野已解锁",
-                "evidence_quote": "陈默的临时追件视野已解锁",
-            },
-        ),
-        (
-            "陈默的临时追件视野仍未解锁。",
-            {
-                "entity_name": "陈默",
-                "category": "power",
-                "direction": "gain",
-                "before_state": "无追件视野",
-                "after_state": "临时追件视野已解锁",
-                "evidence_quote": "陈默的临时追件视野已解锁",
-            },
-        ),
-        (
-            "陈默看到系统提示：临时追件视野已解锁。",
-            {
-                "entity_name": "陈默",
-                "category": "power",
-                "direction": "gain",
-                "before_state": "无追件视野",
-                "after_state": "临时追件视野已解锁",
-                "evidence_quote": "临时追件视野已解锁",
-            },
-        ),
-        (
-            "陈默获得新的追件能力。",
-            {
-                "entity_name": "陈默",
-                "category": "power",
-                "direction": "gain",
-                "before_state": "无追件能力",
-                "after_state": "临时追件视野已解锁",
-                "evidence_quote": "陈默获得新的追件能力",
-            },
-        ),
+        # The quote is not in the body.
+        {"target_id": "reward:power", "status": "done", "evidence": "陈默的临时追件视野已解锁"},
+        # Only a done target is a delivered payoff.
+        {"target_id": "reward:power", "status": "partial", "evidence": "陈默的临时追件视野仍未解锁"},
+        # Goals are not rewards.
+        {"target_id": "goal:1", "status": "done", "evidence": "陈默的临时追件视野仍未解锁"},
+        # A reward needs evidence.
+        {"target_id": "reward:power", "status": "done", "evidence": " "},
+        # A reward target names a reward tag.
+        {"target_id": "reward:fortune", "status": "done", "evidence": "陈默的临时追件视野仍未解锁"},
     ],
 )
 def test_pulp_hard_floor_rejects_unverifiable_delivered_payoff(
-    body: str,
-    payoff: dict[str, str],
+    fulfillment: dict[str, str],
 ) -> None:
+    body = "陈默的临时追件视野仍未解锁。"
     result = run_hard_floor(
-        writer_output=_writer(
-            body,
-            delivered_payoffs=[payoff],
-            new_events=[
-                EventCandidate(
-                    summary="陈默继续追查。",
-                    significance="major",
-                    involved_entity_names=["陈默"],
-                    roles=["protagonist"],
-                )
-            ],
-        ),
-        context_pack=_context(genre="都市玄幻"),
-        repo=None,
-        project_id="project-1",
-        chapter_number=2,
-        policy=_policy("pulp"),
-    )
-
-    assert result.metadata["pulp_beat"]["visible_payoff_present"] is False
-    assert result.metadata["pulp_beat"]["visible_payoff_evidence"] == []
-
-
-def test_pulp_hard_floor_rejects_blank_normalized_after_state() -> None:
-    body = "陈默获得临时追件视野。"
-    malformed = DeliveredPayoffCandidate.model_construct(
-        entity_name="陈默",
-        category="power",
-        direction="gain",
-        before_state="无追件视野",
-        after_state=" ",
-        evidence_quote="陈默获得临时追件视野",
-    )
-    result = run_hard_floor(
-        writer_output=_writer(
-            body,
-            delivered_payoffs=[malformed],
-            new_events=[
-                EventCandidate(
-                    summary="陈默获得追件视野。",
-                    significance="major",
-                    involved_entity_names=["陈默"],
-                    roles=["protagonist"],
-                )
-            ],
-        ),
+        writer_output=_writer(body, chapter_delta=_fulfilled(body, fulfillment)),
         context_pack=_context(genre="都市玄幻"),
         repo=None,
         project_id="project-1",

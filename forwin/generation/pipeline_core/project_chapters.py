@@ -690,12 +690,6 @@ class ChapterExecutionStage:
                         getattr(chapter_plan, "experience_plan_json", "") or "{}"
                     ),
                 )
-                chapter_execution_support.defer_structured_extraction_if_needed(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    writer_output=writer_output,
-                )
                 self._emit_progress(
                     "stage_changed",
                     stage="running_post_acceptance",

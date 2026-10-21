@@ -29,19 +29,34 @@ def _read_timeout_seconds(env_name: str, default: float) -> float:
     return value if value > 0 else default
 
 
-def _draft_rule_claims(writer_output: WriterOutput) -> list[dict[str, str]]:
+# Canon invariant keys of BookState rule nodes (canon_quality_context).
+_RULE_INVARIANT_PREFIX = "book_state_rule:"
+
+
+def _draft_rule_claims(
+    context: ReviewContextPack,
+    writer_output: WriterOutput,
+) -> list[dict[str, str]]:
+    """Chapter delta entity changes that restate a known rule node."""
+    delta = writer_output.chapter_delta
+    if delta is None:
+        return []
+    rule_names = {item.entity_id: item.name for item in context.active_rules if item.entity_id}
+    for item in context.canon_invariants:
+        key = str(item.get("invariant_key") or "")
+        if key.startswith(_RULE_INVARIANT_PREFIX):
+            rule_names.setdefault(
+                key.removeprefix(_RULE_INVARIANT_PREFIX), str(item.get("label") or "")
+            )
     claims: list[dict[str, str]] = []
-    for change in writer_output.state_changes:
-        if str(change.entity_kind or "").strip().lower() not in {
-            "rule",
-            "law",
-            "protocol",
-        }:
+    for change in delta.entity_changes:
+        rule_id = change.ref.strip()
+        if rule_id not in rule_names:
             continue
         claim = str(change.new_value or "").strip()
         if not claim:
             continue
-        field = str(change.field or "").strip() or "public_version"
+        field = change.field.strip() or "public_version"
         if field in {
             "definition",
             "rule",
@@ -54,31 +69,25 @@ def _draft_rule_claims(writer_output: WriterOutput) -> list[dict[str, str]]:
             field = "public_version"
         claims.append(
             {
-                "source": "state_change",
-                "subject_name": str(change.entity_name or "").strip(),
+                "source": "entity_change",
+                "subject_name": rule_names[rule_id] or rule_id,
                 "field": field,
                 "claim": claim,
             }
         )
-    for lore in writer_output.lore_candidates:
-        if str(lore.subject_type or "").strip().lower() not in {
-            "rule",
-            "law",
-            "protocol",
-        }:
-            continue
-        claim = str(lore.description or "").strip()
-        if not claim:
-            continue
-        claims.append(
-            {
-                "source": "lore_candidate",
-                "subject_name": str(lore.subject_name or "").strip(),
-                "field": "public_version",
-                "claim": claim,
-            }
-        )
     return claims[:12]
+
+
+def _delta_payload(writer_output: WriterOutput, *, limit: int) -> dict[str, list[dict[str, Any]]]:
+    """The chapter delta's events, thread beats and entity changes; empty without one."""
+    delta = writer_output.chapter_delta
+    if delta is None:
+        return {"events": [], "thread_beats": [], "entity_changes": []}
+    return {
+        "events": [item.model_dump(mode="json") for item in delta.events[:limit]],
+        "thread_beats": [item.model_dump(mode="json") for item in delta.thread_beats[:4]],
+        "entity_changes": [item.model_dump(mode="json") for item in delta.entity_changes[:limit]],
+    }
 
 
 class LLMWebNovelReviewer:
@@ -436,26 +445,28 @@ class LLMWebNovelReviewer:
         add_evidence("draft:summary", "draft", writer_output.end_of_chapter_summary)
         add_evidence("draft:body_head", "draft", writer_output.body[:500])
         add_evidence("draft:body_tail", "draft", writer_output.body[-500:])
-        for event in writer_output.new_events[:5]:
+        delta = writer_output.chapter_delta
+        for event in delta.events[:5] if delta else []:
             add_evidence(
                 f"draft_event:{event.significance}:{_trim(event.summary, 24)}",
                 "draft_event",
                 event.summary,
             )
-        for beat in writer_output.thread_beats[:4]:
+        for beat in delta.thread_beats[:4] if delta else []:
             add_evidence(
-                f"thread:{beat.thread_name}:{beat.beat_type}",
+                f"thread:{beat.thread_ref or beat.new_thread_title}:{beat.beat_type}",
                 "thread",
-                beat.description,
+                beat.evidence,
             )
-        for change in writer_output.state_changes[:5]:
+        for change in delta.entity_changes[:5] if delta else []:
+            entity = change.new_entity.name if change.new_entity is not None else change.ref
             add_evidence(
-                f"state:{change.entity_name}:{change.field}",
+                f"state:{entity}:{change.field}",
                 "state",
-                f"{change.old_value}->{change.new_value} | {change.reason}",
+                f"{change.new_value} | {change.evidence}",
             )
-        if writer_output.time_advance is not None:
-            add_evidence("time:advance", "time", writer_output.time_advance.model_dump_json())
+        if delta is not None and delta.time.elapsed is not None:
+            add_evidence("time:advance", "time", delta.time.model_dump_json())
         for item in context.recent_canon_events[:5]:
             add_evidence(item.evidence_id or f"canon_event:{item.event_id}", "canon_event", item.summary)
         for item in context.recent_rule_events[:5]:
@@ -501,7 +512,7 @@ class LLMWebNovelReviewer:
                     ),
                 )
 
-        rule_claims = _draft_rule_claims(writer_output)
+        rule_claims = _draft_rule_claims(context, writer_output)
         return {
             "chapter": {
                 "number": context.chapter_number,
@@ -566,15 +577,9 @@ class LLMWebNovelReviewer:
                 "body": writer_output.body,
                 "body_head": _trim(writer_output.body[:500], 500),
                 "body_tail": _trim(writer_output.body[-500:], 500),
-                "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:5]],
-                "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
-                "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:5]],
+                **_delta_payload(writer_output, limit=5),
                 "rule_claims": rule_claims,
-                "time_advance": (
-                    writer_output.time_advance.model_dump(mode="json")
-                    if writer_output.time_advance is not None
-                    else None
-                ),
+                "time": delta.time.model_dump(mode="json") if delta is not None else None,
             },
             "deterministic_quality_report": deterministic_quality_report,
             "evidence_index": evidence_index,
@@ -881,9 +886,7 @@ class LLMWebNovelReviewer:
                 "title": writer_output.title,
                 "end_of_chapter_summary": writer_output.end_of_chapter_summary,
                 "body": writer_output.body,
-                "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:4]],
-                "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
-                "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:4]],
+                **_delta_payload(writer_output, limit=4),
             },
         }
 

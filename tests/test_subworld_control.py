@@ -37,13 +37,12 @@ from forwin.protocol import (
     WriterOutput,
 )
 from forwin.protocol.book_state import WorldNode
-from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
-from forwin.writer.chapter_writer import ChapterWriter
+from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
 from forwin.writer.prompt_core import (
     _canon_name_anchor_section,
@@ -785,23 +784,25 @@ class SubWorldControlTests(unittest.TestCase):
         checker = _AnchoredContinuityChecker(
             [CanonNameAnchor(role_label="师父", canonical_name="甲乙")]
         )
+        body = "师父甲乙留下了线索。" * 80
         verdict = checker.check(
             "p1",
             WriterOutput(
                 chapter_number=7,
                 title="第六日",
-                body="师父甲乙留下了线索。" * 80,
+                body=body,
                 end_of_chapter_summary="弟子确认师父甲乙与旧事有关。",
-                state_changes=[
-                    StateChangeCandidate(
-                        entity_name="弟子",
-                        entity_kind="character",
-                        field="knowledge",
-                        old_value="不知师父来历",
-                        new_value="得知师父甲乙丁。",
-                        reason="翻看旧档",
-                    )
-                ],
+                chapter_delta=chapter_delta(
+                    body,
+                    entity_changes=[
+                        {
+                            "ref": "char-disciple",
+                            "field": "knowledge",
+                            "new_value": "得知师父甲乙丁。",
+                            "evidence": "师父甲乙留下了线索",
+                        }
+                    ],
+                ),
             ),
         )
 
@@ -904,18 +905,24 @@ class SubWorldControlTests(unittest.TestCase):
         )
 
     def test_canon_name_drift_autofix_replaces_observed_name_across_writer_output(self) -> None:
+        body = "旧港是母亲最后出现的地方。陆明发现母亲林婉是原型设计者，报告撰写人是林婉。"
         output = WriterOutput(
             chapter_number=3,
             title="第二日",
-            body="旧港是母亲最后出现的地方。陆明发现母亲林婉是原型设计者，报告撰写人是林婉。",
+            body=body,
             end_of_chapter_summary="陆明在记忆馆发现母亲林婉是回声账本原型设计者之一。",
-            new_events=[
-                EventCandidate(
-                    summary="陆明发现林婉留下技术报告",
-                    significance="major",
-                    involved_entity_names=["陆明", "林婉"],
-                )
-            ],
+            chapter_delta=chapter_delta(
+                body,
+                events=[
+                    {
+                        "summary": "陆明发现林婉留下技术报告",
+                        "participant_refs": ["char-luming", "new:林婉"],
+                        "significance": "major",
+                        "visibility": "public",
+                        "evidence": "陆明发现母亲林婉是原型设计者",
+                    }
+                ],
+            ),
         )
         review = ReviewVerdict(
             verdict="fail",
@@ -1646,28 +1653,6 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(len(roster_rows), 1)
         self.assertTrue(roster_metadata[0].get("pending_entity_admission"))
         self.assertNotIn("character_id", roster_metadata[0])
-
-    def test_writer_output_parses_entity_mentions(self) -> None:
-        writer = ChapterWriter(llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}"))
-        output = writer._writer_output_from_dict(
-            context=SimpleNamespace(project_id="p1", chapter_number=1),
-            data={
-                "title": "第一章",
-                "body": "正文",
-                "end_of_chapter_summary": "总结",
-                "entity_mentions": [
-                    {
-                        "entity_name": "小明",
-                        "entity_kind": "character",
-                        "is_named": True,
-                        "is_on_stage": True,
-                        "evidence_refs": ["body:小明"],
-                    }
-                ],
-            },
-        )
-
-        self.assertEqual(output.entity_mentions[0].entity_name, "小明")
 
 
 if __name__ == "__main__":

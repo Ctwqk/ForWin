@@ -15,7 +15,6 @@ from forwin.naming import EntityRegistrar
 from forwin.naming.entity_registrar import LLMEntityAdmissionClassifier
 from forwin.protocol import EntitySnapshot, SceneOutput, WriterOutput
 from forwin.protocol.book_state import WorldNode
-from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.review.draft_service import DraftReviewService
 from tests.chapter_delta_helpers import chapter_delta, mention
 
@@ -77,18 +76,20 @@ def test_legacy_writer_fields_no_longer_drive_admission() -> None:
         result = EntityRegistrar(session=session, classifier=UnexpectedClassifier()).plan_writer_output(
             project_id=project.id,
             chapter_number=3,
-            writer_output=WriterOutput(
-                project_id=project.id,
-                chapter_number=3,
-                title="第三章",
-                body="突兀角色进入现场。",
-                end_of_chapter_summary="突兀角色出现。",
-                state_changes=[StateChangeCandidate(
-                    entity_name="突兀角色", entity_kind="character", field="status",
-                    old_value="", new_value="在场", reason="出场",
-                )],
-                new_events=[EventCandidate(summary="突兀角色出场", involved_entity_names=["突兀角色"])],
-            ),
+            # A candidate stored before the chapter delta still carries the writer's fields.
+            writer_output=WriterOutput.model_validate({
+                "project_id": project.id,
+                "chapter_number": 3,
+                "title": "第三章",
+                "body": "突兀角色进入现场。",
+                "end_of_chapter_summary": "突兀角色出现。",
+                "state_changes": [{
+                    "entity_name": "突兀角色", "entity_kind": "character", "field": "status",
+                    "old_value": "", "new_value": "在场", "reason": "出场",
+                }],
+                "new_events": [{"summary": "突兀角色出场", "involved_entity_names": ["突兀角色"]}],
+                "entity_mentions": [{"entity_name": "突兀角色", "entity_kind": "character"}],
+            }),
         )
 
         assert result.plan.decisions == []
@@ -425,7 +426,7 @@ def test_admission_reuses_known_non_character_canon_entity() -> None:
         engine.dispose()
 
 
-def test_admission_drops_generic_refs_from_structured_character_surfaces() -> None:
+def test_admission_keeps_generic_refs_on_structured_character_surfaces_as_background() -> None:
     class UnexpectedClassifier:
         def classify(self, **_kwargs):
             raise AssertionError("generic refs must not reach the LLM classifier")
@@ -445,26 +446,7 @@ def test_admission_drops_generic_refs_from_structured_character_surfaces() -> No
                 "summary": "不明追踪者发起覆盖请求", "participant_refs": ["new:不明追踪者"],
                 "significance": "minor", "visibility": "public", "evidence": "不明追踪者正在覆盖记录",
             }],
-        ).model_copy(update={
-            # The writer's own structured fields still exist until they are removed.
-            "state_changes": [
-                StateChangeCandidate(
-                    entity_name="不明追踪者",
-                    entity_kind="character",
-                    field="status",
-                    old_value="未知",
-                    new_value="正在覆盖记录",
-                    reason="系统告警",
-                )
-            ],
-            "new_events": [
-                EventCandidate(
-                    summary="不明追踪者发起覆盖请求",
-                    involved_entity_names=["不明追踪者"],
-                    roles=["antagonist"],
-                )
-            ],
-        })
+        )
         result = EntityRegistrar(
             session=session,
             classifier=UnexpectedClassifier(),
@@ -475,9 +457,6 @@ def test_admission_drops_generic_refs_from_structured_character_surfaces() -> No
         )
 
         assert result.background_generic_names == ["不明追踪者"]
-        assert result.writer_output.state_changes == []
-        assert result.writer_output.new_events[0].involved_entity_names == []
-        assert result.writer_output.new_events[0].roles == []
         assert result.writer_output.chapter_delta == output.chapter_delta
     finally:
         session.close()

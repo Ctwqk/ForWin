@@ -6,12 +6,15 @@ import pytest
 
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
-from forwin.checker.pulp_beat import pulp_track_for_genre, verify_pulp_beats
+from forwin.checker.pulp_beat import (
+    DeliveredPayoffCandidate,
+    pulp_track_for_genre,
+    verify_pulp_beats,
+)
 from forwin.audit.events import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import Project
-from forwin.protocol.state_change import DeliveredPayoffCandidate, EventCandidate
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
 
@@ -56,27 +59,16 @@ def test_unknown_track_still_counts_planned_reward_tags_and_structured_payoffs()
         track=None,
         delivered_payoffs=[
             DeliveredPayoffCandidate(
-                entity_name="陈默",
+                target_id="reward:power",
                 category="power",
-                direction="gain",
-                before_state="没有视野",
-                after_state="临时视野已解锁",
                 evidence_quote="陈默收到提示：临时视野已解锁",
-            )
-        ],
-        new_events=[
-            EventCandidate(
-                summary="陈默解锁视野。",
-                significance="major",
-                involved_entity_names=["陈默"],
-                roles=["protagonist"],
             )
         ],
     )
 
     assert tagged.visible_payoff_present is True
     assert declared.visible_payoff_present is True
-    assert declared.visible_payoff_evidence == ["delivered_payoff:陈默:power:临时视野已解锁"]
+    assert declared.visible_payoff_evidence == ["delivered_payoff:reward:power"]
     assert declared.pressure_present is False
 
 

@@ -1,38 +1,7 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
-from .scene import SceneContinuation, SceneOutput
-from .state_change import (
-    DeliveredPayoffCandidate,
-    EventCandidate,
-    StateChangeCandidate,
-    ThreadBeatCandidate,
-    TimeAdvance,
-)
-from .subworld import EntityMention
-
-
-class LoreCandidate(BaseModel):
-    subject_name: str = ""
-    subject_type: str = ""
-    description: str = ""
-    evidence_refs: list[str] = Field(default_factory=list)
-    confidence: float = 0.5
-
-
-class TimelineHint(BaseModel):
-    current_time_label: str = ""
-    projected_time_label: str = ""
-    duration_hint: str = ""
-    evidence_refs: list[str] = Field(default_factory=list)
-    confidence: float = 0.5
-
-
-class WriterNote(BaseModel):
-    note_type: str = ""
-    target_name: str = ""
-    note: str = ""
-    evidence_refs: list[str] = Field(default_factory=list)
+from .scene import SceneOutput
 
 
 class WriterOutput(BaseModel):
@@ -46,16 +15,6 @@ class WriterOutput(BaseModel):
     end_of_chapter_summary: str  # 1-2 sentence recap in Chinese
     draft_blob_path: str = ""
     scene_outputs: list[SceneOutput] = Field(default_factory=list)
-    state_changes: list[StateChangeCandidate] = Field(default_factory=list)
-    new_events: list[EventCandidate] = Field(default_factory=list)
-    delivered_payoffs: list[DeliveredPayoffCandidate] = Field(default_factory=list)
-    thread_beats: list[ThreadBeatCandidate] = Field(default_factory=list)
-    time_advance: TimeAdvance | None = None
     chapter_delta: ChapterDeltaExtraction | None = None
-    scene_continuation: list[SceneContinuation] = Field(default_factory=list)
-    lore_candidates: list[LoreCandidate] = Field(default_factory=list)
-    timeline_hints: list[TimelineHint] = Field(default_factory=list)
-    writer_notes: list[WriterNote] = Field(default_factory=list)
-    entity_mentions: list[EntityMention] = Field(default_factory=list)
     prompt_revision_hash: str = ""
     generation_meta: dict[str, object] = Field(default_factory=dict)

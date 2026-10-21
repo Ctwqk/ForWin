@@ -368,10 +368,13 @@ def test_movement_total_against_chapter_span() -> None:
     def check(time: dict[str, Any], movements: list[dict[str, Any]]) -> list[tuple[str, str]]:
         return _check(Session, world, 1, {**time, "movements": movements})
 
-    # 240 min of travel: each move fits the 180 min chapter, together they exceed 180 * 1.2.
+    # 240 min of travel, 20% tolerance: a span under 192 min is an error, under 240 a warning.
+    # Each move alone fits every span here.
     assert check(_time(3, "时"), hero_there_and_back) == [("error", "movement_total_too_fast")]
-    # 240 min within 210 min * 1.2 is only a warning.
     assert check(_time(3.5, "时"), hero_there_and_back) == [("warning", "movement_total_fast_within_tolerance")]
+    # A span exactly at the inclusive bound, 240 * (1 - 0.2), is a warning.
+    assert check(_time(3.2, "时"), hero_there_and_back) == [("warning", "movement_total_fast_within_tolerance")]
+    assert check(_time(4, "时"), hero_there_and_back) == []
     assert check(_time(3, "时"), rival_there_and_back) == []
     # An unknown span has no total to compare; each move warns on its own.
     assert check({}, hero_there_and_back) == [("warning", "movement_duration_unknown")] * 2

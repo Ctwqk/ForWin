@@ -209,7 +209,7 @@ def _location_patch_issues(map_graph: MapGraph, patches: Iterable[NodePatch]) ->
                     severity="error",
                     code="movement_unknown_map_node",
                     target_ref=f"node:{patch.node_id}",
-                    message=f"movement references unknown map node: {old_location} -> {new_location}",
+                    message=f"{patch.node_id} moves {old_location} -> {new_location}, an unknown map node",
                 )
             )
             continue
@@ -220,7 +220,10 @@ def _location_patch_issues(map_graph: MapGraph, patches: Iterable[NodePatch]) ->
                     severity="error",
                     code="movement_unreachable",
                     target_ref=f"node:{patch.node_id}",
-                    message=f"no objective map path for movement {old_location} -> {new_location}: {result.blocked_reason}",
+                    message=(
+                        f"no objective map path for {patch.node_id} moving {old_location} -> {new_location}: "
+                        f"{result.blocked_reason}"
+                    ),
                 )
             )
     return issues
@@ -390,7 +393,7 @@ class _ChapterExtractionChecks:
         if not objective.reachable:
             self._issue(
                 "error", "movement_unreachable", target,
-                f"no objective map path for movement {from_id} -> {to_id}: {objective.blocked_reason}",
+                f"no objective map path for {mover} moving {from_id} -> {to_id}: {objective.blocked_reason}",
             )
             return None
         observer = self._overlay_key(mover)
@@ -446,9 +449,10 @@ class _ChapterExtractionChecks:
                 f"{mover} makes {len(minutes)} moves needing {total:g} min on the shortest routes; "
                 f"the chapter spans {chapter_minutes} min"
             )
-            if total > chapter_minutes * (1 + self.tolerance) + _MINUTE_EPSILON:
+            # The per-movement band: the span stands in for the claimed time, the total for the shortest.
+            if chapter_minutes < total * (1 - self.tolerance) - _MINUTE_EPSILON:
                 self._issue("error", "movement_total_too_fast", f"node:{mover}", detail)
-            elif total > chapter_minutes + _MINUTE_EPSILON:
+            elif chapter_minutes < total - _MINUTE_EPSILON:
                 self._issue("warning", "movement_total_fast_within_tolerance", f"node:{mover}", detail)
 
     # entities and items

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,12 +16,20 @@ from forwin.review.decision.rules.review_outcome import decide_review_outcome
 from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.issue_groups import issue_group_for_issue
-from forwin.review.world_consistency import WorldConsistencyReviewer
+from forwin.review.world_consistency import WorldConsistencyReviewer, _named
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.writer.prompt_core.world_repair import DEFAULT_WORLD_REPAIR_FIX, WORLD_REPAIR_FIXES
 from tests.chapter_delta_helpers import chapter_delta
-from tests.test_world_gate_v6 import _move, _seed_world, _session_factory, _time, _World
+from tests.test_world_gate_v6 import (
+    _day_of_moves,
+    _knowledge,
+    _move,
+    _seed_world,
+    _session_factory,
+    _time,
+    _World,
+)
 
 BODY = "The hero walked the road."
 
@@ -224,6 +234,86 @@ def test_draft_review_passes_policy_tolerance_to_world_reviewer() -> None:
     }
     assert calls[0]["session"] is not None
     engine.dispose()
+
+
+def test_unreachable_movement_names_mover_and_destination() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    # loc 5 has no edges; the gate's message ends the destination with a colon.
+    verdict = _draft_review(Session, world, _output(world, _day_of_moves(_move(world.hero, world.loc(1), world.loc(5)))))
+
+    assert _codes(verdict) == [("movement_unreachable", "error")]
+    issue = verdict.issues[0]
+    for node_id in (world.hero, world.loc(1), world.loc(5)):
+        assert node_id not in issue.description
+        assert not any(node_id in item for item in verdict.repair_instruction.must_fix)
+    assert issue.entity_names == ["甲", "site-1", "site-5"]
+    assert issue.suggested_fix == WORLD_REPAIR_FIXES["movement_unreachable"]
+    engine.dispose()
+
+
+def test_hidden_fact_contradiction_shows_the_propositions() -> None:
+    # R40: the writer must see which secret it contradicted, as with must_not_reveal.
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    verdict = _draft_review(Session, world, _output(world, {"knowledge_events": [_knowledge(
+        world.rival, world.fact("fact-public"), state="believes", contradicts_ref=world.fact("fact-secret"),
+    )]}))
+
+    assert _codes(verdict) == [("contradicts_hidden_fact", "error")]
+    issue = verdict.issues[0]
+    assert "「proposition-public」" in issue.description
+    assert "「proposition-secret」" in issue.description
+    assert "fact:" not in issue.description
+    assert any("「proposition-secret」" in item for item in verdict.repair_instruction.must_fix)
+    assert issue.entity_names == []
+    assert issue.suggested_fix == WORLD_REPAIR_FIXES["contradicts_hidden_fact"]
+    engine.dispose()
+
+
+def test_refs_before_trailing_punctuation_get_their_names() -> None:
+    names = {"node-1": "Ann", "site-1": "Harbor", "fact:fact-1": "the vault is empty"}
+
+    assert _named("node-1 reaches site-1: blocked. Then site-1.", names) == (
+        "Ann reaches Harbor: blocked. Then Harbor.", ["Ann", "Harbor"],
+    )
+    assert _named("fact:fact-1: known", names) == ("「the vault is empty」: known", [])
+    assert _named("unknown-1: kept", names) == ("unknown-1: kept", [])
+
+
+# Gate errors the writer cannot fix by rewriting prose keep the generic fix.
+_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon"}
+
+
+def _gate_error_codes() -> set[str]:
+    """Every error code forwin/book_state/reviewer.py can emit, read from its source."""
+    source = Path(__file__).resolve().parents[1] / "forwin" / "book_state" / "reviewer.py"
+    codes: set[str] = set()
+    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        if callee == "_issue" and len(node.args) >= 2:
+            severity, code = node.args[0], node.args[1]
+        elif callee == "BookStateReviewIssue":
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            severity, code = keywords.get("severity"), keywords.get("code")
+        else:
+            continue
+        if isinstance(severity, ast.Constant) and severity.value == "error" and isinstance(code, ast.Constant):
+            codes.add(code.value)
+    return codes
+
+
+def test_every_gate_error_code_has_a_repair_fix() -> None:
+    codes = _gate_error_codes()
+
+    assert "movement_unreachable" in codes and "movement_total_too_fast" in codes
+    assert codes - set(WORLD_REPAIR_FIXES) == _DEFAULT_FIX_GATE_CODES
+    # The table names no code the gate has stopped emitting.
+    assert set(WORLD_REPAIR_FIXES) - codes == {"chapter_delta_missing"}
 
 
 def test_world_issue_type_is_registered_for_routing() -> None:

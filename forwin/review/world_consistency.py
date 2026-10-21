@@ -18,6 +18,8 @@ from forwin.writer.prompt_core.world_repair import world_repair_fix
 ISSUE_TYPE = "world_consistency"
 # Gate and translator messages separate refs with spaces, commas, semicolons, parens and quotes.
 _REF_TOKEN = re.compile(r"[^\s,;()'\"]+")
+# A ref can end a clause; ``fact:<id>`` keeps its inner colon.
+_TRAILING_PUNCTUATION = ":.,;)"
 
 
 class _Finding(NamedTuple):
@@ -120,14 +122,16 @@ def _named(text: str, names: Mapping[str, str]) -> tuple[str, list[str]]:
     entity_names: list[str] = []
 
     def name_of(match: re.Match[str]) -> str:
-        ref = match.group(0)
+        token = match.group(0)
+        ref = token if token in names else token.rstrip(_TRAILING_PUNCTUATION)
         name = names.get(ref)
         if not name:
-            return ref
+            return token
+        suffix = token[len(ref):]
         if ref.startswith(FACT_REF_PREFIX):
-            return f"「{name}」"
+            return f"「{name}」{suffix}"
         entity_names.append(name)
-        return name
+        return f"{name}{suffix}"
 
     return _REF_TOKEN.sub(name_of, text), list(dict.fromkeys(entity_names))
 

@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
+from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction, ChapterTime
 from forwin.canon import (
     CanonAdmissionOutcome,
     CanonQualityGateOutcome,
@@ -496,6 +497,10 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     captured: dict[str, object] = {}
     calls: list[str] = []
     obligation = SimpleNamespace(id="obl-due", linked_plan_patch_ids=["patch-1"])
+    chapter_delta = ChapterDeltaExtraction(
+        body_sha256="test", time=ChapterTime(elapsed=None, evidence=""),
+        plan_fulfillment=[{"target_id": "obligation:obl-due", "status": "done", "evidence": "Ari confirms the retired engineer is Nox."}],
+    )
 
     monkeypatch.setattr(
         quality_gates_module,
@@ -507,7 +512,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         calls.append("draft_verify")
         assert kwargs["obligations"] == [obligation]
         assert kwargs["chapter_number"] == 18
-        assert kwargs["draft_text"] == "Ari confirms the retired engineer is Nox."
+        assert kwargs["chapter_delta"] is chapter_delta
         assert kwargs["evidence_ref"] == "draft:d18"
         return ["obl-due"]
 
@@ -580,7 +585,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         updater=object(),
         project_id="p",
         chapter_number=18,
-        writer_output=SimpleNamespace(body="Ari confirms the retired engineer is Nox."),
+        writer_output=SimpleNamespace(body="Ari confirms the retired engineer is Nox.", chapter_delta=chapter_delta),
         verdict=SimpleNamespace(verdict="pass"),
     )
 

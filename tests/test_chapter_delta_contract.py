@@ -324,6 +324,8 @@ def test_input_builder_filters_prior_runtime_without_database(monkeypatch) -> No
     monkeypatch.setattr(chapter_input.BookStateProjection, "load_runtime_as_of", load_runtime)
     monkeypatch.setattr(chapter_input.StoryCalendarRepository, "get", lambda _self, _project: None)
     monkeypatch.setattr(chapter_input.BookLexiconRepository, "get", lambda _self, _project: BookLexicon())
+    monkeypatch.setattr(chapter_input.NarrativeObligationRepository, "list_active_for_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(chapter_input.NarrativeObligationRepository, "list_planned_for_chapter", lambda *_args, **_kwargs: [])
     result = build_chapter_extraction_input(SimpleNamespace(scalar=lambda _query: None), project_id="p", chapter_number=3)
     assert seen == [("p", 2)]
     assert {row.kind for row in result.entities} == {"character", "faction", "organization", "group", "item", "location"}
@@ -333,3 +335,55 @@ def test_input_builder_filters_prior_runtime_without_database(monkeypatch) -> No
     assert [(row.id, row.region_id, row.subworld_id) for row in result.locations] == [("map", "region", "subworld")]
     assert {row.fact_ref for row in result.secrets} == {"fact:hidden", "fact:secret"}
     assert result.fulfillment_targets == result.calendar_units == result.time_aliases == result.travel_modes == ()
+
+
+@pytest.mark.parametrize("with_plan", [True, False])
+def test_input_offers_unplanned_active_and_current_chapter_obligations(with_plan) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from forwin.models.base import Base
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as session:
+            project = Project(title="Obligations", premise="test", genre="test")
+            session.add(project)
+            session.flush()
+            session.add_all([
+                NarrativeObligationRow(id=ref, project_id=project.id, status=status,
+                                       origin_chapter_number=origin, deadline_chapter=deadline,
+                                       summary=f"Resolve {ref}", payoff_test="" if ref == "active" else f"Pay off {ref}")
+                for ref, status, origin, deadline in (
+                    ("active", "active", 1, 3), ("listed", "active", 1, 4),
+                    ("current", "active", 3, 3), ("planned", "planned", 3, 5),
+                    ("future", "active", 4, 5), ("resolved", "resolved", 1, 3),
+                    ("old-planned", "planned", 1, 3),
+                )
+            ])
+            if with_plan:
+                arc = ArcPlanVersion(project_id=project.id, arc_synopsis="arc")
+                session.add(arc)
+                session.flush()
+                session.add(ChapterPlan(
+                    project_id=project.id, arc_plan_id=arc.id, chapter_number=3,
+                    task_contract_json=json.dumps({"obligations_to_resolve": ["listed", "listed"]}),
+                    experience_plan_json=json.dumps({"obligations_to_resolve": ["listed"]}),
+                ))
+            session.flush()
+
+            result = build_chapter_extraction_input(session, project_id=project.id, chapter_number=3)
+
+            targets = [target for target in result.fulfillment_targets if target.target_id.startswith("obligation:")]
+            assert {target.target_id for target in targets} == {
+                "obligation:active", "obligation:listed", "obligation:current", "obligation:planned",
+            }
+            assert len(targets) == 4
+            assert next(target.description for target in targets if target.target_id == "obligation:active") == "Resolve active"
+            if with_plan:
+                assert targets[0].target_id == "obligation:listed"
+    finally:
+        engine.dispose()

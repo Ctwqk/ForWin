@@ -357,7 +357,7 @@ def _apply_canon_quality_gate(
     draft_resolved_obligation_ids = verify_due_obligations_for_draft(
         obligations=gate_obligations,
         chapter_number=chapter_number,
-        draft_text=str(getattr(writer_output, "body", "") or ""),
+        chapter_delta=getattr(writer_output, "chapter_delta", None),
         evidence_ref=f"draft:{draft_id}"
         if draft_id
         else f"chapter:{chapter_number}:draft",

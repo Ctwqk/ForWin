@@ -126,7 +126,6 @@ class PostCanonStage:
                 session=control_session,
                 project_id=commit.project_id,
                 chapter_number=commit.chapter_number,
-                accepted_text=str(draft.body_text or ""),
             )
             future_audit = self._audit_future_plans_after_acceptance(
                 session=control_session,

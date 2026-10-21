@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, get_args
 
@@ -12,6 +13,8 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import RewardTag
 
 
@@ -82,12 +85,13 @@ def plan_goal_targets(goals: Any) -> list[tuple[str, str]]:
     ]
 
 
-def _fulfillment_targets(session: Session, project_id: str, plan: ChapterPlan | None) -> tuple[FulfillmentTarget, ...]:
-    if plan is None:
-        return ()
-    goals = _loads(plan.goals_json, [])
-    contract = _loads(plan.task_contract_json, {})
-    experience = _loads(plan.experience_plan_json, {})
+def _fulfillment_targets(
+    session: Session, project_id: str, plan: ChapterPlan | None,
+    *, judged_obligations: Sequence[NarrativeObligation] = (),
+) -> tuple[FulfillmentTarget, ...]:
+    goals = _loads(plan.goals_json, []) if plan else []
+    contract = _loads(plan.task_contract_json, {}) if plan else {}
+    experience = _loads(plan.experience_plan_json, {}) if plan else {}
     targets = [
         FulfillmentTarget(target_id, goal)
         for target_id, goal in plan_goal_targets(goals)
@@ -111,6 +115,16 @@ def _fulfillment_targets(session: Session, project_id: str, plan: ChapterPlan | 
                 f"obligation:{ref}",
                 (obligation.payoff_test or obligation.summary or ref) if obligation else ref,
             ))
+    offered_ids = set(obligation_ids)
+    for obligation in judged_obligations:
+        if obligation.id in offered_ids:
+            continue
+        offered_ids.add(obligation.id)
+        targets.append(FulfillmentTarget(
+            f"obligation:{obligation.id}", obligation.payoff_test or obligation.summary or obligation.id,
+        ))
+    if plan is None:
+        return tuple(targets)
     rewards = experience.get("planned_reward_tags", []) if isinstance(experience, dict) else []
     planned = list(dict.fromkeys(
         tag for tag in (rewards if isinstance(rewards, list) else []) if isinstance(tag, str) and tag
@@ -138,6 +152,13 @@ def build_chapter_extraction_input(
         ChapterPlan.project_id == project_id,
         ChapterPlan.chapter_number == chapter_number,
     ))
+    obligation_repo = NarrativeObligationRepository(session)
+    judged_obligations = [
+        # Includes the gate/acceptance selection and current-origin obligations
+        # checked for expiry with chapter_number + 1 after acceptance.
+        *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number + 1),
+        *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
+    ]
     entities = []
     intents = []
     for node in sorted(runtime.world.nodes_by_id.values(), key=lambda node: node.id):
@@ -163,7 +184,7 @@ def build_chapter_extraction_input(
         ),
         calendar_units=tuple(unit.name for unit in calendar.units) if calendar else (),
         time_aliases=tuple(alias.name for alias in lexicon.time_unit_aliases),
-        fulfillment_targets=_fulfillment_targets(session, project_id, plan),
+        fulfillment_targets=_fulfillment_targets(session, project_id, plan, judged_obligations=judged_obligations),
         intents=tuple(intents),
         secrets=tuple(
             SecretRow(f"{FACT_REF_PREFIX}{fact.id}", fact.proposition, fact.sensitivity_level)

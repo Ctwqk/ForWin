@@ -165,40 +165,6 @@ justification = "解析 LLM 是/否 回答"
 max_literals = 8
 
 [[entry]]
-path = "forwin/canon_quality/obligation_verifier.py"
-symbol = "ObligationResolutionVerifier._verify_by_type"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "义务兑现标记词；P2 删除"
-max_literals = 10
-
-[[entry]]
-path = "forwin/canon_quality/obligation_verifier.py"
-symbol = "_CAUSAL_MARKERS"
-checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P2"
-justification = "因果标记词；P2 删除"
-max_literals = 7
-
-[[entry]]
-path = "forwin/canon_quality/obligation_verifier.py"
-symbol = "_PAYOFF_STOP_WORDS"
-checks = ["cjk_collection"]
-category = "language_lexicon"
-justification = "兑现条件措辞的停用词"
-max_literals = 8
-
-[[entry]]
-path = "forwin/canon_quality/obligation_verifier.py"
-symbol = "_matched_payoff_markers"
-checks = ["cjk_regex"]
-category = "language_lexicon"
-justification = "章节标签（第N章前/内）解析"
-max_literals = 1
-
-[[entry]]
 path = "forwin/canon_quality/placeholder.py"
 symbol = "BARE_ROLE_PLACEHOLDERS"
 checks = ["cjk_collection"]

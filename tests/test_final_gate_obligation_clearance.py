@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from forwin.canon_quality.obligation_verifier import expire_unresolved_obligations_after_acceptance
+import pytest
+
+from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction, ChapterTime
+from forwin.canon_quality.obligation_verifier import expire_unresolved_obligations_after_acceptance, verify_due_obligations_for_draft
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -84,3 +87,29 @@ def test_expired_unresolved_obligation_blocks_after_acceptance() -> None:
         assert result["blocked_obligation_ids"] == [created.id]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("status", ["done", "partial", "missing"])
+def test_final_gate_clears_only_done_fulfillment(status) -> None:
+    obligation = NarrativeObligation(
+        id="obl-final", project_id="p1", origin_chapter_number=58,
+        obligation_type="final_hook_closure", priority="P1", status="active",
+        summary="Close the main hook.", deadline_chapter=60, payoff_test="Close the main hook.",
+        linked_plan_patch_ids=["patch-final"],
+    )
+    patch = NarrativePlanPatch(
+        id="patch-final", project_id="p1", source_obligation_ids=[obligation.id],
+        validation_status="passed", applied=True,
+    )
+    extraction = ChapterDeltaExtraction(
+        body_sha256="test", time=ChapterTime(elapsed=None, evidence=""),
+        plan_fulfillment=[{"target_id": "obligation:obl-final", "status": status, "evidence": "The sealed letter identifies the sender."}],
+    )
+    resolved = verify_due_obligations_for_draft(
+        obligations=[obligation], chapter_number=60, chapter_delta=extraction,
+    )
+    result = evaluate_canon_admission(
+        project_id="p1", chapter_number=60, review_verdict="pass", obligations=[obligation],
+        resolved_obligation_ids=resolved, plan_patches=[patch], mode="strict", is_final_chapter=True,
+    )
+    assert result.commit_allowed is (status == "done")

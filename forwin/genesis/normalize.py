@@ -565,7 +565,8 @@ def _normalize_story_engine_payload(
             culture_profile_id = ""
         secrets = item.get("secrets")
         if not isinstance(secrets, list):
-            secret = item.get("secret")
+            # A string ``secrets`` holds one secret, like the older single ``secret`` field.
+            secret = secrets if isinstance(secrets, str) and secrets.strip() else item.get("secret")
             secrets = [secret] if isinstance(secret, str) and secret.strip() else []
         core_cast.append(
             {

@@ -679,7 +679,7 @@ def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership()
     assert '"export_obsidian"' in obsidian_api
     assert "world_export_obsidian" in _read("forwin/mcp/client.py")
     assert "from forwin.proposals.proposal_review import approve_world_edit_proposal" in proposal_api
-    assert "from forwin.proposals.structured_patch import proposal_to_graph_delta" in proposal_review
+    assert "from forwin.proposals.structured_patch import proposal_chapter, proposal_to_graph_delta" in proposal_review
     assert 'trigger: str = "proposal_approve"' in proposal_review
     assert '"source": row.source' in structured_patch
     assert "human-indexed" in exporter

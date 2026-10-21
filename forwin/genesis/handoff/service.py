@@ -57,7 +57,6 @@ class GenesisHandoffService:
 
         project_id_for_failure = project.id
         revision_id_for_failure = revision.id
-        decision_id = ""
         try:
             decision = updater.save_decision_event(
                 DecisionEventInfo(
@@ -77,7 +76,6 @@ class GenesisHandoffService:
                     related_object_id=revision.id,
                 )
             )
-            decision_id = decision.id
             existing_arc_count = int(
                 session.execute(
                     select(func.count(ArcPlanVersion.id)).where(
@@ -171,7 +169,6 @@ class GenesisHandoffService:
                     exc,
                     project_id=project_id_for_failure,
                     revision_id=revision_id_for_failure,
-                    parent_event_id=decision_id,
                 )
             )
             session.flush()
@@ -183,7 +180,6 @@ def _stage_failure_event(
     *,
     project_id: str,
     revision_id: str,
-    parent_event_id: str,
 ) -> DecisionEventInfo:
     if isinstance(exc, WorldSeedCommitError):
         event_type = DecisionEventType.WORLD_SEED_COMMIT_FAILED
@@ -212,5 +208,6 @@ def _stage_failure_event(
         ),
         related_object_type="book_genesis_revision",
         related_object_id=revision_id,
-        parent_event_id=parent_event_id,
+        # No parent: the START_WRITING_REQUESTED event was rolled back with the stage.
+        parent_event_id="",
     )

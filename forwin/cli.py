@@ -52,11 +52,39 @@ def _api_client(args: argparse.Namespace):
     )
 
 
+_WORLD_SEED_LOCK_REFUSED_EXIT_CODE = 2
+
+
+async def _report_world_seed_lock_refusal(client, project_id: str, exc: Exception) -> None:
+    genesis = await client.genesis_get(project_id)
+    stage = next(
+        (item for item in genesis.stage_states if item.stage_key == "world_seed"),
+        None,
+    )
+    issues = stage.validation_issues if stage is not None else []
+    print(f"Genesis world_seed: lock refused: {exc}", file=sys.stderr)
+    print("world_seed validation issues:", file=sys.stderr)
+    for issue in issues:
+        print(
+            f"  - {issue.get('severity', '')} {issue.get('code', '')} "
+            f"({issue.get('path', '')}): {issue.get('message', '')}",
+            file=sys.stderr,
+        )
+    if not issues:
+        print("  (none recorded; see the refusal above)", file=sys.stderr)
+    print(
+        f"Next: fix world_seed with genesis_stage_refine (or genesis_stage_generate), "
+        f"lock it with genesis_stage_lock, then call project_start_writing "
+        f"for project_id={project_id}.",
+        file=sys.stderr,
+    )
+
+
 def cmd_generate(args: argparse.Namespace) -> None:
     """Create a Genesis project and hand it off to durable generation."""
     from forwin.mcp.models import STAGE_KEY_ORDER
 
-    async def run() -> None:
+    async def run() -> int:
         client = _api_client(args)
         created = await client.project_create(
             title=args.title,
@@ -75,10 +103,17 @@ def cmd_generate(args: argparse.Namespace) -> None:
                 stage_key=stage_key,
             )
             print(f"Genesis {stage_key}: lock")
-            await client.genesis_stage_lock(
-                project_id=project_id,
-                stage_key=stage_key,
-            )
+            try:
+                await client.genesis_stage_lock(
+                    project_id=project_id,
+                    stage_key=stage_key,
+                )
+            except ValueError as exc:
+                # The API refuses the lock (4xx) while the seed has validation errors.
+                if stage_key != "world_seed":
+                    raise
+                await _report_world_seed_lock_refusal(client, project_id, exc)
+                return _WORLD_SEED_LOCK_REFUSED_EXIT_CODE
         active = await client.task_active_generation_check(project_id=project_id)
         if active.has_active_generation_task:
             raise RuntimeError("project already has an active generation task")
@@ -92,8 +127,11 @@ def cmd_generate(args: argparse.Namespace) -> None:
         print(f"project_id={project_id}")
         print(f"task_id={task_id}")
         print(started.message)
+        return 0
 
-    asyncio.run(run())
+    exit_code = asyncio.run(run())
+    if exit_code:
+        sys.exit(exit_code)
 
 
 def cmd_read(args: argparse.Namespace) -> None:

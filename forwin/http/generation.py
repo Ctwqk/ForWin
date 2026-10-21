@@ -146,7 +146,9 @@ def _create_continue_generation_task(
     title: str = "",
     subtitle: str = "",
     message: str = "",
+    session=None,
 ) -> str:
+    """Enqueue in its own transaction, or in the caller's ``session`` without committing."""
     normalized_project_id = str(project_id or "").strip()
     return (
         _generation_application_service(runtime)
@@ -161,7 +163,8 @@ def _create_continue_generation_task(
                 subtitle=subtitle or f"项目 {normalized_project_id}",
                 message=message or "准备继续后续章节。",
                 root_event_type=DecisionEventType.CONTINUE_REQUESTED,
-            )
+            ),
+            session=session,
         )
         .task_id
     )

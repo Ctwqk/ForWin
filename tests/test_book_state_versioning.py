@@ -4,11 +4,16 @@ import json
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
+from forwin.api_schema import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.canon import CanonAdmissionService, CanonStaleVersion
+from forwin.characters.creation import CharacterCreationHelper
+from forwin.characters.models import CharacterCreationRequest
+from forwin.http.adapters.api_book_state_routes import build_handlers
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.book_state import GraphDeltaRow
+from forwin.models.book_state import GraphDeltaRow, WorldNodeStateRow
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.proposals import proposal_review
 from forwin.proposals.proposal_review import approve_world_edit_proposal
@@ -621,13 +626,16 @@ def test_past_chapter_compile_does_not_clobber_newer_rows() -> None:
     engine.dispose()
 
 
-def _propose(Session, project_id: str, operation: dict) -> str:
+def _propose(Session, project_id: str, operation: dict, *, chapter: int | None = None) -> str:
+    patch = {"forwin_patch": [operation]}
+    if chapter is not None:
+        patch["frontmatter"] = {"as_of_chapter": chapter}
     with Session.begin() as session:
         row = KnowledgeEditProposalRow(
             project_id=project_id,
             source="world_studio",
             target_node_id=str(operation.get("node_id", "")),
-            proposed_patch_json=json.dumps({"forwin_patch": [operation]}),
+            proposed_patch_json=json.dumps(patch),
             status="pending",
         )
         session.add(row)
@@ -695,6 +703,93 @@ def test_world_edit_after_zero_delta_chapter_lands_in_that_chapter() -> None:
 
     assert delta_chapter == 1
     assert states == [{"status": "idle"}, {"status": "awake"}, {"status": "awake"}]
+    engine.dispose()
+
+
+def test_future_chapter_world_edit_clamps_down() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", state={"status": "idle"})])
+    with Session.begin() as session:
+        _compile_without_deltas(session, project_id, 1)
+    proposal_id = _propose(
+        Session,
+        project_id,
+        {"op": "set_node_field", "node_id": "char_a", "field_path": "state.status", "new_value": "awake"},
+        chapter=5,
+    )
+    with Session.begin() as session:
+        approved = approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+        delta_chapter = session.get(GraphDeltaRow, approved.row.graph_delta_id).chapter_number
+    # The next accepted chapter still lands after the edit.
+    with Session.begin() as session:
+        _compile(session, project_id, 2, node_patches=[_create_character(project_id, "char_b")])
+
+    with Session() as session:
+        states = [_load(session, project_id, chapter).world.get_state("char_a") for chapter in (0, 1, 2)]
+
+    assert (delta_chapter, approved.projection_refresh["as_of_chapter"]) == (1, 1)
+    assert states == [{"status": "idle"}, {"status": "awake"}, {"status": "awake"}]
+    engine.dispose()
+
+
+def _node_versions(session, node_id: str) -> list[tuple[int, str]]:
+    rows = session.execute(
+        select(WorldNodeStateRow)
+        .where(WorldNodeStateRow.node_id == node_id)
+        .order_by(WorldNodeStateRow.as_of_chapter, WorldNodeStateRow.created_at)
+    ).scalars()
+    return [(row.as_of_chapter, row.source_delta_id) for row in rows]
+
+
+def test_compiler_created_character_has_one_version_row() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        # Without a personality_loadout the compiler hands the create to the character helper.
+        create = NodePatch(
+            node_id="char_new",
+            node_type="character",
+            op="create",
+            new_value={"project_id": project_id, "name": "char_new", "state": {"status": "idle"}},
+        )
+        _compile(session, project_id, 0, delta_id="delta_char_new", node_patches=[create])
+
+    with Session() as session:
+        versions = _node_versions(session, "char_new")
+        node = BookStateRepository(session).get_world_node("char_new")
+
+    assert versions == [(0, "delta_char_new")]
+    assert node.profile["personality_loadout"]
+    engine.dispose()
+
+
+def test_direct_writer_never_versions_a_node_before_it_exists() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a")])
+        CharacterCreationHelper(session).create_character(
+            CharacterCreationRequest(
+                project_id=project_id,
+                source="api_manual",
+                character_id="char_later",
+                name="Later",
+                created_at_chapter=3,
+                personality_loadout=_LOADOUT_A,
+            )
+        )
+
+    build_handlers(get_session=Session)["set_character_personality_loadout"](
+        project_id,
+        "char_later",
+        PersonalityLoadoutUpdateRequest(personality_loadout=_LOADOUT_A, reason="manual edit"),
+    )
+
+    with Session() as session:
+        assert BookStateRepository(session).latest_available_chapter(project_id) == 0
+        assert [chapter for chapter, _ in _node_versions(session, "char_later")] == [3, 3]
     engine.dispose()
 
 

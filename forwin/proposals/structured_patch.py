@@ -46,7 +46,7 @@ def proposal_to_graph_delta(
         return audit_delta_from_proposal(row, reason=reason)
     runtime = BookStateProjection(session).load_runtime_as_of(
         row.project_id,
-        as_of_chapter=max(_proposal_chapter(row), 0),
+        as_of_chapter=max(proposal_chapter(row), 0),
     )
     source_refs = _source_refs(row)
     node_patches: list[NodePatch] = []
@@ -120,7 +120,7 @@ def proposal_to_graph_delta(
     return GraphDelta(
         id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
-        chapter_number=_proposal_chapter(row),
+        chapter_number=proposal_chapter(row),
         delta_type=GraphDeltaType.REPAIR,
         operation="structured_proposal_patch",
         target_type="proposal",
@@ -164,7 +164,7 @@ def audit_delta_from_proposal(
     return GraphDelta(
         id=f"proposal_delta_{row.id}_{new_id()}",
         project_id=row.project_id,
-        chapter_number=_proposal_chapter(row),
+        chapter_number=proposal_chapter(row),
         delta_type=GraphDeltaType.REPAIR,
         operation="create_fact",
         target_type="proposal",
@@ -192,7 +192,7 @@ def audit_delta_from_proposal(
                     "confidence": 1.0,
                     "related_node_refs": [target_node_id] if target_node_id else [],
                     "source_refs": source_refs,
-                    "created_at_chapter": _proposal_chapter(row),
+                    "created_at_chapter": proposal_chapter(row),
                     "narrative_function": proposal_type,
                     "state": {
                         "target_page_key": row.target_page_key,
@@ -360,8 +360,8 @@ def _edge_patch(
                 "directionality": operation.get("directionality", "directed"),
                 "weight": operation.get("weight", 1.0),
                 "confidence": operation.get("confidence", 1.0),
-                "established_at_chapter": _proposal_chapter(row),
-                "valid_from_chapter": _proposal_chapter(row),
+                "established_at_chapter": proposal_chapter(row),
+                "valid_from_chapter": proposal_chapter(row),
                 "status": operation.get("status", "active"),
                 "visibility": operation.get("visibility", ""),
                 "truth_relation": operation.get("truth_relation", "true"),
@@ -555,7 +555,7 @@ def _fact_patch(
                 "related_node_refs": operation.get("related_node_refs", []),
                 "related_edge_refs": operation.get("related_edge_refs", []),
                 "source_refs": source_refs,
-                "created_at_chapter": _proposal_chapter(row),
+                "created_at_chapter": proposal_chapter(row),
                 "sensitivity_level": operation.get("sensitivity_level", ""),
                 "narrative_function": operation.get("narrative_function", ""),
                 "state": operation.get("state", {}),
@@ -641,7 +641,7 @@ def _promise_narrative_patches(
     if not promise_id:
         raise ValueError(f"{op} requires promise_id")
     target_ref = f"promise:{promise_id}"
-    as_of_chapter = _proposal_chapter(row)
+    as_of_chapter = proposal_chapter(row)
     patch_reason = reason or str(operation.get("reason") or row.reason or "")
     evidence_refs = list(operation.get("evidence_refs", source_refs))
     if op == "create_reader_promise":
@@ -734,7 +734,8 @@ def _promise_field_path(field_path: str) -> str:
     raise ValueError(f"unsupported reader promise field: {field_path}")
 
 
-def _proposal_chapter(row: KnowledgeEditProposalRow) -> int:
+def proposal_chapter(row: KnowledgeEditProposalRow) -> int:
+    """Chapter a proposal was written against: ``frontmatter.as_of_chapter``, else ``as_of_chapter``."""
     payload = load_json(row.proposed_patch_json, {})
     frontmatter = (
         payload.get("frontmatter")
@@ -742,7 +743,9 @@ def _proposal_chapter(row: KnowledgeEditProposalRow) -> int:
         else {}
     )
     try:
-        return int(frontmatter.get("as_of_chapter") or 0)
+        return int(
+            frontmatter.get("as_of_chapter") or payload.get("as_of_chapter") or 0
+        )
     except (TypeError, ValueError):
         return 0
 

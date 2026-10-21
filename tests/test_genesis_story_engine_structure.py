@@ -77,6 +77,14 @@ def test_secret_string_upgrades_to_secrets_list():
     assert all("secret" not in item for item in result["core_cast"])
 
 
+def test_secrets_string_reads_like_the_legacy_secret():
+    result = normalize({"core_cast": [
+        {"secrets": " A hidden debt "},
+        {"secrets": "  ", "secret": "A legacy secret"},
+    ]})
+    assert [item["secrets"] for item in result["core_cast"]] == [["A hidden debt"], ["A legacy secret"]]
+
+
 def test_long_arcs_are_structured():
     result = normalize({
         "core_cast": [{"name": "A"}],

@@ -724,7 +724,8 @@ def test_compiler_create_character_patch_assigns_personality_loadout() -> None:
     assert node.id == "char_shen"
     assert node.profile["personality_loadout"]["dominant"]["skill"] == "trait-loyal-protector"
     assert node.metadata["personality_assignment"]["assignment_mode"] in {"auto_rule", "fallback_minimal"}
-    assert state_count == 2
+    # Only the compiler's version, attributed to the delta; the helper writes none of its own.
+    assert state_count == 1
 
 
 def test_compiler_preserves_explicit_character_id_when_future_name_duplicate_exists() -> None:

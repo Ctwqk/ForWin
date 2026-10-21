@@ -34,6 +34,12 @@ def test_verify_pulp_beats_detects_core_payoff() -> None:
     assert result.next_hook_present is True
 
 
+def test_a_disciple_mention_is_not_an_audience_reaction() -> None:
+    result = verify_pulp_beats("弟子推门进来，递上一封信。", track="xuanhuan")
+
+    assert result.audience_reaction_present is False
+
+
 def test_unmatched_genre_uses_neutral_pulp_profile() -> None:
     assert pulp_track_for_genre("星际") is None
     for track in (pulp_track_for_genre("星际"), "", "no-such-track"):

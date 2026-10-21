@@ -48,8 +48,9 @@ class CharacterCreationHelper:
         self.policy_resolver = CharacterPersonalityPolicyResolver(session)
 
     def create_character(
-        self, request: CharacterCreationRequest
+        self, request: CharacterCreationRequest, *, record_version: bool = True
     ) -> CharacterCreationResult:
+        """Create the character node; ``record_version=False`` leaves its version to the caller."""
         if (
             is_generic_character_name(
                 request.name,
@@ -143,11 +144,14 @@ class CharacterCreationHelper:
             state=dict(request.state),
             metadata=metadata,
         )
-        self.repo.create_world_node(
-            node,
-            version_chapter=node.created_at_chapter,
-            version_state=dict(request.state),
-        )
+        if record_version:
+            self.repo.create_world_node(
+                node,
+                version_chapter=node.created_at_chapter,
+                version_state=dict(request.state),
+            )
+        else:
+            self.repo.upsert_world_node_row(node)
         self._sync_identity_map(
             request,
             character_id=node.id,
@@ -247,10 +251,13 @@ class CharacterCreationHelper:
     def apply_book_state_character_patch(
         self, request: CharacterCreationRequest
     ) -> CharacterCreationResult:
+        # The compiler versions the node under its delta right after this call; a
+        # version written here would carry no delta id and survive a rewrite of it.
         return self.create_character(
             request.model_copy(
                 update={"source": request.source or "book_state_graph_delta"}
-            )
+            ),
+            record_version=False,
         )
 
     def ensure_character_integrity(

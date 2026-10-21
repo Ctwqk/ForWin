@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from forwin.api_schema import (
     BookGenesisDetail,
@@ -24,6 +26,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.models.project import Project
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
+from forwin.storage.db_errors import is_lock_not_available_error
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -370,6 +373,28 @@ def generate_project_genesis_name(
         session.close()
 
 
+def _lock_project_for_handoff(session, project_id: str) -> Project:
+    """Hold the project row for the whole handoff; a concurrent start-writing gets 409 at once.
+
+    FOR NO KEY UPDATE, like the world seed commit, still lets other sessions insert
+    rows that reference the project while the handoff runs.
+    """
+    try:
+        project = session.execute(
+            select(Project)
+            .where(Project.id == project_id)
+            .with_for_update(key_share=True, nowait=True)
+        ).scalar_one_or_none()
+    except OperationalError as exc:
+        if not is_lock_not_available_error(exc):
+            raise
+        session.rollback()
+        raise HTTPException(409, "该项目正在启动写作，请稍后刷新。") from exc
+    if project is None:
+        raise HTTPException(404, "项目不存在")
+    return project
+
+
 def start_project_writing(
     project_id: str,
     req: StartWritingRequest | None = None,
@@ -395,9 +420,7 @@ def start_project_writing(
     session = get_session()
     genesis_service = None
     try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
+        project = _lock_project_for_handoff(session, project_id)
         require_genesis_project(project)
         if str(project.creation_status or "") != "genesis_ready":
             raise HTTPException(409, "Genesis 尚未完成锁定，不能启动写作。")
@@ -453,6 +476,7 @@ def start_project_writing(
                 )
                 task_max_chapters = target.effective_max_chapters
                 task_run_until_chapter = target.run_until_chapter
+            # Enqueued in the handoff's transaction: a handoff that fails to commit leaves no task.
             task_id = create_continue_generation_task(
                 project_id=project.id,
                 requested_chapters=requested_chapters,
@@ -462,11 +486,12 @@ def start_project_writing(
                 title=project.title,
                 subtitle=f"启动写作 · {project.genre}",
                 message="Genesis 完成，准备进入写作主链。",
+                session=session,
             )
+            session.commit()
         except Exception:
             session.rollback()
             raise
-        session.commit()
         return StartWritingResponse(
             ok=True,
             project_id=project.id,

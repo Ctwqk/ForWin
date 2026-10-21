@@ -287,7 +287,7 @@ symbol = "PULP_BEAT_PROFILES"
 checks = ["cjk_collection"]
 category = "catalog"
 justification = "按显式 genre 选取的节拍词目录（genre 无匹配时用空 profile，不从正文推断）"
-max_literals = 224
+max_literals = 223
 
 [[entry]]
 path = "forwin/checker/pulp_beat.py"

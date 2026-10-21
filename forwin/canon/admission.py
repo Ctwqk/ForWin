@@ -529,8 +529,8 @@ class CanonAdmissionService:
         approved_changes: ApprovedGraphDeltaSet,
     ) -> BookStateCompileResult:
         """Compile a Genesis world seed as chapter 0; the caller owns the transaction."""
-        # FOR NO KEY UPDATE still serializes canon writers, but lets another session insert
-        # rows referencing the project; start-writing enqueues its task that way before committing.
+        # FOR NO KEY UPDATE still serializes canon writers, but lets other sessions insert
+        # rows referencing the project; start-writing takes the same lock before its handoff.
         project = session.execute(
             select(Project).where(Project.id == project_id).with_for_update(key_share=True)
         ).scalar_one_or_none()

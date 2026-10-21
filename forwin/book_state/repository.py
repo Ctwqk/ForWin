@@ -128,7 +128,7 @@ class BookStateRepository:
         version never rolls them back. Without ``version_state`` the version keeps
         the node's latest state at or before ``version_chapter``.
         """
-        row = self._upsert_world_node_row(node)
+        row = self.upsert_world_node_row(node)
         chapter = int(version_chapter)
         newest = self._latest_version_row(node.project_id, node.id)
         if newest is not None and newest.as_of_chapter > chapter:
@@ -162,7 +162,7 @@ class BookStateRepository:
         self.session.flush()
         return row
 
-    def _upsert_world_node_row(self, node: WorldNode) -> WorldNodeRow:
+    def upsert_world_node_row(self, node: WorldNode) -> WorldNodeRow:
         """Write only the latest-value projection row, without a version."""
         row = self.session.get(WorldNodeRow, node.id)
         if row is None:
@@ -825,7 +825,7 @@ class BookStateRepository:
     ) -> None:
         """Use patch provenance, since older creates may have chapter zero metadata."""
         bindings = {
-            "node": (WorldNodeRow, _world_node_from_row, self._upsert_world_node_row),
+            "node": (WorldNodeRow, _world_node_from_row, self.upsert_world_node_row),
             "edge": (WorldEdgeRow, _world_edge_from_row, self.create_world_edge),
             "fact": (FactNodeRow, _fact_node_from_row, self.create_fact_node),
             "map_node": (MapNodeRow, _map_node_from_row, self.create_map_node),
@@ -1280,6 +1280,14 @@ class BookStateRepository:
             ),
         ]
         return max([int(value or 0) for value in values] or [0])
+
+    def direct_write_chapter(self, node: WorldNode) -> int:
+        """Chapter a write outside the compiler versions ``node`` at.
+
+        The latest chapter makes the write visible from now on, but never before
+        the node exists: the character API creates nodes ahead of canon.
+        """
+        return max(self.latest_available_chapter(node.project_id), int(node.created_at_chapter or 0))
 
     def persist_world_snapshot(self, snapshot: WorldSnapshot) -> WorldSnapshotRow:
         row = WorldSnapshotRow(

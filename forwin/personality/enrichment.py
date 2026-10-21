@@ -127,7 +127,7 @@ class RelationshipPersonalityEnricher:
         updated = node.model_copy(update={"profile": profile})
         self.repo.create_world_node(
             updated,
-            version_chapter=self.repo.latest_available_chapter(node.project_id),
+            version_chapter=self.repo.direct_write_chapter(node),
         )
         return {
             "character_id": node.id,

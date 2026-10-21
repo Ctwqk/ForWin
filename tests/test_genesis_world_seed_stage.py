@@ -7,10 +7,13 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
+from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
+from forwin.cli import build_parser, cmd_generate
 from forwin.config import InfrastructureConfig
 from forwin.genesis import GENESIS_STAGE_ORDER, BookGenesisService
 from forwin.genesis.messages import (
@@ -20,7 +23,7 @@ from forwin.genesis.messages import (
 )
 from forwin.genesis.names_paths import GenesisStageInvalidError
 from forwin.genesis.world_seed import WORLD_SEED_KEYS, fallback_world_seed
-from forwin.mcp.models import STAGE_KEY_ORDER, StageKey
+from forwin.mcp.models import STAGE_KEY_ORDER, GenesisView, StageKey, StageStateView
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project
@@ -159,6 +162,70 @@ def test_world_seed_refine_messages_carry_the_output_contract():
     for key in WORLD_SEED_KEYS:
         assert key in content
     assert "【输出要求】" not in _refine_messages("story_engine")[-1]["content"]
+
+
+@pytest.mark.parametrize("target_path,wrap_scalar", [("actors[0]", False), ("calendar.epoch_label", True), ("", True)])
+def test_world_seed_targeted_refine_omits_the_whole_seed_contract(target_path, wrap_scalar):
+    messages = _build_stage_refine_messages(
+        None, pack=deepcopy(UPSTREAM_PATCH), stage_key="world_seed", instruction="改", target_path=target_path,
+        current_payload={}, support_context={}, fallback_stage_payload={}, wrap_scalar_value=wrap_scalar,
+    )
+    assert _world_seed_output_requirement() not in messages[-1]["content"]
+
+
+class _LockRefusingClient:
+    """Answers the CLI's Genesis calls and refuses the world_seed lock like the API's 409."""
+
+    issues = [
+        {"severity": "error", "code": "unknown_location_ref", "path": "actors[0].location_ref", "message": "node-9 is not on the map"},
+        {"severity": "warning", "code": "missing_reveal", "path": "facts[0]", "message": "fact-1 has no reveal candidate"},
+    ]
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def project_create(self, **_kwargs):
+        return SimpleNamespace(project=SimpleNamespace(id="proj-cli"))
+
+    async def genesis_stage_generate(self, *, project_id: str, stage_key: str):
+        self.calls.append(("generate", stage_key))
+
+    async def genesis_stage_lock(self, *, project_id: str, stage_key: str):
+        self.calls.append(("lock", stage_key))
+        if stage_key == "world_seed":
+            raise ValueError(
+                f"ForWin API POST /api/projects/{project_id}/genesis/stages/world_seed/lock failed with 409: "
+                "world_seed 有 1 个校验错误，不能锁定"
+            )
+
+    async def genesis_get(self, project_id: str):
+        return GenesisView(
+            project_id=project_id,
+            stage_states=[StageStateView(stage_key="world_seed", validation_issues=self.issues)],
+        )
+
+    async def task_active_generation_check(self, **_kwargs):
+        raise AssertionError("a refused lock must stop before start-writing")
+
+    async def project_start_writing(self, **_kwargs):
+        raise AssertionError("a refused lock must stop before start-writing")
+
+
+def test_cli_reports_world_seed_lock_refusal(capsys):
+    client = _LockRefusingClient()
+    args = build_parser().parse_args(["generate", "--title", "T", "--premise", "P", "--genre", "G"])
+
+    with patch("forwin.cli._api_client", return_value=client), pytest.raises(SystemExit) as exited:
+        cmd_generate(args)
+
+    assert exited.value.code == 2
+    assert client.calls[-1] == ("lock", "world_seed")
+    report = capsys.readouterr().err
+    for issue in client.issues:
+        assert f"{issue['severity']} {issue['code']} ({issue['path']}): {issue['message']}" in report
+    assert "world_seed 有 1 个校验错误" in report
+    for next_step in ("genesis_stage_refine", "genesis_stage_lock", "project_start_writing", "proj-cli"):
+        assert next_step in report
 
 
 class WorldSeedStageOrderTests(unittest.TestCase):

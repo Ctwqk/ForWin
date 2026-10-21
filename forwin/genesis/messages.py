@@ -213,12 +213,15 @@ def _build_stage_refine_messages(
         else "当前是阶段全量改写模式。请返回更新后的完整阶段 JSON。"
     )
 
-    # Refine is the only LLM path that rewrites a world seed, so it carries the generation contract.
-    output_requirement: list[tuple[str, Any]] = (
-        [("输出要求", _world_seed_output_requirement())] if stage_key == "world_seed" else []
-    )
-    if stage_key == "map" and not target_path and not wrap_scalar_value:
-        output_requirement = [("输出要求", _map_output_requirement())]
+    # A whole-stage refine carries the stage's generation contract (refine is the only LLM
+    # path that rewrites a world seed); a targeted refine returns only its sub-object.
+    stage_output_requirements = {
+        "map": _map_output_requirement,
+        "world_seed": _world_seed_output_requirement,
+    }
+    output_requirement: list[tuple[str, Any]] = []
+    if stage_key in stage_output_requirements and not target_path and not wrap_scalar_value:
+        output_requirement = [("输出要求", stage_output_requirements[stage_key]())]
     sections: list[tuple[str, Any]] = [
         ("阶段", f"{label} ({stage_key})"),
         ("用户指令", instruction),

@@ -56,6 +56,13 @@ def _compile(session, project_id: str, chapter: int, patches: list[NarrativePatc
     )
 
 
+def _accept_chapter_without_deltas(session, project_id: str, chapter: int) -> None:
+    result = BookStateCompiler(session).compile(
+        ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter, graph_deltas=[])
+    )
+    assert result.committed, result.blocked_reasons
+
+
 def _create_promise(promise_id: str, **fields) -> NarrativePatch:
     return NarrativePatch(
         target_ref=f"promise:{promise_id}",
@@ -176,6 +183,38 @@ def test_proposal_creates_promise_node() -> None:
     engine.dispose()
 
 
+def test_proposal_chapter_is_read_from_a_top_level_as_of_chapter() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        row = KnowledgeEditProposalRow(
+            project_id=project_id,
+            source="world_studio",
+            target_node_id="promise_top",
+            proposed_patch_json=json.dumps(
+                {
+                    "forwin_patch": [
+                        {"op": "create_reader_promise", "promise_id": "promise_top", "new_value": {"summary": "a debt"}}
+                    ],
+                    "as_of_chapter": 2,
+                }
+            ),
+            status="pending",
+        )
+        session.add(row)
+        session.flush()
+        proposal_id = row.id
+
+    with Session.begin() as session:
+        approved = approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+    with Session() as session:
+        promises = BookStateQuery(session).reader_promises(project_id, as_of_chapter=2)
+
+    assert approved.projection_refresh["as_of_chapter"] == 2
+    assert [(promise.promise_id, promise.created_at_chapter) for promise in promises] == [("promise_top", 2)]
+    engine.dispose()
+
+
 def test_proposal_field_edits_map_onto_node_fields() -> None:
     engine, Session = _session_factory()
     with Session.begin() as session:
@@ -193,6 +232,9 @@ def test_proposal_field_edits_map_onto_node_fields() -> None:
     with Session.begin() as session:
         approve_world_edit_proposal(session, project_id=project_id, proposal_id=create)
 
+    # World edits compile at the latest canon chapter, so canon advances before each edit.
+    with Session.begin() as session:
+        _accept_chapter_without_deltas(session, project_id, 2)
     rewrite = _propose(
         Session,
         project_id,
@@ -207,6 +249,7 @@ def test_proposal_field_edits_map_onto_node_fields() -> None:
     )
     with Session.begin() as session:
         approve_world_edit_proposal(session, project_id=project_id, proposal_id=rewrite)
+        _accept_chapter_without_deltas(session, project_id, 3)
     settle = _propose(
         Session,
         project_id,

@@ -201,9 +201,14 @@ def _build_stage_refine_messages(
         else "当前是阶段全量改写模式。请返回更新后的完整阶段 JSON。"
     )
 
+    # Refine is the only LLM path that rewrites a world seed, so it carries the generation contract.
+    output_requirement: list[tuple[str, Any]] = (
+        [("输出要求", _world_seed_output_requirement())] if stage_key == "world_seed" else []
+    )
     sections: list[tuple[str, Any]] = [
         ("阶段", f"{label} ({stage_key})"),
         ("用户指令", instruction),
+        *output_requirement,
         ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES.get(stage_key, []))),
         (
             "改写原则",

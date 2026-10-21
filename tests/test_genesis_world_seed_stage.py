@@ -5,6 +5,7 @@ import re
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_args
 
 from fastapi.testclient import TestClient
@@ -12,12 +13,17 @@ from fastapi.testclient import TestClient
 from forwin.api_schema import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import InfrastructureConfig
 from forwin.genesis import GENESIS_STAGE_ORDER, BookGenesisService
-from forwin.genesis.messages import _build_stage_generation_messages
+from forwin.genesis.messages import (
+    _build_stage_generation_messages,
+    _build_stage_refine_messages,
+    _world_seed_output_requirement,
+)
 from forwin.genesis.world_seed import WORLD_SEED_KEYS, fallback_world_seed
 from forwin.mcp.models import STAGE_KEY_ORDER, StageKey
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project
+from forwin.runtime.container import RuntimeContainer
 from forwin.state.updater import StateUpdater
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
@@ -126,6 +132,34 @@ def test_world_seed_generation_messages_define_appellation_direction():
     assert "source 的 appellation → target" in content
 
 
+def test_container_gives_world_seed_the_full_configured_token_budget():
+    config = InfrastructureConfig(database_url="sqlite:///:memory:", max_tokens=20000)
+    service = RuntimeContainer._build_book_genesis_service(
+        config=config,
+        llm_client=_StubLLM(),
+        skill_runtime=SimpleNamespace(router=None, prompt_layer_builder=None),
+        artifact_store=None,
+    )
+    assert (service.max_tokens, service.world_seed_max_tokens) == (1600, 20000)
+    assert BookGenesisService(llm_client=_StubLLM()).world_seed_max_tokens == 16384
+
+
+def _refine_messages(stage_key: str) -> list[dict[str, str]]:
+    return _build_stage_refine_messages(
+        None, pack=deepcopy(UPSTREAM_PATCH), stage_key=stage_key, instruction="改", target_path="",
+        current_payload={}, support_context={}, fallback_stage_payload={},
+    )
+
+
+def test_world_seed_refine_messages_carry_the_output_contract():
+    content = _refine_messages("world_seed")[-1]["content"]
+    assert "【输出要求】" in content
+    assert _world_seed_output_requirement() in content
+    for key in WORLD_SEED_KEYS:
+        assert key in content
+    assert "【输出要求】" not in _refine_messages("story_engine")[-1]["content"]
+
+
 class WorldSeedStageOrderTests(unittest.TestCase):
     def test_stage_order_ends_with_world_seed_and_copies_match(self) -> None:
         self.assertEqual(GENESIS_STAGE_ORDER[-1], "world_seed")
@@ -224,10 +258,10 @@ class WorldSeedServiceTests(unittest.TestCase):
 
     def test_world_seed_generation_uses_world_seed_token_budget(self) -> None:
         client = _StubLLM(json.dumps(valid_seed(), ensure_ascii=False))
-        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
+        service = BookGenesisService(llm_client=client, max_tokens=1600)
 
         self._generate_world_seed(service)
-        self.assertEqual(client.calls[0]["max_tokens"], 6000)
+        self.assertEqual(client.calls[0]["max_tokens"], 16384)
 
         client.calls.clear()
         service._call_json_with_trace(
@@ -237,7 +271,7 @@ class WorldSeedServiceTests(unittest.TestCase):
 
     def test_world_seed_fallback_marks_degraded(self) -> None:
         client = _StubLLM("this is not json")
-        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
+        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=12000)
 
         pack = self._generate_world_seed(service)
 
@@ -245,11 +279,11 @@ class WorldSeedServiceTests(unittest.TestCase):
         self.assertEqual(pack["world_seed"], fallback_world_seed(story_engine))
         self.assertEqual([actor["ref"] for actor in pack["world_seed"]["actors"]], ["cast-1", "cast-2", "opp-1", "faction-1"])
         self.assertTrue(pack["stage_states"]["world_seed"]["degraded"])
-        self.assertEqual([call["max_tokens"] for call in client.calls], [6000, 6000])
+        self.assertEqual([call["max_tokens"] for call in client.calls], [12000, 12000])
 
     def test_retry_keeps_world_seed_cap_while_other_stages_shrink(self) -> None:
         client = _StubLLM("this is not json")
-        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
+        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=12000)
         with self.session_factory() as session:
             project, revision = self._ready_upstream(session, service)
             revision, _trace = service.refine_stage(
@@ -259,7 +293,7 @@ class WorldSeedServiceTests(unittest.TestCase):
             session.commit()
             pack = service.load_pack(revision)
 
-        self.assertEqual([call["max_tokens"] for call in client.calls], [6000, 6000])
+        self.assertEqual([call["max_tokens"] for call in client.calls], [12000, 12000])
         self.assertTrue(pack["stage_states"]["world_seed"]["degraded"])
 
         client.calls.clear()
@@ -270,7 +304,7 @@ class WorldSeedServiceTests(unittest.TestCase):
 
     def test_world_seed_whole_stage_refine_normalizes_with_world_seed_budget(self) -> None:
         client = _StubLLM(json.dumps(valid_seed(), ensure_ascii=False))
-        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=6000)
+        service = BookGenesisService(llm_client=client, max_tokens=1600, world_seed_max_tokens=12000)
         with self.session_factory() as session:
             project, revision = self._ready_upstream(session, service)
             revision, _trace = service.refine_stage(
@@ -280,7 +314,7 @@ class WorldSeedServiceTests(unittest.TestCase):
             session.commit()
             pack = service.load_pack(revision)
 
-        self.assertEqual(client.calls[0]["max_tokens"], 6000)
+        self.assertEqual(client.calls[0]["max_tokens"], 12000)
         self.assertEqual(tuple(pack["world_seed"]), WORLD_SEED_KEYS)
         state = pack["stage_states"]["world_seed"]
         self.assertEqual(state["status"], "edited")
